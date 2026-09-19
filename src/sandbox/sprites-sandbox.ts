@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Agent, fetch as undiciFetch } from "undici";
-import { SpritesClient } from "@fly/sprites";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { sleep } from "../util/async.ts";
+import { sleep, assertOperationActive, getOperationSignal } from "../util/async.ts";
 import { swallow, swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
@@ -77,12 +76,32 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
 export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSandboxOptions = {}): Sandbox {
   if ((!opts.client || !opts.fetchImpl) && !opts.token)
     throw new Error("SANDBOX_BACKEND=sprites requires SPRITES_TOKEN");
-  const client: SpritesClientLike =
-    opts.client ?? (new SpritesClient(opts.token!, opts.baseUrl ? { baseURL: opts.baseUrl } : {}) as SpritesClientLike);
   const rawFetch = opts.fetchImpl ?? defaultSpritesFetch;
-  const fetchImpl: typeof fetch = (input, init) =>
-    rawFetch(input, { dispatcher: spritesDispatcher, ...init } as RequestInit);
+  const fetchImpl: typeof fetch = (input, init) => {
+    const signal = getOperationSignal();
+    signal?.throwIfAborted();
+    return rawFetch(input, {
+      dispatcher: spritesDispatcher,
+      ...init,
+      ...(signal ? { signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal } : {}),
+    } as RequestInit);
+  };
   const baseUrl = (opts.baseUrl ?? DEFAULT_SPRITES_BASE_URL).replace(/\/+$/, "");
+  const requestSprite = async (method: string, path: string, name?: string): Promise<void> => {
+    const res = await fetchImpl(`${baseUrl}/v1/sprites${path}`, {
+      method,
+      headers: { authorization: `Bearer ${opts.token ?? ""}`, "content-type": "application/json" },
+      ...(name ? { body: JSON.stringify({ name }) } : {}),
+      signal: AbortSignal.timeout(name ? 120_000 : 30_000),
+    });
+    const body = await res.text();
+    if (!res.ok) throw new Error(`sprites ${method} ${path}: http ${res.status} ${body.slice(0, 200)}`);
+  };
+  const client: SpritesClientLike = opts.client ?? {
+    getSprite: (name) => requestSprite("GET", `/${encodeURIComponent(name)}`),
+    createSprite: (name) => requestSprite("POST", "", name),
+    deleteSprite: (name) => requestSprite("DELETE", `/${encodeURIComponent(name)}`),
+  };
   const prefix = opts.namePrefix ?? "qm";
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
 
@@ -291,6 +310,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       } catch (error) {
         void error;
       }
+      assertOperationActive();
       if (!exists) {
         try {
           onStatus?.("Creating the sandbox…");
@@ -320,6 +340,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       } catch {
         stale = false;
       }
+      assertOperationActive();
       if (stale) await client.deleteSprite(name).catch(swallowAs("sprites-sandbox: stale scratch delete", undefined));
       await client.createSprite(name);
       ensured.add(name);

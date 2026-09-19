@@ -2,6 +2,8 @@ import type { OutgoingAttachment } from "../../types.ts";
 import { hasParentPathSegment, type Sandbox, type SandboxHandle } from "../../sandbox/sandbox.ts";
 import type { BlobTransferStore } from "../../persistence/blob-transfer.ts";
 import type { AttachFiles, AttachResult } from "../../tools/primitives.ts";
+import type { TapeRecord } from "../../sessions/session-store.ts";
+import { createKeyedQueue } from "../../util/async.ts";
 import {
   collectNamedOutbound,
   discardOutbound,
@@ -14,6 +16,8 @@ export interface AttachToolsContext {
   provision: () => Promise<SandboxHandle>;
   blobTransfer: BlobTransferStore;
   fileRegistration: ArtifactRegistration;
+  restored?: AttachmentState;
+  persist?: (state: AttachmentState) => Promise<void>;
 }
 
 export interface StagedAttachments {
@@ -26,9 +30,39 @@ interface StagedEntry {
   created: ReadonlySet<string>;
 }
 
+export interface AttachmentState {
+  calls: number;
+  entries: Array<{ path: string; attachment: OutgoingAttachment; created: string[] }>;
+}
+
+export function attachmentStateFromTape(tape: readonly TapeRecord[], runId: string): AttachmentState | undefined {
+  for (let index = tape.length - 1; index >= 0; index--) {
+    const row = tape[index]!;
+    const payload = row.payload as { event?: string; runId?: string; state?: AttachmentState } | null;
+    if (row.kind === "annotation" && payload?.event === "turn_attachments" && payload.runId === runId)
+      return payload.state;
+  }
+  return undefined;
+}
+
 export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments {
-  const staged = new Map<string, StagedEntry>();
-  let calls = 0;
+  const staged = new Map<string, StagedEntry>(
+    (ctx.restored?.entries ?? []).map(({ path, attachment, created }) => [
+      path,
+      { attachment, created: new Set(created) },
+    ]),
+  );
+  let calls = ctx.restored?.calls ?? 0;
+  const serial = createKeyedQueue();
+  const persist = async () =>
+    ctx.persist?.({
+      calls,
+      entries: [...staged].map(([path, entry]) => ({
+        path,
+        attachment: entry.attachment,
+        created: [...entry.created],
+      })),
+    });
   const attach = async (files: readonly string[]): Promise<AttachResult> => {
     const paths = [...new Set(files.map((f) => String(f ?? "").trim()).filter(Boolean))];
     if (!paths.length) return { ok: false, message: "attach needs at least one workspace file path" };
@@ -47,6 +81,7 @@ export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments 
     const handle = await ctx.provision();
     const register = { ...ctx.fileRegistration, seed: `${ctx.fileRegistration.seed}:attach:${calls}` };
     calls += 1;
+    await persist();
     const keptNames = [...staged.entries()]
       .filter(([path]) => !paths.includes(path))
       .map(([, entry]) => entry.attachment.name);
@@ -61,12 +96,16 @@ export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments 
         ok: false,
         message: `couldn't attach: ${bad.join(", ")} — nothing was staged; fix the path(s) and retry`,
       };
+    const supersededEntries: StagedEntry[] = [];
     for (const [i, attachment] of r.attachments.entries()) {
       const path = paths[i]!;
       const superseded = staged.get(path);
       staged.set(path, { attachment, created: r.createdArtifactIds });
-      if (superseded) await discardOutbound(superseded.attachment, ctx.blobTransfer, register, superseded.created);
+      if (superseded) supersededEntries.push(superseded);
     }
+    await persist();
+    for (const superseded of supersededEntries)
+      await discardOutbound(superseded.attachment, ctx.blobTransfer, register, superseded.created);
     return {
       ok: true,
       files: r.attachments.map((a) => ({
@@ -78,5 +117,8 @@ export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments 
       staged: staged.size,
     };
   };
-  return { attach, staged: () => [...staged.values()].map((e) => e.attachment) };
+  return {
+    attach: (files) => serial("attach", () => attach(files)),
+    staged: () => [...staged.values()].map((e) => e.attachment),
+  };
 }

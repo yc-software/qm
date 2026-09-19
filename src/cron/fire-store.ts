@@ -116,11 +116,12 @@ export function createMemoryCronFireStore(): CronFireStore {
 
 interface FireColumn {
   name: string;
-  cast: "text" | "bigint";
+  cast: "text" | "bigint" | "jsonb";
   value(cronId: string, entry: CronFireLogEntry): string | number | null;
 }
 
 const FIRE_COLUMN_DEFS: readonly FireColumn[] = [
+  { name: "initiator", cast: "jsonb", value: (_cronId, e) => (e.initiator ? JSON.stringify(e.initiator) : null) },
   { name: "cron_id", cast: "text", value: (cronId) => cronId },
   { name: "fire_key", cast: "text", value: (_cronId, e) => e.fireKey },
   { name: "thread_ref", cast: "text", value: (_cronId, e) => e.threadRef },
@@ -151,6 +152,7 @@ function fireParams(cronId: string, entry: CronFireLogEntry): unknown[] {
 
 function rowToEntry(r: Record<string, unknown>): CronFireLogEntry {
   return {
+    ...(r.initiator != null ? { initiator: r.initiator as CronFireLogEntry["initiator"] } : {}),
     fireKey: r.fire_key as string,
     threadRef: r.thread_ref as string,
     firedAt: Number(r.fired_at),
@@ -164,6 +166,7 @@ function rowToEntry(r: Record<string, unknown>): CronFireLogEntry {
 }
 
 const LEGACY_FIRE_FIELDS = [
+  "source.json->'initiator'",
   "source.cron_id",
   "source.fire_key",
   "COALESCE(source.json->>'threadRef', 'cron:' || source.cron_id)",
@@ -233,6 +236,10 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
           `CREATE INDEX IF NOT EXISTS idx_cron_fires_thread_ref ON cron_fires (thread_ref)`,
           `CREATE INDEX IF NOT EXISTS idx_cron_fires_cron_fired_at ON cron_fires (cron_id, fired_at DESC)`,
         ],
+      },
+      {
+        id: "cron/fires/0002-initiator",
+        statements: ["ALTER TABLE cron_fires ADD COLUMN IF NOT EXISTS initiator JSONB"],
       },
     ],
     [LEGACY_FIRE_MAINTENANCE],

@@ -444,3 +444,27 @@ test("editing pending text preserves identity, order, attachments and rejects st
   await runs.fail(first.id, claimed!.leaseToken!, "retry", { retry: true });
   assert.equal(await runs.editPendingText(first.id, "retry edit", "revised"), false);
 });
+
+for (const backend of backends) {
+  test(`[${backend.name}] a hand-off release is counted apart from claims so repeated deployments never park a healthy run`, async () => {
+    const { runs } = createMemoryRunStore({ maxClaims: 2 });
+    const { run } = await runs.enqueue({ sessionId: "t-handoff", request: turn("keep going") });
+    for (let round = 1; round <= 4; round++) {
+      const claimed = await runs.claim(`w${round}`, 10_000);
+      assert.equal(claimed?.id, run.id, `round ${round} reclaims the same run`);
+      assert.equal(await runs.releaseLease(run.id, claimed!.leaseToken!, { handoff: true }), true);
+      const after = await runs.get(run.id);
+      assert.equal(after?.status, "pending");
+      assert.equal(after?.attempts, round);
+      assert.equal(after?.handoffs, round);
+    }
+    const claimed = await runs.claim("w5", 10);
+    assert.ok(claimed);
+    await sleep(30);
+    const swept = await runs.reapExpired();
+    assert.equal(swept.requeued, 1, "the first genuine lease expiry still requeues");
+    const plain = await runs.claim("w6", 10_000);
+    assert.equal(await runs.releaseLease(run.id, plain!.leaseToken!), true);
+    assert.equal((await runs.get(run.id))?.handoffs, 4, "neither a lease expiry nor an ordinary release is a hand-off");
+  });
+}

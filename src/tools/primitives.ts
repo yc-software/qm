@@ -1,4 +1,4 @@
-import { withAbort } from "../util/async.ts";
+import { assertOperationActive, getOperationSignal, withAbort } from "../util/async.ts";
 import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-types.ts";
 import { readContextFile } from "../resolution/context-files.ts";
 import { contextMemory, type TurnContext } from "../resolution/turn-context.ts";
@@ -504,7 +504,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   async function timed<T>(phase: GapPhase, op: () => Promise<T>): Promise<T> {
     const start = Date.now();
     try {
-      return await op();
+      assertOperationActive();
+      const value = await op();
+      assertOperationActive();
+      return value;
     } finally {
       try {
         deps.onGapWork?.({ phase, start, end: Date.now() });
@@ -515,11 +518,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   }
 
   async function once<T>(produce: () => Promise<T>, shouldCache: (r: T) => boolean = () => true): Promise<T> {
+    assertOperationActive();
     const index = ++callIndex;
     if (runId === undefined) return produce();
     const prior = await timed("tool_ledger", () => ledger.begin(runId, attempt, index));
     if (prior.cached) return JSON.parse(prior.output ?? "null") as T;
+    assertOperationActive();
     const result = await produce();
+    assertOperationActive();
     if (shouldCache(result))
       await timed("tool_ledger", () => ledger.record(runId, attempt, index, JSON.stringify(result ?? null)));
     return result;
@@ -530,7 +536,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     cache?: (r: R) => boolean,
   ): Promise<R | ControlUnavailable> {
     if (!deps.control || !deps.controlClaims) return Promise.resolve(CONTROL_UNAVAILABLE);
-    const call = () => run(deps.control!, deps.controlClaims!);
+    const call = () => {
+      assertOperationActive();
+      return run(deps.control!, deps.controlClaims!);
+    };
     return cache ? once(call, cache) : call();
   }
 
@@ -539,7 +548,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     cache?: (r: R) => boolean,
   ): Promise<R | { ok: false; message: string }> {
     if (!deps.surface) return Promise.resolve({ ok: false, message: SURFACE_UNAVAILABLE_MESSAGE });
-    const call = () => run(deps.surface!);
+    const call = () => {
+      assertOperationActive();
+      return run(deps.surface!);
+    };
     return cache ? once(call, cache) : call();
   }
 
@@ -569,17 +581,21 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               if (!input?.sandboxId) throw new Error("retire requires sandbox_id");
               const record = await resources.access(deps.createdBy, input.sandboxId);
               if (record.ownerScopeId !== writableScopeId) throw new Error("retire this sandbox from its owning scope");
+              assertOperationActive();
               await resources.retire(deps.createdBy, record.id);
               return { retired: record.id };
             }
             if (action === "default") {
               if (input?.sandboxId === undefined) throw new Error("default requires sandbox_id or null");
+              assertOperationActive();
               await resources.setDefault(deps.createdBy, writableScopeId, input.sandboxId);
               deps.invalidateProvision?.();
               return { defaultSandboxId: input.sandboxId };
             }
             if (!input?.backend || !deps.provisionResource) throw new Error("create requires an available backend");
+            assertOperationActive();
             const record = await resources.create(deps.createdBy, writableScopeId, input.backend, input.name);
+            assertOperationActive();
             await deps.provisionResource(record.id);
             return record;
           },
@@ -613,12 +629,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         if (!resources) throw new Error("sandbox inventory unavailable");
         const record = await resources.access(deps.createdBy, sandboxId);
         if (record.ownerScopeId !== writableScopeId) throw new Error("restart this sandbox from its owning scope");
+        assertOperationActive();
         return resources.restart(deps.createdBy, sandboxId);
       }
       if (!deps.sandbox.restartComputer) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "restarting the computer");
       }
       if (!writableScopeId) throw new Error("this turn has no scoped computer to restart");
+      assertOperationActive();
       await deps.sandbox.restartComputer(writableScopeId);
     },
     async migrateComputer(to: string): Promise<{ from: string; to: string }> {
@@ -645,6 +663,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         );
       }
       try {
+        assertOperationActive();
         const result = await runner.migrateScope(writableScopeId, to as SandboxBackendName, "agent-requested", {
           copyTimeoutSec: 1800,
         });
@@ -762,6 +781,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const resource = await deps.sandboxResources.access(deps.createdBy, execOpts.sandboxId);
         if (resource.ownerScopeId !== writableScopeId)
           throw new Error("execute on this sandbox from its owning scope to preserve conversation isolation");
+        assertOperationActive();
         handle = await deps.provisionResource(execOpts.sandboxId);
       } else if (reached) handle = await deps.reach!.provisionFor(reached.scopeId);
       else if (scratch) handle = await deps.provisionScratch!();
@@ -772,11 +792,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         resolvedMs != null && deps.execTimeoutCeilingMs != null
           ? Math.min(resolvedMs, deps.execTimeoutCeilingMs)
           : resolvedMs;
+      const signals = [getOperationSignal(), execOpts?.signal].filter((signal): signal is AbortSignal => !!signal);
+      const signal = signals.length ? AbortSignal.any(signals) : undefined;
       const opts =
-        timeoutMs !== undefined || execOpts?.signal
+        timeoutMs !== undefined || signal
           ? {
               ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-              ...(execOpts?.signal ? { signal: execOpts.signal } : {}),
+              ...(signal ? { signal } : {}),
             }
           : undefined;
       return once(async () => {
@@ -803,6 +825,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async read(path: string, signal?: AbortSignal): Promise<ReadResult> {
+      const ambient = getOperationSignal();
+      signal = signal && ambient ? AbortSignal.any([signal, ambient]) : (signal ?? ambient);
       signal?.throwIfAborted();
       if (path === MEMORY_FILE && deps.memory && deps.memoryScopeId) {
         if (!deps.memoryAccess?.read.includes(deps.memoryScopeId)) {
@@ -833,6 +857,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ? `${deps.sharedMaterializeDir}/${name}`
           : granted.handlePath;
         signal?.throwIfAborted();
+        assertOperationActive();
         await deps.sandbox.writeFileBytes(handle, materializedPath, bytes);
         signal?.throwIfAborted();
         return {
@@ -898,8 +923,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return once(() =>
         timed("file_op", async () => {
           if (data !== undefined) {
+            assertOperationActive();
             await deps.sandbox.writeFile(handle, path, data);
             if (writableScopeId && persistExclude && !isUnderAnyDir(path, persistExclude)) {
+              assertOperationActive();
               await deps.workspace.write(writableScopeId, path, data);
             }
           }
@@ -908,6 +935,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             if (!writableScopeId) throw new Error("share needs a writable scope that owns the file");
             const bytes = await deps.sandbox.readFileBytes(handle, path);
             if (bytes === null) throw new Error(`no such file to share: ${path}`);
+            assertOperationActive();
             await deps.workspace.write(writableScopeId, path, bytes);
             const priorRows = deps.files
               ? await deps.files.resolveByOwnerPaths([{ ownerScopeId: writableScopeId, path }])
@@ -918,6 +946,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             if (deps.files) {
               try {
                 const name = path.split(/[\\/]/).pop() || path;
+                assertOperationActive();
                 await deps.files.put({
                   id: priorArtifact?.id ?? fileArtifactId(randomUUID(), "out", 0),
                   reuseExistingPath: true,
@@ -943,6 +972,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
                 );
               }
               const permission: Permission = s.permission ?? "read";
+              assertOperationActive();
               await deps.acl.grant(
                 { ownerScopeId: writableScopeId, ref: path, granteeScopeId, permission, grantedBy: deps.createdBy },
                 author,
@@ -1147,6 +1177,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
         const record = await deps.sandboxResources.access(deps.createdBy, opts.sandboxId);
         if (record.ownerScopeId !== writableScopeId) throw new Error("start work from the sandbox's owning scope");
+        assertOperationActive();
         handle = await deps.provisionResource(opts.sandboxId);
       } else handle = await deps.provision();
       const { decision, reason, matched, approvalKey } = evaluateCommandWithLayer(

@@ -725,7 +725,10 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           code: "bad_request",
           message: `cron ${id} is ${cron.archived ? "archived" : "paused"} — enable it before firing it on demand`,
         };
-      const result = await scheduler.runNow(id);
+      const result = await scheduler.runNow(id, {
+        actorId: capability.actorId,
+        liveActor: capability.liveActor === true,
+      });
       if (!result.started) {
         const refusal = describeRunNowRefusal(id, result)!;
         return { ok: false, code: refusal.error, message: refusal.message };

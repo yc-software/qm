@@ -1,5 +1,6 @@
+import { TurnHandedOff } from "../core/turn-error.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
-import { createKeyedQueue } from "../util/async.ts";
+import { assertOperationActive, createKeyedQueue, withAbort, withOperationSignal } from "../util/async.ts";
 import { createGrindMeter, grindState } from "./grind.ts";
 import type { RuntimeHandoff, RuntimeRequest } from "./runtime-types.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -63,6 +64,9 @@ export interface ToolContextRef {
     approvalKey?: string;
   }>;
   pausedOnApproval?: boolean;
+  handoffRequested?: boolean;
+  handoffDeadline?: AbortSignal;
+  handoffStopped?: boolean;
   emit?: (entry: { type: EntryType; payload: unknown; scopeLabel: ScopeId }) => void | Promise<unknown>;
   scopeLabel?: ScopeId;
   orgScopeId?: ScopeId;
@@ -348,7 +352,7 @@ export function coreToolOptions(config: Config): CoreToolOptions {
 const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime", "session"]);
 
 export function pauseStampAfterToolCall(
-  ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff">,
+  ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff" | "handoffRequested">,
   prior?: (
     info: unknown,
     signal?: unknown,
@@ -356,7 +360,8 @@ export function pauseStampAfterToolCall(
 ): (info: unknown, signal?: unknown) => Promise<{ terminate?: boolean } | undefined> {
   return async (info, signal) => {
     const upstream = prior ? await prior(info, signal) : undefined;
-    if (ref.pausedOnApproval || ref.silentRequested || ref.runtimeHandoff) return { ...upstream, terminate: true };
+    if (ref.pausedOnApproval || ref.silentRequested || ref.runtimeHandoff || ref.handoffRequested)
+      return { ...upstream, terminate: true };
     return upstream;
   };
 }
@@ -411,8 +416,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     await ref.emit({ type, payload, scopeLabel });
   };
 
-  const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> =>
-    log("tool_call", { ...sandboxLog(payload), callId });
+  const recordCall = async (callId: string, payload: Record<string, unknown>): Promise<void> => {
+    assertOperationActive();
+    await log("tool_call", { ...sandboxLog(payload), callId });
+    assertOperationActive();
+  };
 
   const resultQueue = createKeyedQueue();
   const quarantinedMessages = new Set<string>();
@@ -4012,9 +4020,17 @@ function withToolBodyTiming(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
 }
 
 function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefinition {
+  const checkExecution = (): void => {
+    ref.abortSignal?.throwIfAborted();
+    if (ref.handoffDeadline?.aborted) throw new TurnHandedOff();
+  };
   return {
     ...tool,
     async execute(...args) {
+      checkExecution();
+      const signals = [ref.abortSignal, ref.handoffDeadline].filter((signal): signal is AbortSignal => !!signal);
+      const signal = signals.length ? AbortSignal.any(signals) : undefined;
+      const execute = () => withOperationSignal(signal, () => withAbort(() => tool.execute(...args), signal));
       const [, params] = args;
       if (ref.runtimeHandoff || ref.runtimeMutationPending)
         return {
@@ -4032,19 +4048,23 @@ function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
         ref.runtimeMutationPending = true;
         try {
           await Promise.allSettled(ref.runtimeInFlight ?? []);
+          if (ref.handoffDeadline?.aborted) throw new TurnHandedOff();
           if (ref.abortSignal?.aborted || ref.pausedOnApproval || ref.silentRequested)
             return {
               content: [{ type: "text" as const, text: "Runtime change cancelled before execution." }],
               details: {},
               terminate: true,
             };
-          return await tool.execute(...args);
+          return await execute();
         } finally {
           ref.runtimeMutationPending = false;
         }
       }
       const inFlight = (ref.runtimeInFlight ??= new Set());
-      const result = Promise.resolve().then(() => tool.execute(...args));
+      const result = Promise.resolve().then(() => {
+        checkExecution();
+        return execute();
+      });
       inFlight.add(result);
       try {
         return await result;

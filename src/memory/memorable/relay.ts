@@ -27,8 +27,9 @@ export function relayRecord(
   argv: readonly string[],
   capture: MemorableCapture,
   timeoutMs: number = RELAY_TIMEOUT_MS,
-  opts?: { env: NodeJS.ProcessEnv; apiKey?: string },
+  opts?: { env: NodeJS.ProcessEnv; apiKey?: string; signal?: AbortSignal },
 ): Promise<RelayOutcome> {
+  opts?.signal?.throwIfAborted();
   return new Promise((resolve) => {
     const workflows = capture.workflows.filter(worthOffering);
     if (!workflows.length) {
@@ -48,13 +49,20 @@ export function relayRecord(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      opts?.signal?.removeEventListener("abort", abort);
       resolve(outcome);
+    };
+    const abort = () => {
+      child.kill("SIGKILL");
+      finish({ ok: false, reason: "aborted" });
     };
     const timer = setTimeout(() => {
       child.kill();
       finish({ ok: false, reason: "timeout" });
     }, timeoutMs);
     timer.unref();
+    opts?.signal?.addEventListener("abort", abort, { once: true });
+    if (opts?.signal?.aborted) abort();
     child.stdout.on("data", (c: Buffer) => {
       if (out.length < MAX_RELAY_STDOUT) out += c.toString("utf8");
     });

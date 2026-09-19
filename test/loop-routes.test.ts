@@ -787,3 +787,25 @@ test("a legacy inbox sync cron cannot be re-enabled through an autonomous Loop p
   assert.equal((await call(deps, "PATCH", `/v1/loops/${loop.id}`, { state: "enabled" })).status, 200);
   assert.equal((await deps.crons!.get(cron.id))?.enabled, true);
 });
+
+for (const durable of [false, true]) {
+  test(`manual loop fire forwards the authenticated actor to ${durable ? "durable admission" : "execution"}`, async () => {
+    const deps = services();
+    const created = await call(deps, "POST", "/v1/loops", CREATE);
+    const loop = (created.body as { loop: Loop }).loop;
+    let received: unknown[] = [];
+    const fire = async (...args: unknown[]) => {
+      received = args;
+      return { status: "ok" as const };
+    };
+    deps.fire = { fire, ...(durable ? { requestFire: fire } : {}) } as never;
+    const result = await call(deps, "POST", `/v1/loops/${loop.id}/fire`, {});
+    assert.equal(result.status, 200);
+    assert.deepEqual(received, [
+      loop.id,
+      (result.body as { fireKey: string }).fireKey,
+      undefined,
+      { actorId: "josh", liveActor: true },
+    ]);
+  });
+}

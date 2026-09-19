@@ -172,6 +172,7 @@ export interface Config {
   heartbeatIntervalMs: number;
   reaperIntervalMs: number;
   shutdownDrainMs: number;
+  backgroundHandoffGraceMs: number;
   maxAttempts: number;
   maxClaims: number;
   processReaperIntervalMs: number;
@@ -518,7 +519,25 @@ function porterApiBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
     deployProjectId !== undefined && deployClusterId !== undefined
       ? `${(env.PORTER_DEPLOY_URL ?? "https://dashboard.porter.run").replace(/\/+$/, "")}/api/v2/alpha/projects/${deployProjectId}/clusters/${deployClusterId}`
       : undefined;
-  return env.PORTER_SANDBOX_BASE_URL ?? derived;
+  const explicit = env.PORTER_SANDBOX_BASE_URL || derived;
+  if (explicit) return explicit;
+  if (env.PORTER_CLUSTER_ID) {
+    const token = env.PORTER_DEPLOY_API_TOKEN || env.PORTER_SANDBOX_API_KEY;
+    if (!token) return undefined;
+    let project: unknown;
+    try {
+      const segments = token.split(".");
+      if (segments.length !== 3) throw new Error("invalid token");
+      project = (JSON.parse(Buffer.from(segments[1]!, "base64url").toString("utf8")) as { project_id?: unknown })
+        .project_id;
+    } catch {
+      throw new Error("Porter API token must be a JWT with a positive integer project_id claim");
+    }
+    if (typeof project !== "number" || !Number.isInteger(project) || project <= 0)
+      throw new Error("Porter API token must be a JWT with a positive integer project_id claim");
+    return `https://dashboard.porter.run/api/v2/alpha/projects/${project}/clusters/${env.PORTER_CLUSTER_ID}`;
+  }
+  return env.KUBERNETES_SERVICE_HOST ? "http://sandbox-api.porter-sandbox-system.svc.cluster.local:8080" : undefined;
 }
 
 const porterLocatorPresent = (env: NodeJS.ProcessEnv): boolean =>
@@ -534,7 +553,7 @@ function porterDeployVisibilityStrict(value: string | undefined): PorterDeployEn
 }
 
 function porterDeployEnv(env: NodeJS.ProcessEnv): PorterDeployEnv {
-  const token = env.PORTER_DEPLOY_API_TOKEN;
+  const token = env.PORTER_DEPLOY_API_TOKEN || env.PORTER_SANDBOX_API_KEY;
   const baseUrl = porterApiBaseUrl(env);
   const visibility = porterDeployVisibilityStrict(env.PORTER_DEPLOY_VISIBILITY);
   const ttlSec = numEnvStrict("PORTER_DEPLOY_TTL_SEC", env.PORTER_DEPLOY_TTL_SEC);
@@ -551,7 +570,7 @@ function porterDeployEnv(env: NodeJS.ProcessEnv): PorterDeployEnv {
 }
 
 function porterSandboxEnv(env: NodeJS.ProcessEnv): PorterSandboxEnv {
-  const token = env.PORTER_DEPLOY_API_TOKEN;
+  const token = env.PORTER_DEPLOY_API_TOKEN || env.PORTER_SANDBOX_API_KEY;
   const baseUrl = porterApiBaseUrl(env);
   const ttlSec = numEnvStrict("PORTER_SANDBOX_TTL_SEC", env.PORTER_SANDBOX_TTL_SEC);
   return {
@@ -878,6 +897,7 @@ export const CONFIG_DEFAULTS = {
   heartbeatIntervalMs: 10_000,
   reaperIntervalMs: 15_000,
   shutdownDrainMs: 10_000,
+  backgroundHandoffGraceMs: 120_000,
   maxAttempts: 3,
   maxClaims: 8,
   processReaperIntervalMs: 30_000,
@@ -1535,6 +1555,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       Math.max(1_000, Math.floor((numEnvStrict("LEASE_TTL_MS", env.LEASE_TTL_MS) ?? CONFIG_DEFAULTS.leaseTtlMs) / 3)),
     reaperIntervalMs: numEnvStrict("REAPER_INTERVAL_MS", env.REAPER_INTERVAL_MS) ?? CONFIG_DEFAULTS.reaperIntervalMs,
     shutdownDrainMs: numEnvStrict("SHUTDOWN_DRAIN_MS", env.SHUTDOWN_DRAIN_MS) ?? CONFIG_DEFAULTS.shutdownDrainMs,
+    backgroundHandoffGraceMs: Math.min(
+      120_000,
+      Math.max(
+        0,
+        numEnvStrict("BACKGROUND_HANDOFF_GRACE_MS", env.BACKGROUND_HANDOFF_GRACE_MS) ??
+          CONFIG_DEFAULTS.backgroundHandoffGraceMs,
+      ),
+    ),
     maxAttempts: numEnvStrict("MAX_ATTEMPTS", env.MAX_ATTEMPTS) ?? CONFIG_DEFAULTS.maxAttempts,
     maxClaims: numEnvStrict("MAX_CLAIMS", env.MAX_CLAIMS) ?? CONFIG_DEFAULTS.maxClaims,
     processReaperIntervalMs:

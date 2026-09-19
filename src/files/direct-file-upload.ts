@@ -11,7 +11,7 @@ import {
   type Part,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { isNoSuchKey, type S3Send } from "../persistence/s3.ts";
+import { abortS3MultipartUpload, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 import {
   FileArtifactDeletedError,
   artifactPath,
@@ -50,9 +50,9 @@ export interface DirectFileUploads {
   ): Promise<FileUpload>;
   get(id: string): Promise<FileUpload | null>;
   sign(id: string, partNumber: number): Promise<{ url: string; headers: Record<string, string>; expiresAt: number }>;
-  complete(id: string): Promise<FileArtifact>;
-  abort(id: string): Promise<void>;
-  sweep(): Promise<void>;
+  complete(id: string, signal?: AbortSignal): Promise<FileArtifact>;
+  abort(id: string, signal?: AbortSignal): Promise<void>;
+  sweep(signal?: AbortSignal): Promise<void>;
   start(): void;
   stop(): Promise<void>;
 }
@@ -68,7 +68,7 @@ export function createDirectFileUploads(options: {
   now?: () => number;
 }): DirectFileUploads {
   const nativeClient = new S3Client(options.region ? { region: options.region } : {});
-  const client = options.client ?? nativeClient;
+  const client = s3Client(options.region, options.client ?? nativeClient);
   const presign =
     options.presign ??
     ((command, expiresIn) =>
@@ -83,18 +83,24 @@ export function createDirectFileUploads(options: {
     Bucket: options.bucket,
     Key: `${options.prefix ?? ""}files/uploads/${row.id}`,
   });
-  async function requireRow(id: string): Promise<FileUpload> {
+  async function requireRow(id: string, signal?: AbortSignal): Promise<FileUpload> {
+    signal?.throwIfAborted();
     const row = await store.get(id);
+    signal?.throwIfAborted();
     if (!row) throw new FileUploadError("upload not found", 404);
     return row;
   }
-  async function verifyObject(row: FileUpload): Promise<boolean> {
+  async function verifyObject(row: FileUpload, signal?: AbortSignal): Promise<boolean> {
+    signal?.throwIfAborted();
     try {
-      const head = (await client.send(new HeadObjectCommand({ ...target(row), ChecksumMode: "ENABLED" }))) as {
+      const head = (await client.send(new HeadObjectCommand({ ...target(row), ChecksumMode: "ENABLED" }), {
+        abortSignal: signal,
+      })) as {
         ContentLength?: number;
         ChecksumSHA256?: string;
         Metadata?: Record<string, string>;
       };
+      signal?.throwIfAborted();
       if (
         head.ContentLength !== row.sizeBytes ||
         head.ChecksumSHA256 !== multipartChecksum(row.checksums) ||
@@ -103,21 +109,25 @@ export function createDirectFileUploads(options: {
         throw new FileUploadError("completed object integrity check failed", 409);
       return true;
     } catch (error) {
+      signal?.throwIfAborted();
       if (isNoSuchKey(error)) return false;
       throw error;
     }
   }
-  async function uploadedParts(row: FileUpload): Promise<Part[]> {
+  async function uploadedParts(row: FileUpload, signal?: AbortSignal): Promise<Part[]> {
     const parts: Part[] = [];
     let marker: string | undefined;
     do {
+      signal?.throwIfAborted();
       const result = (await client.send(
         new ListPartsCommand({
           ...target(row),
           UploadId: row.uploadId,
           ...(marker ? { PartNumberMarker: marker } : {}),
         }),
+        { abortSignal: signal },
       )) as { Parts?: Part[]; IsTruncated?: boolean; NextPartNumberMarker?: string };
+      signal?.throwIfAborted();
       parts.push(...(result.Parts ?? []));
       marker = result.IsTruncated ? result.NextPartNumberMarker : undefined;
       if (result.IsTruncated && !marker) throw new Error("S3 omitted the next part marker");
@@ -136,7 +146,7 @@ export function createDirectFileUploads(options: {
       throw new FileUploadError("upload parts are incomplete or do not match the manifest", 409);
     return parts;
   }
-  const sweeper = createSweeper(() => service.sweep(), 60_000, { label: "file uploads", immediate: true });
+  const sweeper = createSweeper((signal) => service.sweep(signal), 60_000, { label: "file uploads", immediate: true });
   const service: DirectFileUploads = {
     async begin(input) {
       if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 0 || input.sizeBytes > MAX_DIRECT_FILE_BYTES)
@@ -194,7 +204,7 @@ export function createDirectFileUploads(options: {
       try {
         await store.insert(row);
       } catch (error) {
-        await client.send(new AbortMultipartUploadCommand({ ...target(row), UploadId: row.uploadId }));
+        await abortS3MultipartUpload(client, { ...target(row), UploadId: row.uploadId });
         const raced = await store.get(id);
         if (raced && matches(raced)) return raced;
         throw error;
@@ -228,10 +238,11 @@ export function createDirectFileUploads(options: {
         expiresAt: now() + expiresIn * 1000,
       };
     },
-    async complete(id) {
-      let row = await requireRow(id);
+    async complete(id, signal) {
+      let row = await requireRow(id, signal);
       if (row.state === "complete") {
         const artifact = await files.get(id, { includeDisabled: true });
+        signal?.throwIfAborted();
         if (!artifact) throw new FileUploadError("published file was deleted", 410);
         if (
           artifact.blobKey !== `files/uploads/${id}` ||
@@ -245,21 +256,24 @@ export function createDirectFileUploads(options: {
       if (row.state !== "pending" && row.state !== "completing")
         throw new FileUploadError("upload cannot be completed", 409);
       if (row.state === "pending" && row.expiresAt <= now()) throw new FileUploadError("upload expired", 409);
-      if (!(await verifyObject(row))) {
+      if (!(await verifyObject(row, signal))) {
         let parts: Part[];
         try {
-          parts = await uploadedParts(row);
+          parts = await uploadedParts(row, signal);
         } catch (error) {
           if (!(error instanceof Error) || error.name !== "NoSuchUpload") throw error;
-          if (await verifyObject(row)) return service.complete(id);
+          if (await verifyObject(row, signal)) return service.complete(id, signal);
+          signal?.throwIfAborted();
           await store.transition(id, ["pending", "completing"], "failed");
           throw new FileUploadError("upload bytes are no longer available", 410);
         }
+        signal?.throwIfAborted();
         if (row.state === "pending" && !(await store.transition(id, ["pending"], "completing"))) {
-          row = await requireRow(id);
+          row = await requireRow(id, signal);
           if (row.state !== "completing" && row.state !== "complete")
             throw new FileUploadError("upload was aborted", 409);
         }
+        signal?.throwIfAborted();
         try {
           await client.send(
             new CompleteMultipartUploadCommand({
@@ -275,16 +289,18 @@ export function createDirectFileUploads(options: {
                 })),
               },
             }),
+            { abortSignal: signal },
           );
         } catch (error) {
-          if (!(await verifyObject(row))) throw error;
+          if (!(await verifyObject(row, signal))) throw error;
         }
-        if (!(await verifyObject(row))) throw new FileUploadError("completed object is missing", 409);
+        if (!(await verifyObject(row, signal))) throw new FileUploadError("completed object is missing", 409);
       }
-      const current = await requireRow(id);
+      const current = await requireRow(id, signal);
       if (current.state !== "completing" && current.state !== "complete")
         throw new FileUploadError("upload cannot be published", 409);
       let artifact: FileArtifact;
+      signal?.throwIfAborted();
       try {
         ({ artifact } = await files.publish({
           id,
@@ -302,6 +318,7 @@ export function createDirectFileUploads(options: {
         }));
       } catch (error) {
         if (!(error instanceof FileArtifactDeletedError)) throw error;
+        signal?.throwIfAborted();
         await store.transition(id, ["completing"], "complete");
         throw new FileUploadError("published file was deleted", 410);
       }
@@ -311,30 +328,39 @@ export function createDirectFileUploads(options: {
         artifact.createdBy !== row.actorId
       )
         throw new FileUploadError("file identity conflict", 409);
+      signal?.throwIfAborted();
       await store.transition(id, ["completing"], "complete");
       return artifact;
     },
-    async abort(id) {
-      let row = await requireRow(id);
+    async abort(id, signal) {
+      let row = await requireRow(id, signal);
       if (row.state === "aborted" || row.state === "failed") return;
       if (row.state === "pending") {
-        if (!(await store.transition(id, ["pending"], "aborting"))) row = await requireRow(id);
+        signal?.throwIfAborted();
+        if (!(await store.transition(id, ["pending"], "aborting"))) row = await requireRow(id, signal);
         else row = { ...row, state: "aborting" };
       }
       if (row.state !== "aborting") throw new FileUploadError("upload completion has already started", 409);
+      signal?.throwIfAborted();
       try {
-        await client.send(new AbortMultipartUploadCommand({ ...target(row), UploadId: row.uploadId }));
+        await client.send(new AbortMultipartUploadCommand({ ...target(row), UploadId: row.uploadId }), {
+          abortSignal: signal,
+        });
       } catch (error) {
         if (!(error instanceof Error) || error.name !== "NoSuchUpload") throw error;
       }
+      signal?.throwIfAborted();
       await store.transition(id, ["aborting"], "aborted");
     },
-    async sweep() {
+    async sweep(signal) {
+      if (signal?.aborted) return;
       for (const row of await store.expired(now())) {
+        if (signal?.aborted) return;
         try {
-          if (row.state === "completing") await service.complete(row.id);
-          else await service.abort(row.id);
+          if (row.state === "completing") await service.complete(row.id, signal);
+          else await service.abort(row.id, signal);
         } catch (error) {
+          if (signal?.aborted) return;
           if (error instanceof FileUploadError && error.status === 410) continue;
           console.warn("[file uploads] cleanup failed", row.id, error instanceof Error ? error.name : "unknown");
         }
@@ -342,6 +368,7 @@ export function createDirectFileUploads(options: {
       let keyMarker: string | undefined;
       let uploadMarker: string | undefined;
       do {
+        if (signal?.aborted) return;
         const page = (await client.send(
           new ListMultipartUploadsCommand({
             Bucket: options.bucket,
@@ -350,6 +377,7 @@ export function createDirectFileUploads(options: {
             ...(keyMarker ? { KeyMarker: keyMarker } : {}),
             ...(uploadMarker ? { UploadIdMarker: uploadMarker } : {}),
           }),
+          { abortSignal: signal },
         )) as {
           Uploads?: Array<{ Key?: string; UploadId?: string; Initiated?: Date }>;
           IsTruncated?: boolean;
@@ -357,6 +385,7 @@ export function createDirectFileUploads(options: {
           NextUploadIdMarker?: string;
         };
         for (const upload of page.Uploads ?? []) {
+          if (signal?.aborted) return;
           if (
             !upload.Key ||
             !upload.UploadId ||
@@ -367,9 +396,11 @@ export function createDirectFileUploads(options: {
           const id = upload.Key.slice(`${options.prefix ?? ""}files/uploads/`.length);
           if (!/^[0-9a-f]{32}$/.test(id)) continue;
           const row = await store.get(id);
+          if (signal?.aborted) return;
           if (row?.state === "completing" && row.uploadId === upload.UploadId) continue;
           await client.send(
             new AbortMultipartUploadCommand({ Bucket: options.bucket, Key: upload.Key, UploadId: upload.UploadId }),
+            { abortSignal: signal },
           );
         }
         keyMarker = page.IsTruncated ? page.NextKeyMarker : undefined;

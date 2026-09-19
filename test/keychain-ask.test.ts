@@ -653,6 +653,7 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-asks-")), signingSecret: SECRET }));
+    built.runtime.startBackground();
     await built.app.upsertDirectory([
       { principalId: "U_ALICE", displayName: "Alice", type: "internal" },
       { principalId: "U_BOB", displayName: "Bob", type: "internal" },
@@ -684,6 +685,7 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
   });
   after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await built.runtime.stop();
   });
 
   it("gates creation: personal ownership and directory-verified channel membership", async () => {

@@ -3,6 +3,7 @@ import type { SkillPackFetcher } from "./pack-fetcher.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
+import { assertOperationActive } from "../util/async.ts";
 
 const TICK_LEASE_KEY = "skills:sync:tick";
 const DEFAULT_INTERVAL_MS = 300_000;
@@ -25,13 +26,16 @@ export function createSkillSyncEngine(deps: SkillSyncDeps): SkillSyncEngine {
 
   async function syncOne(packId: string): Promise<void> {
     const pack = await deps.packs.get(packId);
+    assertOperationActive();
     if (!pack) return;
     if (pack.syncMode === "tracked") {
       const head = await deps.fetcher.resolveRef(pack);
+      assertOperationActive();
       if (pack.lastImport?.status === "ok" && head === pack.lastImport.commit) return;
       await deps.reconcile(packId);
     } else {
       const head = await deps.fetcher.resolveRef(pack);
+      assertOperationActive();
       const available = pack.lastImport ? head !== pack.lastImport.commit : false;
       if (available !== Boolean(pack.updateAvailable)) {
         await deps.packs.update(packId, { updateAvailable: available });
@@ -39,8 +43,9 @@ export function createSkillSyncEngine(deps: SkillSyncDeps): SkillSyncEngine {
     }
   }
 
-  async function syncAll(): Promise<void> {
+  async function syncAll(signal?: AbortSignal): Promise<void> {
     for (const pack of await deps.packs.list()) {
+      if (signal?.aborted) break;
       try {
         await syncOne(pack.id);
       } catch (e) {
@@ -49,12 +54,12 @@ export function createSkillSyncEngine(deps: SkillSyncDeps): SkillSyncEngine {
     }
   }
 
-  const tick = async (): Promise<void> => {
-    await leaderLease.hold(TICK_LEASE_KEY, syncAll);
+  const tick = async (_now?: number, signal?: AbortSignal): Promise<void> => {
+    await leaderLease.hold(TICK_LEASE_KEY, () => syncAll(signal));
   };
 
   const sweeper = createSweeper(
-    () => tick().catch(reportFailureAs("skill-sync: tick", undefined)),
+    (signal) => tick(undefined, signal).catch(reportFailureAs("skill-sync: tick", undefined)),
     DEFAULT_INTERVAL_MS,
     { label: "skill-sync" },
   );

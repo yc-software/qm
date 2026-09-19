@@ -1,3 +1,8 @@
+import { createDurableTasks } from "../src/durable/tasks.ts";
+import { createScheduler } from "../src/cron/scheduler.ts";
+import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
+import { createIdentityService } from "../src/identity/identity-service.ts";
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
@@ -299,3 +304,72 @@ test("pg cron_fires: existing legacy history and later legacy completions remain
     await client.end();
   }
 });
+
+test("pg cron_fires: initiating actor proof survives admission and history roundtrip", { skip }, async () => {
+  const fires = createPostgresCronFireStore(URL!);
+  const entry = {
+    fireKey: "actor-proof",
+    threadRef: "actor-proof-thread",
+    firedAt: Date.now(),
+    status: "running" as const,
+    initiator: { actorId: "U1", liveActor: false },
+  };
+  assert.equal((await fires.beginExclusive("proof-cron", entry, 60_000)).begun, true);
+  const reopened = createPostgresCronFireStore(URL!);
+  assert.deepEqual((await reopened.listByCron("proof-cron")).runs[0]?.initiator, entry.initiator);
+  assert.deepEqual((await reopened.latestForThread("proof-cron", entry.threadRef))?.initiator, entry.initiator);
+  assert.deepEqual((await reopened.listByThreadRefs([entry.threadRef]))[0]?.initiator, entry.initiator);
+  await reopened.backfill("proof-copy", [entry]);
+  assert.deepEqual((await reopened.listByCron("proof-copy")).runs[0]?.initiator, entry.initiator);
+});
+
+for (const legacy of [false, true]) {
+  test(
+    `pg cron_fires: recovered manual admission cannot gain privilege with ${legacy ? "missing" : "non-live"} proof`,
+    { skip },
+    async (t) => {
+      const tasks = createDurableTasks({ queue: `proof-recovery-${legacy}` });
+      const fires = createPostgresCronFireStore(URL!);
+      const backing = createPostgresMapFactory(URL!).map<Cron>("fire_test_crons");
+      const crons = createCronStore(backing, { fires });
+      let calls = 0;
+      const scheduler = createScheduler({
+        tasks,
+        crons,
+        identity: createIdentityService(),
+        deliveries: createDeliveryStore(),
+        idempotency: createIdempotencyStore(),
+        run: async () => {
+          calls++;
+          return { status: "ok", reply: "Finished" };
+        },
+      });
+      const cron = await crons.create({
+        ...base,
+        action: `manual proof recovery ${legacy}`,
+        schedule: { everyMs: 60_000 },
+      });
+      const spawn = tasks.spawn.bind(tasks);
+      let interrupted = false;
+      tasks.spawn = async (...args) => {
+        if (args[0] === "cron.fire" && !interrupted) {
+          interrupted = true;
+          throw new Error("enqueue connection lost");
+        }
+        return spawn(...args);
+      };
+      await assert.rejects(scheduler.runNow(cron.id, { actorId: "U1", liveActor: false }), /enqueue connection lost/);
+      const pending = (await crons.listFires(cron.id)).runs[0]!;
+      assert.deepEqual(pending.initiator, { actorId: "U1", liveActor: false });
+      if (legacy) await crons.recordFire(cron.id, { ...pending, initiator: undefined });
+      await crons.update(cron.id, { unattendedGrants: ["admin.sessions.read"] });
+      await scheduler.tick();
+      const worker = tasks.start({ pollIntervalMs: 1 });
+      t.after(() => worker.stop());
+      const recovered = await spawn("cron.fire", {}, { idempotencyKey: pending.fireKey });
+      await tasks.result(recovered.taskId);
+      assert.equal(calls, 0);
+      assert.equal((await crons.listFires(cron.id)).runs[0]?.status, "refused");
+    },
+  );
+}

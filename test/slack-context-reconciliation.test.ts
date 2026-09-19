@@ -31,7 +31,7 @@ function reply(): Response {
 }
 
 for (const warm of [false, true]) {
-  test(`${warm ? "existing" : "fresh"} human thread includes the approval referent in the provider request and deduplicates after harness reset`, async () => {
+  test(`${warm ? "existing" : "fresh"} human thread includes the approval referent and deduplicates when the next turn rebuilds provider context`, async () => {
     const built = buildApp(
       testConfig({ harness: "pi", anthropicApiKey: "sk-test", securityScreenBackend: "off", sessionTapeMode: "serve" }),
     );
@@ -76,10 +76,11 @@ for (const warm of [false, true]) {
       const requestText = JSON.stringify(messages);
       assert.match(requestText, /The worker needs restarting/);
       assert.match(requestText, /Alex, can you approve/);
-      await built.runtime.stop();
-      built.runtime.start();
+      const firstRequestCount = requests.length;
       const second = await built.app.turn({ ...input, text: "yes, go ahead" });
       assert.equal(second.status, "ok", second.reason);
+      assert.equal(second.sessionId, first.sessionId);
+      assert.ok(requests.length > firstRequestCount, "the second turn made a fresh provider request");
       const next = JSON.stringify(JSON.parse(requests.at(-1)!).messages);
       assert.equal(next.split("Shall I restart the worker?").length - 1, 1);
       const session = await built.app.getSession(first.sessionId!);

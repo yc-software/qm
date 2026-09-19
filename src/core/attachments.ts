@@ -10,7 +10,13 @@ import type {
 } from "../types.ts";
 import { hasParentPathSegment, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
 import { MAX_BLOB_BYTES, collectBlob, type BlobTransferStore } from "../persistence/blob-transfer.ts";
-import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
+import {
+  fileArtifactId,
+  type FileArtifactStore,
+  type FileDirection,
+  type FileArtifact,
+} from "../files/file-artifact-store.ts";
+import type { TapeRecord } from "../sessions/session-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
@@ -21,8 +27,8 @@ export const INBOX_DIR = "inbox";
 export const SHARED_DIR = "shared";
 export const TURN_FILES_DIR = ".agent-turn";
 
-export function turnFileId(runId?: string, attempt = 1, now = Date.now()): string {
-  return `${now.toString(36)}-${hashId([runId ?? randomUUID(), String(attempt)], 24)}`;
+export function turnFileId(runId?: string, _attempt = 1, now = Date.now()): string {
+  return `${now.toString(36)}-${hashId([runId ?? randomUUID()], 24)}`;
 }
 
 export const MAX_ATTACHMENT_BYTES = MAX_BLOB_BYTES;
@@ -331,13 +337,22 @@ export async function materializeInbound(
       tooMany.push(safeAttachmentName(a.name));
       continue;
     }
-    const blob = await transfer.open(a.blobId);
+    const name = uniqueName(safeAttachmentName(a.name), usedNames);
+    let blob = await transfer.open(a.blobId);
+    if (!blob && register) {
+      const artifact = await register.store.get(fileArtifactId(register.seed, "in", metas.length));
+      if (
+        artifact?.name === name &&
+        artifact.ownerScopeId === register.ownerScopeId &&
+        artifact.createdInScope === register.createdInScope
+      )
+        blob = await register.store.open(artifact.id);
+    }
     if (!blob) {
       unavailable.push(safeAttachmentName(a.name));
       continue;
     }
     const bytes = await collectBlob(blob.stream);
-    const name = uniqueName(safeAttachmentName(a.name), usedNames);
     usedNames.add(name);
     const mimetype = baseMime(a.mimetype || mimeFromName(name));
     const textContent = screenText ? decodeText(bytes, name, mimetype) : null;
@@ -373,6 +388,34 @@ export async function materializeInbound(
     }
   }
   return { metas, images, tooMany, unavailable, blocked, unscreened };
+}
+
+export async function restoreInboundFiles(
+  tape: readonly TapeRecord[],
+  runId: string,
+  inboxRoot: string,
+  files: FileArtifactStore,
+  mayRead: (artifact: FileArtifact) => Promise<boolean>,
+  write: (path: string, bytes: Uint8Array) => Promise<void>,
+): Promise<void> {
+  for (const row of tape) {
+    const payload = row.payload as {
+      event?: string;
+      runId?: string;
+      inboxDir?: string;
+      metas?: AttachmentMeta[];
+    } | null;
+    if (row.kind !== "annotation" || payload?.event !== "turn_inbound_files" || payload.runId !== runId) continue;
+    const dir = payload.inboxDir;
+    if (!dir || (dir !== inboxRoot && !dir.startsWith(`${inboxRoot}/`)) || hasParentPathSegment(dir)) continue;
+    for (const meta of payload.metas ?? []) {
+      if (!meta.artifactId || safeAttachmentName(meta.name) !== meta.name) continue;
+      const artifact = await files.get(meta.artifactId);
+      if (!artifact || !(await mayRead(artifact))) continue;
+      const opened = await files.open(artifact.id);
+      if (opened) await write(`${dir}/${meta.name}`, await collectBlob(opened.stream));
+    }
+  }
 }
 
 const DELIVERY_NOTE_PREFIX = "[files delivered to the conversation: ";

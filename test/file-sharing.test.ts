@@ -34,11 +34,11 @@ import {
   sharedManifest,
   turnFileId,
 } from "../src/core/attachments.ts";
-import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
+import { createAttachStaging, type AttachmentState } from "../src/core/orchestrator/attach-tool.ts";
 
-test("turn file ids are stable within one attempt and fenced across retries", () => {
+test("turn file ids preserve advertised paths across retries", () => {
   assert.equal(turnFileId("run-1", 1, 123), turnFileId("run-1", 1, 123));
-  assert.notEqual(turnFileId("run-1", 1, 123), turnFileId("run-1", 2, 123));
+  assert.equal(turnFileId("run-1", 1, 123), turnFileId("run-1", 2, 123));
   assert.notEqual(turnFileId(undefined, 1, 123), turnFileId(undefined, 1, 123));
 });
 
@@ -626,4 +626,95 @@ test("a binary file round-trips through the sandbox (base64-over-exec) without u
   await sandbox.writeFileBytes(handle, "keep.bin", raw);
   const read = await sandbox.readFileBytes(handle, "keep.bin");
   assert.deepEqual(new Uint8Array(read!), raw);
+});
+
+test("committed attachment staging survives a new attempt and replaces the same source path", async () => {
+  const { sandbox, handle, files } = fakeSandbox();
+  const blobTransfer = createMemoryBlobTransferStore();
+  files.set("report.txt", Buffer.from("first"));
+  let saved: AttachmentState | undefined;
+  const context = {
+    sandbox,
+    provision: async () => handle,
+    blobTransfer,
+    fileRegistration: {
+      store: null as never,
+      ownerScopeId: "personal:U1" as const,
+      createdBy: "U1",
+      seed: "durable-attach",
+    },
+    persist: async (state: AttachmentState) => {
+      saved = structuredClone(state);
+    },
+  };
+  const first = createAttachStaging(context);
+  assert.equal((await first.attach(["report.txt"])).ok, true);
+  assert.equal(saved?.entries.length, 1);
+  const second = createAttachStaging({ ...context, restored: saved });
+  assert.deepEqual(second.staged(), first.staged());
+  files.set("report.txt", Buffer.from("replacement"));
+  assert.equal((await second.attach(["report.txt"])).ok, true);
+  assert.equal(second.staged().length, 1);
+  assert.equal(second.staged()[0]!.sizeBytes, 11);
+  assert.equal(saved?.calls, 2);
+});
+
+test("expired inbound transfer blobs recover from their durable artifact at the advertised path", async () => {
+  const { createMemoryFileArtifactStore } = await import("../src/files/file-artifact-store.ts");
+  const { createMemoryDurableByteStore } = await import("../src/files/durable-byte-store.ts");
+  const transfer = createMemoryBlobTransferStore();
+  const attachment = await inFile(transfer, "source.txt", "durable input");
+  const { sandbox, handle, files } = fakeSandbox();
+  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const register = { store, ownerScopeId: "personal:U1" as const, createdBy: "U1", seed: "inbound-run" };
+  const original = await materializeInbound(sandbox, handle, [attachment], transfer, register, "stable/inbox");
+  await transfer.delete(attachment.blobId);
+  files.clear();
+  const restored = await materializeInbound(sandbox, handle, [attachment], transfer, register, "stable/inbox");
+  assert.deepEqual(restored.metas, original.metas);
+  assert.equal(Buffer.from(files.get("stable/inbox/source.txt")!).toString(), "durable input");
+});
+
+test("steered files restore from tape to exact paths with current artifact authorization", async () => {
+  const { createMemoryFileArtifactStore } = await import("../src/files/file-artifact-store.ts");
+  const { createMemoryDurableByteStore } = await import("../src/files/durable-byte-store.ts");
+  const { restoreInboundFiles } = await import("../src/core/attachments.ts");
+  const transfer = createMemoryBlobTransferStore();
+  const { sandbox, handle, files } = fakeSandbox();
+  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const inboxDir = ".agent-turn/run/inbox/steer";
+  const received = await materializeInbound(
+    sandbox,
+    handle,
+    [await inFile(transfer, "steer.txt", "steered")],
+    transfer,
+    { store, ownerScopeId: "personal:U1", createdBy: "U1", seed: "steered-run" },
+    inboxDir,
+  );
+  const tape = [
+    { kind: "annotation", payload: { event: "turn_inbound_files", runId: "run", inboxDir, metas: received.metas } },
+  ] as import("../src/sessions/session-store.ts").TapeRecord[];
+  files.clear();
+  await restoreInboundFiles(
+    tape,
+    "run",
+    ".agent-turn/run/inbox",
+    store,
+    async () => false,
+    async (path, bytes) => {
+      files.set(path, bytes);
+    },
+  );
+  assert.equal(files.size, 0);
+  await restoreInboundFiles(
+    tape,
+    "run",
+    ".agent-turn/run/inbox",
+    store,
+    async () => true,
+    async (path, bytes) => {
+      files.set(path, bytes);
+    },
+  );
+  assert.equal(Buffer.from(files.get(`${inboxDir}/steer.txt`)!).toString(), "steered");
 });

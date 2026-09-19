@@ -1,3 +1,5 @@
+import { withAbort } from "../util/async.ts";
+import { prepareHarnessInput } from "./harness.ts";
 import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
 import { gatewayModelsJson, gatewayModelsVersion } from "../model/gateway-models.ts";
 import { Type } from "typebox";
@@ -48,8 +50,8 @@ import type {
   TapeMeta,
   TapeRecord,
 } from "../sessions/session-store.ts";
-import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
-import { NonRetryableTurnError, TitleRejected } from "../core/turn-error.ts";
+import { isOverheardEntry, tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
+import { NonRetryableTurnError, TitleRejected, TurnHandedOff } from "../core/turn-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
 import {
@@ -1043,8 +1045,12 @@ export function emptyEndingNote(opts: {
 
 export async function raceTurnWallClock(
   prompting: Promise<void>,
-  opts: { capMs: number; graceMs?: number; abort: () => Promise<void>; extendMs?: () => number },
+  opts: { capMs: number; graceMs?: number; abort: () => Promise<void>; extendMs?: () => number; signal?: AbortSignal },
 ): Promise<TurnWallClockOutcome> {
+  if (opts.signal) {
+    const active = prompting;
+    prompting = withAbort(() => active, opts.signal);
+  }
   if (!Number.isFinite(opts.capMs) || opts.capMs <= 0) {
     await prompting;
     return "ok";
@@ -1263,6 +1269,22 @@ export async function buildModelRuntime(
   return runtime;
 }
 
+function promptWithCancellation(
+  session: AgentSession,
+  text: string,
+  signal?: AbortSignal,
+  options?: Parameters<AgentSession["prompt"]>[1],
+): Promise<void> {
+  signal?.throwIfAborted();
+  return session.prompt(text, {
+    ...options,
+    preflightResult(success) {
+      options?.preflightResult?.(success);
+      if (success) signal?.throwIfAborted();
+    },
+  });
+}
+
 export async function oneShot(
   prefix: string,
   model: Model<Api>,
@@ -1296,7 +1318,7 @@ export async function oneShot(
     };
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
     try {
-      await session.prompt(prompt);
+      await promptWithCancellation(session, prompt, opts?.signal);
     } catch (err) {
       throw piTurnError(session, err, messagesBefore);
     } finally {
@@ -1636,6 +1658,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       if (agent) {
         const prior = agent.onPayload;
         agent.onPayload = async (payload, model) => {
+          ref.abortSignal?.throwIfAborted();
+          if (ref.handoffDeadline?.aborted) throw new TurnHandedOff();
           ref.modelCalls = (ref.modelCalls ?? 0) + 1;
           (ref.modelDispatch ??= []).push({
             start: Date.now(),
@@ -1671,6 +1695,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               swallow("pi: llm request capture", e);
             }
           }
+          ref.abortSignal?.throwIfAborted();
+          if (ref.handoffDeadline?.aborted) throw new TurnHandedOff();
           return finalPayload;
         };
         const priorResponse = agent.onResponse;
@@ -1696,6 +1722,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         agent.afterToolCall = pauseStampAfterToolCall(ref, agent.afterToolCall);
         const priorPrepare = agent.prepareNextTurn;
         agent.prepareNextTurn = async (signal) => {
+          if (ref.handoffRequested && !ref.pausedOnApproval && !ref.silentRequested && (ref.modelCalls ?? 0) > 0)
+            throw new TurnHandedOff();
           try {
             ref.pendingPrepareNextTurn = Date.now();
           } catch (e) {
@@ -1797,19 +1825,24 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           };
           turn.onGapWork?.(collectGapWork);
           entry.ref.onGapWork = collectGapWork;
-          const userEntry = await turn.emit({
-            type: "user",
-            payload: {
-              text: turn.input,
-              ...(turn.environment ? { environment: turn.environment } : {}),
-              ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
-              ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
-            },
-            scopeLabel: turn.scopeLabel,
-          });
+          const resumedUserEntry = turn.continueTurn
+            ? [...turn.history].reverse().find((e) => e.type === "user" && !isOverheardEntry(e))
+            : undefined;
+          const userEntry =
+            resumedUserEntry ??
+            (await turn.emit({
+              type: "user",
+              payload: {
+                text: turn.input,
+                ...(turn.environment ? { environment: turn.environment } : {}),
+                ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
+                ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
+              },
+              scopeLabel: turn.scopeLabel,
+            }));
           const grindMeter = createGrindMeter();
 
-          if (!entry.ref.goal) entry.ref.goal = rehydrateOpenGoal(turn.history);
+          if (!entry.ref.goal) entry.ref.goal = rehydrateOpenGoal(turn.history, turn.tapeRows);
           entry.ref.goalMeter = grindMeter;
           entry.ref.goalRound = 0;
           const activeGoalAtStart = entry.ref.goal?.status === "active" ? entry.ref.goal : null;
@@ -1838,7 +1871,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const stepWindows: Array<{ gapStart?: number; gapEnd: number }> = [];
           let thinkTail: Promise<unknown> = Promise.resolve();
           let tapeError: Error | undefined;
-          let tapedTriggerUser = false;
+          let tapedTriggerUser = !!turn.continueTurn;
           const toolAbort = new AbortController();
           const pendingSteerTapeMeta: Array<{
             text: string;
@@ -1875,6 +1908,18 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const resultScope = typeof callId === "string" ? entry.ref.tapeResultScopes?.get(callId) : undefined;
             if (typeof callId === "string") entry.ref.tapeResultScopes?.delete(callId);
             const steerStamp = role === "user" && !isTrigger ? steerTapeStamp(message) : undefined;
+            if (
+              role === "assistant" &&
+              entry.ref.goal &&
+              (entry.ref.goal.status === "active" || entry.ref.goal.status === "complete")
+            ) {
+              const usage = piUsageToCallUsage(
+                (message as { usage?: Partial<Usage> }).usage,
+                entry.agentSession.model,
+                entry.ref.fast,
+              );
+              meterGoalCall(entry.ref.goal, usage);
+            }
             const rec: NewTapeRecord = {
               kind: "message",
               harness: "pi",
@@ -1893,6 +1938,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 : {}),
               ...(steerStamp ? { meta: steerStamp.meta } : {}),
             };
+            rec.meta = { ...rec.meta, goal: entry.ref.goal ? { ...entry.ref.goal } : null };
             try {
               await turn.tape(rec);
             } catch (err) {
@@ -1938,7 +1984,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               const usage = piUsageToCallUsage(u, stepModel, entry.ref.fast);
               meterGrindCall(grindMeter, usage, stepModel?.id ?? effectiveModel);
               const meteredGoal = entry.ref.goal;
-              if (meteredGoal && (meteredGoal.status === "active" || meteredGoal.status === "complete"))
+              if (!turn.tape && meteredGoal && (meteredGoal.status === "active" || meteredGoal.status === "complete"))
                 meterGoalCall(meteredGoal, usage);
               callStats.push({
                 ttftMs: curStart !== undefined && curFirst !== undefined ? curFirst - curStart : null,
@@ -2082,7 +2128,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           };
           let userAborted = false;
           let recoveryDead = false;
+          let handoffAborted = false;
+          let handedOff = false;
           entry.ref.abortSignal = toolAbort.signal;
+          entry.ref.handoffDeadline = turn.handoffDeadline;
+          entry.ref.handoffRequested = false;
           const onCancel = (): void => {
             toolAbort.abort();
             void entry.agentSession.abort().catch(swallowAs("pi: lease-lost abort", undefined));
@@ -2090,6 +2140,23 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           if (turn.cancel) {
             if (turn.cancel.aborted) onCancel();
             else turn.cancel.addEventListener("abort", onCancel, { once: true });
+          }
+          const onHandoffRequested = (): void => {
+            entry.ref.handoffRequested = true;
+          };
+          const onHandoffDeadline = (): void => {
+            if (!entry.ref.handoffRequested || userAborted || turn.cancel?.aborted) return;
+            handoffAborted = true;
+            toolAbort.abort();
+            void entry.agentSession.abort().catch(swallowAs("pi: handoff deadline abort", undefined));
+          };
+          if (turn.handoff) {
+            if (turn.handoff.aborted) onHandoffRequested();
+            else turn.handoff.addEventListener("abort", onHandoffRequested, { once: true });
+          }
+          if (turn.handoffDeadline) {
+            if (turn.handoffDeadline.aborted) onHandoffDeadline();
+            else turn.handoffDeadline.addEventListener("abort", onHandoffDeadline, { once: true });
           }
           const steeredSeen = recordedMessageTimestamps(turn.history);
           const stopSignalPoll =
@@ -2099,7 +2166,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   turn.runId,
                   {
                     onSteer: async (text, ts, request) => {
-                      const prepared = await turn.prepareSteer?.(text, request);
+                      const prepared = await prepareHarnessInput(turn, async () => turn.prepareSteer?.(text, request));
                       const prompt = prepared?.text ?? text;
                       if (!entry.agentSession.isStreaming) return false;
                       if (ts && !steeredSeen.has(ts)) {
@@ -2160,7 +2227,29 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const raceCapMs = floorCap.raceCapMs;
           const extendCapMs = floorCap.extendMs;
           let grindWaiverNote = "";
+          const handoffPending = (): boolean =>
+            entry.ref.handoffRequested === true &&
+            !userAborted &&
+            !turn.cancel?.aborted &&
+            !entry.ref.pausedOnApproval &&
+            !entry.ref.silentRequested &&
+            !entry.ref.pendingApprovals?.length &&
+            (handoffAborted || freshAssistantStopReason() === "toolUse" || freshAssistantStopReason() === "aborted");
+          const checkHandoff = (): void => {
+            if (
+              !userAborted &&
+              !turn.cancel?.aborted &&
+              !entry.ref.pausedOnApproval &&
+              !entry.ref.silentRequested &&
+              !entry.ref.pendingApprovals?.length &&
+              (turn.handoffDeadline?.aborted || handoffPending())
+            )
+              throw new TurnHandedOff();
+          };
+          const promptAgent = (text: string, options?: Parameters<AgentSession["prompt"]>[1]): Promise<void> =>
+            promptWithCancellation(entry.agentSession, text, turn.cancel, options);
           const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
+            checkHandoff();
             if (userAborted || turn.cancel?.aborted) return false;
             const fromId = (entry.agentSession.model as { id?: string } | undefined)?.id;
             const fallbackId = fromId ? refusalFallbackModelId(fromId) : undefined;
@@ -2185,9 +2274,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               }
             }
             const outcome = await raceTurnWallClock(
-              entry.agentSession.prompt(
-                refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal),
-              ),
+              promptAgent(refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal)),
               { capMs, extendMs: extendCapMs, abort: () => entry.agentSession.abort() },
             );
             if (userAborted) return false;
@@ -2198,14 +2285,20 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const images = turn.images?.length
               ? turn.images.map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType }))
               : undefined;
+            checkHandoff();
+            turn.cancel?.throwIfAborted();
             wallClock = await raceTurnWallClock(
-              entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
+              turn.continueTurn
+                ? entry.agentSession.agent.continue()
+                : promptAgent(modelPrompt, images ? { images } : undefined),
               {
                 capMs: raceCapMs(),
                 extendMs: extendCapMs,
                 abort: () => entry.agentSession.abort(),
+                signal: turn.handoffDeadline,
               },
             );
+            if (handoffPending()) throw new TurnHandedOff();
             const goalAfterPrompt = entry.ref.goal;
             if (
               wallClock === "ok" &&
@@ -2227,6 +2320,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 blocked: () =>
                   userAborted ||
                   !!turn.cancel?.aborted ||
+                  !!entry.ref.handoffRequested ||
                   !!entry.ref.runtimeHandoff ||
                   !!entry.ref.pausedOnApproval ||
                   !!entry.ref.pendingApprovals?.length,
@@ -2240,24 +2334,28 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   await thinkTail;
                 },
                 prompt: (note) => {
+                  checkHandoff();
                   if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS)
                     return Promise.resolve<TurnWallClockOutcome>("aborted");
-                  return raceTurnWallClock(entry.agentSession.prompt(note), {
+                  return raceTurnWallClock(promptAgent(note), {
                     capMs: raceCapMs(),
                     extendMs: extendCapMs,
                     abort: () => entry.agentSession.abort(),
+                    signal: turn.handoffDeadline,
                   });
                 },
               });
               wallClock = goalResult.outcome;
               grindWaiverNote = goalResult.waiverNote;
             }
+            checkHandoff();
             if (wallClock === "ok" && !entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
               const refusal = providerRefusalError(entry.agentSession, messagesBefore);
               if (refusal) {
                 try {
                   await attemptRefusalFallback(refusal);
                 } catch (e) {
+                  if (e instanceof TurnHandedOff) throw e;
                   swallow("pi: refusal fallback", e);
                   throw new NonRetryableTurnError(refusal);
                 }
@@ -2286,10 +2384,12 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 (turnWallClockMs <= 0 || capMs >= EMPTY_ENDING_MIN_BUDGET_MS)
               ) {
                 try {
-                  const outcome = await raceTurnWallClock(entry.agentSession.prompt(note), {
+                  checkHandoff();
+                  const outcome = await raceTurnWallClock(promptAgent(note), {
                     capMs,
                     extendMs: extendCapMs,
                     abort: () => entry.agentSession.abort(),
+                    signal: turn.handoffDeadline,
                   });
                   if (outcome !== "ok" && !userAborted) {
                     recoveryDead = true;
@@ -2301,30 +2401,41 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                     console.error(`[pi] turn still ended empty after re-prompt session=${turn.session.id}`);
                   }
                 } catch (e) {
+                  if (e instanceof TurnHandedOff) throw e;
                   swallow("pi: empty-ending re-prompt", e);
                   recoveryDead = true;
                 }
               }
             }
+            checkHandoff();
           } catch (err) {
             if (tapeError) throw tapeError;
-            const cancelAbortRejection =
-              turn.cancel?.aborted === true && (err as { name?: string } | null)?.name === "AbortError";
-            if (!userAborted && !cancelAbortRejection) {
-              const turnErr = piTurnError(entry.agentSession, err, messagesBefore);
-              let recovered = false;
-              if (isProviderRefusal(turnErr.message)) {
-                try {
-                  recovered = await attemptRefusalFallback(turnErr.message);
-                } catch (e) {
-                  swallow("pi: refusal fallback", e);
+            if (err instanceof TurnHandedOff || handoffPending()) {
+              handedOff = !userAborted && !turn.cancel?.aborted;
+            } else {
+              const cancelAbortRejection =
+                turn.cancel?.aborted === true &&
+                (err === turn.cancel.reason || (err as { name?: string } | null)?.name === "AbortError");
+              if (!userAborted && !cancelAbortRejection) {
+                const turnErr = piTurnError(entry.agentSession, err, messagesBefore);
+                let recovered = false;
+                if (isProviderRefusal(turnErr.message)) {
+                  try {
+                    recovered = await attemptRefusalFallback(turnErr.message);
+                  } catch (e) {
+                    if (e instanceof TurnHandedOff) throw e;
+                    swallow("pi: refusal fallback", e);
+                  }
                 }
+                if (!recovered && !userAborted) throw turnErr;
               }
-              if (!recovered && !userAborted) throw turnErr;
+              wallClock = "ok";
             }
-            wallClock = "ok";
           } finally {
             turn.cancel?.removeEventListener("abort", onCancel);
+            turn.handoff?.removeEventListener("abort", onHandoffRequested);
+            turn.handoffDeadline?.removeEventListener("abort", onHandoffDeadline);
+            entry.ref.handoffRequested = false;
             await stopSignalPoll?.();
             unsubscribeTape?.();
             unsubscribe?.();
@@ -2335,6 +2446,24 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             entry.ref.screenToolResult = undefined;
           }
           if (tapeError) throw tapeError;
+          if (handedOff) {
+            if (handoffAborted && turn.tape) {
+              const partialText = (entry.agentSession.getLastAssistantText() ?? "").trim();
+              if (partialText)
+                await turn.tape({
+                  kind: "annotation",
+                  payload: { event: "handoff_partial", text: partialText, at: Date.now() },
+                  scopeLabel: turn.scopeLabel,
+                });
+            }
+            return {
+              reply: "",
+              handedOff: true,
+              modelCalls: entry.ref.modelCalls ?? 0,
+              compileMs,
+              cacheUsage: sumCacheUsage(callStats) ?? undefined,
+            };
+          }
           if (wallClockTurnFailure(wallClock, userAborted, turn.cancel?.aborted === true)) {
             const capLabel =
               turnWallClockMs % 60_000 === 0
@@ -2366,6 +2495,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const cancelStoppedCleanly =
             turn.cancel?.aborted === true && (freshStopReason === "aborted" || freshStopReason === undefined);
           if (userAborted || cancelStoppedCleanly) {
+            if (!tapedTriggerUser) await tapeEntryMirror(userEntry);
             const freshMessages = entry.agentSession.messages.slice(messagesBefore);
             const lastFreshAssistant = [...freshMessages]
               .reverse()
@@ -2497,11 +2627,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         return contextTokenBudgetForModel(id);
       },
 
-      async oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {
+      async oneShot(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined> {
         const model = getRequiredModel(resolveModelId());
         const providerKeys = await resolveProviderKeys();
         if (!keyForModel(providerKeys, model)) return undefined;
-        return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, { modelGateway });
+        return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, { modelGateway, signal });
       },
 
       async judge(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined> {

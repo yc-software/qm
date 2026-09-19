@@ -1,7 +1,7 @@
 import { SignatureV4 } from "@smithy/signature-v4";
 import { Sha256 } from "@aws-crypto/sha256-js";
 import { defaultProvider } from "@aws-sdk/credential-provider-node";
-import { sleep } from "../util/async.ts";
+import { sleep, assertOperationActive, getOperationSignal } from "../util/async.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 
 type CredentialProvider = () => Promise<{
@@ -101,6 +101,7 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
   const signer = new SignatureV4({ service: "lambda", region, sha256: Sha256, credentials });
 
   async function call<T>(method: string, path: string, body?: unknown): Promise<{ status: number; json: T }> {
+    assertOperationActive();
     const payload = body === undefined ? "" : JSON.stringify(body);
     const signed = await signer.sign({
       method,
@@ -115,6 +116,7 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
       method,
       headers: signed.headers as Record<string, string>,
       ...(payload ? { body: payload } : {}),
+      signal: AbortSignal.any([AbortSignal.timeout(60_000), ...(getOperationSignal() ? [getOperationSignal()!] : [])]),
     });
     const text = await res.text();
     let json: unknown = undefined;
@@ -241,6 +243,7 @@ export async function vmFetch(
   path: string,
   opts: VmFetchOptions = {},
 ): Promise<{ status: number; text: string }> {
+  assertOperationActive();
   const doFetch = opts.fetchImpl ?? fetch;
   const payload = opts.body === undefined ? undefined : JSON.stringify(opts.body);
   const res = await doFetch(`https://${endpoint}${path}`, {
@@ -251,7 +254,10 @@ export async function vmFetch(
       ...(payload ? { "content-type": "application/json" } : {}),
     },
     ...(payload ? { body: payload } : {}),
-    signal: AbortSignal.timeout(opts.timeoutMs ?? 120_000),
+    signal: AbortSignal.any([
+      AbortSignal.timeout(opts.timeoutMs ?? 120_000),
+      ...(getOperationSignal() ? [getOperationSignal()!] : []),
+    ]),
   });
   return { status: res.status, text: await res.text() };
 }

@@ -1,11 +1,10 @@
-import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { orgId as configOrgId } from "../config.ts";
-import { createKeyedQueue } from "../util/async.ts";
+import { createKeyedQueue, assertOperationActive, withCleanupSignal, withOperationSignal } from "../util/async.ts";
 import { collectBlob } from "../persistence/blob-transfer.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -27,7 +26,7 @@ import {
   ephemeralCredLinkPaths,
   type CredentialPathSpec,
 } from "../credentials/resident-paths.ts";
-import { killableScript, killScript } from "./exec-kill.ts";
+import { runKillable } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
 import { ModalNameConflictError, ModalSandboxGoneError, type ModalClient, type ModalSession } from "./modal-client.ts";
@@ -153,6 +152,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
 
   async function snapshotHome(scope: string, session: ModalSession): Promise<void> {
     await assertHydrated(session);
+    assertOperationActive();
     if (usesNativeSnapshots(await store.get(scope))) {
       if (!session.snapshotHome) throw new Error("native Modal home checkpoint is not supported by this client");
       if (!store.update) throw new Error("native Modal checkpoints require an atomic durable store");
@@ -168,6 +168,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       const capturedAtMs = Date.now();
       try {
         const snapshot = await session.snapshotHome();
+        assertOperationActive();
         const committed = await store.update(scope, (current) =>
           current.sandboxId === session.sandboxId && current.snapshotGeneration === requested.snapshotGeneration
             ? {
@@ -227,18 +228,32 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       }
       return { session: adopted, coldStart: false };
     }
-    await store.put(scope, {
-      ...previous,
-      hydrationPending: true,
-      lastSnapshotAttemptMs: undefined,
-      ...(client.lifetimeMs ? { expiresAtMs: Date.now() + client.lifetimeMs } : {}),
-      sandboxId: session.sandboxId,
-      createdAtMs: Date.now(),
-      lastActivityMs: Date.now(),
-      orgId: configOrgId(),
-    });
+    const abandon = async (error: unknown): Promise<void> => {
+      await withCleanupSignal(15_000, async () => {
+        const terminated = await session.terminate().then(
+          () => true,
+          () => false,
+        );
+        await store.update?.(scope, (current) =>
+          current.sandboxId === session.sandboxId
+            ? { ...current, recoveryError: errMessage(error), hydrationPending: !terminated }
+            : current,
+        );
+      }).catch(swallowAs("modal-sandbox: abandon incomplete hydration", undefined));
+    };
     let hydrated: boolean;
     try {
+      assertOperationActive();
+      await store.put(scope, {
+        ...previous,
+        hydrationPending: true,
+        lastSnapshotAttemptMs: undefined,
+        ...(client.lifetimeMs ? { expiresAtMs: Date.now() + client.lifetimeMs } : {}),
+        sandboxId: session.sandboxId,
+        createdAtMs: Date.now(),
+        lastActivityMs: Date.now(),
+        orgId: configOrgId(),
+      });
       if (previous?.nativeSnapshotId) {
         if (!session.restoreHome) throw new Error("native Modal home restore is not supported by this client");
         await session.restoreHome(previous.nativeSnapshotId);
@@ -246,14 +261,12 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       } else {
         hydrated = await homeSnapshots.hydrateHome(scope, session);
       }
+      assertOperationActive();
     } catch (e) {
-      await store.merge(scope, { recoveryError: errMessage(e) });
       reportError("sandbox_hydrate", "hydrate_failed", errMessage(e), scope);
       sessionByName.delete(name);
-      await session.terminate().then(
-        () => store.merge(scope, { hydrationPending: false }),
-        () => undefined,
-      );
+      await abandon(e);
+      assertOperationActive();
       throw new Error(`modal provision: home hydration failed (${errMessage(e)}); not risking the stored snapshot`, {
         cause: e,
       });
@@ -261,11 +274,10 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     const marked = await session.runCommand(`touch ${shq(HYDRATED_MARKER)}`, { timeoutMs: 30_000 });
     if (marked.exitCode !== 0) {
       sessionByName.delete(name);
-      await session.terminate().then(
-        () => store.merge(scope, { hydrationPending: false }),
-        () => undefined,
-      );
-      throw new Error(`modal provision: could not mark the sandbox hydrated: ${marked.stderr.slice(0, 200)}`);
+      const error = new Error(`modal provision: could not mark the sandbox hydrated: ${marked.stderr.slice(0, 200)}`);
+      await abandon(error);
+      assertOperationActive();
+      throw error;
     }
     await store.merge(scope, { hydrationPending: false });
     sessionByName.set(name, session);
@@ -432,14 +444,16 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     await store.merge(scope, { lastActivityMs: now }).catch(() => undefined);
   }
 
+  async function execSession(session: ModalSession, script: string, timeoutSec: number): Promise<ExecResult> {
+    const r = await session.runCommand(`timeout ${timeoutSec} sh -c ${shq(script)}`, {
+      timeoutMs: timeoutSec * 1000 + 30_000,
+    });
+    return { stdout: r.stdout, stderr: r.stderr, code: r.exitCode, timedOut: r.exitCode === 124 };
+  }
+
   async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
     await touchActivity(name);
-    return withSession(name, async (session) => {
-      const r = await session.runCommand(`timeout ${timeoutSec} sh -c ${shq(script)}`, {
-        timeoutMs: timeoutSec * 1000 + 30_000,
-      });
-      return { stdout: r.stdout, stderr: r.stderr, code: r.exitCode, timedOut: r.exitCode === 124 };
-    });
+    return withSession(name, (session) => execSession(session, script, timeoutSec));
   }
 
   const profile: AgentComputerProfile = {
@@ -605,20 +619,12 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         .map(([k, v]) => `export ${k}=${shq(v)}`)
         .join("; ");
       const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-      const signal = execOpts?.signal;
-      if (!signal) return execRaw(handle.id, script, timeoutSec);
-      const killUid = randomUUID();
-      const fireKill = () => {
-        execRaw(handle.id, killScript(killUid), 15).catch(swallowAs("modal-sandbox: kill in-flight exec", undefined));
-      };
-      signal.throwIfAborted();
-      const onAbort = () => fireKill();
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
+      return withOperationSignal(execOpts?.signal, async () => {
+        await touchActivity(handle.id);
+        return withSession(handle.id, (session) =>
+          runKillable((body, seconds) => execSession(session, body, seconds), script, timeoutSec),
+        );
+      });
     },
 
     async writeFileBytes(handle, relPath, data): Promise<void> {
@@ -787,11 +793,12 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       });
     },
 
-    async reapDeepIdle(idleMs): Promise<{ reaped: number }> {
+    async reapDeepIdle(idleMs, _devIdleMs, signal): Promise<{ reaped: number }> {
       if (!(idleMs > 0)) return { reaped: 0 };
       const cutoff = Date.now() - Math.min(idleMs, reapIdleMs);
       let reaped = 0;
       for (const [scope, rec] of await store.entries()) {
+        if (signal?.aborted) break;
         if (rec.orgId && rec.orgId !== configOrgId()) continue;
         if (rec.hydrationPending) continue;
         if (
@@ -800,6 +807,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           Date.now() - lastSnapshotAttemptMs(rec) > snapshotIntervalMs(rec)
         ) {
           await provisionQueue(scope, async () => {
+            assertOperationActive();
             try {
               const current = await store.get(scope);
               if (
@@ -809,6 +817,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
               )
                 return;
               const session = await client.fromId(rec.sandboxId);
+              assertOperationActive();
               await snapshotHome(scope, session);
             } catch (error) {
               if (!(error instanceof ModalSandboxGoneError))
@@ -824,6 +833,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           session = sessionByName.get(name) ?? (await client.fromId(rec.sandboxId));
           const handle: SandboxHandle = { id: name, rootDir: workspaceDir, homeDir: HOME_DIR, coldStart: false };
           const live = await createExecProcessSessions(directProcIo(session)).listProcesses(handle);
+          assertOperationActive();
           if (live.some((p) => p.status.state === "running")) continue;
         } catch (e) {
           if (e instanceof ModalSandboxGoneError) {
@@ -836,11 +846,13 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         }
         reaped += await advisoryLock.withLock(`modal-use:${scope}`, () =>
           provisionQueue(scope, async (): Promise<number> => {
+            assertOperationActive();
             const current = await store.get(scope);
             if (!current || current.sandboxId !== rec.sandboxId) return 0;
             if (!current.lastActivityMs || current.lastActivityMs > cutoff) return 0;
             try {
               await snapshotHome(scope, session);
+              assertOperationActive();
               await session.terminate();
               sessionByName.delete(name);
               if (!(await store.get(scope))?.nativeSnapshotId) await store.delete(scope);

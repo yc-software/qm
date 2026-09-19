@@ -1,4 +1,5 @@
 import type { AdmittedWork } from "../util/admitted-work.ts";
+import type { Handoff } from "../runs/handoff.ts";
 import type { EventBus } from "../util/event-bus.ts";
 import type { RunStreamEvent } from "../runs/run-stream-events.ts";
 import type { ResourceSearchStore, ResourceSearchHit } from "../search/resource-search.ts";
@@ -551,7 +552,7 @@ export interface App {
   renameDeployment(id: string, name: string): Promise<Deployment>;
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
-  keepAlwaysOnWarm(): Promise<number>;
+  keepAlwaysOnWarm(signal?: AbortSignal): Promise<number>;
   reachDeployment(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   deploymentLogsFor(
     id: string,
@@ -573,7 +574,7 @@ export interface App {
     opts: { secret: string; baseUrl: string; ttlMs?: number },
   ): Promise<DeploymentGitUrl | null>;
   authorizesDeploymentGitAccess(id: string, principalId: string, permission: "read" | "write"): Promise<boolean>;
-  reapIdleDeployments(ttlMs: number, now?: number): Promise<number>;
+  reapIdleDeployments(ttlMs: number, now?: number, signal?: AbortSignal): Promise<number>;
   listEnvironments(): Promise<{ environment: Environment; attachments: EnvironmentAttachment[] }[]>;
   createEnvironment(input: { scopeId: ScopeId; name: string; actorId: string }): Promise<Environment>;
   resolveEnvironmentByName(name: string): Promise<Environment | null>;
@@ -582,6 +583,7 @@ export interface App {
 
 export interface AppDeps {
   admittedWork?: AdmittedWork;
+  handoff?: Handoff;
   resourceSearch?: ResourceSearchStore;
   swarms?: SwarmService;
   identity: IdentityService;

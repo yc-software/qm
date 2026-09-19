@@ -312,10 +312,12 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
 
     ...(some((s) => !!s.reapDeepIdle)
       ? {
-          async reapDeepIdle(idleMs: number, devIdleMs?: number) {
+          async reapDeepIdle(idleMs: number, devIdleMs?: number, signal?: AbortSignal) {
             let reaped = 0;
             for (const s of Object.values(backends)) {
-              if (s?.reapDeepIdle) reaped += (await s.reapDeepIdle(idleMs, devIdleMs).catch(swallowReap)).reaped ?? 0;
+              if (signal?.aborted) break;
+              if (s?.reapDeepIdle)
+                reaped += (await s.reapDeepIdle(idleMs, devIdleMs, signal).catch(swallowReap)).reaped ?? 0;
             }
             return { reaped };
           },

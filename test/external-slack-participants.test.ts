@@ -44,10 +44,13 @@ test("external-slack-participants: the durable read sees a flip from another ins
   const b = createMemoryConfigStore("default-org", { externalSlackParticipants: store });
 
   a.setExternalSlackParticipants(org, true);
-  await Promise.resolve();
+  await a.flushScope(org);
 
   assert.equal(b.getExternalSlackParticipants(org), false, "the sibling's stale read-cache hasn't seen the flip");
   assert.equal(await b.getExternalSlackParticipantsDurable(org), true, "but the durable read picks it up at once");
+  a.setExternalSlackParticipants(org, false);
+  await a.flushScope(org);
+  assert.equal(await b.getExternalSlackParticipantsDurable(org), false, "the durable read also sees revocation");
 });
 
 test("a Slack channel turn with an external in the audience is refused while the toggle is off", async () => {
@@ -60,7 +63,7 @@ test("a Slack channel turn with an external in the audience is refused while the
 test("with the toggle on, an internal actor may drive a Slack turn in a room with an external", async () => {
   const built = freshApp();
   built.config.setExternalSlackParticipants(org, true);
-  await Promise.resolve();
+  await built.config.flushScope(org);
   const res = await built.app.turn(externalChannelTurn("slack"));
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /You said: hello channel/);
@@ -69,7 +72,7 @@ test("with the toggle on, an internal actor may drive a Slack turn in a room wit
 test("the toggle relaxes only Slack: a non-Slack surface with an external audience stays refused", async () => {
   const built = freshApp();
   built.config.setExternalSlackParticipants(org, true);
-  await Promise.resolve();
+  await built.config.flushScope(org);
   const res = await built.app.turn(externalChannelTurn("test"));
   assert.equal(res.status, "refused");
   assert.match(res.reason ?? "", /internal-only/);
@@ -78,7 +81,7 @@ test("the toggle relaxes only Slack: a non-Slack surface with an external audien
 test("the toggle never lets an external actor interact", async () => {
   const built = freshApp();
   built.config.setExternalSlackParticipants(org, true);
-  await Promise.resolve();
+  await built.config.flushScope(org);
   const res = await built.app.turn({
     surface: "slack",
     actor: guest,

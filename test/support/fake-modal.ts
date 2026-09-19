@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createFakeSandboxEnvironment } from "./fake-sandbox-environment.ts";
 import {
   ModalNameConflictError,
   ModalSandboxGoneError,
@@ -34,6 +35,7 @@ export interface FakeModal {
 
 export function installFakeModal(opts: { native?: boolean } = {}): FakeModal {
   const root = mkdtempSync(join(tmpdir(), "fake-modal-"));
+  const environment = createFakeSandboxEnvironment(root);
   const records = new Map<string, FakeRecord>();
   const execScripts: string[] = [];
   let nextId = 1;
@@ -89,7 +91,7 @@ export function installFakeModal(opts: { native?: boolean } = {}): FakeModal {
       const spawned = spawnSync("sh", ["-c", remap(r, command)], {
         encoding: "buffer",
         maxBuffer: 128 * 1024 * 1024,
-        env: { ...process.env, COPYFILE_DISABLE: "1" },
+        env: environment(),
       });
       return {
         stdout: (spawned.stdout ?? Buffer.alloc(0)).toString("utf8"),

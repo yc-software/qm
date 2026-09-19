@@ -12,6 +12,8 @@ import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { assertOperationActive, getOperationSignal, withOperationSignal } from "../src/util/async.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 let fake: FakePorter;
 let sandbox: Sandbox;
@@ -40,6 +42,122 @@ test("provision runs commands with env and cwd", async () => {
   assert.equal(r.code, 0);
   assert.match(r.stdout, /workspace/);
   assert.match(r.stdout, /VAR=v1/);
+});
+
+test("cancelled Porter readiness deletes only its half-created body with an active cleanup signal", async () => {
+  const controller = new AbortController();
+  const reason = new Error("deployment handoff");
+  let deletes = 0;
+  const client = {
+    ...fake.client,
+    sandboxes: {
+      ...fake.client.sandboxes,
+      async create(options: Parameters<typeof fake.client.sandboxes.create>[0]) {
+        const body = await fake.client.sandboxes.create(options);
+        return {
+          ...body,
+          phase: null,
+          async refresh(): Promise<{ name: string }> {
+            controller.abort(reason);
+            throw reason;
+          },
+          async terminate() {
+            assertOperationActive();
+            assert.notEqual(getOperationSignal(), controller.signal);
+            deletes++;
+            await body.terminate();
+          },
+        };
+      },
+    },
+  };
+  await assert.rejects(
+    withOperationSignal(controller.signal, () => make({ client }).provision(layers)),
+    (error) => error === reason,
+  );
+  assert.equal(deletes, 1);
+  assert.deepEqual(
+    fake.bodies().map((body) => body.phase),
+    ["terminated"],
+  );
+});
+
+test("a replacement cannot adopt a Porter body while an uncertain old deletion can still finish", async () => {
+  const controller = new AbortController();
+  const reason = new Error("deployment handoff");
+  const released = Promise.withResolvers<void>();
+  const advisoryLock = createMemoryAdvisoryLock();
+  let lateDelete: Promise<void> | undefined;
+  const client = {
+    ...fake.client,
+    sandboxes: {
+      ...fake.client.sandboxes,
+      async create(options: Parameters<typeof fake.client.sandboxes.create>[0]) {
+        const body = await fake.client.sandboxes.create(options);
+        return {
+          ...body,
+          phase: null,
+          async refresh(): Promise<{ name: string }> {
+            controller.abort(reason);
+            throw reason;
+          },
+          async terminate() {
+            lateDelete = released.promise.then(() => body.terminate());
+            throw new Error("termination acknowledgement timed out");
+          },
+        };
+      },
+    },
+  };
+  try {
+    await assert.rejects(
+      withOperationSignal(controller.signal, () => make({ client, advisoryLock }).provision(layers)),
+      (error) => error === reason,
+    );
+    assert.ok(lateDelete);
+    const replacement = make({ advisoryLock });
+    await assert.rejects(replacement.provision(layers), /incomplete provisioning/);
+    const previous = fake.bodies()[0]!.name;
+    released.resolve();
+    await lateDelete;
+    const next = await replacement.provision(layers);
+    assert.notEqual(next.id, previous);
+    assert.equal(fake.bodies().find((body) => body.name === next.id)?.phase, "running");
+  } finally {
+    released.resolve();
+    await lateDelete;
+  }
+});
+
+test("a lost Porter readiness acknowledgement preserves the body for safe adoption", async () => {
+  const controller = new AbortController();
+  const reason = new Error("deployment handoff");
+  const client = {
+    ...fake.client,
+    sandboxes: {
+      ...fake.client.sandboxes,
+      raw: {
+        ...fake.client.sandboxes.raw,
+        async exec(...args: Parameters<typeof fake.client.sandboxes.raw.exec>) {
+          const result = await fake.client.sandboxes.raw.exec(...args);
+          if (args[1].command[2]?.includes("printf %s") && args[1].command[2]?.includes(".qm-porter-ready")) {
+            controller.abort(reason);
+            throw reason;
+          }
+          return result;
+        },
+      },
+    },
+  };
+  await assert.rejects(
+    withOperationSignal(controller.signal, () => make({ client }).provision(layers)),
+    (error) => error === reason,
+  );
+  const previous = fake.bodies()[0]!;
+  assert.equal(previous.phase, "running");
+  const adopted = await make().provision(layers);
+  assert.equal(adopted.id, previous.name);
+  assert.equal(fake.bodies().length, 1);
 });
 
 test("streams and exit codes are exact", async () => {
@@ -136,11 +254,21 @@ test("abort signal kills an in-flight exec", async () => {
   const h = await sandbox.provision(layers);
   const ac = new AbortController();
   const started = Date.now();
-  const p = sandbox.run(h, "sleep 30; echo done", { timeoutMs: 60_000, signal: ac.signal });
-  setTimeout(() => ac.abort(), 300);
-  const r = await p;
-  assert.ok(Date.now() - started < 15_000);
-  assert.notEqual(r.code, 0);
+  const p = sandbox.run(h, "echo before > writes; sleep 1; echo after >> writes", {
+    timeoutMs: 60_000,
+    signal: ac.signal,
+  });
+  const rejected = assert.rejects(p, (error) => error === ac.signal.reason);
+  const timer = setTimeout(() => ac.abort(), 300);
+  try {
+    await rejected;
+    assert.ok(Date.now() - started < 15_000);
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    assert.equal(await sandbox.readFile(h, "writes"), "before\n");
+  } finally {
+    clearTimeout(timer);
+    ac.abort();
+  }
 });
 
 test("destroy terminates the body and deletes the volume", async () => {

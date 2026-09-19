@@ -1,3 +1,4 @@
+import { isolatedPostgres } from "./support/isolated-postgres.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -23,23 +24,6 @@ async function until(predicate: () => boolean): Promise<void> {
     assert.ok(Date.now() < deadline, "condition reached before deadline");
     await sleep(5);
   }
-}
-
-async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanup(): Promise<void> }> {
-  const admin = new pg.Pool({ connectionString: process.env.DATABASE_URL! });
-  const schema = `run_availability_${randomUUID().replaceAll("-", "")}`;
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  const url = new URL(process.env.DATABASE_URL!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
-  url.searchParams.set("application_name", schema);
-  return {
-    url: url.toString(),
-    admin,
-    async cleanup() {
-      await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-      await admin.end();
-    },
-  };
 }
 
 for (const duringClaim of [false, true]) {
@@ -162,7 +146,7 @@ test(
       claimed = await reader.runs.claimById(ids[1]!, "test2", 5_000);
       assert.ok(claimed);
       before = notifications;
-      await writer.runs.fail(claimed.id, claimed.leaseToken!, "retry");
+      await writer.runs.fail(claimed.id, claimed.leaseToken!, "retry", { retryAfterMs: 0 });
       await until(() => notifications > before);
       claimed = await reader.runs.claimById(ids[1]!, "test2", 5_000);
       assert.ok(claimed);
@@ -177,9 +161,13 @@ test(
       await enqueue();
       claimed = await reader.runs.claimById(ids[2]!, "expired", 1);
       assert.ok(claimed);
-      await sleep(5);
+      await admin.query(
+        "UPDATE absurd.r_qm_runs SET claim_expires_at=absurd.current_time()-interval '1 second' WHERE run_id=$1",
+        [claimed.leaseToken],
+      );
       before = notifications;
-      assert.equal((await writer.runs.reapExpired()).requeued, 1);
+      await writer.runs.claim("native-recovery", 5_000);
+      assert.equal((await writer.runs.get(claimed.id))?.status, "pending");
       await until(() => notifications > before);
       await admin.query(
         "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=current_database() AND query='LISTEN qm_run_available' AND application_name=$1",
@@ -290,8 +278,11 @@ test(
       const first = (await writer.runs.enqueue({ sessionId: "scheduled", request: { ...request, text: "first" } })).run;
       const claimed = await writer.runs.claimById(first.id, "setup", 5_000);
       await writer.runs.fail(first.id, claimed!.leaseToken!, "transient", { retryAfterMs: 500 });
-      const { rows } = await direct.query("SELECT retry_after FROM runs WHERE id=$1", [first.id]);
-      const deadline = Number(rows[0].retry_after);
+      const { rows } = await direct.query(
+        "SELECT extract(epoch FROM execution.available_at)*1000 AS deadline FROM absurd.r_qm_runs execution JOIN runs ON runs.workflow_task_id=execution.task_id WHERE runs.id=$1 AND execution.state IN ('pending','sleeping')",
+        [first.id],
+      );
+      const deadline = Number(rows[0].deadline);
       await writer.runs.enqueue({ sessionId: "scheduled", request: { ...request, text: "second" } });
       for (const worker of workers) worker.start();
       await until(() => observed.length === 2);
@@ -305,10 +296,24 @@ test(
         "deadline pickup uses the watchdog, not five-second recovery polling",
       );
       const insertedAt = Date.now();
-      await direct.query(
-        "INSERT INTO runs(id, session_id, status, request, created_at) VALUES($1,$2,'pending',$3,$4)",
-        [randomUUID(), "missed", JSON.stringify({ ...request, text: "missed" }), insertedAt],
-      );
+      const missedId = randomUUID();
+      const client = await direct.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("INSERT INTO runs(id,session_id,status,request,created_at) VALUES($1,$2,'pending',$3,$4)", [
+          missedId,
+          "missed",
+          JSON.stringify({ ...request, text: "missed" }),
+          insertedAt,
+        ]);
+        const spawned = await client.query("SELECT * FROM absurd.spawn_task('qm_runs','run.execute',$1)", [
+          JSON.stringify({ runId: missedId }),
+        ]);
+        await client.query("UPDATE runs SET workflow_task_id=$2 WHERE id=$1", [missedId, spawned.rows[0].task_id]);
+        await client.query("COMMIT");
+      } finally {
+        client.release();
+      }
       await until(() => observed.length === 3);
       assert.equal(observed[2]!.id, "missed");
       assert.ok(observed[2]!.at - insertedAt < 750, "missing NOTIFY retains the original polling cadence");

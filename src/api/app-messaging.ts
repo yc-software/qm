@@ -409,9 +409,11 @@ export function createMessagingMethods(
       return merged != null;
     },
     async ackDelivery(id, slackApiMs) {
+      if (deps.deliveries.durable) return;
       await deps.deliveries.ack(id, Date.now(), slackApiMs);
     },
     async ackDeliveryByKey(idempotencyKey) {
+      if (deps.deliveries.durable) return;
       await deps.deliveries.ackByKey(idempotencyKey, Date.now());
     },
     async setRunDeliveryState(runId, state) {

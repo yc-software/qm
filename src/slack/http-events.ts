@@ -18,6 +18,7 @@ export interface HttpEventsReceiverOptions {
   path?: string;
   capMs?: number;
   staging?: EnvelopeStaging;
+  accept?: (body: Record<string, unknown>) => Promise<void>;
 }
 
 function respond(res: ServerResponse, status: number, body: unknown): void {
@@ -63,11 +64,27 @@ export function createHttpEventsReceiver(opts: HttpEventsReceiverOptions): Recei
     }
     let body: Record<string, unknown>;
     try {
-      body = JSON.parse(raw) as Record<string, unknown>;
+      const form = header(req, "content-type")?.includes("application/x-www-form-urlencoded");
+      const params = form ? new URLSearchParams(raw) : undefined;
+      if (params) {
+        body = params.has("payload") ? JSON.parse(params.get("payload")!) : Object.fromEntries(params.entries());
+      } else {
+        body = JSON.parse(raw);
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Expected an envelope");
     } catch {
       return respond(res, 400, { error: "invalid_json" });
     }
     if (body.type === "url_verification") return respond(res, 200, { challenge: body.challenge });
+
+    if (opts.accept) {
+      try {
+        await opts.accept(body);
+        return respond(res, 200, {});
+      } catch {
+        return respond(res, 503, { error: "not_persisted" });
+      }
+    }
 
     const label = describeEnvelope(body);
     const { ack, gate } = createDeferredEnvelopeAck(async (response?: unknown) => respond(res, 200, response ?? {}), {

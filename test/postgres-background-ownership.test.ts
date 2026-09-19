@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
+import { isolatedPostgres } from "./support/isolated-postgres.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 test("Postgres serializes concurrent ownership transitions and replica admission", { skip: !databaseUrl }, async () => {
@@ -40,54 +41,44 @@ test("Postgres serializes concurrent ownership transitions and replica admission
 });
 
 test(
-  "Postgres queue resumes polling without terminating a prior generation callback",
+  "Postgres workflow workers resume claims while an earlier worker drains",
   { skip: !databaseUrl, timeout: 20_000 },
-  async () => {
-    const { createPgBossCronQueue } = await import("../src/cron/job-queue.ts");
-    const schema = `handover_${randomUUID().replaceAll("-", "")}`;
-    const queue = createPgBossCronQueue(databaseUrl!, schema);
-    const oldEntered = Promise.withResolvers<void>();
-    const oldFinish = Promise.withResolvers<void>();
-    const newEntered = Promise.withResolvers<void>();
-    let oldFinished = false;
+  async (t) => {
+    const { createDurableTasks } = await import("../src/durable/tasks.ts");
+    const db = await isolatedPostgres();
+    t.after(() => db.cleanup());
+    const queueName = `handover_${randomUUID().replaceAll("-", "")}`;
+    const tasks = createDurableTasks({ databaseUrl: db.url, queue: queueName });
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    let finished = false;
+    tasks.register<{ old: boolean }, void>("handover", async (_context, input) => {
+      if (input.old) {
+        entered.resolve();
+        await finish.promise;
+        finished = true;
+      }
+    });
+    const first = tasks.start({ concurrency: 1, pollIntervalMs: 10 });
     try {
-      await queue.start(
-        {
-          onTick: async () => {},
-          onFire: async () => {
-            oldEntered.resolve();
-            await oldFinish.promise;
-            oldFinished = true;
-          },
-        },
-        60_000,
-      );
-      await queue.enqueueFire({ cronId: "old", scheduledAt: Date.now() });
-      await oldEntered.promise;
-      await queue.stopClaims!();
-      assert.equal(oldFinished, false);
-      await queue.start(
-        {
-          onTick: async () => {},
-          onFire: async () => {
-            newEntered.resolve();
-          },
-        },
-        60_000,
-      );
-      await queue.enqueueFire({ cronId: "new", scheduledAt: Date.now() });
-      await newEntered.promise;
-      assert.equal(oldFinished, false);
-      oldFinish.resolve();
-      await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(oldFinished, true);
+      const old = await tasks.spawn("handover", { old: true }, { idempotencyKey: "old" });
+      await entered.promise;
+      await first.stopClaims();
+      assert.equal(finished, false);
+      const second = tasks.start({ concurrency: 1, pollIntervalMs: 10 });
+      try {
+        const next = await tasks.spawn("handover", { old: false }, { idempotencyKey: "next" });
+        await tasks.result(next.taskId);
+        assert.equal(finished, false);
+        finish.resolve();
+        await tasks.result(old.taskId);
+      } finally {
+        await second.stop();
+      }
     } finally {
-      oldFinish.resolve();
-      await queue.stop();
-      const { default: pg } = await import("pg");
-      const pool = new pg.Pool({ connectionString: databaseUrl! });
-      await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-      await pool.end();
+      finish.resolve();
+      await first.stop();
+      await tasks.close();
     }
   },
 );

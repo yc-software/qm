@@ -4,7 +4,7 @@ import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import { readTree } from "./deploy-fs.ts";
 import { makeTar } from "../sandbox/tar.ts";
-import { sleep } from "../util/async.ts";
+import { sleep, assertOperationActive, getOperationSignal } from "../util/async.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -103,6 +103,7 @@ interface FlyApiResponse {
 function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch }): FlyMachinesApi {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const request = async (method: string, path: string, body?: unknown): Promise<FlyApiResponse> => {
+    assertOperationActive();
     const res = await fetchImpl(`${MACHINES_API_BASE_URL}${path}`, {
       method,
       headers: {
@@ -110,7 +111,10 @@ function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch })
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+      signal: AbortSignal.any([
+        AbortSignal.timeout(API_TIMEOUT_MS),
+        ...(getOperationSignal() ? [getOperationSignal()!] : []),
+      ]),
     });
     return { ok: res.ok, status: res.status, text: await res.text() };
   };

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
-import type { McpClient } from "../src/mcp/mcp-client.ts";
+import { createMcpClient, type McpClient } from "../src/mcp/mcp-client.ts";
 
 function client(calls: Array<{ tool: string; args: Record<string, unknown> }>, text = "result"): McpClient {
   return {
@@ -66,4 +66,34 @@ test("MCP recall is locally bounded and times out", async () => {
   };
   const timed = createMcpMemoryProvider({ read: { client: hanging, tool: "read", timeoutMs: 10 } });
   await assert.rejects(timed.recall("org:yc"), /timed out after 10ms/);
+});
+
+test("MCP capture cancellation reaches credential minting and the tool request", async () => {
+  const controller = new AbortController();
+  const signals: Array<AbortSignal | undefined> = [];
+  const remote = createMcpClient({
+    url: "http://memory.local",
+    auth: { mode: "client-credentials", clientId: "memory", clientSecret: "secret" },
+    fetchImpl: async (url, init) => {
+      signals.push(init.signal);
+      if (url.endsWith("/token")) return { ok: true, status: 200, text: async () => '{"access_token":"token"}' };
+      return new Promise((_resolve, reject) =>
+        init.signal!.addEventListener("abort", () => reject(init.signal!.reason), { once: true }),
+      );
+    },
+  });
+  const memory = createMcpMemoryProvider({
+    read: { client: remote, tool: "read", timeoutMs: 300_000 },
+    write: { client: remote, tool: "write", timeoutMs: 300_000, idempotencyArg: "key" },
+  });
+  const writing = memory.capture("personal:U1", ["fact"], 1, "U1", {
+    mode: "automatic",
+    signal: controller.signal,
+    idempotencyKey: "turn:1",
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const reason = new Error("handoff");
+  controller.abort(reason);
+  await assert.rejects(writing, (error) => error === reason);
+  assert.deepEqual(signals, [controller.signal, controller.signal]);
 });

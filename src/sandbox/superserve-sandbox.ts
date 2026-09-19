@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -25,7 +25,7 @@ import {
   ephemeralCredLinkPaths,
   type CredentialPathSpec,
 } from "../credentials/resident-paths.ts";
-import { killableScript, killScript } from "./exec-kill.ts";
+import { runKillable } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
 import {
@@ -638,22 +638,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
           .map(([k, v]) => `export ${k}=${shq(v)}`)
           .join("; ");
         const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${shq(handle.rootDir)} || exit 1; ${command}`;
-        const signal = execOpts?.signal;
-        if (!signal) return execRaw(handle.id, script, timeoutSec);
-        const killUid = randomUUID();
-        const fireKill = () => {
-          execRaw(handle.id, killScript(killUid), 15).catch(
-            swallowAs("superserve-sandbox: kill in-flight exec", undefined),
-          );
-        };
-        signal.throwIfAborted();
-        const onAbort = () => fireKill();
-        signal.addEventListener("abort", onAbort, { once: true });
-        try {
-          return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
-        } finally {
-          signal.removeEventListener("abort", onAbort);
-        }
+        return runKillable((body, seconds) => execRaw(handle.id, body, seconds), script, timeoutSec, execOpts?.signal);
       });
     },
 

@@ -23,14 +23,19 @@ export interface WakeSweep {
 export function createWakeSweep(source: SweepSource, opts: WakeSweepOptions): WakeSweep {
   const leaderLease = opts.leaderLease ?? createNoopLeaderLease();
 
-  const sweep = async (): Promise<{ swept: number; fresh: number }> => {
+  const sweep = async (signal?: AbortSignal): Promise<{ swept: number; fresh: number }> => {
     const targets = await source.engagedSessions();
     let fresh = 0;
-    for (const threadRef of targets) fresh += await source.sweepSession(threadRef);
-    return { swept: targets.length, fresh };
+    let swept = 0;
+    for (const threadRef of targets) {
+      if (signal?.aborted) break;
+      fresh += await source.sweepSession(threadRef);
+      swept++;
+    }
+    return { swept, fresh };
   };
 
-  const runPass = (): Promise<unknown> => leaderLease.hold(SWEEP_LEASE_KEY, sweep);
+  const runPass = (signal: AbortSignal): Promise<unknown> => leaderLease.hold(SWEEP_LEASE_KEY, () => sweep(signal));
 
   const sweeper: Sweeper = createSweeper(runPass, opts.intervalMs, { label: "wake-sweep" });
   return {

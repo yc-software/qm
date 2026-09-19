@@ -12,7 +12,7 @@ import { installFakeSprites, type FakeSprites } from "./support/fake-sprites.ts"
 
 test("killableScript: records its PGID to the per-exec marker first, runs under setsid, preserves rc", () => {
   const s = killableScript("do_work", "abc");
-  assert.match(s, /^exec setsid sh -c /, "the command must become its own session/group leader");
+  assert.match(s, /^exec setsid --wait sh -c /, "the command must become its own session/group leader");
   assert.ok(s.includes(pgidMarkerPath("abc")), "the marker path is the per-exec uid");
   assert.ok(s.includes("echo $$ >"), "the leader writes its own pid (== PGID under setsid)");
   assert.ok(s.includes("do_work"), "the inner command is preserved");
@@ -52,8 +52,13 @@ test("run() with a signal wraps the command in the killable process group; witho
   assert.ok(!ff.execScripts()[mark]!.includes("setsid"), "no signal ⇒ the un-killable path is unchanged");
 
   mark = ff.execScripts().length;
-  await sb.run(h, "true", { signal: new AbortController().signal });
-  assert.ok(ff.execScripts()[mark]!.includes("exec setsid sh -c"), "a signal ⇒ the command runs killable");
+  const result = await sb.run(h, "printf 'signal-ready'; printf 'warning' >&2; exit 7", {
+    signal: new AbortController().signal,
+  });
+  assert.ok(ff.execScripts()[mark]!.includes("exec setsid --wait sh -c"), "a signal ⇒ the command runs killable");
+  assert.equal(result.stdout, "signal-ready");
+  assert.equal(result.stderr, "warning");
+  assert.equal(result.code, 7);
 });
 
 test("run(): an already-aborted signal never starts the command", async () => {

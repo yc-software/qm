@@ -1,6 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,14 +12,18 @@ import { scopeId } from "../src/types.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService, MEMORY_FILE } from "../src/memory/memory-service.ts";
 import { testConfig } from "./support/test-config.ts";
+import { settle } from "./support/settle.ts";
 
-function freshApp(overrides: Partial<Config> = {}) {
+function freshApp(t: TestContext, overrides: Partial<Config> = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-mem-"));
   const config: Config = testConfig({
     dataDir,
     ...overrides,
   });
-  return { ...buildApp(config), dataDir };
+  const built = buildApp(config);
+  built.runtime.startBackground();
+  t.after(() => built.runtime.stop());
+  return { ...built, dataDir };
 }
 
 const actor = { externalId: "U1" };
@@ -52,8 +56,8 @@ function channel(text: string): TurnRequest {
   };
 }
 
-test("remembers a fact stated in one DM thread when asked in another (continuity)", async () => {
-  const { app } = freshApp();
+test("remembers a fact stated in one DM thread when asked in another (continuity)", async (t) => {
+  const { app } = freshApp(t);
 
   const a = await app.turn(dm("remember that I own the billing service", "dm:U1:tA"));
   assert.equal(a.status, "ok");
@@ -69,10 +73,12 @@ test("remembers a fact stated in one DM thread when asked in another (continuity
   assert.match(reply, /billing service/);
 });
 
-test("personal memory does NOT surface in a channel (boundary / differentiator)", async () => {
-  const { app } = freshApp();
+test("personal memory does NOT surface in a channel (boundary / differentiator)", async (t) => {
+  const { app, memory } = freshApp(t);
 
   await app.turn(dm("remember that I own the billing service", "dm:U1:tA"));
+  await settle(async () => /billing service/.test(await memory.read(scopeId("personal", "U1"))));
+  assert.match(await memory.read(scopeId("personal", "U1")), /billing service/);
 
   const inChannel = await app.turn(channel("!sysprompt"));
   assert.equal(inChannel.status, "ok");
@@ -82,8 +88,8 @@ test("personal memory does NOT surface in a channel (boundary / differentiator)"
   assert.match(inDm.reply ?? "", /billing service/);
 });
 
-test("default memory policy recalls visible org memory without crossing into personal memory", async () => {
-  const { app, dataDir } = freshApp();
+test("default memory policy recalls visible org memory without crossing into personal memory", async (t) => {
+  const { app, dataDir } = freshApp(t);
   const ws = createLocalWorkspaceStore(dataDir);
   const org = scopeId("org", "default-org");
   await ws.ensureScope(org);
@@ -98,8 +104,8 @@ test("default memory policy recalls visible org memory without crossing into per
   assert.match(inChannel.reply ?? "", /Org launch metric is revenue quality/);
 });
 
-test("memory recall policy can be tightened to writable scope only", async () => {
-  const { app, dataDir } = freshApp({ memoryRecall: "writable" });
+test("memory recall policy can be tightened to writable scope only", async (t) => {
+  const { app, dataDir } = freshApp(t, { memoryRecall: "writable" });
   const ws = createLocalWorkspaceStore(dataDir);
   const org = scopeId("org", "default-org");
   await ws.ensureScope(org);
@@ -110,8 +116,8 @@ test("memory recall policy can be tightened to writable scope only", async () =>
   assert.doesNotMatch(res.reply ?? "", /Org launch metric is revenue quality/);
 });
 
-test("memory capture policy can disable automatic post-turn extraction", async () => {
-  const { app } = freshApp({ memoryCapture: "off" });
+test("memory capture policy can disable automatic post-turn extraction", async (t) => {
+  const { app } = freshApp(t, { memoryCapture: "off" });
   await app.turn(dm("remember that I own the billing service", "dm:U1:tNoCapture"));
 
   const res = await app.turn(dm("!sysprompt", "dm:U1:tNoCapture2"));
@@ -119,8 +125,8 @@ test("memory capture policy can disable automatic post-turn extraction", async (
   assert.doesNotMatch(res.reply ?? "", /billing service/);
 });
 
-test("the memory protocol is always present in the system prompt", async () => {
-  const { app } = freshApp();
+test("the memory protocol is always present in the system prompt", async (t) => {
+  const { app } = freshApp(t);
   const res = await app.turn(dm("!sysprompt", "dm:U1:tA"));
   assert.match(res.reply ?? "", /## Memory/);
 });

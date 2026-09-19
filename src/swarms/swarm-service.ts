@@ -1,3 +1,4 @@
+import { DurableTaskDeferred } from "../durable/tasks.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import { createHash, randomUUID } from "node:crypto";
@@ -62,6 +63,7 @@ export interface SwarmService {
   start(): void;
   stop(): Promise<void>;
   sweep(): Promise<void>;
+  reconcileDurably(swarmId: string): Promise<void>;
   inspect(caller: SwarmCaller): Promise<{
     id: string;
     self: SwarmMember;
@@ -145,6 +147,8 @@ function matchesDispatch(input: OrchestratorInput, expected: OrchestratorInput):
     finalAttempt: true,
     background: true,
     cancel: true,
+    handoff: true,
+    handoffDeadline: true,
     queueMs: true,
     runStartedAt: true,
   };
@@ -528,6 +532,11 @@ export function createSwarmService(deps: {
   return {
     ...sweeper,
     sweep,
+    async reconcileDurably(swarmId) {
+      await reconcile(swarmId, "resources");
+      await reconcile(swarmId, "delivery");
+      if ((await store.get(swarmId))?.pending) throw new DurableTaskDeferred(2);
+    },
     async inspect(caller) {
       const { swarm, self } = await load(caller);
       return {

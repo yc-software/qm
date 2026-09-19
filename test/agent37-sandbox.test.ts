@@ -13,6 +13,7 @@ import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-to
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { installFakeAgent37, FAKE_AGENT37_API_KEY, type FakeAgent37 } from "./support/fake-agent37.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { withOperationSignal } from "../src/util/async.ts";
 
 let fake: FakeAgent37;
 let sandbox: Sandbox;
@@ -33,6 +34,40 @@ beforeEach(() => {
   sandbox = make();
 });
 after(() => fake?.cleanup());
+
+for (const status of [404, 409]) {
+  test(`cancelled Agent37 exec never discovers or starts a body after cleanup returns ${status}`, async () => {
+    const controller = new AbortController();
+    const entered = Promise.withResolvers<void>();
+    const requests: string[] = [];
+    let capture = false;
+    let calls = 0;
+    const backend = make({
+      fetchImpl: async (input: string | URL | Request, init?: RequestInit) => {
+        if (!capture) return fake.fetchImpl(input, init);
+        const path = new URL(String(input)).pathname;
+        requests.push(path);
+        if (path.endsWith("/exec") && ++calls === 1) {
+          entered.resolve();
+          return new Promise<Response>((_, reject) =>
+            init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), { once: true }),
+          );
+        }
+        if (path.endsWith("/exec")) return new Response("Only running instances can execute", { status });
+        return fake.fetchImpl(input, init);
+      },
+    });
+    const handle = await backend.provision(layers);
+    capture = true;
+    const stopped = assert.rejects(withOperationSignal(controller.signal, () => backend.run(handle, "sleep 30")));
+    await entered.promise;
+    controller.abort();
+    await stopped;
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0], requests[1]);
+    assert.ok(requests[0]!.endsWith("/exec"));
+  });
+}
 
 test("provision runs commands with env and cwd", async () => {
   const h = await sandbox.provision(layers, { env: { MY_VAR: "v1" } });

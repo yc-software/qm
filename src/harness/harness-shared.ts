@@ -70,6 +70,10 @@ export function withTapedEntryMirrors(turn: HarnessTurnInput): HarnessTurnInput 
 export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
   return {
     current: turn.tools,
+    handoffDeadline: turn.handoffDeadline,
+    get handoffRequested() {
+      return turn.handoff?.aborted === true;
+    },
     runtimeRunId: turn.runId,
     runtimeActorId: turn.runtimeActorId,
     pendingApprovals: [],
@@ -109,7 +113,17 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
 }
 
 export function bridgedTools(ref: ToolContextRef, options: AgentToolsOptions): BridgedTool[] {
-  return createAgentTools(ref, options) as unknown as BridgedTool[];
+  return (createAgentTools(ref, options) as unknown as BridgedTool[]).map((tool) => ({
+    ...tool,
+    async execute(...args: Parameters<BridgedTool["execute"]>) {
+      const result = await tool.execute(...args);
+      if (ref.handoffRequested && !ref.pausedOnApproval && !ref.silentRequested && !ref.runtimeHandoff) {
+        ref.handoffStopped = true;
+        return { ...result, terminate: true };
+      }
+      return result;
+    },
+  }));
 }
 
 export function bridgedToolText(result: Awaited<ReturnType<BridgedTool["execute"]>>): string {
@@ -182,7 +196,7 @@ export function oneShotModelUtilities(
   judgeModelId?: string,
 ): Pick<HarnessModelUtilities, "oneShot" | "judge" | "screenSecurity" | "generateTitle" | "summarizeApproval"> {
   return {
-    oneShot: (system, prompt) => single(system, prompt),
+    oneShot: (system, prompt, signal) => single(system, prompt, signal),
     judge: (system, prompt, signal) => single(system, prompt, signal, undefined, judgeModelId),
     screenSecurity: async ({ payload, signal, recordModelCall, recordLlmRequest }) =>
       parseSecurityScreenVerdict(

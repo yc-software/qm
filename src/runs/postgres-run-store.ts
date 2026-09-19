@@ -1,24 +1,32 @@
 import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { createPgPool } from "../persistence/pg-pool.ts";
-import { isObj } from "../util/objects.ts";
+import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import type { PoolClient } from "pg";
+import {
+  ABSURD_CHECKPOINT_FENCING_MIGRATION,
+  ABSURD_MIGRATION,
+  ABSURD_HANDOFF_MIGRATION,
+  ABSURD_WORKER_FENCING_MIGRATION,
+  ABSURD_WORKER_CLAIM_HANDOFF_MIGRATION,
+  ABSURD_EXPIRED_HANDOFF_MIGRATION,
+  DURABLE_RETRY_STRATEGY,
+} from "../durable/schema.ts";
+import { SESSION_LEASE_OWNERSHIP_MIGRATION } from "../sessions/lease-ownership.ts";
+import { RUN_HANDOFF_WORKFLOW_MIGRATION, RUN_WORKFLOW_MIGRATION } from "./postgres-run-workflows.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
-import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
-import { isTerminal, releasesDedupKey } from "./run-store.ts";
+import type { EnqueueInput, EnqueueResult, Run, RunDeliveryState, RunStore } from "./run-store.ts";
+import { claimsSpent, isTerminal } from "./run-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
+import { getOperationSignal } from "../util/async.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
 export interface PostgresRuntime {
   runs: RunStore;
   ledger: ToolLedger;
   close(): Promise<void>;
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  return isObj(err) && err.code === "23505";
 }
 
 function rowToRun(r: Record<string, unknown>): Run {
@@ -33,6 +41,7 @@ function rowToRun(r: Record<string, unknown>): Run {
     turnUserSeq: r.turn_user_seq != null ? Number(r.turn_user_seq) : null,
     dedupKey: (r.idempotency_key as string | null) ?? null,
     attempts: Number(r.attempts),
+    handoffs: Number(r.handoffs ?? 0),
     errorAttempts: Number(r.error_attempts),
     maxAttempts: Number(r.max_attempts),
     leaseToken: (r.lease_token as string | null) ?? null,
@@ -44,17 +53,25 @@ function rowToRun(r: Record<string, unknown>): Run {
   };
 }
 
-const FENCE_HOLD_MS = 600_000;
-
-export function createPostgresRunStore(connectionString: string, opts?: { maxClaims?: number }): PostgresRuntime {
+export function createPostgresRunStore(
+  connectionString: string,
+  opts?: { maxClaims?: number; maxAgeMs?: number },
+): PostgresRuntime {
   const available = createPostgresNotifyBus<null>(connectionString, "qm_run_available", "run availability");
   const maxClaims = opts?.maxClaims ?? Number.POSITIVE_INFINITY;
   const events = new EventEmitter();
   events.setMaxListeners(0);
 
-  const { query: q, close: closePool } = createPgPool(
+  const pg = createPgPool(
     connectionString,
     [
+      ABSURD_MIGRATION,
+      ABSURD_HANDOFF_MIGRATION,
+      ABSURD_CHECKPOINT_FENCING_MIGRATION,
+      ABSURD_WORKER_FENCING_MIGRATION,
+      ABSURD_WORKER_CLAIM_HANDOFF_MIGRATION,
+      ABSURD_EXPIRED_HANDOFF_MIGRATION,
+      SESSION_LEASE_OWNERSHIP_MIGRATION,
       {
         id: "runs/store/0001",
         expectedChecksum: "07a121d0fa4e8ae4049e0574939dbf938c8615dc39ce29b74805a7e8ccb4ad0f",
@@ -117,6 +134,12 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `CREATE INDEX IF NOT EXISTS idx_runs_pending_child_returns ON runs(id) WHERE status IN ('done','failed') AND returned_at IS NULL AND session_id LIKE 'agent:main:subagent:%'`,
         ],
       },
+      RUN_WORKFLOW_MIGRATION,
+      {
+        id: "runs/store/0006-handoffs",
+        statements: ["ALTER TABLE runs ADD COLUMN IF NOT EXISTS handoffs INT NOT NULL DEFAULT 0"],
+      },
+      RUN_HANDOFF_WORKFLOW_MIGRATION,
     ],
     [
       {
@@ -153,6 +176,8 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     ],
   );
 
+  const { query: q, close: closePool } = pg;
+
   const availabilityListeners = new Map<() => void, number>();
   let availabilityTimer: ReturnType<typeof setTimeout> | undefined;
   let availabilityProbe: Promise<void> | null = null;
@@ -164,14 +189,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       () => {
         availabilityTimer = undefined;
         availabilityProbe = q(
-          `SELECT EXISTS (
-          SELECT 1 FROM runs r WHERE r.status='pending' AND r.retry_after <= $1
-          AND NOT EXISTS (
-            SELECT 1 FROM runs blocked WHERE blocked.session_id=r.session_id
-              AND (blocked.status='running' OR (blocked.status='pending' AND blocked.retry_after > $1))
-          )
-        ) AS available`,
-          [Date.now()],
+          `SELECT EXISTS (SELECT 1 FROM absurd.r_qm_runs WHERE state IN ('pending','sleeping') AND available_at <= absurd.current_time()) AS available`,
         )
           .then(({ rows }) => {
             if (rows[0]?.available) for (const listener of availabilityListeners.keys()) listener();
@@ -197,69 +215,112 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     events.emit(run.id, run);
     for (const listener of terminalListeners) listener(run);
   }
-  async function retire(
-    run: Run,
-    error: string,
-    retry: boolean,
-    opts?: { ifExpiredAt?: number; countsAsError?: boolean; retryAfterMs?: number },
-  ): Promise<{ requeued: boolean; applied: boolean }> {
-    const ifExpiredAt = opts?.ifExpiredAt ?? null;
-    const countsAsError = opts?.countsAsError ?? false;
-    const errorAttemptsAfter = run.errorAttempts + (countsAsError ? 1 : 0);
-    const overClaimed = run.attempts >= maxClaims;
-    if (retry && errorAttemptsAfter < run.maxAttempts && !overClaimed) {
-      const { rowCount } = await q(
-        `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL,
-           error_attempts=error_attempts+$4, retry_after=$5
-         WHERE id=$1 AND lease_token=$2 AND status='running' AND ($3::bigint IS NULL OR lease_expires_at <= $3) RETURNING pg_notify('qm_run_available', 'null')`,
-        [run.id, run.leaseToken, ifExpiredAt, countsAsError ? 1 : 0, Date.now() + Math.max(0, opts?.retryAfterMs ?? 0)],
-      );
-      return { requeued: rowCount > 0, applied: rowCount > 0 };
-    }
-    const reason =
-      !countsAsError && overClaimed && retry && errorAttemptsAfter < run.maxAttempts
-        ? `run parked after ${run.attempts} claims without completing (suspected crash loop)`
-        : error;
-    const result: TurnResult = { status: "failed", sessionId: run.sessionId, reason };
-    const { rowCount } = await q(
-      `UPDATE runs SET status='failed', result=$4, lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, finished_at=$5,
-         error_attempts=error_attempts+$6
-       WHERE id=$1 AND lease_token=$2 AND status='running' AND ($3::bigint IS NULL OR lease_expires_at <= $3) RETURNING pg_notify('qm_run_available', 'null')`,
-      [run.id, run.leaseToken, ifExpiredAt, JSON.stringify(result), Date.now(), countsAsError ? 1 : 0],
+  async function lockedRun(client: PoolClient, id: string, token: string): Promise<Run | null> {
+    const owner = await client.query(
+      `SELECT execution.run_id FROM absurd.r_qm_runs execution
+       WHERE execution.run_id::text=$2 AND execution.task_id=(SELECT workflow_task_id FROM runs WHERE id=$1)
+       AND execution.state='running' AND execution.claim_expires_at > absurd.current_time() FOR UPDATE`,
+      [id, token],
     );
-    if (rowCount > 0) settle(await getRun(run.id));
-    return { requeued: false, applied: rowCount > 0 };
+    if (!owner.rows[0]) return null;
+    const { rows } = await client.query(
+      "SELECT * FROM runs WHERE id=$1 AND lease_token=$2 AND status='running' FOR UPDATE",
+      [id, token],
+    );
+    return rows[0] ? rowToRun(rows[0]) : null;
+  }
+
+  async function terminal(client: PoolClient, run: Run, result: TurnResult, status: "done" | "failed"): Promise<void> {
+    await client.query("SELECT absurd.complete_run('qm_runs',$1,$2)", [
+      run.leaseToken,
+      JSON.stringify({ status, result }),
+    ]);
   }
 
   async function claim(workerId: string, ttlMs: number, runId?: string, sessionId?: string): Promise<Run | null> {
-    const token = randomUUID();
-    const now = Date.now();
-    try {
-      const { rows } = await q(
-        `UPDATE runs SET status='running', lease_token=$1, lease_expires_at=$2, worker_id=$3,
-           attempts=attempts+1, started_at=COALESCE(started_at,$4)
-         WHERE id = (
-           SELECT candidate.id FROM runs candidate WHERE candidate.status='pending'
-             AND candidate.retry_after <= $4
-             AND ($5::text IS NULL OR candidate.id=$5)
-             AND ($6::text IS NULL OR candidate.session_id=$6)
-             AND NOT EXISTS (
-               SELECT 1 FROM runs sibling WHERE sibling.session_id=candidate.session_id
-                 AND (sibling.status='running' OR (sibling.status='pending'
-                   AND (sibling.retry_after > $4 OR (sibling.created_at, sibling.seq) < (candidate.created_at, candidate.seq))))
-             )
-           ORDER BY candidate.created_at ASC, candidate.seq ASC FOR UPDATE SKIP LOCKED LIMIT 1
-         ) RETURNING *`,
-        [token, now + ttlMs, workerId, now, runId ?? null, sessionId ?? null],
+    const specific = runId !== undefined || sessionId !== undefined;
+    const count = specific ? 256 : 1;
+    for (let round = 0; round < 32; round++) {
+      const signal = getOperationSignal();
+      signal?.throwIfAborted();
+      const { rows: claimed } = await q(
+        "SELECT * FROM qm_claim_tasks('qm_runs',$1,$2,$3)",
+        [workerId, Math.max(1, Math.ceil(ttlMs / 1000)), count],
+        { signal },
       );
-      return rows[0] ? rowToRun(rows[0]) : null;
-    } catch (err) {
-      if (isUniqueViolation(err)) return null;
-      throw err;
+      signal?.throwIfAborted();
+      if (!claimed.length) return null;
+      let selected: Run | null = null;
+      for (const task of claimed) {
+        const next = await withPgTransaction(await pg.pool(), async (client) => {
+          const execution = await client.query(
+            "SELECT run_id,claim_expires_at FROM absurd.r_qm_runs WHERE run_id=$1 AND state='running' FOR UPDATE",
+            [task.run_id],
+          );
+          if (!execution.rows[0]) return {};
+          const { rows } = await client.query("SELECT * FROM runs WHERE workflow_task_id=$1 FOR UPDATE SKIP LOCKED", [
+            task.task_id,
+          ]);
+          const row = rows[0];
+          if (!row && (await client.query("SELECT 1 FROM runs WHERE workflow_task_id=$1", [task.task_id])).rows[0]) {
+            await client.query("SELECT absurd.schedule_run('qm_runs',$1,absurd.current_time())", [task.run_id]);
+            return {};
+          }
+          if (!row || isTerminal(row.status)) {
+            await client.query("SELECT absurd.cancel_task('qm_runs',$1)", [task.task_id]);
+            return {};
+          }
+          if (
+            selected ||
+            (runId !== undefined && row.id !== runId) ||
+            (sessionId !== undefined && row.session_id !== sessionId)
+          ) {
+            await client.query("SELECT absurd.schedule_run('qm_runs',$1,absurd.current_time())", [task.run_id]);
+            return {};
+          }
+          const previous = await client.query(
+            `SELECT id FROM runs WHERE session_id=$1 AND status IN ('pending','running') AND id<>$2
+             AND (status='running' OR (created_at,seq)<($3,$4)) ORDER BY created_at DESC,seq DESC LIMIT 1`,
+            [row.session_id, row.id, row.created_at, row.seq],
+          );
+          if (previous.rows[0]) return { event: `run-terminal:${previous.rows[0].id}` };
+          const { rows: started } = await client.query(
+            `UPDATE runs SET status='running',lease_token=$2,lease_expires_at=$3,worker_id=$4,
+              attempts=workflow_attempt_base+$5+handoffs,started_at=COALESCE(started_at,$6) WHERE id=$1 RETURNING *`,
+            [
+              row.id,
+              task.run_id,
+              new Date(execution.rows[0].claim_expires_at).getTime(),
+              workerId,
+              task.attempt,
+              Date.now(),
+            ],
+          );
+          return { run: rowToRun(started[0]!) };
+        });
+        if (next.run) selected = next.run;
+        else if (next.event) {
+          try {
+            const waiting = await q("SELECT * FROM absurd.await_event('qm_runs',$1,$2,$3,$3,NULL)", [
+              task.task_id,
+              task.run_id,
+              next.event,
+            ]);
+            if (waiting.rows[0]?.should_suspend === false)
+              await q("SELECT absurd.schedule_run('qm_runs',$1,absurd.current_time())", [task.run_id]);
+          } catch (error) {
+            if (!(error instanceof Object && "code" in error && (error.code === "AB001" || error.code === "AB002")))
+              throw error;
+          }
+        }
+      }
+      if (selected || specific) return selected;
     }
+    return null;
   }
 
   const runs: RunStore = {
+    backgroundOnly: true,
     subscribeAvailable(listener, options) {
       availabilityListeners.set(listener, options?.pollMs ?? 50);
       clearTimeout(availabilityTimer);
@@ -278,19 +339,36 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     ...(Number.isFinite(maxClaims) ? { maxClaims } : {}),
 
     async enqueue({ sessionId, request, dedupKey, maxAttempts = 3 }: EnqueueInput): Promise<EnqueueResult> {
-      const id = randomUUID();
-      for (;;) {
-        const { rows } = await q(
-          `INSERT INTO runs(id, session_id, status, request, idempotency_key, attempts, max_attempts, created_at)
-           VALUES ($1,$2,'pending',$3,$4,0,$5,$6)
-           ON CONFLICT (idempotency_key) DO NOTHING
-           RETURNING *, pg_notify('qm_run_available', 'null')`,
-          [id, sessionId, JSON.stringify(request), dedupKey ?? null, maxAttempts, Date.now()],
-        );
-        if (rows[0]) return { run: rowToRun(rows[0]), deduped: false };
-        const existing = await runs.getByDedupKey(dedupKey!);
-        if (existing) return { run: existing, deduped: true };
-      }
+      return withPgTransaction(await pg.pool(), async (client) => {
+        const id = randomUUID();
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`run-admission:${sessionId}`]);
+        let inserted: Record<string, unknown>;
+        for (;;) {
+          const { rows } = await client.query(
+            `INSERT INTO runs(id,session_id,status,request,idempotency_key,attempts,max_attempts,created_at)
+             VALUES($1,$2,'pending',$3,$4,0,$5,$6) ON CONFLICT(idempotency_key) DO NOTHING RETURNING *`,
+            [id, sessionId, JSON.stringify(request), dedupKey ?? null, maxAttempts, Date.now()],
+          );
+          if (rows[0]) {
+            inserted = rows[0];
+            break;
+          }
+          const prior = await client.query("SELECT * FROM runs WHERE idempotency_key=$1", [dedupKey]);
+          if (prior.rows[0]) return { run: rowToRun(prior.rows[0]), deduped: true };
+        }
+        const spawned = await client.query("SELECT * FROM absurd.spawn_task('qm_runs','run.execute',$1,$2)", [
+          JSON.stringify({ runId: id }),
+          JSON.stringify({
+            idempotency_key: `run:${id}`,
+            max_attempts: Number.isFinite(maxClaims) ? maxClaims : null,
+            retry_strategy: { kind: "exponential", base_seconds: 15, factor: 2, max_seconds: 60 },
+            cancellation: { max_duration: Math.max(1, Math.ceil((opts?.maxAgeMs ?? 24 * 60 * 60_000) / 1000)) },
+          }),
+        ]);
+        await client.query("UPDATE runs SET workflow_task_id=$2 WHERE id=$1", [id, spawned.rows[0]!.task_id]);
+        await client.query("SELECT pg_notify('qm_run_available','null')");
+        return { run: rowToRun(inserted), deduped: false };
+      });
     },
 
     async getByDedupKey(dedupKey) {
@@ -303,44 +381,74 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     claimById: (runId, workerId, ttlMs) => claim(workerId, ttlMs, runId),
     claimForSession: (sessionId, workerId, ttlMs) => claim(workerId, ttlMs, undefined, sessionId),
 
-    async heartbeat(runId, leaseToken, ttlMs): Promise<boolean> {
-      const { rowCount } = await q(
-        "UPDATE runs SET lease_expires_at=$1 WHERE id=$2 AND lease_token=$3 AND status='running'",
-        [Date.now() + ttlMs, runId, leaseToken],
-      );
-      return rowCount > 0;
+    async handoffWorker(workerId, keepLeaseTokens = []) {
+      await q("SELECT qm_handoff_worker('qm_runs',$1,$2::uuid[])", [workerId, keepLeaseTokens]);
     },
 
-    async releaseLease(runId, leaseToken): Promise<boolean> {
-      const { rowCount } = await q(
-        "UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL WHERE id=$1 AND lease_token=$2 AND status='running' RETURNING pg_notify('qm_run_available', 'null')",
-        [runId, leaseToken],
-      );
-      return rowCount > 0;
+    async heartbeat(runId, leaseToken, ttlMs): Promise<boolean> {
+      return withPgTransaction(await pg.pool(), async (client) => {
+        if (!(await lockedRun(client, runId, leaseToken))) return false;
+        await client.query("SELECT absurd.extend_claim('qm_runs',$1,$2)", [
+          leaseToken,
+          Math.max(1, Math.ceil(ttlMs / 1000)),
+        ]);
+        await client.query(
+          "UPDATE runs SET lease_expires_at=(SELECT (extract(epoch FROM claim_expires_at)*1000)::bigint FROM absurd.r_qm_runs WHERE run_id=$2::uuid) WHERE id=$1",
+          [runId, leaseToken],
+        );
+        return true;
+      });
+    },
+
+    async releaseLease(runId, leaseToken, opts): Promise<boolean> {
+      return withPgTransaction(await pg.pool(), async (client) => {
+        const run = await lockedRun(client, runId, leaseToken);
+        if (!run) return false;
+        if (opts?.handoff) {
+          const { rows } = await client.query("SELECT qm_handoff_run('qm_runs',$1,$2) AS successor", [
+            leaseToken,
+            run.workerId,
+          ]);
+          if (!rows[0]?.successor) return false;
+          return true;
+        }
+        await client.query("SELECT absurd.fail_run('qm_runs',$1,$2,absurd.current_time())", [
+          leaseToken,
+          JSON.stringify({ name: "DeploymentDrain", message: "deployment handed back execution" }),
+        ]);
+        return true;
+      });
     },
 
     async complete(runId, leaseToken, result): Promise<boolean> {
-      const { rowCount } = await q(
-        `UPDATE runs SET status='done', result=$1, lease_token=NULL, lease_expires_at=NULL, finished_at=$2,
-           idempotency_key = CASE WHEN $5 THEN NULL ELSE idempotency_key END
-         WHERE id=$3 AND lease_token=$4 RETURNING pg_notify('qm_run_available', 'null')`,
-        [JSON.stringify(result), Date.now(), runId, leaseToken, releasesDedupKey(result)],
-      );
-      if (rowCount > 0) {
-        settle(await getRun(runId));
+      const completed = await withPgTransaction(await pg.pool(), async (client) => {
+        const run = await lockedRun(client, runId, leaseToken);
+        if (!run) return false;
+        await terminal(client, run, result, "done");
         return true;
-      }
-      return false;
+      });
+      if (completed) settle(await getRun(runId));
+      return completed;
     },
 
     async fail(runId, leaseToken, error, opts): Promise<{ requeued: boolean }> {
-      const run = await getRun(runId);
-      if (!run || run.leaseToken !== leaseToken) return { requeued: false };
-      return {
-        requeued: (
-          await retire(run, error, opts?.retry !== false, { countsAsError: true, retryAfterMs: opts?.retryAfterMs })
-        ).requeued,
-      };
+      const requeued = await withPgTransaction(await pg.pool(), async (client) => {
+        const run = await lockedRun(client, runId, leaseToken);
+        if (!run) return false;
+        await client.query("UPDATE runs SET error_attempts=error_attempts+1 WHERE id=$1", [runId]);
+        if (opts?.retry === false || run.errorAttempts + 1 >= run.maxAttempts || claimsSpent(run) >= maxClaims) {
+          await terminal(client, run, { status: "failed", sessionId: run.sessionId, reason: error }, "failed");
+          return false;
+        }
+        await client.query("SELECT absurd.fail_run('qm_runs',$1,$2,$3)", [
+          leaseToken,
+          JSON.stringify({ name: "TurnFailure", message: error }),
+          opts?.retryAfterMs !== undefined ? new Date(Date.now() + Math.max(0, opts.retryAfterMs)) : null,
+        ]);
+        return true;
+      });
+      if (!requeued) settle(await getRun(runId));
+      return { requeued };
     },
 
     async noteTurnUserSeq(runId: string, seq: number): Promise<boolean> {
@@ -415,34 +523,58 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     },
 
     async withdraw(runId: string): Promise<boolean> {
-      const { rowCount } = await q("DELETE FROM runs WHERE id = $1 AND status = 'pending'", [runId]);
-      return (rowCount ?? 0) > 0;
+      return withPgTransaction(await pg.pool(), async (client) => {
+        await client.query(
+          "SELECT run_id FROM absurd.r_qm_runs WHERE task_id=(SELECT workflow_task_id FROM runs WHERE id=$1) AND state NOT IN ('completed','failed','cancelled') ORDER BY run_id FOR UPDATE",
+          [runId],
+        );
+        const { rows } = await client.query(
+          "DELETE FROM runs WHERE id=$1 AND status='pending' RETURNING workflow_task_id",
+          [runId],
+        );
+        if (!rows[0]) return false;
+        if (rows[0].workflow_task_id)
+          await client.query("SELECT absurd.cancel_task('qm_runs',$1)", [rows[0].workflow_task_id]);
+        await client.query("SELECT absurd.emit_event('qm_runs',$1,'null'::jsonb)", [`run-terminal:${runId}`]);
+        await client.query("SELECT absurd.emit_event('qm_handoffs',$1,'null'::jsonb)", [`run-terminal:${runId}`]);
+        return true;
+      });
     },
 
     async steerQueued(queuedRunId, targetRunId, signal, signals) {
       await signals.hasDedupeKey(signal.dedupeKey!);
-      const { rows } = await q(
-        `WITH target AS (
-           SELECT id FROM runs WHERE id=$2 AND status IN ('pending','running') FOR UPDATE
-         ), moved AS (
-           DELETE FROM runs WHERE id=$1 AND id<>$2 AND status='pending'
-           AND COALESCE(request::jsonb->>'displayText',request::jsonb->>'text') = $5::jsonb->'request'->>'text'
-           AND EXISTS (SELECT 1 FROM target) RETURNING id
-         ), sent AS (
-           INSERT INTO run_signals(run_id,kind,text,payload,created_at,dedupe_key)
-           SELECT $2,$3,$4,$5,$6,$7 FROM moved RETURNING id
-         ) SELECT pg_notify('run_signals',$2) FROM sent`,
-        [
-          queuedRunId,
-          targetRunId,
-          signal.kind,
-          signal.text ?? null,
-          JSON.stringify(signal),
-          Date.now(),
-          signal.dedupeKey ?? null,
-        ],
-      );
-      return rows.length > 0;
+      return withPgTransaction(await pg.pool(), async (client) => {
+        const target = await client.query(
+          "SELECT id FROM runs WHERE id=$1 AND status IN ('pending','running') FOR UPDATE",
+          [targetRunId],
+        );
+        if (!target.rows[0]) return false;
+        await client.query(
+          "SELECT run_id FROM absurd.r_qm_runs WHERE task_id=(SELECT workflow_task_id FROM runs WHERE id=$1) AND state NOT IN ('completed','failed','cancelled') ORDER BY run_id FOR UPDATE",
+          [queuedRunId],
+        );
+        const { rows } = await client.query(
+          `DELETE FROM runs WHERE id=$1 AND id<>$2 AND status='pending'
+             AND COALESCE(request::jsonb->>'displayText',request::jsonb->>'text')=$3
+             RETURNING workflow_task_id`,
+          [queuedRunId, targetRunId, signal.request?.text],
+        );
+        if (!rows[0]) return false;
+        if (rows[0].workflow_task_id)
+          await client.query("SELECT absurd.cancel_task('qm_runs',$1)", [rows[0].workflow_task_id]);
+        await client.query("SELECT absurd.emit_event('qm_runs',$1,'null'::jsonb)", [`run-terminal:${queuedRunId}`]);
+        await client.query("SELECT absurd.emit_event('qm_handoffs',$1,'null'::jsonb)", [`run-terminal:${queuedRunId}`]);
+        const sent = await client.query(
+          `INSERT INTO run_signals(run_id,kind,text,payload,created_at,dedupe_key) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
+          [targetRunId, signal.kind, signal.text ?? null, JSON.stringify(signal), Date.now(), signal.dedupeKey ?? null],
+        );
+        await client.query("SELECT absurd.spawn_task('qm_handoffs','signal.replay',$1,$2)", [
+          JSON.stringify({ runId: targetRunId }),
+          JSON.stringify({ idempotency_key: `signal:${sent.rows[0]!.id}`, retry_strategy: DURABLE_RETRY_STRATEGY }),
+        ]);
+        await client.query("SELECT pg_notify('run_signals',$1)", [targetRunId]);
+        return true;
+      });
     },
 
     async activeSessionIds(): Promise<string[]> {
@@ -460,42 +592,8 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       return rows.map(rowToRun);
     },
 
-    async reapExpired(
-      onRetired?: (sessionIds: string[]) => Promise<void>,
-      opts?: { maxAgeMs?: number; onReap?: (event: ReapEvent) => void },
-    ): Promise<{ requeued: number; parked: number }> {
-      const now = Date.now();
-      const { rows } = await q(
-        "SELECT * FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1",
-        [now],
-      );
-      const expired = rows.map(rowToRun);
-      let requeued = 0;
-      let parked = 0;
-      for (const run of expired) {
-        const tooOld = opts?.maxAgeMs !== undefined && run.startedAt !== null && now - run.startedAt > opts.maxAgeMs;
-        const reason = tooOld ? "run exceeded max age (reaped)" : "lease expired (reaped)";
-        const fenceToken = randomUUID();
-        const fenced = await q(
-          "UPDATE runs SET lease_token=$1, lease_expires_at=$5 WHERE id=$2 AND lease_token=$3 AND status='running' AND lease_expires_at <= $4 RETURNING id",
-          [fenceToken, run.id, run.leaseToken, now, now + FENCE_HOLD_MS],
-        );
-        if (!fenced.rows[0]) continue;
-        if (onRetired) await onRetired([run.sessionId]);
-        const r = await retire({ ...run, leaseToken: fenceToken }, reason, !tooOld);
-        if (!r.applied) continue;
-        if (r.requeued) requeued++;
-        else parked++;
-        opts?.onReap?.({
-          runId: run.id,
-          sessionId: run.sessionId,
-          workerId: run.workerId,
-          attempts: run.attempts,
-          errorAttempts: run.errorAttempts,
-          outcome: r.requeued ? "requeued" : "parked",
-        });
-      }
-      return { requeued, parked };
+    async reapExpired(): Promise<{ requeued: number; parked: number }> {
+      return { requeued: 0, parked: 0 };
     },
 
     waitFor(runId, timeoutMs = 60_000): Promise<Run> {

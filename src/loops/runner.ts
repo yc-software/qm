@@ -1,3 +1,4 @@
+import { isDurableControlFlow } from "../durable/tasks.ts";
 import type { Loop, LoopItem, LoopOutput } from "../types.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
 import { unresolvedOutput, type CaptureOutputInput, type LoopOutputStore } from "./output-store.ts";
@@ -20,7 +21,6 @@ export interface LoopRunnerEffects {
   captureOutputs(input: { loop: Loop; item: LoopItem; runId: string }): Promise<CapturedArtifact[]>;
   evaluate(input: { loop: Loop; item: LoopItem; attempt: number; runId: string }): Promise<SuccessVerdict>;
   ship(input: { loop: Loop; output: LoopOutput }): Promise<LoopOutput | null>;
-  authorizeAutoShip?(output: LoopOutput): Promise<Loop | null>;
 }
 
 export interface LoopStores {
@@ -94,6 +94,7 @@ export async function runLoopFire(
       if (created) summary.enqueued += 1;
     }
   } catch (error) {
+    if (isDurableControlFlow(error)) throw error;
     if (error instanceof DuplicateLoopFireError) throw error;
     summary.failures.push(`intake: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -174,9 +175,7 @@ export async function runLoopFire(
       ).length;
       for (const output of ready) {
         if (decideShip(loop, outputCandidate(output), grants).outcome !== "auto") continue;
-        const currentLoop = effects.authorizeAutoShip ? await effects.authorizeAutoShip(output) : loop;
-        if (!currentLoop) continue;
-        const shipped = await effects.ship({ loop: currentLoop, output });
+        const shipped = await effects.ship({ loop, output });
         if (shipped?.state === "shipped") {
           autoShipped.push(output.id);
           autoShippedCount += 1;
@@ -189,6 +188,7 @@ export async function runLoopFire(
         summary.ready.push(item.id);
       }
     } catch (error) {
+      if (isDurableControlFlow(error)) throw error;
       const reason = error instanceof Error ? error.message : String(error);
       summary.failures.push(`${item.sourceKey}: ${reason}`);
       if (autoShippedCount > 0) {

@@ -2,12 +2,15 @@ import type { HarnessModelUtilities } from "../../harness/harness.ts";
 import {
   type MemoryService,
   type MemoryCaptureContext,
+  type MemoryCaptureExecution,
+  memoryCaptureStep,
   ccCaptureToPersonal,
   isSystemActor,
 } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
 import type { ScopeId } from "../../types.ts";
 import { bullets } from "../notebook.ts";
+import { withAbort } from "../../util/async.ts";
 
 export const DEFAULT_CAPTURE_QUIET_MS = 180_000;
 export const DEFAULT_CAPTURE_MAX_TURNS = 10;
@@ -44,18 +47,15 @@ export function parseFacts(out: string): string[] {
 export async function extractFacts(
   harness: HarnessModelUtilities,
   turns: Array<{ input: string; reply: string }>,
+  signal?: AbortSignal,
 ): Promise<string[]> {
   if (!harness.oneShot) return [];
-  try {
-    const transcript = turns.map((t) => `User said:\n${t.input}\n\nAssistant replied:\n${t.reply}`).join("\n\n---\n\n");
-    const out = await harness.oneShot(MEMORY_EXTRACTION_PROMPT, transcript);
-    return parseFacts(out ?? "");
-  } catch {
-    return [];
-  }
+  const transcript = turns.map((t) => `User said:\n${t.input}\n\nAssistant replied:\n${t.reply}`).join("\n\n---\n\n");
+  const out = await withAbort(() => harness.oneShot!(MEMORY_EXTRACTION_PROMPT, transcript, signal), signal);
+  return parseFacts(out ?? "");
 }
 
-export interface Burst {
+export interface Burst extends MemoryCaptureExecution {
   scopeId: ScopeId;
   actorId?: string;
   conversationScopeId: ScopeId;
@@ -66,7 +66,7 @@ export interface Burst {
   timer?: NodeJS.Timeout;
 }
 
-export type TurnEndCtx = {
+export type TurnEndCtx = MemoryCaptureExecution & {
   scopeId: ScopeId;
   input: string;
   reply: string;
@@ -95,6 +95,8 @@ export function createBurstBuffer(
     conversationLabel,
     sessionId,
     idempotencyKey,
+    signal,
+    checkpoint,
   }) => {
     if (autonomous === true || isSystemActor(actorId)) return;
     const burst: Burst = {
@@ -105,6 +107,8 @@ export function createBurstBuffer(
       ...(conversationLabel !== undefined ? { conversationLabel } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+      ...(signal ? { signal } : {}),
+      ...(checkpoint ? { checkpoint } : {}),
     };
     if (quietMs <= 0) return flush(burst);
 
@@ -130,9 +134,11 @@ export function createBurstBuffer(
   };
 }
 
-function burstCaptureContext(burst: Burst): MemoryCaptureContext {
+export function burstCaptureContext(burst: Burst): MemoryCaptureContext {
   return {
     mode: "automatic",
+    ...(burst.signal ? { signal: burst.signal } : {}),
+    ...(burst.checkpoint ? { checkpoint: burst.checkpoint } : {}),
     ...(burst.actorId ? { actorId: burst.actorId } : {}),
     conversationScopeId: burst.conversationScopeId,
     input: burst.turns.map((turn) => turn.input).join("\n\n"),
@@ -145,31 +151,30 @@ function burstCaptureContext(burst: Burst): MemoryCaptureContext {
 export function createPerTurnStrategy(deps: {
   harness: HarnessModelUtilities;
   memory: MemoryService;
-  maintain?: (scopeId: ScopeId) => Promise<void>;
+  maintain?: (scopeId: ScopeId, signal?: AbortSignal) => Promise<void>;
   captureQuietMs?: number;
   captureMaxTurns?: number;
   onCaptureError?: (e: unknown, scopeId: ScopeId) => void;
 }): MemoryStrategy {
   async function flush(burst: Burst): Promise<void> {
-    const facts = await extractFacts(deps.harness, burst.turns);
+    const { facts, at } = await memoryCaptureStep(burst, "facts", async () => ({
+      facts: await extractFacts(deps.harness, burst.turns, burst.signal),
+      at: Date.now(),
+    }));
     if (!facts.length) return;
-    const at = Date.now();
-    await deps.memory.capture(burst.scopeId, facts, at, burst.actorId, burstCaptureContext(burst));
-    await ccCaptureToPersonal(
-      deps.memory,
-      burst.conversationScopeId,
-      burst.actorId,
-      facts,
-      at,
-      burst.conversationLabel,
-      {
+    await memoryCaptureStep(burst, "scope", () =>
+      deps.memory.capture(burst.scopeId, facts, at, burst.actorId, burstCaptureContext(burst)),
+    );
+    await memoryCaptureStep(burst, "personal", () =>
+      ccCaptureToPersonal(deps.memory, burst.conversationScopeId, burst.actorId, facts, at, burst.conversationLabel, {
         ...burstCaptureContext(burst),
         ...(burst.idempotencyKey ? { idempotencyKey: `${burst.idempotencyKey}:personal` } : {}),
-      },
+      }),
     );
   }
 
   return {
+    captureBurst: flush,
     onTurnEnd: createBurstBuffer(
       deps.captureQuietMs ?? 0,
       deps.captureMaxTurns ?? DEFAULT_CAPTURE_MAX_TURNS,

@@ -11,7 +11,6 @@ import { installDevIntrospection } from "./dev-introspection.ts";
 import { setDefaultBotIdentity, createSurfaceHeaderEnsurer, type SurfaceHeaderClient } from "./delivery.ts";
 import {
   NO_RETRY,
-  HISTORY_NO_RETRY,
   type SlackPluginConfig,
   normalizeSlackApiUrl,
   slackAccountConfigsFromEnv,
@@ -27,7 +26,7 @@ import { createApprovals } from "./approvals.ts";
 import { createTurnHandler } from "./turn-handler.ts";
 import { registerSlackEvents } from "./events.ts";
 import { createSurfaceContextFulfiller } from "./surface-context.ts";
-import { createDeliveryPoller } from "./deliveries.ts";
+import { createSlackDeliveryHandler } from "./task-delivery.ts";
 import { createDeferredAckReceiver } from "./deferred-ack.ts";
 import { createHttpEventsReceiver } from "./http-events.ts";
 import { parseChannelPage, parseLogLevel } from "./payloads.ts";
@@ -145,17 +144,22 @@ export async function startSlackPlugin(
   }
 
   const stagingAccount = cfg.installationId ? `${ACCOUNT_LABEL}:${cfg.installationId}` : ACCOUNT_LABEL;
-  const staging = core.stagedEnvelopes
-    ? createEnvelopeStaging(core.stagedEnvelopes, { account: stagingAccount })
+  const staging =
+    core.stagedEnvelopes && !core.durableIngress
+      ? createEnvelopeStaging(core.stagedEnvelopes, { account: stagingAccount })
+      : undefined;
+  const accept = core.durableIngress
+    ? (body: Record<string, unknown>) => core.durableIngress!.accept(stagingAccount, body)
     : undefined;
   const receiver = () => {
-    if (cfg.receiverFactory) return cfg.receiverFactory(staging);
+    if (cfg.receiverFactory) return cfg.receiverFactory(staging, accept);
     return EVENTS_MODE === "http"
       ? createHttpEventsReceiver({
           signingSecret: cfg.signingSecret!,
           port: cfg.eventsPort!,
           ...(cfg.ackCapMs !== undefined ? { capMs: cfg.ackCapMs } : {}),
           ...(staging ? { staging } : {}),
+          ...(accept ? { accept } : {}),
         })
       : createDeferredAckReceiver({
           appToken: APP_TOKEN!,
@@ -163,6 +167,7 @@ export async function startSlackPlugin(
           ...(SLACK_API_URL ? { slackApiUrl: SLACK_API_URL } : {}),
           ...(cfg.ackCapMs !== undefined ? { capMs: cfg.ackCapMs } : {}),
           ...(staging ? { staging } : {}),
+          ...(accept ? { accept } : {}),
         });
   };
   const app = new App({
@@ -172,6 +177,7 @@ export async function startSlackPlugin(
     logLevel: parseLogLevel(cfg.logLevel),
     clientOptions: { ...CLIENT_OPTIONS },
   });
+  let unregisterIngress: (() => void) | undefined;
   const replaySweeper = staging
     ? createSweeper(
         () =>
@@ -217,9 +223,9 @@ export async function startSlackPlugin(
   };
   const rateLimitNotice = createSlackRateLimitNotice({
     ...historyRateLimitOptions,
-    client: new WebClient(BOT_TOKEN, { ...CLIENT_OPTIONS, ...HISTORY_NO_RETRY, timeout: 5000 }),
+    client: new WebClient(BOT_TOKEN, { ...CLIENT_OPTIONS, timeout: 5000 }),
   });
-  const historyApi = new WebClient(BOT_TOKEN, { ...CLIENT_OPTIONS, ...HISTORY_NO_RETRY });
+  const historyApi = new WebClient(BOT_TOKEN, { ...CLIENT_OPTIONS });
   const historyClient = {
     conversations: Object.fromEntries(
       (["history", "replies"] as const).map((method) => [
@@ -251,7 +257,7 @@ export async function startSlackPlugin(
     externalParticipantsEnabled,
     ...(cfg.recentMessages ? { recentMessages: cfg.recentMessages } : {}),
   });
-  const approvals = createApprovals({ core, flow, directory, threads, ids });
+  const approvals = createApprovals({ core, flow, directory, threads, ids, accountId: ACCOUNT_LABEL });
   const ensureHeader = createSurfaceHeaderEnsurer({
     headerFacts: (scope) => core.surfaceHeaderFacts(scope as Parameters<typeof core.surfaceHeaderFacts>[0]),
     channelPinEnabled: (scope) =>
@@ -295,6 +301,7 @@ export async function startSlackPlugin(
       })();
     });
   const handler = createTurnHandler({
+    accountId: ACCOUNT_LABEL,
     rateLimitNotice,
     readHistory,
     core,
@@ -365,15 +372,19 @@ export async function startSlackPlugin(
     ...(cfg.userToken ? { userToken: cfg.userToken } : {}),
     clientOptions: CLIENT_OPTIONS,
   });
-  const deliveries = createDeliveryPoller({
+  let unregisterDeliveryHandler: (() => void) | undefined;
+  const deliveryHandler = createSlackDeliveryHandler({
     core,
-    flow,
-    threads,
+    client: app.client,
     clientForIdentity,
+    threads,
+    approvals,
     webUiPublicUrl: cfg.webUiPublicUrl,
   });
 
   let auth: AuthTestResponse;
+  let emojiCatalogTimer: NodeJS.Timeout | undefined;
+  let unsubscribeContextRequests = (): void => {};
   try {
     auth = await app.client.auth.test();
     ids.ownTeamId = auth.team_id ?? "";
@@ -393,10 +404,86 @@ export async function startSlackPlugin(
       }
     }
     await directory.getUserSnapshot(app.client);
+    unregisterDeliveryHandler = core.registerDeliveryHandler?.(deliveryHandler, ACCOUNT_LABEL);
+    unregisterIngress = core.durableIngress?.register(stagingAccount, (body, ackGate) =>
+      app.processEvent({ body, ack: async () => {}, customProperties: { ackGate } }),
+    );
+    if (core.durableIngress && core.stagedEnvelopes) {
+      for (const [key, staged] of await core.stagedEnvelopes.entries()) {
+        if (staged.account !== stagingAccount) continue;
+        await core.durableIngress.accept(stagingAccount, staged.body);
+        await core.stagedEnvelopes.delete(key);
+      }
+    }
     await app.start();
     replaySweeper?.start();
+    devIntrospection?.ready({ connectedAs: auth.user ?? "", botUserId: ids.botUserId, teamId: ids.ownTeamId });
+    console.log(
+      `[slack-plugin] account ${ACCOUNT_LABEL} connected as @${auth.user} (bot ${ids.botUserId}) in team ${auth.team} (${ids.ownTeamId}); in-process core`,
+    );
+    ackEmoji.refreshAckEmoji(app.client);
+    ackEmojiOverride();
+
+    const EMOJI_CATALOG_REFRESH_MS = 6 * 60 * 60_000;
+    const publishEmojiCatalog = (): void => {
+      if (stopped) return;
+      void Promise.resolve(app.client.emoji.list())
+        .then((res: { emoji?: Record<string, string> }) => {
+          const emoji: Record<string, string> = {};
+          for (const [name, url] of Object.entries(res.emoji ?? {})) {
+            if (typeof url === "string" && !url.startsWith("alias:")) emoji[name] = url;
+          }
+          return core.publishEmojiCatalog(emoji);
+        })
+        .catch(swallowAs("slack: emoji catalog publish", undefined));
+    };
+    if (CORE_SINGLETON) {
+      publishEmojiCatalog();
+      emojiCatalogTimer = setInterval(publishEmojiCatalog, EMOJI_CATALOG_REFRESH_MS);
+    }
+
+    const contextRequestsInFlight = new Set<string>();
+    const serviceContextRequest = (request: SurfaceContextRequest): void => {
+      if (stopped || !request?.id || contextRequestsInFlight.has(request.id)) return;
+      contextRequestsInFlight.add(request.id);
+      void surfaceContext
+        .fulfillSurfaceContext(app.client, request)
+        .finally(() => contextRequestsInFlight.delete(request.id));
+    };
+    if (CORE_SINGLETON) {
+      unsubscribeContextRequests = core.onContextRequest(serviceContextRequest);
+      void core
+        .pendingContextRequests()
+        .then((pending) => pending.forEach(serviceContextRequest))
+        .catch(swallowAs("slack: context request drain", undefined));
+    }
+
+    return {
+      async stop(): Promise<void> {
+        if (stopped) {
+          await replaySweeper?.stop();
+          await app.stop();
+          return;
+        }
+        stopped = true;
+        await replaySweeper?.stop();
+        if (emojiCatalogTimer) clearInterval(emojiCatalogTimer);
+        unregisterDeliveryHandler?.();
+        unregisterIngress?.();
+        unsubscribeContextRequests();
+        try {
+          await app.stop();
+        } finally {
+          await devIntrospection?.close();
+        }
+      },
+    };
   } catch (err) {
     stopped = true;
+    if (emojiCatalogTimer) clearInterval(emojiCatalogTimer);
+    unsubscribeContextRequests();
+    unregisterIngress?.();
+    unregisterDeliveryHandler?.();
     await devIntrospection?.close().catch(swallowAs("slack: dev-introspection close on failed start", undefined));
     try {
       await app.stop();
@@ -407,104 +494,4 @@ export async function startSlackPlugin(
     }
     throw err;
   }
-  devIntrospection?.ready({ connectedAs: auth.user ?? "", botUserId: ids.botUserId, teamId: ids.ownTeamId });
-  console.log(
-    `[slack-plugin] account ${ACCOUNT_LABEL} connected as @${auth.user} (bot ${ids.botUserId}) in team ${auth.team} (${ids.ownTeamId}); in-process core`,
-  );
-  ackEmoji.refreshAckEmoji(app.client);
-  ackEmojiOverride();
-
-  const EMOJI_CATALOG_REFRESH_MS = 6 * 60 * 60_000;
-  const publishEmojiCatalog = (): void => {
-    if (stopped) return;
-    void Promise.resolve(app.client.emoji.list())
-      .then((res: { emoji?: Record<string, string> }) => {
-        const emoji: Record<string, string> = {};
-        for (const [name, url] of Object.entries(res.emoji ?? {})) {
-          if (typeof url === "string" && !url.startsWith("alias:")) emoji[name] = url;
-        }
-        return core.publishEmojiCatalog(emoji);
-      })
-      .catch(swallowAs("slack: emoji catalog publish", undefined));
-  };
-  let emojiCatalogTimer: NodeJS.Timeout | undefined;
-  if (CORE_SINGLETON) {
-    publishEmojiCatalog();
-    emojiCatalogTimer = setInterval(publishEmojiCatalog, EMOJI_CATALOG_REFRESH_MS);
-  }
-
-  let deliveriesPollInFlight = false;
-  let deliveriesPollAgain = false;
-  let followerRetry: ReturnType<typeof setTimeout> | undefined;
-  const drainDeliveries = (): void => {
-    if (stopped) return;
-    if (deliveriesPollInFlight) {
-      deliveriesPollAgain = true;
-      return;
-    }
-    deliveriesPollInFlight = true;
-    void deliveries
-      .pollDeliveries(app.client)
-      .then((ranAsLeader) => {
-        if (!ranAsLeader && !stopped && !followerRetry) {
-          followerRetry = setTimeout(() => {
-            followerRetry = undefined;
-            drainDeliveries();
-          }, 5_000);
-          followerRetry.unref?.();
-        }
-      })
-      .finally(() => {
-        deliveriesPollInFlight = false;
-        if (deliveriesPollAgain) {
-          deliveriesPollAgain = false;
-          drainDeliveries();
-        }
-      });
-  };
-  let unsubscribeDeliveries = (): void => {};
-  let deliveriesTimer: NodeJS.Timeout | undefined;
-  if (CORE_SINGLETON) {
-    unsubscribeDeliveries = core.onDeliveryEnqueued(drainDeliveries);
-    deliveriesTimer = setInterval(drainDeliveries, 60_000);
-    drainDeliveries();
-  }
-
-  const contextRequestsInFlight = new Set<string>();
-
-  const serviceContextRequest = (r: SurfaceContextRequest): void => {
-    if (stopped || !r?.id || contextRequestsInFlight.has(r.id)) return;
-    contextRequestsInFlight.add(r.id);
-    void surfaceContext.fulfillSurfaceContext(app.client, r).finally(() => contextRequestsInFlight.delete(r.id));
-  };
-  let unsubscribeContextRequests = (): void => {};
-  if (CORE_SINGLETON) {
-    unsubscribeContextRequests = core.onContextRequest(serviceContextRequest);
-    void core
-      .pendingContextRequests()
-      .then((pending) => pending.forEach(serviceContextRequest))
-      .catch(swallowAs("slack: context request drain", undefined));
-  }
-
-  return {
-    async stop(): Promise<void> {
-      if (stopped) {
-        await replaySweeper?.stop();
-        await app.stop();
-        return;
-      }
-      stopped = true;
-      await replaySweeper?.stop();
-      if (deliveriesTimer) clearInterval(deliveriesTimer);
-      if (emojiCatalogTimer) clearInterval(emojiCatalogTimer);
-      if (followerRetry) clearTimeout(followerRetry);
-      unsubscribeDeliveries();
-      unsubscribeContextRequests();
-      try {
-        await app.stop();
-      } finally {
-        await devIntrospection?.close();
-      }
-    },
-  };
 }

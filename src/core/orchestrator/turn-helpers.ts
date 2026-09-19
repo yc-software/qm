@@ -249,6 +249,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     },
     text: input.text,
     ...(input.gatewayContext ? { gatewayContext: input.gatewayContext } : {}),
+    ...(input.slackDeliveryContext ? { slackDeliveryContext: input.slackDeliveryContext } : {}),
     ...(input.analyticsSuppressed ? { analyticsSuppressed: true } : {}),
     ...(input.proactiveOpener ? { proactiveOpener: true } : {}),
     ...turnOriginRequestFields(input.origin),

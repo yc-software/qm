@@ -1,3 +1,4 @@
+import { ABSURD_MIGRATION, absurdQueueMigration, DURABLE_RETRY_OPTIONS_SQL } from "../durable/schema.ts";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
@@ -19,6 +20,8 @@ function toSignals(rows: Rows): RunSignal[] {
 
 export function createPostgresRunSignalStore(connectionString: string): RunSignalStore {
   const pg = createPgPool(connectionString, [
+    ABSURD_MIGRATION,
+    absurdQueueMigration("qm_handoffs"),
     {
       id: "runs/signals/0001",
       statements: [
@@ -40,6 +43,13 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       statements: [
         `ALTER TABLE run_signals ADD COLUMN IF NOT EXISTS dedupe_key TEXT`,
         `CREATE UNIQUE INDEX IF NOT EXISTS run_signals_by_dedupe_key ON run_signals(dedupe_key) WHERE dedupe_key IS NOT NULL`,
+      ],
+    },
+    {
+      id: "runs/signals/0003-workflows",
+      statements: [
+        `SELECT absurd.spawn_task('qm_handoffs','signal.replay',jsonb_build_object('runId',run_id),
+        jsonb_build_object('idempotency_key','signal:'||id)||${DURABLE_RETRY_OPTIONS_SQL}) FROM run_signals WHERE consumed_at IS NULL`,
       ],
     },
   ]);
@@ -75,7 +85,8 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
            ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
            RETURNING id
          )
-         SELECT pg_notify('${CHANNEL}', $1) FROM ins`,
+         SELECT pg_notify('${CHANNEL}', $1),absurd.spawn_task('qm_handoffs','signal.replay',
+           jsonb_build_object('runId',$1::text),jsonb_build_object('idempotency_key','signal:'||id)||${DURABLE_RETRY_OPTIONS_SQL}) FROM ins`,
         [runId, signal.kind, signal.text ?? null, JSON.stringify(signal), Date.now(), signal.dedupeKey ?? null],
       );
       return rows.length > 0;

@@ -17,6 +17,8 @@ import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-to
 import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { E2bSandboxGoneError } from "../src/sandbox/e2b-client.ts";
+import { assertOperationActive, getOperationSignal, withAbort, withOperationSignal } from "../src/util/async.ts";
+import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 
 let fake: FakeE2b;
 let sandbox: Sandbox;
@@ -53,6 +55,222 @@ test("an already-aborted signal never executes a command", async () => {
   const signal = AbortSignal.abort();
   await assert.rejects(sandbox.run(handle, "echo must-not-run", { signal }), /aborted/i);
   assert.equal(fake.execScripts().length, before);
+});
+
+test("canceling a disappeared E2B command cannot create a replacement during cleanup", async () => {
+  const controller = new AbortController();
+  const entered = Promise.withResolvers<void>();
+  let creates = 0;
+  let kills = 0;
+  const client: typeof fake.client = {
+    ...fake.client,
+    async create(options) {
+      creates++;
+      const session = await fake.client.create(options);
+      return {
+        ...session,
+        async runCommand(command, options) {
+          if (command.includes("qm-abort-body")) {
+            entered.resolve();
+            return withAbort(() => new Promise(() => {}), getOperationSignal());
+          }
+          if (command.includes("i=0")) {
+            assertOperationActive();
+            kills++;
+            await fake.client.kill(session.sandboxId);
+            throw new E2bSandboxGoneError(session.sandboxId, "disappeared before cleanup");
+          }
+          return session.runCommand(command, options);
+        },
+      };
+    },
+  };
+  const sandbox = make({ client });
+  const handle = await sandbox.provision(layers);
+  const rejected = assert.rejects(
+    withOperationSignal(controller.signal, () => sandbox.run(handle, "qm-abort-body")),
+    (error) => error === controller.signal.reason,
+  );
+  await entered.promise;
+  controller.abort();
+  await rejected;
+  assert.equal(kills, 1);
+  assert.equal(creates, 1);
+});
+
+test("cancelled home hydration joins independently bounded deletion before retrying", async () => {
+  const controller = new AbortController();
+  const reason = new Error("deployment handoff");
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const cleanupStarted = Promise.withResolvers<void>();
+  const cleanupReleased = Promise.withResolvers<void>();
+  let reads = 0;
+  let deleted = false;
+  const client = {
+    ...fake.client,
+    async kill(id: string) {
+      assertOperationActive();
+      assert.notEqual(getOperationSignal(), controller.signal);
+      cleanupStarted.resolve();
+      await cleanupReleased.promise;
+      await fake.client.kill(id);
+      deleted = true;
+    },
+  };
+  const snapshots = {
+    ...createMemorySnapshotStore(),
+    async open() {
+      if (++reads === 1) {
+        controller.abort(reason);
+        throw reason;
+      }
+      return null;
+    },
+  };
+  const failed = assert.rejects(
+    withOperationSignal(controller.signal, () => make({ client, store, snapshots }).provision(layers)),
+    (error) => error === reason,
+  );
+  try {
+    await cleanupStarted.promise;
+    await assert.rejects(make({ client, store, snapshots }).provision(layers), /hydration is incomplete/);
+  } finally {
+    cleanupReleased.resolve();
+    await failed;
+  }
+  assert.equal(deleted, true);
+  assert.equal(fake.current(scopeName()), null);
+  const next = await make({ client, store, snapshots }).provision(layers);
+  assert.equal(next.coldStart, true);
+  assert.equal(reads, 2);
+  assert.equal(fake.createdCount(scopeName()), 2);
+});
+
+test("a lost readiness acknowledgement cannot delete a home already adopted by a replacement", async () => {
+  const controller = new AbortController();
+  const reason = new Error("deployment handoff");
+  const store = createMemoryMap<StoredE2bSandbox>();
+  let replacement: Awaited<ReturnType<Sandbox["provision"]>> | undefined;
+  let deletes = 0;
+  const client = {
+    ...fake.client,
+    async create(options: Parameters<typeof fake.client.create>[0]) {
+      const session = await fake.client.create(options);
+      return {
+        ...session,
+        async writeFileBytes(path: string, bytes: Uint8Array) {
+          await session.writeFileBytes(path, bytes);
+          if (path === "/home/user/.qm-hydrated") {
+            replacement = await make({ store }).provision(layers);
+            controller.abort(reason);
+            throw reason;
+          }
+        },
+      };
+    },
+    async kill(id: string) {
+      deletes++;
+      await fake.client.kill(id);
+    },
+  };
+  await assert.rejects(
+    withOperationSignal(controller.signal, () => make({ client, store }).provision(layers)),
+    (error) => error === reason,
+  );
+  assert.ok(replacement);
+  assert.equal(replacement.coldStart, false);
+  assert.equal(deletes, 0);
+  assert.ok(fake.current(scopeName()));
+});
+
+test("cancelled native-pause publication preserves the ready home for the replacement", async () => {
+  const controller = new AbortController();
+  const reason = new Error("deployment handoff");
+  const backing = createMemoryMap<StoredE2bSandbox>();
+  const store: DurableMap<StoredE2bSandbox> = {
+    ...backing,
+    async update(id, change) {
+      const result = await backing.update!(id, change);
+      if (result?.nativePause) {
+        controller.abort(reason);
+        throw reason;
+      }
+      return result;
+    },
+  };
+  const client = { ...fake.client, nativePause: true };
+  await assert.rejects(
+    withOperationSignal(controller.signal, () => make({ client, store }).provision(layers)),
+    (error) => error === reason,
+  );
+  assert.equal((await backing.get(scope))?.nativePause, true);
+  assert.ok(fake.current(scopeName()));
+  const adopted = await make({ client, store: backing }).provision(layers);
+  assert.equal(adopted.coldStart, false);
+  assert.equal(fake.createdCount(scopeName()), 1);
+});
+
+for (const stage of ["publication", "hydration"] as const) {
+  test(`cancelled ${stage} cannot publish an incomplete home even when deletion fails`, async () => {
+    const controller = new AbortController();
+    const reason = new Error("deployment handoff");
+    const backing = createMemoryMap<StoredE2bSandbox>();
+    const store: DurableMap<StoredE2bSandbox> = {
+      ...backing,
+      async put(id, record) {
+        if (stage === "publication") {
+          controller.abort(reason);
+          throw reason;
+        }
+        await backing.put(id, record);
+      },
+    };
+    let deletes = 0;
+    const client = {
+      ...fake.client,
+      async kill() {
+        assertOperationActive();
+        deletes++;
+        throw new Error("provider unavailable");
+      },
+    };
+    const snapshots = {
+      ...createMemorySnapshotStore(),
+      async open() {
+        controller.abort(reason);
+        throw reason;
+      },
+    };
+    const backend = make({ client, store, snapshots });
+    await assert.rejects(
+      withOperationSignal(controller.signal, () => backend.provision(layers)),
+      (error) => error === reason,
+    );
+    assert.equal(deletes, 1);
+    assert.equal(Boolean(await backing.get(scope)), stage === "hydration");
+    assert.ok(fake.current(scopeName()));
+    await assert.rejects(backend.provision(layers), /hydration is incomplete/);
+    await assert.rejects(make({ client, store: backing, snapshots }).provision(layers), /hydration is incomplete/);
+    assert.equal(fake.createdCount(scopeName()), 1);
+  });
+}
+
+test("provider discovery accepts a completed home receipt and preserves legacy adoption", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const first = await make({ store }).provision(layers);
+  await store.delete(scope);
+  const adopted = await make({ store }).provision(layers);
+  assert.equal(adopted.id, first.id);
+  assert.equal(adopted.coldStart, false);
+  assert.equal(fake.createdCount(scopeName()), 1);
+  assert.equal((await store.get(scope))?.hydrationRequired, true);
+
+  await fake.client.kill((await store.get(scope))!.sandboxId);
+  await store.delete(scope);
+  const legacy = await fake.client.create({ metadata: { name: scopeName() } });
+  const resumed = await make({ store }).provision(layers);
+  assert.equal(resumed.coldStart, false);
+  assert.equal((await store.get(scope))?.sandboxId, legacy.sandboxId);
 });
 
 test("streams and exit codes are exact", async () => {

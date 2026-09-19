@@ -1,3 +1,5 @@
+import { prepareHarnessInput } from "./harness.ts";
+import { withAbort, withTimeout } from "../util/async.ts";
 import {
   documentExtension,
   documentFallbackText,
@@ -22,7 +24,7 @@ import type { ScopeId } from "../types.ts";
 import type { TaskStore } from "../tasks/task-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
-import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { TurnHandedOff, NonRetryableTurnError } from "../core/turn-error.ts";
 import {
   defineHarness,
   promptEnvelopeWithoutHistory,
@@ -827,17 +829,32 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
 
   const runPrompt = async (turn: HarnessTurnInput): Promise<HarnessTurnResult> => {
     if (turn.cancel?.aborted) return { reply: "", stopped: true };
-    const rt = await ensureRuntime();
+    if (turn.handoffDeadline?.aborted) return { reply: "", handedOff: true };
+    const rt = await withAbort(ensureRuntime, turn.handoffDeadline).catch((error) => {
+      if (turn.handoffDeadline?.aborted) throw new TurnHandedOff();
+      throw error;
+    });
     if (turn.cancel?.aborted) return { reply: "", stopped: true };
+    if (turn.handoffDeadline?.aborted) return { reply: "", handedOff: true };
     const selectedModel = turn.runtime?.modelId ?? resolveModelId(turn.scopeLabel);
     const model = modelRef(selectedModel);
-    const created = await rt.client.session.create({ body: { title: `qm:${turn.session.id}` } });
+    const created = await withAbort(
+      () => rt.client.session.create({ body: { title: `qm:${turn.session.id}` } }),
+      turn.handoffDeadline,
+    ).catch((error) => {
+      if (turn.handoffDeadline?.aborted) throw new TurnHandedOff();
+      throw error;
+    });
     const session = created.data;
     if (!session) throw new Error(`OpenCode session creation failed: ${JSON.stringify(created.error)}`);
     const sessionId = session.id;
     if (turn.cancel?.aborted) {
-      await rt.client.session.abort({ path: { id: sessionId } }).catch(() => undefined);
-      await rt.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);
+      void rt.client.session.abort({ path: { id: sessionId } }).catch(() => undefined);
+      await withTimeout(
+        () => rt.client.session.delete({ path: { id: sessionId } }),
+        1000,
+        "OpenCode session cleanup",
+      ).catch(() => undefined);
       return { reply: "", stopped: true };
     }
     const ref = harnessToolContext(turn);
@@ -876,8 +893,18 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     const abort = async (stopped: boolean) => {
       state.stopped ||= stopped;
       controller.abort();
-      await rt.client.session.abort({ path: { id: sessionId } }).catch(() => undefined);
+      void rt.client.session.abort({ path: { id: sessionId } }).catch(() => undefined);
     };
+    let handedOff = false;
+    const handoffEnd = Promise.withResolvers<never>();
+    void handoffEnd.promise.catch(() => {});
+    const onHandoffDeadline = () => {
+      handedOff = true;
+      handoffEnd.reject(new TurnHandedOff());
+      void abort(false);
+    };
+    if (turn.handoffDeadline?.aborted) onHandoffDeadline();
+    else turn.handoffDeadline?.addEventListener("abort", onHandoffDeadline, { once: true });
     const onCancel = () => {
       void abort(false);
     };
@@ -889,7 +916,11 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       await abort(false);
       active.delete(sessionId);
       turn.cancel.removeEventListener("abort", onCancel);
-      await rt.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);
+      await withTimeout(
+        () => rt.client.session.delete({ path: { id: sessionId } }),
+        1000,
+        "OpenCode session cleanup",
+      ).catch(() => undefined);
       return { reply: "", stopped: true };
     }
     const wallMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
@@ -903,7 +934,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         if (
           documentExtension(document) === "pdf" &&
           ["anthropic", "openai", "google"].includes(model.providerID) &&
-          (await nativeDocumentIsReadable(document, turn.cancel))
+          (await prepareHarnessInput(turn, (signal) => nativeDocumentIsReadable(document, signal)))
         ) {
           parts.push({
             type: "file",
@@ -912,7 +943,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             url: `data:application/pdf;base64,${document.dataBase64}`,
           });
         } else {
-          const content = await documentFallbackText(document, turn.cancel);
+          const content = await prepareHarnessInput(turn, (signal) => documentFallbackText(document, signal));
           const text = fitDocumentText(content, documentTextBudget);
           parts.push({ type: "text", text });
         }
@@ -937,8 +968,17 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         ];
         steeredTapeParts.push({ text, parts: [...parts] });
         parts.push(...(await documentParts(documents)));
-        await rt.client.session.promptAsync({ path: { id: sessionId }, body: { model, agent: "qm", parts } });
-        await waitForSessionIdle(rt.client, sessionId, wallMs > 0 ? wallMs : OPENCODE_IDLE_WAIT_MS);
+        if (turn.handoffDeadline?.aborted) return;
+        await Promise.race([
+          (async () => {
+            await rt.client.session.promptAsync({ path: { id: sessionId }, body: { model, agent: "qm", parts } });
+            if (!turn.handoffDeadline?.aborted)
+              await waitForSessionIdle(rt.client, sessionId, wallMs > 0 ? wallMs : OPENCODE_IDLE_WAIT_MS);
+          })(),
+          handoffEnd.promise,
+        ]).catch((error) => {
+          if (!handedOff) throw error;
+        });
       })();
       queuedSignals.add(pending);
       return pending;
@@ -951,7 +991,8 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             {
               onAbort: async () => abort(true),
               onSteer: async (text, ts, request) => {
-                const prepared = await turn.prepareSteer?.(text, request);
+                if (turn.handoff?.aborted) return false;
+                const prepared = await prepareHarnessInput(turn, async () => turn.prepareSteer?.(text, request));
                 const prompt = prepared?.text ?? text;
                 await turn.emit({
                   type: "user",
@@ -981,7 +1022,11 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       const infoByCapture = new Map<LlmCapture, AssistantMessageInfo>();
       await Promise.all(
         [...capturesBySession.entries()].map(async ([id, group]) => {
-          const listed = await rt.client.session.messages({ path: { id } }).catch(() => null);
+          const listed = await withTimeout(
+            () => rt.client.session.messages({ path: { id } }),
+            handedOff ? 1000 : 30000,
+            "OpenCode usage retrieval",
+          ).catch(() => null);
           const infos = (listed?.data ?? [])
             .map((message) => (message as { info?: AssistantMessageInfo }).info)
             .filter((info): info is AssistantMessageInfo => info?.role === "assistant");
@@ -1029,39 +1074,58 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       })),
     ];
     const tapePromptParts = [...promptParts];
-    promptParts.push(...(await documentParts(turn.documents ?? [])));
+
     const enabled = Object.fromEntries(definitions.map((tool) => [tool.name, false]));
     for (const tool of tools) enabled[bridgeToolName(tool.name)] = true;
     enabled.task = !turn.readOnly;
     let timer: NodeJS.Timeout | undefined;
     let signalsStopped = false;
     try {
+      promptParts.push(...(await documentParts(turn.documents ?? [])));
+      if (turn.handoffDeadline?.aborted) throw new TurnHandedOff();
       const request = rt.client.session.prompt({
         path: { id: sessionId },
         body: { model, agent: "qm", system: turn.systemPrompt, tools: enabled, parts: promptParts as never },
       });
-      const response =
-        wallMs > 0
-          ? await Promise.race([
-              request,
-              new Promise<never>((_, reject) => {
-                timer = setTimeout(() => {
-                  void abort(false);
-                  reject(new NonRetryableTurnError(`OpenCode turn exceeded ${Math.round(wallMs / 1000)}s wall clock`));
-                }, wallMs);
-              }),
-            ])
-          : await request;
-      if (!response.data) throw new Error(`OpenCode prompt failed: ${JSON.stringify(response.error)}`);
-      throwAssistantFailure((response.data as { info?: AssistantMessageInfo }).info);
+      const response = await (async () => {
+        try {
+          return wallMs > 0
+            ? await Promise.race([
+                request,
+                handoffEnd.promise,
+                new Promise<never>((_, reject) => {
+                  timer = setTimeout(() => {
+                    void abort(false);
+                    reject(
+                      new NonRetryableTurnError(`OpenCode turn exceeded ${Math.round(wallMs / 1000)}s wall clock`),
+                    );
+                  }, wallMs);
+                }),
+              ])
+            : await Promise.race([request, handoffEnd.promise]);
+        } catch (error) {
+          if (!handedOff) throw error;
+          return { data: undefined, error: undefined };
+        }
+      })();
+      if (!response.data && !handedOff) throw new Error(`OpenCode prompt failed: ${JSON.stringify(response.error)}`);
+      if (!handedOff) throwAssistantFailure((response.data as { info?: AssistantMessageInfo }).info);
       await stopSignals?.();
       signalsStopped = true;
       const hadQueuedSignals = queuedSignals.size > 0;
       await Promise.allSettled(queuedSignals);
-      const parts = hadQueuedSignals
-        ? ((await latestAssistantParts(rt.client, sessionId)) ?? (response.data.parts as unknown[]))
-        : (response.data.parts as unknown[]);
-      const messages = await rt.client.session.messages({ path: { id: sessionId } });
+      const parts =
+        hadQueuedSignals && !handedOff
+          ? ((await latestAssistantParts(rt.client, sessionId)) ?? ((response.data?.parts ?? []) as unknown[]))
+          : ((response.data?.parts ?? []) as unknown[]);
+      const messages = await withTimeout(
+        () => rt.client.session.messages({ path: { id: sessionId } }),
+        handedOff ? 1000 : 30000,
+        "OpenCode transcript retrieval",
+      ).catch((error) => {
+        if (!handedOff) throw error;
+        return { data: undefined };
+      });
       for (const message of messages.data ?? []) {
         for (const part of (message as { parts?: unknown[] }).parts ?? []) {
           await processEvent({ payload: { type: "message.part.updated", properties: { part } } });
@@ -1100,6 +1164,15 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
           });
         }
       }
+      if (
+        (handedOff || ref.handoffStopped) &&
+        !state.stopped &&
+        !turn.cancel?.aborted &&
+        !ref.pausedOnApproval &&
+        !ref.silentRequested &&
+        !ref.runtimeHandoff
+      )
+        return { reply: "", handedOff: true, modelCalls: state.captures.length };
       for (const thinking of reasoningFromParts(parts))
         await turn.emit({ type: "thinking", payload: thinking, scopeLabel: turn.scopeLabel });
       const reply = ref.runtimeHandoff ? "" : textFromParts(parts);
@@ -1125,6 +1198,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       if (!signalsStopped) await stopSignals?.();
       await Promise.allSettled(queuedSignals);
       turn.cancel?.removeEventListener("abort", onCancel);
+      turn.handoffDeadline?.removeEventListener("abort", onHandoffDeadline);
       if (opts.tasks) {
         const taskIds = [...state.seenTasks.keys()];
         await Promise.all(
@@ -1138,7 +1212,11 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       }
       await flushLlmRequests();
       for (const [id, candidate] of active) if (candidate.turn === turn) active.delete(id);
-      await rt.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);
+      await withTimeout(
+        () => rt.client.session.delete({ path: { id: sessionId } }),
+        1000,
+        "OpenCode session cleanup",
+      ).catch(() => undefined);
     }
   };
 

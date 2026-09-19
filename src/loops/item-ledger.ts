@@ -1,7 +1,15 @@
 import type { LedgerEvent, LedgerEventOp } from "./ledger-events.ts";
 import { canonicalJson } from "../util/objects.ts";
 import { wireMentionKeys } from "../slack/mrkdwn.ts";
-import type { LoopItem, LoopItemStatus, LoopProposal, LoopSourcePayload, LoopThreadMessage } from "../types.ts";
+import type {
+  LoopItem,
+  LoopItemStatus,
+  LoopProposal,
+  LoopSourcePayload,
+  LoopThreadMessage,
+  LoopSourceActionResult,
+  LoopSourceActionReceipt,
+} from "../types.ts";
 import { isResolved } from "./ledger-view.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
@@ -9,6 +17,7 @@ import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
 
 interface EnqueueItemInput {
+  operationId?: string;
   loopId: string;
   sourceKey: string;
   sourceSummary?: string;
@@ -50,6 +59,7 @@ interface PruneOptions {
 }
 
 interface RecordActionInput {
+  operationId?: string;
   kind: string;
   result?: string;
   actorId?: string;
@@ -59,17 +69,30 @@ interface RecordActionInput {
 export interface LoopItemLedger {
   enqueue(input: EnqueueItemInput): Promise<EnqueueResult>;
   ingest(entries: IngestEntryInput[]): Promise<IngestOutcome>;
-  setProposal(id: string, proposal: Omit<LoopProposal, "at">, opts?: { expectedAt?: number }): Promise<LoopItem | null>;
+  setProposal(
+    id: string,
+    proposal: Omit<LoopProposal, "at">,
+    opts?: { expectedAt?: number; operationId?: string },
+  ): Promise<LoopItem | null>;
   annotate(id: string, patch: LoopSourcePayload, opts?: { summary?: string }): Promise<LoopItem | null>;
-  appendThread(id: string, messages: Array<Omit<LoopThreadMessage, "id" | "at">>): Promise<LoopItem | null>;
+  appendThread(
+    id: string,
+    messages: Array<Omit<LoopThreadMessage, "id" | "at"> & { id?: string }>,
+  ): Promise<LoopItem | null>;
   recordAction(id: string, input: RecordActionInput): Promise<LoopItem | null>;
+  beginSourceAction(
+    id: string,
+    operationId: string,
+    kind: string,
+  ): Promise<LoopSourceActionReceipt & { fresh: boolean }>;
+  finishSourceAction(id: string, operationId: string, result: LoopSourceActionResult): Promise<void>;
   reopen(id: string, opts?: { sentReply?: boolean }): Promise<LoopItem | null>;
   prune(loopId: string, options: PruneOptions): Promise<number>;
   get(id: string): Promise<LoopItem | null>;
   byLoop(loopId: string): Promise<LoopItem[]>;
   queued(loopId: string, limit?: number): Promise<LoopItem[]>;
-  claim(id: string, claimedAt?: number): Promise<LoopItem | null>;
-  acquireDecision(id: string, decisionAt?: number): Promise<string | null>;
+  claim(id: string, claimedAt?: number, token?: string): Promise<LoopItem | null>;
+  acquireDecision(id: string, decisionAt?: number, token?: string): Promise<string | null>;
   releaseDecision(id: string, token: string): Promise<boolean>;
   recordRun(id: string, runId: string, claimToken: string): Promise<LoopItem | null>;
   markReady(id: string, outputIds: string[], claimToken: string): Promise<LoopItem | null>;
@@ -188,6 +211,7 @@ export function createLoopItemLedger(
         id,
         loopId: input.loopId,
         sourceKey: input.sourceKey,
+        ...(input.operationId ? { createdByOperation: input.operationId } : {}),
         status: "queued",
         attempts: 0,
         runIds: [],
@@ -198,10 +222,16 @@ export function createLoopItemLedger(
       };
       if (backing.insertIfAbsent) {
         const created = await backing.insertIfAbsent(id, candidate);
-        return { item: created ? candidate : ((await backing.get(id)) ?? candidate), created };
+        const item = created ? candidate : ((await backing.get(id)) ?? candidate);
+        return { item, created: created || (!!input.operationId && item.createdByOperation === input.operationId) };
       }
       const stored = await backing.putIfAbsent(id, candidate);
-      return { item: stored, created: stored.createdAt === candidate.createdAt };
+      return {
+        item: stored,
+        created: input.operationId
+          ? stored.createdByOperation === input.operationId
+          : stored.createdAt === candidate.createdAt,
+      };
     },
     async ingest(entries) {
       const outcome: IngestOutcome = { created: 0, updated: 0, skipped: 0 };
@@ -250,6 +280,10 @@ export function createLoopItemLedger(
     async setProposal(id, proposal, opts) {
       let applied = false;
       const after = await update(id, (item) => {
+        if (opts?.operationId && item.workflowOperations?.includes(opts.operationId)) {
+          applied = true;
+          return item;
+        }
         if (item.status === "shipped") return item;
         if (opts?.expectedAt !== undefined && item.proposal?.at !== opts.expectedAt) return item;
         applied = true;
@@ -258,6 +292,7 @@ export function createLoopItemLedger(
         return {
           ...item,
           proposal: stamped,
+          ...(opts?.operationId ? { workflowOperations: [...(item.workflowOperations ?? []), opts.operationId] } : {}),
           ...withAgentDraft(item, stamped),
           status: item.status === "queued" ? "ready" : item.status,
           updatedAt: now,
@@ -287,10 +322,17 @@ export function createLoopItemLedger(
       const after = await update(id, (item) => {
         applied = true;
         const now = Date.now();
-        const added = messages.map((message) => ({ ...message, id: randomUUID(), at: now }));
+        const known = new Set([
+          ...(item.workflowOperations ?? []),
+          ...(item.thread ?? []).map((message) => message.id),
+        ]);
+        const added = messages
+          .filter((message) => !message.id || !known.has(message.id))
+          .map((message) => ({ ...message, id: message.id ?? randomUUID(), at: now }));
         const thread = [...(item.thread ?? []), ...added];
         return {
           ...item,
+          workflowOperations: [...(item.workflowOperations ?? []), ...added.map((message) => message.id)],
           thread: thread.length > LEDGER_THREAD_MAX ? thread.slice(thread.length - LEDGER_THREAD_MAX) : thread,
           updatedAt: now,
         };
@@ -298,9 +340,53 @@ export function createLoopItemLedger(
       if (applied) emit(after, "thread");
       return applied ? after : null;
     },
+    async beginSourceAction(id, operationId, kind) {
+      let receipt: LoopSourceActionReceipt & { fresh: boolean } = { kind, state: "uncertain", fresh: false };
+      await update(id, (item) => {
+        const prior = item.sourceActions?.[operationId];
+        if (prior?.state === "completed") {
+          receipt = { ...prior, fresh: false };
+          return item;
+        }
+        const uncertain = Object.values(item.sourceActions ?? {}).find((action) => action.state !== "completed");
+        if (prior || uncertain) {
+          const result: LoopSourceActionResult = {
+            ok: false,
+            reason: "upstream",
+            partial: true,
+            message: "The previous action may have completed. Check the source before sending again.",
+          };
+          receipt = { kind, state: "uncertain", fresh: false, result };
+          return {
+            ...item,
+            sourceActions: { ...item.sourceActions, [operationId]: { kind, state: "uncertain", result } },
+          };
+        }
+        receipt = { kind, state: "started", fresh: true };
+        return { ...item, sourceActions: { ...item.sourceActions, [operationId]: { kind, state: "started" } } };
+      });
+      return receipt;
+    },
+    async finishSourceAction(id, operationId, result) {
+      await update(id, (item) => {
+        const receipt = item.sourceActions?.[operationId];
+        if (!receipt) return item;
+        return {
+          ...item,
+          sourceActions: {
+            ...item.sourceActions,
+            [operationId]: { ...receipt, state: !result.ok && result.partial ? "uncertain" : "completed", result },
+          },
+        };
+      });
+    },
     async recordAction(id, input) {
       let applied = false;
       const after = await update(id, (item) => {
+        if (input.operationId && item.workflowOperations?.includes(input.operationId)) {
+          applied = true;
+          return item;
+        }
         if (item.status === "shipped") return item;
         applied = true;
         const now = Date.now();
@@ -308,6 +394,23 @@ export function createLoopItemLedger(
           ...item,
           status: input.outcome === "actioned" ? "shipped" : "skipped",
           actionKind: input.kind,
+          ...(input.operationId ? { workflowOperations: [...(item.workflowOperations ?? []), input.operationId] } : {}),
+          ...(input.kind === "replied" || input.kind === "dismiss"
+            ? {
+                sourceActions: Object.fromEntries(
+                  Object.entries(item.sourceActions ?? {}).map(([key, receipt]) => [
+                    key,
+                    receipt.state === "completed"
+                      ? receipt
+                      : {
+                          ...receipt,
+                          state: "completed" as const,
+                          result: { ok: true as const, result: input.result ?? "Reconciled by operator" },
+                        },
+                  ]),
+                ),
+              }
+            : {}),
           actedAt: now,
           claimedAt: undefined,
           claimToken: undefined,
@@ -370,11 +473,18 @@ export function createLoopItemLedger(
         .sort((a, b) => a.createdAt - b.createdAt);
       return limit === undefined ? queued : queued.slice(0, limit);
     },
-    async claim(id, claimedAt = Date.now()) {
+    async claim(id, claimedAt = Date.now(), token) {
       const now = claimedAt;
       let applied = false;
       const after = await update(id, (item) => {
-        const stale = item.status === "in_progress" && (item.claimedAt ?? 0) + CLAIM_LEASE_MS <= now;
+        if (token && item.claimToken === token) {
+          applied = true;
+          return item;
+        }
+        const stale =
+          item.status === "in_progress" &&
+          !item.claimToken?.startsWith("task:") &&
+          (item.claimedAt ?? 0) + CLAIM_LEASE_MS <= now;
         if (item.status !== "queued" && !stale) return item;
         applied = true;
         return {
@@ -382,19 +492,25 @@ export function createLoopItemLedger(
           status: "in_progress",
           attempts: item.attempts + 1,
           claimedAt: now,
-          claimToken: randomUUID(),
+          claimToken: token ?? randomUUID(),
           parkedReason: undefined,
           updatedAt: now,
         };
       });
       return applied ? after : null;
     },
-    async acquireDecision(id, decisionAt = Date.now()) {
+    async acquireDecision(id, decisionAt = Date.now(), requestedToken) {
       let token: string | null = null;
       await update(id, (item) => {
-        const active = item.decisionToken && (item.decisionAt ?? 0) + DECISION_LEASE_MS > decisionAt;
+        if (requestedToken && item.decisionToken === requestedToken) {
+          token = requestedToken;
+          return item;
+        }
+        const active =
+          item.decisionToken &&
+          (item.decisionToken.startsWith("task:") || (item.decisionAt ?? 0) + DECISION_LEASE_MS > decisionAt);
         if (active) return item;
-        token = randomUUID();
+        token = requestedToken ?? randomUUID();
         return { ...item, decisionAt, decisionToken: token, updatedAt: decisionAt };
       });
       return token;
@@ -421,6 +537,9 @@ export function createLoopItemLedger(
       );
     },
     async markReady(id, outputIds, claimToken) {
+      const existing = await backing.get(id);
+      if (existing?.status === "ready" && outputIds.every((outputId) => existing.outputIds.includes(outputId)))
+        return existing;
       return transition(
         id,
         new Set(["in_progress"]),

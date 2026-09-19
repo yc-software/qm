@@ -1,7 +1,7 @@
-import { test, before } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createScheduler, type Scheduler } from "../src/cron/scheduler.ts";
-import { createPgBossCronQueue } from "../src/cron/job-queue.ts";
+import { createDurableTasks } from "../src/durable/tasks.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { createMemoryCronFireStore, type CronFireStore } from "../src/cron/fire-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -9,23 +9,23 @@ import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempoten
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { scopeId, type Cron, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { isolatedPostgres } from "./support/isolated-postgres.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";
+const baseUrl = process.env.DATABASE_URL;
+let databaseUrl: string | undefined;
+let isolated: Awaited<ReturnType<typeof isolatedPostgres>> | undefined;
+const skip = baseUrl ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";
 
-const SCHEMA = "pgboss_cron_queue_test";
+const SCHEMA = "cron_queue_test";
 const CRONS_TABLE = "cron_queue_test_crons";
 const IDEM_TABLE = "cron_queue_test_idempotency";
 
 before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
-  await p.query(`DROP TABLE IF EXISTS ${CRONS_TABLE}, ${IDEM_TABLE}`);
-  await p.end();
+  if (!baseUrl) return;
+  isolated = await isolatedPostgres("cron_queue_test");
+  databaseUrl = isolated.url;
 });
+after(async () => isolated?.cleanup());
 
 async function until(cond: () => boolean, ms: number): Promise<void> {
   const deadline = Date.now() + ms;
@@ -33,26 +33,39 @@ async function until(cond: () => boolean, ms: number): Promise<void> {
 }
 
 function instance(calls: TurnRequest[], turnMs = 0, fires?: CronFireStore): { scheduler: Scheduler; crons: CronStore } {
-  const maps = createPostgresMapFactory(URL!);
+  const maps = createPostgresMapFactory(databaseUrl!);
   const crons = createCronStore(maps.map<Cron>(CRONS_TABLE), fires ? { fires } : undefined);
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
     if (turnMs) await new Promise((r) => setTimeout(r, turnMs));
     return { status: "ok", reply: "QUEUE-OUTPUT" };
   };
+  const tasks = createDurableTasks({ databaseUrl: databaseUrl!, queue: SCHEMA });
+  const worker = tasks.start({ concurrency: 4, pollIntervalMs: 50 });
   const scheduler = createScheduler({
     crons,
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(maps.map<IdempotencyRecord>(IDEM_TABLE)),
     identity: createIdentityService(),
     run,
-    jobQueue: createPgBossCronQueue(URL ?? "", SCHEMA),
+    tasks,
   });
-  return { scheduler, crons };
+  return {
+    scheduler: {
+      ...scheduler,
+      async stop() {
+        await scheduler.stop();
+        await worker.stop();
+        await tasks.close();
+        await maps.pool.close();
+      },
+    },
+    crons,
+  };
 }
 
 test(
-  "pg-boss queue: a slow fire is not double-run by a sibling instance (durable slot claim)",
+  "Absurd queue: a slow fire is not double-run by a sibling instance (durable slot claim)",
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
@@ -69,6 +82,7 @@ test(
         createdBy: "U1",
         ownerScopeId: scopeId("personal", "U1"),
       });
+      a.scheduler.notifyChanged(cron.id);
       await until(() => calls.length >= 1, 30_000);
       assert.equal(calls.length, 1, "the due slot starts exactly one turn");
       await new Promise((r) => setTimeout(r, 16_000));
@@ -76,15 +90,15 @@ test(
       assert.equal((await b.crons.get(cron.id))?.enabled, false, "the one-shot ends disabled");
       assert.equal((await b.crons.listFires(cron.id)).total, 1, "one fire recorded");
     } finally {
-      a.scheduler.stop();
-      b.scheduler.stop();
+      await a.scheduler.stop();
+      await b.scheduler.stop();
       await new Promise((r) => setTimeout(r, 500));
     }
   },
 );
 
 test(
-  "pg-boss queue: a recurring cron chains fires with unique slots, and a schedule edit invalidates queued slots",
+  "Absurd queue: a recurring cron chains fires with unique slots, and a schedule edit invalidates queued slots",
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
@@ -100,6 +114,7 @@ test(
         createdBy: "U2",
         ownerScopeId: scopeId("personal", "U2"),
       });
+      a.scheduler.notifyChanged(cron.id);
       const fires = () => calls.filter((c) => c.idempotencyKey?.startsWith(`cron:${cron.id}:`)).length;
       await until(() => fires() >= 3, 45_000);
       assert.ok(fires() >= 3, "a recurring cron chains fire jobs across instances");
@@ -111,8 +126,8 @@ test(
       await new Promise((r) => setTimeout(r, 6_000));
       assert.equal(fires(), at, "a rescheduled cron's stale slot jobs do not fire");
     } finally {
-      a.scheduler.stop();
-      b.scheduler.stop();
+      await a.scheduler.stop();
+      await b.scheduler.stop();
       await new Promise((r) => setTimeout(r, 500));
     }
   },

@@ -1,4 +1,4 @@
-import type { Cron, Loop, LoopItem, LoopSourcePayload } from "../../types.ts";
+import type { Cron, Loop, LoopItem, LoopSourcePayload, TriggerInitiator } from "../../types.ts";
 import { canonicalJson } from "../../util/objects.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
@@ -144,7 +144,7 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
 
 async function loadItem(
   ctx: ApiCtx,
-): Promise<{ deps: LoopServiceDeps; loop: Loop; item: LoopItem; actorId: string } | null> {
+): Promise<{ deps: LoopServiceDeps; loop: Loop; item: LoopItem; actorId: string; initiator: TriggerInitiator } | null> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return null;
   if (!readableItems(ctx, loaded.loop)) return null;
@@ -153,7 +153,13 @@ async function loadItem(
     sendJson(ctx.res, 404, { error: "not_found", message: "no such ledger item" });
     return null;
   }
-  return { deps: loaded.deps, loop: loaded.loop, item, actorId: loaded.acting.actorId };
+  return {
+    deps: loaded.deps,
+    loop: loaded.loop,
+    item,
+    actorId: loaded.acting.actorId,
+    initiator: { actorId: loaded.acting.actorId, liveActor: loaded.acting.liveHuman },
+  };
 }
 
 const IMAGE_MAX_BYTES = 8_000_000;
@@ -319,6 +325,15 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
 
   const adapter = adapterForItem(item);
   if (adapter?.actions.includes(kind)) {
+    if (deps.fire?.sourceAction) {
+      const result = await deps.fire.sourceAction(loop, item, kind, args, proposalAuthor);
+      if (!result.ok) {
+        const statusByReason = { not_connected: 409, bad_item: 400, upstream: 502 } as const;
+        return sendJson(ctx.res, statusByReason[result.reason], { error: result.reason, message: result.message });
+      }
+      const next = await deps.items.get(item.id);
+      return sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item) });
+    }
     const tokens = ctx.deps.loopSourceTokens;
     if (!tokens) return sendJson(ctx.res, 404, { error: "not_found", message: "connectors are not wired" });
     const decisionToken = await deps.items.acquireDecision(item.id);
@@ -353,16 +368,11 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
 
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  const turn = await deps.fire.itemAction(loop, item, kind, args, loaded.actorId);
+  const turn = await deps.fire.itemAction(loop, item, kind, args, loaded.actorId, loaded.initiator);
   if (!turn.ok) {
     return sendJson(ctx.res, 502, { error: "action_failed", message: turn.userNote ?? "the agent turn did not run" });
   }
-  await deps.items.appendThread(item.id, [{ role: "agent", text: turn.reply ?? `Did "${kind}".` }]);
-  const next = await deps.items.recordAction(item.id, {
-    kind,
-    outcome: "actioned",
-    ...(turn.reply ? { result: turn.reply } : {}),
-  });
+  const next = await deps.items.get(item.id);
   sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item) });
 }
 
@@ -382,7 +392,7 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
   }
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   try {
-    const next = await deps.fire.followUp(loop, item, message, loaded.actorId);
+    const next = await deps.fire.followUp(loop, item, message, loaded.actorId, loaded.initiator);
     sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item) });
   } catch (e) {
     sendJson(ctx.res, 502, { error: "followup_failed", message: errMessage(e) });

@@ -132,55 +132,23 @@ test("dynamic migration waits for its prerequisite schema on a fresh database", 
 });
 
 test(
-  "cron queue shares transaction pooling and stopping it preserves other stores",
+  "durable workflow queue shares transaction pooling and stopping preserves other stores",
   { skip, timeout: 30_000 },
   async () => {
-    const { createPgBossCronQueue } = await import("../src/cron/job-queue.ts");
+    const { createDurableTasks } = await import("../src/durable/tasks.ts");
     const store = createPgPool(direct!);
-    const queue = createPgBossCronQueue(direct!, "pooled_cron_test");
-    let fired = false;
+    const tasks = createDurableTasks({ databaseUrl: direct!, queue: "pooled_cron_test" });
+    tasks.register("pool.test", async () => 42);
+    const worker = tasks.start({ pollIntervalMs: 10 });
     try {
-      await store.q("SELECT 1");
-      await queue.start(
-        {
-          onFire: async () => {
-            fired = true;
-          },
-          onTick: async () => {},
-        },
-        5_000,
-      );
-      await queue.enqueueFire({ cronId: "pool-test", scheduledAt: Date.now() });
-      const deadline = Date.now() + 10_000;
-      while (!fired && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
-      assert.ok(fired);
-      const observer = await (await store.sessionPool()).connect();
-      try {
-        const result = await observer.query(
-          "SELECT count(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND application_name='pgboss'",
-        );
-        assert.equal(result.rows[0].n, 0);
-      } finally {
-        observer.release();
-      }
-      await queue.stop();
+      const { taskId } = await tasks.spawn("pool.test", {}, { idempotencyKey: `pool-test:${Date.now()}` });
+      assert.equal(await tasks.result(taskId), 42);
+      await worker.stop();
+      await tasks.close();
       assert.equal((await store.q("SELECT 42 AS answer"))[0]!.answer, 42);
-      fired = false;
-      await queue.start(
-        {
-          onFire: async () => {
-            fired = true;
-          },
-          onTick: async () => {},
-        },
-        5_000,
-      );
-      await queue.enqueueFire({ cronId: "pool-test-restart", scheduledAt: Date.now() });
-      const restartedDeadline = Date.now() + 10_000;
-      while (!fired && Date.now() < restartedDeadline) await new Promise((r) => setTimeout(r, 50));
-      assert.ok(fired);
     } finally {
-      await queue.stop();
+      await worker.stop();
+      await tasks.close();
       await store.close();
     }
   },

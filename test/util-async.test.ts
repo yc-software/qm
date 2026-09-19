@@ -2,7 +2,58 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { sleep, createKeyedQueue } from "../src/util/async.ts";
+import {
+  sleep,
+  createKeyedQueue,
+  getOperationSignal,
+  withOperationSignal,
+  assertOperationActive,
+} from "../src/util/async.ts";
+
+test("operation cancellation survives awaits and nested scopes retain their parent deadline", async () => {
+  const parent = new AbortController();
+  const child = new AbortController();
+  await withOperationSignal(parent.signal, async () => {
+    await Promise.resolve();
+    assert.equal(getOperationSignal(), parent.signal);
+    await withOperationSignal(child.signal, async () => {
+      await Promise.resolve();
+      parent.abort(new Error("retired"));
+      assert.throws(assertOperationActive, /retired/);
+      assert.equal(child.signal.aborted, false);
+    });
+  });
+  assert.equal(getOperationSignal(), undefined);
+});
+
+test("a cancelled queue waiter never executes or releases the still active predecessor", async () => {
+  const queue = createKeyedQueue();
+  const entered = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  const order: string[] = [];
+  const first = queue("one", async () => {
+    entered.resolve();
+    await gate.promise;
+    order.push("first");
+  });
+  await entered.promise;
+  const controller = new AbortController();
+  const cancelled = withOperationSignal(controller.signal, () =>
+    queue("one", async () => {
+      order.push("cancelled");
+    }),
+  );
+  controller.abort();
+  await assert.rejects(cancelled, { name: "AbortError" });
+  const next = queue("one", async () => {
+    order.push("next");
+  });
+  await sleep(10);
+  assert.deepEqual(order, []);
+  gate.resolve();
+  await Promise.all([first, next]);
+  assert.deepEqual(order, ["first", "next"]);
+});
 
 test("sleep resolves after roughly the given delay", async () => {
   const t0 = Date.now();

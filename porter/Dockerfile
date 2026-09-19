@@ -5,7 +5,7 @@ FROM debian:12-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbf
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      bash coreutils findutils grep sed gawk \
+      bash coreutils findutils grep sed gawk util-linux \
       git curl wget jq unzip \
       python3 python3-venv python3-pip \
       ca-certificates gnupg \
@@ -46,7 +46,7 @@ RUN python3 -m venv /opt/agent-venv \
 ENV PATH="/opt/agent-venv/bin:${PATH}"
 ENV VIRTUAL_ENV=/opt/agent-venv
 
-RUN timeout -k 1 5 true && setsid true && node --version && python3 --version
+RUN timeout -k 1 5 true && setsid --wait true && node --version && python3 --version
 
 WORKDIR /root
 

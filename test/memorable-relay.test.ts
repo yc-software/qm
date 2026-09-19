@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { sleep, withTimeout } from "../src/util/async.ts";
 import { relayRecord } from "../src/memory/memorable/relay.ts";
 import type { MemorableCapture, MemorableWorkflow } from "../src/memory/memorable/capture.ts";
 
@@ -162,4 +163,38 @@ test("relayRecord reports success on a clean exit, and on nothing to offer", asy
   const { bin } = stub(`import { readFileSync } from "node:fs";\nreadFileSync(0, "utf8");\n`);
   assert.deepEqual(await relayRecord(bin, capture, undefined, { env: { PATH: process.env.PATH } }), { ok: true });
   assert.deepEqual(await relayRecord(bin, { ...capture, workflows: [] }), { ok: true });
+});
+
+test("relayRecord kills a stuck process when memory capture hands off", async () => {
+  const { bin, marker } = stub(`import { writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {});
+writeFileSync(MARKER, String(process.pid));
+setInterval(() => {}, 1000);
+`);
+  const controller = new AbortController();
+  const relay = relayRecord(bin, capture, 300_000, { env: process.env, signal: controller.signal });
+  await withTimeout(
+    async () => {
+      while (!existsSync(marker)) await sleep(5);
+    },
+    2000,
+    "relay process",
+  );
+  const pid = Number(readFileSync(marker, "utf8"));
+  controller.abort(new Error("handoff"));
+  assert.deepEqual(await withTimeout(() => relay, 1000, "relay cancellation"), { ok: false, reason: "aborted" });
+  await withTimeout(
+    async () => {
+      for (;;) {
+        try {
+          process.kill(pid, 0);
+        } catch {
+          return;
+        }
+        await sleep(5);
+      }
+    },
+    1000,
+    "relay killed",
+  );
 });

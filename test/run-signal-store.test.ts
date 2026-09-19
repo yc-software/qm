@@ -1,10 +1,20 @@
-import { test } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunSignalStore, startSignalPoll } from "../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { isolatedPostgres } from "./support/isolated-postgres.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the pg run-signal tests";
+const baseUrl = process.env.DATABASE_URL;
+let URL: string | undefined;
+let isolated: Awaited<ReturnType<typeof isolatedPostgres>> | undefined;
+const skip = baseUrl ? false : "set DATABASE_URL (a Postgres) to run the pg run-signal tests";
+
+before(async () => {
+  if (!baseUrl) return;
+  isolated = await isolatedPostgres("run_signal_test");
+  URL = isolated.url;
+});
+after(async () => isolated?.cleanup());
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const until = async (cond: () => boolean, ms = 3_000): Promise<void> => {

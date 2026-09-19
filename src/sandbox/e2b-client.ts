@@ -1,3 +1,5 @@
+import { assertOperationActive, getOperationSignal } from "../util/async.ts";
+
 export interface E2bCommandResult {
   stdout: string;
   stderr: string;
@@ -108,6 +110,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
   type E2bSdk = typeof import("e2b");
   let sdk: Promise<E2bSdk> | null = null;
   const loadSdk = (): Promise<E2bSdk> => {
+    assertOperationActive();
     const loaded = (sdk ??= import("e2b").then(
       (m) => m as unknown as E2bSdk,
       (e) => {
@@ -127,7 +130,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
       try {
         const r = await sbx.commands.run(command, {
           timeoutMs,
-
+          signal: getOperationSignal(),
           requestTimeoutMs: timeoutMs + 30_000,
         });
         return commandResultFrom(r) ?? { stdout: "", stderr: "", exitCode: -1 };
@@ -140,7 +143,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
     },
     async readFileBytes(absPath): Promise<Uint8Array | null> {
       try {
-        const data = await sbx.files.read(absPath, { format: "bytes" });
+        const data = await sbx.files.read(absPath, { format: "bytes", signal: getOperationSignal() });
         return data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer);
       } catch (err) {
         if (isSandboxGoneError(err)) throw new E2bSandboxGoneError(sbx.sandboxId, String((err as Error).message));
@@ -156,17 +159,17 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
       const buf = new ArrayBuffer(data.byteLength);
       new Uint8Array(buf).set(data);
       try {
-        await sbx.files.write(absPath, buf);
+        await sbx.files.write(absPath, buf, { signal: getOperationSignal() });
       } catch (err) {
         if (isSandboxGoneError(err)) throw new E2bSandboxGoneError(sbx.sandboxId, String((err as Error).message));
         throw err;
       }
     },
     async pause(): Promise<void> {
-      await sbx.pause({ keepMemory: true });
+      await sbx.pause({ keepMemory: true, signal: getOperationSignal() });
     },
     async kill(): Promise<void> {
-      await sbx.kill().catch((err) => {
+      await sbx.kill({ signal: getOperationSignal() }).catch((err) => {
         if (!isGoneError(err)) throw err;
       });
     },
@@ -177,7 +180,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
     async info(sandboxId) {
       const { Sandbox } = await loadSdk();
       try {
-        const info = await Sandbox.getInfo(sandboxId, common);
+        const info = await Sandbox.getInfo(sandboxId, { ...common, signal: getOperationSignal() });
         return { state: info.state, expiresAtMs: info.endAt.getTime(), onTimeout: info.lifecycle?.onTimeout };
       } catch (err) {
         if (isGoneError(err)) throw new E2bSandboxGoneError(sandboxId, String((err as Error).message));
@@ -188,6 +191,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
       const { Sandbox } = await loadSdk();
       const sbx = await Sandbox.create(templateId, {
         ...common,
+        signal: getOperationSignal(),
         timeoutMs: createOpts.timeoutMs ?? sandboxTtlMs,
         metadata: createOpts.metadata,
         lifecycle: { onTimeout: createOpts.autoPause ? "pause" : "kill", autoResume: false },
@@ -197,7 +201,11 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
     async connect(sandboxId): Promise<E2bSession> {
       const { Sandbox } = await loadSdk();
       try {
-        const sbx = await Sandbox.connect(sandboxId, { ...common, timeoutMs: sandboxTtlMs });
+        const sbx = await Sandbox.connect(sandboxId, {
+          ...common,
+          timeoutMs: sandboxTtlMs,
+          signal: getOperationSignal(),
+        });
         return wrap(sbx);
       } catch (err) {
         if (isGoneError(err)) throw new E2bSandboxGoneError(sandboxId, String((err as Error).message));
@@ -212,7 +220,8 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
       });
       const out: E2bSandboxSummary[] = [];
       while (paginator.hasNext) {
-        const items = await paginator.nextItems();
+        assertOperationActive();
+        const items = await paginator.nextItems({ signal: getOperationSignal() });
         for (const s of items) {
           out.push({ sandboxId: s.sandboxId, state: String(s.state), ...(s.metadata ? { metadata: s.metadata } : {}) });
         }
@@ -221,7 +230,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
     },
     async kill(sandboxId): Promise<void> {
       const { Sandbox } = await loadSdk();
-      await Sandbox.kill(sandboxId, common).catch((err) => {
+      await Sandbox.kill(sandboxId, { ...common, signal: getOperationSignal() }).catch((err) => {
         if (!isGoneError(err)) throw err;
       });
     },

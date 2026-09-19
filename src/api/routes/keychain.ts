@@ -13,7 +13,7 @@ import { sendJson } from "../http.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
-import { swallow, swallowAs } from "../../util/errors.ts";
+import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 import { keychainUseCommand } from "../contract.ts";
 
@@ -228,10 +228,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
           resource: `${grant.credentialId}→${grant.audienceScopeId} (ask ${ask.id})`,
           scopeLabel: capability.scopeId,
         });
-        void deps
-          .fireAskResolution?.(ask, grant)
-          .then(() => kc.markAskNotified(ask.id))
-          .catch((e) => swallow("keychain: ask resolution fire failed (sweep will retry)", e));
+        await deps.fireAskResolution?.(ask, grant);
         return sendJson(res, 200, {
           grant,
           ask,
@@ -392,10 +389,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         resource: ask.id,
         scopeLabel: capability.scopeId,
       });
-      void deps
-        .fireAskResolution?.(ask)
-        .then(() => kc.markAskNotified(ask.id))
-        .catch((e) => swallow("keychain: ask resolution fire failed (sweep will retry)", e));
+      await deps.fireAskResolution?.(ask);
       return sendJson(res, 200, { ask });
     }
 

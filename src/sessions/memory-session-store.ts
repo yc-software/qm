@@ -34,6 +34,7 @@ import {
 } from "./entry-search.ts";
 import {
   contextWindowFromEntries,
+  entryDeliveryKey,
   cronIdOf,
   entryWithinTenure,
   isOverheardEntry,
@@ -287,6 +288,9 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return full;
     },
 
+    async findEntryByDeliveryKey(sessionId, key) {
+      return (entries.get(sessionId) ?? []).find((entry) => entryDeliveryKey(entry) === key);
+    },
     async getEntries(sessionId, opts?: GetEntriesOptions) {
       const log = entries.get(sessionId) ?? [];
       const since = opts?.sinceSeq ?? 0;

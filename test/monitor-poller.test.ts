@@ -1,3 +1,5 @@
+import { createDurableTasks } from "../src/durable/tasks.ts";
+import { SuspendTask } from "absurd-sdk";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
@@ -93,6 +95,7 @@ function fakeSandbox() {
 }
 
 async function harness(opts?: {
+  durable?: boolean;
   reply?: string;
   result?: TurnResult;
   leaderLease?: LeaderLease;
@@ -101,7 +104,8 @@ async function harness(opts?: {
   onRun?: () => Promise<void>;
 }) {
   const fake = fakeSandbox();
-  const monitors = createMonitorStore();
+  const tasks = opts?.durable ? createDurableTasks({ queue: "qm_triggers" }) : undefined;
+  const monitors = createMonitorStore(undefined, tasks);
   const processes = createMemoryProcessRegistry();
   const deliveries = createDeliveryStore();
   const calls: TurnRequest[] = [];
@@ -113,6 +117,7 @@ async function harness(opts?: {
   const identity = createIdentityService();
   const poller = createMonitorPoller({
     monitors,
+    ...(tasks ? { tasks } : {}),
     processes,
     sandbox: fake.sandbox,
     deliveries,
@@ -145,7 +150,7 @@ async function harness(opts?: {
       ...overrides,
     });
 
-  return { ...fake, monitors, processes, deliveries, calls, poller, arm, identity };
+  return { ...fake, monitors, processes, deliveries, calls, poller, arm, identity, tasks };
 }
 
 test("new output wakes the agent as a first-class live turn in the arming conversation", async () => {
@@ -518,4 +523,40 @@ test("an unwatch between the tick snapshot and the poll is honored", async () =>
   const victim = fired === a ? b : a;
   assert.equal((await h.monitors.get(fired.id))?.enabled, true);
   assert.equal(await h.monitors.get(victim.id), null);
+});
+
+test("durable monitor retries keep the accepted output cursor when more output arrives", async (t) => {
+  const h = await harness({ durable: true });
+  const monitor = await h.arm();
+  h.append("p-1", "first output\n");
+  const advance = h.monitors.advance.bind(h.monitors);
+  let interrupted = false;
+  h.monitors.advance = async (...args) => {
+    if (!interrupted) {
+      interrupted = true;
+      h.append("p-1", "later output\n");
+      h.finish("p-1");
+      throw new SuspendTask();
+    }
+    await advance(...args);
+  };
+  const worker = h.tasks!.start({ pollIntervalMs: 1 });
+  t.after(() => worker.stop());
+  for (let attempt = 0; attempt < 100 && (await h.monitors.get(monitor.id))?.cursor === 0; attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(h.calls.length, 1);
+  assert.match(h.calls[0]!.text!, /first output/);
+  assert.doesNotMatch(h.calls[0]!.text!, /later output/);
+  assert.equal((await h.monitors.get(monitor.id))?.cursor, "first output\n".length);
+  assert.equal((await h.monitors.get(monitor.id))?.enabled, true);
+});
+
+test("an old monitor task cannot advance or disable a rearmed watch", async () => {
+  const h = await harness();
+  const monitor = await h.arm();
+  await h.monitors.update(monitor.id, { cursor: 100, instructions: "watch the next phase" });
+  await h.monitors.advance(monitor.id, { cursor: 10, firedAt: 1 }, monitor.workflowRevision);
+  await h.monitors.setEnabled(monitor.id, false, monitor.workflowRevision);
+  assert.equal((await h.monitors.get(monitor.id))?.cursor, 100);
+  assert.equal((await h.monitors.get(monitor.id))?.enabled, true);
 });

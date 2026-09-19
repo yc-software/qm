@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import type { DeliveryTaskScheduler } from "./task-delivery.ts";
+import { createPgPool, withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { cronIdOf, threadRefCronIdExpr } from "../sessions/session-store.ts";
@@ -38,9 +39,12 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
   };
 }
 
-export function createPostgresDeliveryStore(connectionString: string, opts?: { maxAgeMs?: number }): DeliveryStore {
+export function createPostgresDeliveryStore(
+  connectionString: string,
+  opts?: { maxAgeMs?: number; scheduler?: DeliveryTaskScheduler },
+): DeliveryStore {
   const maxAgeMs = opts?.maxAgeMs ?? DELIVERY_MAX_AGE_MS;
-  const { q, query } = createPgPool(connectionString, [
+  const { q, query, pool } = createPgPool(connectionString, [
     {
       id: "delivery/store/0001",
       statements: [
@@ -115,9 +119,12 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
   }
 
   return {
+    durable: Boolean(opts?.scheduler),
     async enqueue(input) {
-      const inserted = await q(
-        `INSERT INTO deliveries (id, idempotency_key, destination, text, attachments, provenance, source_cron_id, created_at, shadow)
+      const delivery = await withPgTransaction(await pool(), async (transaction) => {
+        const inserted = (
+          await transaction.query(
+            `INSERT INTO deliveries (id, idempotency_key, destination, text, attachments, provenance, source_cron_id, created_at, shadow)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (idempotency_key) DO UPDATE
            SET destination = EXCLUDED.destination,
@@ -131,25 +138,35 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
                claim_expires_at = NULL
            WHERE deliveries.delivered_at IS NULL AND deliveries.expired_at IS NOT NULL
          RETURNING *`,
-        [
-          randomUUID(),
-          input.idempotencyKey,
-          JSON.stringify(input.destination),
-          input.text,
-          input.attachments?.length ? JSON.stringify(input.attachments) : null,
-          input.provenance ? JSON.stringify(input.provenance) : null,
-          cronIdOf(input.provenance?.sourceThreadRef),
-          Date.now(),
-          input.shadow === true,
-        ],
-      );
-      if (inserted[0]) {
-        if (input.shadow !== true) for (const l of enqueueListeners) l();
-        return rowToDelivery(inserted[0]);
-      }
-      const existing = await q("SELECT * FROM deliveries WHERE idempotency_key = $1", [input.idempotencyKey]);
-      if (!existing[0]) throw new Error(`delivery enqueue lost a race for key ${input.idempotencyKey}`);
-      return rowToDelivery(existing[0]);
+            [
+              randomUUID(),
+              input.idempotencyKey,
+              JSON.stringify(input.destination),
+              input.text,
+              input.attachments?.length ? JSON.stringify(input.attachments) : null,
+              input.provenance ? JSON.stringify(input.provenance) : null,
+              cronIdOf(input.provenance?.sourceThreadRef),
+              Date.now(),
+              input.shadow === true,
+            ],
+          )
+        ).rows;
+        if (inserted[0]) {
+          const created = rowToDelivery(inserted[0]);
+          if (!created.shadow) await opts?.scheduler?.spawnDelivery(created.id, transaction);
+          return created;
+        }
+        const existing = (
+          await transaction.query("SELECT * FROM deliveries WHERE idempotency_key = $1", [input.idempotencyKey])
+        ).rows;
+        if (!existing[0]) throw new Error(`delivery enqueue lost a race for key ${input.idempotencyKey}`);
+        const existingDelivery = rowToDelivery(existing[0]);
+        if (!existingDelivery.shadow && existingDelivery.deliveredAt === null)
+          await opts?.scheduler?.spawnDelivery(existingDelivery.id, transaction);
+        return existingDelivery;
+      });
+      if (!delivery.shadow) for (const listener of enqueueListeners) listener();
+      return delivery;
     },
     async pending(type) {
       const rows = await q(
@@ -161,6 +178,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       return rows.map(rowToDelivery);
     },
     async claimPending(type, ttlMs) {
+      if (opts?.scheduler) return [];
       await expireOveraged();
       const rows = await q(
         `UPDATE deliveries
@@ -216,6 +234,10 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     },
     async get(id) {
       const rows = await q("SELECT * FROM deliveries WHERE id = $1", [id]);
+      return rows[0] ? rowToDelivery(rows[0]) : null;
+    },
+    async getByKey(idempotencyKey) {
+      const rows = await q("SELECT * FROM deliveries WHERE idempotency_key = $1", [idempotencyKey]);
       return rows[0] ? rowToDelivery(rows[0]) : null;
     },
     async recordRecipientThread(id, recipientThreadRef, at) {
@@ -290,6 +312,27 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     onEnqueue(listener) {
       enqueueListeners.add(listener);
       return () => enqueueListeners.delete(listener);
+    },
+    async recoverPending() {
+      if (!opts?.scheduler) return 0;
+      let count = 0;
+      let after = "";
+      for (;;) {
+        const rows = await q(
+          "SELECT id FROM deliveries WHERE delivered_at IS NULL AND NOT shadow AND id > $1 ORDER BY id LIMIT 100",
+          [after],
+        );
+        if (!rows.length) return count;
+        for (const row of rows) {
+          const id = String(row.id);
+          await withPgTransaction(await pool(), async (transaction) => {
+            await opts.scheduler!.spawnDelivery(id, transaction);
+            await transaction.query("UPDATE deliveries SET expired_at = NULL WHERE id = $1", [id]);
+          });
+          after = id;
+          count++;
+        }
+      }
     },
   };
 }

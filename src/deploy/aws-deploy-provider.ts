@@ -5,6 +5,7 @@ import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
 import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "../sandbox/aws-microvm-api.ts";
+import { s3Client } from "../persistence/s3.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
@@ -131,7 +132,10 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const dataPrefix = (opts.dataPrefix ?? "deploy-data").replace(/\/+$/, "");
   const snapshotIntervalMs = opts.snapshotIntervalMs ?? 5 * 60_000;
   const s3: Pick<S3Client, "send"> | undefined = dataBucket
-    ? (opts.s3 ?? new S3Client({ region, ...(opts.profile ? { profile: opts.profile } : {}) }))
+    ? (s3Client(
+        region,
+        opts.s3 ?? new S3Client({ region, ...(opts.profile ? { profile: opts.profile } : {}) }),
+      ) as Pick<S3Client, "send">)
     : undefined;
   const dataRoleArn = opts.dataRoleArn;
   const litestream = !!(dataBucket && dataRoleArn);

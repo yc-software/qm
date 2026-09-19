@@ -1,3 +1,4 @@
+import { isDurableControlFlow, type DurableTasks, type DurableTaskContext } from "../durable/tasks.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
 import type { Monitor, TurnRequest, TurnResult } from "../types.ts";
 import type { MonitorStore } from "./monitor-store.ts";
@@ -30,6 +31,7 @@ export interface MonitorPoller {
 
 export interface MonitorPollerDeps {
   admittedWork?: AdmittedWork;
+  tasks?: DurableTasks;
   monitors: MonitorStore;
   processes: ProcessRegistry;
   sandbox: Sandbox;
@@ -146,45 +148,65 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     fireKey: string,
     event: { input: string; securityScreenData: string },
     withErrorNotice = false,
+    context?: DurableTaskContext,
   ): Promise<TriggerOutcome> {
-    return runTrigger(triggerDeps, {
-      owner: m.owner,
-      ownerScopeId: m.ownerScopeId,
-      input: event.input,
-      securityScreenData: event.securityScreenData,
-      fireKey,
-      surface: "monitor",
-      threadRef: m.threadRef,
-      ...(m.destination ? { destination: m.destination } : {}),
-      ...(withErrorNotice
-        ? { errorNotice: (s) => `⚠️ A background-job update (\`${m.command}\`) could not run: ${s}` }
-        : {}),
-    });
+    return runTrigger(
+      triggerDeps,
+      {
+        owner: m.owner,
+        ownerScopeId: m.ownerScopeId,
+        input: event.input,
+        securityScreenData: event.securityScreenData,
+        fireKey,
+        surface: "monitor",
+        threadRef: m.threadRef,
+        ...(m.destination ? { destination: m.destination } : {}),
+        ...(withErrorNotice
+          ? { errorNotice: (s) => `⚠️ A background-job update (\`${m.command}\`) could not run: ${s}` }
+          : {}),
+      },
+      context,
+    );
   }
 
-  async function reportLost(m: Monitor): Promise<void> {
-    const outcome = await fire(m, `monitor:${m.id}:lost`, renderEvent(m, m.tail ?? "", { kind: "lost" }));
+  async function reportLost(m: Monitor, context?: DurableTaskContext): Promise<void> {
+    const outcome = await fire(
+      m,
+      `monitor:${m.id}:lost`,
+      renderEvent(m, m.tail ?? "", { kind: "lost" }),
+      false,
+      context,
+    );
     if (!outcome.authzFailed && outcome.note) await deps.monitors.recordError(m.id, outcome.note);
-    await deps.monitors.setEnabled(m.id, false);
+    await deps.monitors.setEnabled(m.id, false, m.workflowRevision ?? "legacy");
   }
 
   async function stillLive(m: Monitor): Promise<boolean> {
     const fresh = await deps.monitors.get(m.id);
-    return fresh !== null && fresh.enabled;
+    return fresh !== null && fresh.enabled && fresh.workflowRevision === m.workflowRevision;
   }
 
-  async function poll(sandbox: ProcessSandbox, handle: SandboxHandle, m: Monitor, t: number): Promise<boolean> {
+  async function poll(
+    sandbox: ProcessSandbox,
+    handle: SandboxHandle,
+    m: Monitor,
+    t: number,
+    context?: DurableTaskContext,
+  ): Promise<boolean> {
     if (!(await stillLive(m))) return false;
     let read;
     try {
-      read = await sandbox.readProcess(handle, m.processId, {
-        sinceCursor: m.cursor,
-        maxBytes: MAX_READ_BYTES,
-        waitMs: 0,
-      });
+      const readNext = () =>
+        sandbox.readProcess(handle, m.processId, {
+          sinceCursor: m.cursor,
+          maxBytes: MAX_READ_BYTES,
+          waitMs: 0,
+        });
+      read = context ? await context.step("process:observation", readNext) : await readNext();
     } catch (e) {
+      if (isDurableControlFlow(e)) throw e;
       if (processIsGone(e)) {
-        await reportLost(m);
+        await reportLost(m, context);
         return true;
       }
       await deps.monitors.recordError(m.id, errMessage(e));
@@ -214,16 +236,19 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
           m,
           `monitor:${m.id}:quiet:${quietSince}`,
           renderEvent(m, raw.slice(-MAX_TAIL_CHARS), { kind: "quiet", quietMins }),
+          false,
+          context,
         );
         if (outcome.authzFailed) {
-          await deps.monitors.setEnabled(m.id, false);
+          await deps.monitors.setEnabled(m.id, false, m.workflowRevision ?? "legacy");
           return true;
         }
         if (outcome.note) await deps.monitors.recordError(m.id, outcome.note);
-        await deps.monitors.advance(m.id, { cursor: read.cursor, tail, firedAt: t });
+        await deps.monitors.advance(m.id, { cursor: read.cursor, tail, firedAt: t }, m.workflowRevision ?? "legacy");
         return true;
       }
-      if (read.cursor !== m.cursor || tail !== m.tail) await deps.monitors.advance(m.id, { cursor: read.cursor, tail });
+      if (read.cursor !== m.cursor || tail !== m.tail)
+        await deps.monitors.advance(m.id, { cursor: read.cursor, tail }, m.workflowRevision ?? "legacy");
       return false;
     }
 
@@ -241,15 +266,15 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
       ev = { kind: "expired" };
       fireKey = `monitor:${m.id}:expired`;
     }
-    const outcome = await fire(m, fireKey, renderEvent(m, events, ev), true);
+    const outcome = await fire(m, fireKey, renderEvent(m, events, ev), true, context);
     if (outcome.authzFailed) {
-      await deps.monitors.setEnabled(m.id, false);
+      await deps.monitors.setEnabled(m.id, false, m.workflowRevision ?? "legacy");
       return true;
     }
     if (outcome.note) await deps.monitors.recordError(m.id, outcome.note);
-    if (await deps.monitors.get(m.id)) {
-      await deps.monitors.advance(m.id, { cursor: read.cursor, tail, firedAt: t });
-      if (exited || expired) await deps.monitors.setEnabled(m.id, false);
+    if (await stillLive(m)) {
+      await deps.monitors.advance(m.id, { cursor: read.cursor, tail, firedAt: t }, m.workflowRevision ?? "legacy");
+      if (exited || expired) await deps.monitors.setEnabled(m.id, false, m.workflowRevision ?? "legacy");
     }
     if (exited) await deps.processes.markStatus(m.processId, "exited");
     return true;
@@ -306,7 +331,54 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     }
   }
 
+  interface WatchTask {
+    monitorId: string;
+    revision?: string;
+    sequence: number;
+  }
+  async function scheduleWatch(monitor: Monitor, sequence = 0, at?: number): Promise<void> {
+    await deps.tasks!.spawn<WatchTask>(
+      "monitor.watch",
+      { monitorId: monitor.id, revision: monitor.workflowRevision, sequence },
+      {
+        idempotencyKey: `monitor:${monitor.id}:${monitor.workflowRevision ?? "legacy"}:${sequence}`,
+        ...(at !== undefined ? { at } : {}),
+      },
+    );
+  }
+  deps.tasks?.register<WatchTask, void>("monitor.watch", async (context, input) => {
+    const monitor = await context.step("watch", async () => {
+      const current = await deps.monitors.get(input.monitorId);
+      return current?.enabled && current.workflowRevision === input.revision ? current : null;
+    });
+    if (!monitor || !(await stillLive(monitor)) || !supportsProcessSessions(deps.sandbox)) return;
+    const process = await deps.processes.get(monitor.processId);
+    if (!process) {
+      await reportLost(monitor, context);
+      return;
+    }
+    const handle = await deps.sandbox.provision(
+      [{ scopeId: process.scopeId, mode: "rw", mountPath: "" }],
+      process.sandboxId ? { sandboxId: process.sandboxId } : undefined,
+    );
+    try {
+      const observedAt = await context.step("observed-at", async () => now());
+      await poll(deps.sandbox, handle, monitor, observedAt, context);
+    } finally {
+      await deps.sandbox.teardown(handle, { keepWarm: true });
+    }
+    await context.step("successor", async () => {
+      const current = await deps.monitors.get(monitor.id);
+      if (current?.enabled && current.workflowRevision === input.revision)
+        await scheduleWatch(current, input.sequence + 1, now() + 10_000);
+    });
+  });
+
   const tick = async (nowArg?: number): Promise<void> => {
+    if (deps.tasks) {
+      for (const monitor of await deps.monitors.enabled()) await scheduleWatch(monitor);
+      return;
+    }
     const t = nowArg ?? now();
     const observed = epoch;
     const work = () => leaderLease.hold(TICK_LEASE_KEY, () => pollAll(t, observed));
@@ -321,7 +393,9 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     tick,
     start(intervalMs) {
       stopped = false;
-      sweeper.start(intervalMs);
+      if (deps.tasks)
+        void tick().catch((error: unknown) => console.error("[monitor] admission failed:", errMessage(error)));
+      else sweeper.start(intervalMs);
     },
     stop() {
       stopped = true;

@@ -783,8 +783,10 @@ test("app.turn forwards ownerKeychainUnion onto the persisted run request (else 
   assert.deepEqual(runC?.request.origin, { kind: "automation", screenData: "external event" });
 });
 
-test("cron list / get / patch / delete / run round-trip with owner authz", async () => {
+test("cron list / get / patch / delete / run round-trip with owner authz", async (t) => {
   const { built, control } = setup();
+  built.runtime.startBackground();
+  t.after(() => built.runtime.stop());
   const updateCron = built.app.updateCron.bind(built.app);
   let updateCalls = 0;
   built.app.updateCron = async (id, patch) => {

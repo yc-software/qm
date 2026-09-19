@@ -82,6 +82,13 @@ describe("POST /v1/reach with files", () => {
     const body = (await res.json()) as any;
     const d = (await built.app.pendingDeliveries("principal")).find((x) => x.id === body.deliveryId);
     assert.ok(d, "delivery is in the principal queue");
+    await built.app.ackDelivery(d.id);
+    await built.app.ackDeliveryByKey(d.idempotencyKey);
+    assert.equal(
+      (await built.deliveries.get(d.id))?.deliveredAt,
+      null,
+      "legacy clients cannot finish a workflow-owned delivery",
+    );
     assert.equal(d!.attachments?.length, 1, "the named file rides the delivery as an attachment");
     const a = d!.attachments![0]!;
     assert.equal(a.name, "report.md");

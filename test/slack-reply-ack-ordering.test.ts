@@ -111,3 +111,15 @@ test("failed and refused turns keep recovery pending until their notice is deliv
     flow.ackRunDelivery("r1");
   }
 });
+
+test("workflow handoff passes through Slack polling without becoming a user failure", async () => {
+  const { TurnHandedOff } = await import("../src/core/turn-error.ts");
+  const handoff = new TurnHandedOff();
+  const core = fakeCore(new Map(), []);
+  core.waitRun = async () => {
+    throw handoff;
+  };
+  const flow = createTurnFlow(core);
+  await assert.rejects(flow.callCore({ text: "hello" } as any), (error) => error === handoff);
+  assert.equal(flow.inFlightRuns.has("r1"), false);
+});

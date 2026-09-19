@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +14,10 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import type { MemoryStrategy } from "../src/memory/strategy.ts";
+import { createMemoryStrategy } from "../src/memory/strategy.ts";
+import { withDurableMemoryCapture } from "../src/memory/durable-capture.ts";
+import { createDurableTasks, type DurableTasks } from "../src/durable/tasks.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
@@ -28,6 +32,10 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 
 const ORG = "default-org";
+const runtimes: DurableTasks[] = [];
+after(async () => {
+  await Promise.all(runtimes.map((tasks) => tasks.close()));
+});
 const actor: Principal = { id: "U1", type: "internal" };
 const dm = (thread: string, text: string): OrchestratorInput => ({
   surface: "test",
@@ -94,6 +102,14 @@ function buildOrchestrator(harness: Harness, memory?: MemoryService, memoryStrat
   const acl = createAclStore();
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "mca-")));
+  const service = memory ?? createMemoryService(workspace);
+  const direct =
+    memoryStrategy ??
+    createMemoryStrategy("per-turn", { harness: harness.models, memory: service, workspace }).strategy;
+  const tasks = createDurableTasks({ queue: "memory" });
+  runtimes.push(tasks);
+  const durableStrategy = withDurableMemoryCapture(direct, tasks, createMemoryMap(), 0);
+  tasks.start();
   const deploy = createDeployService({
     deployStore: createDeployStore(),
     provider: createDockerDeployProvider(),
@@ -112,8 +128,8 @@ function buildOrchestrator(harness: Harness, memory?: MemoryService, memoryStrat
     auditLog,
     rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
     harness,
-    memory: memory ?? createMemoryService(workspace),
-    ...(memoryStrategy ? { memoryStrategy } : {}),
+    memory: service,
+    memoryStrategy: durableStrategy,
     deploy,
     acl,
   });
@@ -153,7 +169,8 @@ test("capture does NOT block the turn: the reply returns while extraction is sti
   const res = await orch.handleTurn(dm("dm:U1:tA", "remember my secret is ZULU77"));
 
   assert.equal(res.status, "ok");
-  assert.equal(g.started, 1, "capture extraction was kicked off");
+  for (let i = 0; i < 100 && !g.started; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(g.started, 1, "durably accepted capture extraction was kicked off");
   assert.equal(g.finished, 0, "...but the turn returned WITHOUT awaiting it (still gated) — async");
   g.release();
 });
@@ -163,6 +180,7 @@ test("recall does NOT block on an in-flight capture; continuity is eventually-co
   const orch = buildOrchestrator(g.harness);
 
   await orch.handleTurn(dm("dm:U1:tA", "remember my secret is ZULU77"));
+  for (let i = 0; i < 100 && !g.started; i++) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(g.finished, 0, "capture is still in flight after the first turn returns");
 
   const recall = orch.handleTurn(dm("dm:U1:tB", "!sysprompt"));

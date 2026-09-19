@@ -1,3 +1,5 @@
+import "./support/auto-fake-sprites.ts";
+
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
@@ -64,6 +66,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         signingSecret: SECRET,
       }),
     );
+    built.runtime.startBackground();
     await built.directory.replaceChannels(
       [{ channelId: "C", name: "eng", isPrivate: false }],
       ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
@@ -80,6 +83,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
 
   after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await built.runtime.stop();
   });
 
   const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>

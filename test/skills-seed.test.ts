@@ -61,7 +61,7 @@ test("installSeedSkills publishes the repository starter catalog into org scope"
   assert.deepEqual(rerun.updated, []);
 });
 
-test("every licence shipped with a seed skill is MIT, and no tracked source carries Apache licence text", () => {
+test("seed skills retain MIT licenses and Absurd retains its approved third-party notice", () => {
   const seedDir = "skills-seed";
   const licences: string[] = [];
   const walk = (dir: string): void => {
@@ -89,7 +89,14 @@ test("every licence shipped with a seed skill is MIT, and no tracked source carr
     }
     return text.includes(["Apache", " License"].join(""));
   });
-  assert.deepEqual(offenders, [], "Apache-licensed material must not be vendored into this MIT repository");
+  assert.deepEqual(
+    offenders,
+    ["src/durable/vendor/ABSURD-LICENSE"],
+    "Only the pinned Absurd vendor may carry its third-party notice",
+  );
+  const vendor = JSON.parse(readFileSync("src/durable/vendor/absurd-0.5.0.json", "utf8"));
+  assert.equal(vendor.version, "0.5.0");
+  assert.equal(vendor.license, "Apache-2.0; see ABSURD-LICENSE");
 });
 
 function writeSeedSkill(dir: string, name: string, description: string, body: string): void {

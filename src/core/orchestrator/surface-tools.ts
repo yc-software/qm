@@ -92,12 +92,14 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   } = ctx;
   if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.deliveries)) return undefined;
   const deliveries = deps.deliveries;
-  const currentDestination = defaultDestination;
+  const currentDestination = {
+    ...defaultDestination,
+    ...(input.slackDeliveryContext?.account ? { slackAccount: input.slackDeliveryContext.account } : {}),
+  };
   const rateLimitRecipient =
     input.origin?.kind === "human" && currentDestination.type === "slack" && currentDestination.target
       ? { rateLimitRecipient: { target: currentDestination.target, user: actor.id } }
       : {};
-  let editRefConsumed = false;
   const resolveDestination = async (
     target?: {
       channel?: string;
@@ -159,7 +161,10 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const idempotencyKey = postKeys.key(destination, seq);
       const delivery = await reachEnqueue({
         deliveries,
-        destination,
+        destination: {
+          ...destination,
+          ...(input.slackDeliveryContext?.account ? { slackAccount: input.slackDeliveryContext.account } : {}),
+        },
         text: postText,
         ...(attachments?.length ? { attachments } : {}),
         idempotencyKey,
@@ -226,9 +231,16 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const footer = buildDebugFooter();
       const run = input.runId ? await deps.runs?.get(input.runId) : null;
       const taskList = input.runId ? await deps.tasks?.list({ originRunId: input.runId }) : undefined;
-      const editRef =
-        !editRefConsumed && destination.target === currentDestination.target ? run?.deliveryState?.editRef : undefined;
-      if (editRef) editRefConsumed = true;
+      let editRef = destination.target === currentDestination.target ? run?.deliveryState?.editRef : undefined;
+      if (editRef) {
+        for (let previous = 0; previous < seq; previous++) {
+          const delivered = await deliveries.getByKey(postKeys.key(currentDestination, previous));
+          if (delivered?.destination.editRef === editRef) {
+            editRef = undefined;
+            break;
+          }
+        }
+      }
       const projectedDestination = {
         ...destination,
         ...(editRef ? { editRef } : {}),

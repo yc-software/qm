@@ -6,13 +6,16 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
+import { isolatedPostgres } from "./support/isolated-postgres.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 
 test(
   "migration command closes runtime listeners and exits naturally",
   { skip: !databaseUrl, timeout: 45_000 },
-  async () => {
+  async (t) => {
+    const database = await isolatedPostgres("migrate_main");
+    t.after(() => database.cleanup());
     const dataDir = await mkdtemp(join(tmpdir(), "qm-migrate-test-"));
     try {
       const { stdout } = await promisify(execFile)(process.execPath, ["src/migrate-main.ts"], {
@@ -20,7 +23,7 @@ test(
         env: {
           PATH: process.env.PATH,
           NODE_ENV: "test",
-          DATABASE_URL: databaseUrl,
+          DATABASE_URL: database.url,
           SESSION_STORE: "postgres",
           HARNESS: "mock",
           SANDBOX_BACKEND: "local",

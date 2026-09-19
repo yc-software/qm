@@ -15,6 +15,7 @@ export function createDrainController(opts: {
   registry: InstanceRegistry;
   protection: TaskProtection | null;
   busy: () => boolean;
+  onSuperseded?: (superseded: boolean) => void;
   sweepMs?: number;
 }): DrainController {
   let superseded = false;
@@ -24,8 +25,9 @@ export function createDrainController(opts: {
       const wasSuperseded = superseded;
       superseded = await opts.registry.beat();
       if (superseded !== wasSuperseded) {
+        opts.onSuperseded?.(superseded);
         console.error(
-          `[drain] ${superseded ? "newer build is live — draining: no new run claims, finishing in-flight turns" : "newer build gone — resuming run claims"}`,
+          `[drain] ${superseded ? "newer build is live — handing off background work" : "newer build gone — resuming background work"}`,
         );
       }
       if (!opts.protection) return;

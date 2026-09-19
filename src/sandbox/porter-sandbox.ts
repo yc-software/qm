@@ -3,7 +3,7 @@ import { NotFoundError } from "porter-sandbox";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { createKeyedQueue } from "../util/async.ts";
+import { assertOperationActive, createKeyedQueue, withCleanupSignal } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import {
   createPorterClient,
@@ -28,7 +28,7 @@ import {
   type CredentialPathSpec,
 } from "../credentials/resident-paths.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
-import { killableScript, killScript } from "./exec-kill.ts";
+import { runKillable } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import type {
   AgentComputerProfile,
@@ -48,6 +48,8 @@ const GUEST_PROBE_TIMEOUT_SEC = 10;
 const EGRESS_TAG = "qm-egress";
 const SCOPE_TAG = "qm-scope";
 const KIND_TAG = "qm-kind";
+const READINESS_TAG = "qm-readiness";
+const READY_RECEIPT = "/tmp/.qm-porter-ready";
 const DEFAULT_PORTER_SANDBOX_IMAGE = "ghcr.io/porter-dev/qm-sandbox:latest";
 
 interface BodyEntry {
@@ -118,6 +120,15 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
     if (!live) return null;
     const name = (await live.refresh()).name;
     await waitPorterRunning(name, live);
+    if (live.tags?.[READINESS_TAG] === "required") {
+      const ready = await client.sandboxes.raw.exec(
+        live.id,
+        { command: ["sh", "-c", `test "$(cat ${shq(READY_RECEIPT)} 2>/dev/null)" = ${shq(live.id)}`] },
+        { timeoutMs: 15_000 },
+      );
+      if (ready.exit_code !== 0)
+        throw new Error(`porter sandbox ${live.id} has incomplete provisioning; retire it before retrying`);
+    }
     const entry = { name, sb: live };
     bodies.set(slug, entry);
     return entry;
@@ -135,7 +146,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
         image,
         name,
         command: ["sleep", "infinity"],
-        tags: { [SCOPE_TAG]: slug, [EGRESS_TAG]: egressMode, [KIND_TAG]: kind },
+        tags: { [SCOPE_TAG]: slug, [EGRESS_TAG]: egressMode, [KIND_TAG]: kind, [READINESS_TAG]: "required" },
         ...(volume ? { volume_mounts: { [volume.mountPath]: volume.id } } : {}),
         ...(egressMode === "proxy" && egressProxyHost ? { egress: { allowed_destinations: [egressProxyHost] } } : {}),
         ttl_seconds: ttlSec,
@@ -151,10 +162,20 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
       });
     try {
       await waitPorterRunning(name, sb);
+      assertOperationActive();
     } catch (e) {
-      await sb.terminate().catch(swallowAs("porter-sandbox: abandon half-created body", undefined));
+      await withCleanupSignal(15_000, () => sb.terminate()).catch(
+        swallowAs("porter-sandbox: abandon half-created body", undefined),
+      );
       throw e;
     }
+    const ready = await client.sandboxes.raw.exec(
+      sb.id,
+      { command: ["sh", "-c", `printf %s ${shq(sb.id)} > ${shq(READY_RECEIPT)}`] },
+      { timeoutMs: 15_000 },
+    );
+    if (ready.exit_code !== 0) throw new Error(`porter sandbox ${sb.id} could not publish its readiness receipt`);
+    assertOperationActive();
     const entry = { name, sb };
     bodies.set(slug, entry);
     return entry;
@@ -344,20 +365,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
         .map(([k, v]) => `export ${k}=${shq(v)}`)
         .join("; ");
       const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-      const signal = execOpts?.signal;
-      if (!signal) return execRaw(handle.id, script, timeoutSec);
-      const killUid = randomUUID();
-      const fireKill = () => {
-        execRaw(handle.id, killScript(killUid), 15).catch(swallowAs("porter-sandbox: kill in-flight exec", undefined));
-      };
-      const onAbort = () => fireKill();
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        signal.throwIfAborted();
-        return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
+      return runKillable((body, seconds) => execRaw(handle.id, body, seconds), script, timeoutSec, execOpts?.signal);
     },
 
     async writeFileBytes(handle, relPath, data): Promise<void> {

@@ -307,3 +307,101 @@ test("missing multipart upload and object become terminal instead of retrying fo
   await f.service.abort(row.id);
   await assert.rejects(f.service.complete(row.id), /no longer available/);
 });
+
+for (const commandName of [
+  "HeadObjectCommand",
+  "ListPartsCommand",
+  "CompleteMultipartUploadCommand",
+  "AbortMultipartUploadCommand",
+  "ListMultipartUploadsCommand",
+]) {
+  test(`deployment stop cancels and joins active upload cleanup ${commandName}`, { timeout: 5_000 }, async () => {
+    const f = fixture();
+    const row = await f.service.begin(f.input);
+    f.uploadParts(row);
+    if (commandName !== "AbortMultipartUploadCommand" && commandName !== "ListMultipartUploadsCommand") {
+      await f.store.transition(row.id, ["pending"], "completing");
+    }
+    if (commandName !== "ListMultipartUploadsCommand") f.advance();
+    const entered = Promise.withResolvers<void>();
+    const aborted = Promise.withResolvers<void>();
+    const finished = Promise.withResolvers<void>();
+    const calls: string[] = [];
+    const service = createDirectFileUploads({
+      ...f.options,
+      client: {
+        async send(command: any, options) {
+          calls.push(command.constructor.name);
+          if (command.constructor.name !== commandName) return f.options.client.send(command);
+          assert.ok(options?.abortSignal);
+          entered.resolve();
+          await new Promise<void>((resolve) => {
+            options.abortSignal!.addEventListener(
+              "abort",
+              () => {
+                aborted.resolve();
+                resolve();
+              },
+              { once: true },
+            );
+          });
+          await finished.promise;
+          throw options.abortSignal.reason;
+        },
+      },
+    });
+    service.start();
+    await entered.promise;
+    let stopped = false;
+    const stopping = service.stop().then(() => {
+      stopped = true;
+    });
+    await aborted.promise;
+    assert.equal(stopped, false);
+    const callsAtAbort = [...calls];
+    finished.resolve();
+    await stopping;
+    assert.deepEqual(calls, callsAtAbort);
+    assert.equal(await f.files.get(row.id), null);
+    let expectedState = "completing";
+    if (commandName === "AbortMultipartUploadCommand") expectedState = "aborting";
+    if (commandName === "ListMultipartUploadsCommand") expectedState = "pending";
+    assert.equal((await f.store.get(row.id))!.state, expectedState);
+    if (commandName !== "ListMultipartUploadsCommand") {
+      await f.service.sweep();
+      assert.equal(
+        (await f.store.get(row.id))!.state,
+        commandName === "AbortMultipartUploadCommand" ? "aborted" : "complete",
+      );
+    }
+  });
+}
+
+test("orphan cleanup does not abort an upload after cancellation during its ownership read", async () => {
+  const f = fixture();
+  const controller = new AbortController();
+  let aborted = false;
+  const id = "a".repeat(32);
+  const service = createDirectFileUploads({
+    ...f.options,
+    store: {
+      ...f.store,
+      async get() {
+        controller.abort();
+        return null;
+      },
+    },
+    client: {
+      async send(command: any) {
+        if (command.constructor.name === "ListMultipartUploadsCommand") {
+          return { Uploads: [{ Key: `files/uploads/${id}`, UploadId: "orphan", Initiated: new Date(0) }] };
+        }
+        aborted = true;
+        return {};
+      },
+    },
+  });
+  f.advance();
+  await service.sweep(controller.signal);
+  assert.equal(aborted, false);
+});

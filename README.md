@@ -237,6 +237,7 @@ upstream source history to merge.
 ## Going deeper
 
 - [`docs/swarms.md`](./docs/swarms.md) — durable agent pools, scoped messages, and blank Modal workers
+- [`docs/durable-workflows.md`](./docs/durable-workflows.md) — Absurd ownership, recovery, and migration cutover
 - [`docs/model-gateway.md`](./docs/model-gateway.md) — discover and route models through a gateway
 - [`docs/getting-started.md`](./docs/getting-started.md) — first run, end to end
 - [`cli/README.md`](./cli/README.md) — the `qm` CLI and the deployment directory contract

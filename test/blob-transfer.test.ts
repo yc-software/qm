@@ -409,3 +409,69 @@ test("s3: ensureExpiry also reaps incomplete multipart uploads (invisible to Lis
     "orphaned parts are not objects; only this rule can reap them",
   );
 });
+
+test("deployment stop leaves the remainder of blob cleanup for the replacement", async () => {
+  const controller = new AbortController();
+  const remaining = new Set(["first", "second", "third"]);
+  const removed: string[] = [];
+  const store = createS3BlobTransferStore({
+    bucket: "test",
+    _client: {
+      async send(command: unknown) {
+        if (command instanceof ListObjectsV2Command) {
+          return { Contents: [...remaining].map((Key) => ({ Key, LastModified: new Date(0) })) };
+        }
+        assert.ok(command instanceof DeleteObjectCommand);
+        const key = command.input.Key!;
+        remaining.delete(key);
+        removed.push(key);
+        if (removed.length === 1) controller.abort();
+        return {};
+      },
+    },
+  });
+  await assert.rejects(store.sweep(1_000, controller.signal), { name: "AbortError" });
+  assert.deepEqual(removed, ["first"]);
+  assert.equal(await store.sweep(1_000), 2);
+  assert.equal(remaining.size, 0);
+});
+
+for (const hanging of [ListObjectsV2Command, DeleteObjectCommand]) {
+  test(
+    `s3: deployment stop cancels an active ${hanging.name} without starting more cleanup`,
+    { timeout: 5_000 },
+    async () => {
+      const controller = new AbortController();
+      const entered = Promise.withResolvers<void>();
+      const calls: string[] = [];
+      const store = createS3BlobTransferStore({
+        bucket: "test",
+        _client: {
+          async send(command, options) {
+            assert.ok(command instanceof ListObjectsV2Command || command instanceof DeleteObjectCommand);
+            calls.push(command.constructor.name);
+            if (command instanceof hanging) {
+              assert.equal(options?.abortSignal, controller.signal);
+              entered.resolve();
+              return new Promise((_, reject) => {
+                options!.abortSignal!.addEventListener("abort", () => reject(options!.abortSignal!.reason), {
+                  once: true,
+                });
+              });
+            }
+            return { Contents: ["first", "second"].map((Key) => ({ Key, LastModified: new Date(0) })) };
+          },
+        },
+      });
+      const sweeping = store.sweep(1_000, controller.signal);
+      const rejected = assert.rejects(sweeping, { name: "AbortError" });
+      await entered.promise;
+      controller.abort();
+      await rejected;
+      assert.deepEqual(
+        calls,
+        hanging === ListObjectsV2Command ? ["ListObjectsV2Command"] : ["ListObjectsV2Command", "DeleteObjectCommand"],
+      );
+    },
+  );
+}

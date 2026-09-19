@@ -444,46 +444,6 @@ async function slackWorkspaceUrl(): Promise<string | null> {
   return urlValue;
 }
 
-const WEB_DELIVERY_POLL_MS = Number(process.env.WEB_DELIVERY_POLL_MS ?? 2500);
-const WEB_DELIVERY_GIVEUP_MS = 60_000;
-let deliveriesPollInFlight = false;
-
-interface PendingWebDelivery {
-  id: string;
-  createdAt: number;
-  destination?: { target?: string };
-}
-
-async function drainWebDeliveries(): Promise<void> {
-  if (deliveriesPollInFlight) return;
-  deliveriesPollInFlight = true;
-  try {
-    const r = await coreFetch("GET", "/v1/deliveries?type=web");
-    if (r.status !== 200) return;
-    let pending: PendingWebDelivery[] = [];
-    try {
-      pending = (JSON.parse(r.text) as { deliveries?: PendingWebDelivery[] }).deliveries ?? [];
-    } catch {
-      return;
-    }
-    const now = Date.now();
-    for (const d of pending) {
-      const target = d.destination?.target ?? "";
-      const conns = deliveryClients.get(ownerOfWebThread(target) ?? "");
-      if (conns && conns.size) {
-        for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
-      } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
-        continue;
-      }
-      await coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`).catch(() => {});
-    }
-  } catch {
-    void 0;
-  } finally {
-    deliveriesPollInFlight = false;
-  }
-}
-
 const SSE_HEARTBEAT_MS = 15_000;
 const STATE_FEED_RECONNECT_MS = Number(process.env.STATE_FEED_RECONNECT_MS ?? 3_000);
 
@@ -3170,8 +3130,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
           console.warn("[web-ui] dist-web/ not built, run `npm run build`");
         if (ALLOW.length === 0)
           console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
-        const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
-        t.unref?.();
         void runStateFeed();
         void runInboxFeed();
       });

@@ -39,7 +39,7 @@ export interface LoopOutputStore {
   promoteAttempt(itemId: string, attemptId: string): Promise<LoopOutput[]>;
   supersedeAttempt(itemId: string, attemptId: string): Promise<LoopOutput[]>;
   supersedeActiveSiblings(itemId: string, exceptOutputId: string): Promise<LoopOutput[]>;
-  claimShipping(id: string, claimedAt?: number): Promise<LoopOutput | null>;
+  claimShipping(id: string, claimedAt?: number, token?: string): Promise<LoopOutput | null>;
   beginShipAttempt(id: string, claimToken: string, shipFireKey: string): Promise<LoopOutput | null>;
   markUnconfirmed(id: string, claimToken: string): Promise<LoopOutput | null>;
   confirmShipped(id: string, input: DecideOutputInput): Promise<LoopOutput | null>;
@@ -170,6 +170,10 @@ export function createLoopOutputStore(
     async promoteAttempt(itemId, attemptId) {
       const promoted: LoopOutput[] = [];
       for (const output of await byAttempt(itemId, attemptId)) {
+        if (output.state === "ready") {
+          promoted.push(output);
+          continue;
+        }
         const after = await applyIf(
           output.id,
           (current) => current.state === "staged",
@@ -208,13 +212,25 @@ export function createLoopOutputStore(
       }
       return superseded;
     },
-    async claimShipping(id, claimedAt = Date.now()) {
+    async claimShipping(id, claimedAt = Date.now(), token) {
+      if (token) {
+        const existing = await backing.get(id);
+        if (existing?.claimToken === token) return existing;
+      }
       return applyIf(
         id,
         (output) =>
           output.state === "ready" ||
-          (output.state === "shipping" && (output.claimedAt ?? 0) + SHIP_LEASE_MS <= claimedAt),
-        (output) => ({ ...output, state: "shipping", claimedAt, claimToken: randomUUID(), updatedAt: claimedAt }),
+          (output.state === "shipping" &&
+            !output.claimToken?.startsWith("task:") &&
+            (output.claimedAt ?? 0) + SHIP_LEASE_MS <= claimedAt),
+        (output) => ({
+          ...output,
+          state: "shipping",
+          claimedAt,
+          claimToken: token ?? randomUUID(),
+          updatedAt: claimedAt,
+        }),
       );
     },
     async beginShipAttempt(id, claimToken, shipFireKey) {
@@ -238,6 +254,8 @@ export function createLoopOutputStore(
       );
     },
     async confirmShipped(id, input) {
+      const existing = await backing.get(id);
+      if (existing?.state === "shipped" && existing.decidedBy === input.actorId) return existing;
       return applyIf(
         id,
         (output) => output.state === "unconfirmed",
@@ -252,6 +270,8 @@ export function createLoopOutputStore(
       );
     },
     async completeShipping(id, claimToken, input, result) {
+      const existing = await backing.get(id);
+      if (existing?.state === "shipped" && existing.decidedBy === input.actorId) return existing;
       return applyIf(
         id,
         (output) => output.state === "shipping" && output.claimToken === claimToken,
@@ -282,6 +302,8 @@ export function createLoopOutputStore(
       );
     },
     async returnToLoop(id, input) {
+      const existing = await backing.get(id);
+      if (existing?.state === "returned" && existing.decidedBy === input.actorId) return existing;
       return applyIf(
         id,
         (output) => output.state === "ready" || output.state === "unconfirmed",

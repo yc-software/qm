@@ -51,9 +51,9 @@ test("a mid-prompt cancel takes the stopped exit: partial persisted replay-safe,
         return;
       }
       signal?.addEventListener("abort", () => reject(abortShapedError()), { once: true });
+      queueMicrotask(() => controller.abort());
     })) as typeof globalThis.fetch;
   try {
-    setTimeout(() => controller.abort(), 100);
     const result = await harness.turns.runTurn(cancelTurn("cancel-exit-stop", controller.signal, sink));
 
     assert.equal(result.stopped, true, "the cancelled turn reports itself stopped");
@@ -83,20 +83,26 @@ test("a mid-prompt cancel takes the stopped exit: partial persisted replay-safe,
 test("a genuine provider error racing a cancel still fails the turn instead of completing it as stopped", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
   const controller = new AbortController();
-  controller.abort();
   const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }>, tape: [] as NewTapeRecord[] };
   const realFetch = globalThis.fetch;
-  globalThis.fetch = (async () =>
-    new Response(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "boom" } }), {
+  let requests = 0;
+  globalThis.fetch = (async () => {
+    requests++;
+    return new Response(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "boom" } }), {
       status: 400,
       headers: { "content-type": "application/json" },
-    })) as typeof globalThis.fetch;
+    });
+  }) as typeof globalThis.fetch;
   try {
+    const turn = cancelTurn("cancel-exit-error", controller.signal, sink);
+    turn.recordLlmRequest = () => controller.abort();
     await assert.rejects(
-      harness.turns.runTurn(cancelTurn("cancel-exit-error", controller.signal, sink)),
+      harness.turns.runTurn(turn),
       /boom|400|invalid_request_error/,
       "the unrelated failure surfaces as a turn error, not a stopped completion",
     );
+    assert.equal(requests, 1, "the provider error arrives from a dispatched request");
+    assert.equal(controller.signal.aborted, true, "cancellation races the recorded failure");
     assert.equal(
       sink.entries.some(
         (entry) => entry.type === "assistant" && (entry.payload as { text?: unknown }).text === "(stopped)",
@@ -115,6 +121,49 @@ test("a genuine provider error racing a cancel still fails the turn instead of c
     globalThis.fetch = realFetch;
   }
 });
+
+for (const phase of ["before", "preflight"] as const) {
+  for (const reason of [undefined, new Error("user requested stop")]) {
+    test(`a turn canceled ${phase} with ${reason ? "a custom reason" : "the default reason"} stops without a model request`, async () => {
+      const harness = createPiHarness({ apiKey: "sk-test" });
+      const controller = new AbortController();
+      if (phase === "before") controller.abort(reason);
+      const sink = {
+        entries: [] as Array<{ seq: number; type: string; payload: unknown }>,
+        tape: [] as NewTapeRecord[],
+      };
+      const realFetch = globalThis.fetch;
+      let requests = 0;
+      globalThis.fetch = (async () => {
+        requests++;
+        return sse(textReplyEvents("must not dispatch"));
+      }) as typeof globalThis.fetch;
+      try {
+        const turn = cancelTurn("cancel-before-dispatch", controller.signal, sink);
+        if (phase === "preflight") turn.recordModelCall = () => queueMicrotask(() => controller.abort(reason));
+        const result = await harness.turns.runTurn(turn);
+        assert.equal(requests, 0);
+        assert.equal(result.stopped, true);
+        assert.equal(result.stoppedTapeComplete, true);
+        assert.equal(result.reply, "(stopped)");
+        const trigger = sink.entries.find((entry) => entry.type === "user");
+        assert.ok(trigger);
+        assert.ok(
+          sink.tape.some((row) => row.entrySeq === trigger.seq),
+          "the canceled trigger remains on the tape",
+        );
+        assert.ok(
+          sink.tape.some(
+            (row) => row.kind === "annotation" && (row.payload as { subturnEnd?: unknown }).subturnEnd === true,
+          ),
+        );
+      } finally {
+        globalThis.fetch = realFetch;
+        await harness.turns.close?.();
+      }
+    });
+  }
+}
 
 function sse(events: Array<Record<string, unknown>>): Response {
   const body = events.map((event) => `event: ${event.type as string}\ndata: ${JSON.stringify(event)}\n\n`).join("");
@@ -182,6 +231,7 @@ test("a second '(stopped)' in one session is still re-taped for replay", async (
         return;
       }
       signal?.addEventListener("abort", () => reject(abortShapedError()), { once: true });
+      queueMicrotask(() => controller.abort());
     })) as typeof globalThis.fetch;
   try {
     const turn = cancelTurn("cancel-second-stopped", controller.signal, sink);
@@ -205,7 +255,6 @@ test("a second '(stopped)' in one session is still re-taped for replay", async (
         createdAt: 2,
       },
     ];
-    setTimeout(() => controller.abort(), 100);
     const result = await harness.turns.runTurn(turn);
     assert.equal(result.stopped, true);
     assert.equal(result.stoppedTapeComplete, true);

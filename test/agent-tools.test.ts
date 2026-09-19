@@ -3176,12 +3176,14 @@ test("a queued runtime change cannot mutate after cancellation while draining to
   });
   const controller = new AbortController();
   let selected = false;
+  const entered = Promise.withResolvers<void>();
   const ref: ToolContextRef = {
     abortSignal: controller.signal,
     current: {
       ...fakeToolContext(),
       runtime: async (request) => {
         if (request.action === "get") {
+          entered.resolve();
           await held;
           return { ok: true };
         }
@@ -3192,10 +3194,12 @@ test("a queued runtime change cannot mutate after cancellation while draining to
   };
   const runtime = createAgentTools(ref).find((t) => t.name === "runtime");
   const first = call(runtime, { action: "get" });
+  await entered.promise;
   const second = call(runtime, { action: "set", model: "Astra", lifetime: "scope" });
   controller.abort();
   release();
-  await Promise.all([first, second]);
+  const results = await Promise.allSettled([first, second]);
+  assert.equal(results[0]!.status, "rejected");
   assert.equal(selected, false);
   assert.equal(ref.runtimeHandoff, undefined);
 });
@@ -3352,4 +3356,130 @@ test("quarantined mail remains pending for release and mailbox failures preserve
     { path: "a.txt" },
   );
   assert.ok(JSON.stringify(third).includes("data"));
+});
+
+test("aborted turns cannot dispatch new mutating tools", async () => {
+  let mutations = 0;
+  const ref: ToolContextRef = {
+    abortSignal: AbortSignal.abort(),
+    current: {
+      ...fakeToolContext(),
+      write: async () => {
+        mutations++;
+        return { shared: [] };
+      },
+    },
+  };
+  const tool = createAgentTools(ref).find((tool) => tool.name === "write");
+  await assert.rejects(call(tool, { path: "test.txt", content: "must not write" }), { name: "AbortError" });
+  assert.equal(mutations, 0);
+});
+
+test("deploy deadlines fence queued tools even before a provider observes cancellation", async () => {
+  const deadline = new AbortController();
+  let mutations = 0;
+  const ref: ToolContextRef = {
+    handoffDeadline: deadline.signal,
+    current: {
+      ...fakeToolContext(),
+      write: async () => {
+        mutations++;
+        return { shared: [] };
+      },
+    },
+  };
+  const tool = createAgentTools(ref).find((tool) => tool.name === "write");
+  const queued = call(tool, { path: "test.txt", content: "must not write" });
+  deadline.abort();
+  await assert.rejects(queued, { name: "TurnHandedOff" });
+  await assert.rejects(call(tool, { path: "test.txt", content: "also must not write" }), { name: "TurnHandedOff" });
+  assert.equal(mutations, 0);
+});
+
+test("a runtime mutation waiting for active tools rechecks the deploy deadline", async () => {
+  const entered = Promise.withResolvers<void>();
+  const held = Promise.withResolvers<void>();
+  const deadline = new AbortController();
+  let mutations = 0;
+  const ref: ToolContextRef = {
+    handoffDeadline: deadline.signal,
+    current: {
+      ...fakeToolContext(),
+      runtime: async ({ action }) => {
+        if (action === "get") {
+          entered.resolve();
+          await held.promise;
+        } else mutations++;
+        return { ok: true };
+      },
+    },
+  };
+  const tool = createAgentTools(ref).find((tool) => tool.name === "runtime");
+  const active = call(tool, { action: "get" });
+  await entered.promise;
+  const queued = call(tool, { action: "set", model: "Astra", lifetime: "scope" });
+  const rejected = Promise.all([
+    assert.rejects(active, { name: "AbortError" }),
+    assert.rejects(queued, { name: "TurnHandedOff" }),
+  ]);
+  deadline.abort();
+  held.resolve();
+  await rejected;
+  assert.equal(mutations, 0);
+});
+
+test("deploy deadlines release the dispatcher even when an active tool ignores abort", async () => {
+  const deadline = new AbortController();
+  const entered = Promise.withResolvers<void>();
+  const pending = Promise.withResolvers<{ shared: [] }>();
+  const tool = createAgentTools({
+    handoffDeadline: deadline.signal,
+    current: {
+      ...fakeToolContext(),
+      write: async () => {
+        entered.resolve();
+        return pending.promise;
+      },
+    },
+  }).find((tool) => tool.name === "write");
+  const active = call(tool, { path: "test.txt", content: "in flight" });
+  await entered.promise;
+  deadline.abort();
+  await assert.rejects(active, { name: "AbortError" });
+  pending.resolve({ shared: [] });
+});
+
+test("deploy deadlines fence mutations released from a pending tool-call record", async () => {
+  const deadline = new AbortController();
+  const cancelled = new AbortController();
+  const entered = Promise.withResolvers<void>();
+  const recorded = Promise.withResolvers<void>();
+  let mutations = 0;
+  const ref: ToolContextRef = {
+    handoffDeadline: deadline.signal,
+    abortSignal: cancelled.signal,
+    scopeLabel: "personal:U1",
+    emit: async (entry) => {
+      if (entry.type === "tool_call") {
+        entered.resolve();
+        await recorded.promise;
+      }
+    },
+    current: {
+      ...fakeToolContext(),
+      write: async () => {
+        mutations++;
+        return { shared: [] };
+      },
+    },
+  };
+  const tool = createAgentTools(ref).find((tool) => tool.name === "write");
+  const active = call(tool, { path: "test.txt", data: "retired owner" });
+  await entered.promise;
+  deadline.abort();
+  cancelled.abort();
+  await assert.rejects(active, { name: "AbortError" });
+  recorded.resolve();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(mutations, 0);
 });

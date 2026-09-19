@@ -8,12 +8,13 @@ FROM debian:12-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbf
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      bash coreutils findutils grep sed gawk \
+      bash coreutils findutils grep sed gawk util-linux \
       git curl wget jq unzip \
       nftables \
       python3 python3-venv python3-pip \
       ca-certificates gnupg \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* \
+  && setsid --wait true
 
 COPY --from=node-runtime /usr/local/ /usr/local/
 

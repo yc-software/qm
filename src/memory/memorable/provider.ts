@@ -3,6 +3,7 @@ import type { MemoryService } from "../memory-service.ts";
 import { captureSession, type MemorableCapture, type MemorableToolCall } from "./capture.ts";
 import { memorableInject } from "./inject.ts";
 import { relayRecord } from "./relay.ts";
+import { memoryCaptureEffect } from "../capture-effect.ts";
 
 export interface MemorableProviderDeps {
   argv: readonly string[];
@@ -65,12 +66,16 @@ export function createMemorableMemoryProvider(deps: MemorableProviderDeps): Memo
 
     async capture(scopeId: ScopeId, _facts, _at, _author, context) {
       if (context?.mode !== "automatic" || !context.sessionId) return 0;
+      context.signal?.throwIfAborted();
       const entries = await deps.loadEntries(context.sessionId);
       const raw = captureSession(context.sessionId, entries);
       const capture = redactCapture({ ...raw, scope_id: scopeId }, mask);
       if (!capture.workflows.length) return 0;
-      const outcome = await relay(deps.argv, capture, deps.recordTimeoutMs, spawnOpts);
-      if (!outcome.ok) throw new Error(`memorable record refused: ${outcome.reason}`);
+      await memoryCaptureEffect(context, `memorable:${scopeId}`, false, async () => {
+        const outcome = await relay(deps.argv, capture, deps.recordTimeoutMs, { ...spawnOpts, signal: context.signal });
+        context.signal?.throwIfAborted();
+        if (!outcome.ok) throw new Error(`memorable record refused: ${outcome.reason}`);
+      });
       return capture.workflows.length;
     },
 

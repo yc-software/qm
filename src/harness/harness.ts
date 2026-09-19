@@ -1,3 +1,5 @@
+import { withAbort } from "../util/async.ts";
+import { TurnHandedOff } from "../core/turn-error.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import type { RuntimeControl, RuntimeHandoff } from "./runtime-types.ts";
 import type { AttachmentMeta, ConversationTurn, ScopeId, Session, SessionEntry, TurnRequest } from "../types.ts";
@@ -93,6 +95,9 @@ export interface HarnessTurnInput {
   session: Session;
   runId?: string;
   cancel?: AbortSignal;
+  handoff?: AbortSignal;
+  handoffDeadline?: AbortSignal;
+  continueTurn?: boolean;
   input: string;
   triggerTs?: string;
   entryTs?: string;
@@ -147,6 +152,7 @@ export interface HarnessTurnResult {
   silent?: boolean;
   stopped?: true;
   stoppedTapeComplete?: true;
+  handedOff?: true;
   pendingApprovals?: Array<{
     command: string;
     reason: string;
@@ -194,7 +200,7 @@ export interface HarnessModelUtilities {
   shouldRespond?(input: HarnessDetectInput): Promise<HarnessDetectResult>;
   compactHistory?(input: HarnessCompactInput): Promise<string>;
   contextTokenBudget?(scopeLabel?: string, model?: string): number | undefined;
-  oneShot?(systemPrompt: string, prompt: string): Promise<string | undefined>;
+  oneShot?(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined>;
   judge?(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined>;
   screenSecurity?(input: HarnessSecurityScreenInput): Promise<SecurityScreenVerdict | undefined>;
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
@@ -254,4 +260,19 @@ export function defineHarness(
       : {}),
   };
   return { profile, turns, models, tools };
+}
+
+export async function prepareHarnessInput<T>(
+  turn: Pick<HarnessTurnInput, "cancel" | "handoffDeadline">,
+  prepare: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const signal = AbortSignal.any([turn.cancel, turn.handoffDeadline].filter((s): s is AbortSignal => !!s));
+  try {
+    const result = await withAbort(() => prepare(signal), signal);
+    signal.throwIfAborted();
+    return result;
+  } catch (error) {
+    if (turn.handoffDeadline?.aborted && !turn.cancel?.aborted) throw new TurnHandedOff();
+    throw error;
+  }
 }

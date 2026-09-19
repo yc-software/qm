@@ -1,7 +1,7 @@
 import type { ScopeId } from "../../types.ts";
 import type { HarnessModelUtilities } from "../../harness/harness.ts";
 import type { MemoryService } from "../memory-service.ts";
-import { createKeyedQueue } from "../../util/async.ts";
+import { createKeyedQueue, withAbort } from "../../util/async.ts";
 import { bulletText, captureDate, dateStr, isBullet } from "../notebook.ts";
 
 export const DEFAULT_CONSOLIDATE_AFTER = 10;
@@ -120,8 +120,8 @@ export function applyConsolidationActions(body: string, actions: ConsolidationAc
 }
 
 export interface Consolidator {
-  maintain(scopeId: ScopeId): Promise<void>;
-  maybeMaintain(scopeId: ScopeId): Promise<void>;
+  maintain(scopeId: ScopeId, signal?: AbortSignal): Promise<void>;
+  maybeMaintain(scopeId: ScopeId, signal?: AbortSignal): Promise<void>;
 }
 
 export function createConsolidator(deps: {
@@ -136,7 +136,8 @@ export function createConsolidator(deps: {
   const now = deps.now ?? Date.now;
   const log = deps.log ?? ((msg: string) => console.error(msg));
   const degraded = new Set<ScopeId>();
-  async function maintain(scopeId: ScopeId): Promise<void> {
+  async function maintain(scopeId: ScopeId, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     if (degraded.has(scopeId) || !deps.harness.oneShot) return;
     const guarded = deps.memory.readHead && deps.memory.replaceIfRevision;
     const head = guarded ? await deps.memory.readHead!(scopeId) : undefined;
@@ -147,10 +148,12 @@ export function createConsolidator(deps: {
     const numbered = bullets.map((l, i) => `${i + 1}. ${bulletText(l)}`).join("\n");
     let out: string | undefined;
     try {
-      out = await deps.harness.oneShot(MEMORY_CONSOLIDATION_PROMPT, numbered);
+      out = await withAbort(() => deps.harness.oneShot!(MEMORY_CONSOLIDATION_PROMPT, numbered, signal), signal);
     } catch {
+      signal?.throwIfAborted();
       out = "";
     }
+    signal?.throwIfAborted();
     const at = now();
     const next = applyConsolidationActions(body, parseConsolidationActions(out ?? ""), at);
     if (head) {
@@ -168,9 +171,10 @@ export function createConsolidator(deps: {
 
   return {
     maintain,
-    async maybeMaintain(scopeId) {
+    async maybeMaintain(scopeId, signal) {
+      signal?.throwIfAborted();
       if (degraded.has(scopeId)) return;
-      if (bulletsBelowMarker(await deps.memory.read(scopeId)) >= afterN) await maintain(scopeId);
+      if (bulletsBelowMarker(await deps.memory.read(scopeId)) >= afterN) await maintain(scopeId, signal);
     },
   };
 }
@@ -178,17 +182,20 @@ export function createConsolidator(deps: {
 export function createConsolidatingMemory(
   base: MemoryService,
   consolidator: Consolidator | undefined,
-): { memory: MemoryService; maintain?: (scopeId: ScopeId) => Promise<void> } {
+): { memory: MemoryService; maintain?: (scopeId: ScopeId, signal?: AbortSignal) => Promise<void> } {
   if (!consolidator) return { memory: base };
   const perScope = createKeyedQueue<ScopeId>();
   const memory: MemoryService = {
     ...base,
     async capture(s, facts, at, author, context) {
-      const added = await perScope(s, () => base.capture(s, facts, at, author, context));
-      if (added > 0) void perScope(s, () => consolidator.maybeMaintain(s)).catch(() => {});
+      const append = () => perScope(s, () => base.capture(s, facts, at, author, context));
+      const added = context?.checkpoint ? await context.checkpoint(`append:${s}`, append) : await append();
+      const maintain = () => perScope(s, () => consolidator.maybeMaintain(s, context?.signal));
+      if (context?.checkpoint) await context.checkpoint(`consolidate:${s}`, maintain);
+      else if (added > 0) void maintain().catch(() => {});
       return added;
     },
     replace: (s, content, author) => perScope(s, () => base.replace(s, content, author)),
   };
-  return { memory, maintain: (s) => perScope(s, () => consolidator.maintain(s)) };
+  return { memory, maintain: (s, signal) => perScope(s, () => consolidator.maintain(s, signal)) };
 }

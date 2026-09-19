@@ -1,9 +1,8 @@
-import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
-import { createKeyedQueue } from "../util/async.ts";
+import { assertOperationActive, createKeyedQueue, withCleanupSignal, withOperationSignal } from "../util/async.ts";
 import { collectBlob } from "../persistence/blob-transfer.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -24,7 +23,7 @@ import {
   ephemeralCredLinkPaths,
   type CredentialPathSpec,
 } from "../credentials/resident-paths.ts";
-import { killableScript, killScript } from "./exec-kill.ts";
+import { runKillable } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
 import { E2bSandboxGoneError, type E2bClient, type E2bSession } from "./e2b-client.ts";
@@ -51,12 +50,15 @@ const WORKSPACE_BASENAME = "workspace";
 const RO_LAYERS_TAR = ".ro-layers.tar";
 const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
+const HYDRATED_MARKER = `${HOME_DIR}/.qm-hydrated`;
+const HYDRATION_METADATA = "qm_hydration";
 const IN_MEMORY_ADOPT_MAX_BYTES = 256 * 1024 * 1024;
 
 const SNAPSHOT_PRUNE = HOME_SNAPSHOT_PRUNE;
 
 export interface StoredE2bSandbox {
   sandboxId: string;
+  hydrationRequired?: boolean;
   nativePause?: boolean;
   preservationState?: "running" | "paused" | "pause_failed";
   preservationError?: string;
@@ -120,6 +122,13 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
   const hydrateHome = (scope: string, session: E2bSession): Promise<boolean> =>
     homeSnapshots.hydrateHome(scope, session);
 
+  async function assertHydrated(session: E2bSession, required: boolean | undefined): Promise<void> {
+    if (!required) return;
+    const receipt = await session.readFileBytes(HYDRATED_MARKER);
+    if (!receipt || Buffer.from(receipt).toString("utf8") !== session.sandboxId)
+      throw new Error("E2B home hydration is incomplete; refusing to adopt the replacement");
+  }
+
   async function ensureSession(
     scope: string,
     name: string,
@@ -138,6 +147,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       if (stored) {
         try {
           const session = await client.connect(stored.sandboxId);
+          await assertHydrated(session, stored.hydrationRequired);
           const info = await client.info?.(session.sandboxId);
           await store.merge(scope, {
             preservationState: "running",
@@ -153,9 +163,12 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       for (const summary of listed) {
         try {
           const session = await client.connect(summary.sandboxId);
+          const hydrationRequired = summary.metadata?.[HYDRATION_METADATA] === "required";
+          await assertHydrated(session, hydrationRequired);
           const info = await client.info?.(session.sandboxId);
           await store.put(scope, {
             sandboxId: session.sandboxId,
+            hydrationRequired,
             createdAtMs: Date.now(),
             nativePause: info?.onTimeout === "pause",
           });
@@ -173,26 +186,35 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       } catch (error) {
         void error;
       }
-      const session = await client.create({ metadata: { name }, autoPause: true });
-      sessionByName.set(name, session);
-      await store.put(scope, {
-        sandboxId: session.sandboxId,
-        createdAtMs: Date.now(),
-        nativePause: false,
-        preservationState: "running",
-      });
+      const session = await client.create({ metadata: { name, [HYDRATION_METADATA]: "required" }, autoPause: true });
       let hydrated: boolean;
       try {
+        assertOperationActive();
+        await store.put(scope, {
+          sandboxId: session.sandboxId,
+          hydrationRequired: true,
+          createdAtMs: Date.now(),
+          nativePause: false,
+          preservationState: "running",
+        });
         hydrated = await hydrateHome(scope, session);
+        assertOperationActive();
       } catch (e) {
         reportError("sandbox_hydrate", "hydrate_failed", errMessage(e), scope);
-        sessionByName.delete(name);
-        await client.kill(session.sandboxId).catch(() => undefined);
+        await withCleanupSignal(15_000, () => client.kill(session.sandboxId)).catch(
+          swallowAs("e2b-sandbox: terminate after failed hydrate", undefined),
+        );
+        assertOperationActive();
         throw new Error(`e2b provision: home hydration failed (${errMessage(e)}); not risking the stored snapshot`, {
           cause: e,
         });
       }
-      await store.merge(scope, { nativePause: client.nativePause });
+      await session.writeFileBytes(HYDRATED_MARKER, Buffer.from(session.sandboxId));
+      await (store.update?.(scope, (current) =>
+        current.sandboxId === session.sandboxId ? { ...current, nativePause: client.nativePause } : current,
+      ) ?? store.merge(scope, { nativePause: client.nativePause }));
+      assertOperationActive();
+      sessionByName.set(name, session);
       return { session, coldStart: !hydrated };
     });
   }
@@ -236,13 +258,15 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     }
   }
 
-  async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
-    return withSession(name, async (session) => {
-      const r = await session.runCommand(`timeout ${timeoutSec} sh -c ${shq(script)}`, {
-        timeoutMs: timeoutSec * 1000 + 30_000,
-      });
-      return { stdout: r.stdout, stderr: r.stderr, code: r.exitCode, timedOut: r.exitCode === 124 };
+  async function execSession(session: E2bSession, script: string, timeoutSec: number): Promise<ExecResult> {
+    const r = await session.runCommand(`timeout ${timeoutSec} sh -c ${shq(script)}`, {
+      timeoutMs: timeoutSec * 1000 + 30_000,
     });
+    return { stdout: r.stdout, stderr: r.stderr, code: r.exitCode, timedOut: r.exitCode === 124 };
+  }
+
+  async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
+    return withSession(name, (session) => execSession(session, script, timeoutSec));
   }
 
   const profile: AgentComputerProfile = {
@@ -391,20 +415,11 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         .map(([k, v]) => `export ${k}=${shq(v)}`)
         .join("; ");
       const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-      const signal = execOpts?.signal;
-      if (!signal) return execRaw(handle.id, script, timeoutSec);
-      const killUid = randomUUID();
-      const fireKill = () => {
-        execRaw(handle.id, killScript(killUid), 15).catch(swallowAs("e2b-sandbox: kill in-flight exec", undefined));
-      };
-      signal.throwIfAborted();
-      const onAbort = () => fireKill();
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
+      return withOperationSignal(execOpts?.signal, () =>
+        withSession(handle.id, (session) =>
+          runKillable((body, seconds) => execSession(session, body, seconds), script, timeoutSec),
+        ),
+      );
     },
 
     async writeFileBytes(handle, relPath, data): Promise<void> {

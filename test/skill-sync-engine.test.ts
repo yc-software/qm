@@ -96,3 +96,44 @@ test("one failing pack never aborts the tick", async () => {
   await engine.tick();
   assert.deepEqual(calls, [good.id], "the healthy pack is still reconciled despite the failing one");
 });
+
+test("deployment stop finishes the current skill import and leaves the rest for the next generation", async () => {
+  const packs = createSkillPackStore();
+  const first = await packs.create(base);
+  const second = await packs.create(base);
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const resumed = Promise.withResolvers<void>();
+  const calls: string[] = [];
+  const engine = createSkillSyncEngine({
+    packs,
+    fetcher: fakeFetcher({ [first.id]: "current", [second.id]: "current" }),
+    reconcile: async (id) => {
+      calls.push(id);
+      if (calls.length === 1) {
+        entered.resolve();
+        await finish.promise;
+      }
+      await packs.recordImport(id, { at: 0, commit: "current", status: "ok" });
+      if (calls.length === 2) resumed.resolve();
+    },
+  });
+  const keepAlive = setTimeout(() => {}, 5_000);
+  try {
+    engine.start(5);
+    await entered.promise;
+    const stopping = engine.stop();
+    assert.equal(calls.length, 1);
+    finish.resolve();
+    await stopping;
+    assert.equal(calls.length, 1);
+    engine.start(5);
+    await resumed.promise;
+    await engine.stop();
+    assert.deepEqual(new Set(calls), new Set([first.id, second.id]));
+  } finally {
+    finish.resolve();
+    await engine.stop();
+    clearTimeout(keepAlive);
+  }
+});

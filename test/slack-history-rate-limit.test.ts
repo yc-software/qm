@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { test } from "node:test";
 import { WebClient, LogLevel } from "@slack/web-api";
-import { HISTORY_NO_RETRY, slackPluginConfigFromEnv, slackAccountConfigsFromEnv } from "../src/slack/config.ts";
+import { NO_RETRY, slackPluginConfigFromEnv, slackAccountConfigsFromEnv } from "../src/slack/config.ts";
 import { slackHistoryRateLimitMessage } from "../src/slack/history-rate-limit.ts";
 
 test("managed history throttling gives retry timing and workspace app setup without leaking the error", () => {
@@ -54,7 +54,7 @@ test("Slack history 429 returns immediately instead of sleeping inside the SDK",
   const address = server.address();
   assert.ok(address && typeof address === "object");
   const client = new WebClient("test-token", {
-    ...HISTORY_NO_RETRY,
+    ...NO_RETRY,
     slackApiUrl: `http://127.0.0.1:${address.port}/api/`,
     logLevel: LogLevel.ERROR,
   });

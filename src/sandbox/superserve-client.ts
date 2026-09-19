@@ -1,4 +1,16 @@
+import {
+  AuthenticationError,
+  ConflictError,
+  NotFoundError,
+  RateLimitError,
+  SandboxError,
+  ServerError,
+  TimeoutError,
+  ValidationError,
+  resolveConfig,
+} from "@superserve/sdk";
 import { errMessage } from "../util/errors.ts";
+import { getOperationSignal } from "../util/async.ts";
 
 export interface SuperserveCommandResult {
   stdout: string;
@@ -104,177 +116,311 @@ function isGoneError(err: unknown): boolean {
   return hasStatus(err, 404) || hasStatus(err, 410);
 }
 
+interface SuperserveWireInfo {
+  id: string;
+  name?: string;
+  status: SuperserveSandboxState;
+  created_at: string;
+  metadata?: Record<string, string>;
+  access_token?: string;
+  vcpu_count?: number;
+  memory_mib?: number;
+  timeout_seconds?: number | null;
+  auto_delete_at?: string;
+  network?: { allow_out?: string[]; deny_out?: string[] };
+}
+
 export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): SuperserveClient {
+  const config = resolveConfig(opts);
   const maxCommandMs = opts.maxCommandMs ?? DEFAULT_MAX_COMMAND_MS;
-  const connection = { apiKey: opts.apiKey, ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}) };
+  const baseUrl = config.baseUrl.replace(/\/+$/, "");
+  const headers = { "X-API-Key": config.apiKey };
+  const sandboxPath = (id: string) => `/sandboxes/${encodeURIComponent(id)}`;
 
-  type Sdk = typeof import("@superserve/sdk");
-  let sdk: Promise<Sdk> | null = null;
-  const loadSdk = (): Promise<Sdk> =>
-    (sdk ??= import("@superserve/sdk").catch((e: unknown) => {
-      sdk = null;
-      throw e;
-    }));
+  async function request<T>(
+    url: string,
+    init: RequestInit,
+    read: (response: Response) => Promise<T>,
+    timeoutMs = 30_000,
+  ): Promise<T> {
+    const operation = getOperationSignal();
+    const deadline = AbortSignal.timeout(timeoutMs);
+    const signal = operation ? AbortSignal.any([operation, deadline]) : deadline;
+    signal.throwIfAborted();
+    try {
+      const response = await fetch(url, { ...init, signal });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as {
+          error?: { message?: string; code?: string };
+        } | null;
+        signal.throwIfAborted();
+        const message = body?.error?.message ?? `API error (${response.status})`;
+        const code = body?.error?.code;
+        switch (response.status) {
+          case 400:
+            throw new ValidationError(message, code);
+          case 401:
+          case 403:
+            throw new AuthenticationError(message, code, response.status);
+          case 404:
+            throw new NotFoundError(message, code);
+          case 409:
+            throw new ConflictError(message, code);
+          case 429:
+            throw new RateLimitError(message, code);
+          default:
+            if (response.status >= 500) throw new ServerError(message, code, response.status);
+            throw new SandboxError(message, response.status, code);
+        }
+      }
+      const value = await read(response);
+      signal.throwIfAborted();
+      return value;
+    } catch (error) {
+      operation?.throwIfAborted();
+      if (deadline.aborted) throw new TimeoutError(`Request timed out after ${timeoutMs}ms`);
+      if (error instanceof SandboxError) throw error;
+      throw new SandboxError(`Network error: ${errMessage(error)}`, undefined, undefined, { cause: error });
+    }
+  }
 
-  type SdkSandbox = Awaited<ReturnType<Sdk["Sandbox"]["create"]>>;
+  const json = async <T>(response: Response): Promise<T> => {
+    const text = await response.text();
+    return (text ? JSON.parse(text) : undefined) as T;
+  };
+  const control = <T>(method: string, path: string, body?: unknown): Promise<T> =>
+    request(
+      `${baseUrl}${path}`,
+      {
+        method,
+        headers: { ...headers, "Content-Type": "application/json" },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      },
+      json<T>,
+    );
 
-  const gone = (id: string, err: unknown): never => {
-    throw new SuperserveSandboxGoneError(id, errMessage(err));
+  const toInfo = (raw: SuperserveWireInfo): SuperserveSandboxInfo => {
+    if (!raw.id || !raw.status || !raw.created_at)
+      throw new SandboxError("Invalid API response: missing sandbox identity");
+    return {
+      id: raw.id,
+      name: raw.name ?? "",
+      status: raw.status,
+      metadata: raw.metadata ?? {},
+      vcpuCount: raw.vcpu_count ?? 0,
+      memoryMib: raw.memory_mib ?? 0,
+      ...(raw.timeout_seconds == null ? {} : { timeoutSeconds: raw.timeout_seconds }),
+      ...(raw.auto_delete_at ? { autoDeleteAtMs: new Date(raw.auto_delete_at).getTime() } : {}),
+      ...(raw.network ? { network: { allowOut: raw.network.allow_out, denyOut: raw.network.deny_out } } : {}),
+    };
+  };
+  const updateBody = (patch: SuperserveUpdate) => ({
+    ...(patch.metadata === undefined ? {} : { metadata: patch.metadata }),
+    ...(patch.timeoutSeconds === undefined ? {} : { timeout_seconds: patch.timeoutSeconds }),
+    ...(patch.autoDeleteSeconds === undefined ? {} : { auto_delete_seconds: patch.autoDeleteSeconds }),
+    ...(patch.network ? { network: { allow_out: patch.network.allowOut, deny_out: patch.network.denyOut } } : {}),
+  });
+  const gone = (id: string, error: unknown): never => {
+    throw new SuperserveSandboxGoneError(id, errMessage(error));
+  };
+  const existing = async <T>(id: string, work: () => Promise<T>): Promise<T> => {
+    try {
+      return await work();
+    } catch (error) {
+      if (isGoneError(error)) gone(id, error);
+      throw error;
+    }
+  };
+  const kill = async (id: string): Promise<void> => {
+    try {
+      await control("DELETE", sandboxPath(id));
+    } catch (error) {
+      if (!isGoneError(error)) throw error;
+    }
+  };
+  const update = (id: string, patch: SuperserveUpdate): Promise<void> =>
+    existing(id, () => control("PATCH", sandboxPath(id), updateBody(patch)));
+  const list = async (metadata: Record<string, string>): Promise<SuperserveSandboxInfo[]> => {
+    const query = new URLSearchParams(
+      Object.entries(metadata).map(([key, value]): [string, string] => [`metadata.${key}`, value]),
+    );
+    return (await control<SuperserveWireInfo[]>("GET", `/sandboxes${query.size ? `?${query}` : ""}`)).map(toInfo);
   };
 
-  const wrap = (sbx: SdkSandbox): SuperserveSession => ({
-    id: sbx.id,
-    async run(command, runOpts): Promise<SuperserveCommandResult> {
-      const timeoutMs = runOpts?.timeoutMs ?? maxCommandMs;
-      const cap = runOpts?.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
-      try {
-        const r = await sbx.commands.run(command, {
+  const wrap = (raw: SuperserveWireInfo): SuperserveSession => {
+    const info = toInfo(raw);
+    if (!raw.access_token) throw new SandboxError("Invalid API response: missing access_token");
+    let token = raw.access_token;
+    let refreshing: Promise<void> | undefined;
+    const sharedHost = ["sandbox.superserve.ai", "staging-sandbox.superserve.ai", "usw-sandbox.superserve.ai"].includes(
+      config.sandboxHost.toLowerCase(),
+    );
+    const dataUrl = `https://${sharedHost ? "" : `boxd-${info.id}.`}${config.sandboxHost.toLowerCase()}`;
+    const routing: Record<string, string> = sharedHost ? { "X-Superserve-Sandbox-Id": info.id } : {};
+    const refresh = (): Promise<void> =>
+      (refreshing ??= control<SuperserveWireInfo>("POST", `${sandboxPath(info.id)}/activate`)
+        .then((next) => {
+          if (!next.access_token) throw new SandboxError("Invalid activate response: missing access_token");
+          token = next.access_token;
+        })
+        .finally(() => {
+          refreshing = undefined;
+        }));
+    async function data<T>(
+      path: string,
+      init: RequestInit,
+      read: (response: Response) => Promise<T>,
+      timeoutMs?: number,
+    ): Promise<T> {
+      const send = () =>
+        request(
+          `${dataUrl}${path}`,
+          {
+            ...init,
+            headers: { ...routing, "X-Access-Token": token, ...init.headers },
+          },
+          read,
           timeoutMs,
-          onStdout: () => undefined,
-        });
-        return {
-          stdout: clampUtf8(r.stdout, cap),
-          stderr: clampUtf8(r.stderr, cap),
-          exitCode: r.exitCode,
-          ...(r.truncated || Buffer.byteLength(r.stdout, "utf8") > cap || Buffer.byteLength(r.stderr, "utf8") > cap
-            ? { truncated: true }
-            : {}),
-        };
-      } catch (err) {
-        if (isGoneError(err)) gone(sbx.id, err);
-        throw err;
-      }
-    },
-    async readFileBytes(absPath): Promise<Uint8Array | null> {
+        );
       try {
-        return await sbx.files.read(absPath);
-      } catch (err) {
-        if (hasStatus(err, 404)) {
-          let status: string;
-          try {
-            status = (await sbx.getInfo()).status;
-          } catch (infoErr) {
-            if (isGoneError(infoErr)) gone(sbx.id, infoErr);
-            throw infoErr;
+        return await send();
+      } catch (error) {
+        if (!(error instanceof AuthenticationError) && !(error instanceof ServerError && error.statusCode === 503))
+          throw error;
+        await refresh();
+        return send();
+      }
+    }
+    const filePath = (path: string): string => {
+      if (!path.startsWith("/")) throw new ValidationError(`Path must start with "/": ${path}`);
+      if (path.split("/").includes("..")) throw new ValidationError(`Path must not contain ".." segments: ${path}`);
+      return `/files?path=${encodeURIComponent(path)}`;
+    };
+    return {
+      id: info.id,
+      async run(command, runOpts) {
+        const timeoutMs = runOpts?.timeoutMs ?? maxCommandMs;
+        const cap = runOpts?.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+        return existing(info.id, () =>
+          data(
+            "/exec/stream",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ command, timeout_s: Math.ceil(timeoutMs / 1000) }),
+            },
+            async (response) => {
+              if (!response.body) throw new SandboxError("Expected streaming response but got empty body");
+              let stdout = "",
+                stderr = "",
+                pending = "";
+              let exitCode = 0,
+                finished = false,
+                stdoutTruncated = false,
+                stderrTruncated = false;
+              const decoder = new TextDecoder();
+              const event = (line: string) => {
+                if (!line.startsWith("data:")) return;
+                const text = line.slice(5).trim();
+                if (!text || text === "[DONE]") return;
+                let value: { stdout?: string; stderr?: string; finished?: boolean; exit_code?: number; error?: string };
+                try {
+                  value = JSON.parse(text);
+                } catch {
+                  return;
+                }
+                if (!stdoutTruncated) {
+                  const out = stdout + (value.stdout ?? "");
+                  stdoutTruncated = Buffer.byteLength(out) > cap;
+                  stdout = clampUtf8(out, cap);
+                }
+                if (!stderrTruncated) {
+                  const err = stderr + (value.stderr ?? "") + (value.finished ? (value.error ?? "") : "");
+                  stderrTruncated = Buffer.byteLength(err) > cap;
+                  stderr = clampUtf8(err, cap);
+                }
+                if (value.finished) {
+                  finished = true;
+                  exitCode = value.exit_code ?? 0;
+                }
+              };
+              for await (const chunk of response.body) {
+                pending += decoder.decode(chunk, { stream: true });
+                const lines = pending.split("\n");
+                pending = lines.pop() ?? "";
+                for (const line of lines) event(line);
+              }
+              event(pending + decoder.decode());
+              if (!finished)
+                throw new SandboxError("Command stream ended without a finished event (possible network disconnect)");
+              return { stdout, stderr, exitCode, ...(stdoutTruncated || stderrTruncated ? { truncated: true } : {}) };
+            },
+            timeoutMs + 5_000,
+          ),
+        );
+      },
+      async readFileBytes(path) {
+        try {
+          return await data(filePath(path), { method: "GET" }, async (response) => {
+            const parts: Uint8Array[] = [];
+            let size = 0;
+            if (response.body)
+              for await (const chunk of response.body) {
+                size += chunk.byteLength;
+                if (size > 2 * 1024 ** 3) throw new ValidationError("Response body exceeds the maximum size");
+                parts.push(chunk);
+              }
+            return new Uint8Array(Buffer.concat(parts));
+          });
+        } catch (error) {
+          if (hasStatus(error, 404)) {
+            const current = await existing(info.id, () => control<SuperserveWireInfo>("GET", sandboxPath(info.id)));
+            if (GONE_STATES.has(current.status)) gone(info.id, error);
+            return null;
           }
-          if (GONE_STATES.has(status)) gone(sbx.id, err);
-          return null;
+          if (isGoneError(error)) gone(info.id, error);
+          throw error;
         }
-        if (isGoneError(err)) gone(sbx.id, err);
-        throw err;
-      }
-    },
-    async writeFileBytes(absPath, data): Promise<void> {
-      try {
-        await sbx.files.write(absPath, data);
-      } catch (err) {
-        if (isGoneError(err)) gone(sbx.id, err);
-        throw err;
-      }
-    },
-    async update(patch): Promise<void> {
-      try {
-        await sbx.update(patch);
-      } catch (err) {
-        if (isGoneError(err)) gone(sbx.id, err);
-        throw err;
-      }
-    },
-    async pause(): Promise<void> {
-      try {
-        await sbx.pause();
-      } catch (err) {
-        if (isGoneError(err)) gone(sbx.id, err);
-        throw err;
-      }
-    },
-    async kill(): Promise<void> {
-      await sbx.kill().catch((err) => {
-        if (!isGoneError(err)) throw err;
-      });
-    },
-  });
-
-  const toInfo = (i: {
-    id: string;
-    name: string;
-    status: SuperserveSandboxState;
-    metadata: Record<string, string>;
-    vcpuCount?: number;
-    memoryMib?: number;
-    timeoutSeconds?: number;
-    autoDeleteAt?: Date;
-    network?: SuperserveNetwork;
-  }): SuperserveSandboxInfo => ({
-    id: i.id,
-    name: i.name,
-    status: i.status,
-    metadata: i.metadata ?? {},
-    ...(i.network ? { network: i.network } : {}),
-    ...(i.vcpuCount !== undefined ? { vcpuCount: i.vcpuCount } : {}),
-    ...(i.memoryMib !== undefined ? { memoryMib: i.memoryMib } : {}),
-    ...(i.timeoutSeconds !== undefined ? { timeoutSeconds: i.timeoutSeconds } : {}),
-    ...(i.autoDeleteAt ? { autoDeleteAtMs: i.autoDeleteAt.getTime() } : {}),
-  });
-
+      },
+      writeFileBytes: (path, bytes) =>
+        existing(info.id, () =>
+          data(
+            filePath(path),
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/octet-stream" },
+              body: Buffer.from(bytes),
+            },
+            async (response) => {
+              await response.arrayBuffer();
+            },
+          ),
+        ),
+      update: (patch) => update(info.id, patch),
+      pause: () => existing(info.id, () => control("POST", `${sandboxPath(info.id)}/pause`)),
+      kill: () => kill(info.id),
+    };
+  };
   return {
-    async create(createOpts): Promise<SuperserveSession> {
-      const { Sandbox } = await loadSdk();
-      const sbx = await Sandbox.create({
-        ...connection,
-        name: createOpts.name,
-        metadata: createOpts.metadata,
-        ...((createOpts.template ?? opts.template) ? { fromTemplate: createOpts.template ?? opts.template } : {}),
-        ...(createOpts.timeoutSeconds !== undefined ? { timeoutSeconds: createOpts.timeoutSeconds } : {}),
-        ...(createOpts.autoDeleteSeconds !== undefined ? { autoDeleteSeconds: createOpts.autoDeleteSeconds } : {}),
-        ...(createOpts.network ? { network: createOpts.network } : {}),
-        previewAccess: "private",
-      });
-      return wrap(sbx);
+    async create(options) {
+      return wrap(
+        await control<SuperserveWireInfo>("POST", "/sandboxes", {
+          ...updateBody(options),
+          name: options.name,
+          preview_access: "private",
+          ...((options.template ?? opts.template) ? { from_template: options.template ?? opts.template } : {}),
+        }),
+      );
     },
-    async update(sandboxId, patch): Promise<void> {
-      const { Sandbox } = await loadSdk();
-      try {
-        await Sandbox.updateById(sandboxId, patch, connection);
-      } catch (err) {
-        if (isGoneError(err)) gone(sandboxId, err);
-        throw err;
-      }
+    connect: (id) =>
+      existing(id, async () => wrap(await control<SuperserveWireInfo>("POST", `${sandboxPath(id)}/activate`))),
+    update,
+    async info(id, metadata) {
+      const found = (await list(metadata ?? {})).find((entry) => entry.id === id);
+      if (!found || GONE_STATES.has(found.status)) throw new SuperserveSandboxGoneError(id, "not listed");
+      return found;
     },
-    async connect(sandboxId): Promise<SuperserveSession> {
-      const { Sandbox } = await loadSdk();
-      try {
-        return wrap(await Sandbox.connect(sandboxId, connection));
-      } catch (err) {
-        if (isGoneError(err)) gone(sandboxId, err);
-        throw err;
-      }
-    },
-    async info(sandboxId, scopeMetadata): Promise<SuperserveSandboxInfo> {
-      const { Sandbox } = await loadSdk();
-      const scoped = scopeMetadata && Object.keys(scopeMetadata).length ? scopeMetadata : undefined;
-      try {
-        const listed = await Sandbox.list({ ...connection, ...(scoped ? { metadata: scoped } : {}) });
-        const hit = listed.find((s) => s.id === sandboxId);
-        if (!hit || GONE_STATES.has(hit.status)) throw new SuperserveSandboxGoneError(sandboxId, "not listed");
-        return toInfo(hit);
-      } catch (err) {
-        if (isGoneError(err)) gone(sandboxId, err);
-        throw err;
-      }
-    },
-    async list(metadata): Promise<SuperserveSandboxSummary[]> {
-      const { Sandbox } = await loadSdk();
-      const listed = await Sandbox.list({ ...connection, ...(Object.keys(metadata).length ? { metadata } : {}) });
-      return listed
-        .filter((s) => !GONE_STATES.has(s.status))
-        .map((s) => ({ id: s.id, name: s.name, status: s.status, metadata: s.metadata ?? {} }));
-    },
-    async kill(sandboxId): Promise<void> {
-      const { Sandbox } = await loadSdk();
-      await Sandbox.killById(sandboxId, connection).catch((err) => {
-        if (!isGoneError(err)) throw err;
-      });
-    },
+    list: async (metadata) => (await list(metadata)).filter((entry) => !GONE_STATES.has(entry.status)),
+    kill,
   };
 }

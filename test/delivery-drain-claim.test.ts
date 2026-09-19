@@ -10,15 +10,23 @@ import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { sleep, withTimeout } from "../src/util/async.ts";
 
 const SECRET = "test-signing-secret".repeat(3);
 
-function start(): { base: string; app: ReturnType<typeof buildApp>["app"]; close: () => Promise<void> } {
+function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "claim-")) }));
   const server = createServer(built.app, { signingSecret: SECRET });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, app: built.app, close: () => new Promise<void>((r) => server.close(() => r())) };
+  return {
+    ...built,
+    base,
+    async close() {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await built.runtime.stop();
+    },
+  };
 }
 
 function sign(method: string, pathWithQuery: string, body: string): Record<string, string> {
@@ -37,7 +45,7 @@ async function fetchPending(base: string, query: string): Promise<{ id: string }
   return ((await res.json()) as { deliveries?: { id: string }[] }).deliveries ?? [];
 }
 
-test("two overlapping drain pollers with claimMs can't both receive the same delivery", async () => {
+test("overlapping legacy claim pollers cannot take workflow-owned deliveries", async () => {
   const srv = start();
   try {
     await srv.app.enqueueDelivery({
@@ -49,13 +57,15 @@ test("two overlapping drain pollers with claimMs can't both receive the same del
       fetchPending(srv.base, "type=group&claimMs=15000"),
       fetchPending(srv.base, "type=group&claimMs=15000"),
     ]);
-    assert.equal(oldTask.length + newTask.length, 1, "exactly one poller receives the row");
+    assert.deepEqual(oldTask, []);
+    assert.deepEqual(newTask, []);
+    assert.equal((await fetchPending(srv.base, "type=group")).length, 1, "the workflow obligation remains visible");
   } finally {
     await srv.close();
   }
 });
 
-test("a claim-less fetch stays claim-agnostic (the web-ui drain re-reads rows it left unacked)", async () => {
+test("read-only delivery queries remain repeatable while work is pending", async () => {
   const srv = start();
   try {
     await srv.app.enqueueDelivery({
@@ -63,30 +73,67 @@ test("a claim-less fetch stays claim-agnostic (the web-ui drain re-reads rows it
       text: "nudge",
       idempotencyKey: "post:sess-2:one",
     });
-    assert.equal((await fetchPending(srv.base, "type=web")).length, 1);
-    assert.equal((await fetchPending(srv.base, "type=web")).length, 1, "still visible on the next poll");
+    const first = await fetchPending(srv.base, "type=web");
+    assert.equal(first.length, 1);
+    assert.deepEqual(await fetchPending(srv.base, "type=web"), first);
   } finally {
     await srv.close();
   }
 });
 
-test("an expired claim re-surfaces the row to a later poll (drainer died mid-post)", async () => {
+test("legacy claim expiry and acknowledgements cannot complete a workflow-owned delivery", async () => {
   const srv = start();
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  let executions = 0;
+  const unregister = srv.slackCore.registerDeliveryHandler!(async (_delivery, context) => {
+    await context.step("provider:post", async () => {
+      executions++;
+      entered.resolve();
+      await finish.promise;
+    });
+  });
   try {
     await srv.app.enqueueDelivery({
       destination: { type: "group", target: "C2" },
-      text: "claimed then abandoned",
+      text: "owned by the workflow",
       idempotencyKey: "post:sess-3:one",
     });
-    assert.equal((await fetchPending(srv.base, "type=group&claimMs=50")).length, 1);
-    assert.equal(
-      (await fetchPending(srv.base, "type=group&claimMs=50")).length,
-      0,
-      "claimed rows are invisible before the TTL",
+    const pending = await fetchPending(srv.base, "type=group");
+    assert.equal(pending.length, 1);
+    srv.runtime.start();
+    await withTimeout(() => entered.promise, 2_000, "delivery workflow admission");
+    assert.deepEqual(await fetchPending(srv.base, "type=group&claimMs=50"), []);
+    for (const [path, payload] of [
+      [`/v1/deliveries/${pending[0]!.id}/ack`, {}],
+      ["/v1/deliveries/ack-by-key", { idempotencyKey: "post:sess-3:one" }],
+    ] as const) {
+      const body = JSON.stringify(payload);
+      const res = await fetch(`${srv.base}${path}`, { method: "POST", headers: sign("POST", path, body), body });
+      assert.equal(res.status, 200);
+    }
+    await sleep(80);
+    assert.deepEqual(await fetchPending(srv.base, "type=group&claimMs=15000"), []);
+    assert.deepEqual(await fetchPending(srv.base, "type=group"), pending);
+    assert.equal((await srv.deliveries.get(pending[0]!.id))?.deliveredAt, null);
+    await srv.runtime.stopBackgroundClaims();
+    finish.resolve();
+    await withTimeout(() => srv.runtime.backgroundDrained(), 2_000, "delivery workflow handoff");
+    assert.deepEqual(await fetchPending(srv.base, "type=group"), pending);
+    srv.runtime.startBackground();
+    await withTimeout(
+      async () => {
+        while ((await srv.deliveries.get(pending[0]!.id))?.deliveredAt === null) await sleep(10);
+      },
+      2000,
+      "resumed delivery acknowledgement",
     );
-    await new Promise((r) => setTimeout(r, 80));
-    assert.equal((await fetchPending(srv.base, "type=group&claimMs=15000")).length, 1, "the abandoned row comes back");
+    assert.deepEqual(await fetchPending(srv.base, "type=group"), []);
+    assert.notEqual((await srv.deliveries.get(pending[0]!.id))?.deliveredAt, null);
+    assert.equal(executions, 1);
   } finally {
+    finish.resolve();
     await srv.close();
+    unregister();
   }
 });

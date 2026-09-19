@@ -21,6 +21,16 @@ const productionEnv = {
   SANDBOX_BACKEND: "local",
 } as const;
 
+test("background handoff grace is separate from shutdown and never exceeds two minutes", () => {
+  const defaults = loadConfig({});
+  assert.equal(defaults.backgroundHandoffGraceMs, 120_000);
+  assert.equal(defaults.shutdownDrainMs, 10_000);
+  assert.equal(loadConfig({ BACKGROUND_HANDOFF_GRACE_MS: "300" }).backgroundHandoffGraceMs, 300);
+  assert.equal(loadConfig({ BACKGROUND_HANDOFF_GRACE_MS: "600000" }).backgroundHandoffGraceMs, 120_000);
+  assert.equal(loadConfig({ BACKGROUND_HANDOFF_GRACE_MS: "-1" }).backgroundHandoffGraceMs, 0);
+  assert.throws(() => loadConfig({ BACKGROUND_HANDOFF_GRACE_MS: "invalid" }), /BACKGROUND_HANDOFF_GRACE_MS/);
+});
+
 test("ORG_BRAND_* parses into a validated branding default", () => {
   assert.equal(loadConfig({}).brandingDefault, undefined);
   assert.deepEqual(
@@ -658,16 +668,17 @@ test("SANDBOX_BACKEND=porter locates the API and shares the deploy provider's to
     () => loadConfig({ SANDBOX_BACKEND: "porter", PORTER_DEPLOY_API_TOKEN: "tok" }),
     /PORTER_DEPLOY_PROJECT_ID/,
   );
+  const token = `header.${Buffer.from(JSON.stringify({ project_id: 7 })).toString("base64url")}.signature`;
   const inCluster = loadConfig({
     SANDBOX_BACKEND: "porter",
     DEPLOY_PROVIDER: "porter",
-    PORTER_DEPLOY_API_TOKEN: "tok",
+    PORTER_DEPLOY_API_TOKEN: token,
     PORTER_CLUSTER_ID: "3",
     PORTER_SANDBOX_TTL_SEC: "120",
   });
-  assert.equal(inCluster.porterSandbox.token, "tok");
+  assert.equal(inCluster.porterSandbox.token, token);
   assert.equal(inCluster.porterSandbox.ttlSec, 120);
-  assert.equal(inCluster.porterDeploy.token, "tok");
+  assert.equal(inCluster.porterDeploy.token, token);
 });
 
 test("DEPLOY_APPS_DOMAIN is the one-var apps setup: it feeds the gate and defaults every provider's domain", () => {
@@ -910,4 +921,25 @@ test("background ownership requires durable storage and an independent deploymen
   assert.throws(() => loadConfig({ ...env, BACKGROUND_DEPLOYMENT_ID: " " }), /BACKGROUND_DEPLOYMENT_ID/);
   assert.throws(() => loadConfig({ ...env, CORE_SIGNING_SECRET: "short" }), /CORE_SIGNING_SECRET/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
+});
+
+test("Porter SDK environment defaults resolve once at the config boundary", () => {
+  const token = `header.${Buffer.from(JSON.stringify({ project_id: 17 })).toString("base64url")}.signature`;
+  const external = loadConfig({ PORTER_SANDBOX_API_KEY: token, PORTER_CLUSTER_ID: "23" });
+  for (const options of [external.porterSandbox, external.porterDeploy]) {
+    assert.equal(options.token, token);
+    assert.equal(options.baseUrl, "https://dashboard.porter.run/api/v2/alpha/projects/17/clusters/23");
+  }
+  const explicit = loadConfig({
+    PORTER_SANDBOX_API_KEY: token,
+    PORTER_DEPLOY_API_TOKEN: "preferred",
+    PORTER_CLUSTER_ID: "23",
+    PORTER_SANDBOX_BASE_URL: "https://porter.example/gateway",
+  });
+  assert.equal(explicit.porterSandbox.token, "preferred");
+  assert.equal(explicit.porterDeploy.baseUrl, "https://porter.example/gateway");
+  const internal = loadConfig({ KUBERNETES_SERVICE_HOST: "kubernetes" });
+  assert.equal(internal.porterSandbox.baseUrl, "http://sandbox-api.porter-sandbox-system.svc.cluster.local:8080");
+  assert.equal(internal.porterSandbox.token, undefined);
+  assert.throws(() => loadConfig({ PORTER_SANDBOX_API_KEY: "bad", PORTER_CLUSTER_ID: "23" }), /project_id/);
 });

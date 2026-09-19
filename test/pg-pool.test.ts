@@ -8,7 +8,38 @@ import {
   concurrentIndexName,
   definePgMigration,
   pgMigrationChecksum,
+  withPgTransaction,
 } from "../src/persistence/pg-pool.ts";
+import { withOperationSignal } from "../src/util/async.ts";
+
+test("a cancelled transaction rolls back instead of committing and releases its connection", async () => {
+  const controller = new AbortController();
+  const statements: string[] = [];
+  let released = false;
+  const pool = {
+    async connect() {
+      return {
+        async query(statement: string) {
+          statements.push(statement);
+        },
+        release() {
+          released = true;
+        },
+      };
+    },
+  } as unknown as Parameters<typeof withPgTransaction>[0];
+  await assert.rejects(
+    withOperationSignal(controller.signal, () =>
+      withPgTransaction(pool, async (client) => {
+        await client.query("INSERT INTO facts VALUES ('old worker')");
+        controller.abort();
+      }),
+    ),
+    { name: "AbortError" },
+  );
+  assert.deepEqual(statements, ["BEGIN", "INSERT INTO facts VALUES ('old worker')", "ROLLBACK"]);
+  assert.equal(released, true);
+});
 
 test("createPgPool is lazy: building it neither connects nor throws (no DB needed)", async () => {
   const pg = createPgPool("postgres://does-not-exist:0/none", "test/lazy/0001", ["SELECT 1"]);

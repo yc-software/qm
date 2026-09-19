@@ -1,3 +1,4 @@
+import { isDurableControlFlow } from "../durable/tasks.ts";
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { MemoryRevision, MemoryService } from "./memory-service.ts";
 
@@ -68,9 +69,18 @@ export function createRoutedMemoryService(opts: {
       const counts = await Promise.all(
         routes.map(async (route) => {
           try {
-            return await providerFor(route).capture(scopeId, facts, at, author, context);
+            context?.signal?.throwIfAborted();
+            const providerContext = context?.checkpoint
+              ? {
+                  ...context,
+                  checkpoint: <T>(name: string, run: () => Promise<T>) =>
+                    context.checkpoint!(`provider:${route.provider}:${name}`, run),
+                }
+              : context;
+            return await providerFor(route).capture(scopeId, facts, at, author, providerContext);
           } catch (error) {
-            if (!route.failOpen) throw error;
+            if (context?.checkpoint || isDurableControlFlow(error) || !route.failOpen) throw error;
+            context?.signal?.throwIfAborted();
             opts.onError?.(error, route.provider, "capture");
             return 0;
           }

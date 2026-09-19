@@ -15,6 +15,8 @@ import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
 import { replayableRequest } from "../src/core/orchestrator/turn-helpers.ts";
+import { TurnHandedOff } from "../src/core/turn-error.ts";
+import { claimsSpent, errorParks } from "../src/runs/run-store.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -828,4 +830,126 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
   } finally {
     await built.runtime.stop();
   }
+});
+
+function handoffOrchestrator(): { orchestrator: Orchestrator; started: Promise<void>; calls: number } {
+  let signalStarted: () => void = () => {};
+  const started = new Promise<void>((r) => {
+    signalStarted = r;
+  });
+  const state = { calls: 0 };
+  const orchestrator = {
+    async handleTurn(input: OrchestratorInput) {
+      state.calls += 1;
+      signalStarted();
+      if (!input.handoff) return { status: "ok", reply: "finished" };
+      await new Promise<void>((resolve) => {
+        if (input.handoff!.aborted) resolve();
+        else input.handoff!.addEventListener("abort", () => resolve(), { once: true });
+      });
+      throw new TurnHandedOff();
+    },
+  } as unknown as Orchestrator;
+  return {
+    orchestrator,
+    started,
+    get calls() {
+      return state.calls;
+    },
+  };
+}
+
+test("a handoff request releases the in-flight run at its next committed step without spending a claim", async () => {
+  const { runs } = createMemoryRunStore({ maxClaims: 2 });
+  const sessions = createMemorySessionStore();
+  const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
+  const gate = handoffOrchestrator();
+
+  const worker = createWorker({ runs, sessions, orchestrator: gate.orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+  worker.start();
+  await gate.started;
+  assert.equal((await runs.get(enq.id))?.status, "running");
+
+  worker.requestHandoff(60_000);
+  await worker.drained();
+
+  const released = await runs.get(enq.id);
+  assert.equal(released?.status, "pending", "the run went back to the queue instead of finishing or failing");
+  assert.equal(released?.attempts, 1);
+  assert.equal(released?.handoffs, 1, "the release is recorded as a hand-off");
+  assert.equal(released?.errorAttempts, 0, "a hand-off is not an error");
+  assert.equal(claimsSpent(released!), 0, "the hand-off does not count toward the claim budget");
+
+  const next = createWorker({ runs, sessions, orchestrator: gate.orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+  next.start();
+  await sleep(30);
+  next.requestHandoff(60_000);
+  await next.drained();
+  const again = await runs.get(enq.id);
+  assert.equal(again?.status, "pending");
+  assert.equal(again?.attempts, 2);
+  assert.equal(again?.handoffs, 2);
+  assert.equal(errorParks(again!, 2), false, "two hand-offs never park the run under a claim cap of two");
+  assert.equal(gate.calls, 2);
+});
+
+test("the handoff deadline fires after the grace so a stuck step is abandoned at the last committed one", async () => {
+  const { runs } = createMemoryRunStore();
+  const sessions = createMemorySessionStore();
+  const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
+  let deadlineSeen = false;
+  let signalStarted: () => void = () => {};
+  const started = new Promise<void>((r) => {
+    signalStarted = r;
+  });
+  const orchestrator = {
+    async handleTurn(input: OrchestratorInput) {
+      signalStarted();
+      await new Promise<void>((resolve) =>
+        input.handoffDeadline!.addEventListener("abort", () => resolve(), { once: true }),
+      );
+      deadlineSeen = true;
+      throw new TurnHandedOff();
+    },
+  } as unknown as Orchestrator;
+  const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+  worker.start();
+  await started;
+  const before = Date.now();
+  worker.requestHandoff(40);
+  await worker.drained();
+  assert.ok(deadlineSeen, "the deadline signal reached the turn");
+  assert.ok(Date.now() - before >= 35, "the deadline waited for the grace period");
+  assert.equal((await runs.get(enq.id))?.status, "pending");
+});
+
+test("restarting a worker after a handoff gives its next turn fresh, unaborted handoff signals", async () => {
+  const { runs } = createMemoryRunStore();
+  const sessions = createMemorySessionStore();
+  await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 });
+  const seen: boolean[] = [];
+  let resolveSecond: () => void = () => {};
+  const second = new Promise<void>((r) => {
+    resolveSecond = r;
+  });
+  const orchestrator = {
+    async handleTurn(input: OrchestratorInput) {
+      seen.push(input.handoff!.aborted);
+      if (seen.length === 1) {
+        await new Promise<void>((resolve) => input.handoff!.addEventListener("abort", () => resolve(), { once: true }));
+        throw new TurnHandedOff();
+      }
+      resolveSecond();
+      return { status: "ok", reply: "finished" };
+    },
+  } as unknown as Orchestrator;
+  const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+  worker.start();
+  await sleep(30);
+  worker.requestHandoff(60_000);
+  await worker.drained();
+  worker.start();
+  await second;
+  await worker.stop();
+  assert.deepEqual(seen, [false, false], "neither turn started with a pre-aborted handoff signal");
 });

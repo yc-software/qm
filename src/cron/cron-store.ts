@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   Cron,
   CronFireLogEntry,
@@ -83,7 +84,7 @@ export interface CronStore {
   due(now: number): Promise<Array<Cron & { scheduledAt: number }>>;
 }
 
-export function isDeferred(cron: Pick<Cron, "deferUntil">, now: number): boolean {
+function isDeferred(cron: Pick<Cron, "deferUntil">, now: number): boolean {
   return cron.deferUntil !== undefined && now < cron.deferUntil;
 }
 
@@ -120,6 +121,7 @@ export function createCronStore(
       ]);
       return createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
+        workflowRevision: randomUUID(),
         schedule,
         ...(nextFireAt !== undefined ? { nextFireAt } : {}),
         ...(title ? { title } : {}),
@@ -135,6 +137,8 @@ export function createCronStore(
     list: () => backing.all(),
     async update(id, patch) {
       const fields: Partial<Cron> = {};
+      if (patch.schedule !== undefined || patch.enabled !== undefined || patch.archived !== undefined)
+        fields.workflowRevision = randomUUID();
       if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
       if (patch.action !== undefined) fields.action = patch.action;
       if (patch.message !== undefined) fields.message = patch.message;
@@ -154,7 +158,7 @@ export function createCronStore(
     },
     delete: (id) => backing.delete(id),
     async setEnabled(id, enabled) {
-      await backing.merge(id, { enabled, ...(enabled ? { archived: false } : {}) });
+      await backing.merge(id, { enabled, workflowRevision: randomUUID(), ...(enabled ? { archived: false } : {}) });
     },
     async setDestination(id, destination) {
       await backing.merge(id, { destination });

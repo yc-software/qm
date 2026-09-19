@@ -21,6 +21,32 @@ const turn: OrchestratorInput = {
 };
 const ok: TurnResult = { status: "ok", reply: "done" };
 
+test("legacy supersession requests one handoff per transition and permits rollback", async () => {
+  let superseded = false;
+  const transitions: boolean[] = [];
+  const drain = createDrainController({
+    registry: { beat: async () => superseded },
+    protection: null,
+    busy: () => true,
+    onSuperseded: (value) => transitions.push(value),
+    sweepMs: 5,
+  });
+  drain.start();
+  try {
+    await sleep(15);
+    superseded = true;
+    await sleep(25);
+    assert.equal(drain.canClaim(), false);
+    assert.deepEqual(transitions, [true]);
+    superseded = false;
+    await sleep(25);
+    assert.equal(drain.canClaim(), true);
+    assert.deepEqual(transitions, [true, false]);
+  } finally {
+    await drain.stop();
+  }
+});
+
 test("a superseded worker stops claiming; in-flight turns finish; claiming resumes when the newer build dies", async () => {
   const { runs } = createMemoryRunStore();
   const sessions = createMemorySessionStore();

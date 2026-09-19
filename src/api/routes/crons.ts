@@ -314,7 +314,8 @@ async function runCronNow(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: `cron ${id} is ${cron.archived ? "archived" : "paused"} — enable it before firing it on demand`,
     });
-  const result = await deps.scheduler.runNow(id);
+  const actorId = ctx.actor?.p ?? ctx.url.searchParams.get("principalId");
+  const result = await deps.scheduler.runNow(id, actorId ? { actorId, liveActor: !!ctx.actor?.p } : undefined);
   if (!result.started) {
     const refusal = describeRunNowRefusal(id, result)!;
     return sendJson(res, CRON_ERROR_STATUS[refusal.error] ?? 400, refusal);

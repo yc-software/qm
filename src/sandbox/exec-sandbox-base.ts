@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -10,7 +9,7 @@ import { materializeRoLayers } from "./ro-layers.ts";
 import type { LayerToolInstaller } from "./layer-tool-install.ts";
 import { posixJoin } from "./exec-file-ops.ts";
 import { ephemeralCredLinkScript, type CredentialPathSpec } from "../credentials/resident-paths.ts";
-import { killableScript, killScript } from "./exec-kill.ts";
+import { runKillable } from "./exec-kill.ts";
 import { execFailureDetail } from "./sandbox.ts";
 import type { ExecOptions, ExecResult, ProvisionOptions, SandboxHandle, TeardownOptions } from "./sandbox.ts";
 
@@ -38,6 +37,7 @@ export interface ExecSandboxBaseDeps {
   deleteFailureCode: string;
   onError?(e: { category: string; code: string; message: string; scopeLabel?: string }): void;
   exec(name: string, script: string, timeoutSec: number): Promise<ExecResult>;
+  cleanupExec?(name: string, script: string, timeoutSec: number): Promise<ExecResult>;
   writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void>;
   readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null>;
   ensureResident(name: string, onStatus?: (text: string) => void): Promise<{ coldStart: boolean }>;
@@ -203,22 +203,13 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
       .map(([k, v]) => `export ${k}=${shq(v)}`)
       .join("; ");
     const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-    const signal = execOpts?.signal;
-    if (!signal) return deps.exec(handle.id, script, timeoutSec);
-    const killUid = randomUUID();
-    const fireKill = () => {
-      deps
-        .exec(handle.id, killScript(killUid), 15)
-        .catch(swallowAs(`${label}-sandbox: kill in-flight exec`, undefined));
-    };
-    signal.throwIfAborted();
-    const onAbort = () => fireKill();
-    signal.addEventListener("abort", onAbort, { once: true });
-    try {
-      return await deps.exec(handle.id, killableScript(script, killUid), timeoutSec);
-    } finally {
-      signal.removeEventListener("abort", onAbort);
-    }
+    return runKillable(
+      (body, seconds) => deps.exec(handle.id, body, seconds),
+      script,
+      timeoutSec,
+      execOpts?.signal,
+      deps.cleanupExec ? (body, seconds) => deps.cleanupExec!(handle.id, body, seconds) : undefined,
+    );
   }
 
   return {

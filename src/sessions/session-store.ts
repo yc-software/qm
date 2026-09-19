@@ -79,7 +79,13 @@ export interface LeasePeek {
   heldUntil: number;
 }
 
+interface RunLeaseOwner {
+  runId: string;
+  runLeaseToken: string;
+}
+
 export interface AcquireLeaseWaitOptions {
+  run?: RunLeaseOwner;
   waitFor?: (heldBy: LeaseHolder | undefined) => boolean;
 }
 
@@ -98,7 +104,7 @@ export async function acquireLeaseWithin(
   let delay = LEASE_WAIT_MIN_DELAY_MS;
   for (;;) {
     const waitedMs = Date.now() - started;
-    const attempt = await sessions.acquireLease(sessionId, holder);
+    const attempt = await sessions.acquireLease(sessionId, holder, opts?.run);
     if (attempt.lease) return { ...attempt, waitedMs };
     if (attempt.heldUntil === undefined) return { ...attempt, waitedMs };
     if (opts?.waitFor && !opts.waitFor(attempt.heldBy)) return { ...attempt, waitedMs };
@@ -250,6 +256,7 @@ export async function appendEntryOutsideTurn(
 export const TAPE_IMPORT_MAX_ENTRIES = 500;
 
 export interface TapeMeta {
+  goal?: unknown;
   bareText?: string;
   ts?: string;
   changeTime?: string;
@@ -705,7 +712,7 @@ export interface SessionStore {
   ): Promise<void>;
 
   readonly leaseTtlMs: number;
-  acquireLease(sessionId: string, holder?: LeaseHolder): Promise<LeaseAttempt>;
+  acquireLease(sessionId: string, holder?: LeaseHolder, run?: RunLeaseOwner): Promise<LeaseAttempt>;
   peekLease(sessionId: string): Promise<LeasePeek | null>;
   renewLease(lease: Lease): Promise<boolean>;
   releaseLease(lease: Lease): Promise<void>;
@@ -713,6 +720,7 @@ export interface SessionStore {
 
   append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
+  findEntryByDeliveryKey(sessionId: string, key: string): Promise<SessionEntry | undefined>;
   getTranscriptEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;

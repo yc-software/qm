@@ -1,5 +1,4 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawnCaptured } from "../util/process.ts";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
@@ -8,6 +7,7 @@ import { isIP } from "node:net";
 import { errMessage } from "../util/errors.ts";
 import { isPrivateNetworkIp } from "../util/network.ts";
 import { isProbablyBinary } from "./seed.ts";
+import { assertOperationActive, getOperationSignal } from "../util/async.ts";
 import type { FetchedRepo, RepoFile } from "./ingest.ts";
 import type { SkillPack } from "./skill-pack-store.ts";
 
@@ -144,8 +144,6 @@ export async function resolvePackAuth(
 const SHA_RE = /^[0-9a-f]{7,40}$/;
 const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 
-const execFileP = promisify(execFile);
-
 function scrub(s: string, auth: GitAuth | undefined): string {
   return auth ? s.split(auth.secret).join("***").split(auth.value).join("***") : s;
 }
@@ -189,16 +187,17 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
     auth: GitAuth | undefined,
     config: Array<[string, string]> = [],
   ): Promise<string> {
+    assertOperationActive();
     try {
-      return (
-        await execFileP(gitBin, args, {
-          cwd,
-          env: gitEnv(cwd, auth, config),
-          timeout: timeoutMs,
-          killSignal: "SIGKILL",
-          maxBuffer: 64 * 1024 * 1024,
-        })
-      ).stdout;
+      const result = await spawnCaptured(gitBin, args, {
+        cwd,
+        env: gitEnv(cwd, auth, config),
+        timeoutMs,
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      if (result.code !== 0)
+        throw Object.assign(new Error(`git ${args[0]} failed (${result.code}): ${result.stderr}`), result);
+      return result.stdout;
     } catch (e) {
       if (e instanceof Error) {
         const failure = e as Error & { stdout?: unknown; stderr?: unknown };
@@ -217,6 +216,7 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
     let totalBytes = 0;
     const walk = async (absDir: string): Promise<void> => {
       for (const ent of await readdir(absDir, { withFileTypes: true })) {
+        assertOperationActive();
         if (ent.name === ".git") continue;
         if (ent.isSymbolicLink()) continue;
         const abs = join(absDir, ent.name);
@@ -226,7 +226,7 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
         }
         if (!ent.isFile()) continue;
         if (files.length >= maxFiles) throw new Error(`pack exceeds max files (${maxFiles})`);
-        const buf = await readFile(abs);
+        const buf = await readFile(abs, { signal: getOperationSignal() });
         totalBytes += buf.length;
         if (totalBytes > maxTotalBytes) throw new Error(`pack exceeds max bytes (${maxTotalBytes})`);
         const binary = isProbablyBinary(buf);

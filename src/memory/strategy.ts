@@ -1,6 +1,6 @@
 import type { ScopeId } from "../types.ts";
 import type { HarnessModelUtilities } from "../harness/harness.ts";
-import type { MemoryService } from "./memory-service.ts";
+import type { MemoryService, MemoryCaptureExecution } from "./memory-service.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createPerTurnStrategy } from "./strategies/per-turn.ts";
 import { createScratchPromote } from "./strategies/scratch-promote.ts";
@@ -12,18 +12,31 @@ import {
 import { createAgentOnlyStrategy } from "./strategies/agent-only.ts";
 
 export interface MemoryStrategy {
-  onTurnEnd?(ctx: {
-    scopeId: ScopeId;
-    input: string;
-    reply: string;
-    actorId?: string;
-    autonomous?: boolean;
-    conversationScopeId?: ScopeId;
-    conversationLabel?: string;
-    sessionId?: string;
-    idempotencyKey?: string;
-  }): Promise<void>;
-  maintain?(scopeId: ScopeId): Promise<void>;
+  captureBurst?(
+    ctx: MemoryCaptureExecution & {
+      scopeId: ScopeId;
+      conversationScopeId: ScopeId;
+      actorId?: string;
+      conversationLabel?: string;
+      sessionId?: string;
+      idempotencyKey?: string;
+      turns: Array<{ input: string; reply: string }>;
+    },
+  ): Promise<void>;
+  onTurnEnd?(
+    ctx: MemoryCaptureExecution & {
+      scopeId: ScopeId;
+      input: string;
+      reply: string;
+      actorId?: string;
+      autonomous?: boolean;
+      conversationScopeId?: ScopeId;
+      conversationLabel?: string;
+      sessionId?: string;
+      idempotencyKey?: string;
+    },
+  ): Promise<void>;
+  maintain?(scopeId: ScopeId, signal?: AbortSignal): Promise<void>;
   promptLines?(): string[];
 }
 

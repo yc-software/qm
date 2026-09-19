@@ -19,7 +19,7 @@ import {
 import type { DeployProfile, DeployProvider } from "./deploy-provider.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { createKeyedQueue } from "../util/async.ts";
+import { createKeyedQueue, assertOperationActive } from "../util/async.ts";
 import { errMessage, reportFailure, swallow } from "../util/errors.ts";
 
 export interface DeployFile {
@@ -80,13 +80,13 @@ export interface DeployService {
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
 
-  keepAlwaysOnWarm(): Promise<number>;
+  keepAlwaysOnWarm(signal?: AbortSignal): Promise<number>;
   reachDeployment(idOrName: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   /** Recent app output (entrypoint stdout+stderr) for a deployment, newest last; null when the provider keeps none. */
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
   gitRepoPath(idOrName: string): Promise<string | null>;
   pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>): Promise<T>;
-  reapIdleDeployments(ttlMs: number, now?: number): Promise<number>;
+  reapIdleDeployments(ttlMs: number, now?: number, signal?: AbortSignal): Promise<number>;
   deployOrUpdate(input: DeployOrUpdateInput): Promise<Deployment>;
   deploymentGrantees(idOrName: string): Promise<DeploymentGrantee[]>;
   canManageDeployment(idOrName: string, callerId: string, actingScopeId?: ScopeId): Promise<boolean>;
@@ -156,7 +156,13 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   const advisoryLock = deps.advisoryLock ?? createNoopAdvisoryLock();
   const deployQueue = createKeyedQueue();
   function withDeployLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
-    return deployQueue(id, () => advisoryLock.withLock(`deploy:${id}`, fn));
+    return deployQueue(id, () => {
+      assertOperationActive();
+      return advisoryLock.withLock(`deploy:${id}`, () => {
+        assertOperationActive();
+        return fn();
+      });
+    });
   }
 
   const applyVersion = async (
@@ -168,6 +174,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     const stored = (await deps.deployStore.get(id))!;
     const d = alwaysOn === undefined ? stored : { ...stored, alwaysOn };
     const deploymentEnv = await deps.deploymentEnv?.(d);
+    assertOperationActive();
     if (deploymentEnv && Object.keys(deploymentEnv).length)
       version = { ...version, env: { ...version.env, ...deploymentEnv } };
     let endpoint: DeployEndpoint;
@@ -175,6 +182,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const diff = await deps.deployStore.diffVersions(id, fromVersion, version.version);
       const allPaths = ((await deps.deployStore.treeOf(id, version.version)) ?? []).map((f) => f.path);
       const gitBundle = await deps.deployStore.bundleOf(id, version.version);
+      assertOperationActive();
       endpoint = await deps.provider.reconcile(d, version, {
         ...(gitBundle ? { gitBundle } : {}),
         changedPaths: diff ? [...diff.added, ...diff.modified].map((f) => f.path) : allPaths,
@@ -188,6 +196,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (files == null) throw new Error(`cannot materialize deployment ${id} version ${version.version}`);
         materialized = { ...version, snapshotDir: await snapshotFiles(deps.deployDir, files) };
       }
+      assertOperationActive();
       endpoint = await deps.provider.apply(d, materialized);
     }
     if (alwaysOn !== undefined) await deps.deployStore.setAlwaysOn(id, alwaysOn);
@@ -204,10 +213,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   };
 
   const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint> => {
+    assertOperationActive();
     if (!deps.provider.resolveEndpoint || d.endpoint == null) return d.endpoint!;
     const version = currentVersionOf(d);
     if (!version) return d.endpoint;
     const resolved = await deps.provider.resolveEndpoint(d, version);
+    assertOperationActive();
     if (resolved) {
       if (!endpointsEqual(resolved, d.endpoint)) await deps.deployStore.setEndpoint(d.id, resolved);
       return resolved;
@@ -216,6 +227,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const cur = (await deps.deployStore.get(d.id)) ?? d;
       const v = currentVersionOf(cur) ?? version;
       const again = await deps.provider.resolveEndpoint!(cur, v);
+      assertOperationActive();
       if (again) {
         if (!endpointsEqual(again, cur.endpoint)) await deps.deployStore.setEndpoint(cur.id, again);
         return again;
@@ -538,13 +550,15 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async keepAlwaysOnWarm() {
+    async keepAlwaysOnWarm(signal) {
       const result = await leaderLease.hold("deployments:keep-warm", async () => {
         let warmed = 0;
         for (const d of await deps.deployStore.list()) {
+          if (signal?.aborted) break;
           if (!d.alwaysOn || d.status !== "running") continue;
           try {
             const cur = await deps.deployStore.get(d.id);
+            assertOperationActive();
             if (!cur?.alwaysOn || cur.status !== "running") continue;
             await liveEndpoint(cur);
             warmed++;
@@ -616,17 +630,19 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async reapIdleDeployments(ttlMs, now = Date.now()) {
+    async reapIdleDeployments(ttlMs, now = Date.now(), signal) {
       const result = await leaderLease.hold("deployments:reaper", async () => {
         if (deps.provider.profile.managedScaleToZero) return 0;
         let stopped = 0;
         for (const d of await deps.deployStore.list()) {
+          if (signal?.aborted) break;
           if (d.status !== "running") continue;
           if (d.alwaysOn) continue;
           const last = d.lastAccessAt ?? d.versions[d.versions.length - 1]?.createdAt ?? 0;
           if (now - last < ttlMs) continue;
           await withDeployLock(d.id, async () => {
             const cur = await deps.deployStore.get(d.id);
+            assertOperationActive();
             if (!cur || cur.status !== "running" || cur.alwaysOn) return;
             await deps.provider.destroy(cur);
             await deps.deployStore.setStatus(d.id, "stopped");

@@ -102,3 +102,15 @@ test("SDK file validation errors containing 404 are preserved", async (t) => {
   });
   await assert.rejects((await connect()).readFileBytes("/root/404"), { name: "ValidationError" });
 });
+
+test("command truncation preserves the original UTF-8 prefix across later chunks and terminal errors", async (t) => {
+  mockApi(t, () =>
+    stream([
+      { stdout: "漢漢", stderr: "漢漢" },
+      { stdout: "x", stderr: "y" },
+      { finished: true, exit_code: 7, error: "z" },
+    ]),
+  );
+  const result = await (await connect()).run("command", { maxOutputBytes: 4 });
+  assert.deepEqual(result, { stdout: "漢", stderr: "漢", exitCode: 7, truncated: true });
+});

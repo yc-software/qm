@@ -1,7 +1,7 @@
 import { assertPersonalConversationParity } from "./support/personal-conversation-parity.ts";
 import "./run-availability.ts";
 import { migrateTranscriptPage } from "../scripts/lib/transcript-tape-migration.ts";
-import { test, before } from "node:test";
+import { test, before, after } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
@@ -17,20 +17,19 @@ import { scopeId, type Principal, type TurnResult } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { byScopeId, rollupsFromSummaries } from "./support/scope-rollup-oracle.ts";
+import { isolatedPostgres } from "./support/isolated-postgres.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
+const baseUrl = process.env.DATABASE_URL;
+let URL: string | undefined;
+let isolated: Awaited<ReturnType<typeof isolatedPostgres>> | undefined;
+const skip = baseUrl ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
 
 before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query(
-    "DROP TABLE IF EXISTS sessions, session_entries, participants, session_leases, session_tape, session_llm_requests, session_pins, runs, tool_calls CASCADE",
-  );
-  await p.end();
+  if (!baseUrl) return;
+  isolated = await isolatedPostgres("store_test");
+  URL = isolated.url;
 });
+after(async () => isolated?.cleanup());
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn = (text: string): OrchestratorInput => ({
@@ -1318,56 +1317,68 @@ test("pg run store: the turn boundary is recorded once and survives a re-claim",
   }
 });
 
-test("pg run store: enqueue dedup, atomic one-per-session claim, fencing, ledger, reaper", { skip }, async () => {
-  const { runs, ledger, close } = createPostgresRunStore(URL!);
-  try {
-    const r1 = (await runs.enqueue({ sessionId: "sA", request: turn("1") })).run;
-    await runs.enqueue({ sessionId: "sA", request: turn("2") });
-    const rB = (await runs.enqueue({ sessionId: "sB", request: turn("b") })).run;
-    const first = await runs.claim("w1", 5_000);
-    assert.equal(first?.id, r1.id, "oldest pending claimed first");
-    const second = await runs.claim("w2", 5_000);
-    assert.equal(second?.id, rB.id, "sA already running → skip its 2nd, take sB");
-    assert.equal(await runs.claim("w3", 5_000), null, "nothing else eligible");
+test(
+  "pg run store: enqueue dedup, atomic one-per-session claim, fencing, ledger, native expiry",
+  { skip },
+  async () => {
+    const { runs, ledger, close } = createPostgresRunStore(URL!);
+    try {
+      const r1 = (await runs.enqueue({ sessionId: "sA", request: turn("1") })).run;
+      await runs.enqueue({ sessionId: "sA", request: turn("2") });
+      const rB = (await runs.enqueue({ sessionId: "sB", request: turn("b") })).run;
+      const first = await runs.claim("w1", 5_000);
+      assert.equal(first?.id, r1.id, "oldest pending claimed first");
+      const second = await runs.claim("w2", 5_000);
+      assert.equal(second?.id, rB.id, "sA already running → skip its 2nd, take sB");
+      assert.equal(await runs.claim("w3", 5_000), null, "nothing else eligible");
 
-    assert.equal(
-      await runs.complete(first!.id, "wrong", { status: "ok" } as TurnResult),
-      false,
-      "fenced token can't complete",
-    );
-    assert.equal((await runs.get(first!.id))?.status, "running");
-    assert.equal(await runs.complete(first!.id, first!.leaseToken!, { status: "ok", reply: "done" }), true);
-    assert.equal((await runs.get(first!.id))?.status, "done");
+      assert.equal(
+        await runs.complete(first!.id, "wrong", { status: "ok" } as TurnResult),
+        false,
+        "fenced token can't complete",
+      );
+      assert.equal((await runs.get(first!.id))?.status, "running");
+      assert.equal(await runs.complete(first!.id, first!.leaseToken!, { status: "ok", reply: "done" }), true);
+      assert.equal((await runs.get(first!.id))?.status, "done");
 
-    const a = await runs.enqueue({ sessionId: "s1", request: turn("hi"), dedupKey: "k1" });
-    const b = await runs.enqueue({ sessionId: "s1", request: turn("again"), dedupKey: "k1" });
-    assert.equal(b.deduped, true);
-    assert.equal(b.run.id, a.run.id);
+      const a = await runs.enqueue({ sessionId: "s1", request: turn("hi"), dedupKey: "k1" });
+      const b = await runs.enqueue({ sessionId: "s1", request: turn("again"), dedupKey: "k1" });
+      assert.equal(b.deduped, true);
+      assert.equal(b.run.id, a.run.id);
 
-    const N = 8;
-    const raced = await Promise.all(
-      Array.from({ length: N }, (_, i) => runs.enqueue({ sessionId: "s2", request: turn(`c${i}`), dedupKey: "kc" })),
-    );
-    const racedIds = new Set(raced.map((r) => r.run.id));
-    assert.equal(racedIds.size, 1, "all concurrent same-key enqueues return the same run");
-    assert.equal(raced.filter((r) => r.deduped === false).length, 1, "exactly one inserter");
-    assert.equal(raced.filter((r) => r.deduped === true).length, N - 1, "the rest are dedup hits");
+      const N = 8;
+      const raced = await Promise.all(
+        Array.from({ length: N }, (_, i) => runs.enqueue({ sessionId: "s2", request: turn(`c${i}`), dedupKey: "kc" })),
+      );
+      const racedIds = new Set(raced.map((r) => r.run.id));
+      assert.equal(racedIds.size, 1, "all concurrent same-key enqueues return the same run");
+      assert.equal(raced.filter((r) => r.deduped === false).length, 1, "exactly one inserter");
+      assert.equal(raced.filter((r) => r.deduped === true).length, N - 1, "the rest are dedup hits");
 
-    assert.equal((await ledger.begin("run1", 1, 0)).cached, false);
-    await ledger.record("run1", 1, 0, JSON.stringify({ ok: true }));
-    assert.deepEqual(JSON.parse((await ledger.begin("run1", 1, 0)).output ?? "null"), { ok: true });
-    assert.equal((await ledger.begin("run1", 2, 0)).cached, false, "attempt 2 call 0 is a fresh slot");
+      assert.equal((await ledger.begin("run1", 1, 0)).cached, false);
+      await ledger.record("run1", 1, 0, JSON.stringify({ ok: true }));
+      assert.deepEqual(JSON.parse((await ledger.begin("run1", 1, 0)).output ?? "null"), { ok: true });
+      assert.equal((await ledger.begin("run1", 2, 0)).cached, false, "attempt 2 call 0 is a fresh slot");
 
-    const r = (await runs.enqueue({ sessionId: "sR", request: turn("x"), maxAttempts: 3 })).run;
-    await runs.claim("dead", 1);
-    await new Promise((res) => setTimeout(res, 20));
-    const swept = await runs.reapExpired();
-    assert.ok(swept.requeued >= 1);
-    assert.equal((await runs.get(r.id))?.status, "pending");
-  } finally {
-    await close();
-  }
-});
+      const r = (await runs.enqueue({ sessionId: "sR", request: turn("x"), maxAttempts: 3 })).run;
+      const dead = await runs.claimById(r.id, "dead", 5_000);
+      const pg = (await import("pg")).default;
+      const raw = new pg.Pool({ connectionString: URL });
+      try {
+        await raw.query(
+          "UPDATE absurd.r_qm_runs SET claim_expires_at=absurd.current_time()-interval '1 second' WHERE run_id=$1",
+          [dead!.leaseToken],
+        );
+        await runs.claim("recovery", 5_000);
+        assert.equal((await runs.get(r.id))?.status, "pending");
+      } finally {
+        await raw.end();
+      }
+    } finally {
+      await close();
+    }
+  },
+);
 
 test("pg run store: duplicate enqueue never updates a protected run owner", { skip }, async () => {
   const first = createPostgresRunStore(URL!);
@@ -1534,75 +1545,54 @@ test("pg run store: delivery state round-trips; onTerminal fires once with it", 
   }
 });
 
-test("pg run store: reaper cannot clobber a run that completed or renewed its lease mid-sweep", { skip }, async () => {
+test("pg run store: native expiry cannot clobber a completed or renewed attempt", { skip }, async () => {
   const { runs, close } = createPostgresRunStore(URL!);
   try {
-    const retiredSessions: string[] = [];
-    const collect = async (ids: string[]): Promise<void> => {
-      retiredSessions.push(...ids);
-    };
-
     const completed = (await runs.enqueue({ sessionId: "sweepDone", request: turn("x") })).run;
     const claimedDone = await runs.claimById(completed.id, "w1", 1);
     assert.ok(claimedDone?.leaseToken);
     await new Promise((res) => setTimeout(res, 20));
     assert.equal(await runs.complete(completed.id, claimedDone!.leaseToken!, { status: "ok", reply: "won" }), true);
-    await runs.reapExpired(collect);
+    await runs.claim("expiry-check", 5_000);
     const done = await runs.get(completed.id);
     assert.equal(done?.status, "done", "completed run is not flipped back to pending");
     assert.equal(done?.result?.reply, "won");
-    assert.ok(!retiredSessions.includes("sweepDone"), "a completed run's session is never released by the sweep");
 
     const renewed = (await runs.enqueue({ sessionId: "sweepAlive", request: turn("y") })).run;
     const claimedAlive = await runs.claimById(renewed.id, "w2", 1);
     assert.ok(claimedAlive?.leaseToken);
     await new Promise((res) => setTimeout(res, 20));
     assert.equal(await runs.heartbeat(renewed.id, claimedAlive!.leaseToken!, 60_000), true);
-    await runs.reapExpired(collect);
+    await runs.claim("expiry-check", 5_000);
     assert.equal((await runs.get(renewed.id))?.status, "running", "renewed lease survives the sweep");
-    assert.ok(!retiredSessions.includes("sweepAlive"), "a renewed run's session is never released by the sweep");
   } finally {
     await close();
   }
 });
 
-test("pg run store: reaper parks over-age runs, requeues young ones, and audits every reap", { skip }, async () => {
-  const { runs, close } = createPostgresRunStore(URL!);
+test("pg run store: native cancellation enforces age limits and records a terminal handoff", { skip }, async () => {
+  const runtime = createPostgresRunStore(URL!, { maxAgeMs: 1_000 });
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
   try {
-    type ReapEvent = import("../src/runs/run-store.ts").ReapEvent;
-
-    const old = (await runs.enqueue({ sessionId: "ageOld", request: turn("poison") })).run;
-    assert.ok((await runs.claimById(old.id, "wOld", 1))?.leaseToken);
-    await new Promise((res) => setTimeout(res, 20));
-    const oldEvents: ReapEvent[] = [];
-    const sweptOld = await runs.reapExpired(undefined, { maxAgeMs: 5, onReap: (e) => oldEvents.push(e) });
-    assert.equal(sweptOld.parked, 1, "an over-age run parks");
-    assert.equal(sweptOld.requeued, 0);
-    const parked = await runs.get(old.id);
-    assert.equal(parked?.status, "failed", "park is a loud terminal failure");
-    assert.match(parked?.result?.reason ?? "", /max age/);
-    assert.equal(parked?.errorAttempts, 0, "age-cap park does not spend the error budget");
-    const oldEv = oldEvents.find((e) => e.runId === old.id);
-    assert.equal(oldEv?.outcome, "parked");
-    assert.equal(oldEv?.sessionId, "ageOld");
-    assert.equal(oldEv?.workerId, "wOld");
-    assert.equal(oldEv?.attempts, 1);
-    assert.equal(oldEv?.errorAttempts, 0);
-
-    const young = (await runs.enqueue({ sessionId: "ageYoung", request: turn("normal") })).run;
-    assert.ok((await runs.claimById(young.id, "wYoung", 1))?.leaseToken);
-    await new Promise((res) => setTimeout(res, 20));
-    const youngEvents: ReapEvent[] = [];
-    const sweptYoung = await runs.reapExpired(undefined, { maxAgeMs: 600_000, onReap: (e) => youngEvents.push(e) });
-    assert.equal(sweptYoung.requeued, 1, "a young expired run requeues");
-    assert.equal(sweptYoung.parked, 0);
-    assert.equal((await runs.get(young.id))?.status, "pending");
-    const youngEv = youngEvents.find((e) => e.runId === young.id);
-    assert.equal(youngEv?.outcome, "requeued");
-    assert.equal(youngEv?.workerId, "wYoung");
-    assert.equal(youngEv?.errorAttempts, 0);
+    const old = (await runtime.runs.enqueue({ sessionId: "ageOld", request: turn("old") })).run;
+    await runtime.runs.claimById(old.id, "old", 5_000);
+    await raw.query(
+      "UPDATE absurd.t_qm_runs SET first_started_at=absurd.current_time()-interval '2 seconds' WHERE task_id=(SELECT workflow_task_id FROM runs WHERE id=$1)",
+      [old.id],
+    );
+    await runtime.runs.claim("age-check", 5_000);
+    const result = await runtime.runs.get(old.id);
+    assert.equal(result?.status, "failed");
+    assert.match(result?.result?.reason ?? "", /lifetime/);
+    assert.equal(result?.errorAttempts, 0);
+    assert.equal(
+      (await raw.query("SELECT count(*) FROM absurd.t_qm_handoffs WHERE params->>'runId'=$1", [old.id])).rows[0].count,
+      "1",
+    );
   } finally {
-    await close();
+    await runtime.close();
+    await raw.end();
   }
 });
 
@@ -1617,7 +1607,7 @@ test("pg run store: one-running-per-session holds under concurrent claims (uniqu
 
     await assert.rejects(
       raw.query("UPDATE runs SET status='running' WHERE id=$1", [r2.id]),
-      /idx_runs_one_running_per_session/,
+      /idx_runs_one_running_per_session|active durable workflow attempt/,
       "partial unique index blocks a second running row for the session",
     );
     assert.equal(await runs.claimById(r2.id, "w2", 60_000), null, "claimById refuses while a sibling runs");

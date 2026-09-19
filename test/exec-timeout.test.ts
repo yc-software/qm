@@ -3,14 +3,19 @@ import assert from "node:assert/strict";
 import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
 import { scopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { ExecOptions, ExecResult, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { withOperationSignal } from "../src/util/async.ts";
 
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
 
-function recordingSandbox(): { sandbox: Sandbox; lastOpts: () => ExecOptions | undefined } {
+function recordingSandbox(onRun?: (opts?: ExecOptions) => Promise<void>): {
+  sandbox: Sandbox;
+  lastOpts: () => ExecOptions | undefined;
+} {
   let captured: ExecOptions | undefined;
   const sandbox = {
     async run(_handle: SandboxHandle, command: string, opts?: ExecOptions): Promise<ExecResult> {
       captured = opts;
+      await onRun?.(opts);
       return { stdout: `ran ${command}`, stderr: "", code: 0, timedOut: false };
     },
   } as unknown as Sandbox;
@@ -80,9 +85,16 @@ test("with a ceiling but no default, an under-ceiling agent param passes through
 test("the per-turn abort signal plumbs through execute() into sandbox.run (alongside timeoutMs)", async () => {
   const { sandbox, lastOpts } = recordingSandbox();
   const ctx = ctxFor(sandbox, { execTimeoutMs: 120_000 });
-  const signal = new AbortController().signal;
-  await ctx.execute("sleep 9999", { signal });
-  assert.deepEqual(lastOpts(), { timeoutMs: 120_000, signal });
+  const controller = new AbortController();
+  await ctx.execute("sleep 9999", { signal: controller.signal });
+  const { signal, ...opts } = lastOpts()!;
+  assert.deepEqual(opts, { timeoutMs: 120_000 });
+  assert.ok(signal);
+  assert.equal(signal.aborted, false);
+  const reason = new Error("turn cancelled");
+  controller.abort(reason);
+  assert.equal(signal.aborted, true);
+  assert.equal(signal.reason, reason);
 });
 
 test("no timeout and no signal → no opts override leaks; a signal alone still plumbs through", async () => {
@@ -90,7 +102,52 @@ test("no timeout and no signal → no opts override leaks; a signal alone still 
   const ctx = ctxFor(sandbox);
   await ctx.execute("echo hi");
   assert.equal(lastOpts(), undefined);
-  const signal = new AbortController().signal;
-  await ctx.execute("echo hi", { signal });
-  assert.deepEqual(lastOpts(), { signal });
+  const controller = new AbortController();
+  await ctx.execute("echo hi", { signal: controller.signal });
+  const { signal, ...opts } = lastOpts()!;
+  assert.deepEqual(opts, {});
+  assert.ok(signal);
+  assert.equal(signal.aborted, false);
+  const reason = new Error("turn cancelled");
+  controller.abort(reason);
+  assert.equal(signal.aborted, true);
+  assert.equal(signal.reason, reason);
 });
+
+for (const scenario of [
+  { name: "the turn signal alone", turn: true, ambient: false, abort: "turn" },
+  { name: "the ambient signal alone", turn: false, ambient: true, abort: "ambient" },
+  { name: "the turn signal combined with an ambient signal", turn: true, ambient: true, abort: "turn" },
+  { name: "the ambient signal combined with a turn signal", turn: true, ambient: true, abort: "ambient" },
+] as const) {
+  test(`execute cancels in-flight sandbox work through ${scenario.name} and retains the timeout ceiling`, async () => {
+    const turn = new AbortController();
+    const ambient = new AbortController();
+    const entered = Promise.withResolvers<ExecOptions | undefined>();
+    const { sandbox } = recordingSandbox(async (opts) => {
+      entered.resolve(opts);
+      assert.ok(opts?.signal);
+      const signal = opts.signal;
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    });
+    const ctx = ctxFor(sandbox, { execTimeoutMs: 120_000, execTimeoutCeilingMs: 300_000 });
+    const reason = new Error(`${scenario.abort} cancelled`);
+    const running = withOperationSignal(scenario.ambient ? ambient.signal : undefined, () =>
+      ctx.execute("sleep 9999", { timeoutSeconds: 400, ...(scenario.turn ? { signal: turn.signal } : {}) }),
+    );
+    const rejected = assert.rejects(running, (error) => error === reason);
+    const { signal, ...opts } = (await entered.promise)!;
+    assert.deepEqual(opts, { timeoutMs: 300_000 });
+    assert.ok(signal);
+    assert.equal(signal.aborted, false);
+    const aborted = scenario.abort === "turn" ? turn : ambient;
+    const remaining = scenario.abort === "turn" ? ambient : turn;
+    aborted.abort(reason);
+    await rejected;
+    assert.equal(signal.aborted, true);
+    assert.equal(signal.reason, reason);
+    assert.equal(remaining.signal.aborted, false);
+  });
+}

@@ -1,4 +1,5 @@
 import { resolveModalImage } from "./modal-image.ts";
+import { assertOperationActive, getOperationSignal } from "../util/async.ts";
 
 export interface ModalCommandResult {
   stdout: string;
@@ -123,6 +124,21 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
     const client = new sdk.ModalClient({
       tokenId: opts.tokenId,
       tokenSecret: opts.tokenSecret,
+      grpcMiddleware: [
+        async function* (call, options) {
+          assertOperationActive();
+          const signal = getOperationSignal();
+          return yield* call.next(
+            call.request,
+            signal
+              ? {
+                  ...options,
+                  signal: options.signal ? AbortSignal.any([options.signal, signal]) : signal,
+                }
+              : options,
+          );
+        },
+      ],
       ...(opts.environment ? { environment: opts.environment } : {}),
     });
     const app = await client.apps.fromName(opts.appName, { createIfMissing: true });
@@ -135,14 +151,38 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       throw e;
     }));
 
+  async function useSandbox<T>(original: SdkSandbox, work: (sandbox: SdkSandbox) => Promise<T>): Promise<T> {
+    const signal = getOperationSignal();
+    signal?.throwIfAborted();
+    if (!signal) return work(original);
+    const { client } = await loadCtx();
+    const sandbox = await client.sandboxes.fromId(original.sandboxId);
+    const abort = () => sandbox.detach();
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      signal.throwIfAborted();
+      const value = await work(sandbox);
+      signal.throwIfAborted();
+      return value;
+    } catch (error) {
+      signal.throwIfAborted();
+      throw error;
+    } finally {
+      signal.removeEventListener("abort", abort);
+      sandbox.detach();
+    }
+  }
+
   const wrap = (sbx: SdkSandbox): ModalSession => ({
     sandboxId: sbx.sandboxId,
     async runCommand(command, runOpts): Promise<ModalCommandResult> {
       const timeoutMs = runOpts?.timeoutMs ?? maxCommandMs;
       try {
-        const p = await sbx.exec(["sh", "-c", command], { mode: "text", timeoutMs: timeoutMs + 30_000 });
-        const [stdout, stderr, exitCode] = await Promise.all([p.stdout.readText(), p.stderr.readText(), p.wait()]);
-        return { stdout, stderr, exitCode };
+        return await useSandbox(sbx, async (sandbox) => {
+          const p = await sandbox.exec(["sh", "-c", command], { mode: "text", timeoutMs: timeoutMs + 30_000 });
+          const [stdout, stderr, exitCode] = await Promise.all([p.stdout.readText(), p.stderr.readText(), p.wait()]);
+          return { stdout, stderr, exitCode };
+        });
       } catch (err) {
         if (isDeadlineError(err)) return { stdout: "", stderr: errText(err), exitCode: 124 };
         if (isSandboxGoneError(err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err));
@@ -151,7 +191,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
     },
     async readFileBytes(absPath): Promise<Uint8Array | null> {
       try {
-        return await sbx.filesystem.readBytes(absPath);
+        return await useSandbox(sbx, (sandbox) => sandbox.filesystem.readBytes(absPath));
       } catch (err) {
         if (isSandboxGoneError(err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err));
         if (isFileNotFoundError(err)) return null;
@@ -160,7 +200,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
     },
     async writeFileBytes(absPath, data): Promise<void> {
       try {
-        await sbx.filesystem.writeBytes(data, absPath);
+        await useSandbox(sbx, (sandbox) => sandbox.filesystem.writeBytes(data, absPath));
       } catch (err) {
         if (isSandboxGoneError(err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err));
         throw err;
@@ -168,15 +208,18 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
     },
     async snapshotHome() {
       const expiresAtMs = Date.now() + snapshotRetentionMs;
-      const image = await sbx.snapshotDirectory("/root", { ttlMs: snapshotRetentionMs, timeoutMs: 600_000 });
+      const image = await useSandbox(sbx, (sandbox) =>
+        sandbox.snapshotDirectory("/root", { ttlMs: snapshotRetentionMs, timeoutMs: 600_000 }),
+      );
       return { imageId: image.imageId, expiresAtMs };
     },
     async restoreHome(imageId): Promise<void> {
       const { client } = await loadCtx();
-      await sbx.mountImage("/root", await client.images.fromId(imageId));
+      const image = await client.images.fromId(imageId);
+      await useSandbox(sbx, (sandbox) => sandbox.mountImage("/root", image));
     },
     async terminate(): Promise<void> {
-      await sbx.terminate().catch((err) => {
+      await useSandbox(sbx, (sandbox) => sandbox.terminate()).catch((err) => {
         if (!isSandboxGoneError(err)) throw err;
       });
     },

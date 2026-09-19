@@ -5,6 +5,7 @@ import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { processIsGone } from "../sandbox/process-poll.ts";
 import type { ProcessSandbox } from "../sandbox/sandbox.ts";
 import { errMessage } from "../util/errors.ts";
+import { assertOperationActive } from "../util/async.ts";
 
 const PROCESS_REAPER_LEASE_KEY = "processes:reaper";
 
@@ -25,9 +26,11 @@ export function createReaperKillHook(
       rec.sandboxId ? { sandboxId: rec.sandboxId } : undefined,
     );
     try {
+      assertOperationActive();
       await sandbox.signalProcess(handle, rec.processId, "TERM");
       let status = await awaitProcessExit(sandbox, handle, rec.processId, termGraceMs);
       if (status.state !== "exited") {
+        assertOperationActive();
         await sandbox.signalProcess(handle, rec.processId, "KILL");
         status = await awaitProcessExit(sandbox, handle, rec.processId, killGraceMs);
       }
@@ -55,10 +58,11 @@ export interface ProcessReaperOptions {
 
 export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReaperOptions): ProcessReaper {
   const leaderLease = opts.leaderLease ?? createNoopLeaderLease();
-  async function sweep(): Promise<{ reaped: number }> {
+  async function sweep(signal?: AbortSignal): Promise<{ reaped: number }> {
     const expired = await registry.listExpired();
     let reaped = 0;
     for (const rec of expired) {
+      if (signal?.aborted) break;
       if (opts.kill) {
         try {
           await opts.kill(rec);
@@ -66,6 +70,7 @@ export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReap
           continue;
         }
       }
+      assertOperationActive();
       const flipped = await registry.markStatus(rec.processId, "reaped");
       if (!flipped) continue;
       reaped++;
@@ -77,7 +82,10 @@ export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReap
     return { reaped };
   }
 
-  const sweeper = createSweeper(() => leaderLease.hold(PROCESS_REAPER_LEASE_KEY, sweep), opts.intervalMs);
+  const sweeper = createSweeper(
+    (signal) => leaderLease.hold(PROCESS_REAPER_LEASE_KEY, () => sweep(signal)),
+    opts.intervalMs,
+  );
   return {
     start: () => sweeper.start(),
     stop: () => sweeper.stop(),

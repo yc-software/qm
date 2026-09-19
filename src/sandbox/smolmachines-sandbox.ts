@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { sleep } from "../util/async.ts";
+import { sleep, assertOperationActive, getOperationSignal } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
@@ -76,6 +76,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   const idByName = new Map<string, string>();
 
   async function api(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<Response> {
+    assertOperationActive();
     const res = await fetchImpl(`${baseUrl}${path}`, {
       method,
       headers: {
@@ -83,7 +84,10 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.any([
+        AbortSignal.timeout(timeoutMs),
+        ...(getOperationSignal() ? [getOperationSignal()!] : []),
+      ]),
     });
     return res;
   }
@@ -203,6 +207,21 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   const filesUrl = (id: string, absPath: string): string =>
     `/v1/machines/${encodeURIComponent(id)}/files${absPath.split("/").map(encodeURIComponent).join("/")}`;
 
+  async function cleanupExec(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
+    const id = idByName.get(name);
+    if (!id) return { code: 0, stdout: "", stderr: "", timedOut: false };
+    const response = await api(
+      "POST",
+      `/v1/machines/${encodeURIComponent(id)}/exec`,
+      { command: ["sh", "-c", script], timeoutSeconds: timeoutSec },
+      timeoutSec * 1000,
+    );
+    if (response.status === 404) return { code: 0, stdout: "", stderr: "", timedOut: false };
+    if (!response.ok) throw new Error(`smolmachines cleanup ${id}: http ${response.status}`);
+    const result = (await response.json()) as MachineExecResponse;
+    return { code: result.exitCode, stdout: result.stdout, stderr: result.stderr, timedOut: false };
+  }
+
   async function readSpooled(name: string, absPath: string, declared: number): Promise<Buffer> {
     const data = await readAbsBytes(name, absPath);
     if (!data || data.length !== declared) {
@@ -283,7 +302,10 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       method: "PUT",
       headers: { authorization: `Bearer ${opts.token ?? ""}`, "content-type": "application/octet-stream" },
       body: Buffer.from(data),
-      signal: AbortSignal.timeout(FILE_TRANSFER_TIMEOUT_MS),
+      signal: AbortSignal.any([
+        AbortSignal.timeout(FILE_TRANSFER_TIMEOUT_MS),
+        ...(getOperationSignal() ? [getOperationSignal()!] : []),
+      ]),
     });
     if (!res.ok) {
       throw new Error(`smolmachines write ${absPath}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
@@ -294,7 +316,10 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     const id = await machineIdFor(name);
     const res = await fetchImpl(`${baseUrl}${filesUrl(id, absPath)}`, {
       headers: { authorization: `Bearer ${opts.token ?? ""}` },
-      signal: AbortSignal.timeout(FILE_TRANSFER_TIMEOUT_MS),
+      signal: AbortSignal.any([
+        AbortSignal.timeout(FILE_TRANSFER_TIMEOUT_MS),
+        ...(getOperationSignal() ? [getOperationSignal()!] : []),
+      ]),
     });
     if (res.status === 404) return null;
     if (!res.ok) {
@@ -315,6 +340,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     deleteFailureCode: "machine_delete_failed",
     onError: opts.onError,
     exec: execRaw,
+    cleanupExec,
     writeAbsBytes,
     readAbsBytes,
     async ensureResident(name, onStatus) {

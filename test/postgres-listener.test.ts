@@ -1,12 +1,21 @@
-import { test } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
 import { subscribePostgresChannel } from "../src/persistence/postgres-listener.ts";
 import { createPostgresNotifyBus } from "../src/persistence/postgres-notify-bus.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { isolatedPostgres } from "./support/isolated-postgres.ts";
 
-const url = process.env.DATABASE_URL;
-const skip = !url;
+const baseUrl = process.env.DATABASE_URL;
+let url: string | undefined;
+let isolated: Awaited<ReturnType<typeof isolatedPostgres>> | undefined;
+const skip = !baseUrl;
+before(async () => {
+  if (!baseUrl) return;
+  isolated = await isolatedPostgres("listener_test");
+  url = isolated.url;
+});
+after(async () => isolated?.cleanup());
 async function until(check: () => boolean | Promise<boolean>) {
   const deadline = Date.now() + 8_000;
   while (!(await check())) {

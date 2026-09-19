@@ -2,11 +2,17 @@ import { relative } from "node:path";
 import type { ScopeId } from "../../types.ts";
 import type { HarnessModelUtilities } from "../../harness/harness.ts";
 import type { WorkspaceStore } from "../../workspace/workspace-store.ts";
-import { type MemoryService, ccCaptureToPersonal } from "../memory-service.ts";
+import { type MemoryService, ccCaptureToPersonal, memoryCaptureStep } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
 import { bullets, capTail, dateStr, normalize } from "../notebook.ts";
-import { type Burst, createBurstBuffer, DEFAULT_CAPTURE_MAX_TURNS, extractFacts } from "./per-turn.ts";
-import { createKeyedQueue } from "../../util/async.ts";
+import {
+  type Burst,
+  burstCaptureContext,
+  createBurstBuffer,
+  DEFAULT_CAPTURE_MAX_TURNS,
+  extractFacts,
+} from "./per-turn.ts";
+import { createKeyedQueue, withAbort } from "../../util/async.ts";
 
 const LOG_DIR = "memory/log";
 const LOG_RETENTION_DAYS = 14;
@@ -128,33 +134,45 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
       return parts.join("\n\n");
     },
 
-    async capture(scopeId, facts, at) {
-      return perScope(scopeId, async () => {
-        const clean = facts.map((f) => f.replace(/\s+/g, " ").trim()).filter(Boolean);
-        if (!clean.length) return 0;
-        const path = logPath(at);
-        const existing = (await workspace.read(scopeId, path)) ?? "";
-        const seen = new Set(bullets(existing).map(normalize));
-        const date = dateStr(at);
-        const added: string[] = [];
-        for (const f of clean) {
-          const key = normalize(f);
-          if (!key || seen.has(key)) continue;
-          seen.add(key);
-          added.push(`- (${date}) ${f}`);
-        }
-        if (!added.length) return 0;
-        const body = existing.trim()
-          ? `${existing.replace(/\s+$/, "")}\n${added.join("\n")}`
-          : `# Scratch log ${date}\n\n${added.join("\n")}`;
-        await workspace.write(scopeId, path, `${body}\n`);
-
-        const count = await bumpMarker(scopeId, added.length);
-        if (deps.consolidateAfter > 0 && count >= deps.consolidateAfter) {
-          await strategy.maintain!(scopeId).catch(() => {});
-        }
-        return added.length;
-      });
+    async capture(scopeId, facts, at, _author, context) {
+      const appended = await memoryCaptureStep(context ?? {}, `scratch:${scopeId}:append`, () =>
+        perScope(scopeId, async () => {
+          context?.signal?.throwIfAborted();
+          const clean = facts.map((f) => f.replace(/\s+/g, " ").trim()).filter(Boolean);
+          if (!clean.length) return { added: 0, count: 0 };
+          const path = logPath(at);
+          const existing = (await workspace.read(scopeId, path)) ?? "";
+          const seen = new Set(bullets(existing).map(normalize));
+          const date = dateStr(at);
+          const added: string[] = [];
+          for (const f of clean) {
+            const key = normalize(f);
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            added.push(`- (${date}) ${f}`);
+          }
+          if (!added.length) {
+            const marker = (await base.read(scopeId)).match(MARKER_RE);
+            return { added: 0, count: marker ? Number(marker[1]) : 0 };
+          }
+          const body = existing.trim()
+            ? `${existing.replace(/\s+$/, "")}\n${added.join("\n")}`
+            : `# Scratch log ${date}\n\n${added.join("\n")}`;
+          context?.signal?.throwIfAborted();
+          await workspace.write(scopeId, path, `${body}\n`);
+          const count = await bumpMarker(scopeId, added.length);
+          return { added: added.length, count };
+        }),
+      );
+      if (deps.consolidateAfter > 0 && appended.count >= deps.consolidateAfter)
+        await memoryCaptureStep(context ?? {}, `scratch:${scopeId}:promote`, () =>
+          perScope(scopeId, () =>
+            strategy.maintain!(scopeId, context?.signal).catch(() => {
+              context?.signal?.throwIfAborted();
+            }),
+          ),
+        );
+      return appended.added;
     },
 
     async query(scopeId, q, limit = 20) {
@@ -173,14 +191,24 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
   };
 
   async function flushBurst(burst: Burst): Promise<void> {
-    const facts = await extractFacts(deps.harness, burst.turns);
+    const { facts, at } = await memoryCaptureStep(burst, "facts", async () => ({
+      facts: await extractFacts(deps.harness, burst.turns, burst.signal),
+      at: Date.now(),
+    }));
     if (!facts.length) return;
-    const at = Date.now();
-    await memory.capture(burst.scopeId, facts, at);
-    await ccCaptureToPersonal(memory, burst.conversationScopeId, burst.actorId, facts, at, burst.conversationLabel);
+    await memoryCaptureStep(burst, "scope", () =>
+      memory.capture(burst.scopeId, facts, at, burst.actorId, burstCaptureContext(burst)),
+    );
+    await memoryCaptureStep(burst, "personal", () =>
+      ccCaptureToPersonal(memory, burst.conversationScopeId, burst.actorId, facts, at, burst.conversationLabel, {
+        ...burstCaptureContext(burst),
+        ...(burst.idempotencyKey ? { idempotencyKey: `${burst.idempotencyKey}:personal` } : {}),
+      }),
+    );
   }
 
   const strategy: MemoryStrategy = {
+    captureBurst: flushBurst,
     onTurnEnd: createBurstBuffer(
       deps.captureQuietMs ?? 0,
       deps.captureMaxTurns ?? DEFAULT_CAPTURE_MAX_TURNS,
@@ -188,7 +216,8 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
       (e, burst) => deps.onCaptureError?.(e, burst.scopeId),
     ),
 
-    async maintain(scopeId) {
+    async maintain(scopeId, signal) {
+      signal?.throwIfAborted();
       const now = Date.now();
       const window = await readLogWindow(scopeId, now, LOG_RETENTION_DAYS);
       if (window.length && deps.harness.oneShot) {
@@ -197,10 +226,20 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
         const longTerm = stripMarker(raw);
         const scratch = window.map(({ date, body }) => `## ${date}\n${body}`).join("\n\n");
         const out = (
-          (await deps.harness
-            .oneShot(PROMOTION_PROMPT, `Current notebook:\n${longTerm || "(empty)"}\n\nScratch log:\n${scratch}`)
-            .catch(() => "")) ?? ""
+          (await withAbort(
+            () =>
+              deps.harness.oneShot!(
+                PROMOTION_PROMPT,
+                `Current notebook:\n${longTerm || "(empty)"}\n\nScratch log:\n${scratch}`,
+                signal,
+              ),
+            signal,
+          ).catch(() => {
+            signal?.throwIfAborted();
+            return "";
+          })) ?? ""
         ).trim();
+        signal?.throwIfAborted();
         const promoted = out && out.length <= MAX_PROMOTED_NOTEBOOK_CHARS && !/^none$/i.test(out);
         const next = promoted ? out : longTerm;
         if (head) {
@@ -211,6 +250,7 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
       }
       const cutoff = dateStr(now - LOG_RETENTION_DAYS * 86_400_000);
       for (const abs of await workspace.list(scopeId)) {
+        signal?.throwIfAborted();
         const rel = relative(workspace.scopeDir(scopeId), abs);
         const m = rel.match(/^memory\/log\/(\d{4}-\d\d-\d\d)\.md$/);
         if (m && m[1]! < cutoff) await workspace.remove(scopeId, rel);

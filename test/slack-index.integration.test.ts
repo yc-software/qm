@@ -1616,10 +1616,10 @@ test("a non-singleton account still serves turns but runs no core-singleton subs
   }
 });
 
-test("the default account keeps every core-singleton subsystem", async () => {
+test("the default account keeps context feeds without a competing delivery poller", async () => {
   const f = await fixture();
   try {
-    assert.equal(f.core.deliverySubscriptions, 1);
+    assert.equal(f.core.deliverySubscriptions, 0);
     assert.equal(f.core.contextSubscriptions, 1);
     assert.equal(f.core.modelChangeListeners.length, 1);
     assert.equal(f.core.headerPinChangeListeners.length, 1);

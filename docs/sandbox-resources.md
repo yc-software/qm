@@ -8,6 +8,8 @@ Before activation, agents have `execute`, `background`, and `sandbox` with `stat
 
 The initial agent interface restricts inventory and operations to the current owning scope, in addition to actor authorization. It does not yet offer cross-conversation access to every resource a person can access. Provider-native recovery status includes its own expiry; a sandbox record is not an indefinite backup guarantee.
 
+Sandbox images must provide `setsid` from `util-linux` on the command path. Core runs cancellable commands in their own process group so a handoff can stop their child processes. QM's image recipes install or verify this dependency at build time. For custom images and externally managed templates, run `setsid --wait true` in the image before enabling it; missing `setsid` prevents command execution. Updating core does not install packages in existing sandboxes.
+
 ## Agent actions
 
 | Action              | Parameters                                                                                                  |

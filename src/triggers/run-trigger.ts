@@ -19,6 +19,7 @@ import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts"
 import type { DirectoryStore } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
+import type { DurableTaskContext } from "../durable/tasks.ts";
 
 const MEMBERSHIP_SKIP_NOTE = "the acting person is no longer a member of this trigger's home scope — run skipped";
 const UNKNOWN_HOME_SKIP_NOTE =
@@ -158,6 +159,27 @@ async function actorMayReadScope(
   return { ok: false, note: MEMBERSHIP_SKIP_NOTE };
 }
 
+async function triggerHomeAccess(
+  deps: TriggerDeps,
+  actorId: string,
+  ownerScopeId: ScopeId,
+  currentMembers: Principal[] | undefined,
+): Promise<{ ok: boolean; note?: string }> {
+  if (currentMembers !== undefined)
+    return currentMembers.some((member) => samePerson(member.id, actorId))
+      ? { ok: true }
+      : { ok: false, note: MEMBERSHIP_SKIP_NOTE };
+  if (!deps.directory) return { ok: true };
+  const { kind, ref } = parseScopeId(ownerScopeId);
+  return actorMayReadScope(deps, actorId, kind, ref, ownerScopeId, deps.currentScopeMembers !== undefined);
+}
+
+export async function triggerOwnerMayAct(deps: TriggerDeps, ownerId: string, ownerScopeId: ScopeId): Promise<boolean> {
+  await deps.identity.refresh();
+  if (deps.identity.classify(ownerId).type !== "internal") return false;
+  return (await triggerHomeAccess(deps, ownerId, ownerScopeId, await deps.currentScopeMembers?.(ownerScopeId))).ok;
+}
+
 export async function destinationVisible(
   deps: TriggerDeps,
   actorId: string,
@@ -175,7 +197,13 @@ export async function destinationVisible(
   return true;
 }
 
-export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<TriggerOutcome> {
+export async function runTrigger(
+  deps: TriggerDeps,
+  spec: TriggerSpec,
+  context?: DurableTaskContext,
+): Promise<TriggerOutcome> {
+  const step = <T>(name: string, work: () => Promise<T>): Promise<T> =>
+    context ? context.step(`${spec.fireKey}:${name}`, work) : work();
   await deps.identity.refresh();
   const isScopeFloor = spec.runAs === "scopeFloor";
   const isScopeShared = spec.runAs === "scopeShared";
@@ -218,23 +246,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     };
   }
 
-  let homeAccess: { ok: boolean; note?: string };
-  if (currentMembers !== undefined) {
-    homeAccess = currentMembers.some((member) => samePerson(member.id, actorId))
-      ? { ok: true }
-      : { ok: false, note: MEMBERSHIP_SKIP_NOTE };
-  } else if (!deps.directory) {
-    homeAccess = { ok: true };
-  } else {
-    homeAccess = await actorMayReadScope(
-      deps,
-      actorId,
-      ownerKind,
-      ownerRef,
-      spec.ownerScopeId,
-      deps.currentScopeMembers !== undefined,
-    );
-  }
+  const homeAccess = await triggerHomeAccess(deps, actorId, spec.ownerScopeId, currentMembers);
   const destinationIsHome = spec.destination?.audienceScopeId === spec.ownerScopeId;
   const deliverable = spec.destination
     ? (destinationIsHome && homeAccess.ok) || (await destinationVisible(deps, actorId, spec.destination))
@@ -243,7 +255,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   const requiredRecipient = consentRequiredRecipient({
     owner: spec.owner,
     standing: spec.recipientConsentRequired === true,
-    destination: spec.destination,
+    destination: spec.destination!,
   });
   const consented = recipientConsentSatisfied(spec, requiredRecipient);
   const consentNote =
@@ -258,49 +270,55 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let reply: string | undefined;
   let sessionId: string | undefined;
   const ownerSkipNotice = async () => {
-    await deps.deliveries.enqueue({
-      destination: principalDestination(spec.owner, spec.owner),
-      text: `Scheduled delivery skipped: ${consentNote}`,
-      idempotencyKey: `${spec.fireKey}:err`,
-      provenance: deliveryProvenance(spec, threadRef),
-      ...(spec.shadow ? { shadow: true } : {}),
-    });
+    await step("consent-notice", () =>
+      deps.deliveries.enqueue({
+        destination: principalDestination(spec.owner, spec.owner),
+        text: `Scheduled delivery skipped: ${consentNote}`,
+        idempotencyKey: `${spec.fireKey}:err`,
+        provenance: deliveryProvenance(spec, threadRef),
+        ...(spec.shadow ? { shadow: true } : {}),
+      }),
+    );
   };
   let deferred = false;
-  const ran = await deps.idempotency
-    .once(spec.fireKey, async () => {
+  const execute = async () => {
+    await step("claimed", async () => {
       await spec.onClaimed?.();
-      if (spec.message !== undefined) {
-        status = "ok";
-        if (!spec.destination) return;
-        if (!consented) {
-          status = "refused";
-          note = consentNote;
-          await ownerSkipNotice();
-          return;
-        }
-        if (!deliverable) {
-          status = "refused";
-          note = notVisibleNote;
-          return;
-        }
-        const attributeAs = await relayAttribution(deps, spec);
-        await reachEnqueue({
+    });
+    if (spec.message !== undefined) {
+      status = "ok";
+      if (!spec.destination) return;
+      if (!consented) {
+        status = "refused";
+        note = consentNote;
+        await ownerSkipNotice();
+        return;
+      }
+      if (!deliverable) {
+        status = "refused";
+        note = notVisibleNote;
+        return;
+      }
+      const attributeAs = await relayAttribution(deps, spec);
+      await step("delivery", () =>
+        reachEnqueue({
           deliveries: deps.deliveries,
-          destination: spec.destination,
-          text: spec.message,
+          destination: spec.destination!,
+          text: spec.message!,
           idempotencyKey: spec.fireKey,
           provenance: deliveryProvenance(spec, threadRef),
           ...(attributeAs ? { attributeAs } : {}),
           ...(spec.shadow ? { shadow: true } : {}),
-        });
-        return;
-      }
-      if (!homeAccess.ok) {
-        note = homeAccess.note ?? MEMBERSHIP_SKIP_NOTE;
-        return;
-      }
-      const res = await deps.run({
+        }),
+      );
+      return;
+    }
+    if (!homeAccess.ok) {
+      note = homeAccess.note ?? MEMBERSHIP_SKIP_NOTE;
+      return;
+    }
+    const res = await step("run", () =>
+      deps.run({
         surface: spec.surface,
         actor: { externalId: actorId },
         conversation,
@@ -317,53 +335,58 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
         ...(isScopeShared ? { ownerKeychainUnion: true } : {}),
         idempotencyKey: spec.fireKey,
-      });
-      if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();
-      status = res.status;
-      reply = res.reply;
-      sessionId = res.sessionId;
-      if (res.status === "silent") return;
-      if (res.status === "pending_approval") {
-        note = "hit a require_approval command — failed closed (no human at fire/event time)";
-        console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
+      }),
+    );
+    if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();
+    status = res.status;
+    reply = res.reply;
+    sessionId = res.sessionId;
+    if (res.status === "silent") return;
+    if (res.status === "pending_approval") {
+      note = "hit a require_approval command — failed closed (no human at fire/event time)";
+      console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
+      return;
+    }
+    if (res.status === "ok" && (res.reply || res.attachments?.length)) {
+      if (!spec.destination) return;
+      if (liveDelivery) return;
+      if (!consented) {
+        status = "refused";
+        note = consentNote;
+        await ownerSkipNotice();
         return;
       }
-      if (res.status === "ok" && (res.reply || res.attachments?.length)) {
-        if (!spec.destination) return;
-        if (liveDelivery) return;
-        if (!consented) {
-          status = "refused";
-          note = consentNote;
-          await ownerSkipNotice();
-          return;
-        }
-        if (!deliverable) {
-          status = "refused";
-          note = notVisibleNote;
-          return;
-        }
-        await reachEnqueue({
+      if (!deliverable) {
+        status = "refused";
+        note = notVisibleNote;
+        return;
+      }
+      await step("delivery", () =>
+        reachEnqueue({
           deliveries: deps.deliveries,
-          destination: spec.destination,
+          destination: spec.destination!,
           text: res.reply ?? "",
           ...(res.attachments?.length ? { attachments: res.attachments } : {}),
           idempotencyKey: spec.fireKey,
           provenance: deliveryProvenance(spec, threadRef, res),
           ...(spec.shadow ? { shadow: true } : {}),
-        });
-        return;
-      }
-      if (res.status === "ok") note = "produced no reply";
-      else {
-        note = res.reason ? `${res.status}: ${res.reason}` : res.status;
-        userNote = userFacingFailureClause(res);
-      }
-    })
-    .catch((e: unknown) => {
+        }),
+      );
+      return;
+    }
+    if (res.status === "ok") note = "produced no reply";
+    else {
+      note = res.reason ? `${res.status}: ${res.reason}` : res.status;
+      userNote = userFacingFailureClause(res);
+    }
+  };
+  const ran = await (context ? execute().then(() => true) : deps.idempotency.once(spec.fireKey, execute)).catch(
+    (e: unknown) => {
       if (!(e instanceof FireDeferred)) throw e;
       deferred = true;
       return false;
-    });
+    },
+  );
 
   const outcome: TriggerOutcome = {
     authzFailed: false,
@@ -377,13 +400,15 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   };
 
   if (spec.errorNotice && spec.destination && consented && deliverable && isTriggerFailure(outcome)) {
-    await deps.deliveries.enqueue({
-      destination: spec.destination,
-      text: spec.errorNotice(userNote ?? note ?? status!),
-      idempotencyKey: `${spec.fireKey}:err`,
-      provenance: deliveryProvenance(spec, threadRef),
-      ...(spec.shadow ? { shadow: true } : {}),
-    });
+    await step("error-delivery", () =>
+      deps.deliveries.enqueue({
+        destination: spec.destination!,
+        text: spec.errorNotice!(userNote ?? note ?? status!),
+        idempotencyKey: `${spec.fireKey}:err`,
+        provenance: deliveryProvenance(spec, threadRef),
+        ...(spec.shadow ? { shadow: true } : {}),
+      }),
+    );
   }
 
   return outcome;

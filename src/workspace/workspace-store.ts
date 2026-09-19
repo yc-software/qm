@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile, readdir, opendir, rm } from "node:fs/promises";
 import { join, resolve, relative, isAbsolute, dirname } from "node:path";
 import type { ScopeId } from "../types.ts";
+import { assertOperationActive, getOperationSignal } from "../util/async.ts";
 import { scopeStorageKey } from "../util/scope-storage-key.ts";
 
 export interface WorkspaceStore {
@@ -32,6 +33,7 @@ export function createLocalWorkspaceStore(rootDir: string): WorkspaceStore {
   const store: WorkspaceStore = {
     scopeDir,
     async ensureScope(scopeId) {
+      assertOperationActive();
       await mkdir(scopeDir(scopeId), { recursive: true });
     },
     async read(scopeId, relPath) {
@@ -52,10 +54,13 @@ export function createLocalWorkspaceStore(rootDir: string): WorkspaceStore {
     },
     async write(scopeId, relPath, data) {
       const path = safeJoin(scopeDir(scopeId), relPath);
+      assertOperationActive();
       await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, data);
+      assertOperationActive();
+      await writeFile(path, data, { signal: getOperationSignal() });
     },
     async remove(scopeId, relPath) {
+      assertOperationActive();
       await rm(safeJoin(scopeDir(scopeId), relPath), { force: true });
     },
     async list(scopeId, opts) {

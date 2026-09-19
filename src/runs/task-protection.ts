@@ -15,6 +15,7 @@ export function createEcsTaskProtection(agentUri: string, opts?: { fetchFn?: typ
         const res = await fetchFn(`${agentUri.replace(/\/$/, "")}/task-protection/v1/state`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
+          signal: AbortSignal.timeout(5_000),
           body: JSON.stringify(
             enabled
               ? { ProtectionEnabled: true, ExpiresInMinutes: PROTECTION_EXPIRES_MINUTES }

@@ -1,7 +1,7 @@
 import test from "node:test";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -507,4 +507,45 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
   assert.ok(sent.includes("DOCX-QUARTZ-731"));
   assert.ok(!JSON.stringify(tape).includes(pdf));
   assert.ok(!JSON.stringify(tape).includes("DOCX-QUARTZ-731"));
+});
+
+test("OpenCode persists native history before handing off a stalled prompt", { timeout: 5_000 }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-handoff-"));
+  const binaryPath = fakeSidecar(
+    dir,
+    "handoff",
+    `
+    if (req.method === "POST" && message) { await readBody(req); require("node:fs").writeFileSync(${JSON.stringify(join(dir, "prompt-started"))}, "yes"); return; }
+    if (req.method === "GET" && message) return json(res, [${okAssistant}]);
+  `,
+  );
+  const harness = createOpenCodeHarness({ binaryPath, turnWallClockMs: 0 });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const deadline = new AbortController();
+  const entries: SessionEntry[] = [];
+  const turn = turnInput(entries, []);
+  const tape: unknown[] = [];
+  turn.tape = async (row) => {
+    tape.push(row);
+  };
+  turn.handoff = AbortSignal.abort();
+  turn.handoffDeadline = deadline.signal;
+  const pending = harness.turns.runTurn(turn);
+  for (let attempt = 0; attempt < 200 && !existsSync(join(dir, "prompt-started")); attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(existsSync(join(dir, "prompt-started")), true);
+  deadline.abort();
+  {
+    const result = await pending;
+    assert.equal(result.handedOff, true);
+    assert.equal(result.stopped, undefined);
+    assert.equal(
+      entries.some((entry) => entry.type === "assistant"),
+      false,
+    );
+    assert.ok(tape.length > 0);
+  }
 });

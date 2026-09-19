@@ -294,6 +294,7 @@ export function createTurnMethods(
         modelAccount: origin.kind === "human" ? modelAccount : ("company" as const),
         text: req.text,
         ...(req.gatewayContext ? { gatewayContext: req.gatewayContext } : {}),
+        ...(req.slackDeliveryContext ? { slackDeliveryContext: req.slackDeliveryContext } : {}),
         ...(req.proactiveOpener ? { proactiveOpener: true } : {}),
         ...(req.analyticsSuppressed || (sameApprovedMessage && approvedRequest?.analyticsSuppressed)
           ? { analyticsSuppressed: true }

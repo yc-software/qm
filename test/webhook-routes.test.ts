@@ -17,6 +17,7 @@ const HOOK_SECRET = "hook-secret";
 
 function start(signingSecret?: string, publicUrl?: string): { base: string; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wh-")) }));
+  built.runtime.startBackground();
   const deps = { ...(publicUrl ? { publicUrl } : {}), webhookReceiver: built.webhookReceiver };
   const server = signingSecret
     ? createServer(built.app, { ...deps, signingSecret })
@@ -24,7 +25,10 @@ function start(signingSecret?: string, publicUrl?: string): { base: string; clos
   server.listen(0);
   return {
     base: `http://localhost:${(server.address() as AddressInfo).port}`,
-    close: () => new Promise<void>((r) => server.close(() => r())),
+    close: async () => {
+      await new Promise<void>((r) => server.close(() => r()));
+      await built.runtime.stop();
+    },
   };
 }
 

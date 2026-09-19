@@ -5,7 +5,6 @@ import { once } from "node:events";
 import { Readable } from "node:stream";
 import { join } from "node:path";
 import {
-  AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
@@ -19,7 +18,14 @@ import {
 } from "@aws-sdk/client-s3";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { asChunks, collectBytes, type ByteSource } from "../util/bytes.ts";
-import { bodyToReadable, isNoSuchKey, isNoSuchLifecycleConfiguration, s3Client, type S3Send } from "./s3.ts";
+import {
+  abortS3MultipartUpload,
+  bodyToReadable,
+  isNoSuchKey,
+  isNoSuchLifecycleConfiguration,
+  s3Client,
+  type S3Send,
+} from "./s3.ts";
 
 export const MAX_BLOB_BYTES = 1_000_000_000;
 export const MAX_STAGE_BLOB_BYTES = 12_000_000_000;
@@ -48,7 +54,7 @@ export interface BlobTransferStore {
   put(source: BlobSource, opts?: PutOptions): Promise<BlobInfo>;
   open(blobId: string): Promise<OpenBlob | null>;
   delete(blobId: string): Promise<void>;
-  sweep(maxAgeMs: number): Promise<number>;
+  sweep(maxAgeMs: number, signal?: AbortSignal): Promise<number>;
   ensureExpiry?(maxAgeDays: number): Promise<boolean>;
   s3Ref?(blobId: string): { bucket: string; key: string } | null;
 }
@@ -135,7 +141,7 @@ export function createLocalBlobTransferStore(dir: string): BlobTransferStore {
       await rm(join(dir, blobId), { force: true }).catch(swallowAs("blob-transfer: delete", undefined));
     },
 
-    async sweep(maxAgeMs) {
+    async sweep(maxAgeMs, signal) {
       const cutoff = Date.now() - maxAgeMs;
       let removed = 0;
       let names: string[];
@@ -145,9 +151,11 @@ export function createLocalBlobTransferStore(dir: string): BlobTransferStore {
         return 0;
       }
       for (const name of names) {
+        if (signal?.aborted) break;
         const path = join(dir, name);
         try {
           const st = await stat(path);
+          if (signal?.aborted) break;
           if (st.mtimeMs <= cutoff) {
             await rm(path, { force: true });
             removed++;
@@ -172,7 +180,7 @@ export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobT
   const bucket = options.bucket;
   const prefix = (options.prefix ?? "") + "transfer/";
   const keyFor = (blobId: string): string => prefix + blobId;
-  const client = options._client ?? s3Client(options.region);
+  const client = s3Client(options.region, options._client);
 
   return {
     s3Ref: (blobId) => (/^[0-9a-f]{32}$/.test(blobId) ? { bucket, key: keyFor(blobId) } : null),
@@ -255,13 +263,13 @@ export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobT
         }
       } catch (err) {
         if (uploadId) {
-          await client
-            .send(new AbortMultipartUploadCommand({ Bucket: bucket, Key, UploadId: uploadId }))
-            .catch((abortErr: unknown) => {
+          await abortS3MultipartUpload(client, { Bucket: bucket, Key, UploadId: uploadId }).catch(
+            (abortErr: unknown) => {
               console.warn(
                 `[blob-transfer] leaked S3 multipart parts for ${Key} (upload ${uploadId}) — abort failed: ${String(abortErr)}`,
               );
-            });
+            },
+          );
         }
         throw err;
       }
@@ -297,22 +305,25 @@ export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobT
       await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: keyFor(blobId) }));
     },
 
-    async sweep(maxAgeMs) {
+    async sweep(maxAgeMs, signal) {
       const cutoff = Date.now() - maxAgeMs;
       let removed = 0;
       let token: string | undefined;
       do {
+        if (signal?.aborted) break;
         const page = (await client.send(
           new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ...(token ? { ContinuationToken: token } : {}) }),
+          { abortSignal: signal },
         )) as {
           Contents?: Array<{ Key?: string; LastModified?: Date }>;
           IsTruncated?: boolean;
           NextContinuationToken?: string;
         };
         for (const obj of page.Contents ?? []) {
+          if (signal?.aborted) break;
           if (!obj.Key) continue;
           if ((obj.LastModified?.getTime() ?? Infinity) <= cutoff) {
-            await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: obj.Key }));
+            await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: obj.Key }), { abortSignal: signal });
             removed++;
           }
         }
@@ -373,10 +384,11 @@ export function createMemoryBlobTransferStore(): BlobTransferStore {
     async delete(blobId) {
       blobs.delete(blobId);
     },
-    async sweep(maxAgeMs) {
+    async sweep(maxAgeMs, signal) {
       const cutoff = Date.now() - maxAgeMs;
       let removed = 0;
       for (const [id, v] of blobs) {
+        if (signal?.aborted) break;
         if (v.at <= cutoff) {
           blobs.delete(id);
           removed++;

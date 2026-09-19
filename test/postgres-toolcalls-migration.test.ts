@@ -2,9 +2,12 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
+import { isolatedPostgres } from "./support/isolated-postgres.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the tool_calls migration tests";
+const baseUrl = process.env.DATABASE_URL;
+let URL: string | undefined;
+let isolated: Awaited<ReturnType<typeof isolatedPostgres>> | undefined;
+const skip = baseUrl ? false : "set DATABASE_URL (a Postgres) to run the tool_calls migration tests";
 
 type Pg = {
   query: (sql: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>;
@@ -35,20 +38,11 @@ async function bootAndClose(): Promise<void> {
 }
 
 before(async () => {
-  if (!URL) return;
-  const p = await pool();
-  await p.query("DROP TABLE IF EXISTS runs, tool_calls CASCADE");
-  await p.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'runs/store/%'").catch(() => undefined);
-  await p.end();
+  if (!baseUrl) return;
+  isolated = await isolatedPostgres("toolcalls_test");
+  URL = isolated.url;
 });
-
-after(async () => {
-  if (!URL) return;
-  const p = await pool();
-  await p.query("DROP TABLE IF EXISTS runs, tool_calls CASCADE");
-  await p.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'runs/store/%'").catch(() => undefined);
-  await p.end();
-});
+after(async () => isolated?.cleanup());
 
 test("tool_calls: a keyless table with duplicates heals on boot, keeping the newest row", { skip }, async () => {
   const p = await pool();

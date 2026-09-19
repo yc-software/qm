@@ -23,7 +23,7 @@
  *   semantics — keep working at least this much) and an optional token cap
  *   (wind down when exhausted; never auto-complete).
  */
-import type { LlmCallUsage } from "../sessions/session-store.ts";
+import type { LlmCallUsage, TapeRecord } from "../sessions/session-store.ts";
 import { type GrindBudget, type GrindMeter, grindState } from "./grind.ts";
 
 type GoalStatus = "active" | "paused" | "complete" | "blocked";
@@ -204,16 +204,34 @@ export function reviveGoalRecord(goal: GoalRecord): GoalRecord {
  * would re-emit an end-of-turn snapshot — and a fresh "goal complete"
  * notice — on every later turn.
  */
-export function rehydrateOpenGoal(history: ReadonlyArray<{ type: string; payload?: unknown }>): GoalRecord | null {
+export function rehydrateOpenGoal(
+  history: ReadonlyArray<{ type: string; payload?: unknown; createdAt?: number }>,
+  tape: readonly TapeRecord[] = [],
+): GoalRecord | null {
+  let saved: GoalRecord | null = null;
+  let savedAt = -1;
   for (let i = history.length - 1; i >= 0; i--) {
     const h = history[i]!;
     if (h.type !== "system") continue;
     const payload = h.payload as { kind?: string; goal?: GoalRecord } | null;
     if (payload?.kind !== "goal" || !payload.goal) continue;
-    const status = (payload.goal as { status?: string }).status;
-    return status === "active" || status === "paused" ? reviveGoalRecord(payload.goal) : null;
+    saved = payload.goal;
+    savedAt = h.createdAt ?? 0;
+    break;
   }
-  return null;
+  for (const row of tape) {
+    if (row.createdAt < savedAt) continue;
+    const entry = (row.payload as { entry?: { type?: string; payload?: { kind?: string; goal?: GoalRecord } } } | null)
+      ?.entry;
+    let candidate: GoalRecord | null | undefined;
+    if (row.meta && "goal" in row.meta) candidate = row.meta.goal as GoalRecord | null;
+    else if (row.kind === "annotation" && entry?.type === "system" && entry.payload?.kind === "goal")
+      candidate = entry.payload.goal;
+    if (candidate === undefined) continue;
+    saved = candidate;
+    savedAt = row.createdAt;
+  }
+  return saved?.status === "active" || saved?.status === "paused" ? reviveGoalRecord(saved) : null;
 }
 
 export function goalReport(goal: GoalRecord): string {

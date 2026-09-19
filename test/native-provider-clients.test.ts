@@ -2,6 +2,7 @@ import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createSdkModalClient } from "../src/sandbox/modal-client.ts";
 import { createSdkE2bClient } from "../src/sandbox/e2b-client.ts";
+import { withOperationSignal } from "../src/util/async.ts";
 
 const modalCalls: unknown[][] = [];
 const modalSandbox = {
@@ -40,8 +41,8 @@ mock.module("e2b", {
           },
         };
       }
-      static async getInfo() {
-        e2bCalls.push(["info"]);
+      static async getInfo(sandboxId: string, options: unknown) {
+        e2bCalls.push(["info", sandboxId, options]);
         return { state: "paused", endAt: new Date(1000), lifecycle: { onTimeout: "pause" } };
       }
     },
@@ -88,10 +89,31 @@ test("E2B sends explicit pause lifecycle, reads state without connect, and surfa
   assert.deepEqual((e2bCalls[0]![2] as { lifecycle: unknown }).lifecycle, { onTimeout: "pause", autoResume: false });
   assert.equal(await client.info!(session.sandboxId).then((info) => info.state), "paused");
   await session.pause();
-  assert.deepEqual(e2bCalls.at(-1), ["pause", { keepMemory: true }]);
+  assert.deepEqual(e2bCalls.at(-1), ["pause", { keepMemory: true, signal: undefined }]);
   pauseError = new Error("snapshot backlog");
   await assert.rejects(session.pause(), /snapshot backlog/);
   pauseError = undefined;
   await client.create({ metadata: {}, autoPause: false });
   assert.deepEqual((e2bCalls.at(-1)![2] as { lifecycle: unknown }).lifecycle, { onTimeout: "kill", autoResume: false });
+});
+
+test("E2B forwards the active operation signal through create, state lookup, and pause", async () => {
+  const controller = new AbortController();
+  const before = e2bCalls.length;
+  const client = createSdkE2bClient({ apiKey: "test" });
+  await withOperationSignal(controller.signal, async () => {
+    const session = await client.create({ metadata: { name: "scoped" }, autoPause: true });
+    const info = await client.info!(session.sandboxId);
+    assert.equal(info.state, "paused");
+    await session.pause();
+  });
+  const calls = e2bCalls.slice(before);
+  assert.deepEqual(
+    calls.map(([operation]) => operation),
+    ["create", "info", "pause"],
+  );
+  assert.equal((calls[0]![2] as { signal?: AbortSignal }).signal, controller.signal);
+  assert.equal(calls[1]![1], "e2b-native");
+  assert.equal((calls[1]![2] as { signal?: AbortSignal }).signal, controller.signal);
+  assert.deepEqual(calls[2], ["pause", { keepMemory: true, signal: controller.signal }]);
 });

@@ -1,26 +1,26 @@
-import { test, before } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresInstanceRegistry, createLegacyEnrollmentBridge } from "../src/runs/instance-registry.ts";
 import { settle } from "./support/settle.ts";
+import { isolatedPostgres } from "./support/isolated-postgres.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the instance-registry tests";
+const baseUrl = process.env.DATABASE_URL;
+let database: Awaited<ReturnType<typeof isolatedPostgres>> | undefined;
+const skip = baseUrl ? false : "set DATABASE_URL (a Postgres) to run the instance-registry tests";
 
 before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS instance_heartbeats CASCADE");
-  await p.end();
+  if (!baseUrl) return;
+  database = await isolatedPostgres("instance_registry", baseUrl);
 });
+after(async () => database?.cleanup());
 
 test(
   "supersession: a newer different-sha instance drains the old one; same sha and stale beats don't",
   { skip },
-  async () => {
-    const pool = createPostgresMapFactory(URL!).pool;
+  async (t) => {
+    const pool = createPostgresMapFactory(database!.url).pool;
+    t.after(() => pool.close());
     const old = createPostgresInstanceRegistry(pool, {
       instanceId: "i-old",
       buildSha: "sha-a",
@@ -54,7 +54,7 @@ test(
 );
 
 test("controlled enrollment drains same-image legacy workers without self-supersession", { skip }, async () => {
-  const factory = createPostgresMapFactory(URL!);
+  const factory = createPostgresMapFactory(database!.url);
   const old = createPostgresInstanceRegistry(factory.pool, {
     instanceId: "migration-old",
     buildSha: "same-image",
@@ -97,29 +97,38 @@ test("controlled enrollment drains same-image legacy workers without self-supers
 test(
   "a core with background work disabled never heartbeats, so it cannot drain a peer that does",
   { skip },
-  async () => {
+  async (t) => {
     await import("./support/auto-fake-sprites.ts");
     const [{ buildApp }, { testConfig }] = await Promise.all([
       import("../src/wiring.ts"),
       import("./support/test-config.ts"),
     ]);
-    const pool = createPostgresMapFactory(URL!).pool;
+    const pool = createPostgresMapFactory(database!.url).pool;
+    t.after(() => pool.close());
     const boot = async (backgroundWorkEnabled: boolean, buildSha: string): Promise<number> => {
       const built = buildApp(
-        testConfig({ databaseUrl: URL, buildSha, backgroundWorkEnabled, workers: 1, reaperIntervalMs: 60_000 }),
-      );
-      built.runtime.start();
-      const count = async (): Promise<number> => {
-        const { rows } = await pool.query("SELECT count(*)::int AS n FROM instance_heartbeats WHERE build_sha = $1", [
+        testConfig({
+          databaseUrl: database!.url,
           buildSha,
-        ]);
-        return (rows[0] as { n: number }).n;
-      };
-      if (backgroundWorkEnabled) await settle(async () => (await count()) > 0);
-      else await new Promise((r) => setTimeout(r, 500));
-      const n = await count();
-      await built.runtime.stop();
-      return n;
+          backgroundWorkEnabled,
+          workers: 1,
+          reaperIntervalMs: 60_000,
+        }),
+      );
+      try {
+        built.runtime.start();
+        const count = async (): Promise<number> => {
+          const { rows } = await pool.query("SELECT count(*)::int AS n FROM instance_heartbeats WHERE build_sha = $1", [
+            buildSha,
+          ]);
+          return (rows[0] as { n: number }).n;
+        };
+        if (backgroundWorkEnabled) await settle(async () => (await count()) > 0);
+        else await new Promise((r) => setTimeout(r, 500));
+        return await count();
+      } finally {
+        await built.runtime.stop();
+      }
     };
     assert.equal(await boot(false, "sha-inactive"), 0, "an inactive stack must leave no heartbeat behind");
     assert.equal(await boot(true, "sha-active"), 1, "a claiming instance still announces itself");

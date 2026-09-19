@@ -6,6 +6,7 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createMemoryRunSignalStore, type RunSignal } from "../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { isolatedPostgres } from "./support/isolated-postgres.ts";
 
 for (const backend of ["memory", "postgres"] as const) {
   test(
@@ -14,9 +15,9 @@ for (const backend of ["memory", "postgres"] as const) {
       skip: backend === "postgres" && !process.env.DATABASE_URL ? "DATABASE_URL required" : false,
     },
     async () => {
-      const runtime = backend === "memory" ? createMemoryRunStore() : createPostgresRunStore(process.env.DATABASE_URL!);
-      const signals =
-        backend === "memory" ? createMemoryRunSignalStore() : createPostgresRunSignalStore(process.env.DATABASE_URL!);
+      const database = backend === "postgres" ? await isolatedPostgres("queued_steer_test") : undefined;
+      const runtime = backend === "memory" ? createMemoryRunStore() : createPostgresRunStore(database!.url);
+      const signals = backend === "memory" ? createMemoryRunSignalStore() : createPostgresRunSignalStore(database!.url);
       const runs = runtime.runs;
       const sessionId = randomUUID();
       const actor = { id: "queued-owner", type: "internal" as const };
@@ -73,6 +74,7 @@ for (const backend of ["memory", "postgres"] as const) {
       } finally {
         await signals.close?.();
         await runs.close?.();
+        await database?.cleanup();
       }
     },
   );

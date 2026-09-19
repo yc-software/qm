@@ -1,3 +1,4 @@
+import { SESSION_LEASE_OWNERSHIP_MIGRATION } from "./lease-ownership.ts";
 import { randomUUID } from "node:crypto";
 import { createPgPool, type PgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbSafeStringify } from "../util/text.ts";
@@ -241,6 +242,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const { pool, q } = createPgPool(
     connectionString,
     [
+      SESSION_LEASE_OWNERSHIP_MIGRATION,
       {
         id: "sessions/store/0001",
         expectedChecksum: "cf56c9f6488806677a229698193ef6dd7cb74300c343bdb1930c17702c5ccf2f",
@@ -566,6 +568,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
              ON sessions(parent_session_id) WHERE parent_session_id IS NOT NULL`,
         ],
       },
+      {
+        id: "sessions/store/0018-delivery-key-index",
+        statements: [
+          `CREATE INDEX IF NOT EXISTS session_entries_delivery_key ON session_entries(session_id, (safe_json(replace(payload, '\\u0000', ''))->>'deliveryKey')) WHERE safe_json(replace(payload, '\\u0000', ''))->>'deliveryKey' IS NOT NULL`,
+        ],
+      },
     ],
     [
       {
@@ -727,20 +735,27 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(rowToSession);
     },
 
-    async acquireLease(sessionId, holder): Promise<LeaseAttempt> {
+    async acquireLease(sessionId, holder, run): Promise<LeaseAttempt> {
       const token = randomUUID();
       const t = now();
       return withPgTransaction(await pool(), async (client) => {
+        if (run) {
+          const active = await client.query(
+            "SELECT id FROM runs WHERE id=$1 AND lease_token=$2 AND status='running' AND lease_expires_at>$3 FOR UPDATE",
+            [run.runId, run.runLeaseToken, t],
+          );
+          if (!active.rows[0]) throw new Error("session lease requested by an inactive run");
+        }
         await lockSession(client, sessionId);
         for (;;) {
           const granted = await client.query(
-            `INSERT INTO session_leases(session_id, token, expires_at, holder, acquired_at)
-               SELECT $1, $2, $3, $5, $4 WHERE EXISTS (SELECT 1 FROM sessions WHERE id = $1)
+            `INSERT INTO session_leases(session_id, token, expires_at, holder, acquired_at, run_id, run_lease_token)
+               SELECT $1, $2, $3, $5, $4, $6, $7 WHERE EXISTS (SELECT 1 FROM sessions WHERE id = $1)
              ON CONFLICT (session_id) DO UPDATE
-               SET token = $2, expires_at = $3, holder = $5, acquired_at = $4
+               SET token = $2, expires_at = $3, holder = $5, acquired_at = $4, run_id=$6, run_lease_token=$7
                WHERE session_leases.expires_at <= $4
              RETURNING token`,
-            [sessionId, token, t + leaseTtlMs, t, holder ?? null],
+            [sessionId, token, t + leaseTtlMs, t, holder ?? null, run?.runId ?? null, run?.runLeaseToken ?? null],
           );
           if (granted.rows[0]) return { lease: { sessionId, token } };
           const held = await client.query(
@@ -911,6 +926,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return Number(rows[0]?.n ?? -1);
     },
 
+    async findEntryByDeliveryKey(sessionId, key) {
+      const rows = await q(
+        "SELECT * FROM session_entries WHERE session_id = $1 AND safe_json(replace(payload, '\\u0000', ''))->>'deliveryKey' = $2 ORDER BY seq LIMIT 1",
+        [sessionId, key],
+      );
+      return rows[0] ? rowToEntry(rows[0]) : undefined;
+    },
     async getEntries(sessionId, opts?: GetEntriesOptions): Promise<SessionEntry[]> {
       const params: unknown[] = [sessionId, opts?.sinceSeq ?? 0];
       let sql = "SELECT * FROM session_entries WHERE session_id = $1 AND seq >= $2";

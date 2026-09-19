@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createFakeSandboxEnvironment } from "./fake-sandbox-environment.ts";
 import {
   E2bSandboxGoneError,
   type E2bClient,
@@ -33,6 +34,7 @@ export interface FakeE2b {
 
 export function installFakeE2b(): FakeE2b {
   const root = mkdtempSync(join(tmpdir(), "fake-e2b-"));
+  const environment = createFakeSandboxEnvironment(root);
   const records = new Map<string, FakeRecord>();
   const execScripts: string[] = [];
   let nextId = 1;
@@ -73,7 +75,7 @@ export function installFakeE2b(): FakeE2b {
       const spawned = spawnSync("sh", ["-c", remap(r, command)], {
         encoding: "buffer",
         maxBuffer: 128 * 1024 * 1024,
-        env: { ...process.env, COPYFILE_DISABLE: "1" },
+        env: environment(),
       });
       return {
         stdout: (spawned.stdout ?? Buffer.alloc(0)).toString("utf8"),

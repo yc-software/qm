@@ -100,7 +100,10 @@ export function ensureDeliveryStream(): void {
       if (event.state === "working") for (const conv of live) conv.resumeIfIdle();
       else for (const conv of live) conv.onDelivery(event.threadRef);
     },
-    () => void refreshSessions({ silent: true }),
+    () => {
+      void refreshSessions({ silent: true });
+      for (const conv of live) if (conv.state.threadRef) conv.onDelivery(conv.state.threadRef);
+    },
     (event) => inboxItemHandler?.(event),
     () => inboxResyncHandler?.(),
   );

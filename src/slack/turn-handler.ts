@@ -1,6 +1,8 @@
+import { isDurableControlFlow } from "../durable/tasks.ts";
 import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
 import { performance } from "node:perf_hooks";
+import { createHash } from "node:crypto";
 import { slackFailureText } from "./turn-flow.ts";
 import { errMessage, reportFailure, reportFailureAs, swallowAs } from "../util/errors.ts";
 import {
@@ -128,6 +130,7 @@ function channelLocation(
 }
 
 export function createTurnHandler(deps: {
+  accountId?: string;
   rateLimitNotice?: SlackRateLimitNotice;
   core: SlackCoreClient;
   flow: TurnFlow;
@@ -242,8 +245,17 @@ export function createTurnHandler(deps: {
         ...slackReplyArgs(inc.channel, text, replyThreadTs, { threadOnly: inc.kind === "channel", unfurlLinks: false }),
         ...(withBlocks && blocks ? { blocks } : {}),
       });
+      if (core.durableIngress && !idempotencyKey)
+        idempotencyKey = `slack-event:${inc.channel}:${inc.ts}:message:${createHash("sha256")
+          .update(JSON.stringify([msg, blocks]))
+          .digest("hex")}`;
       if (idempotencyKey) {
-        const res = await postWithVerify(client, replyArgs(msg, true) as PostMessageArgs, idempotencyKey);
+        const res = await postWithVerify(
+          client,
+          replyArgs(msg, true) as PostMessageArgs,
+          idempotencyKey,
+          core.durableIngress ? { verifyFirst: true, verifyOldest: String(Number(inc.ts) - 60) } : undefined,
+        );
         return res.ts;
       }
       const parts = blocks ? [msg] : safeChunks(msg, SLACK_POST_SPLIT_LIMIT);
@@ -367,6 +379,8 @@ export function createTurnHandler(deps: {
       if (intercepted) return;
     }
 
+    const progress = <T>(execute: () => Promise<T>): Promise<T | undefined> =>
+      core.durableDeliveries && queuedRunId && core.runProgress ? core.runProgress(queuedRunId, execute) : execute();
     const ack = inc.unprompted
       ? undefined
       : createAckPresenter({
@@ -374,7 +388,13 @@ export function createTurnHandler(deps: {
           postAck: async (text) => {
             const rendered = toSlackMrkdwn(text);
             if (await taskList?.addLead(rendered)) return;
-            const ts = await postReply(rendered);
+            const ts = await progress(() =>
+              postReply(
+                rendered,
+                undefined,
+                core.durableDeliveries && queuedRunId ? `run:${queuedRunId}:progress` : undefined,
+              ),
+            );
             if (ts) {
               await taskList?.attach(ts, rendered);
             }
@@ -395,31 +415,41 @@ export function createTurnHandler(deps: {
         });
     if (!inc.unprompted) {
       taskList = createTaskListPresenter({
-        post: (text, blocks) => postReply(text, blocks),
+        post: (text, blocks) =>
+          progress(() =>
+            postReply(text, blocks, core.durableDeliveries && queuedRunId ? `run:${queuedRunId}:progress` : undefined),
+          ),
         update: (ts, text, blocks, metadata) =>
-          client.chat
-            .update({
-              channel: inc.channel,
-              ts,
-              text,
-              blocks,
-              ...(metadata ? { metadata } : {}),
-              ...botIdentityArgs(),
-            })
-            .then(() => {}),
+          progress(() =>
+            client.chat
+              .update({
+                channel: inc.channel,
+                ts,
+                text,
+                blocks,
+                ...(metadata ? { metadata } : {}),
+                ...botIdentityArgs(),
+              })
+              .then(() => {}),
+          ),
         checkpoint: async (ts) => {
           if (queuedRunId) await core.reportRunEditRef(queuedRunId, ts);
         },
-        remove: (ts) => client.chat.delete({ channel: inc.channel, ts }).then(() => {}),
+        remove: (ts) => progress(() => client.chat.delete({ channel: inc.channel, ts }).then(() => {})),
         onSurfacePosted: () => ack?.onSurfacePosted(),
         onError: (error) => console.error("[slack-plugin] task-list update failed:", (error as Error).message),
       });
     }
     if (!inc.unprompted) {
       goalNotice = createGoalNoticePresenter({
-        post: (text, blocks) => postReply(text, blocks),
+        post: (text, blocks) =>
+          progress(() =>
+            postReply(text, blocks, core.durableDeliveries && queuedRunId ? `run:${queuedRunId}:goal` : undefined),
+          ),
         update: (ts, text, blocks) =>
-          client.chat.update({ channel: inc.channel, ts, text, blocks, ...botIdentityArgs() }).then(() => {}),
+          progress(() =>
+            client.chat.update({ channel: inc.channel, ts, text, blocks, ...botIdentityArgs() }).then(() => {}),
+          ),
         onError: (error) => console.error("[slack-plugin] goal notice update failed:", (error as Error).message),
       });
     }
@@ -503,6 +533,14 @@ export function createTurnHandler(deps: {
     if (inc.unprompted && !text.trim() && attachments.length === 0) return;
 
     const turn: Omit<CoreTurnBody, "approval"> = {
+      slackDeliveryContext: {
+        ...(deps.accountId ? { account: deps.accountId } : {}),
+        requesterId: inc.userId,
+        triggerTs: inc.ts,
+        allowedTs: [...allowedTs],
+        audience,
+        ...(slackIdsByPrincipal ? { slackIdsByPrincipal: [...slackIdsByPrincipal] } : {}),
+      },
       actor,
       conversation: {
         kind: conversationKind,
@@ -591,7 +629,12 @@ export function createTurnHandler(deps: {
       await taskList?.settle();
       await goalNotice?.settle();
     } catch (err) {
+      if (isDurableControlFlow(err)) throw err;
       await settleAck();
+      if (core.durableIngress && !accepted) {
+        inc.ackGate?.failed(errMessage(err));
+        throw err;
+      }
       if (inc.unprompted) {
         if (!accepted) inc.ackGate?.failed(errMessage(err));
         console.error(
@@ -612,6 +655,11 @@ export function createTurnHandler(deps: {
     // delivers its reply; delivering here too is how one answer got posted twice. Settle this
     // trigger's own ack and stand down.
     if (result.steered) {
+      await settleAck();
+      return;
+    }
+
+    if (core.durableDeliveries && queuedRunId) {
       await settleAck();
       return;
     }
@@ -839,6 +887,7 @@ export function createTurnHandler(deps: {
       key,
       () => handleIncoming(stamped, client),
       (err) => {
+        if (isDurableControlFlow(err)) throw err;
         stamped.ackGate?.failed(errMessage(err));
         reportFailure("slack: incoming handler", err);
       },

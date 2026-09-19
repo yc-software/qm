@@ -450,7 +450,15 @@ async function fireLoopNow(ctx: ApiCtx): Promise<void> {
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   const fireKey = `loop:${loop.id}:manual:${Date.now()}`;
-  void deps.fire.fire(loop.id, fireKey).catch((e: unknown) => swallow(`manual fire of loop ${loop.id}`, e));
+  if (deps.fire.requestFire)
+    await deps.fire.requestFire(loop.id, fireKey, undefined, {
+      actorId: loaded.acting.actorId,
+      liveActor: loaded.acting.liveHuman,
+    });
+  else
+    void deps.fire
+      .fire(loop.id, fireKey, undefined, { actorId: loaded.acting.actorId, liveActor: loaded.acting.liveHuman })
+      .catch((e: unknown) => swallow(`manual fire of loop ${loop.id}`, e));
   return sendJson(ctx.res, 200, { ok: true, fireKey });
 }
 
@@ -473,7 +481,10 @@ async function decideOutput(ctx: ApiCtx): Promise<void> {
   };
   if (b.decision === "ship" || b.decision === "shipped") {
     try {
-      const shipped = await deps.fire.shipOutput(loop.id, outputId, acting.actorId, note);
+      const shipped = await deps.fire.shipOutput(loop.id, outputId, acting.actorId, note, {
+        actorId: acting.actorId,
+        liveActor: acting.liveHuman,
+      });
       if (!shipped) return decisionMissing();
       return sendJson(ctx.res, 200, { output: shipped });
     } catch (e) {
@@ -483,7 +494,10 @@ async function decideOutput(ctx: ApiCtx): Promise<void> {
   if (b.decision === "return" || b.decision === "returned") {
     if (!note)
       return sendJson(ctx.res, 400, { error: "bad_request", message: "a return needs a note for the next attempt" });
-    const returned = await deps.fire.returnOutput(loop.id, outputId, acting.actorId, note);
+    const returned = await deps.fire.returnOutput(loop.id, outputId, acting.actorId, note, {
+      actorId: acting.actorId,
+      liveActor: acting.liveHuman,
+    });
     if (!returned) return decisionMissing();
     return sendJson(ctx.res, 200, { output: returned });
   }

@@ -1,11 +1,11 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { orgId as configOrgId } from "../config.ts";
 import { arch } from "node:os";
 import { join } from "node:path";
 import { readdir, readFile as fsReadFile } from "node:fs/promises";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { createKeyedQueue, sleep } from "../util/async.ts";
+import { createKeyedQueue, sleep, assertOperationActive, getOperationSignal } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
@@ -16,7 +16,7 @@ import { spawnDockerExec, type DockerExec } from "./docker-exec.ts";
 import { ephemeralCredLinkScript } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { shortHash } from "../util/crypto.ts";
-import { killableScript, killScript } from "./exec-kill.ts";
+import { runKillable } from "./exec-kill.ts";
 import { execFailureDetail } from "./sandbox.ts";
 import type {
   AgentComputerProfile,
@@ -170,10 +170,15 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     timeoutMs?: number,
     signal?: AbortSignal,
   ): Promise<{ status: number; text: string }> {
+    assertOperationActive();
     const base = opts.coreContainer
       ? `http://${name}:${AGENT_PORT}${path}`
       : `http://127.0.0.1:${await resolvePort(name)}${path}`;
-    const signals = [AbortSignal.timeout(timeoutMs ?? 30_000), ...(signal ? [signal] : [])];
+    const signals = [
+      AbortSignal.timeout(timeoutMs ?? 30_000),
+      ...(signal ? [signal] : []),
+      ...(getOperationSignal() ? [getOperationSignal()!] : []),
+    ];
     const res = await fetchImpl(base, {
       method: body === undefined ? "GET" : "POST",
       ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { "content-type": "application/json" } }),
@@ -443,20 +448,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
         .map(([k, v]) => `export ${k}=${shq(v)}`)
         .join("; ");
       const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-      const signal = execOpts?.signal;
-      if (!signal) return execRaw(handle.id, script, timeoutSec);
-      const killUid = randomUUID();
-      const fireKill = () => {
-        execRaw(handle.id, killScript(killUid), 15).catch(swallowAs("local-sandbox: kill in-flight exec", undefined));
-      };
-      const onAbort = () => fireKill();
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        signal.throwIfAborted();
-        return await execRaw(handle.id, killableScript(script, killUid), timeoutSec, signal);
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
+      return runKillable((body, seconds) => execRaw(handle.id, body, seconds), script, timeoutSec, execOpts?.signal);
     },
 
     async writeFileBytes(handle, relPath, data): Promise<void> {

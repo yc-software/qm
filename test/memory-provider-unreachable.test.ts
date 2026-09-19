@@ -43,6 +43,7 @@ test("wiring: an unreachable fail-open MCP memory provider still serves turns vi
   const { app, runtime } = buildApp(
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "mem-unreachable-")), memoryProviderConfig }),
   );
+  runtime.startBackground();
   try {
     const actor = { externalId: "U1" };
     const dm = (text: string, thread: string): TurnRequest => ({

@@ -2,7 +2,7 @@ import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../typ
 import type { Run, RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
 import type { Task, TaskStore } from "../tasks/task-store.ts";
-import { resolveTurnOrigin } from "../core/turn-origin.ts";
+import { isPersonAuthored, resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { TurnFailurePayload } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -14,7 +14,6 @@ import {
   type TranscriptAppendSessions,
 } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
-import { reportFailureAs } from "../util/errors.ts";
 
 export interface RunResultDelivery {
   destination: Destination;
@@ -44,15 +43,22 @@ export function runResultDelivery(
   const surface = run.request.surface;
   if (!target || !surface) return null;
   const origin = resolveTurnOrigin(run.request);
-  const editRef = run.deliveryState?.editRef;
+  const approvalCard = run.request.slackDeliveryContext?.approvalCard;
+  const editRef =
+    run.deliveryState?.editRef ??
+    (approvalCard && approvalCard.channel === target.split(":")[0] ? approvalCard.messageTs : undefined);
   const failed = run.status === "failed";
   const webTranscript = webTranscriptNote(run, surface, failed);
   const destination: Destination = {
     type: surface,
     target,
+    ...(run.request.slackDeliveryContext?.account ? { slackAccount: run.request.slackDeliveryContext.account } : {}),
     ...(editRef ? { editRef } : {}),
     ...(taskList.length ? { taskList: taskList.map(({ id, title, status }) => ({ id, title, status })) } : {}),
     ...(webTranscript ? { webTranscript } : {}),
+    ...(run.result?.pendingApprovals?.length
+      ? { approvalRequestIds: run.result.pendingApprovals.map((approval) => approval.requestId) }
+      : {}),
   };
   const idempotencyKey = `run:${run.id}`;
   const provenance = turnDeliveryProvenance({
@@ -75,7 +81,23 @@ export function runResultDelivery(
   ) {
     return { destination, text: standaloneFailureText(run.result)!, provenance, idempotencyKey };
   }
-  if (run.request.surfaceTools && run.result?.status !== "failed" && !run.result?.attachments?.length) return null;
+  if (run.result?.status === "pending_approval" && run.result.pendingApprovals?.length) {
+    if (
+      run.request.surfaceTools &&
+      !run.request.addressed &&
+      !isPersonAuthored(origin.kind) &&
+      run.result.pendingApprovals.every((approval) => approval.kind === "input")
+    )
+      return null;
+    return { destination, text: "", provenance, idempotencyKey };
+  }
+  if (
+    run.request.surfaceTools &&
+    run.result?.status !== "failed" &&
+    !run.result?.attachments?.length &&
+    !run.result?.pendingApprovals?.length
+  )
+    return null;
   if (failed) {
     if (origin.kind === "ambient") return null;
     const clause = userFacingFailureClause(run.result ?? { status: "failed" });
@@ -98,7 +120,6 @@ export function runResultDelivery(
 export type TurnFailureSessions = TranscriptAppendSessions &
   Pick<SessionStore, "getByThread" | "acquireLease" | "peekLease" | "releaseLease" | "getEntries">;
 
-const FAILURE_RECORD_SCAN_LIMIT = 200;
 const FAILURE_RECORD_WAIT_MS = 10 * 60_000;
 
 export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: Run): Promise<boolean> {
@@ -116,7 +137,7 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
     return false;
   }
   try {
-    const tail = await sessions.getEntries(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT });
+    const tail = await sessions.getEntries(session.id);
     if (turnRecordedFailure(tail, { notBefore: run.startedAt ?? run.createdAt, runId: run.id })) return false;
     if (tail.some((entry) => entryDeliveryKey(entry) === `run:${run.id}`)) return false;
     const payload: TurnFailurePayload = {
@@ -131,24 +152,39 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
   }
 }
 
-export function wireRunResultDeliveries(
+export async function deliverRunResult(
   runs: RunStore,
   deliveries: DeliveryStore,
+  runId: string,
   tasks?: TaskStore,
   adminUrlFor?: AdminUrlFor,
   sessions?: TurnFailureSessions,
-): void {
-  runs.onTerminal((run) => {
-    if (sessions) {
-      void recordRunFailureEntry(sessions, run).catch(
-        reportFailureAs("delivery: record turn_failure entry", undefined, `run=${run.id}`),
-      );
-    }
-    void (async () => {
-      const taskList = tasks ? await tasks.list({ originRunId: run.id }) : [];
-      const delivery = runResultDelivery(run, taskList, adminUrlFor);
-      if (!delivery) return;
-      await deliveries.enqueue(delivery);
-    })().catch(reportFailureAs("delivery: enqueue recovery delivery", undefined, `run=${run.id}`));
-  });
+): Promise<void> {
+  const run = await runs.get(runId);
+  if (!run || (run.status !== "done" && run.status !== "failed")) return;
+  if (sessions) await recordRunFailureEntry(sessions, run);
+  const taskList = tasks ? await tasks.list({ originRunId: run.id }) : [];
+  const delivery = runResultDelivery(run, taskList, adminUrlFor);
+  if (delivery) {
+    await deliveries.enqueue(delivery);
+  } else if (
+    run.request.surface === "slack" &&
+    run.request.deliveryTarget &&
+    Boolean(run.request.slackDeliveryContext || run.deliveryState) &&
+    !run.request.privateSessionMessage &&
+    !run.request.swarm
+  ) {
+    await deliveries.enqueue({
+      destination: {
+        type: "slack",
+        target: run.request.deliveryTarget,
+        ...(run.request.slackDeliveryContext?.account
+          ? { slackAccount: run.request.slackDeliveryContext.account }
+          : {}),
+        ...(!run.request.surfaceTools && run.deliveryState?.editRef ? { editRef: run.deliveryState.editRef } : {}),
+      },
+      text: "",
+      idempotencyKey: `run:${run.id}`,
+    });
+  }
 }

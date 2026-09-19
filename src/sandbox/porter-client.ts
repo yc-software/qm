@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { Porter, NotFoundError, SandboxError } from "porter-sandbox";
+import { NotFoundError, SandboxError } from "porter-sandbox";
 import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { shortHash } from "../util/crypto.ts";
 import type { ExecResult } from "./sandbox.ts";
+import { createPorterTransport } from "./porter-transport.ts";
 
 const MISSING_RC = 44;
 const READ_CHUNK = 256 * 1024;
@@ -92,12 +93,7 @@ export function withPorterErrorDetails<T>(value: T): T {
 }
 
 export function createPorterClient(opts: { token?: string; baseUrl?: string }): PorterClientLike {
-  return withPorterErrorDetails(
-    new Porter({
-      ...(opts.token ? { apiKey: opts.token } : {}),
-      ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),
-    }) as PorterClientLike,
-  );
+  return withPorterErrorDetails(createPorterTransport(opts));
 }
 
 export const porterSlug = (prefix: string, id: string): string => {

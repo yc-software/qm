@@ -1,4 +1,4 @@
-import { cronTriggerAuthority } from "./authority.ts";
+import { cronTriggerAuthority, unattendedActorRefusal } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
 import {
@@ -6,11 +6,12 @@ import {
   type Cron,
   type CronFireLogEntry,
   type CronFireNote,
+  type TriggerInitiator,
   type TurnRequest,
   type TurnResult,
 } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
-import { isDeferred, type CronStore } from "./cron-store.ts";
+import { type CronStore } from "./cron-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
@@ -19,12 +20,11 @@ import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { recoverNextFireAt } from "./schedule.ts";
-import type { CronFireJob, CronJobQueue } from "./job-queue.ts";
 import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
-import { sleep } from "../util/async.ts";
+import { isDurableControlFlow, type DurableTasks, type DurableTaskContext } from "../durable/tasks.ts";
+import { createDurableScheduler } from "./durable-scheduler.ts";
 
 const TICK_LEASE_KEY = "cron:scheduler:tick";
 const CRON_FIRE_REPLY_MAX_CHARS = 2000;
@@ -58,7 +58,7 @@ export function describeRunNowRefusal(
 
 export interface Scheduler {
   tick(now?: number): Promise<void>;
-  runNow(cronId: string): Promise<RunNowResult>;
+  runNow(cronId: string, initiator?: TriggerInitiator): Promise<RunNowResult>;
   notifyChanged(cronId: string): void;
   start(intervalMs: number): void;
   ready(): Promise<void>;
@@ -69,6 +69,7 @@ export interface Scheduler {
 
 export interface SchedulerDeps {
   admittedWork?: AdmittedWork;
+  tasks?: DurableTasks;
   crons: CronStore;
   deliveries: DeliveryStore;
   idempotency: IdempotencyStore;
@@ -83,13 +84,13 @@ export interface SchedulerDeps {
     list(): Promise<DirectoryMember[]>;
   };
   sweepAsks?: (now: number) => Promise<void>;
-  jobQueue?: CronJobQueue;
-  requireQueueStart?: boolean;
   sessions?: TriggerDeps["sessions"];
+  samePerson?: (a: string, b: string) => Promise<boolean>;
   fireLoop?: (
     loopId: string,
     fireKey: string,
     cronId: string,
+    initiator?: TriggerInitiator,
   ) => Promise<{ status?: TurnResult["status"]; note?: string }>;
 }
 
@@ -135,7 +136,7 @@ function fireNoteLine(note: CronFireNote | undefined): string[] {
   ];
 }
 
-function cronFireThreadRef(cronId: string, fireKey: string): string {
+export function cronFireThreadRef(cronId: string, fireKey: string): string {
   return `cron:${cronId}:fire:${hashId([fireKey], 12)}`;
 }
 
@@ -199,9 +200,19 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const maxFiresPerTick = deps.maxFiresPerTick ?? 100;
   const leaderLease = deps.leaderLease ?? createNoopLeaderLease();
 
-  async function fire(cron: Cron, t: number, fireKey: string, scheduledAt?: number): Promise<FireResult> {
+  async function fire(
+    cron: Cron,
+    t: number,
+    fireKey: string,
+    scheduledAt?: number,
+    context?: DurableTaskContext,
+    initiator?: TriggerInitiator,
+  ): Promise<FireResult> {
+    const step = <T>(name: string, work: () => Promise<T>): Promise<T> =>
+      context ? context.step(`cron:${name}`, work) : work();
     const threadRef = cronFireThreadRef(cron.id, fireKey);
     const runningEntry: CronFireLogEntry = {
+      ...(initiator ? { initiator } : {}),
       fireKey,
       threadRef,
       firedAt: t,
@@ -209,25 +220,28 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       status: "running",
     };
     if (cron.loopId) {
-      await deps.crons.beginFire(cron.id, runningEntry);
+      await step("begin", () => deps.crons.beginFire(cron.id, runningEntry));
       let result: { status?: TurnResult["status"]; note?: string };
       if (!deps.fireLoop) {
         result = { status: "failed", note: "loop service unavailable" };
       } else
         try {
-          result = await deps.fireLoop(cron.loopId, fireKey, cron.id);
+          result = await step("loop", () => deps.fireLoop!(cron.loopId!, fireKey, cron.id, initiator));
         } catch (e) {
+          if (isDurableControlFlow(e)) throw e;
           result = { status: "failed", note: errMessage(e) };
         }
-      await deps.crons.recordFire(cron.id, {
-        fireKey,
-        threadRef,
-        firedAt: t,
-        endedAt: now(),
-        ...(scheduledAt !== undefined ? { scheduledAt } : {}),
-        status: result.status ?? "ok",
-        ...(result.note ? { note: truncate(result.note, CRON_FIRE_REPLY_MAX_CHARS) } : {}),
-      });
+      await step("finish", () =>
+        deps.crons.recordFire(cron.id, {
+          fireKey,
+          threadRef,
+          firedAt: t,
+          endedAt: now(),
+          ...(scheduledAt !== undefined ? { scheduledAt } : {}),
+          status: result.status ?? "ok",
+          ...(result.note ? { note: truncate(result.note, CRON_FIRE_REPLY_MAX_CHARS) } : {}),
+        }),
+      );
       if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
       return { authzFailed: false };
     }
@@ -239,7 +253,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           deliveries: deps.deliveries,
           idempotency: deps.idempotency,
           identity: deps.identity,
-          run: deps.run,
+          run: async (request) => {
+            if (initiator && cron.unattendedGrants?.length) {
+              const refusal = await unattendedActorRefusal(cron.owner, initiator, deps.samePerson);
+              if (refusal) return { status: "refused", reason: refusal };
+            }
+            return deps.run(request);
+          },
           ...(deps.directory ? { directory: deps.directory } : {}),
           ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
           ...(deps.sessions ? { sessions: deps.sessions } : {}),
@@ -258,10 +278,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ...(cron.destination ? { destination: cron.destination } : {}),
           ...(cron.recipientConsent ? { recipientConsent: cron.recipientConsent } : {}),
           recipientConsentRequired: cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined,
-          deferWhenBusy: scheduledAt !== undefined && t - scheduledAt <= BUSY_DEFER_MAX_LATE_MS,
+          deferWhenBusy: scheduledAt !== undefined && now() - scheduledAt <= BUSY_DEFER_MAX_LATE_MS,
         },
+        context,
       );
     } catch (e) {
+      if (isDurableControlFlow(e)) throw e;
       await deps.crons.recordFire(cron.id, {
         fireKey,
         threadRef,
@@ -307,6 +329,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
     return { authzFailed: false };
   }
+
+  if (deps.tasks) return createDurableScheduler(deps, fire);
 
   let lastStrandedSweep = 0;
   const sweepStranded = async (t: number): Promise<void> => {
@@ -380,129 +404,35 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   let sweeper = makeSweeper();
 
-  function nextSlot(cron: Cron): number | undefined {
-    return recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt);
-  }
-
-  function nextJob(cron: Cron): CronFireJob | undefined {
-    const slot = nextSlot(cron);
-    if (slot === undefined) return undefined;
-    return {
-      cronId: cron.id,
-      scheduledAt: slot,
-      ...(cron.deferUntil !== undefined ? { notBefore: cron.deferUntil } : {}),
-    };
-  }
-
-  async function enqueueNext(cronId: string): Promise<void> {
-    const cron = await deps.crons.get(cronId);
-    if (!cron || cron.archived || !cron.enabled) return;
-    const job = nextJob(cron);
-    if (job) await deps.jobQueue!.enqueueFire(job);
-  }
-
-  async function fireJob(job: CronFireJob): Promise<void> {
-    const observed = epoch;
-    const cron = await deps.crons.get(job.cronId);
-    if (!cron || cron.archived || !cron.enabled) return;
-    const slot = nextSlot(cron);
-    if (slot !== job.scheduledAt) return;
-    const t = now();
-    if (t < slot) {
-      await deps.jobQueue!.enqueueFire(job);
-      return;
-    }
-    if (isDeferred(cron, t)) {
-      await deps.jobQueue!.enqueueFire({ ...job, notBefore: cron.deferUntil! });
-      return;
-    }
-    if (stopped || observed !== epoch) return;
-    if (!(await deps.crons.claimSlot(job.cronId, slot, t))) return;
-    if (stopped || observed !== epoch) {
-      await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
-      return;
-    }
-    try {
-      const { authzFailed, deferred } = await fire(cron, t, `cron:${cron.id}:${slot}`, slot);
-      if (authzFailed || deferred) {
-        await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
-        if (deferred) await enqueueNext(job.cronId);
-        return;
-      }
-    } catch (e) {
-      reportFailure("scheduler: fire", e);
-      await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
-      return;
-    }
-    await enqueueNext(job.cronId);
-  }
-
-  async function reconcile(): Promise<void> {
-    try {
-      for (const cron of await deps.crons.list()) {
-        if (stopped) break;
-        if (cron.archived || !cron.enabled) continue;
-        const job = nextJob(cron);
-        if (job) await deps.jobQueue!.enqueueFire(job);
-      }
-    } catch (e) {
-      reportFailure("scheduler: reconcile", e);
-    }
-    await sweepStranded(now());
-    await gcFires(now());
-    await deps.sweepAsks?.(now()).catch(reportFailureAs("scheduler: ask sweep", undefined));
-  }
-
-  let stopSignal = Promise.withResolvers<void>();
-  const leaseGuard = createSweeper(
-    () =>
-      deps.jobQueue!.healthy()
-        ? leaderLease.hold(TICK_LEASE_KEY, async (lost) => {
-            let lockLost = false;
-            void lost.then(() => (lockLost = true));
-            while (!stopped && !lockLost && deps.jobQueue!.healthy())
-              await Promise.race([sleep(1000, { unref: true }), lost, stopSignal.promise]);
-          })
-        : undefined,
-    1000,
-    { label: "scheduler lease guard", immediate: true },
-  );
-
   let stopped = false;
   let epoch = 0;
   let started = false;
-  let stopFailed = false;
-  let starting: Promise<void> | null = null;
   let stopping: Promise<void> | null = null;
-  let pausing: Promise<void> | null = null;
   const oldSweeps = new Set<Promise<void>>();
   const retireSweep = (work: Promise<void>) => {
     oldSweeps.add(work);
     void work.finally(() => oldSweeps.delete(work));
   };
   const pending = new Set<Promise<unknown>>();
-  async function runQueueTask(work: () => Promise<void>): Promise<void> {
-    if (stopped) return;
-    const task = withWork(work);
-    pending.add(task);
-    try {
-      await task;
-    } finally {
-      pending.delete(task);
-    }
-  }
   return {
     tick,
-    async runNow(cronId) {
+    async runNow(cronId, initiator) {
       try {
         const preparing = withWork(async (): Promise<RunNowResult> => {
           const cron = await deps.crons.get(cronId);
           if (!cron || cron.archived || !cron.enabled) return { started: false, reason: "unavailable" };
+          initiator ??= { actorId: cron.owner, liveActor: false };
           const t = now();
           const fireKey = `cron:${cron.id}:manual:${randomUUID()}`;
           const begin = await deps.crons.beginFire(
             cronId,
-            { fireKey, threadRef: cronFireThreadRef(cron.id, fireKey), firedAt: t, status: "running" },
+            {
+              fireKey,
+              threadRef: cronFireThreadRef(cron.id, fireKey),
+              firedAt: t,
+              status: "running",
+              ...(initiator ? { initiator } : {}),
+            },
             { exclusive: true },
           );
           if (!begin.begun) {
@@ -510,7 +440,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
               ? { started: false, reason: "already_running", running: begin.running }
               : { started: false, reason: "unavailable" };
           }
-          const settled = withWork(() => fire(cron, t, fireKey)).then(
+          const settled = withWork(() => fire(cron, t, fireKey, undefined, undefined, initiator)).then(
             () => undefined,
             reportFailureAs("scheduler: manual fire", undefined, `cron=${cronId}`),
           );
@@ -529,66 +459,20 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         throw error;
       }
     },
-    notifyChanged(cronId) {
-      if (!deps.jobQueue) return;
-      void enqueueNext(cronId).catch(reportFailureAs("scheduler: cron enqueue", undefined, `cron=${cronId}`));
-    },
+    notifyChanged() {},
     start(intervalMs) {
-      if (started || stopping || pausing || stopFailed) return;
+      if (started || stopping) return;
       started = true;
       stopped = false;
-      stopSignal = Promise.withResolvers<void>();
-      if (!deps.jobQueue) {
-        sweeper.start(intervalMs);
-        return;
-      }
-      const observed = epoch;
-      starting = deps.jobQueue
-        .start(
-          {
-            onFire: (job) => (observed === epoch ? runQueueTask(() => fireJob(job)) : Promise.resolve()),
-            onTick: () => (observed === epoch ? runQueueTask(reconcile) : Promise.resolve()),
-          },
-          intervalMs,
-        )
-        .then(
-          () => {
-            if (!stopped) leaseGuard.start();
-          },
-          (e: unknown) => {
-            if (deps.requireQueueStart) throw e;
-            reportFailure("scheduler: cron job queue start (falling back to interval ticks)", e);
-            if (!stopped) sweeper.start(intervalMs);
-          },
-        );
+      sweeper.start(intervalMs);
     },
-    async ready() {
-      await starting;
-    },
-    stopClaims() {
-      if (pausing) return pausing;
+    async ready() {},
+    async stopClaims() {
       stopped = true;
       started = false;
       epoch++;
-      stopSignal.resolve();
       retireSweep(sweeper.stop());
       sweeper = makeSweeper();
-      const guard = leaseGuard.stop();
-      pausing = (async () => {
-        await starting?.catch(() => {});
-        if (deps.jobQueue?.stopClaims) await deps.jobQueue.stopClaims();
-        else await deps.jobQueue?.stop();
-        await guard;
-        stopFailed = false;
-      })()
-        .catch((error) => {
-          stopFailed = true;
-          throw error;
-        })
-        .finally(() => {
-          pausing = null;
-        });
-      return pausing;
     },
     async drained() {
       while (oldSweeps.size || pending.size) await Promise.all([...oldSweeps, ...pending]);
@@ -596,27 +480,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     stop() {
       if (stopping) return stopping;
       stopped = true;
-      epoch++;
-      stopSignal.resolve();
       started = false;
-      const sweeps = [sweeper.stop(), leaseGuard.stop()];
+      epoch++;
       stopping = (async () => {
-        await starting?.catch(() => {});
-        if (deps.jobQueue?.stopClaims) await deps.jobQueue.stopClaims();
-        await pausing;
-        await Promise.all(sweeps);
-        await Promise.all(oldSweeps);
-        while (pending.size) await Promise.allSettled(pending);
-        await deps.jobQueue?.stop();
-        stopFailed = false;
-      })()
-        .catch((error: unknown) => {
-          stopFailed = true;
-          throw error;
-        })
-        .finally(() => {
-          stopping = null;
-        });
+        await sweeper.stop();
+        while (oldSweeps.size || pending.size) await Promise.allSettled([...oldSweeps, ...pending]);
+      })().finally(() => {
+        stopping = null;
+      });
       return stopping;
     },
   };

@@ -9,7 +9,11 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { createPostgresAdvisoryLock, createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import {
+  createPostgresAdvisoryLock,
+  createNoopAdvisoryLock,
+  createMemoryAdvisoryLock,
+} from "../src/persistence/advisory-lock.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the advisory-lock tests";
@@ -348,4 +352,92 @@ test("pg contended polling releases connections for unrelated keys", { skip, tim
     await pool.end();
     await pg.close();
   }
+});
+
+for (const heldShared of [false, true]) {
+  test(`cancelled memory lock waiters preserve ${heldShared ? "reader" : "writer"} exclusion`, async () => {
+    const { withOperationSignal } = await import("../src/util/async.ts");
+    const lock = createMemoryAdvisoryLock();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const holding = (heldShared ? lock.withSharedLock! : lock.withLock)("one", async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    const controller = new AbortController();
+    const waiting = withOperationSignal(controller.signal, () =>
+      lock.withLock("one", async () => assert.fail("cancelled waiter entered")),
+    );
+    const rejected = assert.rejects(waiting, { name: "AbortError" });
+    controller.abort();
+    await rejected;
+    let laterEntered = false;
+    const later = lock.withSharedLock!("one", async () => {
+      laterEntered = true;
+    });
+    await sleep(10);
+    assert.equal(laterEntered, false);
+    release.resolve();
+    await Promise.all([holding, later]);
+    assert.equal(laterEntered, true);
+  });
+}
+
+test("cancelled Postgres advisory contention stops polling without waiting for its five-minute timeout", async () => {
+  const { withOperationSignal } = await import("../src/util/async.ts");
+  const entered = Promise.withResolvers<void>();
+  let queries = 0;
+  let released = 0;
+  const pg = {
+    sessionPool: async () => ({
+      connect: async () => ({
+        query: async () => {
+          queries++;
+          entered.resolve();
+          return { rows: [{ locked: false }] };
+        },
+        release: () => {
+          released++;
+        },
+      }),
+    }),
+  } as unknown as import("../src/persistence/pg-pool.ts").PgPool;
+  const lock = createPostgresAdvisoryLock(pg, { pollMs: 60_000 });
+  const controller = new AbortController();
+  const waiting = withOperationSignal(controller.signal, () =>
+    lock.withLock("one", async () => assert.fail("cancelled contender entered")),
+  );
+  const rejected = assert.rejects(waiting, { name: "AbortError" });
+  await entered.promise;
+  controller.abort();
+  await rejected;
+  assert.equal(queries, 1);
+  assert.equal(released, 1);
+});
+
+test("Postgres cancellation after lock acquisition releases the lock without entering its body", async () => {
+  const { withOperationSignal } = await import("../src/util/async.ts");
+  const controller = new AbortController();
+  const queries: string[] = [];
+  const pg = {
+    sessionPool: async () => ({
+      connect: async () => ({
+        query: async (text: string) => {
+          queries.push(text);
+          if (text.includes("pg_try_advisory_lock")) controller.abort();
+          return { rows: [{ locked: true }] };
+        },
+        release: () => {},
+      }),
+    }),
+  } as unknown as import("../src/persistence/pg-pool.ts").PgPool;
+  await assert.rejects(
+    withOperationSignal(controller.signal, () =>
+      createPostgresAdvisoryLock(pg).withLock("one", async () => assert.fail("cancelled owner entered")),
+    ),
+    { name: "AbortError" },
+  );
+  assert.equal(queries.length, 2);
+  assert.match(queries[1]!, /pg_advisory_unlock/);
 });

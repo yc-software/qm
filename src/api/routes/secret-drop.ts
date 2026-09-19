@@ -12,7 +12,6 @@ import { samePerson } from "../../directory/person.ts";
 import { escapeHtml, sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
-import { swallow } from "../../util/errors.ts";
 
 const TRIGGERED = "secret-drop links can only be minted on a turn a person sent — this turn was fired by a trigger";
 
@@ -254,6 +253,8 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
       message: "sign in as the account owner to complete this credential drop",
     });
   }
+  if (peeked.rec.orgId !== undefined && peeked.rec.orgId !== configOrgId())
+    return sendJson(res, 404, { error: "not_found", message: "this drop link is for a different org" });
   const attestation = linkClaims === true ? undefined : linkClaims;
   if (!(await dropScopeAuthorized(ctx, peeked.rec, attestation))) {
     await deps.secretDrops.redeem(params.id!).catch(() => null);
@@ -275,6 +276,28 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
     }
   } else if (typeof secret !== "string" || !secret.trim()) {
     return sendJson(res, 400, { error: "bad_request", message: "expected { secret }" });
+  }
+  if (deps.secretDrops.submit) {
+    const credential = await deps.secretDrops.submit(params.id!, {
+      ...(saveFields ? { fields: saveFields } : { secret: secret as string }),
+      ...(attestation
+        ? {
+            attestation: {
+              ...(attestation.botActor ? { botActor: true } : {}),
+              ...(attestation.liveActor ? { liveActor: true } : {}),
+              ...(attestation.members ? { members: attestation.members } : {}),
+            },
+          }
+        : {}),
+    });
+    if (!credential) return sendJson(res, 404, { error: "not_found", message: "this drop link was already used" });
+    audit(deps, {
+      principalId: peeked.rec.ownerId,
+      action: "keychain.drop.redeem",
+      resource: `${credential.service}:${credential.id}`,
+      scopeLabel: peeked.rec.audienceScopeId ?? peeked.rec.ownerId,
+    });
+    return sendJson(res, 200, { ok: true, credential });
   }
   const redeemed = await deps.secretDrops.redeem(params.id!);
   if (!redeemed.ok) {
@@ -315,7 +338,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
       scopeLabel: drop.audienceScopeId ?? drop.ownerId,
     });
     if (mayShare && drop.audienceScopeId) {
-      void (async () => {
+      {
         const pending = (await deps.secretDrops!.siblings(drop).catch(() => [])).map((s) => s.service);
         await deps.fireDropResolution?.({
           id: params.id!,
@@ -329,7 +352,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
           granted: !!grantId,
           ...(pending.length ? { pendingSiblings: pending } : {}),
         });
-      })().catch((e) => swallow("secret-drop: resolution fire failed", e));
+      }
     }
     return sendJson(res, 200, { ok: true, credential: meta });
   } catch (e) {

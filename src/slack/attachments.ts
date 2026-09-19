@@ -1,6 +1,10 @@
+import { randomUUID } from "node:crypto";
+import { assertOperationActive, getOperationSignal } from "../util/async.ts";
+import { DurableTaskDeferred } from "../durable/tasks.ts";
 import { sleep } from "./util.ts";
 import { channelShareTs, parseUploadedFileIds, slackErrorCode } from "./payloads.ts";
 import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
+import type { DeliveryTaskContext } from "../delivery/task-delivery.ts";
 
 export interface IncomingAttachment {
   name: string;
@@ -227,4 +231,107 @@ export function uploadFailureNote(err: unknown): string {
     return `⚠️ I couldn't attach the file(s) — check my upload permission (${needed}).`;
   }
   return `⚠️ I couldn't attach the file(s)${code ? ` (Slack said: ${code})` : ""}. Try again in a moment.`;
+}
+
+export interface DurableUploadClient {
+  files: {
+    getUploadURLExternal(input: { filename: string; length: number }): Promise<{
+      file_id?: string;
+      upload_url?: string;
+    }>;
+    completeUploadExternal(input: {
+      files: Array<{ id: string; title: string }>;
+      channel_id: string;
+      thread_ts?: string;
+    }): Promise<unknown>;
+    info(input: { file: string }): Promise<unknown>;
+  };
+}
+
+export async function uploadDurableAttachment(
+  context: DeliveryTaskContext,
+  key: string,
+  client: DurableUploadClient,
+  channel: string,
+  threadTs: string | undefined,
+  attachment: OutgoingAttachment,
+  blobs: BlobSource,
+  upload: typeof fetch = fetch,
+): Promise<{ fileId: string; messageTs: string }> {
+  for (let generation = 0; ; generation++) {
+    const attemptKey = generation ? `${key}:retry:${generation}` : key;
+    const allocation = await context.step(`${attemptKey}:upload`, async () => {
+      let bytes: Buffer;
+      try {
+        bytes = await blobs.readBlob(attachment.blobId);
+      } catch (error) {
+        assertOperationActive();
+        if (!attachment.artifactId || !attachment.artifactViewerId) throw error;
+        bytes = await blobs.readFileArtifact(attachment.artifactId, attachment.artifactViewerId);
+      }
+      assertOperationActive();
+      const allocated = await client.files.getUploadURLExternal({ filename: attachment.name, length: bytes.length });
+      if (!allocated.file_id || !allocated.upload_url) throw new Error("Slack did not allocate a file upload");
+      assertOperationActive();
+      const signal = getOperationSignal();
+      const response = await upload(allocated.upload_url, {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: bytes,
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(300_000)]) : AbortSignal.timeout(300_000),
+      });
+      if (!response.ok) throw new Error(`Slack file upload failed: ${response.status}`);
+      return { fileId: allocated.file_id, completionProtocol: 1 };
+    });
+    const shared = async () => {
+      try {
+        assertOperationActive();
+        return channelShareTs(await client.files.info({ file: allocation.fileId }), channel);
+      } catch (error) {
+        if (["file_not_found", "file_deleted"].includes(slackErrorCode(error) ?? "")) return undefined;
+        throw error;
+      }
+    };
+    const execution = randomUUID();
+    const completionOwner = await context.step(`${attemptKey}:completion-attempt`, async () => execution);
+    const completion = await context.step(`${attemptKey}:complete`, async () => {
+      const messageTs = await shared();
+      if (messageTs) return { expired: false, messageTs };
+      try {
+        assertOperationActive();
+        await client.files.completeUploadExternal({
+          files: [{ id: allocation.fileId, title: attachment.name }],
+          channel_id: channel,
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+        });
+      } catch (error) {
+        const reconciled = await shared();
+        if (reconciled) return { expired: false, messageTs: reconciled };
+        if (slackErrorCode(error) !== "file_not_found") throw error;
+        if (completionOwner === execution && allocation.completionProtocol === 1) return { expired: true };
+        throw new SlackUploadPending(allocation.fileId, "completion outcome is uncertain");
+      }
+      return { expired: false };
+    });
+    if (completion.expired) {
+      if (completionOwner === execution) throw new Error(`Slack upload ${allocation.fileId} expired before completion`);
+      continue;
+    }
+    return context.step(`${attemptKey}:share`, async () => {
+      let messageTs = completion.messageTs;
+      for (let attempt = 0; !messageTs && attempt < 12; attempt++) {
+        messageTs = await shared();
+        if (!messageTs) await sleep(250);
+      }
+      if (!messageTs) throw new SlackUploadPending(allocation.fileId, "share is not visible yet");
+      return { fileId: allocation.fileId, messageTs };
+    });
+  }
+}
+
+class SlackUploadPending extends DurableTaskDeferred {
+  constructor(fileId: string, reason: string) {
+    super(15);
+    this.message = `Slack upload ${fileId}: ${reason}; retaining the file for reconciliation`;
+  }
 }

@@ -17,6 +17,8 @@ import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-to
 import { installFakeModal, type FakeModal } from "./support/fake-modal.ts";
 import { ModalSandboxGoneError, type ModalClient } from "../src/sandbox/modal-client.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { assertOperationActive, getOperationSignal, withAbort, withOperationSignal } from "../src/util/async.ts";
+import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 
 let fake: FakeModal;
 let sandbox: Sandbox;
@@ -55,6 +57,99 @@ test("an already-aborted signal never executes a command", async () => {
   await assert.rejects(sandbox.run(handle, "echo must-not-run", { signal }), /aborted/i);
   assert.equal(fake.execScripts().length, before);
 });
+
+test("canceling a disappeared Modal command cannot create a replacement during cleanup", async () => {
+  const controller = new AbortController();
+  const entered = Promise.withResolvers<void>();
+  let creates = 0;
+  let kills = 0;
+  const client: ModalClient = {
+    ...fake.client,
+    async create(options) {
+      creates++;
+      const session = await fake.client.create(options);
+      return {
+        ...session,
+        async runCommand(command, options) {
+          if (command.includes("qm-abort-body")) {
+            entered.resolve();
+            return withAbort(() => new Promise(() => {}), getOperationSignal());
+          }
+          if (command.includes("i=0")) {
+            assertOperationActive();
+            kills++;
+            await session.terminate();
+            throw new ModalSandboxGoneError(session.sandboxId, "disappeared before cleanup");
+          }
+          return session.runCommand(command, options);
+        },
+      };
+    },
+  };
+  const sandbox = make({ client });
+  const handle = await sandbox.provision(layers);
+  const rejected = assert.rejects(
+    withOperationSignal(controller.signal, () => sandbox.run(handle, "qm-abort-body")),
+    (error) => error === controller.signal.reason,
+  );
+  await entered.promise;
+  controller.abort();
+  await rejected;
+  assert.equal(kills, 1);
+  assert.equal(creates, 1);
+});
+
+for (const terminationFails of [false, true]) {
+  test(`cancelled Modal hydration retains safe readiness when deletion ${terminationFails ? "fails" : "succeeds"}`, async () => {
+    const controller = new AbortController();
+    const reason = new Error("deployment handoff");
+    const backing = createMemoryMap<StoredModalSandbox>();
+    const store: DurableMap<StoredModalSandbox> = {
+      ...backing,
+      async merge(id, patch) {
+        assertOperationActive();
+        return backing.merge(id, patch);
+      },
+      async update(id, change) {
+        assertOperationActive();
+        return backing.update!(id, change);
+      },
+    };
+    let deletes = 0;
+    const client: ModalClient = {
+      ...fake.client,
+      async create(options) {
+        const session = await fake.client.create(options);
+        return {
+          ...session,
+          async terminate() {
+            assertOperationActive();
+            assert.notEqual(getOperationSignal(), controller.signal);
+            deletes++;
+            if (terminationFails) throw new Error("provider unavailable");
+            await session.terminate();
+          },
+        };
+      },
+    };
+    const snapshots = {
+      ...createMemorySnapshotStore(),
+      async open() {
+        controller.abort(reason);
+        throw reason;
+      },
+    };
+    await assert.rejects(
+      withOperationSignal(controller.signal, () => make({ client, store, snapshots }).provision(layers)),
+      (error) => error === reason,
+    );
+    assert.equal(deletes, 1);
+    assert.equal((await backing.get(scope))?.hydrationPending, terminationFails);
+    const replacement = make({ store });
+    if (terminationFails) await assert.rejects(replacement.provision(layers), /hydration was interrupted/);
+    else assert.equal((await replacement.provision(layers)).coldStart, true);
+  });
+}
 
 test("streams and exit codes are exact", async () => {
   const h = await sandbox.provision(layers);

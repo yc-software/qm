@@ -426,3 +426,28 @@ test("a NonRetryableTurnError keeps its human-readable reason on the stored resu
   await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run!));
   assert.equal((await runs.get(run!.id))?.result?.reason, "Codex turn exceeded 300s wall clock");
 });
+
+test("processRun cancels when heartbeat calls stall past the last confirmed lease", async () => {
+  const runtime = createMemoryRunStore();
+  const queued = await runtime.runs.enqueue({ sessionId: "heartbeat-stall", request: turn });
+  const claimed = await runtime.runs.claimById(queued.run.id, "worker", 30);
+  runtime.runs.heartbeat = () => new Promise<boolean>(() => {});
+  let cancelled = false;
+  const orchestrator = {
+    handleTurn: async (turn: OrchestratorInput) => {
+      await new Promise<void>((resolve) =>
+        turn.cancel!.addEventListener(
+          "abort",
+          () => {
+            cancelled = true;
+            resolve();
+          },
+          { once: true },
+        ),
+      );
+      return { status: "silent" as const };
+    },
+  } as Orchestrator;
+  await processRun({ runs: runtime.runs, orchestrator, leaseTtlMs: 30, heartbeatIntervalMs: 5 }, claimed!);
+  assert.equal(cancelled, true);
+});

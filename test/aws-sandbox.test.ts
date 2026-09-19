@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createAwsSandbox } from "../src/sandbox/aws-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { sleep } from "../src/util/async.ts";
+import { assertOperationActive, getOperationSignal, sleep, withOperationSignal } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { installFakeMicrovm, type FakeMicrovm } from "./support/fake-microvm.ts";
@@ -202,6 +202,47 @@ test("a hydrate failure terminates the fresh body instead of cold-starting over 
   const h2 = await sb.provision(layers);
   assert.equal(await sb.readFile(h2, "notes/todo.txt"), "buy milk");
 });
+
+for (const stage of ["readiness", "hydration"] as const) {
+  for (const terminationFails of [false, true]) {
+    test(`cancelled AWS ${stage} retains safe provisioning when deletion ${terminationFails ? "fails" : "succeeds"}`, async () => {
+      const fake = installFakeMicrovm();
+      const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
+      const store = createMemoryMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
+      const controller = new AbortController();
+      const reason = new Error("deployment handoff");
+      const cancel = async () => {
+        controller.abort(reason);
+        throw reason;
+      };
+      const wait = fake.api.waitForState;
+      const send = fake.s3.send;
+      if (stage === "readiness") fake.api.waitForState = cancel;
+      else fake.s3.send = cancel;
+      const terminate = fake.api.terminate;
+      let deletes = 0;
+      fake.api.terminate = async (id) => {
+        assertOperationActive();
+        assert.notEqual(getOperationSignal(), controller.signal);
+        deletes++;
+        if (terminationFails) throw new Error("provider unavailable");
+        await terminate(id);
+      };
+      const owner = "personal:cancelled-provision";
+      await assert.rejects(
+        withOperationSignal(controller.signal, () => makeSandbox(fake, { store }).provision(rw(owner))),
+        (error) => error === reason,
+      );
+      assert.equal(deletes, 1);
+      assert.equal((await store.get(owner))?.provisioning, true);
+      fake.api.waitForState = wait;
+      fake.s3.send = send;
+      const replacement = makeSandbox(fake, { store });
+      if (terminationFails) await assert.rejects(replacement.provision(rw(owner)), /incomplete provisioning/);
+      else assert.equal((await replacement.provision(rw(owner))).coldStart, true);
+    });
+  }
+}
 
 test("scope retirement terminates its body and removes only its snapshot, including after restart", async () => {
   const fake = installFakeMicrovm();

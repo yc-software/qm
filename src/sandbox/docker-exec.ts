@@ -1,4 +1,6 @@
-import { spawn } from "node:child_process";
+import { getOperationSignal } from "../util/async.ts";
+import { spawnCaptured } from "../util/process.ts";
+import { errMessage } from "../util/errors.ts";
 
 export type DockerExec = (
   args: string[],
@@ -6,21 +8,13 @@ export type DockerExec = (
 ) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 export function spawnDockerExec(dockerBin: string): DockerExec {
-  return (args, timeoutMs = 60_000) =>
-    new Promise((res) => {
-      const child = spawn(dockerBin, args, { timeout: timeoutMs, killSignal: "SIGKILL" });
-      let stdout = "";
-      let stderr = "";
-      let settled = false;
-      const done = (r: { code: number; stdout: string; stderr: string }) => {
-        if (!settled) {
-          settled = true;
-          res(r);
-        }
-      };
-      child.stdout.on("data", (d) => (stdout += d.toString()));
-      child.stderr.on("data", (d) => (stderr += d.toString()));
-      child.on("error", (e) => done({ code: -1, stdout, stderr: `${stderr}\n${e.message}` }));
-      child.on("close", (code) => done({ code: code ?? -1, stdout, stderr }));
-    });
+  return async (args, timeoutMs = 60_000) => {
+    try {
+      return await spawnCaptured(dockerBin, args, { timeoutMs });
+    } catch (error) {
+      getOperationSignal()?.throwIfAborted();
+      const captured = error as { stdout?: string; stderr?: string };
+      return { code: -1, stdout: captured.stdout ?? "", stderr: `${captured.stderr ?? ""}\n${errMessage(error)}` };
+    }
+  };
 }

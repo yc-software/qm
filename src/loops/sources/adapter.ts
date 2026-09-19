@@ -1,4 +1,4 @@
-import type { LoopItem, LoopSourcePayload } from "../../types.ts";
+import type { LoopItem, LoopSourcePayload, LoopSourceActionResult } from "../../types.ts";
 
 export interface ConnectorTokenSource {
   connectorAccessToken(host: string, principalId: string, accountType?: string): Promise<string | null>;
@@ -19,9 +19,7 @@ export interface SourceActionDeps {
   slackClient?: (token: string) => SlackUserClient;
 }
 
-export type SourceActionResult =
-  | { ok: true; result: string; resolves?: boolean; payloadPatch?: LoopSourcePayload }
-  | { ok: false; reason: "not_connected" | "bad_item" | "upstream"; message: string; partial?: boolean };
+export type SourceActionResult = LoopSourceActionResult;
 
 export interface ConversationEvent {
   source: string;

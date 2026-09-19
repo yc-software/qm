@@ -73,8 +73,10 @@ function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
         await w.loops.items.setProposal(item.id, { data: { body: "shorter" }, by: "agent" });
         return w.loops.items.get(item.id);
       },
-      itemAction: async (_loop: Loop, _item: LoopItem, kind: string, args: Record<string, unknown>) => {
+      itemAction: async (_loop: Loop, item: LoopItem, kind: string, args: Record<string, unknown>) => {
         w.actions.push({ kind, args });
+        await w.loops.items.appendThread(item.id, [{ role: "agent", text: `did ${kind}` }]);
+        await w.loops.items.recordAction(item.id, { kind, outcome: "actioned", result: `did ${kind}` });
         return { ok: true, reply: `did ${kind}` };
       },
     };

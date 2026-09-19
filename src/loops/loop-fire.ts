@@ -1,9 +1,13 @@
-import { cronTriggerAuthority } from "../cron/authority.ts";
+import { cronTriggerAuthority, unattendedActorRefusal } from "../cron/authority.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
 import { samePerson } from "../directory/person.ts";
-import type { Loop, LoopItem, LoopOutput, TurnResult } from "../types.ts";
-import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
+import { randomUUID } from "node:crypto";
+import { isDurableControlFlow, type DurableTasks, type DurableTaskContext } from "../durable/tasks.ts";
+import { checkpointLoopStore } from "./workflow.ts";
+import type { SourceActionDeps, SourceActionResult } from "./sources/adapter.ts";
+import type { Loop, LoopItem, LoopOutput, TurnResult, TriggerInitiator } from "../types.ts";
+import { runTrigger, triggerOwnerMayAct, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
 import { errMessage } from "../util/errors.ts";
@@ -30,6 +34,8 @@ import { ledgerState } from "./ledger-view.ts";
 import { adapterForItem } from "./sources/index.ts";
 
 export interface LoopFireDeps {
+  tasks?: DurableTasks;
+  sources?: Omit<SourceActionDeps, "owner" | "actor">;
   loops: LoopStore;
   crons?: Pick<CronStore, "get">;
   samePerson?: (a: string, b: string) => Promise<boolean>;
@@ -54,17 +60,44 @@ interface ItemTurnResult {
 }
 
 export interface LoopFireService {
-  fire(loopId: string, fireKey: string, cronId?: string): Promise<LoopFireResult>;
-  followUp(loop: Loop, item: LoopItem, message: string, actorId: string): Promise<LoopItem | null>;
+  fire(loopId: string, fireKey: string, cronId?: string, initiator?: TriggerInitiator): Promise<LoopFireResult>;
+  requestFire?(loopId: string, fireKey: string, cronId?: string, initiator?: TriggerInitiator): Promise<void>;
+  followUp(
+    loop: Loop,
+    item: LoopItem,
+    message: string,
+    actorId: string,
+    initiator?: TriggerInitiator,
+  ): Promise<LoopItem | null>;
   itemAction(
     loop: Loop,
     item: LoopItem,
     kind: string,
     args: Record<string, unknown>,
     actorId: string,
+    initiator?: TriggerInitiator,
   ): Promise<ItemTurnResult>;
-  shipOutput(loopId: string, outputId: string, actorId: string, note?: string): Promise<LoopOutput | null>;
-  returnOutput(loopId: string, outputId: string, actorId: string, note: string): Promise<LoopOutput | null>;
+  sourceAction?(
+    loop: Loop,
+    item: LoopItem,
+    kind: string,
+    args: Record<string, unknown>,
+    actor: "human" | "agent",
+  ): Promise<SourceActionResult>;
+  shipOutput(
+    loopId: string,
+    outputId: string,
+    actorId: string,
+    note?: string,
+    initiator?: TriggerInitiator,
+  ): Promise<LoopOutput | null>;
+  returnOutput(
+    loopId: string,
+    outputId: string,
+    actorId: string,
+    note: string,
+    initiator?: TriggerInitiator,
+  ): Promise<LoopOutput | null>;
   sweepStale(now: number): Promise<void>;
 }
 
@@ -363,37 +396,87 @@ function shipPrompt(loop: Loop, output: LoopOutput, note?: string): string {
   ].join("\n");
 }
 
-export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
+export function createLoopFireService(inputDeps: LoopFireDeps, context?: DurableTaskContext): LoopFireService {
+  const stores = (prefix: string): LoopFireDeps =>
+    context
+      ? {
+          ...inputDeps,
+          loops: checkpointLoopStore(inputDeps.loops, context, `${prefix}:loops`),
+          items: checkpointLoopStore(inputDeps.items, context, `${prefix}:items`),
+          outputs: checkpointLoopStore(inputDeps.outputs, context, `${prefix}:outputs`),
+          grants: checkpointLoopStore(inputDeps.grants, context, `${prefix}:grants`),
+        }
+      : inputDeps;
+  const deps = stores("fire");
+  if (deps.tasks && !context) return createLoopTasks(deps);
+
+  async function currentDecisionItem(itemId: string, token: string): Promise<LoopItem | null> {
+    const item = await inputDeps.items.get(itemId);
+    return item?.decisionToken === token ? item : null;
+  }
+
   async function stageTurn(
     loop: Loop,
     fireKey: string,
     threadRef: string,
     input: string,
-    actorId?: string,
+    options: { actorId?: string; cronId?: string; initiator?: TriggerInitiator; run?: TriggerDeps["run"] } = {},
   ): Promise<TriggerOutcome> {
-    let cron;
-    try {
-      const bound = await boundLoopCron(loop, deps.crons);
-      cron = bound?.loopId === loop.id ? bound : null;
-    } catch (e) {
-      return { authzFailed: true, ran: false, note: errMessage(e) };
-    }
-    if (cron?.unattendedGrants?.length && (!cron.enabled || cron.archived)) {
-      return { authzFailed: true, ran: false, note: "loop cron is disabled or archived" };
-    }
-    if (
-      cron?.unattendedGrants?.length &&
-      actorId !== undefined &&
-      !(await (deps.samePerson ?? samePerson)(cron.owner, actorId))
-    ) {
-      return { authzFailed: true, ran: false, note: "only the owner may direct a privileged loop turn" };
-    }
-    return runTrigger(deps.trigger, {
-      ...cronTriggerAuthority(cron ?? loop),
-      input,
-      fireKey,
-      threadRef,
-      surface: "loop",
+    const execute = async (): Promise<TriggerOutcome> => {
+      const current = await inputDeps.loops.get(loop.id);
+      if (!current) return { authzFailed: true, ran: false, note: "loop not found" };
+      let cron;
+      try {
+        const bound = await boundLoopCron(current, inputDeps.crons, options.cronId);
+        cron = bound?.loopId === current.id ? bound : null;
+      } catch (e) {
+        return { authzFailed: true, ran: false, note: errMessage(e) };
+      }
+      if (cron?.unattendedGrants?.length && (!cron.enabled || cron.archived)) {
+        return { authzFailed: true, ran: false, note: "loop cron is disabled or archived" };
+      }
+      if (cron?.unattendedGrants?.length && options.initiator) {
+        const refusal = await unattendedActorRefusal(cron.owner, options.initiator, inputDeps.samePerson);
+        if (refusal) return { authzFailed: true, ran: false, note: refusal };
+      }
+      if (
+        cron?.unattendedGrants?.length &&
+        options.actorId !== undefined &&
+        !(await (inputDeps.samePerson ?? samePerson)(cron.owner, options.actorId))
+      ) {
+        return { authzFailed: true, ran: false, note: "only the owner may direct a privileged loop turn" };
+      }
+      return runTrigger(
+        { ...deps.trigger, run: options.run ?? deps.trigger.run },
+        {
+          ...cronTriggerAuthority(cron ?? current),
+          input,
+          fireKey,
+          threadRef,
+          surface: "loop",
+        },
+        context ? { ...context, step: async (_name, work) => work() } : undefined,
+      );
+    };
+    return context ? context.step(`${fireKey}:turn`, execute) : execute();
+  }
+
+  function fireStageTurn(
+    loop: Loop,
+    fireKey: string,
+    threadRef: string,
+    input: string,
+    cronId?: string,
+    initiator?: TriggerInitiator,
+  ): Promise<TriggerOutcome> {
+    return stageTurn(loop, fireKey, threadRef, input, {
+      cronId,
+      initiator,
+      run: async (request) => {
+        const current = await inputDeps.loops.get(loop.id);
+        if (!current || !isRunnable(current)) return { status: "refused", reason: "the loop is no longer runnable" };
+        return deps.trigger.run(request);
+      },
     });
   }
 
@@ -416,16 +499,19 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     return null;
   }
 
-  async function applyGovernor(loopId: string, summary?: FireSummary, evaluatedAt = Date.now()): Promise<void> {
+  async function applyGovernor(loopId: string, summary?: FireSummary, evaluatedAt?: number): Promise<void> {
+    const at = context
+      ? await context.step(`governor:${loopId}:at`, async () => evaluatedAt ?? Date.now())
+      : (evaluatedAt ?? Date.now());
     const loop = await deps.loops.get(loopId);
     if (!loop) return;
-    const vitals = await collectVitals(loop, { items: deps.items, outputs: deps.outputs }, evaluatedAt);
+    const vitals = await collectVitals(loop, { items: deps.items, outputs: deps.outputs }, at);
     if (summary?.undeclaredShipActions.length) {
       vitals.undeclaredShipActions = [
         ...new Set([...(vitals.undeclaredShipActions ?? []), ...summary.undeclaredShipActions]),
       ];
     }
-    const verdict = evaluateGovernor(loop, vitals, evaluatedAt);
+    const verdict = evaluateGovernor(loop, vitals, at);
     const previous = loop.health;
     if (verdict.actions.some((action) => action.type === "quarantine")) {
       await deps.loops.setState(loop.id, "quarantined");
@@ -444,31 +530,50 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
           (action) => `- ${action.type}: ${action.reason}${action.recommendation ? ` — ${action.recommendation}` : ""}`,
         ),
       ];
-      await reachEnqueue({
-        deliveries: deps.trigger.deliveries,
-        destination: loop.destination,
-        text: lines.join("\n"),
-        idempotencyKey: `loop:${loop.id}:health:${verdict.health}:${evaluatedAt}`,
-        provenance: {
-          trigger: "loop",
-          surface: "loop",
-          fireKey: `loop:${loop.id}:governor`,
-          sourceScopeId: loop.ownerScopeId,
-          sourceThreadRef: `loop:${loop.id}:governor`,
-        },
-      }).catch((e: unknown) => console.error("%s", `[loops] governor ping for ${loop.id} failed:`, errMessage(e)));
+      const destination = loop.destination;
+      const deliver = () =>
+        reachEnqueue({
+          deliveries: deps.trigger.deliveries,
+          destination,
+          text: lines.join("\n"),
+          idempotencyKey: `loop:${loop.id}:health:${verdict.health}:${at}`,
+          provenance: {
+            trigger: "loop",
+            surface: "loop",
+            fireKey: `loop:${loop.id}:governor`,
+            sourceScopeId: loop.ownerScopeId,
+            sourceThreadRef: `loop:${loop.id}:governor`,
+          },
+        });
+      if (context) await context.step(`governor:${loopId}:delivery`, deliver);
+      else
+        await deliver().catch((e: unknown) =>
+          console.error("%s", `[loops] governor ping for ${loop.id} failed:`, errMessage(e)),
+        );
     }
   }
 
-  async function fire(loopId: string, fireKey: string, cronId?: string): Promise<LoopFireResult> {
+  async function fire(
+    loopId: string,
+    fireKey: string,
+    cronId?: string,
+    initiator?: TriggerInitiator,
+  ): Promise<LoopFireResult> {
     const loop = await deps.loops.get(loopId);
     if (!loop) return { status: "failed", note: "loop not found" };
-    try {
-      await boundLoopCron(loop, deps.crons, cronId);
-    } catch (e) {
-      return { status: "failed", note: errMessage(e) };
-    }
-    if (loop.state === "enabled" && (await deps.trigger.idempotency.committed(`${fireKey}:intake`))) {
+    const bindingRefusal = async (): Promise<string | null> => {
+      try {
+        const current = await inputDeps.loops.get(loopId);
+        if (!current) return "loop not found";
+        await boundLoopCron(current, inputDeps.crons, cronId);
+        return null;
+      } catch (e) {
+        return errMessage(e);
+      }
+    };
+    const refusal = context ? await context.step(`${fireKey}:binding`, bindingRefusal) : await bindingRefusal();
+    if (refusal) return { status: "failed", note: refusal };
+    if (!context && loop.state === "enabled" && (await deps.trigger.idempotency.committed(`${fireKey}:intake`))) {
       return { status: "silent", note: "duplicate fire key" };
     }
     const threadRef = loopFireThreadRef(loopId, fireKey);
@@ -483,18 +588,27 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         { loops: deps.loops, items: deps.items, outputs: deps.outputs },
         {
           enumerate: async () => {
-            const outcome = await stageTurn(loop, `${fireKey}:intake`, threadRef, intakePrompt(loop));
+            const outcome = await fireStageTurn(
+              loop,
+              `${fireKey}:intake`,
+              threadRef,
+              intakePrompt(loop),
+              cronId,
+              initiator,
+            );
             if (!outcome.ran && !outcome.authzFailed) throw new DuplicateLoopFireError("duplicate fire key");
             const failure = stageFailure("intake", outcome);
             if (failure) throw failure.error;
             return parseIntake(outcome.reply ?? "");
           },
           work: async ({ item, guidance }) => {
-            const outcome = await stageTurn(
+            const outcome = await fireStageTurn(
               loop,
               `${fireKey}:work:${item.id}:${item.attempts}`,
               threadRef,
               workPrompt(loop, item, guidance),
+              cronId,
+              initiator,
             );
             const failure = stageFailure("work", outcome);
             if (failure) throw failure.error;
@@ -503,11 +617,13 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
           },
           captureOutputs: async ({ item }) => parseOutputs(workReplies.get(item.id) ?? ""),
           evaluate: async ({ item, attempt }) => {
-            const outcome = await stageTurn(
+            const outcome = await fireStageTurn(
               loop,
               `${fireKey}:judge:${item.id}:${attempt}`,
               threadRef,
               judgePrompt(loop, item),
+              cronId,
+              initiator,
             );
             const failure = stageFailure("judge", outcome);
             if (failure) throw failure.error;
@@ -519,19 +635,13 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
               maxAttempts,
             );
           },
-          authorizeAutoShip: async (output) => {
-            const currentLoop = await deps.loops.get(loop.id);
-            if (!currentLoop || !isRunnable(currentLoop)) return null;
-            const currentGrants = await deps.grants.byLoop(loop.id);
-            return decideShip(currentLoop, outputCandidate(output), currentGrants).outcome === "auto"
-              ? currentLoop
-              : null;
-          },
-          ship: async ({ output }) => shipOutput(loop.id, output.id, loop.owner, "auto-shipped by policy", true),
+          ship: async ({ output }) =>
+            shipOutput(loop.id, output.id, loop.owner, "auto-shipped by policy", initiator, true, cronId),
         },
         grants,
       );
     } catch (e) {
+      if (isDurableControlFlow(e)) throw e;
       if (e instanceof DuplicateLoopFireError) return { status: "silent", note: "duplicate fire key" };
       await deps.loops.recordFireOutcome(loopId, true);
       await applyGovernor(loopId);
@@ -557,8 +667,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     outputId: string,
     actorId: string,
     note?: string,
+    initiator?: TriggerInitiator,
     requireAuto = false,
+    cronId?: string,
   ): Promise<LoopOutput | null> {
+    const deps = stores(`ship:${outputId}`);
     let loop = await deps.loops.get(loopId);
     let output = await deps.outputs.get(outputId);
     if (!loop || !output || output.loopId !== loopId) return null;
@@ -566,6 +679,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     const decisionItemId = output.itemId;
     const decisionToken = await deps.items.acquireDecision(decisionItemId);
     if (!decisionToken) return null;
+    let interrupted = false;
+    let claimToken: string | undefined;
     try {
       output = await deps.outputs.get(outputId);
       if (!output || output.loopId !== loopId) return null;
@@ -584,7 +699,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       }
       const claimed = await deps.outputs.claimShipping(outputId);
       if (!claimed) return null;
-      const claimToken = claimed.claimToken!;
+      claimToken = claimed.claimToken!;
       const fireKey = `loop:${loopId}:ship:${outputId}`;
       if (!(await deps.outputs.beginShipAttempt(outputId, claimToken, fireKey))) return null;
       const outcome = await stageTurn(
@@ -592,7 +707,29 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         fireKey,
         loopFireThreadRef(loopId, fireKey),
         shipPrompt(loop, claimed, note),
-        actorId,
+        {
+          actorId,
+          initiator,
+          cronId,
+          run: async (request) => {
+            const currentLoop = await inputDeps.loops.get(loopId);
+            const currentOutput = await inputDeps.outputs.get(outputId);
+            const currentItem = await currentDecisionItem(decisionItemId, decisionToken);
+            if (
+              !currentLoop ||
+              !isRunnable(currentLoop) ||
+              currentOutput?.state !== "shipping" ||
+              currentOutput.claimToken !== claimToken ||
+              currentItem?.status !== "ready" ||
+              !currentItem.outputIds.includes(outputId) ||
+              (requireAuto &&
+                decideShip(currentLoop, outputCandidate(currentOutput), await inputDeps.grants.byLoop(loopId))
+                  .outcome !== "auto")
+            )
+              throw new ShipAuthorizationChanged();
+            return deps.trigger.run(request);
+          },
+        },
       );
       if (!outcome.ran && !outcome.authzFailed && (await deps.outputs.get(outputId))?.shipFireKey === fireKey) {
         return deps.outputs.markUnconfirmed(outputId, claimToken);
@@ -600,7 +737,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       const failure = stageFailure("ship", outcome);
       if (failure) {
         await deps.outputs.failShipping(outputId, claimToken);
-        throw failure.error;
+        throw new ShipTurnFailed(failure.error.message);
       }
       const shipped = await deps.outputs.completeShipping(
         outputId,
@@ -615,8 +752,15 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       );
       if (shipped) await settleItem(loopId, shipped.itemId);
       return shipped;
+    } catch (error) {
+      if (error instanceof ShipAuthorizationChanged) {
+        if (claimToken) await deps.outputs.failShipping(outputId, claimToken);
+        return null;
+      }
+      interrupted = isDurableControlFlow(error);
+      throw error;
     } finally {
-      await deps.items.releaseDecision(decisionItemId, decisionToken);
+      if (!interrupted) await deps.items.releaseDecision(decisionItemId, decisionToken);
     }
   }
 
@@ -632,12 +776,27 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     outputId: string,
     actorId: string,
     note: string,
+    initiator?: TriggerInitiator,
   ): Promise<LoopOutput | null> {
+    const deps = stores(`return:${outputId}`);
+    const authorize = async () => {
+      if (!initiator) return true;
+      const current = await inputDeps.loops.get(loopId);
+      if (!current) return false;
+      const cron = await boundLoopCron(current, inputDeps.crons);
+      if (cron?.loopId !== current.id || !cron.unattendedGrants?.length) return true;
+      return (
+        cron.enabled && !cron.archived && !(await unattendedActorRefusal(cron.owner, initiator, inputDeps.samePerson))
+      );
+    };
+    const authorized = context ? await context.step(`return:${outputId}:authority`, authorize) : await authorize();
+    if (!authorized) return null;
     const output = await deps.outputs.get(outputId);
     if (!output || output.loopId !== loopId || (output.state !== "ready" && output.state !== "unconfirmed"))
       return null;
     const decisionToken = await deps.items.acquireDecision(output.itemId);
     if (!decisionToken) return null;
+    let interrupted = false;
     try {
       if ((await deps.outputs.byItem(output.itemId)).some((candidate) => candidate.state === "shipping")) return null;
       const returned = await deps.outputs.returnToLoop(outputId, { actorId, note });
@@ -646,8 +805,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         await deps.items.returnToWork(returned.itemId, note);
       }
       return returned;
+    } catch (error) {
+      interrupted = isDurableControlFlow(error);
+      throw error;
     } finally {
-      await deps.items.releaseDecision(output.itemId, decisionToken);
+      if (!interrupted) await deps.items.releaseDecision(output.itemId, decisionToken);
     }
   }
 
@@ -669,8 +831,9 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     input: string,
     fireKey: string,
     actorId: string,
+    initiator?: TriggerInitiator,
   ): Promise<ItemTurnResult> {
-    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), input, actorId);
+    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), input, { actorId, initiator });
     const failure = stageFailure("item turn", outcome);
     if (failure) return { ok: false, note: failure.error.message, userNote: failure.userMessage };
     return {
@@ -680,11 +843,17 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     };
   }
 
-  async function followUp(loop: Loop, item: LoopItem, message: string, actorId: string): Promise<LoopItem | null> {
+  async function followUp(
+    loop: Loop,
+    item: LoopItem,
+    message: string,
+    actorId: string,
+    initiator?: TriggerInitiator,
+  ): Promise<LoopItem | null> {
     await deps.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
     const asked = (await deps.items.get(item.id)) ?? item;
-    const fireKey = `loop:${loop.id}:item:${item.id}:followup:${Date.now()}`;
-    const turn = await itemTurn(loop, asked, followUpPrompt(loop, asked, message), fireKey, actorId);
+    const fireKey = `loop:${loop.id}:item:${item.id}:followup:${context?.taskID ?? randomUUID()}`;
+    const turn = await itemTurn(loop, asked, followUpPrompt(loop, asked, message), fireKey, actorId, initiator);
     if (!turn.ok) {
       await deps.items.appendThread(item.id, [
         { role: "system", text: `The agent could not answer: ${turn.userNote ?? "the turn did not run"}` },
@@ -715,10 +884,270 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     kind: string,
     args: Record<string, unknown>,
     actorId: string,
+    initiator?: TriggerInitiator,
   ): Promise<ItemTurnResult> {
-    const fireKey = `loop:${loop.id}:item:${item.id}:action:${kind}:${Date.now()}`;
-    return itemTurn(loop, item, itemActionPrompt(loop, item, kind, args), fireKey, actorId);
+    const decisionToken = await deps.items.acquireDecision(item.id);
+    if (!decisionToken) return { ok: false, note: "an action is already in progress" };
+    let interrupted = false;
+    try {
+      const fireKey = `loop:${loop.id}:item:${item.id}:action:${kind}:${context?.taskID ?? randomUUID()}`;
+      const outcome = await stageTurn(
+        loop,
+        fireKey,
+        loopItemThreadRef(loop.id, item.id),
+        itemActionPrompt(loop, item, kind, args),
+        {
+          actorId,
+          initiator,
+          run: async (request) => {
+            const current = await currentDecisionItem(item.id, decisionToken);
+            if (!current || ledgerState(current) === "actioned")
+              throw new ItemActionChanged("this item was already actioned or its action claim changed");
+            if (current.proposal?.at !== item.proposal?.at)
+              throw new ItemActionChanged("the draft changed before the action ran");
+            return deps.trigger.run(request);
+          },
+        },
+      );
+      const failure = stageFailure("item turn", outcome);
+      if (failure) return { ok: false, note: failure.error.message, userNote: failure.userMessage };
+      await deps.items.appendThread(item.id, [{ role: "agent", text: outcome.reply ?? `Did "${kind}".` }]);
+      await deps.items.recordAction(item.id, {
+        kind,
+        outcome: "actioned",
+        ...(outcome.reply ? { result: outcome.reply } : {}),
+      });
+      return {
+        ok: true,
+        ...(outcome.reply !== undefined ? { reply: outcome.reply } : {}),
+        ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
+      };
+    } catch (error) {
+      if (error instanceof ItemActionChanged) return { ok: false, note: error.message };
+      interrupted = isDurableControlFlow(error);
+      throw error;
+    } finally {
+      if (!interrupted) await deps.items.releaseDecision(item.id, decisionToken);
+    }
   }
 
-  return { fire, shipOutput, returnOutput, sweepStale, followUp, itemAction };
+  async function sourceAction(
+    loop: Loop,
+    item: LoopItem,
+    kind: string,
+    args: Record<string, unknown>,
+    actor: "human" | "agent",
+  ): Promise<SourceActionResult> {
+    const adapter = adapterForItem(item);
+    if (!adapter || !deps.sources) return { ok: false, reason: "not_connected", message: "connectors are not wired" };
+    const decisionToken = await deps.items.acquireDecision(item.id);
+    if (!decisionToken) return { ok: false, reason: "bad_item", message: "an action is already in progress" };
+    let interrupted = false;
+    try {
+      const act = async () => {
+        const currentLoop = await inputDeps.loops.get(loop.id);
+        if (!currentLoop || !(await triggerOwnerMayAct(deps.trigger, currentLoop.owner, currentLoop.ownerScopeId)))
+          return {
+            ok: false as const,
+            reason: "bad_item" as const,
+            message: "the loop owner is no longer authorized to act in this scope",
+          };
+        const current = await currentDecisionItem(item.id, decisionToken);
+        if (!current || ledgerState(current) === "actioned")
+          return {
+            ok: false as const,
+            reason: "bad_item" as const,
+            message: "this item was already actioned or its action claim changed",
+          };
+        if (current.proposal?.at !== item.proposal?.at)
+          return {
+            ok: false as const,
+            reason: "bad_item" as const,
+            message: "the draft changed before the action ran",
+          };
+        const operationId = `task:${context?.taskID ?? randomUUID()}:source:action`;
+        const receipt = await inputDeps.items.beginSourceAction(item.id, operationId, kind);
+        if (!receipt.fresh)
+          return (
+            receipt.result ?? {
+              ok: false as const,
+              reason: "upstream" as const,
+              partial: true,
+              message: "The previous action may have completed. Check the source before sending again.",
+            }
+          );
+        const result = await adapter.act({ ...deps.sources!, owner: currentLoop.owner, actor }, current, kind, args);
+        await inputDeps.items.finishSourceAction(item.id, operationId, result);
+        return result;
+      };
+      const result = context ? await context.step("source:action", act) : await act();
+      if (!result.ok) {
+        if (result.partial) await deps.items.appendThread(item.id, [{ role: "system", text: result.message }]);
+        return result;
+      }
+      if (result.payloadPatch) await deps.items.annotate(item.id, result.payloadPatch);
+      if (result.resolves !== false)
+        await deps.items.recordAction(item.id, { kind, outcome: "actioned", result: result.result });
+      return result;
+    } catch (error) {
+      interrupted = isDurableControlFlow(error);
+      throw error;
+    } finally {
+      if (!interrupted) await deps.items.releaseDecision(item.id, decisionToken);
+    }
+  }
+
+  return {
+    fire,
+    shipOutput,
+    returnOutput,
+    sweepStale,
+    followUp,
+    itemAction,
+    ...(deps.sources ? { sourceAction } : {}),
+  };
+}
+
+class ItemActionChanged extends Error {}
+class ShipAuthorizationChanged extends Error {}
+class ShipTurnFailed extends Error {}
+
+function createLoopTasks(deps: LoopFireDeps): LoopFireService {
+  const tasks = deps.tasks!;
+  interface FireParams {
+    loopId: string;
+    fireKey: string;
+    cronId?: string;
+    initiator?: TriggerInitiator;
+  }
+  interface FollowUpParams {
+    loop: Loop;
+    item: LoopItem;
+    message: string;
+    actorId: string;
+    initiator?: TriggerInitiator;
+  }
+  interface ActionParams {
+    loop: Loop;
+    item: LoopItem;
+    kind: string;
+    args: Record<string, unknown>;
+    actorId: string;
+    initiator?: TriggerInitiator;
+  }
+  interface SourceParams extends Omit<ActionParams, "actorId" | "initiator"> {
+    actor: "human" | "agent";
+  }
+  interface ShipParams {
+    loopId: string;
+    outputId: string;
+    actorId: string;
+    initiator?: TriggerInitiator;
+    note?: string;
+  }
+  const service = (context: DurableTaskContext) => createLoopFireService({ ...deps, tasks: undefined }, context);
+  tasks.register<FireParams, LoopFireResult>("loop.fire", (context, input) =>
+    service(context).fire(
+      input.loopId,
+      input.fireKey,
+      input.cronId,
+      input.initiator ?? (input.cronId ? undefined : { actorId: "", liveActor: false }),
+    ),
+  );
+  tasks.register<FollowUpParams, LoopItem | null>("loop.followup", (context, input) =>
+    service(context).followUp(
+      input.loop,
+      input.item,
+      input.message,
+      input.actorId,
+      input.initiator ?? { actorId: input.actorId, liveActor: false },
+    ),
+  );
+  tasks.register<ActionParams, ItemTurnResult>("loop.action", (context, input) =>
+    service(context).itemAction(
+      input.loop,
+      input.item,
+      input.kind,
+      input.args,
+      input.actorId,
+      input.initiator ?? { actorId: input.actorId, liveActor: false },
+    ),
+  );
+  tasks.register<SourceParams, SourceActionResult>("loop.source-action", (context, input) =>
+    service(context).sourceAction!(input.loop, input.item, input.kind, input.args, input.actor),
+  );
+  tasks.register<ShipParams, LoopOutput | null | { error: string }>("loop.ship", async (context, input) => {
+    try {
+      return await service(context).shipOutput(
+        input.loopId,
+        input.outputId,
+        input.actorId,
+        input.note,
+        input.initiator ?? { actorId: input.actorId, liveActor: false },
+      );
+    } catch (error) {
+      if (error instanceof ShipTurnFailed) return { error: error.message };
+      throw error;
+    }
+  });
+  tasks.register<ShipParams & { note: string }, LoopOutput | null>("loop.return", (context, input) =>
+    service(context).returnOutput(
+      input.loopId,
+      input.outputId,
+      input.actorId,
+      input.note,
+      input.initiator ?? { actorId: input.actorId, liveActor: false },
+    ),
+  );
+  tasks.register<{ now: number }, void>("loop.governor", (context, input) => service(context).sweepStale(input.now));
+  async function execute<R>(name: string, input: unknown, idempotencyKey: string): Promise<R> {
+    const { taskId } = await tasks.spawn(name, input, { idempotencyKey, maxAttempts: null });
+    return tasks.result<R>(taskId);
+  }
+  return {
+    fire: (loopId, fireKey, cronId, initiator) => execute("loop.fire", { loopId, fireKey, cronId, initiator }, fireKey),
+    async requestFire(loopId, fireKey, cronId, initiator) {
+      await tasks.spawn(
+        "loop.fire",
+        { loopId, fireKey, cronId, initiator },
+        { idempotencyKey: fireKey, maxAttempts: null },
+      );
+    },
+    followUp: (loop, item, message, actorId, initiator) =>
+      execute("loop.followup", { loop, item, message, actorId, initiator }, `loop:${loop.id}:followup:${randomUUID()}`),
+    itemAction: (loop, item, kind, args, actorId, initiator) =>
+      execute("loop.action", { loop, item, kind, args, actorId, initiator }, `loop:${loop.id}:action:${randomUUID()}`),
+    ...(deps.sources
+      ? {
+          sourceAction: (
+            loop: Loop,
+            item: LoopItem,
+            kind: string,
+            args: Record<string, unknown>,
+            actor: "human" | "agent",
+          ) =>
+            execute<SourceActionResult>(
+              "loop.source-action",
+              { loop, item, kind, args, actor },
+              `loop:${loop.id}:source-action:${randomUUID()}`,
+            ),
+        }
+      : {}),
+    async shipOutput(loopId, outputId, actorId, note, initiator) {
+      const result = await execute<LoopOutput | null | { error: string }>(
+        "loop.ship",
+        { loopId, outputId, actorId, note, initiator },
+        `loop:${loopId}:ship:${outputId}:${randomUUID()}`,
+      );
+      if (result && "error" in result) throw new Error(result.error);
+      return result;
+    },
+    returnOutput: (loopId, outputId, actorId, note, initiator) =>
+      execute(
+        "loop.return",
+        { loopId, outputId, actorId, note, initiator },
+        `loop:${loopId}:return:${outputId}:${randomUUID()}`,
+      ),
+    sweepStale: (now) => execute("loop.governor", { now }, `loop:governor:${now}`),
+  };
 }

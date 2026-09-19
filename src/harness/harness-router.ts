@@ -11,9 +11,9 @@ import {
   type HarnessId,
 } from "../model/pi-models.ts";
 import type { ScopeId } from "../types.ts";
-import type { Harness, HarnessTurnInput, RuntimeChoice } from "./harness.ts";
+import { prepareHarnessInput, type Harness, type HarnessTurnInput, type RuntimeChoice } from "./harness.ts";
 import { withTapedEntryMirrors } from "./harness-shared.ts";
-import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { NonRetryableTurnError, TurnHandedOff } from "../core/turn-error.ts";
 
 function normalizeRuntimeChoice(choice: RuntimeChoice): RuntimeChoice {
   return {
@@ -140,14 +140,17 @@ export function createHarnessRouter(
     tools: utility.tools,
     turns: {
       async runTurn(input) {
-        const choice = await resolve(input);
+        const choice = await prepareHarnessInput(input, async () => resolve(input));
         const adapter = adapters.get(choice.harnessId);
         if (!adapter) throw new Error(`harness ${choice.harnessId} is unavailable`);
         const prior = lastHarness.get(input.session.id);
         if (prior && prior !== choice.harnessId) {
-          await adapters.get(prior)?.turns.resetSession?.(input.session.id);
-          await adapter.turns.resetSession?.(input.session.id);
+          await prepareHarnessInput(input, async () => {
+            await adapters.get(prior)?.turns.resetSession?.(input.session.id);
+            await adapter.turns.resetSession?.(input.session.id);
+          });
         }
+        if (input.handoffDeadline?.aborted) throw new TurnHandedOff();
         lastHarness.set(input.session.id, choice.harnessId);
         const dispatched: HarnessTurnInput = {
           ...input,

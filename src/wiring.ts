@@ -1,4 +1,5 @@
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
+import { createHandoff } from "./runs/handoff.ts";
 import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
 import { resolveTurnOrigin } from "./core/turn-origin.ts";
@@ -120,7 +121,7 @@ import type {
   SurfaceContextRequest,
   Webhook,
 } from "./types.ts";
-import { personalScope, scopeId } from "./types.ts";
+import { isSharedScope, personalScope, scopeId } from "./types.ts";
 import { createAuditLog, type AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createRateLimiter, type RateLimiter } from "./ratelimit/rate-limiter.ts";
@@ -144,9 +145,12 @@ import { createLoopFireService, type LoopFireService } from "./loops/loop-fire.t
 import type { LoopServiceDeps } from "./api/routes/loops.ts";
 import { createDeliveryStore, type DeliveryStore } from "./delivery/delivery-store.ts";
 import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.ts";
-import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
+import { deliverRunResult } from "./delivery/run-result-delivery.ts";
+import { createDurableTasks, type DurableWorker } from "./durable/tasks.ts";
+import { withDurableMemoryCapture, type MemoryCaptureBurst } from "./memory/durable-capture.ts";
+import { createDeliveryDispatcher, type DeliveryTaskScheduler } from "./delivery/task-delivery.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
-import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
+import { createWebDeliveryHandler } from "./delivery/web-transcript-delivery.ts";
 import { createDirectoryStore, type DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import {
@@ -156,7 +160,6 @@ import {
 } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
-import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
@@ -240,12 +243,7 @@ import {
   type KeychainGrant,
   type ServiceCredentialStore,
 } from "./credentials/keychain.ts";
-import {
-  fireAskResolution,
-  fireDropResolution,
-  createAskExpirySweep,
-  type DropResolution,
-} from "./triggers/keychain-ask.ts";
+import { createKeychainResolutionTasks, createAskExpirySweep, type DropResolution } from "./triggers/keychain-ask.ts";
 import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
 import { createLivenessCache, type LivenessCache, type ScopeLivenessRecord } from "./credentials/resident-auth.ts";
 import { createConnectorStatusCache, type ConnectorStatusRecord } from "./credentials/connector-status.ts";
@@ -405,6 +403,7 @@ import { createSlackInstallationStore, type SlackInstallationStore } from "./sur
 export interface Runtime {
   start(): void;
   startBackground(): void;
+  requestHandoff(graceMs?: number): void;
   stopBackgroundClaims(): Promise<void>;
   setBackgroundAdmission(check: () => boolean): void;
   stopBackground(): Promise<void>;
@@ -545,6 +544,7 @@ export function buildApp(
     modelVerificationProbe?: typeof probeModel;
   } = {},
 ): BuiltApp {
+  const handoff = createHandoff();
   let backgroundAdmission = () => !config.backgroundDeploymentId;
   let noteAdmitted = () => {};
   const admittedWork = createAdmittedWork({
@@ -552,7 +552,7 @@ export function buildApp(
     onAdmitted: () => noteAdmitted(),
   });
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
-    createUntrackedSweeper(() => admittedWork.run(work), interval, options);
+    createUntrackedSweeper((signal) => admittedWork.run(() => work(signal)), interval, options);
   if (config.databaseUrl && !config.connectorSecretKey) {
     throw new Error("CONNECTOR_SECRET_KEY is required with durable storage");
   }
@@ -587,6 +587,21 @@ export function buildApp(
     manages: (principalId, scopeId, authoredBy) =>
       membership.managesArtifactHome!(scopeId, authoredBy ?? "", principalId),
   });
+  const triggerWorkflows = createDurableTasks({ databaseUrl: config.databaseUrl, queue: "qm_triggers" });
+  const loopWorkflows = createDurableTasks({ databaseUrl: config.databaseUrl, queue: "qm_loops" });
+  const deliveryWorkflows = createDurableTasks({ databaseUrl: config.databaseUrl, queue: "qm_deliveries" });
+  const handoffWorkflows = createDurableTasks({ databaseUrl: config.databaseUrl, queue: "qm_handoffs" });
+  const memoryWorkflows = createDurableTasks({ databaseUrl: config.databaseUrl, queue: "qm_memory" });
+  const inboundWorkflows = createDurableTasks({ databaseUrl: config.databaseUrl, queue: "qm_ingress" });
+  const workflowRuntimes = [
+    triggerWorkflows,
+    loopWorkflows,
+    deliveryWorkflows,
+    handoffWorkflows,
+    memoryWorkflows,
+    inboundWorkflows,
+  ];
+  const workflowWorkers = new Set<DurableWorker>();
   const pgArtifactMap = config.databaseUrl ? createPostgresMapFactory(config.databaseUrl) : null;
   const artifactMap = <T>(table: string): DurableMap<T> =>
     pgArtifactMap ? pgArtifactMap.map<T>(table) : createMemoryMap<T>();
@@ -1204,7 +1219,10 @@ export function buildApp(
   const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
   const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(artifactMap<OAuthState>("oauth_flows"));
-  const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
+  const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"), {
+    key: credentialKey,
+    tasks: triggerWorkflows,
+  });
   const modelGateway = createModelGateway();
 
   const requireDbUrl = (kind: string): string => {
@@ -1405,7 +1423,7 @@ export function buildApp(
   const maxAttempts = config.maxAttempts;
   const runStore =
     runStoreKind === "postgres"
-      ? createPostgresRunStore(requireDbUrl("RUN_STORE"), { maxClaims: config.maxClaims })
+      ? createPostgresRunStore(requireDbUrl("RUN_STORE"), { maxClaims: config.maxClaims, maxAgeMs: config.runMaxAgeMs })
       : createMemoryRunStore({ maxClaims: config.maxClaims });
   const runs: RunStore = {
     ...runStore.runs,
@@ -1594,16 +1612,37 @@ export function buildApp(
     seed: bootAdminGrantSeed(config.adminGrants, config.orgId, !!config.databaseUrl),
   });
   const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
-  const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
+  const { strategy: directMemoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
     harness: harness.models,
     memory: baseMemory,
     workspace,
     ...(config.memoryConsolidateAfter !== undefined ? { consolidateAfter: config.memoryConsolidateAfter } : {}),
-    captureQuietMs: config.memoryCaptureQuietMs,
+    captureQuietMs: 0,
     ...(config.memoryCaptureMaxTurns !== undefined ? { captureMaxTurns: config.memoryCaptureMaxTurns } : {}),
     onCaptureError: (e, scope) =>
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
+  const memoryStrategy = withDurableMemoryCapture(
+    directMemoryStrategy,
+    memoryWorkflows,
+    artifactMap<MemoryCaptureBurst>("memory_capture_bursts"),
+    config.memoryCaptureQuietMs ?? 0,
+    config.memoryCaptureMaxTurns,
+    {
+      metrics,
+      onError: (error, capture) =>
+        errors.record(
+          {
+            category: "memory",
+            code: "capture_failed",
+            message: errMessage(error),
+            scopeLabel: capture.conversationScopeId ?? capture.scopeId,
+            sessionId: capture.sessionId,
+          },
+          error,
+        ),
+    },
+  );
   const directory = config.databaseUrl ? createPostgresDirectoryStore(config.databaseUrl) : createDirectoryStore();
   const projects = createProjectStore(artifactMap<Project>("projects"), {
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
@@ -1669,7 +1708,7 @@ export function buildApp(
   const environments = config.databaseUrl
     ? createPostgresEnvironmentStore(config.databaseUrl)
     : createMemoryEnvironmentStore();
-  const monitors = createMonitorStore(artifactMap<Monitor>("monitors"));
+  const monitors = createMonitorStore(artifactMap<Monitor>("monitors"), triggerWorkflows);
   const loopStore = createLoopStore(artifactMap<Loop>("loops"));
   const loopItemsMap = artifactMap<LoopItem>("loop_items");
   const loopOwnerCache = new Map<string, string>();
@@ -1717,10 +1756,33 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const deliveries = withWebTranscriptDeliveries(
-    config.databaseUrl ? createPostgresDeliveryStore(config.databaseUrl) : createDeliveryStore(),
-    sessions,
+  const deliveryScheduler: DeliveryTaskScheduler = {
+    async spawnDelivery(deliveryId, transaction) {
+      const options = { idempotencyKey: `delivery:${deliveryId}` };
+      if (transaction)
+        await deliveryWorkflows.spawnInTransaction(transaction, "delivery.dispatch", { deliveryId }, options);
+      else await deliveryWorkflows.spawn("delivery.dispatch", { deliveryId }, options);
+    },
+  };
+  const deliveries = config.databaseUrl
+    ? createPostgresDeliveryStore(config.databaseUrl, { scheduler: deliveryScheduler })
+    : createDeliveryStore({ scheduler: deliveryScheduler });
+  const deliveryDispatcher = createDeliveryDispatcher(deliveries);
+  deliveryDispatcher.register(
+    ["web"],
+    createWebDeliveryHandler(sessions, async (sessionId, threadRef) => {
+      sessionStateBus.emit({
+        sessionId,
+        threadRef,
+        state: "idle",
+        at: Date.now(),
+        participants: await sessions.participantsOf(sessionId),
+      });
+    }),
   );
+  deliveryWorkflows.register("delivery.dispatch", async (context, { deliveryId }: { deliveryId: string }) => {
+    await deliveryDispatcher.execute(deliveryId, context);
+  });
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreenBackend === "proxy") {
     securityScreener = createSecurityScreenProxy({
@@ -1878,7 +1940,22 @@ export function buildApp(
     ? (sessionId: string): string | undefined =>
         uuidId.test(sessionId) ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
     : undefined;
-  wireRunResultDeliveries(runs, deliveries, tasks, recoveryAdminUrlFor, sessions);
+  handoffWorkflows.register("run.terminal", async (context, { runId }: { runId: string }) => {
+    await context.step("deliver-result", () =>
+      deliverRunResult(runs, deliveries, runId, tasks, recoveryAdminUrlFor, sessions),
+    );
+    await context.step("return-to-parent", async () => {
+      const run = await runs.get(runId);
+      if (run?.sessionId.startsWith("agent:main:subagent:")) await returnSessionRun(run);
+    });
+    await context.step("replay-signals", () => replayRunSignals(runId));
+  });
+  if (!runs.backgroundOnly)
+    runs.onTerminal((run) => {
+      void handoffWorkflows
+        .spawn("run.terminal", { runId: run.id }, { idempotencyKey: `run:terminal:${run.id}` })
+        .catch(swallowAs("run terminal workflow", undefined));
+    });
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
   const skillFetcher = createGitFetcher(
     keychain
@@ -1910,7 +1987,7 @@ export function buildApp(
   let lastReapAt = 0;
   const REAP_POKE_COOLDOWN_MS = 1_000;
   const pokeReaper = (): void => {
-    if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
+    if (runs.backgroundOnly || reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
     reapInFlight = true;
     void leaderLease
       .hold(REAPER_LEASE_KEY, () => reaper.sweep())
@@ -1976,6 +2053,7 @@ export function buildApp(
     : undefined;
   const app = createApp({
     admittedWork,
+    handoff,
     ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
     identity,
@@ -2055,9 +2133,15 @@ export function buildApp(
   const inboxRealtime = createInboxRealtime({
     loops: loopStore,
     items: loopItems,
-    requestFire: (loopId) => void loopFire.fire(loopId, `loop:${loopId}:slack-event:${Date.now()}`).catch(() => {}),
+    requestFire: (loopId) =>
+      void loopFire.requestFire!(loopId, `loop:${loopId}:slack-event:${Date.now()}`).catch(
+        swallowAs("loop event acceptance", undefined),
+      ),
   });
   const slackCore = createSlackCoreClient({
+    advisoryLock,
+    deliveryDispatcher,
+    inboundTasks: inboundWorkflows,
     surfaceCache,
     taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
@@ -2087,9 +2171,18 @@ export function buildApp(
       })
       .catch(swallowAs("wake: settle on terminal", undefined));
   });
-  runs.onTerminal((run) => {
-    void app.replayOrphanedRunSignals(run.id).catch(swallowAs("wake: orphaned-signal replay", undefined));
+  handoffWorkflows.register("swarm.reconcile", async (_context, { swarmId }: { swarmId: string }) => {
+    await swarms?.reconcileDurably(swarmId);
   });
+  handoffWorkflows.register("signal.replay", async (context, { runId }: { runId: string }) => {
+    const run = await runs.get(runId);
+    if (run && !isTerminal(run.status)) await context.awaitEvent(`run-terminal:${runId}`);
+    await replayRunSignals(runId);
+  });
+  async function replayRunSignals(runId: string): Promise<void> {
+    await app.replayOrphanedRunSignals(runId);
+    if ((await runSignals.pending(runId)).length) throw new Error(`Run ${runId} still has pending signals`);
+  }
   runs.onTerminal((run) => {
     void (async () => {
       const uuid = (await sessions.getByThread(run.sessionId))?.id;
@@ -2117,10 +2210,11 @@ export function buildApp(
       );
       await runs.markReturned(run.id);
     });
-  runs.onTerminal((run) => {
-    if (run.sessionId.startsWith("agent:main:subagent:"))
-      void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
-  });
+  if (!runs.backgroundOnly)
+    runs.onTerminal((run) => {
+      if (run.sessionId.startsWith("agent:main:subagent:"))
+        void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
+    });
   const sweepSessionReturns = async () => {
     let afterId: string | undefined;
     for (;;) {
@@ -2186,32 +2280,39 @@ export function buildApp(
   orchestratorDeps.channelPolicy = channelPolicy;
   orchestratorDeps.surfaceCache = surfaceCache;
   orchestratorDeps.slackContextSource = config.slackContextSource ?? "live";
-  const askResolution = keychain
-    ? (ask: KeychainAsk, grant?: KeychainGrant) =>
-        fireAskResolution(
-          {
-            deliveries,
-            idempotency,
-            identity,
-            run: (req) => app.turn(req),
-            directory,
-            currentScopeMembers,
-            sessions,
-            getCron: (id) => crons.get(id),
-            getAsk: (id) => keychain.getAsk(id),
-            getGrant: (id) => keychain.getGrant(id),
-          },
-          ask,
-          grant,
-        )
+  const keychainResolutions = keychain
+    ? createKeychainResolutionTasks({
+        tasks: triggerWorkflows,
+        keychain,
+        secretDrops,
+        authorizeDrop: (rec, attestation) =>
+          !rec.audienceScopeId || !isSharedScope(rec.audienceScopeId)
+            ? Promise.resolve(true)
+            : app.authorizesCapabilityScope({
+                actorId: rec.ownerId,
+                scopeId: rec.audienceScopeId,
+                ...(rec.scopeVersion ? { scopeVersion: rec.scopeVersion } : {}),
+                ...attestation,
+              }),
+        deliveries,
+        idempotency,
+        identity,
+        run: (req) => app.turn(req),
+        directory,
+        currentScopeMembers,
+        sessions,
+        getCron: (id) => crons.get(id),
+        getAsk: (id) => keychain.getAsk(id),
+        getGrant: (id) => keychain.getGrant(id),
+      })
     : undefined;
-  const dropResolution = keychain
-    ? (drop: DropResolution) =>
-        fireDropResolution({ deliveries, idempotency, identity, run: (req) => app.turn(req), directory }, drop)
-    : undefined;
+  const askResolution = keychainResolutions?.ask;
+  const dropResolution = keychainResolutions?.drop;
   const loopFire: LoopFireService = createLoopFireService({
     crons,
     samePerson: (a, b) => app.samePerson(a, b),
+    tasks: loopWorkflows,
+    ...(keychain ? { sources: { tokens: keychain, slackClient: slackUserClientFactory(config.slack?.apiUrl) } } : {}),
     loops: loopStore,
     items: loopItems,
     outputs: loopOutputs,
@@ -2238,8 +2339,8 @@ export function buildApp(
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
   const scheduler = createScheduler({
+    tasks: triggerWorkflows,
     admittedWork,
-    requireQueueStart: Boolean(config.backgroundDeploymentId),
     crons,
     deliveries,
     idempotency,
@@ -2249,12 +2350,10 @@ export function buildApp(
     directory,
     currentScopeMembers,
     sessions,
-    fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
-    ...(config.databaseUrl
-      ? { jobQueue: createPgBossCronQueue(config.databaseUrl, undefined, config.cronFireConcurrency) }
-      : {}),
+    fireLoop: (loopId, fireKey, cronId, initiator) => loopFire.fire(loopId, fireKey, cronId, initiator),
+    samePerson: (a, b) => app.samePerson(a, b),
     sweepAsks: async (now) => {
-      await Promise.all([sweepAsks?.(now), loopFire.sweepStale(now)]);
+      await Promise.all([sweepAsks?.(now), loopFire.sweepStale(now), secretDrops.recoverSubmissions()]);
     },
   });
   const suggestedActivities = createSuggestedActivityService({
@@ -2290,6 +2389,7 @@ export function buildApp(
     processes && supportsProcessSessions(sandbox)
       ? createMonitorPoller({
           admittedWork,
+          tasks: triggerWorkflows,
           monitors,
           processes,
           sandbox,
@@ -2311,6 +2411,7 @@ export function buildApp(
     leaderLease,
   });
   const webhookReceiver = createWebhookReceiver({
+    tasks: triggerWorkflows,
     webhooks,
     deliveries,
     idempotency,
@@ -2356,11 +2457,17 @@ export function buildApp(
     registry: instanceRegistry,
     protection: taskProtection,
     busy: () => admittedWork.busy() || workers.some((w) => w.busy()),
+    onSuperseded(superseded) {
+      if (backgroundOwnership || closing) return;
+      if (superseded) void stopBackground().catch(swallowAs("wiring: deployment handoff failed", undefined));
+      else if (config.backgroundWorkEnabled) startBackground();
+    },
   });
   noteAdmitted = () => drain.noteBusy();
   const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
     createWorker({
       admittedWork,
+      handoff,
       runs,
       sessions,
       orchestrator,
@@ -2387,7 +2494,7 @@ export function buildApp(
   );
   const deployIdleTtlMs = deployProvider.profile.managedScaleToZero ? undefined : config.deployIdleTtlMs;
   const BLOB_TTL_MS = 6 * 60 * 60_000;
-  const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
+  const blobSweeper = createSweeper((signal) => blobTransfer.sweep(BLOB_TTL_MS, signal), 30 * 60_000);
   const BLOB_TRANSFER_EXPIRY_DAYS = 1;
   void blobTransfer
     .ensureExpiry?.(BLOB_TRANSFER_EXPIRY_DAYS)
@@ -2396,10 +2503,13 @@ export function buildApp(
     );
   const idleSweeper =
     deployIdleTtlMs && deployIdleTtlMs > 0
-      ? createSweeper(() => app.reapIdleDeployments(deployIdleTtlMs), Math.max(5_000, Math.floor(deployIdleTtlMs / 4)))
+      ? createSweeper(
+          (signal) => app.reapIdleDeployments(deployIdleTtlMs, undefined, signal),
+          Math.max(5_000, Math.floor(deployIdleTtlMs / 4)),
+        )
       : null;
   const KEEP_WARM_INTERVAL_MS = 5 * 60_000;
-  const keepWarmSweeper = createSweeper(() => app.keepAlwaysOnWarm(), KEEP_WARM_INTERVAL_MS);
+  const keepWarmSweeper = createSweeper((signal) => app.keepAlwaysOnWarm(signal), KEEP_WARM_INTERVAL_MS);
   const deepIdleMachineMs = config.deepIdleMachineMs;
   const devIdleMachineMs = config.devIdleMachineMs;
   const sweepFractions = [deepIdleMachineMs, devIdleMachineMs]
@@ -2408,25 +2518,41 @@ export function buildApp(
   const deepIdleReapEnabled = Boolean(sandbox.reapDeepIdle && sweepFractions.length);
   const deepIdleSweeper = deepIdleReapEnabled
     ? createSweeper(
-        () =>
+        (signal) =>
           leaderLease.hold("sandbox:deep-idle-reaper", () =>
-            sandbox.reapDeepIdle!(deepIdleMachineMs, devIdleMachineMs),
+            sandbox.reapDeepIdle!(deepIdleMachineMs, devIdleMachineMs, signal),
           ),
         Math.max(60_000, Math.min(...sweepFractions)),
         { immediate: true },
       )
     : null;
   let backgroundRunning = false;
+  let closing = false;
   let backgroundStopping: Promise<void> | null = null;
   let backgroundClaimsStopping: Promise<void> = Promise.resolve();
   let monitorDrained: Promise<void> = Promise.resolve();
   let backgroundGeneration = 0;
+  function requestHandoff(graceMs = config.backgroundHandoffGraceMs): void {
+    const grace = Math.min(120_000, Math.max(0, graceMs));
+    handoff.request(grace);
+    for (const worker of workers) worker.requestHandoff(grace);
+    for (const worker of workflowWorkers) worker.requestHandoff(grace);
+  }
   function startBackground(): void {
-    if (backgroundRunning) return;
+    if (backgroundRunning || closing || !drain.canClaim()) return;
     backgroundRunning = true;
+    if (handoff.signals().requested.aborted) handoff.reset();
     admittedWork.resume();
     drain.start();
     const generation = ++backgroundGeneration;
+    for (const workflows of workflowRuntimes) {
+      const worker = workflows.start({
+        admittedWork,
+        concurrency: config.cronFireConcurrency ?? 8,
+        canClaim: () => backgroundAdmission() && drain.canClaim(),
+      });
+      workflowWorkers.add(worker);
+    }
     for (const worker of workers) {
       const drained = worker.drained();
       worker.start();
@@ -2436,9 +2562,13 @@ export function buildApp(
         })
         .catch(swallowAs("wiring: worker resume failed", undefined));
     }
+    void deliveryWorkflows
+      .ready()
+      .then(() => deliveries.recoverPending?.())
+      .catch(swallowAs("delivery recovery import", undefined));
     const startPeriodic = () => {
       if (!backgroundRunning || generation !== backgroundGeneration) return;
-      reaper.start();
+      if (!runs.backgroundOnly) reaper.start();
       processReaper?.start();
       monitorPoller?.start(config.monitorPollMs);
       void monitorDrained
@@ -2454,15 +2584,18 @@ export function buildApp(
       keepWarmSweeper.start();
       deepIdleSweeper?.start();
       wakeSweep.start();
-      swarms?.start();
-      orphanedSignalSweeper.start();
-      sessionReturnSweeper.start();
+      if (!config.databaseUrl) swarms?.start();
+      if (!runs.backgroundOnly) {
+        orphanedSignalSweeper.start();
+        sessionReturnSweeper.start();
+      }
     };
     if (backgroundStopping)
-      void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
+      void backgroundStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
     else startPeriodic();
   }
   function stopBackground(): Promise<void> {
+    requestHandoff();
     admittedWork.pause();
     backgroundRunning = false;
     const previous = backgroundStopping;
@@ -2483,10 +2616,13 @@ export function buildApp(
       swarms?.stop(),
       orphanedSignalSweeper.stop(),
       sessionReturnSweeper.stop(),
-      ...workers.map((worker) => worker.stopClaims()),
     ];
-    backgroundClaimsStopping = Promise.all(stopping).then(() => {});
-    const draining = Promise.all([previous, backgroundClaimsStopping, monitorStopping])
+    backgroundClaimsStopping = Promise.all([
+      ...workers.map((worker) => worker.stopClaims()),
+      ...[...workflowWorkers].map((worker) => worker.stopClaims()),
+    ]).then(() => {});
+    for (const worker of workflowWorkers) void worker.drained().then(() => workflowWorkers.delete(worker));
+    const draining = Promise.all([previous, backgroundClaimsStopping, monitorStopping, ...stopping])
       .then(() => {})
       .finally(() => {
         if (backgroundStopping === draining) backgroundStopping = null;
@@ -2501,6 +2637,7 @@ export function buildApp(
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
     startBackground,
+    requestHandoff,
     setBackgroundAdmission(check) {
       backgroundAdmission = check;
     },
@@ -2510,20 +2647,34 @@ export function buildApp(
     },
     stopBackground,
     async backgroundDrained() {
-      await backgroundStopping;
-      await Promise.all([admittedWork.drained(), ...workers.map((worker) => worker.drained())]);
+      await Promise.all([
+        backgroundStopping,
+        admittedWork.drained(),
+        ...workers.map((worker) => worker.drained()),
+        ...[...workflowWorkers].map((worker) => worker.drained()),
+      ]);
     },
     async releaseInFlightRuns() {
+      requestHandoff(0);
       await Promise.all(workers.map((w) => w.releaseInFlight()));
     },
     async stop() {
-      await stopBackground();
-      await Promise.all([
-        withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
-          swallowAs("wiring: admitted work drain failed", undefined),
-        ),
-        ...workers.map((w) => w.stop(config.shutdownDrainMs)),
-      ]).catch(swallowAs("wiring: worker drain failed", undefined));
+      closing = true;
+      const deadline = Date.now() + config.shutdownDrainMs;
+      const remaining = () => Math.max(0, deadline - Date.now());
+      requestHandoff(Math.min(config.backgroundHandoffGraceMs, Math.max(0, config.shutdownDrainMs - 1_000)));
+      await withTimeout(
+        async () => {
+          await Promise.all([
+            stopBackground(),
+            admittedWork.drained(),
+            ...workers.map((w) => w.stop(remaining())),
+            ...[...workflowWorkers].map((worker) => worker.drained()),
+          ]);
+        },
+        remaining(),
+        "background shutdown",
+      ).catch(swallowAs("wiring: background shutdown incomplete", undefined));
       await Promise.all(workers.map((w) => w.releaseInFlight()));
       await drain.stop();
       runs.close?.();
@@ -2535,6 +2686,7 @@ export function buildApp(
       void runStreamEvents.close?.();
       await harness.turns.close?.();
       await tasks.close?.();
+      await Promise.all(workflowRuntimes.map((workflows) => workflows.close(remaining())));
       await flyTunnel?.stop();
     },
   };

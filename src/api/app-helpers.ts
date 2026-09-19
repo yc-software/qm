@@ -1,4 +1,6 @@
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
+import { TurnHandedOff } from "../core/turn-error.ts";
+import { durableTaskContext } from "../durable/tasks.ts";
 import type {
   PendingApproval,
   PendingApprovalRecord,
@@ -201,6 +203,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   }
 
   async function drive(runId: string): Promise<TurnResult> {
+    const handoff = deps.handoff?.signals();
+    const yielded = (): TurnResult => {
+      if (durableTaskContext.getStore()) throw new TurnHandedOff();
+      return { status: "queued", runId };
+    };
     const timeoutMs = deps.runWaitMs ?? 60_000;
     const deadline = performance.now() + timeoutMs;
     for (;;) {
@@ -211,14 +218,24 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           run.result ?? { status: "failed", sessionId: run.sessionId, reason: "run produced no result" },
         );
       }
-      const claimed = await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
+      if (handoff?.requested.aborted) return yielded();
+      const claimed = deps.runs.backgroundOnly
+        ? null
+        : await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
       if (claimed) {
         const result = processRun(
-          { runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
+          { runs: deps.runs, sessions: deps.sessions, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
           claimed,
+          { handoff },
         );
-        if (claimed.id === runId) return withAdminLink(await result);
-        await result.catch((error: unknown) => swallow("inline predecessor run failed", error));
+        try {
+          if (claimed.id === runId) return withAdminLink(await result);
+          await result;
+        } catch (error) {
+          if (error instanceof TurnHandedOff) return yielded();
+          if (claimed.id === runId) throw error;
+          swallow("inline predecessor run failed", error);
+        }
         continue;
       }
       const remaining = deadline - performance.now();
@@ -650,8 +667,12 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       }
       return drained;
     }
-    for (const signal of await deps.signals.takePending(runId)) {
-      if (signal.kind === "abort") continue;
+    for (const { id, signal } of await deps.signals.pending(runId)) {
+      if (signal.kind === "abort") {
+        await deps.signals.acknowledge(runId, id);
+        continue;
+      }
+      const dedupKey = `session-signal:${runId}:${id}`;
       let replayRunId: string | undefined;
       let replayOutcomeKnown = true;
       if (signal.request) {
@@ -667,8 +688,16 @@ export function createAppHelpers(deps: AppDeps, app: App) {
             ...(base.fastMode === undefined && prior?.fastMode !== undefined ? { fastMode: prior.fastMode } : {}),
             ...(base.timezone === undefined && prior?.timezone !== undefined ? { timezone: prior.timezone } : {}),
           };
-          const replayed = await app.turn({ ...base, ...inheritedOptions, async: true });
+          const replayed = await app.turn(
+            { ...base, ...inheritedOptions, async: true, idempotencyKey: dedupKey },
+            { signalDedupKey: dedupKey },
+          );
           replayRunId = replayed.runId;
+          if (!replayRunId && replayed.status === "refused") {
+            await deps.signals.acknowledge(runId, id);
+            drained.push({ signal });
+            continue;
+          }
         } catch (err) {
           replayOutcomeKnown = false;
           swallow(`signals: orphaned-signal replay for run ${runId}`, err);
@@ -682,6 +711,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
             const { run: fresh } = await deps.runs.enqueue({
               sessionId: orphanRun.sessionId,
               request: { ...base, text: signal.text },
+              dedupKey,
+              maxAttempts: deps.maxAttempts,
             });
             replayRunId = fresh.id;
           } catch (err) {
@@ -690,10 +721,10 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         }
       }
       if (!replayRunId) {
-        console.warn(
-          `[signals] orphaned ${signal.kind} for terminal run ${runId} could not be replayed — dropped: ${signal.text?.slice(0, 120) ?? ""}`,
-        );
+        console.warn(`[signals] orphaned ${signal.kind} for terminal run ${runId} remains pending`);
+        continue;
       }
+      await deps.signals.acknowledge(runId, id);
       drained.push({ signal, ...(replayRunId ? { replayRunId } : {}) });
     }
     return drained;

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { PgPool, PoolClient } from "./pg-pool.ts";
-import { sleep } from "../util/async.ts";
+import { sleep, getOperationSignal, assertOperationActive, withAbort } from "../util/async.ts";
 
 export interface AdvisoryLock {
   withLock<T>(key: string, fn: () => Promise<T>): Promise<T>;
@@ -14,12 +14,15 @@ const DEFAULT_ADVISORY_LOCK_POLL_MS = 300;
 export function createNoopAdvisoryLock(): AdvisoryLock {
   return {
     async withLock<T>(_key: string, fn: () => Promise<T>): Promise<T> {
+      assertOperationActive();
       return fn();
     },
     async withSharedLock<T>(_key: string, fn: () => Promise<T>): Promise<T> {
+      assertOperationActive();
       return fn();
     },
     async tryWithLock<T>(_key: string, fn: () => Promise<T>): Promise<T | null> {
+      assertOperationActive();
       return fn();
     },
   };
@@ -38,14 +41,18 @@ export function createMemoryAdvisoryLock(): AdvisoryLock {
     state.pending++;
     if (shared) state.readers.add(done.promise);
     else state.tail = done.promise;
-    try {
-      await before;
-      return await fn();
-    } finally {
+    const cleanup = () => {
       state.readers.delete(done.promise);
       state.pending--;
       done.resolve();
       if (!state.pending) states.delete(key);
+    };
+    try {
+      await withAbort(() => Promise.resolve(before).then(() => {}), getOperationSignal());
+      assertOperationActive();
+      return await fn();
+    } finally {
+      void Promise.resolve(before).then(cleanup, cleanup);
     }
   };
   return {
@@ -88,7 +95,9 @@ export function createPostgresAdvisoryLock(
   const run = async <T>(key: string, fn: () => Promise<T>, shared: boolean, wait: boolean): Promise<T | null> => {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
+      assertOperationActive();
       const attempt = await withClient(async (context): Promise<{ acquired: false } | { acquired: true; value: T }> => {
+        assertOperationActive();
         const { client, keys } = context;
         const held = keys.get(key);
         if (held && !(shared && held.shared)) return { acquired: false };
@@ -102,6 +111,7 @@ export function createPostgresAdvisoryLock(
           );
           if (res.rows[0]?.locked !== true) return { acquired: false };
           try {
+            assertOperationActive();
             return { acquired: true, value: await fn() };
           } finally {
             await client.query(`SELECT pg_advisory_unlock${shared ? "_shared" : ""}(hashtextextended($1, 0))`, [key]);
@@ -113,7 +123,7 @@ export function createPostgresAdvisoryLock(
       if (attempt.acquired) return attempt.value;
       if (!wait) return null;
       if (Date.now() >= deadline) throw new Error(`timeout acquiring advisory lock for ${key}`);
-      await sleep(pollMs);
+      await withAbort(() => sleep(pollMs, { unref: true }), getOperationSignal());
     }
   };
   return {

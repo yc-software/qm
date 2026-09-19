@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Pool, PoolClient } from "pg";
-import { createKeyedQueue } from "../util/async.ts";
+import { assertOperationActive, createKeyedQueue } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
 export type { Pool, PoolClient };
@@ -147,10 +147,14 @@ async function withStatementTimeout<T>(
 }
 
 export async function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  assertOperationActive();
   const client = await pool.connect();
   try {
+    assertOperationActive();
     await client.query("BEGIN");
+    assertOperationActive();
     const result = await fn(client);
+    assertOperationActive();
     await client.query("COMMIT");
     return result;
   } catch (error) {

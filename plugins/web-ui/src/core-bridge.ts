@@ -1794,6 +1794,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
   const userByTs = new Map<string, HistoryUserMessage>();
   let pending: ToolActivity[] = [];
   let deliveryFiles: DeliveredFile[] = [];
+  const assistantByEntry = new Map<number, AssistantWork>();
   let posted = false;
   const heldPosts = new Map<string, { text: string; activity: ToolActivity }>();
   const spillHeldPosts = (): void => {
@@ -1884,6 +1885,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
   };
   for (const e of entries) {
     const payload = e.payload as {
+      sourceAssistantEntrySeq?: number;
       text?: string;
       display?: string;
       callId?: string;
@@ -2004,9 +2006,17 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
           flushWork(text, e.createdAt, !posted, timing, stopped);
         }
       }
+      if (typeof e.seq === "number" && (out[out.length - 1] as { role?: string } | undefined)?.role === "assistant")
+        assistantByEntry.set(e.seq, out[out.length - 1] as AssistantWork);
       posted = false;
     } else if (e.type === "delivery") {
-      appendDeliveryFiles(deliveredFilesFromAttachments(payload?.files));
+      const files = deliveredFilesFromAttachments(payload?.files);
+      const target =
+        typeof payload?.sourceAssistantEntrySeq === "number"
+          ? assistantByEntry.get(payload.sourceAssistantEntrySeq)
+          : undefined;
+      if (target) target.deliveredFiles = [...(target.deliveredFiles ?? []), ...files];
+      else if (typeof payload?.sourceAssistantEntrySeq !== "number") appendDeliveryFiles(files);
     } else if (e.type === "system") {
       const revision = messageRevisionPayload(e.payload);
       if (revision) {

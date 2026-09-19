@@ -684,6 +684,29 @@ test("delivery entries attach openable files to the preceding assistant message"
   ]);
 });
 
+test("a delayed durable delivery attaches files to its original reply", () => {
+  const messages = entriesToMessages(
+    [
+      { type: "user", seq: 0, payload: { text: "make a report" }, createdAt: 100 },
+      { type: "assistant", seq: 1, payload: { text: "Here is the report." }, createdAt: 110 },
+      { type: "user", seq: 2, payload: { text: "what is next" }, createdAt: 120 },
+      { type: "assistant", seq: 3, payload: { text: "Review it." }, createdAt: 130 },
+      {
+        type: "delivery",
+        seq: 4,
+        payload: {
+          sourceAssistantEntrySeq: 1,
+          files: [{ name: "report.pdf", mimetype: "application/pdf", sizeBytes: 42, artifactId: "report-1" }],
+        },
+        createdAt: 140,
+      },
+    ],
+    MODEL,
+  );
+  assert.equal((messages[1] as AssistantWork).deliveredFiles?.[0]?.artifactId, "report-1");
+  assert.equal((messages[3] as AssistantWork).deliveredFiles, undefined);
+});
+
 test("an attach tool result attaches openable files to the turn's assistant message", () => {
   const entries: SessionEntry[] = [
     { type: "user", payload: { text: "make a report" }, createdAt: 100 },

@@ -34,7 +34,20 @@ export interface MemoryRecallContext {
   autonomous?: boolean;
 }
 
-export interface MemoryCaptureContext {
+export interface MemoryCaptureExecution {
+  signal?: AbortSignal;
+  checkpoint?<T>(name: string, run: () => Promise<T>): Promise<T>;
+}
+
+export async function memoryCaptureStep<T>(
+  execution: MemoryCaptureExecution,
+  name: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  return execution.checkpoint ? execution.checkpoint(name, run) : run();
+}
+
+export interface MemoryCaptureContext extends MemoryCaptureExecution {
   mode: "explicit" | "automatic";
   actorId?: string;
   sessionId?: string;
@@ -129,8 +142,9 @@ export function createMemoryService(workspace: WorkspaceStore): MemoryService {
       return recallBody((await workspace.read(scopeId, MEMORY_FILE)) ?? "");
     },
 
-    async capture(scopeId, facts, at, author) {
+    async capture(scopeId, facts, at, author, context) {
       return perScope(scopeId, async () => {
+        context?.signal?.throwIfAborted();
         const existing = (await workspace.read(scopeId, MEMORY_FILE)) ?? "";
         const { body, added } = foldCapture(existing, facts, at, author?.startsWith("cc:") === true);
         if (!added) return 0;

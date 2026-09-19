@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { isolatedPostgres } from "./support/isolated-postgres.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import * as modalClient from "../src/sandbox/modal-client.ts";
@@ -11,13 +12,23 @@ import { createServer } from "../src/api/server.ts";
 import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { startSignalPoll } from "../src/runs/run-signal-store.ts";
-import { withTimeout } from "../src/util/async.ts";
+import { sleep, withTimeout } from "../src/util/async.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { AddressInfo } from "node:net";
 import type { TurnRequest } from "../src/types.ts";
 
 const screenedPayloads: string[] = [];
 let exerciseTurn: ((turn: HarnessTurnInput) => Promise<void | { stopped: true }>) | undefined;
+
+async function waitForValue<T>(read: () => Promise<T | undefined>, label: string): Promise<T> {
+  const deadline = performance.now() + 15_000;
+  for (;;) {
+    const value = await read();
+    if (value !== undefined) return value;
+    assert.ok(performance.now() < deadline, `${label} completed before its deadline`);
+    await sleep(20);
+  }
+}
 
 const fake = installFakeModal({ native: true });
 mock.module("../src/sandbox/modal-client.ts", {
@@ -195,20 +206,9 @@ for (const storage of ["memory", "postgres"] as const) {
       let databaseUrl: string | undefined;
       let cleanupDatabase = async () => {};
       if (storage === "postgres") {
-        const { default: pg } = await import("pg");
-        const url = new URL(process.env.SWARM_TEST_DATABASE_URL!);
-        const schema = `swarm_http_${process.pid}`;
-        const pool = new pg.Pool({ connectionString: url.toString() });
-        await pool.query(`CREATE SCHEMA ${schema}`);
-        url.searchParams.set("options", `-c search_path=${schema}`);
-        databaseUrl = url.toString();
-        cleanupDatabase = async () => {
-          try {
-            await pool.query(`DROP SCHEMA ${schema} CASCADE`);
-          } finally {
-            await pool.end();
-          }
-        };
+        const database = await isolatedPostgres("swarm_http", process.env.SWARM_TEST_DATABASE_URL!);
+        databaseUrl = database.url;
+        cleanupDatabase = database.cleanup;
       }
       const config = testConfig({
         databaseUrl,
@@ -233,6 +233,8 @@ for (const storage of ["memory", "postgres"] as const) {
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
       let base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
       let rootId = "";
+      let rootRunId = "";
+      const continueRoot = Promise.withResolvers<void>();
       const childIds = new Set<string>();
       const issued: Array<{ sessionId: string; attempt: number }> = [];
       exerciseTurn = async (turn) => {
@@ -247,8 +249,14 @@ for (const storage of ["memory", "postgres"] as const) {
         assert.ok(claims?.runLeaseToken);
         issued.push({ sessionId: claims.sessionId!, attempt: claims.runAttempt });
         const root = turn.input === "http-swarm-root";
-        if (root) rootId = turn.session.id;
-        else childIds.add(turn.session.id);
+        if (root) {
+          rootId = turn.session.id;
+          rootRunId = turn.runId!;
+        } else childIds.add(turn.session.id);
+        if (root && storage === "postgres") {
+          await built.runtime.stopBackgroundClaims();
+          await continueRoot.promise;
+        }
         const body = root
           ? {
               action: "spawn",
@@ -314,6 +322,7 @@ for (const storage of ["memory", "postgres"] as const) {
           conversation: { kind: "dm", threadRef: "http-swarm-root" },
           text: "http-swarm-root",
         });
+        if (storage === "postgres") built.runtime.startBackground();
         const rootResponse = await fetch(`${base}/v1/turns`, {
           method: "POST",
           headers: signedRequestHeaders(config.signingSecret!, "POST", "/v1/turns", body, {
@@ -321,17 +330,23 @@ for (const storage of ["memory", "postgres"] as const) {
           }),
           body,
         });
-        assert.equal(rootResponse.status, 200);
-        const root = (await rootResponse.json()) as { status: string };
-        assert.equal(root.status, "ok", JSON.stringify(root));
+        assert.equal(rootResponse.status, storage === "postgres" ? 202 : 200);
+        const root = (await rootResponse.json()) as { status: string; runId?: string };
         if (storage === "postgres") {
+          assert.deepEqual(root, { status: "queued", runId: rootRunId });
+          continueRoot.resolve();
+          const completedRoot = await built.runs.waitFor(rootRunId, 15_000);
+          assert.equal(completedRoot.status, "done");
+          assert.equal(completedRoot.result?.status, "ok", JSON.stringify(completedRoot.result));
+          assert.equal(completedRoot.attempts, 1);
+          assert.equal(completedRoot.errorAttempts, 0);
           await new Promise<void>((resolve) => server.close(() => resolve()));
           await built.runtime.stop();
           built = buildApp(config);
           server = createServer(built.app, serverDeps(config, built));
           await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
           base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-        }
+        } else assert.equal(root.status, "ok", JSON.stringify(root));
         await built.app.swarms!.sweep();
         const workers = (await built.runs.list()).filter((run) => run.request.swarm);
         assert.equal(workers.length, 3);
@@ -343,9 +358,12 @@ for (const storage of ["memory", "postgres"] as const) {
           assert.equal(runResultDelivery(run), null);
         }
         await built.app.swarms!.sweep();
-        const replies = (await built.runs.list()).filter(
-          (run) => run.request.swarm && run.request.conversation.threadRef === "http-swarm-root",
-        );
+        const replies = await waitForValue(async () => {
+          const runs = (await built.runs.list()).filter(
+            (run) => run.request.swarm && run.request.conversation.threadRef === "http-swarm-root",
+          );
+          return runs.length >= 3 ? runs : undefined;
+        }, "swarm replies");
         assert.equal(replies.length, 3);
         for (const reply of replies) assert.equal((await built.runs.waitFor(reply.id, 15_000)).result?.status, "ok");
         assert.equal(issued.length, 4);
@@ -396,20 +414,26 @@ for (const storage of ["memory", "postgres"] as const) {
         exerciseTurn = async (turn) => {
           if (turn.input.includes("http-revoked-work")) revokedExecuted = true;
         };
+        if (storage === "postgres") await built.runtime.stopBackgroundClaims();
         const revoked = await built.app.swarms!.send(human, {
           requestId: "revoke",
           audience: [worker.request.swarm!.recipientId],
           text: "http-revoked-work",
         });
         await built.sessions.addParticipant(rootId, "U2");
+        if (storage === "postgres") built.runtime.startBackground();
         await built.app.swarms!.sweep();
-        const blocked = (await built.runs.list()).find((run) => run.request.swarm?.messageId === revoked.id)!;
+        const blocked = await waitForValue(
+          async () => (await built.runs.list()).find((run) => run.request.swarm?.messageId === revoked.id),
+          "revoked swarm run",
+        );
         assert.ok(blocked);
         const rejected = await built.runs.waitFor(blocked.id, 15_000);
         assert.equal(rejected.status, "failed");
         assert.equal(rejected.errorAttempts, 1);
         assert.equal(revokedExecuted, false);
       } finally {
+        continueRoot.resolve();
         exerciseTurn = undefined;
         await new Promise<void>((resolve) => server.close(() => resolve()));
         await built.runtime.stop();

@@ -5,10 +5,13 @@ import { createTurnFlow } from "../src/slack/turn-flow.ts";
 import { createThreadTracker } from "../src/slack/lib.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { TurnResult } from "../src/types.ts";
+import { createDurableTasks } from "../src/durable/tasks.ts";
+import { createSlackIngress } from "../src/slack/task-ingress.ts";
+import { assertOperationActive, withTimeout } from "../src/util/async.ts";
 
 type ActionHandler = (args: any) => Promise<void>;
 
-function fixture() {
+function fixture(options: { durable?: boolean; checkpoint?: SlackCoreClient["reportRunEditRef"] } = {}) {
   const submitted: any[] = [];
   const state: {
     stored: { requesterId: string; text: string } | null;
@@ -22,6 +25,7 @@ function fixture() {
     fetchFails: false,
   };
   const core = {
+    durableDeliveries: options.durable === true,
     submitTurn: async (body: any) => {
       submitted.push(body);
       if (state.hold) await state.hold;
@@ -29,7 +33,7 @@ function fixture() {
     },
     waitRun: async () => null,
     ackRunDelivery: async () => {},
-    reportRunEditRef: async () => {},
+    reportRunEditRef: options.checkpoint ?? (async () => {}),
     getApproval: async () => {
       if (state.fetchFails) throw new Error("core unreachable");
       return state.stored
@@ -199,3 +203,79 @@ test("a sealed-out deny never claims the command was denied", async () => {
   assert.equal(f.submitted.length, 2, "the restored card still denies once the conversation is unblocked");
   assert.match(String(f.updates.at(-1)?.text ?? ""), /Denied/);
 });
+
+for (const action of ["hilo_allow_once", "hilo_deny"]) {
+  test(`durable ${action} ingress joins its approval-card checkpoint before retiring`, async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let checkpointed = false;
+    let handled = false;
+    const f = fixture({
+      durable: true,
+      checkpoint: async (runId, editRef) => {
+        assert.equal(runId, "approval-run");
+        assert.equal(editRef, "1.0");
+        entered.resolve();
+        await release.promise;
+        assertOperationActive();
+        checkpointed = true;
+      },
+    });
+    f.state.result = { status: "queued", runId: "approval-run" };
+    const tasks = createDurableTasks({ queue: "approval-checkpoint-test" });
+    const ingress = createSlackIngress(tasks);
+    ingress.register("bot", async () => {
+      await f.click("U2", action);
+      handled = true;
+    });
+    const task = await tasks.spawn(
+      "slack.ingest",
+      { account: "bot", body: { type: "block_actions", trigger_id: action } },
+      { idempotencyKey: action },
+    );
+    const worker = tasks.start({ concurrency: 1, pollIntervalMs: 1 });
+    try {
+      await withTimeout(() => entered.promise, 1000, "approval checkpoint started");
+      await worker.stopClaims();
+      let drained = false;
+      const draining = worker.drained().then(() => {
+        drained = true;
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(handled, false);
+      assert.equal(drained, false);
+      release.resolve();
+      await withTimeout(() => draining, 1000, "approval checkpoint joined");
+      await tasks.result(task.taskId);
+      assert.equal(checkpointed, true);
+      assert.equal(handled, true);
+    } finally {
+      release.resolve();
+      await worker.stop();
+      await tasks.close();
+    }
+  });
+
+  for (const result of [
+    { status: "pending_approval", reason: "This conversation is waiting for someone else." },
+    { status: "refused", reason: "This approval is no longer visible." },
+  ] as const) {
+    test(`a delayed ${result.status} response to ${action} cannot overwrite a durable final card`, async () => {
+      const f = fixture({ durable: true });
+      const release = Promise.withResolvers<void>();
+      f.state.hold = release.promise;
+      f.state.result = result;
+      const pending = f.click("U2", action);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(f.submitted.length, 1);
+      f.state.stored = null;
+      f.updates.push({ text: "Completed successfully" });
+      release.resolve();
+      await pending;
+      assert.deepEqual(f.updates, [{ text: "Completed successfully" }]);
+      assert.equal(f.ephemerals.at(-1)?.text, result.reason);
+      await f.click("U2", action);
+      assert.deepEqual(f.updates, [{ text: "Completed successfully" }]);
+    });
+  }
+}

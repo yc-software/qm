@@ -207,6 +207,8 @@ export interface Destination {
   pin?: { messageTs: string; remove?: boolean };
   identity?: string;
   debugFooter?: string;
+  slackAccount?: string;
+  approvalRequestIds?: string[];
   webTranscript?: { kind: "reply" } | { kind: "turn_failure"; notBefore: number; runId?: string };
 }
 
@@ -236,7 +238,13 @@ export interface CronSchedule {
   firstFireAt?: number;
 }
 
+export interface TriggerInitiator {
+  actorId: string;
+  liveActor?: boolean;
+}
+
 export interface CronFireLogEntry {
+  initiator?: TriggerInitiator;
   fireKey: string;
   threadRef: string;
   firedAt: number;
@@ -255,6 +263,7 @@ export interface CronFireNote {
 }
 
 export interface Cron extends TriggerBase {
+  workflowRevision?: string;
   schedule: CronSchedule;
   nextFireAt?: number;
   lastAttemptAt?: number;
@@ -292,6 +301,7 @@ export interface Webhook extends TriggerBase {
 }
 
 export interface Monitor extends TriggerBase {
+  workflowRevision?: string;
   processId: string;
   command: string;
   threadRef: string;
@@ -357,6 +367,7 @@ export interface Loop extends TriggerBase {
   cronId?: string;
   runAs?: "owner" | "scopeFloor" | "scopeShared";
   consecutiveFailedFires?: number;
+  fireOutcomeOperations?: string[];
   quarantineClearedBy?: string;
   quarantineClearedAt?: number;
 }
@@ -381,7 +392,20 @@ export interface LoopThreadMessage {
   actorId?: string;
 }
 
+export type LoopSourceActionResult =
+  | { ok: true; result: string; resolves?: boolean; payloadPatch?: LoopSourcePayload }
+  | { ok: false; reason: "not_connected" | "bad_item" | "upstream"; message: string; partial?: boolean };
+
+export interface LoopSourceActionReceipt {
+  kind: string;
+  state: "started" | "completed" | "uncertain";
+  result?: LoopSourceActionResult;
+}
+
 export interface LoopItem {
+  createdByOperation?: string;
+  workflowOperations?: string[];
+  sourceActions?: Record<string, LoopSourceActionReceipt>;
   id: string;
   loopId: string;
   sourceKey: string;
@@ -588,6 +612,16 @@ export type TurnOrigin =
   | { kind: "direct" };
 
 export interface TurnRequest {
+  slackDeliveryContext?: {
+    account?: string;
+    requesterId?: string;
+    triggerTs: string;
+    allowedTs: string[];
+    audience: ActorAssertion[];
+    slackIdsByPrincipal?: Array<[string, string]>;
+    approvalCard?: { channel: string; messageTs: string };
+    agentRequestId?: string;
+  };
   sessionSenderId?: string;
   privateSessionMessage?: true;
   sessionMessageDepth?: number;

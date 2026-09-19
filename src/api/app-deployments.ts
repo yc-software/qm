@@ -97,8 +97,8 @@ export function createDeploymentMethods(
     setDeploymentAlwaysOn(id, alwaysOn) {
       return deps.deploy.setDeploymentAlwaysOn(id, alwaysOn);
     },
-    keepAlwaysOnWarm() {
-      return deps.deploy.keepAlwaysOnWarm();
+    keepAlwaysOnWarm(signal) {
+      return deps.deploy.keepAlwaysOnWarm(signal);
     },
     async reachDeployment(id, principalId, opts): Promise<Reach> {
       if (opts?.bypassAcl) return deps.deploy.reachDeployment(id, principalId, opts);
@@ -145,8 +145,8 @@ export function createDeploymentMethods(
       const current = await principalGitPermission(d, principalId);
       return permission === "write" ? current === "write" : current !== null;
     },
-    reapIdleDeployments(ttlMs, now) {
-      return deps.deploy.reapIdleDeployments(ttlMs, now);
+    reapIdleDeployments(ttlMs, now, signal) {
+      return deps.deploy.reapIdleDeployments(ttlMs, now, signal);
     },
 
     async listEnvironments() {

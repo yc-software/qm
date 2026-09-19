@@ -227,6 +227,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "secret-drop-")), signingSecret: SECRET }));
+    built.runtime.startBackground();
     await built.directory.replaceChannels(
       [{ channelId: "C1", name: "drops", isPrivate: false }],
       [
@@ -250,6 +251,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   });
   after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await built.runtime.stop();
   });
 
   it("a triggered turn cannot mint a drop", async () => {
@@ -597,12 +599,13 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
       [{ channelId: "C1", name: "drops", isPrivate: false }],
       [{ channelId: "C1", principalId: "U_A" }],
     );
+    const secretDrops = createSecretDropStore(createMemoryMap());
     const fires: DropResolution[] = [];
     let fired: (() => void) | undefined;
     const server = createServer(built.app, {
       signingSecret: SECRET,
       keychain: built.keychain,
-      secretDrops: built.secretDrops,
+      secretDrops,
       deliveries: built.deliveries,
       workspace: built.workspace,
       auditLog: built.auditLog,
@@ -661,12 +664,12 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
 
       const gamma = await mint("gammasvc");
       await mint("deltasvc");
-      const broken = built.secretDrops!.siblings;
-      built.secretDrops!.siblings = () => Promise.reject(new Error("boom"));
+      const broken = secretDrops.siblings;
+      secretDrops.siblings = () => Promise.reject(new Error("boom"));
       try {
         await redeem(gamma, "sk-gamma");
       } finally {
-        built.secretDrops!.siblings = broken;
+        secretDrops.siblings = broken;
       }
       assert.equal(fires.length, 3, "a failed sibling scan must not cancel the wake");
       assert.equal(fires[2]!.pendingSiblings, undefined, "scan failure degrades to a wake with no sibling note");

@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createFakeSandboxEnvironment } from "./fake-sandbox-environment.ts";
 
 export interface Agent37Call {
   method: string;
@@ -44,6 +45,7 @@ const OUTPUT_CAP = 512 * 1024;
 
 export function installFakeAgent37(): FakeAgent37 {
   const root = mkdtempSync(join(tmpdir(), "fake-a37-"));
+  const environment = createFakeSandboxEnvironment(root);
   const instances = new Map<string, FakeInstance>();
   const execScripts: string[] = [];
   const calls: Agent37Call[] = [];
@@ -96,7 +98,7 @@ export function installFakeAgent37(): FakeAgent37 {
     const r = spawnSync("sh", ["-c", remap(m, script)], {
       encoding: "buffer",
       maxBuffer: 128 * 1024 * 1024,
-      env: { ...process.env, COPYFILE_DISABLE: "1" },
+      env: environment(),
     });
     const code = r.status ?? (r.signal ? 137 : -1);
     const stdout = (r.stdout ?? Buffer.alloc(0)).toString("utf8");

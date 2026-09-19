@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { createKeyedQueue, sleep } from "../util/async.ts";
+import { createKeyedQueue, sleep, assertOperationActive, getOperationSignal } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
@@ -16,7 +16,7 @@ import {
 import { DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { killableScript, killScript } from "./exec-kill.ts";
+import { runKillable } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
 import type {
@@ -110,6 +110,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
   const activeScratch = new Map<string, number>();
 
   async function api(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<Response> {
+    assertOperationActive();
     return fetchImpl(`${baseUrl}${path}`, {
       method,
       headers: {
@@ -117,7 +118,10 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.any([
+        AbortSignal.timeout(timeoutMs),
+        ...(getOperationSignal() ? [getOperationSignal()!] : []),
+      ]),
     });
   }
 
@@ -212,6 +216,21 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       throw new Error(`agent37 exec ${name}: output truncated by the API: chunk the read instead`);
     }
     return parsed;
+  }
+
+  async function cleanupExec(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
+    const id = idByName.get(name);
+    if (!id) return { code: 0, stdout: "", stderr: "", timedOut: false };
+    const response = await api(
+      "POST",
+      `/v1/instances/${encodeURIComponent(id)}/exec`,
+      { command: script },
+      timeoutSec * 1000,
+    );
+    if (response.status === 404) return { code: 0, stdout: "", stderr: "", timedOut: false };
+    if (!response.ok) throw new Error(`agent37 cleanup ${id}: http ${response.status}`);
+    const result = (await response.json()) as InstanceExecResponse;
+    return { code: result.exit_code, stdout: result.stdout, stderr: result.stderr, timedOut: false };
   }
 
   async function readSpooled(name: string, absPath: string, declared: number): Promise<Buffer> {
@@ -515,20 +534,13 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
         .map(([k, v]) => `export ${k}=${shq(v)}`)
         .join("; ");
       const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-      const signal = execOpts?.signal;
-      if (!signal) return execRaw(handle.id, script, timeoutSec);
-      const killUid = randomUUID();
-      const fireKill = () => {
-        execRaw(handle.id, killScript(killUid), 15).catch(swallowAs("agent37-sandbox: kill in-flight exec", undefined));
-      };
-      const onAbort = () => fireKill();
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        signal.throwIfAborted();
-        return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
+      return runKillable(
+        (body, seconds) => execRaw(handle.id, body, seconds),
+        script,
+        timeoutSec,
+        execOpts?.signal,
+        (body, seconds) => cleanupExec(handle.id, body, seconds),
+      );
     },
 
     async writeFileBytes(handle, relPath, data): Promise<void> {

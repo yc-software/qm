@@ -1,6 +1,6 @@
 # Background ownership
 
-A core deployment can transfer background work to another deployment without restarting either HTTP process. Existing runs retain their leases and heartbeats while the old deployment stops accepting background work. The deployment controller uses a shared PostgreSQL record to fence generations and record each process's acknowledgment.
+A core deployment can transfer background work to another deployment without restarting either HTTP process. The retiring deployment stops new claims and yields active work after its next committed step. The deployment controller uses a shared PostgreSQL record to fence generations and record each process's acknowledgment.
 
 ## Enable the capability
 
@@ -44,9 +44,11 @@ A process records `admitted` before starting background resources. The desired d
 
 `ready: true` means activation completed. A deployment operator should wait for every expected current task to have an admitted, ready process at the desired generation before considering activation successful.
 
-`relinquished` acknowledges that the process stopped new claims and closed its Slack ingress. Already admitted turns may still run. Cron polling can resume after rollback while earlier callbacks keep their queue connection and heartbeats. Maintenance callbacks that cannot relinquish safely are joined before acknowledgment.
+`relinquished` acknowledges that the process stopped new claims and closed its Slack ingress. Admitted runs and Absurd workflows receive a handoff request. They commit their active step, release ownership, and resume from the durable checkpoint on an incoming worker. A parent waiting for a durable child or run yields immediately; it does not wait for the child to finish. Maintenance stops between items and joins its current operation.
 
-`drained` means the process's admitted background work has finished. Releasing ownership and making a deployment safe to replace are separate gates. Do not terminate a relinquished but undrained process merely to meet a rollout time target.
+`drained` means the process has no remaining admitted work or owned workflow executions. Completion of the original task is not required: a safely yielded task belongs to the incoming deployment. `BACKGROUND_HANDOFF_GRACE_MS` defaults to 120 seconds and is capped at 120 seconds. At the deadline, active operations receive cancellation and old executions are fenced. External effects with an unknown outcome remain recorded for reconciliation by the incoming worker; elapsed time does not establish whether a remote request succeeded. Maintenance cancels its active transport or subprocess and joins its callback. A database outage can prevent acknowledged surrender, in which case recovery uses native lease expiry.
+
+Legacy build supersession requests the same handoff. Rollback creates a fresh admission generation without clearing cancellation for old executions. Process shutdown uses the shorter `SHUTDOWN_DRAIN_MS` deadline, requests cancellation before waiting on ownership teardown, and retains a final process exit backstop.
 
 Database errors or an expired local validity watchdog fence new local work. They do not establish durable relinquishment or authorize another deployment to bypass an outstanding member.
 
@@ -116,8 +118,8 @@ to resume their existing claim loop.
 
 Synchronous turns and manually started cron callbacks are admitted work too. A
 paused deployment refuses new synchronous execution while still accepting durable
-asynchronous submissions for the active workers. Accepted turns, scheduled
-callbacks, and their nested work keep running with their existing leases; their
-completion is part of the deployment's drain acknowledgment. Resuming ownership
-restores synchronous admission without restarting or canceling those calls.
-Task protection also counts admitted foreground work while the process drains.
+asynchronous submissions for the active workers. A synchronous caller waiting on
+an accepted run receives its queued run ID when the deployment yields. Cron and
+loop parents retain their checkpoints and replay their join on an incoming worker.
+Resuming ownership restores synchronous admission. Task protection counts admitted
+foreground work until it finishes or safely yields.

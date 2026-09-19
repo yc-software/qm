@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createFakeSandboxEnvironment } from "./fake-sandbox-environment.ts";
 import { NotFoundError } from "porter-sandbox";
 import type { PorterClientLike, PorterSandboxLike, PorterSandboxSpec } from "../../src/sandbox/porter-client.ts";
 
@@ -57,6 +58,7 @@ const pathRe = (guestPath: string): RegExp => new RegExp(`${escapeRe(guestPath)}
 
 export function installFakePorter(opts: FakePorterOptions = {}): FakePorter {
   const root = mkdtempSync(join(tmpdir(), "fake-porter-"));
+  const environment = createFakeSandboxEnvironment(root);
   const volumes = new Map<string, { id: string; dir: string }>();
   const bodies = new Map<string, BodyRecord>();
   const execScripts: string[] = [];
@@ -207,7 +209,7 @@ export function installFakePorter(opts: FakePorterOptions = {}): FakePorter {
           execScripts.push(script);
           mkdirSync(cur.tmp, { recursive: true });
           const child = spawn("sh", ["-c", remap(cur, script)], {
-            env: { ...process.env, ...cur.env, COPYFILE_DISABLE: "1" },
+            env: { ...environment(), ...cur.env, COPYFILE_DISABLE: "1" },
           });
           const stdout: Buffer[] = [];
           const stderr: Buffer[] = [];

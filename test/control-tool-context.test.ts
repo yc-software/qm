@@ -190,3 +190,42 @@ test("concurrent session calls retain distinct ledger receipts", async () => {
   assert.deepEqual(JSON.parse(first.output!), results[0]);
   assert.deepEqual(JSON.parse(second.output!), results[1]);
 });
+
+for (const prerequisite of ["provision", "ledger"] as const) {
+  test(`a retired tool cannot write after its pending ${prerequisite} completes`, async () => {
+    const { withOperationSignal } = await import("../src/util/async.ts");
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    let writes = 0;
+    const wait = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const context = ctxFor({
+      runId: "run:retiring",
+      provision: async () => {
+        if (prerequisite === "provision") await wait();
+        return handle;
+      },
+      ledger: {
+        async begin() {
+          if (prerequisite === "ledger") await wait();
+          return { cached: false };
+        },
+        async record() {},
+      },
+      sandbox: {
+        async writeFile() {
+          writes++;
+        },
+      } as unknown as Sandbox,
+    });
+    const active = withOperationSignal(controller.signal, () => context.write("late.txt", "retired"));
+    await entered.promise;
+    controller.abort();
+    release.resolve();
+    await assert.rejects(active, { name: "AbortError" });
+    assert.equal(writes, 0);
+  });
+}

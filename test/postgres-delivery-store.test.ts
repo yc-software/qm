@@ -13,6 +13,63 @@ import {
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres delivery-store tests";
 
+test(
+  "pg durable delivery rolls back its intent when scheduling fails and recovers the old outbox",
+  { skip },
+  async () => {
+    const pg = (await import("pg")).default;
+    const database = new pg.Pool({ connectionString: URL });
+    try {
+      const failing = createPostgresDeliveryStore(URL!, {
+        scheduler: {
+          spawnDelivery: async (_id, transaction) => {
+            assert.ok(transaction);
+            throw new Error("task spawn failed");
+          },
+        },
+      });
+      await assert.rejects(
+        failing.enqueue({
+          destination: { type: "slack", target: "C1" },
+          text: "answer",
+          idempotencyKey: "atomic-failure",
+        }),
+        /task spawn failed/,
+      );
+      assert.equal(
+        (await database.query("SELECT 1 FROM deliveries WHERE idempotency_key = 'atomic-failure'")).rowCount,
+        0,
+      );
+      const legacy = createPostgresDeliveryStore(URL!);
+      const delivery = await legacy.enqueue({
+        destination: { type: "slack", target: "C1" },
+        text: "old pending",
+        idempotencyKey: "legacy-backfill",
+      });
+      await database.query("UPDATE deliveries SET expired_at = 1 WHERE id = $1", [delivery.id]);
+      const scheduled: string[] = [];
+      const durable = createPostgresDeliveryStore(URL!, {
+        scheduler: {
+          spawnDelivery: async (id, transaction) => {
+            assert.ok(transaction);
+            const visible = await transaction.query("SELECT id FROM deliveries WHERE id = $1", [id]);
+            assert.equal(visible.rows[0]?.id, id);
+            scheduled.push(id);
+          },
+        },
+      });
+      await durable.recoverPending!();
+      assert.ok(scheduled.includes(delivery.id));
+      assert.equal((await durable.get(delivery.id))?.expiredAt, undefined);
+      assert.ok((await durable.pending("slack")).some((row) => row.id === delivery.id));
+      assert.deepEqual(await durable.claimPending("slack", 1), []);
+      await durable.ack(delivery.id, Date.now());
+    } finally {
+      await database.end();
+    }
+  },
+);
+
 before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;

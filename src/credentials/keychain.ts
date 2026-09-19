@@ -83,6 +83,7 @@ export interface CredentialFieldInput {
 }
 
 export interface KeychainCredential {
+  saveOperations?: string[];
   id: string;
   ownerId: string;
   orgId?: string;
@@ -285,6 +286,7 @@ export interface ConnectorTokenStore {
 }
 
 interface SaveCredentialInput {
+  operationId?: string;
   ownerId: string;
   service: string;
   secret?: string;
@@ -301,6 +303,7 @@ interface SaveCredentialInput {
 }
 
 interface CreateGrantInput {
+  operationId?: string;
   credentialId: string;
   ownerId: string;
   audienceScopeId: ScopeId;
@@ -848,6 +851,7 @@ export function createKeychain(deps: {
         .join(",")}`;
     const id = credId(input.ownerId, service, slot);
     const buildRec = (prior?: KeychainCredential | null): KeychainCredential => {
+      if (input.operationId && prior?.saveOperations?.includes(input.operationId)) return prior;
       const carriedCapturePaths = input.capturePaths ?? prior?.capturePaths;
       return {
         id,
@@ -861,6 +865,9 @@ export function createKeychain(deps: {
         ...(carriedCapturePaths ? { capturePaths: carriedCapturePaths } : {}),
         ...(input.host ? { host: input.host } : {}),
         ...(input.accountLabel ? { accountLabel: input.accountLabel } : {}),
+        saveOperations: input.operationId
+          ? [...(prior?.saveOperations ?? []), input.operationId]
+          : prior?.saveOperations,
         secretEnc: encryptSecret(secret, deps.key),
         fingerprint: fingerprintOf(secret),
         ...(input.origin ? { origin: input.origin } : {}),
@@ -871,7 +878,7 @@ export function createKeychain(deps: {
     };
     const expectedOrigin =
       input.expectedOrigin ?? (input.origin === DEVICE_FLOW_ORIGIN ? DEVICE_FLOW_ORIGIN : undefined);
-    if (expectedOrigin === undefined) {
+    if (expectedOrigin === undefined && !input.operationId) {
       const prior = await deps.creds.get(id);
       const rec = buildRec(prior);
       await deps.creds.put(id, rec);
@@ -880,7 +887,7 @@ export function createKeychain(deps: {
     if (!deps.creds.update || !deps.creds.insertIfAbsent)
       throw new Error("credential store does not support atomic origin-guarded saves");
     const guarded = (prior: KeychainCredential): KeychainCredential => {
-      if (prior.origin !== expectedOrigin)
+      if (expectedOrigin !== undefined && prior.origin !== expectedOrigin)
         throw new KeychainError(
           409,
           `a ${prior.origin ?? "manually saved"} credential for ${service} already exists — not overwritten`,
@@ -963,7 +970,7 @@ export function createKeychain(deps: {
     const t = now();
     if (!cred.managed && credExpired(cred, t)) throw new KeychainError(410, "credential is expired");
     const grant: KeychainGrant = {
-      id: hashId([cred.id, input.audienceScopeId, String(t), purpose]),
+      id: hashId([cred.id, input.audienceScopeId, input.operationId ?? String(t), purpose]),
       credentialId: cred.id,
       ownerId: cred.ownerId,
       orgId: cred.orgId,
@@ -975,6 +982,7 @@ export function createKeychain(deps: {
       ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
       ...(input.askId ? { askId: input.askId } : {}),
     };
+    if (input.operationId) return deps.grants.putIfAbsent(grant.id, grant);
     await deps.grants.put(grant.id, grant);
     return grant;
   }

@@ -1,5 +1,6 @@
 import { mcpResultText, type McpClient, type McpToolResult } from "../mcp/mcp-client.ts";
 import type { MemoryService } from "./memory-service.ts";
+import { memoryCaptureEffect } from "./capture-effect.ts";
 
 export interface McpMemoryOperation {
   client: McpClient;
@@ -64,7 +65,12 @@ export function createMcpMemoryProvider(opts: { read: McpMemoryOperation; write?
       const actorId = context?.actorId ?? author;
       if (actorId) args[op.actorArg ?? "acting_user"] = actorId;
       if (op.scopeArg) args[op.scopeArg] = scopeId;
-      await withTimeout(op.client.callTool(op.tool, args), op.timeoutMs);
+      await memoryCaptureEffect(
+        context,
+        `mcp:${op.client.base}:${op.tool}:${scopeId}`,
+        !!(context?.idempotencyKey && op.idempotencyArg),
+        () => withTimeout(op.client.callTool(op.tool, args, context?.signal), op.timeoutMs),
+      );
       return facts.length;
     },
 

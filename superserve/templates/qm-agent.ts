@@ -34,6 +34,7 @@ const APT_PACKAGES = [
   "grep",
   "sed",
   "gawk",
+  "util-linux",
   "git",
   "curl",
   "wget",
@@ -63,6 +64,7 @@ function buildSteps(): BuildStep[] {
         "apt-get update",
         `apt-get install -y --no-install-recommends ${APT_PACKAGES.join(" ")}`,
         "rm -rf /var/lib/apt/lists/*",
+        "setsid --wait true",
       ]),
     },
     {

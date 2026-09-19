@@ -1,3 +1,5 @@
+import { ABSURD_MIGRATION } from "../durable/schema.ts";
+import { SWARM_WORKFLOW_MIGRATION } from "./postgres-swarm-workflow.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
 import type { RunStore, Run } from "../runs/run-store.ts";
@@ -104,6 +106,20 @@ export function createSwarmStore(
   authority?: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get">; pg?: PgPool },
 ): SwarmStore {
   if (!backing.update) throw new Error("swarm storage requires atomic updates");
+  authority?.pg?.registerMigration(ABSURD_MIGRATION);
+  authority?.pg?.registerMigration(SWARM_WORKFLOW_MIGRATION);
+  let initialized: Promise<void> | undefined;
+  const ready = (): Promise<void> => {
+    if (!authority?.pg) return Promise.resolve();
+    return (initialized ??= (async () => {
+      await backing.get("");
+      await authority.pg!.migrate(ABSURD_MIGRATION);
+      await authority.pg!.migrate(SWARM_WORKFLOW_MIGRATION);
+    })().catch((error) => {
+      initialized = undefined;
+      throw error;
+    }));
+  };
   async function fencedWrite(
     id: string,
     mutate: (value: SwarmStorage | null) => SwarmStorage,
@@ -157,10 +173,12 @@ export function createSwarmStore(
   }
   return {
     async get(id) {
+      await ready();
       const row = await backing.get(id);
       return row ? decode(row) : null;
     },
     async create(swarm, fence) {
+      await ready();
       const create = (current: SwarmStorage | null) => {
         if (current) return current;
         assertSwarmOpen(swarm);
@@ -170,6 +188,7 @@ export function createSwarmStore(
       return decode(await backing.putIfAbsent(swarm.id, create(null)));
     },
     async update(id, mutate, fence) {
+      await ready();
       const apply = (value: SwarmStorage | null) => {
         if (!value) throw new Error("swarm not found");
         const next = decode(value);
@@ -186,6 +205,7 @@ export function createSwarmStore(
       return decode(updated);
     },
     async pending(afterId) {
+      await ready();
       return (
         await backing.select({
           where: { field: "pending", anyOfFold: ["true"] },

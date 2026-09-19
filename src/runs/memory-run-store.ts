@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
-import { isTerminal, leaseLapsed, releasesDedupKey } from "./run-store.ts";
+import { isTerminal, leaseLapsed, releasesDedupKey, claimsSpent } from "./run-store.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
 export interface MemoryRuntime {
@@ -20,6 +20,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
   const events = new EventEmitter();
   events.setMaxListeners(0);
   const returned = new Set<string>();
+  const stoppedWorkers = new Set<string>();
   const terminalListeners: Array<(run: Run) => void> = [];
 
   function sessionUnavailable(sessionId: string, now: number): boolean {
@@ -66,6 +67,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         turnUserSeq: null,
         dedupKey: dedupKey ?? null,
         attempts: 0,
+        handoffs: 0,
         errorAttempts: 0,
         maxAttempts,
         leaseToken: null,
@@ -99,6 +101,13 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       return run ? lease(run, workerId, ttlMs) : null;
     },
 
+    async handoffWorker(workerId, keepLeaseTokens = []) {
+      stoppedWorkers.add(workerId);
+      for (const run of runs.values())
+        if (run.workerId === workerId && run.leaseToken && !keepLeaseTokens.includes(run.leaseToken))
+          await store.releaseLease(run.id, run.leaseToken, { handoff: true });
+    },
+
     async heartbeat(runId, leaseToken, ttlMs) {
       const run = runs.get(runId);
       if (!run || run.status !== "running" || run.leaseToken !== leaseToken) return false;
@@ -106,9 +115,10 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       return true;
     },
 
-    async releaseLease(runId, leaseToken) {
+    async releaseLease(runId, leaseToken, opts) {
       const run = runs.get(runId);
       if (!run || run.status !== "running" || run.leaseToken !== leaseToken) return false;
+      if (opts?.handoff) run.handoffs += 1;
       run.status = "pending";
       run.leaseToken = null;
       run.leaseExpiresAt = null;
@@ -315,7 +325,8 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     },
   };
 
-  function lease(run: Run, workerId: string, ttlMs: number): Run {
+  function lease(run: Run, workerId: string, ttlMs: number): Run | null {
+    if (stoppedWorkers.has(workerId)) return null;
     retryAfter.delete(run.id);
     run.status = "running";
     run.leaseToken = randomUUID();
@@ -340,7 +351,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     run.leaseExpiresAt = null;
     run.workerId = null;
     if (opts?.countsAsError) run.errorAttempts += 1;
-    const overClaimed = run.attempts >= maxClaims;
+    const overClaimed = claimsSpent(run) >= maxClaims;
     if (retry && run.errorAttempts < run.maxAttempts && !overClaimed) {
       run.status = "pending";
       retryAfter.set(run.id, Date.now() + Math.max(0, opts?.retryAfterMs ?? 0));
@@ -349,7 +360,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     run.status = "failed";
     const reason =
       !opts?.countsAsError && overClaimed && retry && run.errorAttempts < run.maxAttempts
-        ? `run parked after ${run.attempts} claims without completing (suspected crash loop)`
+        ? `run parked after ${claimsSpent(run)} claims without completing (suspected crash loop)`
         : error;
     run.result = { status: "failed", sessionId: run.sessionId, reason };
     run.finishedAt = Date.now();

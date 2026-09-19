@@ -14,6 +14,7 @@ import { parseRef } from "../acl/resource-ref.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import type { Principal } from "../types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
+import { assertOperationActive } from "../util/async.ts";
 
 export async function skillVisibilityContext(
   deps: AppDeps,
@@ -122,7 +123,11 @@ function skillPackSourceIdentity(pack: SkillPack): string {
 }
 
 function withSkillMutationLock<T>(deps: AppDeps, fn: () => Promise<T>): Promise<T> {
-  return deps.advisoryLock?.withLock(SKILL_MATERIALIZATION_LOCK, fn) ?? fn();
+  const mutate = () => {
+    assertOperationActive();
+    return fn();
+  };
+  return deps.advisoryLock?.withLock(SKILL_MATERIALIZATION_LOCK, mutate) ?? mutate();
 }
 
 async function reconcilePack(
@@ -138,6 +143,7 @@ async function reconcilePack(
   try {
     repo = await fetcher.fetch(pack);
   } catch (e) {
+    assertOperationActive();
     await packs.recordImport(id, {
       at: Date.now(),
       commit: pack.ref,
@@ -148,6 +154,7 @@ async function reconcilePack(
   }
   const applyFetched = async (): Promise<ImportResult> => {
     const current = await packs.get(id);
+    assertOperationActive();
     if (!current) throw new Error(`unknown skill pack: ${id}`);
     if (skillPackSourceIdentity(current) !== skillPackSourceIdentity(pack)) {
       throw new Error(`skill pack changed while fetching: ${id}`);
@@ -163,6 +170,7 @@ async function reconcilePack(
       const skipped: string[] = [];
       const archived: string[] = [];
       for (const target of targets) {
+        assertOperationActive();
         const nativeNames = await nativeNamesFor(deps, id, target.scopeId);
         const claimedPaths = await buildClaimedPaths(deps, id, target.scopeId);
         const claimedBundlePaths = await buildClaimedBundlePaths(deps);
@@ -204,6 +212,7 @@ async function reconcilePack(
       await packs.update(id, { updateAvailable: false, available: canonPlan.counts.eligible });
       return result;
     } catch (e) {
+      assertOperationActive();
       await packs.recordImport(id, {
         at: Date.now(),
         commit: pack.ref,

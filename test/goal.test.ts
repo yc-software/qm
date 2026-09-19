@@ -481,3 +481,31 @@ test("floor cap policy: a stall clears when progress resumes", () => {
   h.advance(GOAL_FLOOR_RECHECK_MS);
   assert.equal(h.policy.extendMs(), GOAL_FLOOR_RECHECK_MS, "resumed progress re-arms the unmet floor");
 });
+
+test("goal usage recovers from the same tape commit as its assistant message", () => {
+  const goal = createGoalRecord({ objective: "finish the work", capTokens: 100, source: "tool", now: 1 });
+  const history = [{ type: "system", payload: { kind: "goal", goal }, createdAt: 1 }];
+  const rows = [
+    {
+      sessionId: "session",
+      seq: 1,
+      createdAt: 2,
+      kind: "message" as const,
+      scopeLabel: "personal:U1" as const,
+      payload: { role: "assistant" },
+      meta: { goal: { ...goal, tokensUsed: 8 } },
+    },
+  ];
+  assert.equal(rehydrateOpenGoal(history, rows)?.tokensUsed, 8);
+  assert.equal(
+    rehydrateOpenGoal(
+      [...history, { type: "system", payload: { kind: "goal", goal: { ...goal, status: "complete" } }, createdAt: 3 }],
+      rows,
+    ),
+    null,
+  );
+  assert.equal(
+    rehydrateOpenGoal(history, [...rows, { ...rows[0]!, seq: 2, createdAt: 3, meta: { goal: null } }]),
+    null,
+  );
+});

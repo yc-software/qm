@@ -1,3 +1,4 @@
+import { isolatedPostgres } from "./support/isolated-postgres.ts";
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -10,31 +11,17 @@ import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 
 const baseUrl = process.env.DATABASE_URL;
-const schema = `swarm_test_${process.pid}`;
-const isolatedUrl = baseUrl ? new URL(baseUrl) : undefined;
-isolatedUrl?.searchParams.set("options", `-c search_path=${schema}`);
-const databaseUrl = isolatedUrl?.toString();
+let databaseUrl: string | undefined;
+let isolated: Awaited<ReturnType<typeof isolatedPostgres>> | undefined;
 before(async () => {
   if (!baseUrl) return;
-  const { default: pg } = await import("pg");
-  const pool = new pg.Pool({ connectionString: baseUrl });
-  try {
-    await pool.query(`CREATE SCHEMA ${schema}`);
-  } finally {
-    await pool.end();
-  }
+  isolated = await isolatedPostgres("swarm_test");
+  databaseUrl = isolated.url;
 });
 after(async () => {
-  if (!baseUrl) return;
-  const { default: pg } = await import("pg");
-  const pool = new pg.Pool({ connectionString: baseUrl });
-  try {
-    await pool.query(`DROP SCHEMA ${schema} CASCADE`);
-  } finally {
-    await pool.end();
-  }
+  await isolated?.cleanup();
 });
-const skip = databaseUrl ? false : "set DATABASE_URL to a disposable Postgres database";
+const skip = baseUrl ? false : "set DATABASE_URL to a disposable Postgres database";
 
 test(
   "Postgres delayed ready acknowledgment cannot roll back a delivered worker across phase locks",
@@ -334,14 +321,14 @@ test("Postgres rolls back a swarm mutation whose run expires while waiting for t
     if (fixture.caller.kind !== "agent") throw new Error("wrong caller");
     const run = (await runtime.runs.get(fixture.caller.claims.runId!))!;
     const before = await store.get(fixture.root.id);
-    await runtime.runs.heartbeat(run.id, run.leaseToken!, 200);
+    await runtime.runs.heartbeat(run.id, run.leaseToken!, 1_000);
     await client.query("BEGIN");
     await client.query("SELECT v FROM durable_map_versions WHERE tbl='swarms' FOR UPDATE");
     const mutation = assert.rejects(
       fixture.service.context(fixture.caller, { changed: true }),
       /active capability run required/,
     );
-    await sleep(300);
+    await sleep(1_100);
     await client.query("COMMIT");
     await mutation;
     assert.deepEqual(await store.get(fixture.root.id), before);
@@ -480,6 +467,59 @@ test("Postgres initial pool expires atomically while waiting for the write lock"
     context.mock.timers.reset();
     await client.query("ROLLBACK");
     client.release();
+    await runtime.close();
+    await factory.pool.close();
+  }
+});
+
+test("Postgres swarm mutations and their durable reconciliation obligations commit together", { skip }, async () => {
+  const factory = createPostgresMapFactory(databaseUrl!);
+  const runtime = createPostgresRunStore(databaseUrl!);
+  const sessions = createPostgresSessionStore(databaseUrl!);
+  const store = createSwarmStore(factory.map<SwarmStorage>("swarms"), {
+    runs: runtime.runs,
+    sessions,
+    pg: factory.pool,
+  });
+  const f = await swarmFixture({ store, sessions, runs: runtime.runs, lock: createPostgresAdvisoryLock(factory.pool) });
+  const pool = await factory.pool.pool();
+  try {
+    await f.service.spawn(f.caller, { requestId: "durable-spawn", text: "Work" });
+    const scheduled = await pool.query(
+      "SELECT count(*) FROM absurd.t_qm_handoffs WHERE task_name='swarm.reconcile' AND params->>'swarmId'=$1",
+      [f.root.id],
+    );
+    assert.ok(Number(scheduled.rows[0].count) > 0);
+    const handoff = await pool.query(
+      "SELECT last_attempt_run FROM absurd.t_qm_handoffs WHERE task_name='swarm.reconcile' AND params->>'swarmId'=$1",
+      [f.root.id],
+    );
+    await pool.query("UPDATE absurd.r_qm_handoffs SET state='running' WHERE run_id=$1", [
+      handoff.rows[0].last_attempt_run,
+    ]);
+    await pool.query("SELECT absurd.fail_run('qm_handoffs',$1,$2)", [
+      handoff.rows[0].last_attempt_run,
+      JSON.stringify({ name: "Unavailable", message: "sandbox provider unavailable" }),
+    ]);
+    const retried = await pool.query(
+      `SELECT r.state,extract(epoch FROM (r.available_at-r.created_at))::float AS delay
+       FROM absurd.r_qm_handoffs r JOIN absurd.t_qm_handoffs t ON r.run_id=t.last_attempt_run
+       WHERE t.params->>'swarmId'=$1`,
+      [f.root.id],
+    );
+    assert.equal(retried.rows[0].state, "sleeping");
+    assert.ok(retried.rows[0].delay > 0.5 && retried.rows[0].delay <= 1);
+    const before = await store.get(f.root.id);
+    await pool.query(
+      `ALTER TABLE absurd.t_qm_handoffs ADD CONSTRAINT refuse_swarm_handoff CHECK(task_name <> 'swarm.reconcile' OR params->>'swarmId' <> '${f.root.id}') NOT VALID`,
+    );
+    await assert.rejects(f.service.context(f.caller, { mustRollback: true }), /refuse_swarm_handoff/);
+    assert.deepEqual(await store.get(f.root.id), before);
+    await pool.query("ALTER TABLE absurd.t_qm_handoffs DROP CONSTRAINT refuse_swarm_handoff");
+    await f.service.reconcileDurably(f.root.id);
+    assert.equal((await store.get(f.root.id))?.pending, false);
+  } finally {
+    await pool.query("ALTER TABLE absurd.t_qm_handoffs DROP CONSTRAINT IF EXISTS refuse_swarm_handoff");
     await runtime.close();
     await factory.pool.close();
   }

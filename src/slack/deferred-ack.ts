@@ -124,6 +124,7 @@ export interface DeferredAckReceiverOptions {
   capMs?: number;
   slackApiUrl?: string;
   staging?: EnvelopeStaging;
+  accept?: (body: Record<string, unknown>) => Promise<void>;
 }
 
 export function createDeferredAckReceiver(opts: DeferredAckReceiverOptions): Receiver {
@@ -142,6 +143,15 @@ export function createDeferredAckReceiver(opts: DeferredAckReceiverOptions): Rec
       retry_num?: number;
       retry_reason?: string;
     }) => {
+      if (opts.accept) {
+        try {
+          await opts.accept(args.body);
+          await args.ack();
+        } catch (error) {
+          console.error(`[slack-plugin] envelope was not durably accepted: ${errMessage(error)}`);
+        }
+        return;
+      }
       const { ack, gate } = createDeferredEnvelopeAck(args.ack, {
         gated: isGatedEnvelope(args.body),
         ...(opts.capMs !== undefined ? { capMs: opts.capMs } : {}),

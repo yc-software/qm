@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createFakeSandboxEnvironment } from "./fake-sandbox-environment.ts";
 
 export interface SmolCall {
   method: string;
@@ -34,6 +35,7 @@ export const FAKE_SMOLMACHINES_TOKEN = "test-token";
 
 export function installFakeSmolmachines(): FakeSmolmachines {
   const root = mkdtempSync(join(tmpdir(), "fake-smol-"));
+  const environment = createFakeSandboxEnvironment(root);
   const machines = new Map<string, FakeMachine>();
   const execScripts: string[] = [];
   const calls: SmolCall[] = [];
@@ -74,7 +76,7 @@ export function installFakeSmolmachines(): FakeSmolmachines {
     const r = spawnSync("sh", ["-c", remap(m, script)], {
       encoding: "buffer",
       maxBuffer: 128 * 1024 * 1024,
-      env: { ...process.env, COPYFILE_DISABLE: "1" },
+      env: environment(),
       ...(stdinB64 !== undefined ? { input: Buffer.from(stdinB64, "utf8") } : {}),
     });
     const code = r.status ?? (r.signal ? 137 : -1);

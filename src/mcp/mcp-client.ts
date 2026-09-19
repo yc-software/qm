@@ -21,7 +21,7 @@ interface McpHttpResponse {
 
 export type McpFetch = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body: string },
+  init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal },
 ) => Promise<McpHttpResponse>;
 
 const realFetch: McpFetch = (url, init) => fetch(url, { ...init, redirect: "error" });
@@ -111,7 +111,7 @@ export interface McpClient {
   readonly base: string;
   readonly host: string;
   listTools(): Promise<McpRemoteTool[]>;
-  callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult>;
+  callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpToolResult>;
 }
 
 interface CachedToken {
@@ -132,10 +132,12 @@ export function createMcpClient(opts: {
   let cached: CachedToken | null = null;
   let rpcId = 0;
 
-  async function mintToken(clientId: string, clientSecret: string): Promise<string> {
+  async function mintToken(clientId: string, clientSecret: string, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
     if (cached && now() < cached.expiresAt - TOKEN_SKEW_MS) return cached.accessToken;
     const res = await fetchImpl(`${base}/token`, {
       method: "POST",
+      ...(signal ? { signal } : {}),
       headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
       body: new URLSearchParams({
         grant_type: "client_credentials",
@@ -152,19 +154,21 @@ export function createMcpClient(opts: {
     return accessToken;
   }
 
-  async function authHeaders(): Promise<Record<string, string>> {
+  async function authHeaders(signal?: AbortSignal): Promise<Record<string, string>> {
     const auth = opts.auth;
     if (auth.mode === "none") return {};
     if (auth.mode === "bearer") return { authorization: `Bearer ${auth.token}` };
-    return { authorization: `Bearer ${await mintToken(auth.clientId, auth.clientSecret)}` };
+    return { authorization: `Bearer ${await mintToken(auth.clientId, auth.clientSecret, signal)}` };
   }
 
-  async function rpc(method: string, params: Record<string, unknown>): Promise<unknown> {
+  async function rpc(method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+    signal?.throwIfAborted();
     const id = ++rpcId;
     const res = await fetchImpl(`${base}/mcp`, {
       method: "POST",
+      ...(signal ? { signal } : {}),
       headers: {
-        ...(await authHeaders()),
+        ...(await authHeaders(signal)),
         "content-type": "application/json",
         accept: MCP_ACCEPT,
       },
@@ -198,8 +202,8 @@ export function createMcpClient(opts: {
       }
       return out;
     },
-    async callTool(name, args) {
-      const result = (await rpc("tools/call", { name, arguments: args })) as McpToolResult;
+    async callTool(name, args, signal) {
+      const result = (await rpc("tools/call", { name, arguments: args }, signal)) as McpToolResult;
       if (result.isError) throw new Error(`mcp tool ${name} error: ${mcpResultText(result) || "(no detail)"}`);
       return result;
     },

@@ -39,8 +39,10 @@ export function startLeaseKeepalive(
       .then((renewed) => {
         if (renewed) return;
         clearInterval(timer);
-        if (!releaseExpected())
+        if (!releaseExpected()) {
           console.error(`[orchestrator] lease keepalive stopped: lease lost mid-turn session=${lease.sessionId}`);
+          liveness?.onStalled();
+        }
       })
       .catch(swallowAs("orchestrator: lease keepalive", undefined));
   }, intervalMs);

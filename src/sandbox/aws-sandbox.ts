@@ -3,8 +3,9 @@ import { orgId as configOrgId } from "../config.ts";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import { s3Client } from "../persistence/s3.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { createKeyedQueue } from "../util/async.ts";
+import { createKeyedQueue, assertOperationActive, withCleanupSignal } from "../util/async.ts";
 import { scopeStorageKey } from "../util/scope-storage-key.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -106,8 +107,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       ...(opts.profile ? { profile: opts.profile } : {}),
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
     });
-  const s3: Pick<S3Client, "send"> =
-    opts.s3 ?? new S3Client({ region, ...(opts.profile ? { profile: opts.profile } : {}) });
+  const s3 = s3Client(region, opts.s3 ?? new S3Client({ region, ...(opts.profile ? { profile: opts.profile } : {}) }));
   const store = opts.store ?? createMemoryMap<StoredMicrovm>();
   const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
   const provisionQueue = createKeyedQueue<string>();
@@ -237,13 +237,17 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       await client.waitDaemon(run.microvmId, endpoint);
       return { id: run.microvmId, endpoint };
     } catch (error) {
+      endpointById.delete(run.microvmId);
+      client.evict(run.microvmId);
       try {
-        await api.terminate(run.microvmId);
+        await withCleanupSignal(15_000, () => api.terminate(run.microvmId));
       } catch (cleanupError) {
+        assertOperationActive();
         throw new AggregateError([error, cleanupError], `AWS launch ${run.microvmId} failed and termination failed`, {
           cause: cleanupError,
         });
       }
+      assertOperationActive();
       throw error;
     }
   }
@@ -282,7 +286,10 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         scopeByMicrovm.delete(body.id);
         endpointById.delete(body.id);
         client.evict(body.id);
-        await api.terminate(body.id).catch(swallowAs("aws-sandbox: terminate after failed hydrate", undefined));
+        await withCleanupSignal(15_000, () => api.terminate(body.id)).catch(
+          swallowAs("aws-sandbox: terminate after failed hydrate", undefined),
+        );
+        assertOperationActive();
         throw new Error(`aws provision: home hydration failed (${errMessage(e)}); not risking the stored snapshot`, {
           cause: e,
         });
@@ -537,18 +544,21 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       }
     },
 
-    async reapDeepIdle(idleMs): Promise<{ reaped: number }> {
+    async reapDeepIdle(idleMs, _devIdleMs, signal): Promise<{ reaped: number }> {
       if (!(idleMs > 0)) return { reaped: 0 };
       const cutoff = Date.now() - idleMs;
       let reaped = 0;
       for (const [scope, candidate] of await store.entries()) {
+        if (signal?.aborted) break;
         await withScopeLock(scope, async () => {
+          assertOperationActive();
           const rec = await store.get(scope);
           if (!rec || rec.microvmId !== candidate.microvmId) return;
           if (rec.orgId && rec.orgId !== configOrgId()) return;
           if (!rec.lastActivityMs || rec.lastActivityMs > cutoff) return;
           if (activeByMicrovm.has(rec.microvmId)) return;
           const desc = await api.tryGetMicrovm(rec.microvmId);
+          assertOperationActive();
           if (!desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") {
             await store.delete(scope).catch(() => {});
             return;
@@ -558,8 +568,10 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
             const due = !rec.lastSnapshotMs || (rec.lastActivityMs ?? 0) > rec.lastSnapshotMs;
             if (due) {
               await ensureRunning(rec.microvmId);
+              assertOperationActive();
               await snapshotHome(scope, rec.microvmId);
             }
+            assertOperationActive();
             await api.terminate(rec.microvmId);
             await store.delete(scope);
             reaped++;

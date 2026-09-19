@@ -189,6 +189,7 @@ let shuttingDown = false;
 function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
+  built.runtime.requestHandoff(Math.min(config.backgroundHandoffGraceMs, Math.max(0, config.shutdownDrainMs - 1_000)));
   console.log(`[qm] ${signal} received, shutting down`);
   void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
   for (const runtime of slackAccountRuntimes)
@@ -201,8 +202,7 @@ function shutdown(signal: string): void {
   stopWithBackstop(
     {
       async stop() {
-        await backgroundController?.stop();
-        await built.runtime.stop();
+        await Promise.all([backgroundController?.stop(), built.runtime.stop()]);
       },
       releaseInFlightRuns: () => built.runtime.releaseInFlightRuns(),
     },

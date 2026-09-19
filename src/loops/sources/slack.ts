@@ -198,7 +198,14 @@ export const slackAdapter: LoopSourceAdapter = {
       return await sendSlack(deps, item, { ...draft, body: draft.body.trim() });
     } catch (err) {
       const code = slackErrorCode(err);
-      return { ok: false, reason: "upstream", message: code ? `Slack refused the ${kind}: ${code}` : errMessage(err) };
+      return {
+        ok: false,
+        reason: "upstream",
+        ...(!code ? { partial: true } : {}),
+        message: code
+          ? `Slack refused the ${kind}: ${code}`
+          : `The action may have completed. Check Slack before sending again: ${errMessage(err)}`,
+      };
     }
   },
 };

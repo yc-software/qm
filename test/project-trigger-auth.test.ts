@@ -51,6 +51,8 @@ async function token(actorId: string, scopeId: CapabilityClaims["scopeId"], scop
 
 test("Project trigger access follows current membership while Slack-group owner access is unchanged", async (t) => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-trigger-auth-")) }));
+  built.runtime.startBackground();
+  t.after(() => built.runtime.stop());
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },

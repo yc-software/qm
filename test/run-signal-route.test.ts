@@ -241,7 +241,7 @@ test("an orphaned steer with a request replays as the steerer, not the run's own
   assert.equal(replayed!.request.timezone, "America/New_York", "turn options are inherited from the ended run");
 });
 
-test("an orphaned steer whose own request is refused falls back to replaying on the run's request", async () => {
+test("an orphaned steer refused under its own identity cannot replay as the previous owner", async () => {
   const threadRef = "t-orphan-fallback";
   const { run } = await built.runs.enqueue({ sessionId: threadRef, request: request("hi", threadRef) });
   await built.signals.send(run.id, {
@@ -260,14 +260,8 @@ test("an orphaned steer whose own request is refused falls back to replaying on 
   assert.ok(claimed);
   await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
   await built.app.replayOrphanedRunSignals(run.id);
-  let replayed = await built.runs.activeForThread(threadRef);
-  for (let i = 0; !replayed && i < 50; i++) {
-    await new Promise((r) => setTimeout(r, 100));
-    replayed = await built.runs.activeForThread(threadRef);
-  }
-  assert.ok(replayed, "a refused steerer request still replays the text on the run's own request");
-  assert.equal(replayed!.request.actor.id, "internal:U1");
-  assert.equal(replayed!.request.text, "still matters");
+  assert.equal(await built.runs.activeForThread(threadRef), null);
+  assert.deepEqual(await built.signals.pending(run.id), []);
 });
 
 test("attributedSteerText prefixes foreign and ambient steers only", () => {
@@ -666,4 +660,27 @@ test("web steering atomically transfers file-only queues and deduplicates retrie
   const signals = await built.signals.takePending(runId);
   assert.equal(signals.length, 1);
   assert.deepEqual(signals[0]?.request?.attachments, attachments);
+});
+
+test("orphan replay retains its signal until replacement run acceptance succeeds", async () => {
+  const threadRef = `orphan-crash:${crypto.randomUUID()}`;
+  const { run } = await built.runs.enqueue({ sessionId: threadRef, request: request("first", threadRef) });
+  const claimed = await built.runs.claimById(run.id, "test", 5000);
+  assert.ok(claimed?.leaseToken);
+  await built.runs.complete(run.id, claimed.leaseToken, { status: "ok", reply: "done" });
+  await built.signals.send(run.id, { kind: "steer", text: "retained followup" });
+  const enqueue = built.runs.enqueue;
+  built.runs.enqueue = async () => {
+    throw new Error("database unavailable");
+  };
+  try {
+    await built.app.replayOrphanedRunSignals(run.id);
+  } finally {
+    built.runs.enqueue = enqueue;
+  }
+  assert.equal((await built.signals.pending(run.id)).length, 1);
+  await built.app.replayOrphanedRunSignals(run.id);
+  await built.app.replayOrphanedRunSignals(run.id);
+  assert.equal((await built.signals.pending(run.id)).length, 0);
+  assert.equal((await built.runs.list()).filter((row) => row.sessionId === threadRef && row.id !== run.id).length, 1);
 });

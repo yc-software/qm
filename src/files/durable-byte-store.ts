@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { Readable } from "node:stream";
 import { join } from "node:path";
 import {
-  AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
@@ -16,7 +15,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { swallowAs } from "../util/errors.ts";
 import { asChunks, collectBytes, type ByteSource } from "../util/bytes.ts";
-import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
+import { abortS3MultipartUpload, bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 
 export type { ByteSource } from "../util/bytes.ts";
 
@@ -130,7 +129,7 @@ export function createS3DurableByteStore(options: S3DurableByteOptions): Durable
   const bucket = options.bucket;
   const prefix = options.prefix ?? "";
   const s3Key = (blobKey: string): string => prefix + blobKey;
-  const client = options._client ?? s3Client(options.region);
+  const client = s3Client(options.region, options._client);
 
   return {
     async put(source, opts) {
@@ -184,9 +183,9 @@ export function createS3DurableByteStore(options: S3DurableByteOptions): Durable
         return { blobKey, sizeBytes, sha256 };
       } catch (error) {
         if (uploadId && Key)
-          await client
-            .send(new AbortMultipartUploadCommand({ Bucket: bucket, Key, UploadId: uploadId }))
-            .catch(swallowAs("files: abort upload", undefined));
+          await abortS3MultipartUpload(client, { Bucket: bucket, Key, UploadId: uploadId }).catch(
+            swallowAs("files: abort upload", undefined),
+          );
         throw error;
       } finally {
         await rm(dir, { recursive: true, force: true });

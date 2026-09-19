@@ -3,6 +3,7 @@ import { FETCH_SUBSTRATE, SCRIPT_RUNNER } from "../../src/sandbox/sprites-sandbo
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createFakeSandboxEnvironment } from "./fake-sandbox-environment.ts";
 import type { SpritesClientLike } from "../../src/sandbox/sprites-sandbox.ts";
 
 export interface NetworkRule {
@@ -41,6 +42,7 @@ const API_ORIGIN = "https://api.sprites.dev";
 
 export function installFakeSprites(): FakeSprites {
   const root = mkdtempSync(join(tmpdir(), "fake-sprites-"));
+  const environment = createFakeSandboxEnvironment(root);
   const sprites = new Map<string, { home: string }>();
   const policies = new Map<string, NetworkRule[]>();
   const execScripts: string[] = [];
@@ -91,7 +93,7 @@ export function installFakeSprites(): FakeSprites {
     const r = spawnSync("sh", ["-c", viaBody ? SCRIPT_RUNNER : remap(name, script)], {
       encoding: "buffer",
       maxBuffer: 128 * 1024 * 1024,
-      env: { ...process.env, COPYFILE_DISABLE: "1" },
+      env: environment(),
       ...(input ? { input } : {}),
     });
     const code = r.status ?? (r.signal ? 137 : -1);

@@ -1,7 +1,7 @@
+import { isolatedPostgres } from "./support/isolated-postgres.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import type { Pool } from "pg";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -20,17 +20,8 @@ for (const backend of ["memory", "postgres"] as const) {
       skip: backend === "postgres" && !process.env.DATABASE_URL,
     },
     async (t) => {
-      let connectionString = process.env.DATABASE_URL!;
-      let admin: Pool | undefined;
-      const schema = `retry_${randomUUID().replaceAll("-", "")}`;
-      if (backend === "postgres") {
-        const pg = (await import("pg")).default;
-        admin = new pg.Pool({ connectionString });
-        await admin.query(`CREATE SCHEMA ${schema}`);
-        const url = new URL(connectionString);
-        url.searchParams.set("options", `-c search_path=${schema}`);
-        connectionString = url.toString();
-      }
+      const database = backend === "postgres" ? await isolatedPostgres("retry") : undefined;
+      const connectionString = database?.url ?? "";
       const runtime = backend === "memory" ? createMemoryRunStore() : createPostgresRunStore(connectionString);
       let { runs } = runtime;
       const sessionId = randomUUID();
@@ -56,6 +47,11 @@ for (const backend of ["memory", "postgres"] as const) {
         t.mock.timers.tick(29_999);
         assert.equal(await runs.claim("worker-3", 60_000), null);
         t.mock.timers.tick(1);
+        if (database)
+          await database.admin.query(
+            "UPDATE absurd.r_qm_runs SET available_at=absurd.current_time() WHERE task_id=(SELECT workflow_task_id FROM runs WHERE id=$1) AND state IN ('pending','sleeping')",
+            [first.id],
+          );
         assert.equal(await runs.claimById(later.id, "inline-worker", 60_000), null);
         const retried = await runs.claimForSession(sessionId, "worker-3", 60_000);
         assert.equal(retried?.id, first.id);
@@ -68,13 +64,7 @@ for (const backend of ["memory", "postgres"] as const) {
       } finally {
         t.mock.timers.reset();
         await runs.close?.();
-        if (admin) {
-          try {
-            await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-          } finally {
-            await admin.end();
-          }
-        }
+        await database?.cleanup();
       }
     },
   );
@@ -100,11 +90,9 @@ test(
   async () => {
     const pg = (await import("pg")).default;
     const { applyPgMigrations, registeredPgMigrations } = await import("../src/persistence/pg-pool.ts");
-    const admin = new pg.Pool({ connectionString: process.env.DATABASE_URL });
-    const schema = `retry_lock_${randomUUID().replaceAll("-", "")}`;
-    await admin.query(`CREATE SCHEMA ${schema}`);
-    const url = new URL(process.env.DATABASE_URL!);
-    url.searchParams.set("options", `-c search_path=${schema} -c statement_timeout=5000`);
+    const database = await isolatedPostgres("retry_lock");
+    const url = new URL(database.url);
+    url.searchParams.set("options", "-c statement_timeout=5000");
     const runtime = createPostgresRunStore(url.toString());
     const pool = new pg.Pool({ connectionString: url.toString() });
     const holder = await pool.connect();
@@ -127,8 +115,7 @@ test(
       holder.release();
       await runtime.close();
       await pool.end();
-      await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-      await admin.end();
+      await database.cleanup();
     }
   },
 );

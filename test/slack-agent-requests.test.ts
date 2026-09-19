@@ -299,7 +299,7 @@ test("the agent-request store expires stale records and sweeps them on put", asy
   await map.put("stale3", record("stale3", eightDays));
   const brittle = createAgentRequestStore({
     ...map,
-    delete: async () => {
+    deleteIf: async () => {
       throw new Error("gc hiccup");
     },
   });
@@ -308,7 +308,12 @@ test("the agent-request store expires stale records and sweeps them on put", asy
   assert.equal((await store.getAgentRequest("fresh"))?.requestId, "fresh");
   assert.equal((await store.agentRequestForApproval("req-new"))?.requestId, "fresh");
   assert.equal((await store.takeAgentRequest("fresh"))?.requestId, "fresh");
-  assert.equal(await map.get("fresh"), null);
+  assert.equal(typeof (await map.get("fresh"))?.settledAt, "number");
+  assert.equal(await store.takeAgentRequest("fresh"), null);
+  assert.equal(await store.getAgentRequest("fresh"), null);
+  assert.equal(await store.agentRequestForApproval("req-new"), null);
+  await store.putAgentRequest("fresh", record("fresh", 0, ["req-new"]));
+  assert.equal(await store.getAgentRequest("fresh"), null);
 });
 
 test("a handoff command approval recovered on a fresh instance still reports back to the origin channel", async () => {
@@ -378,4 +383,311 @@ test("the leftover strip is case-insensitive and safe on non-ASCII text", () => 
   const start = process.hrtime.bigint();
   extractAgentRequests(("[[ask-agent:" + "x".repeat(88)).repeat(10000));
   assert.ok(Number(process.hrtime.bigint() - start) / 1e6 < 100);
+});
+
+test("durable handoff delivery cannot recreate a settled request after losing a persistence receipt", async () => {
+  const map = createMemoryMap<SlackAgentRequestContext>();
+  const core = createAgentRequestStore(map);
+  const saved = new Map<string, unknown>();
+  let crash = true;
+  let settledId: string | undefined;
+  const context = {
+    async step<T>(name: string, run: () => Promise<T>): Promise<T> {
+      if (saved.has(name)) return structuredClone(saved.get(name)) as T;
+      const result = await run();
+      if (name === "agent-request:0:context" && crash) {
+        crash = false;
+        settledId = (await map.entries())[0]![0];
+        await core.takeAgentRequest(settledId);
+        throw new Error("lost persistence receipt");
+      }
+      saved.set(name, structuredClone(result));
+      return result;
+    },
+  };
+  const posts: Array<Record<string, unknown>> = [];
+  const client = {
+    conversations: {
+      open: async () => ({ channel: { id: "D1" } }),
+      history: async () => ({ messages: [] }),
+      replies: async () => ({ messages: [] }),
+    },
+    chat: {
+      postMessage: async (args: Record<string, unknown>) => {
+        posts.push(args);
+        return { ts: String(posts.length) };
+      },
+    },
+  };
+  const approvals = createApprovals({ core, flow: {}, directory: {}, threads: {}, ids: {} } as never);
+  const execute = () =>
+    approvals.postAgentRequests(
+      client,
+      {
+        requesterId: "U1",
+        channel: "C1",
+        threadOnly: true,
+        kind: "channel",
+        audience: [{ externalId: "U2", displayName: "Second User" }],
+      },
+      [{ targetUserId: "U2", task: "get the result" }],
+      { context, key: "run:origin" },
+    );
+  await assert.rejects(execute(), /lost persistence receipt/);
+  await execute();
+  assert.equal(posts.length, 2);
+  assert.ok(settledId);
+  assert.equal(await core.getAgentRequest(settledId), null);
+  assert.equal(typeof (await map.get(settledId))?.settledAt, "number");
+});
+
+test("only one handoff consumer can settle a request, and stale writes preserve that decision", async () => {
+  const map = createMemoryMap<SlackAgentRequestContext>();
+  const first = createAgentRequestStore(map);
+  const second = createAgentRequestStore(map);
+  const record: SlackAgentRequestContext = {
+    requestId: "concurrent",
+    requesterId: "U1",
+    targetUserId: "U2",
+    originChannel: "C1",
+    originThreadOnly: true,
+    dmChannel: "D1",
+    task: "t",
+    originAgentLabel: "channel",
+    targetAgentLabel: "personal",
+    createdAt: Date.now(),
+  };
+  await first.putAgentRequest(record.requestId, record);
+  const taken = await Promise.all([
+    first.takeAgentRequest(record.requestId),
+    second.takeAgentRequest(record.requestId),
+  ]);
+  assert.equal(taken.filter(Boolean).length, 1);
+  await second.putAgentRequest(record.requestId, { ...record, acceptedAt: Date.now() });
+  assert.equal(await first.getAgentRequest(record.requestId), null);
+});
+
+test("a concurrent decline cannot overwrite an accepted handoff decision", async () => {
+  const map = createMemoryMap<SlackAgentRequestContext>();
+  const store = createAgentRequestStore(map);
+  const record: SlackAgentRequestContext = {
+    requestId: "decision-race",
+    requesterId: "U1",
+    targetUserId: "U2",
+    originChannel: "C1",
+    originStatusTs: "1.1",
+    originThreadOnly: true,
+    dmChannel: "D1",
+    dmMessageTs: "2.1",
+    task: "t",
+    originAgentLabel: "channel",
+    targetAgentLabel: "personal",
+    createdAt: Date.now(),
+  };
+  await store.putAgentRequest(record.requestId, record);
+  let submitted = 0;
+  const updates: string[] = [];
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const approvals = createApprovals({
+    core: { ...store, durableIngress: {}, durableDeliveries: true },
+    flow: {
+      callCore: async (_turn: unknown, hooks: { onQueued: (runId: string) => void }) => {
+        submitted++;
+        hooks.onQueued("r1");
+        return { status: "ok", reply: "done" };
+      },
+    },
+    directory: {
+      classifyUserCached: async () => {
+        entered.resolve();
+        await release.promise;
+        return { actor: { externalId: "U2" } };
+      },
+    },
+    threads: {},
+    ids: {},
+  } as never);
+  let handler: (args: unknown) => Promise<void>;
+  approvals.registerActions({
+    action: (pattern, callback) => {
+      if (pattern.test("agent_request_run")) handler = callback;
+    },
+  });
+  const click = (actionId: string) =>
+    handler({
+      ack: async () => {},
+      body: { user: { id: "U2" }, channel: { id: "D1" }, message: { ts: "2.1" } },
+      action: { action_id: actionId, value: record.requestId },
+      client: {
+        chat: {
+          update: async (args: { text: string }) => {
+            updates.push(args.text);
+            return {};
+          },
+        },
+      },
+    });
+  const run = click("agent_request_run");
+  await entered.promise;
+  await click("agent_request_deny");
+  release.resolve();
+  await run;
+  assert.equal(submitted, 1);
+  assert.equal(
+    updates.some((text) => text.startsWith("Declined.")),
+    false,
+  );
+  assert.equal((await store.getAgentRequest(record.requestId))?.decision, "run");
+});
+
+test("a durable decline survives replay and prevents a later Run decision", async () => {
+  const map = createMemoryMap<SlackAgentRequestContext>();
+  const store = createAgentRequestStore(map);
+  const record: SlackAgentRequestContext = {
+    requestId: "declined",
+    requesterId: "U1",
+    targetUserId: "U2",
+    originChannel: "C1",
+    originThreadOnly: true,
+    dmChannel: "D1",
+    task: "t",
+    originAgentLabel: "channel",
+    targetAgentLabel: "personal",
+    createdAt: Date.now(),
+  };
+  await store.putAgentRequest(record.requestId, record);
+  const declined = await store.decideAgentRequest!(record.requestId, "deny");
+  assert.equal(declined?.decision, "deny");
+  await store.putAgentRequest(record.requestId, record);
+  assert.deepEqual(await store.decideAgentRequest!(record.requestId, "deny"), declined);
+  assert.equal(await store.decideAgentRequest!(record.requestId, "run"), null);
+});
+
+test("the clicked DM timestamp is durable before handoff admission when the sender has not saved its receipt", async () => {
+  const map = createMemoryMap<SlackAgentRequestContext>();
+  const store = createAgentRequestStore(map);
+  const record: SlackAgentRequestContext = {
+    requestId: "early-click",
+    requesterId: "U1",
+    targetUserId: "U2",
+    originChannel: "C1",
+    originStatusTs: "1.1",
+    originThreadOnly: true,
+    dmChannel: "D1",
+    task: "t",
+    originAgentLabel: "channel",
+    targetAgentLabel: "personal",
+    createdAt: Date.now(),
+  };
+  await store.putAgentRequest(record.requestId, record);
+  let admitted = false;
+  const approvals = createApprovals({
+    core: { ...store, durableIngress: {}, durableDeliveries: true },
+    flow: {
+      callCore: async (_turn: unknown, hooks: { onQueued: (id: string) => void }) => {
+        assert.equal((await store.getAgentRequest(record.requestId))?.dmMessageTs, "2.1");
+        admitted = true;
+        hooks.onQueued("r1");
+        return { status: "ok", reply: "done" };
+      },
+    },
+    directory: { classifyUserCached: async () => ({ actor: { externalId: "U2" } }) },
+    threads: {},
+    ids: {},
+  } as never);
+  let handler: (args: unknown) => Promise<void>;
+  approvals.registerActions({
+    action: (pattern, callback) => {
+      if (pattern.test("agent_request_run")) handler = callback;
+    },
+  });
+  await handler!({
+    ack: async () => {},
+    body: { user: { id: "U2" }, channel: { id: "D1" }, message: { ts: "2.1" } },
+    action: { action_id: "agent_request_run", value: record.requestId },
+    client: { chat: { update: async () => ({}) } },
+  });
+  assert.equal(admitted, true);
+  await store.takeAgentRequest(record.requestId);
+  await store.putAgentRequest(record.requestId, record);
+  assert.equal((await map.get(record.requestId))?.dmMessageTs, "2.1");
+});
+
+test("duplicate or replayed Run clicks cannot overwrite the handoff's terminal messages", async () => {
+  const store = createAgentRequestStore(createMemoryMap<SlackAgentRequestContext>());
+  const record: SlackAgentRequestContext = {
+    requestId: "duplicate-run",
+    requesterId: "U1",
+    targetUserId: "U2",
+    originChannel: "C1",
+    originStatusTs: "1.1",
+    originThreadOnly: true,
+    dmChannel: "D1",
+    dmMessageTs: "2.1",
+    task: "t",
+    originAgentLabel: "channel",
+    targetAgentLabel: "personal",
+    createdAt: Date.now(),
+  };
+  await store.putAgentRequest(record.requestId, record);
+  const blocked = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const messages = new Map<string, string>();
+  let blockedOnce = false;
+  const client = {
+    chat: {
+      update: async ({ channel, text }: { channel: string; text: string }) => {
+        if (!blockedOnce && text.startsWith("Approved. Running")) {
+          blockedOnce = true;
+          blocked.resolve();
+          await release.promise;
+        }
+        messages.set(channel, text);
+        return {};
+      },
+      postEphemeral: async () => ({}),
+    },
+  };
+  const approvals = createApprovals({
+    core: { ...store, durableIngress: {}, durableDeliveries: true },
+    flow: {
+      callCore: async (_turn: unknown, hooks: { onQueued: (id: string) => void }) => {
+        hooks.onQueued("r1");
+        return { status: "ok", reply: "done" };
+      },
+    },
+    directory: { classifyUserCached: async () => ({ actor: { externalId: "U2" } }) },
+    threads: {},
+    ids: {},
+  } as never);
+  let handler: (args: unknown) => Promise<void>;
+  approvals.registerActions({
+    action: (pattern, callback) => {
+      if (pattern.test("agent_request_run")) handler = callback;
+    },
+  });
+  const click = () =>
+    handler!({
+      ack: async () => {},
+      body: { user: { id: "U2" }, channel: { id: "D1" }, message: { ts: "2.1" } },
+      action: { action_id: "agent_request_run", value: record.requestId },
+      client,
+    });
+  const first = click();
+  await Promise.race([blocked.promise, first]);
+  await click();
+  messages.set("D1", "completed");
+  messages.set("C1", "final answer");
+  await store.takeAgentRequest(record.requestId);
+  release.resolve();
+  await first;
+  await click();
+  assert.deepEqual(
+    [...messages],
+    [
+      ["D1", "completed"],
+      ["C1", "final answer"],
+    ],
+  );
 });

@@ -13,6 +13,7 @@ import { testConfig } from "./support/test-config.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-metrics-")) }));
+  built.runtime.startBackground();
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,
@@ -22,7 +23,14 @@ function start() {
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
+  return {
+    base,
+    built,
+    close: async () => {
+      await new Promise<void>((r) => server.close(() => r()));
+      await built.runtime.stop();
+    },
+  };
 }
 
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };
@@ -160,7 +168,7 @@ test("metrics: turn anatomy splits no-sandbox (Trace A) from sandbox (Trace B) t
   }
 });
 
-test("metrics: session+lease measured per turn; detached post-turn capture recorded separately", async () => {
+test("metrics: session+lease measured per turn; durable post-turn capture recorded separately", async () => {
   const s = start();
   try {
     const dm: TurnRequest = {
@@ -182,7 +190,7 @@ test("metrics: session+lease measured per turn; detached post-turn capture recor
       await new Promise((r) => setTimeout(r, 20));
       m = await getJson(s.base, "/v1/admin/metrics?scope=org:default-org");
     }
-    assert.ok(m.anatomy.capture.count >= 1, "the detached post-turn capture was recorded");
+    assert.ok(m.anatomy.capture.count >= 1, "the durable post-turn capture was recorded");
     assert.ok(typeof m.anatomy.capture.p50 === "number" && m.anatomy.capture.p50 >= 0, "capture p50 is a real number");
     assert.equal(
       m.anatomy.traceA.samples + m.anatomy.traceB.samples,

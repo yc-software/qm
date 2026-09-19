@@ -208,7 +208,7 @@ export interface Sandbox {
   restartComputer?(scopeId: string): Promise<void>;
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
   destroyScope?(scopeId: string): Promise<void>;
-  reapDeepIdle?(idleMs: number, devIdleMs?: number): Promise<{ reaped: number }>;
+  reapDeepIdle?(idleMs: number, devIdleMs?: number, signal?: AbortSignal): Promise<{ reaped: number }>;
 }
 
 export class CapabilityUnsupportedError extends Error {

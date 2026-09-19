@@ -6,7 +6,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
+import { deliverRunResult } from "../src/delivery/run-result-delivery.ts";
 import { testConfig } from "./support/test-config.ts";
+import { settle } from "./support/settle.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -72,9 +74,18 @@ test("a prompt-injected ambient judge reason is screened even when the shown mes
         createdAt: 1,
       },
     ]);
-    await sleep(250);
-    assert.equal((await built.deliveries.pending("slack")).length, 0);
-    assert.ok((await built.auditLog.events()).some((event) => event.action === "security_posture.flagged"));
+    const flagged = async () =>
+      (await built.auditLog.events()).some((event) => event.action === "security_posture.flagged");
+    const threadRef = "slack:C-reason-risk:ambient:100.2";
+    await settle(async () => Boolean(await built.runs.latestForThread(threadRef)));
+    const run = await built.runs.latestForThread(threadRef);
+    assert.ok(run);
+    const finished = await built.runs.waitFor(run.id);
+    assert.equal(finished.result?.status, "pending_approval");
+    await deliverRunResult(built.runs, built.deliveries, run.id);
+    const pending = await built.deliveries.pending("slack");
+    assert.equal(pending.length, 0, JSON.stringify(pending));
+    assert.ok(await flagged());
   } finally {
     await built.runtime.stop();
   }

@@ -1,6 +1,5 @@
 import { basename } from "node:path/posix";
 import {
-  AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
   CopyObjectCommand,
   CreateMultipartUploadCommand,
@@ -12,8 +11,8 @@ import {
 } from "@aws-sdk/client-s3";
 import { shq } from "../util/shell.ts";
 import { swallowAs } from "../util/errors.ts";
-import { sleep, withTimeout } from "../util/async.ts";
-import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
+import { assertOperationActive, sleep, withTimeout } from "../util/async.ts";
+import { abortS3MultipartUpload, bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 import { displacedPruneGlobs } from "../credentials/resident-paths.ts";
 import type { TeardownOptions } from "./sandbox.ts";
 
@@ -112,7 +111,7 @@ export interface S3SnapshotStoreOptions {
 }
 
 export function createS3SnapshotStore(opts: S3SnapshotStoreOptions): HomeSnapshotStore {
-  const s3 = opts.s3 ?? s3Client(opts.region);
+  const s3 = s3Client(opts.region, opts.s3);
   const keyFor = opts.keyFor ?? ((scope: string): string => `${opts.prefix}/${encodeURIComponent(scope)}.tar`);
   const Bucket = opts.bucket;
   return {
@@ -136,7 +135,7 @@ export function createS3SnapshotStore(opts: S3SnapshotStoreOptions): HomeSnapsho
       const UploadId = started.UploadId!;
       const parts: Array<{ ETag: string; PartNumber: number }> = [];
       const abort = async (): Promise<void> => {
-        await s3.send(new AbortMultipartUploadCommand({ Bucket, Key, UploadId })).catch(() => {});
+        await abortS3MultipartUpload(s3, { Bucket, Key, UploadId }).catch(() => {});
       };
       return {
         async addPart(bytes) {
@@ -197,7 +196,7 @@ export function createS3SnapshotStore(opts: S3SnapshotStoreOptions): HomeSnapsho
           }),
         );
       } catch (e) {
-        await s3.send(new AbortMultipartUploadCommand({ Bucket, Key, UploadId: uploadId })).catch(() => {});
+        await abortS3MultipartUpload(s3, { Bucket, Key, UploadId: uploadId }).catch(() => {});
         throw e;
       }
     },
@@ -264,6 +263,7 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
   const startClock = (): (() => number) => {
     const deadline = Date.now() + timeoutMs;
     return () => {
+      assertOperationActive();
       const left = deadline - Date.now();
       if (left <= 0) throw new Error(`${label} snapshot exceeded ${timeoutMs}ms`);
       return left;

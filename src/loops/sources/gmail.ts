@@ -175,7 +175,12 @@ export const gmailAdapter: LoopSourceAdapter = {
     try {
       return await sendGmail(deps, item, { ...draft, body: draft.body.trim() });
     } catch (err) {
-      return { ok: false, reason: "upstream", message: errMessage(err) };
+      return {
+        ok: false,
+        reason: "upstream",
+        partial: true,
+        message: `The send may have completed. Check Gmail before sending again: ${errMessage(err)}`,
+      };
     }
   },
 };

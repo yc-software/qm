@@ -683,8 +683,9 @@ async function until<T>(get: () => Promise<T | undefined>, ms = 3_000): Promise<
   }
 }
 
-test("orphan replay: a steer unconsumed at run completion replays as a fresh turn (prod 93a5c5ba)", async () => {
+test("orphan replay: a steer unconsumed at run completion replays as a fresh turn (prod 93a5c5ba)", async (t) => {
   const built = freshApp();
+  t.after(() => built.runtime.stop());
   const channel = "C9";
   const root = "900.9";
   const threadRef = `ch:${channel}:${root}`;
@@ -695,11 +696,11 @@ test("orphan replay: a steer unconsumed at run completion replays as a fresh tur
   const claimed = await built.runs.claim("w1", 30_000);
   assert.equal(claimed?.id, liveRunId);
   await built.runs.complete(liveRunId, claimed!.leaseToken!, { status: "silent" });
+  built.runtime.startBackground();
 
   const replayed = await until(async () =>
     (await built.runs.list()).find((r) => r.sessionId === threadRef && r.id !== liveRunId),
   );
-  assert.equal(replayed.status, "pending");
   const text = `${replayed.request.text ?? ""} ${replayed.request.displayText ?? ""}`;
   assert.ok(
     text.includes("why did you do it wrong?"),

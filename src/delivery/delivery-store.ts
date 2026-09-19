@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { DeliveryTaskScheduler } from "./task-delivery.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment, ScopeId } from "../types.ts";
 import type { TurnOrigin } from "../core/turn-origin.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
@@ -35,6 +36,7 @@ export function turnDeliveryProvenance(input: {
 }
 
 export interface DeliveryStore {
+  readonly durable?: boolean;
   enqueue(input: {
     destination: Destination;
     text: string;
@@ -50,15 +52,17 @@ export interface DeliveryStore {
   ackByKey(idempotencyKey: string, at: number): Promise<void>;
   setEditRefByKey(idempotencyKey: string, editRef: string): Promise<void>;
   get(id: string): Promise<Delivery | null>;
+  getByKey(idempotencyKey: string): Promise<Delivery | null>;
   recordRecipientThread(id: string, recipientThreadRef: string, at: number): Promise<void>;
   listByRecipientThread(recipientThreadRef: string, opts?: { limit?: number }): Promise<Delivery[]>;
   listBySourceSession(sourceSessionId: string, sourceThreadRef: string, opts?: { limit?: number }): Promise<Delivery[]>;
   sentCountsBySourceSessions(sources: Array<{ sessionId: string; threadRef: string }>): Promise<Map<string, number>>;
   sentRunCountsByCron(cronIds: string[]): Promise<Map<string, number>>;
   onEnqueue(listener: () => void): () => void;
+  recoverPending?(): Promise<number>;
 }
 
-export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore {
+export function createDeliveryStore(opts?: { maxAgeMs?: number; scheduler?: DeliveryTaskScheduler }): DeliveryStore {
   const maxAgeMs = opts?.maxAgeMs ?? DELIVERY_MAX_AGE_MS;
   const deliveries = new Map<string, Delivery>();
   const byKey = new Map<string, string>();
@@ -76,6 +80,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
   };
 
   return {
+    durable: Boolean(opts?.scheduler),
     async enqueue(input) {
       const existingId = byKey.get(input.idempotencyKey);
       if (existingId) {
@@ -94,6 +99,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
           else delete existing.shadow;
           if (!existing.shadow) for (const l of enqueueListeners) l();
         }
+        if (!existing.shadow && existing.deliveredAt === null) await opts?.scheduler?.spawnDelivery(existing.id);
         return existing;
       }
       const delivery: Delivery = {
@@ -109,7 +115,10 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       };
       deliveries.set(delivery.id, delivery);
       byKey.set(delivery.idempotencyKey, delivery.id);
-      if (!delivery.shadow) for (const l of enqueueListeners) l();
+      if (!delivery.shadow) {
+        await opts?.scheduler?.spawnDelivery(delivery.id);
+        for (const l of enqueueListeners) l();
+      }
       return delivery;
     },
     async pending(type) {
@@ -118,6 +127,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       );
     },
     async claimPending(type, ttlMs) {
+      if (opts?.scheduler) return [];
       const now = Date.now();
       expireOveraged(now);
       const rows = [...deliveries.values()].filter(
@@ -176,6 +186,10 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
     async get(id) {
       return deliveries.get(id) ?? null;
     },
+    async getByKey(idempotencyKey) {
+      const id = byKey.get(idempotencyKey);
+      return id ? (deliveries.get(id) ?? null) : null;
+    },
     async recordRecipientThread(id, recipientThreadRef, at) {
       const d = deliveries.get(id);
       if (!d || d.destination.type !== "principal") return;
@@ -233,6 +247,17 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
     onEnqueue(listener) {
       enqueueListeners.add(listener);
       return () => enqueueListeners.delete(listener);
+    },
+    async recoverPending() {
+      if (!opts?.scheduler) return 0;
+      let count = 0;
+      for (const delivery of deliveries.values()) {
+        if (delivery.deliveredAt !== null || delivery.shadow) continue;
+        await opts.scheduler.spawnDelivery(delivery.id);
+        delete delivery.expiredAt;
+        count++;
+      }
+      return count;
     },
   };
 }

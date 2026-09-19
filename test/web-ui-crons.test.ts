@@ -15,6 +15,7 @@ import { testConfig } from "./support/test-config.ts";
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-cron-")) }));
+built.runtime.startBackground();
 const core = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
@@ -30,6 +31,7 @@ const webBase = `http://localhost:${(web.address() as AddressInfo).port}`;
 after(async () => {
   await new Promise<void>((r) => web.close(() => r()));
   await new Promise<void>((r) => core.close(() => r()));
+  await built.runtime.stop();
 });
 
 function asUser(user: string, init: RequestInit = {}): RequestInit {

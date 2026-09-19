@@ -372,6 +372,36 @@ test("oneShot removes its temp dirs even when the session call throws", async ()
   assert.equal(after, before, "oneShot must leave no agent dirs behind");
 });
 
+for (const reason of [undefined, new Error("one-shot canceled")]) {
+  test(`oneShot cancellation during preflight preserves ${reason ? "a custom reason" : "the default reason"} without dispatch`, async (t) => {
+    const controller = new AbortController();
+    const subscribe = controller.signal.addEventListener.bind(controller.signal);
+    controller.signal.addEventListener = (type, callback, options) => {
+      subscribe(type, callback, options);
+      if (type === "abort") queueMicrotask(() => controller.abort(reason));
+    };
+    const originalFetch = globalThis.fetch;
+    t.after(() => {
+      globalThis.fetch = originalFetch;
+    });
+    let requests = 0;
+    globalThis.fetch = (async () => {
+      requests++;
+      return new Response(JSON.stringify({ error: { message: "must not dispatch" } }), { status: 400 });
+    }) as typeof fetch;
+    const model = getBuiltinModel("anthropic", "claude-haiku-4-5");
+    assert.ok(model);
+    const prefix = "pi-canceled-preflight-test";
+    const before = countTempDirs(`${prefix}-agent-`);
+    await assert.rejects(
+      oneShot(prefix, model, "test-key", "system", "hello", { signal: controller.signal }),
+      (error) => error === controller.signal.reason,
+    );
+    assert.equal(requests, 0);
+    assert.equal(countTempDirs(`${prefix}-agent-`), before);
+  });
+}
+
 test("oneShot completes an authenticated Pi 0.82 turn", async (t) => {
   let apiKey: string | undefined;
   let requestBody = "";

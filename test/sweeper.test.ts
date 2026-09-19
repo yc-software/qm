@@ -166,3 +166,34 @@ test("stop drains overlapping callbacks including failed work before acknowledgi
   await stopping;
   assert.equal(active, 0);
 });
+
+test("stop signals the active generation and waits for its current item before restart", async () => {
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const signals: AbortSignal[] = [];
+  const sweeper = createSweeper(
+    async (signal) => {
+      signals.push(signal);
+      entered.resolve();
+      if (signals.length === 1) await finish.promise;
+    },
+    60_000,
+    { immediate: true },
+  );
+  sweeper.start();
+  await entered.promise;
+  let drained = false;
+  const stopping = sweeper.stop().then(() => {
+    drained = true;
+  });
+  assert.equal(signals[0]!.aborted, true);
+  await Promise.resolve();
+  assert.equal(drained, false);
+  finish.resolve();
+  await stopping;
+  sweeper.start();
+  assert.equal(signals.length, 2);
+  assert.equal(signals[1]!.aborted, false);
+  assert.notEqual(signals[0], signals[1]);
+  await sweeper.stop();
+});

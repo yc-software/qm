@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import { assertOperationActive } from "../util/async.ts";
+import { DurableTaskDeferred } from "../durable/tasks.ts";
+import type { DeliveryTaskContext } from "../delivery/task-delivery.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
@@ -443,6 +447,7 @@ export async function findPostedByKey(
   const channel = args.channel;
   let cursor: string | undefined;
   do {
+    assertOperationActive();
     const paging = {
       channel,
       limit: 100,
@@ -497,8 +502,15 @@ export async function postWithVerify(
   client: PostVerifyClient,
   args: PostMessageArgs,
   idempotencyKey: string,
-  opts?: { attempts?: number; verifyFirst?: boolean; verifyOldest?: string; verifyBestEffort?: boolean },
+  opts?: {
+    attempts?: number;
+    verifyFirst?: boolean;
+    verifyOldest?: string;
+    verifyBestEffort?: boolean;
+    context?: DeliveryTaskContext;
+  },
 ): Promise<{ ts: string | undefined; channel: string; reused?: boolean; parts?: PostedPart[] }> {
+  assertOperationActive();
   const fullText = typeof args.text === "string" ? args.text : "";
   const batches: PostMessageArgs[] = [];
   if (Array.isArray(args.blocks) && args.blocks.length > 50) {
@@ -549,9 +561,54 @@ export async function postWithVerify(
       : await findPostedByKey(client, args, idempotencyKey, verifyOldest);
     if (found) return { ...found, reused: true };
   }
+  if (opts?.context) {
+    const execution = randomUUID();
+    for (let attempt = 0; ; attempt++) {
+      const key = `${idempotencyKey}:post:${attempt}`;
+      const owner = await opts.context.step(`${key}:attempt`, async () => execution);
+      const outcome = await opts.context.step(`${key}:result`, async () => {
+        if (owner !== execution) {
+          const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest);
+          if (found) return { kind: "posted" as const, result: { ...found, reused: true } };
+          throw new DurableTaskDeferred(15);
+        }
+        try {
+          assertOperationActive();
+          const response = (await client.chat.postMessage(args)) as { ts?: string; channel?: string };
+          return {
+            kind: "posted" as const,
+            result: {
+              ts: response.ts === undefined ? undefined : String(response.ts),
+              channel: String(response.channel ?? args.channel),
+            },
+          };
+        } catch (error) {
+          const failure = error as { code?: string; retryAfter?: number; data?: { error?: string } };
+          if (failure.code === "slack_webapi_rate_limited_error")
+            return { kind: "rate_limited" as const, retryAt: Date.now() + (failure.retryAfter ?? 1) * 1000 };
+          if (failure.code === "slack_webapi_platform_error")
+            return { kind: "rejected" as const, message: errMessage(error), error: failure.data?.error };
+          const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest);
+          if (found) return { kind: "posted" as const, result: { ...found, reused: true } };
+          throw new DurableTaskDeferred(15);
+        }
+      });
+      if (outcome.kind === "posted") return outcome.result;
+      if (outcome.kind === "rejected") {
+        if (owner !== execution) continue;
+        throw Object.assign(new Error(outcome.message), {
+          code: "slack_webapi_platform_error",
+          ...(outcome.error ? { data: { error: outcome.error } } : {}),
+        });
+      }
+      const remaining = outcome.retryAt - Date.now();
+      if (remaining > 0) throw new DurableTaskDeferred(Math.max(1, Math.ceil(remaining / 1000)));
+    }
+  }
   let lastErr: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
+      assertOperationActive();
       const res = (await client.chat.postMessage(args)) as { ts?: string; channel?: string };
       return { ts: res.ts === undefined ? undefined : String(res.ts), channel: String(res.channel ?? args.channel) };
     } catch (err) {
