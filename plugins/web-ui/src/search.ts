@@ -10,6 +10,7 @@ import { destinations } from "./browse";
 import { UI_BASE } from "./deep-link";
 import { resourceResults, matchResources, type ResourceHit, type ResourceSearchResponse } from "./search-resources";
 import { icon } from "./ui";
+import { matchesPrimaryShortcut } from "./shortcut";
 
 interface ChatSearchHit {
   sessionId: string;
@@ -50,7 +51,7 @@ let fetchSeq = 0;
 
 export function registerChatSearchHotkey(): void {
   document.addEventListener("keydown", (e) => {
-    if (e.key.toLowerCase() === "k" && (isMac ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey) {
+    if (matchesPrimaryShortcut(e, "k", isMac)) {
       e.preventDefault();
       if (searchState.open) closeChatSearch();
       else openChatSearch();
