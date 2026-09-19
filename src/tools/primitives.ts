@@ -131,7 +131,7 @@ export class CommandDenied extends Error {
   }
 }
 
-export interface ReadResult {
+interface ReadResult {
   content: string | null;
   sourceScopeId: ScopeId | null;
   shared?: true;
