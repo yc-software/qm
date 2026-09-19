@@ -1,6 +1,6 @@
 import type { ActorAssertion, Principal } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { personKey } from "../directory/person.ts";
+import { canonicalPerson, personKey } from "../directory/person.ts";
 import { externalMemberActive, type ExternalMember } from "./external-members.ts";
 
 interface IdentityProvider {
@@ -48,6 +48,7 @@ export function createIdentityService(
     isOverridden?: (externalId: string) => boolean;
     directorySyncProtected?: readonly string[];
     externalMembers?: DurableMap<ExternalMember>;
+    principalLinks?: { refresh(force?: boolean): Promise<void> };
   } = {},
 ): IdentityService {
   const store = backing ?? createMemoryMap<DeactivationRecord>();
@@ -63,6 +64,7 @@ export function createIdentityService(
   const keptByDirectorySync = (key: string): boolean => directorySyncProtected.has(key) || externals.has(key);
 
   async function load(overwrite: boolean): Promise<void> {
+    await opts.principalLinks?.refresh(true);
     const [deactivations, members] = await Promise.all([store.all(), externalStore.all()]);
     if (overwrite) {
       deactivated.clear();
@@ -79,7 +81,8 @@ export function createIdentityService(
   }
 
   function classify(externalId: string, isExternalGuest?: boolean): Principal {
-    if (opts.isOverridden?.(externalId)) return { id: externalId, type: "internal" };
+    const id = canonicalPerson(externalId);
+    if (opts.isOverridden?.(externalId)) return { id, type: "internal" };
     const key = personKey(externalId);
     const record = deactivated.get(key);
     const external = externals.get(key);
@@ -88,7 +91,7 @@ export function createIdentityService(
       (record?.source === "directory-sync" && !keptByDirectorySync(key)) ||
       (external !== undefined && !externalMemberActive(external));
     const type: Principal["type"] = inactive || isExternalGuest ? "guest" : "internal";
-    return { id: externalId, type };
+    return { id, type };
   }
 
   async function deactivate(externalId: string, source: DeactivationSource = "manual"): Promise<void> {

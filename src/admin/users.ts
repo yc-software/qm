@@ -1,6 +1,7 @@
 import type { AdminGrant } from "./admin-grant-store.ts";
 import { adminStatusFromGrants, type AdminStatus } from "./admin-service.ts";
 import { forEachAttributedTurn, type AttributionInput } from "./attribution.ts";
+import { canonicalPerson } from "../directory/person.ts";
 
 export interface AdminUserRow {
   principalId: string;
@@ -26,18 +27,20 @@ export function computeUsers(input: UsersInput): AdminUserRow[] {
 
   forEachAttributedTurn(input, {
     onWindow(sessionId, w) {
-      const set = sessionsByUser.get(w.principalId);
+      const principalId = canonicalPerson(w.principalId);
+      const set = sessionsByUser.get(principalId);
       if (set) set.add(sessionId);
-      else sessionsByUser.set(w.principalId, new Set([sessionId]));
-      bumpLastSeen(w.principalId, w.validFrom);
+      else sessionsByUser.set(principalId, new Set([sessionId]));
+      bumpLastSeen(principalId, w.validFrom);
     },
     onTurn(w, turn) {
-      turnsByUser.set(w.principalId, (turnsByUser.get(w.principalId) ?? 0) + turn.turns);
-      bumpLastSeen(w.principalId, turn.lastAt);
+      const principalId = canonicalPerson(w.principalId);
+      turnsByUser.set(principalId, (turnsByUser.get(principalId) ?? 0) + turn.turns);
+      bumpLastSeen(principalId, turn.lastAt);
     },
   });
 
-  const ids = new Set<string>([...sessionsByUser.keys(), ...grants.map((g) => g.principalId)]);
+  const ids = new Set<string>([...sessionsByUser.keys(), ...grants.map((g) => canonicalPerson(g.principalId))]);
   return [...ids]
     .map((principalId) => ({
       principalId,

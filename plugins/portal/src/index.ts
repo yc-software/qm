@@ -296,6 +296,33 @@ async function isAdmin(sub: string): Promise<boolean> {
   return (await adminProbe(sub)).isAdmin;
 }
 
+const CANONICAL_TTL_MS = 60_000;
+const CANONICAL_TIMEOUT_MS = 4_000;
+const canonicalCache = new LRUCache<string, string>({ max: 10_000, ttl: CANONICAL_TTL_MS });
+
+async function canonicalPrincipal(sub: string): Promise<string> {
+  const hit = canonicalCache.get(sub);
+  if (hit !== undefined) return hit;
+  const path = withSourceAuthNonce(`/v1/principals/${encodeURIComponent(sub)}/canonical`, CORE_SIGNING_SECRET);
+  try {
+    const r = await fetch(`${CORE}${path}`, {
+      headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
+      signal: AbortSignal.timeout(CANONICAL_TIMEOUT_MS),
+    });
+    if (!r.ok) {
+      console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
+      return sub;
+    }
+    const body = (await r.json()) as { canonicalId?: unknown };
+    const canonical = typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
+    canonicalCache.set(sub, canonical);
+    return canonical;
+  } catch (error) {
+    console.warn(`[portal] canonical principal lookup failed: ${errMessage(error)}`);
+    return sub;
+  }
+}
+
 const PAGE_CSP =
   "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
@@ -1017,6 +1044,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   let session = currentSession(req);
   if (session) renewSessionCookie(req, res);
+  if (session && !session.anon) session = { ...session, sub: await canonicalPrincipal(session.sub) };
 
   if (pathname === "/auth/impersonate" && method === "POST") {
     if (!session) return json(res, 401, { error: "sign in" });
