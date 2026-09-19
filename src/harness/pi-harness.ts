@@ -597,7 +597,7 @@ export function piUsageToCallUsage(
     totalTokens: u.totalTokens ?? 0,
     costUsd: u.cost?.total ?? 0,
   };
-  if (!model?.cost) return row;
+  if (!fast || !model?.cost) return row;
   const priced: Usage = {
     input: row.input,
     output: row.output,
