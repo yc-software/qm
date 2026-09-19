@@ -53,6 +53,10 @@ const upstream = createServer((req: IncomingMessage, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ principalId: "U-alias", canonicalId: "U1" }));
   }
+  if (req.url?.startsWith("/v1/principals/U-unresolved/canonical")) {
+    res.writeHead(500, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ error: "boom" }));
+  }
   if (req.url === "/api/whoami") {
     whoamiProbes++;
     const m = (req.headers.cookie ?? "").match(/admin=([^;]+)/);
@@ -178,6 +182,18 @@ test("a session whose subject core links to another principal is proxied as that
   assert.equal(body.cookie, "webuiuser=U1");
   const unlinked = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-solo") } });
   assert.equal(((await unlinked.json()) as { cookie: string }).cookie, "webuiuser=U-solo");
+});
+
+test("when core cannot resolve the session subject the portal refuses to proxy instead of guessing", async () => {
+  const r = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-unresolved") } });
+  assert.equal(r.status, 503);
+  assert.equal(((await r.json()) as { error: string }).error, "identity_unavailable");
+  const logout = await fetch(`${base}/auth/logout`, {
+    method: "POST",
+    headers: { cookie: sessionCookie("U-unresolved"), origin: PUBLIC },
+    redirect: "manual",
+  });
+  assert.notEqual(logout.status, 503, "auth routes still work without core");
 });
 
 test("web-ui /app-edit drops x-frame-options so its own frame-ancestors CSP can allow the app origin", async () => {

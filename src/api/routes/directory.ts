@@ -31,7 +31,7 @@ async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
-  await deps.identity?.refresh();
+  await deps.identity?.refresh(true);
   return sendJson(res, 200, { principalId: id, canonicalId: canonicalPerson(id) });
 }
 

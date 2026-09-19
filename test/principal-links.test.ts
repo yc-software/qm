@@ -157,6 +157,39 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     assert.equal(identity.classify(OIDC).type, "internal");
   });
 
+  it("a deactivation recorded before the link is still reversible after it", async () => {
+    installPrincipalLinks(null);
+    const links = createPrincipalLinkService();
+    const identity = createIdentityService(undefined, { principalLinks: links });
+    await identity.deactivate(OIDC);
+    await identity.putExternalMember({
+      email: "guest@partner.test",
+      role: "member",
+      expiresAt: Date.now() + 60_000,
+      invitedBy: "admin",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
+    await links.link({
+      principalId: "guest@partner.test",
+      canonicalId: "U0GUEST",
+      evidence: EVIDENCE,
+      linkedBy: "admin",
+    });
+    installPrincipalLinks(links);
+    await identity.refresh(true);
+    assert.equal(identity.classify(EMAIL).type, "guest");
+    await identity.reactivate(EMAIL);
+    await identity.refresh(true);
+    assert.equal(identity.classify(EMAIL).type, "internal", "reactivation survives a reload");
+    assert.equal(identity.classify(OIDC).type, "internal");
+    assert.ok(identity.externalMember("U0GUEST"));
+    await identity.removeExternalMember("U0GUEST");
+    await identity.refresh(true);
+    assert.equal(identity.externalMember("guest@partner.test"), undefined, "removal survives a reload");
+  });
+
   it("the keychain stores new credentials under the canonical owner and lists legacy ones from either id", async () => {
     await installed();
     const creds = createMemoryMap<KeychainCredential>();
@@ -168,6 +201,9 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     });
     const saved = await keychain.save({ ownerId: OIDC, service: "github", secret: "ghp_x", envKey: "GITHUB_TOKEN" });
     assert.equal(saved.ownerId, EMAIL);
+    const rotated = await keychain.save({ ownerId: EMAIL, service: "github", secret: "ghp_y", envKey: "GITHUB_TOKEN" });
+    assert.equal(rotated.id, saved.id, "the same person saving the same service rotates one record");
+    assert.equal(await keychain.readOwnSecret(OIDC, saved.id), "ghp_y");
     const legacy = await keychain.save({ ownerId: EMAIL, service: "linear", secret: "lin_x", envKey: "LINEAR_KEY" });
     await creds.merge(legacy.id, { ownerId: OIDC });
     const mine = await keychain.listByOwner(EMAIL);
@@ -257,14 +293,25 @@ describe("linked sign-ins across the HTTP surface", () => {
       body,
     });
     assert.equal(agent.status, 403);
-    const reversed = await signed(
+    for (const memberSide of [EMAIL, EMAIL.toUpperCase(), SLACK]) {
+      const reversed = await signed(
+        "POST",
+        "/v1/admin/principal-links",
+        JSON.stringify({ principalId: memberSide, canonicalId: OIDC, evidence: EVIDENCE }),
+        admin,
+      );
+      assert.equal(reversed.status, 400, `${memberSide} is a directory member and stays canonical`);
+      assert.match(((await reversed.json()) as { message: string }).message, /directory member/);
+    }
+    const escalation = await signed(
       "POST",
       "/v1/admin/principal-links",
-      JSON.stringify({ principalId: EMAIL, canonicalId: OIDC, evidence: EVIDENCE }),
+      JSON.stringify({ principalId: "admin-alice", canonicalId: "casey@acme.test", evidence: EVIDENCE }),
       admin,
     );
-    assert.equal(reversed.status, 400);
-    assert.match(((await reversed.json()) as { message: string }).message, /directory member/);
+    assert.equal(escalation.status, 400, "an admin sign-in cannot make a non-admin canonical principal an admin");
+    assert.match(((await escalation.json()) as { message: string }).message, /admin grant/);
+    assert.equal(adminStatusFromGrants(await built.admin.listGrants(), "casey@acme.test").isAdmin, false);
     const created = await signed("POST", "/v1/admin/principal-links", body, admin);
     assert.equal(created.status, 200);
     const listed = (await (await signed("GET", "/v1/admin/principal-links", "", admin)).json()) as {
