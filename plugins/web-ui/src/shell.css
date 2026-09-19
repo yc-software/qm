@@ -678,7 +678,7 @@ a.chat-row-open {
   align-items: center;
   gap: 5px;
   min-height: 30px;
-  margin: 3px 0 5px 4px;
+  margin: 3px 0 0 4px;
   padding: 4px 3px 4px 2px;
   color: var(--foreground);
   font-size: 12.5px;
@@ -708,41 +708,31 @@ a.chat-row-open {
   --session-action-hover: color-mix(in srgb, var(--session-color) 24%, var(--secondary));
   --session-action-foreground: color-mix(in srgb, var(--session-color) 68%, var(--foreground));
 }
+.session-row:is(.colored, .active, .menu-open, .selected, .read-only, :hover) .session {
+  width: calc(100% + 4px);
+  margin-left: -4px;
+  padding-left: 15px;
+}
 .session-row.colored .session {
-  background: linear-gradient(
-    110deg,
-    color-mix(in srgb, var(--session-color) 22%, transparent),
-    color-mix(in srgb, var(--session-color) 10%, transparent)
-  );
+  background: color-mix(in srgb, var(--session-color) 16%, transparent);
+}
+.recent-project-children .session-row:is(.colored, .active, .menu-open, .selected, .read-only, :hover) .session,
+.archived-children .session-row:is(.colored, .active, .menu-open, .selected, .read-only, :hover) .session,
+.pinned-children .session-row:is(.colored, .active, .menu-open, .selected, .read-only, :hover) .session {
+  padding-left: 10px;
 }
 .session-row.colored .session:hover,
 .session-row.colored.menu-open .session {
-  background: linear-gradient(
-    110deg,
-    color-mix(in srgb, var(--session-color) 30%, transparent),
-    color-mix(in srgb, var(--session-color) 16%, transparent)
-  );
+  background: color-mix(in srgb, var(--session-color) 23%, transparent);
 }
 .session-row.colored.active .session {
-  background: linear-gradient(
-    110deg,
-    color-mix(in srgb, var(--session-color) 34%, var(--secondary)),
-    color-mix(in srgb, var(--session-color) 20%, var(--secondary))
-  );
+  background: color-mix(in srgb, var(--session-color) 27%, var(--secondary));
 }
 .list-row.chat-row.colored {
-  background: linear-gradient(
-    110deg,
-    color-mix(in srgb, var(--session-color) 20%, transparent),
-    color-mix(in srgb, var(--session-color) 8%, transparent)
-  );
+  background: color-mix(in srgb, var(--session-color) 14%, transparent);
 }
 .list-row.chat-row.colored:hover {
-  background: linear-gradient(
-    110deg,
-    color-mix(in srgb, var(--session-color) 28%, transparent),
-    color-mix(in srgb, var(--session-color) 14%, transparent)
-  );
+  background: color-mix(in srgb, var(--session-color) 21%, transparent);
 }
 
 .session-menu-colors {
