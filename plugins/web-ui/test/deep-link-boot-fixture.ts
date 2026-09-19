@@ -26,6 +26,7 @@ interface HarnessOptions {
   savedCanvas?: boolean;
   welcome?: boolean;
   connectionReturn?: boolean;
+  slackReturn?: "success" | "expired" | "cancelled" | "wrong-account";
   returnWidget?: string;
 }
 
@@ -52,6 +53,16 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
           a: { kind: "leaf", threadRef: "web:tester:old-a" },
           b: { kind: "leaf", threadRef: "web:tester:old-b" },
         },
+      }),
+    );
+  if (opts.slackReturn)
+    dom.window.sessionStorage.setItem(
+      "qm-slack-account",
+      JSON.stringify({
+        user: opts.slackReturn === "wrong-account" ? "test:other" : "test:tester",
+        state: "qa-slack-nonce",
+        ticket: "signed-test-ticket",
+        expiresAt: Date.now() + (opts.slackReturn === "expired" ? -60000 : 60000),
       }),
     );
   let connectedItems: unknown[] = opts.connectionReturn ? [{ id: "ca_test", toolkit: "gmail" }] : [];
@@ -93,6 +104,9 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         permissions: [],
         ...(opts.welcome ? { welcomeCohort: "F26" } : {}),
       });
+    if (path === "/api/composio/slack/complete")
+      return Response.json({ connected: true, user: "Alice", workspace: "Acme" });
+    if (path === "/api/composio/slack") return Response.json({ connected: false });
     if (path.startsWith("/api/composio/connections"))
       return Response.json({ items: connectedItems, nextCursor: null }, { status: connectedStatus });
     if (path.startsWith("/api/composio/toolkits"))

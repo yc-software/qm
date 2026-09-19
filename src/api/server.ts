@@ -301,8 +301,14 @@ async function gate(
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
     actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
     if (actor && deps.identity) {
-      await deps.identity.refresh();
-      if (deps.identity.classify(actor.p).type !== "internal") actor = null;
+      await deps.identity.refresh(Boolean(actor.authenticatedAs));
+      if (
+        deps.identity.classify(actor.p).type !== "internal" ||
+        (actor.authenticatedAs &&
+          (deps.identity.classify(actor.authenticatedAs).type !== "internal" ||
+            !samePerson(actor.authenticatedAs, actor.imp ?? actor.p)))
+      )
+        actor = null;
     }
     if (actor)
       actor = { ...actor, p: canonicalPerson(actor.p), ...(actor.imp ? { imp: canonicalPerson(actor.imp) } : {}) };

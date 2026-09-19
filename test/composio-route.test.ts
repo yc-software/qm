@@ -237,3 +237,117 @@ test("connections require credential access and fail visibly on upstream errors"
   assert.equal(r.status, 502);
   assert.doesNotMatch(r.text, /private-key/);
 });
+
+test("Slack connection links verified workspace identity to the web owner and persists status", async () => {
+  const f = fixture();
+  await f.own();
+  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
+  const { createDirectoryStore } = await import("../src/directory/directory-store.ts");
+  const { installPrincipalLinks, canonicalPerson } = await import("../src/directory/person.ts");
+  f.deps.principalLinks = createPrincipalLinkService();
+  installPrincipalLinks(f.deps.principalLinks);
+  f.deps.slackAccounts = createMemoryMap();
+  f.deps.signingSecret = "qa-slack-link-secret";
+  f.deps.directory = createDirectoryStore();
+  await f.deps.directory.replace([
+    { principalId: "work@example.test", slackId: "U123", displayName: "Alice", type: "internal" },
+  ]);
+  f.deps.slackEnvBotToken = "bot-test";
+  f.deps.slackInstallationFetch = (async () => Response.json({ ok: true, team_id: "T123" })) as typeof fetch;
+  try {
+    f.replies.push(
+      { session_id: "trs_test" },
+      { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },
+    );
+    const started = await f.invoke("/v1/composio/slack/authorize", {});
+    assert.equal(started.status, 200);
+    const account = {
+      id: "ca_test",
+      user_id: composioUserId(orgId(), "alice"),
+      toolkit: { slug: "slack" },
+      status: "ACTIVE",
+    };
+    f.replies.push(account, { data: { ok: true, user_id: "U123", team_id: "T123", user: "alice", team: "Acme" } });
+    f.replies.push({ items: [] });
+    const linked = await f.invoke("/v1/composio/slack/complete", { ticket: started.data.ticket });
+    assert.equal(linked.status, 200);
+    assert.equal(canonicalPerson("work@example.test"), "alice");
+    assert.equal((await f.deps.slackAccounts.get("alice"))?.accountId, "ca_test");
+    f.replies.push(account);
+    assert.equal((await f.invoke("/v1/composio/slack")).data.connected, true);
+    f.replies.push({ ...account, status: "REVOKED" });
+    assert.equal((await f.invoke("/v1/composio/slack")).data.connected, false);
+    f.replies.push(account, { data: { ok: true, user_id: "U123", team_id: "T123", user: "alice", team: "Acme" } });
+    assert.equal((await f.invoke("/v1/composio/slack/complete", { ticket: started.data.ticket })).status, 200);
+  } finally {
+    installPrincipalLinks(null);
+  }
+});
+
+test("Slack link rejects changed browser accounts, wrong owner, bots, other workspaces and inactive connections", async () => {
+  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
+  const { createDirectoryStore } = await import("../src/directory/directory-store.ts");
+  const { mintSignedPayload } = await import("../src/auth/signed-token.ts");
+  for (const scenario of [
+    "expired",
+    "other-browser",
+    "wrong-owner",
+    "bot",
+    "wrong-workspace",
+    "pending",
+    "existing-connectors",
+    "existing-key",
+    "different-project",
+  ]) {
+    const f = fixture();
+    await f.own();
+    await f.own("bob");
+    f.deps.signingSecret = "slack-test";
+    f.deps.principalLinks = createPrincipalLinkService();
+    f.deps.slackAccounts = createMemoryMap();
+    f.deps.directory = createDirectoryStore();
+    await f.deps.directory.replace([
+      { principalId: "work@example.test", slackId: "U123", displayName: "Alice", type: "internal" },
+    ]);
+    f.deps.slackEnvBotToken = "bot-test";
+    f.deps.slackInstallationFetch = (async () => Response.json({ ok: true, team_id: "T123" })) as typeof fetch;
+    const ticket = await mintSignedPayload(
+      {
+        purpose: "slack-account-link",
+        principal: "alice",
+        org: orgId(),
+        accountId: "ca_test",
+        exp: Date.now() + (scenario === "expired" ? -1000 : 60000),
+      },
+      "slack-test",
+    );
+    f.replies.push(
+      {
+        id: "ca_test",
+        user_id: composioUserId(orgId(), scenario === "wrong-owner" ? "bob" : "alice"),
+        toolkit: { slug: "slack" },
+        status: scenario === "pending" ? "INITIATED" : "ACTIVE",
+      },
+      {
+        data: {
+          ok: true,
+          user_id: "U123",
+          team_id: scenario === "wrong-workspace" ? "T999" : "T123",
+          ...(scenario === "bot" ? { bot_id: "B123" } : {}),
+        },
+      },
+    );
+    if (scenario === "existing-key") await f.own("work@example.test");
+    if (scenario === "different-project") await f.shared();
+    f.replies.push({ items: scenario === "existing-connectors" ? [{ id: "ca_existing" }] : [] });
+    if (scenario === "different-project") f.replies.push({ items: [{ id: "ca_company_existing" }] });
+    const result = await f.invoke(
+      "/v1/composio/slack/complete",
+      { ticket },
+      scenario === "other-browser" ? "bob" : "alice",
+    );
+    assert.ok(result.status >= 400, `${scenario}: ${result.status}`);
+    assert.equal((await f.deps.principalLinks.list()).length, 0);
+    assert.equal((await f.deps.slackAccounts.all()).length, 0);
+  }
+});

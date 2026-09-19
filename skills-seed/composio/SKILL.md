@@ -55,3 +55,5 @@ Automatic file transfer is disabled. Upload/download only explicit authorized fi
 If project-level callback identity verification is enabled, consent must return through that project's existing authenticated verifier. Do not redeem `session_uri` from the agent with a self-asserted user ID, disable verification, or fabricate callback success. This skill does not implement a verifier; ask the operator to resolve missing setup.
 
 When no authorized Composio credential is available, use the existing direct app skill. A permission denial is not permission to switch accounts or bypass approval. Composio's personal Slack connection does not install the separate QM bot.
+
+For Slack authorization, use QM’s dedicated **Connect Slack** button in web Settings (`/?view=settings`), signed into the existing web account. This also links the Slack identity. Do not use a generic Composio consent link for Slack. Installing the company bot is a separate action.

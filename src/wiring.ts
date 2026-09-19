@@ -69,6 +69,7 @@ import {
   type PrincipalLink,
   type PrincipalLinkService,
 } from "./identity/principal-links.ts";
+import type { SlackAccountLink } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { createResendMailer } from "./admin/invite-email.ts";
@@ -508,6 +509,7 @@ export interface BuiltApp {
   egressAudit: EgressAuditSink;
   identity: IdentityService;
   principalLinks: PrincipalLinkService;
+  slackAccounts: DurableMap<SlackAccountLink>;
   keychain?: Keychain;
   serviceCreds: ServiceCredentialStore;
   deliveries: DeliveryStore;
@@ -630,7 +632,10 @@ export function buildApp(
       };
     },
   };
-  const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"));
+  const advisoryLock: AdvisoryLock = pgArtifactMap
+    ? createPostgresAdvisoryLock(pgArtifactMap.pool)
+    : createMemoryAdvisoryLock();
+  const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"), advisoryLock);
   installPrincipalLinks(principalLinks);
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
     isOverridden: (id) => configStore.getInternalMemberOverrides().includes(id.trim().toLowerCase()),
@@ -642,9 +647,6 @@ export function buildApp(
   const leaderLease: LeaderLease = pgArtifactMap
     ? createPostgresLeaderLease(pgArtifactMap.pool)
     : createNoopLeaderLease();
-  const advisoryLock: AdvisoryLock = pgArtifactMap
-    ? createPostgresAdvisoryLock(pgArtifactMap.pool)
-    : createMemoryAdvisoryLock();
   const configStore = createMemoryConfigStore(config.orgId, {
     connectorClients: artifactMap<StoredConnectorClient>("connector_clients"),
     souls: artifactMap<PersistedSoul>("soul_configs"),
@@ -2647,6 +2649,7 @@ export function buildApp(
     egressAudit,
     identity,
     principalLinks,
+    slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
     workspace,
     memory,
     ...(keychain ? { keychain } : {}),
@@ -2781,6 +2784,7 @@ export function serverDeps(
     loopIngress: built.loopIngress,
     identity: built.identity,
     principalLinks: built.principalLinks,
+    slackAccounts: built.slackAccounts,
     ...(built.keychain ? { keychain: built.keychain } : {}),
     serviceCreds: built.serviceCreds,
     deliveries: built.deliveries,

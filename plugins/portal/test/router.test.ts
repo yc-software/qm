@@ -49,6 +49,10 @@ const upstream = createServer((req: IncomingMessage, res) => {
       JSON.stringify({ status: "authorize", authorizeUrl: "https://accounts.google.test/o/oauth2?x=1" }),
     );
   }
+  if (req.url?.startsWith("/v1/principals/U-admin-alias/canonical")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ canonicalId: "U-admin" }));
+  }
   if (req.url?.startsWith("/v1/principals/U-alias/canonical")) {
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ principalId: "U-alias", canonicalId: "U1" }));
@@ -725,4 +729,19 @@ test("Loop ingress forwards signed events and Google identity without a portal s
   assert.equal(body.headers["x-slack-signature"], "v0=signature");
   assert.equal((await fetch(`${base}/v1/loop-ingress/gmail`)).status, 404);
   assert.equal((await fetch(`${base}/v1/loop-ingress/gmail/extra`, { method: "POST" })).status, 404);
+});
+
+test("linked administrator impersonation follows the target", async () => {
+  const start = await fetch(`${base}/auth/impersonate?target=alice@acme`, {
+    method: "POST",
+    headers: { cookie: sessionCookie("U-admin-alias"), origin: PUBLIC },
+  });
+  assert.equal(start.status, 200);
+  const imp = (start.headers.get("set-cookie") ?? "").match(/portal_impersonate=([^;]+)/);
+  assert.ok(imp);
+  const web = await fetch(`${base}/api/x`, {
+    headers: { cookie: `${sessionCookie("U-admin-alias")}; portal_impersonate=${imp[1]}` },
+  });
+  const body = (await web.json()) as { cookie: string };
+  assert.match(body.cookie, /webuiuser=alice%40acme/);
 });

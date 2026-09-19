@@ -1,3 +1,4 @@
+import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
 
@@ -39,7 +40,10 @@ function validId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= MAX_ID_LENGTH;
 }
 
-export function createPrincipalLinkService(backing?: DurableMap<PrincipalLink>): PrincipalLinkService {
+export function createPrincipalLinkService(
+  backing?: DurableMap<PrincipalLink>,
+  lock: AdvisoryLock = createMemoryAdvisoryLock(),
+): PrincipalLinkService {
   const store = backing ?? createMemoryMap<PrincipalLink>();
   const byAlias = new Map<string, PrincipalLink>();
   const byCanonical = new Map<string, PrincipalLink[]>();
@@ -58,8 +62,9 @@ export function createPrincipalLinkService(backing?: DurableMap<PrincipalLink>):
     }
   }
 
-  function refresh(force = false): Promise<void> {
-    if (refreshP) return refreshP;
+  async function refresh(force = false): Promise<void> {
+    if (refreshP && !force) return refreshP;
+    while (refreshP) await refreshP;
     if (!force && Date.now() - refreshedAt < REFRESH_TTL_MS) return Promise.resolve();
     refreshP = store
       .all()
@@ -88,52 +93,56 @@ export function createPrincipalLinkService(backing?: DurableMap<PrincipalLink>):
       );
     },
     async link(input) {
-      if (!validId(input.principalId) || !validId(input.canonicalId))
-        throw new PrincipalLinkError(
-          400,
-          `principalId and canonicalId must be non-empty ids of at most ${MAX_ID_LENGTH} characters`,
-        );
-      const evidence = typeof input.evidence === "string" ? input.evidence.trim() : "";
-      if (!evidence || evidence.length > MAX_EVIDENCE_LENGTH)
-        throw new PrincipalLinkError(400, `evidence must say how the two identities were verified as one person`);
-      const principalId = input.principalId.trim();
-      const canonicalId = input.canonicalId.trim();
-      const aliasKey = foldPrincipalId(principalId);
-      const canonicalKey = foldPrincipalId(canonicalId);
-      if (aliasKey === canonicalKey) throw new PrincipalLinkError(400, "a principal cannot be linked to itself");
-      await refresh(true);
-      const existing = byAlias.get(aliasKey);
-      if (existing) {
-        if (foldPrincipalId(existing.canonicalId) === canonicalKey) return existing;
-        throw new PrincipalLinkError(409, `${principalId} is already linked to ${existing.canonicalId}`);
-      }
-      const canonicalIsAlias = byAlias.get(canonicalKey);
-      if (canonicalIsAlias)
-        throw new PrincipalLinkError(
-          400,
-          `${canonicalId} is itself linked to ${canonicalIsAlias.canonicalId}; link to that principal instead`,
-        );
-      if (byCanonical.has(aliasKey))
-        throw new PrincipalLinkError(
-          400,
-          `${principalId} is the canonical principal of other links; unlink those first`,
-        );
-      const stored = await store.putIfAbsent(aliasKey, {
-        principalId,
-        canonicalId,
-        evidence,
-        linkedBy: input.linkedBy,
-        createdAt: Date.now(),
+      return lock.withLock("principal-links", async () => {
+        if (!validId(input.principalId) || !validId(input.canonicalId))
+          throw new PrincipalLinkError(
+            400,
+            `principalId and canonicalId must be non-empty ids of at most ${MAX_ID_LENGTH} characters`,
+          );
+        const evidence = typeof input.evidence === "string" ? input.evidence.trim() : "";
+        if (!evidence || evidence.length > MAX_EVIDENCE_LENGTH)
+          throw new PrincipalLinkError(400, `evidence must say how the two identities were verified as one person`);
+        const principalId = input.principalId.trim();
+        const canonicalId = input.canonicalId.trim();
+        const aliasKey = foldPrincipalId(principalId);
+        const canonicalKey = foldPrincipalId(canonicalId);
+        if (aliasKey === canonicalKey) throw new PrincipalLinkError(400, "a principal cannot be linked to itself");
+        await refresh(true);
+        const existing = byAlias.get(aliasKey);
+        if (existing) {
+          if (foldPrincipalId(existing.canonicalId) === canonicalKey) return existing;
+          throw new PrincipalLinkError(409, `${principalId} is already linked to ${existing.canonicalId}`);
+        }
+        const canonicalIsAlias = byAlias.get(canonicalKey);
+        if (canonicalIsAlias)
+          throw new PrincipalLinkError(
+            400,
+            `${canonicalId} is itself linked to ${canonicalIsAlias.canonicalId}; link to that principal instead`,
+          );
+        if (byCanonical.has(aliasKey))
+          throw new PrincipalLinkError(
+            400,
+            `${principalId} is the canonical principal of other links; unlink those first`,
+          );
+        const stored = await store.putIfAbsent(aliasKey, {
+          principalId,
+          canonicalId,
+          evidence,
+          linkedBy: input.linkedBy,
+          createdAt: Date.now(),
+        });
+        await refresh(true);
+        if (foldPrincipalId(stored.canonicalId) !== canonicalKey)
+          throw new PrincipalLinkError(409, `${principalId} is already linked to ${stored.canonicalId}`);
+        return stored;
       });
-      await refresh(true);
-      if (foldPrincipalId(stored.canonicalId) !== canonicalKey)
-        throw new PrincipalLinkError(409, `${principalId} is already linked to ${stored.canonicalId}`);
-      return stored;
     },
     async unlink(principalId) {
-      const row = await store.take(foldPrincipalId(principalId));
-      await refresh(true);
-      return row;
+      return lock.withLock("principal-links", async () => {
+        const row = await store.take(foldPrincipalId(principalId));
+        await refresh(true);
+        return row;
+      });
     },
   };
 }

@@ -13,6 +13,7 @@ import { mountConnectionPicker, type ConnectionService } from "./connection-pick
 import type { Me } from "./shell-state";
 import "./onboarding-welcome.css";
 import "./onboarding-slack";
+import "./slack-account";
 import {
   connectionPreviewEnabled,
   previewParameters,
@@ -258,7 +259,7 @@ export class OnboardingWelcome extends LitElement {
         if (!response.ok)
           throw new Error(result.message ?? "Composio is not available. Ask your administrator to check its setup.");
         for (const item of result.items as Array<{ id: string; name: string; description: string }>) {
-          if (!services.some((service) => service.id === item.id))
+          if (item.id !== "slack" && !services.some((service) => service.id === item.id))
             services.push({ ...item, popularity: 100000 - services.length });
         }
         cursor = typeof result.nextCursor === "string" ? result.nextCursor : "";
@@ -425,6 +426,7 @@ export class OnboardingWelcome extends LitElement {
                       <p class="welcome-beat" style="--welcome-delay:700ms">The easiest way to get up and running:</p>`
               }`
       }
+      ${this.widget !== "apps" ? html`<qm-slack-account .user=${this.previewUser()}></qm-slack-account>` : nothing}
       ${
         this.widget !== "apps" && this.me?.permissions?.includes("admin")
           ? html`<qm-onboarding-slack

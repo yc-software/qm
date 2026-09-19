@@ -1,3 +1,6 @@
+import { mintSignedPayload, verifySignedPayload } from "../../auth/signed-token.ts";
+import { canonicalPerson, samePerson } from "../../directory/person.ts";
+import { PrincipalLinkError } from "../../identity/principal-links.ts";
 import { createHash } from "node:crypto";
 import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
@@ -116,10 +119,12 @@ async function catalog(ctx: ApiCtx): Promise<void> {
   }
 }
 
-async function authorize(ctx: ApiCtx): Promise<void> {
+async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
   const access = await credential(ctx);
   if (!access) return;
-  const toolkit = (ctx.body as { toolkit?: unknown } | null)?.toolkit;
+  const toolkit = linkSlack ? "slack" : (ctx.body as { toolkit?: unknown } | null)?.toolkit;
+  if (linkSlack && (!ctx.deps.signingSecret || !ctx.deps.principalLinks || ctx.actor?.imp))
+    return sendJson(ctx.res, 403, { error: "link_unavailable", message: "Sign in as yourself to connect Slack." });
   if (typeof toolkit !== "string" || !/^[a-z0-9_-]{1,100}$/.test(toolkit))
     return sendJson(ctx.res, 400, { error: "invalid_toolkit" });
   const callbackUrl = (ctx.body as { callbackUrl?: unknown }).callbackUrl;
@@ -172,7 +177,23 @@ async function authorize(ctx: ApiCtx): Promise<void> {
       resource: toolkit,
       scopeLabel: scopeId("personal", access.principal),
     });
-    return sendJson(ctx.res, 200, { url: url.href, accountId: link.connected_account_id });
+    const ticket = linkSlack
+      ? await mintSignedPayload(
+          {
+            purpose: "slack-account-link",
+            principal: access.principal,
+            org: orgId(),
+            accountId: link.connected_account_id,
+            exp: Date.now() + 20 * 60_000,
+          },
+          ctx.deps.signingSecret!,
+        )
+      : undefined;
+    return sendJson(ctx.res, 200, {
+      url: url.href,
+      accountId: link.connected_account_id,
+      ...(ticket ? { ticket } : {}),
+    });
   } catch {
     return sendJson(ctx.res, 502, {
       error: "composio_authorization_failed",
@@ -226,7 +247,209 @@ async function identity(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, { userId: composioUserId(orgId(), principal) });
 }
 
+export interface SlackAccountLink {
+  principalId: string;
+  accountId: string;
+  memberId: string;
+  userId: string;
+  teamId: string;
+  user: string;
+  workspace: string;
+}
+
+async function slackStatus(ctx: ApiCtx): Promise<void> {
+  const access = await credential(ctx);
+  if (!access) return;
+  const record = await ctx.deps.slackAccounts?.get(access.principal);
+  ctx.res.setHeader("Cache-Control", "no-store");
+  if (!record || !samePerson(record.memberId, access.principal)) return sendJson(ctx.res, 200, { connected: false });
+  try {
+    const account = await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(record.accountId)}`);
+    const toolkit = account.toolkit as { slug?: string } | undefined;
+    const connected =
+      account.id === record.accountId &&
+      account.user_id === composioUserId(orgId(), access.principal) &&
+      toolkit?.slug === "slack" &&
+      account.status === "ACTIVE" &&
+      account.is_disabled !== true;
+    return sendJson(ctx.res, 200, { connected, user: record.user, workspace: record.workspace });
+  } catch {
+    return sendJson(ctx.res, 502, { error: "status_unavailable" });
+  }
+}
+
+async function completeSlack(ctx: ApiCtx): Promise<void> {
+  const access = await credential(ctx);
+  if (!access) return;
+  const { deps, res } = ctx;
+  if (!deps.signingSecret || !deps.principalLinks || !deps.directory || !deps.slackAccounts || ctx.actor?.imp)
+    return sendJson(res, 403, { error: "link_unavailable", message: "Sign in as yourself to connect Slack." });
+  const ticket = (ctx.body as { ticket?: unknown } | null)?.ticket;
+  const proof =
+    typeof ticket === "string"
+      ? ((await verifySignedPayload(ticket, deps.signingSecret)) as Record<string, unknown> | null)
+      : null;
+  if (
+    !proof ||
+    proof.purpose !== "slack-account-link" ||
+    proof.org !== orgId() ||
+    proof.principal !== access.principal ||
+    typeof proof.exp !== "number" ||
+    proof.exp <= Date.now() ||
+    typeof proof.accountId !== "string" ||
+    !/^ca_[a-zA-Z0-9_-]+$/.test(proof.accountId)
+  )
+    return sendJson(res, 400, {
+      error: "invalid_link",
+      message:
+        "This connection expired or belongs to another QM account. Start again from the account you want to connect.",
+    });
+  try {
+    const account = await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(proof.accountId)}`);
+    const toolkit = account.toolkit as { slug?: string } | undefined;
+    if (
+      account.id !== proof.accountId ||
+      account.user_id !== composioUserId(orgId(), access.principal) ||
+      toolkit?.slug !== "slack" ||
+      account.is_disabled === true
+    )
+      return sendJson(res, 403, {
+        error: "wrong_account",
+        message: "This Slack connection does not belong to your QM account.",
+      });
+    if (account.status !== "ACTIVE")
+      return sendJson(res, 409, {
+        error: "not_connected",
+        message: "Slack authorization has not completed. Try again after approving access.",
+      });
+    const result = await request(ctx, access.key, "/tools/execute/proxy", {
+      connected_account_id: proof.accountId,
+      endpoint: "https://slack.com/api/auth.test",
+      method: "GET",
+    });
+    const slack = result.data as
+      { ok?: boolean; user_id?: string; team_id?: string; bot_id?: string; user?: string; team?: string } | undefined;
+    if (
+      slack?.ok !== true ||
+      slack.bot_id ||
+      !/^[UW][A-Z0-9]+$/.test(slack.user_id ?? "") ||
+      !/^T[A-Z0-9]+$/.test(slack.team_id ?? "")
+    )
+      return sendJson(res, 400, {
+        error: "not_user",
+        message: "Connect your personal Slack account, not a bot account.",
+      });
+    const installation = await deps.slackInstallation?.get();
+    let teamId = installation?.teamId;
+    const botToken = installation?.botToken ?? deps.slackEnvBotToken;
+    if (!teamId && botToken) {
+      const response = await (deps.slackInstallationFetch ?? fetch)("https://slack.com/api/auth.test", {
+        method: "POST",
+        headers: { authorization: `Bearer ${botToken}` },
+        signal: AbortSignal.timeout(10_000),
+        redirect: "error",
+      });
+      const bot = (await response.json()) as { ok?: boolean; team_id?: string };
+      if (response.ok && bot.ok) teamId = bot.team_id;
+    }
+    if (!teamId)
+      return sendJson(res, 409, {
+        error: "workspace_unavailable",
+        message:
+          "Slack access is authorized. Ask an administrator to finish installing the company bot, then check the connection again.",
+      });
+    if (teamId !== slack.team_id)
+      return sendJson(res, 409, {
+        error: "wrong_workspace",
+        message: "Connect the Slack workspace where your company uses QM.",
+      });
+    const members = (await deps.directory.list()).filter(
+      (m) => m.slackId === slack.user_id || m.principalId === slack.user_id,
+    );
+    if (members.length !== 1 || members[0]!.type !== "internal")
+      return sendJson(res, 409, {
+        error: "member_unavailable",
+        message:
+          "QM could not find your company Slack membership. Message the bot and try again, or ask your administrator for help.",
+      });
+    const member = members[0]!;
+    await deps.identity?.refresh(true);
+    if (!(await activePrincipal(deps, member.principalId)) || !(await activePrincipal(deps, access.principal)))
+      return sendJson(res, 403, {
+        error: "inactive_account",
+        message: "An account is inactive. Ask your administrator for help.",
+      });
+    if (!samePerson(member.principalId, access.principal)) {
+      const existingCredentials = (await deps.keychain?.listByOwner(member.principalId)) ?? [];
+      const projectKeys = new Set([access.key]);
+      const companyCredentials = (await deps.serviceCreds?.listServiceCredentials(scopeId("org", orgId()))) ?? [];
+      for (const candidate of companyCredentials) {
+        if (candidate.envKey !== "COMPOSIO_API_KEY" || !candidate.hasSecret) continue;
+        const material = await deps.serviceCreds!.getServiceCredentialSecret(scopeId("org", orgId()), candidate.slug);
+        if (!material?.secret) throw Error("Could not inspect existing connections");
+        projectKeys.add(material.secret);
+      }
+      let hasPriorAccounts = false;
+      for (const projectKey of projectKeys) {
+        const priorAccounts = await request(
+          ctx,
+          projectKey,
+          `/connected_accounts?${new URLSearchParams({ user_ids: composioUserId(orgId(), member.principalId), limit: "1" })}`,
+        );
+        if (!Array.isArray(priorAccounts.items)) throw Error("Could not inspect existing connections");
+        hasPriorAccounts ||= priorAccounts.items.length > 0;
+      }
+      if (existingCredentials.length || hasPriorAccounts)
+        return sendJson(res, 409, {
+          error: "established_account",
+          message:
+            "Your Slack identity already has connected services. Ask your administrator to combine these accounts so those connections are preserved.",
+        });
+
+      if (canonicalPerson(member.principalId) !== member.principalId)
+        return sendJson(res, 409, {
+          error: "already_linked",
+          message: "This Slack identity is connected to another QM account. Ask your administrator for help.",
+        });
+      await deps.principalLinks.link({
+        principalId: member.principalId,
+        canonicalId: access.principal,
+        evidence: `Slack OAuth user ${slack.user_id} in workspace ${slack.team_id}, connection ${proof.accountId}`,
+        linkedBy: access.principal,
+      });
+      await deps.identity?.refresh(true);
+      audit(deps, {
+        principalId: access.principal,
+        action: "principal_link.create",
+        resource: `${member.principalId} -> ${access.principal}`,
+        scopeLabel: scopeId("org", orgId()),
+      });
+    }
+    await deps.slackAccounts.put(access.principal, {
+      principalId: access.principal,
+      accountId: proof.accountId,
+      memberId: member.principalId,
+      userId: slack.user_id!,
+      teamId: slack.team_id!,
+      user: slack.user ?? member.displayName,
+      workspace: slack.team ?? slack.team_id!,
+    });
+    return sendJson(res, 200, { connected: true, user: slack.user, workspace: slack.team });
+  } catch (error) {
+    return sendJson(res, error instanceof PrincipalLinkError ? 409 : 502, {
+      error: "slack_link_failed",
+      message:
+        error instanceof PrincipalLinkError
+          ? "These accounts need an administrator's help to connect. Your existing data has not been moved."
+          : "Could not verify the Slack connection. Please try again.",
+    });
+  }
+}
+
 export const composioRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "GET", path: "/v1/composio/slack", auth: "source", handle: slackStatus },
+  { method: "POST", path: "/v1/composio/slack/authorize", auth: "source", handle: (ctx) => authorize(ctx, true) },
+  { method: "POST", path: "/v1/composio/slack/complete", auth: "source", handle: completeSlack },
   { method: "GET", path: "/v1/composio/connections", auth: "source", handle: connections },
   { method: "GET", path: "/v1/composio/toolkits", auth: "source", handle: catalog },
   { method: "POST", path: "/v1/composio/authorize", auth: "source", handle: authorize },

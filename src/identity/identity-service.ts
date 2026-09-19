@@ -74,7 +74,8 @@ export function createIdentityService(
     }
     for (const r of deactivations) {
       const key = personKey(r.principalId);
-      if (overwrite || !deactivated.has(key)) deactivated.set(key, r);
+      if (deactivated.get(key)?.source !== "manual" && (r.source === "manual" || overwrite || !deactivated.has(key)))
+        deactivated.set(key, r);
     }
     for (const m of members) {
       const key = personKey(m.email);
