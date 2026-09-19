@@ -300,7 +300,7 @@ const CANONICAL_TTL_MS = 60_000;
 const CANONICAL_TIMEOUT_MS = 4_000;
 const canonicalCache = new LRUCache<string, string>({ max: 10_000, ttl: CANONICAL_TTL_MS });
 
-async function canonicalPrincipal(sub: string): Promise<string> {
+async function canonicalPrincipal(sub: string): Promise<string | null> {
   const hit = canonicalCache.get(sub);
   if (hit !== undefined) return hit;
   const path = withSourceAuthNonce(`/v1/principals/${encodeURIComponent(sub)}/canonical`, CORE_SIGNING_SECRET);
@@ -311,7 +311,7 @@ async function canonicalPrincipal(sub: string): Promise<string> {
     });
     if (!r.ok) {
       console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
-      return sub;
+      return null;
     }
     const body = (await r.json()) as { canonicalId?: unknown };
     const canonical = typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
@@ -319,8 +319,18 @@ async function canonicalPrincipal(sub: string): Promise<string> {
     return canonical;
   } catch (error) {
     console.warn(`[portal] canonical principal lookup failed: ${errMessage(error)}`);
-    return sub;
+    return null;
   }
+}
+
+function identityUnavailable(req: IncomingMessage, res: ServerResponse): void {
+  if (wantsHtml(req))
+    return sendHtml(
+      res,
+      503,
+      '<!doctype html><meta charset=utf-8><body style="font-family:system-ui;max-width:32rem;margin:4rem auto"><h2>Service unavailable</h2><p>Could not confirm your identity. Try again in a moment.</p></body>',
+    );
+  json(res, 503, { error: "identity_unavailable", message: "could not confirm your identity, try again in a moment" });
 }
 
 const PAGE_CSP =
@@ -1044,7 +1054,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   let session = currentSession(req);
   if (session) renewSessionCookie(req, res);
-  if (session && !session.anon) session = { ...session, sub: await canonicalPrincipal(session.sub) };
+  if (session && !session.anon && !pathname.startsWith("/auth/")) {
+    const canonical = await canonicalPrincipal(session.sub);
+    if (canonical === null) return identityUnavailable(req, res);
+    session = { ...session, sub: canonical };
+  }
 
   if (pathname === "/auth/impersonate" && method === "POST") {
     if (!session) return json(res, 401, { error: "sign in" });
@@ -1052,7 +1066,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!(await isAdmin(session.sub))) return json(res, 403, { error: "forbidden", message: "admin access required" });
     const target = (url.searchParams.get("target") ?? "").trim();
     if (!target) return json(res, 400, { error: "bad_request", message: "target required" });
-    if (target === session.sub) return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
+    if (target === session.sub || (await canonicalPrincipal(target)) === session.sub)
+      return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
     const result = await coreImpersonate("start", session.sub, target);
     if (!result.ok) {
       const status = result.status === 403 || result.status === 400 ? result.status : 502;

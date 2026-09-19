@@ -846,12 +846,13 @@ export function createKeychain(deps: {
         .map((f) => f.envKey)
         .sort()
         .join(",")}`;
-    const id = credId(input.ownerId, service, slot);
+    const ownerId = canonicalPerson(input.ownerId);
+    const id = credId(ownerId, service, slot);
     const buildRec = (prior?: KeychainCredential | null): KeychainCredential => {
       const carriedCapturePaths = input.capturePaths ?? prior?.capturePaths;
       return {
         id,
-        ownerId: canonicalPerson(input.ownerId),
+        ownerId,
         orgId: configOrgId(),
         service,
         kind,

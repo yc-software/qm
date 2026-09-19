@@ -1,6 +1,6 @@
 import type { ActorAssertion, Principal } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { canonicalPerson, personKey } from "../directory/person.ts";
+import { canonicalPerson, foldPrincipalId, personIds, personKey } from "../directory/person.ts";
 import { externalMemberActive, type ExternalMember } from "./external-members.ts";
 
 interface IdentityProvider {
@@ -55,13 +55,15 @@ export function createIdentityService(
   const externalStore = opts.externalMembers ?? createMemoryMap<ExternalMember>();
   const deactivated = new Map<string, DeactivationRecord>();
   const externals = new Map<string, ExternalMember>();
-  const directorySyncProtected = new Set((opts.directorySyncProtected ?? []).map(personKey).filter(Boolean));
+  const directorySyncProtected = opts.directorySyncProtected ?? [];
   const REFRESH_TTL_MS = 10_000;
   let refreshedAt = 0;
   let refreshP: Promise<void> | null = null;
   let hydrateP: Promise<void> | null = null;
 
-  const keptByDirectorySync = (key: string): boolean => directorySyncProtected.has(key) || externals.has(key);
+  const keptByDirectorySync = (key: string): boolean =>
+    directorySyncProtected.some((id) => personKey(id) === key) || externals.has(key);
+  const storeKeys = (externalId: string): string[] => personIds(externalId).map(foldPrincipalId).filter(Boolean);
 
   async function load(overwrite: boolean): Promise<void> {
     await opts.principalLinks?.refresh(true);
@@ -100,13 +102,12 @@ export function createIdentityService(
     if (existing && (existing.source === "manual" || existing.source === source)) return;
     const record: DeactivationRecord = { principalId: externalId, source, at: Date.now() };
     deactivated.set(key, record);
-    await store.put(key, record);
+    await store.put(foldPrincipalId(externalId), record);
   }
 
   async function reactivate(externalId: string): Promise<void> {
-    const key = personKey(externalId);
-    deactivated.delete(key);
-    await store.delete(key);
+    deactivated.delete(personKey(externalId));
+    for (const key of storeKeys(externalId)) await store.delete(key);
   }
 
   async function refresh(force = false): Promise<void> {
@@ -149,14 +150,12 @@ export function createIdentityService(
       return externals.get(personKey(principalId));
     },
     async putExternalMember(m: ExternalMember): Promise<void> {
-      const key = personKey(m.email);
-      externals.set(key, m);
-      await externalStore.put(key, m);
+      externals.set(personKey(m.email), m);
+      await externalStore.put(foldPrincipalId(m.email), m);
     },
     async removeExternalMember(principalId: string): Promise<void> {
-      const key = personKey(principalId);
-      externals.delete(key);
-      await externalStore.delete(key);
+      externals.delete(personKey(principalId));
+      for (const key of storeKeys(principalId)) await externalStore.delete(key);
     },
     hydrate(): Promise<void> {
       if (!hydrateP) hydrateP = load(false);

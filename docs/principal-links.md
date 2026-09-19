@@ -21,13 +21,16 @@ before proxying, and the keychain stores credentials under the canonical owner.
 - **The directory member is canonical.** When the company runs Slack, the
   Slack-verified directory principal is the person's canonical id and the
   trusted OIDC subject is the linked sign-in. The admin API refuses a link
-  whose linked side is a directory member.
+  whose linked side is a directory member, by principal id or Slack id.
+- **A link never creates an admin.** A sign-in that holds an org admin grant
+  can only be linked to a canonical principal that is already an admin.
 - **Links are flat.** A canonical principal is never itself linked onward, and
   a linked sign-in cannot become canonical for others.
 - **Evidence is required.** Every link records how the two identities were
   verified as one person and which admin created it.
 - **Links are reversible.** Deleting a link restores two separate principals.
-  Records written while the link existed stay under the canonical id.
+  Records written while the link existed stay under the canonical id, so a
+  wrong link is an incident to reconcile, not just a row to delete.
 - **Deactivation follows the person.** Deactivating either id deactivates both.
 
 ## Admin API
@@ -45,5 +48,9 @@ Surfaces resolve a sign-in with a source-authenticated read:
 ```
 GET /v1/principals/:id/canonical   → { principalId, canonicalId }
 ```
+
+The portal caches the answer for one minute and refuses to proxy (503) when
+core cannot answer, rather than acting as the unresolved subject. A deleted
+link therefore stays effective for at most a minute of cached sessions.
 
 Links live in the `principal_links` durable map of the company database.
