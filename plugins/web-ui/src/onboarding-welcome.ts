@@ -257,7 +257,7 @@ export class OnboardingWelcome extends LitElement {
         });
         const result = await response.json();
         if (!response.ok)
-          throw new Error(result.message ?? "Composio is not available. Ask your administrator to check its setup.");
+          throw new Error(result.message ?? "App connections are unavailable right now. Please try again.");
         for (const item of result.items as Array<{ id: string; name: string; description: string }>) {
           if (item.id !== "slack" && !services.some((service) => service.id === item.id))
             services.push({ ...item, popularity: 100000 - services.length });
@@ -426,7 +426,7 @@ export class OnboardingWelcome extends LitElement {
                       <p class="welcome-beat" style="--welcome-delay:700ms">The easiest way to get up and running:</p>`
               }`
       }
-      ${this.widget !== "apps" ? html`<qm-slack-account .user=${this.previewUser()}></qm-slack-account>` : nothing}
+      ${this.widget !== "apps" && (this.widget === "slack" || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()}></qm-slack-account>` : nothing}
       ${
         this.widget !== "apps" && this.me?.permissions?.includes("admin")
           ? html`<qm-onboarding-slack
@@ -444,8 +444,18 @@ export class OnboardingWelcome extends LitElement {
               ${
                 this.error
                   ? html`<div class="welcome-load">
+                      <strong>Connect your apps</strong>
                       <p role="status">${this.error}</p>
-                      <button type="button" class="btn" @click=${() => void this.loadCatalog()}>Try again</button>
+                      <button
+                        type="button"
+                        class="btn"
+                        @click=${() => {
+                        void this.loadCatalog();
+                        void this.loadConnections();
+                      }}
+                      >
+                        Try again
+                      </button>
                     </div>`
                   : nothing
               }
@@ -463,7 +473,7 @@ export class OnboardingWelcome extends LitElement {
                     </div>`
                   : nothing
               }
-              ${this.connectionError ? html`<div class="welcome-connection-status" role="status">${this.connectionError} <button class="btn" @click=${() => void this.loadConnections()}>Check again</button></div>` : nothing}
+              ${this.connectionError && !this.error && !this.loading ? html`<div class="welcome-connection-status" role="status">${this.connectionError} <button class="btn" @click=${() => void this.loadConnections()}>Check again</button></div>` : nothing}
               ${!this.preview && this.connectionOutcome === "failed" ? html`<button class="btn" @click=${() => void this.loadConnections()}>Check again</button>` : nothing}
               <div class="welcome-picker" ?inert=${Boolean(this.authorizing)}></div>
               ${
