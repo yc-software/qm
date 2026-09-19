@@ -58,7 +58,7 @@ async function credential(ctx: ApiCtx): Promise<{ key: string; principal: string
   if (records.length !== 1) {
     sendJson(ctx.res, records.length ? 409 : 403, {
       error: "composio_unavailable",
-      message: "Composio is not available to this account. Ask your administrator to check its credential grant.",
+      message: "App connections aren’t available for your account yet. Ask your administrator to enable them.",
     });
     return null;
   }
