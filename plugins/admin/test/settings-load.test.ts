@@ -1,3 +1,4 @@
+import { litFixture } from "./lit-fixture.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -149,14 +150,21 @@ test("other settings projections leave the loaded Governance cards intact", () =
 });
 
 test("credential usage distinguishes loading, failure, and confirmed zero", () => {
-  const context = vm.createContext({ plural: (n: number, word: string) => `${n} ${word}s`, fmtTime: String });
-  vm.runInContext(extract("function serviceCredentialUsageLabel(", "function renderServiceCreds("), context);
-  assert.equal(vm.runInContext("serviceCredentialUsageLabel({})", context), "Loading usage…");
-  assert.equal(vm.runInContext("serviceCredentialUsageLabel({usageUnavailable:true})", context), "Usage unavailable");
-  assert.equal(
-    vm.runInContext("serviceCredentialUsageLabel({usageCount:0})", context),
-    "0 successful uses in retained broker history",
-  );
+  const f = litFixture();
+  try {
+    f.root.innerHTML = '<template data-settings-card="card-service-credentials"></template>';
+    f.ui.settings.mountCards();
+    for (const [usage, message] of [
+      [{}, "Loading usage…"],
+      [{ usageUnavailable: true }, "Usage unavailable"],
+      [{ usageCount: 0 }, "0 successful uses in retained broker history"],
+    ] as const) {
+      f.ui.settings.loadCredentials([{ slug: "test", host: "example.com", ...usage }], [], [], [], "org:test");
+      assert.ok(f.document.querySelector("#sc-list")!.textContent!.includes(message));
+    }
+  } finally {
+    f.dom.window.close();
+  }
 });
 
 test("usage completion preserves credentials on failure and ignores stale scope, view, and reload responses", async () => {
@@ -175,7 +183,7 @@ test("usage completion preserves credentials on failure and ignores stale scope,
       },
     });
     vm.runInContext(
-      extract("async function loadServiceCredentialUsage(", "function serviceCredentialUsageLabel("),
+      extract("async function loadServiceCredentialUsage(", "governanceUI.settings.configureCredentials("),
       context,
     );
     const work = vm.runInContext('loadServiceCredentialUsage("org:example", 1)', context);
@@ -197,30 +205,38 @@ test("usage completion preserves credentials on failure and ignores stale scope,
 });
 
 test("credential request displays loading, then a visible retry on failure", async () => {
-  const pending = Promise.withResolvers<unknown>();
-  const messages: unknown[] = [];
-  const add = { disabled: false };
-  const context = vm.createContext({
-    scope: "org:example",
-    view: "credentials",
-    governanceReq: 0,
-    loadedGovernanceScope: null,
-    serviceCredList: [{ slug: "stale" }],
-    setServiceCredentialState: (...args: unknown[]) => messages.push(args),
-    $: () => add,
-    loadPersonalKeychainSummary() {},
-    setStatus() {},
-    api: () => pending.promise,
-  });
-  const source = extract("async function loadScope() {", "        const refreshModelChoices = [];");
-  vm.runInContext(source + "}", context);
-  const work = vm.runInContext("loadScope()", context);
-  assert.deepEqual(messages, [["Loading credentials…"]]);
-  assert.equal(add.disabled, true);
-  assert.equal(context.serviceCredList.length, 0);
-  pending.resolve({ ok: false, status: 500 });
-  await work;
-  assert.deepEqual(messages.at(-1), ["Could not load credentials.", true]);
+  const f = litFixture();
+  try {
+    f.root.innerHTML = '<template data-settings-card="card-service-credentials"></template>';
+    f.ui.settings.mountCards();
+    const pending = Promise.withResolvers<unknown>();
+    let retries = 0;
+    f.ui.settings.configureCredentials({ reload: () => retries++, label: String, formatTime: String });
+    const context = vm.createContext({
+      scope: "org:example",
+      view: "credentials",
+      governanceReq: 0,
+      loadedGovernanceScope: null,
+      serviceCredList: [{ slug: "stale" }],
+      governanceUI: f.ui,
+      loadPersonalKeychainSummary() {},
+      setStatus() {},
+      api: () => pending.promise,
+    });
+    const source = extract("async function loadScope() {", "        const refreshModelChoices = [];");
+    vm.runInContext(source + "}", context);
+    const work = vm.runInContext("loadScope()", context);
+    assert.equal(f.document.querySelector("#sc-list")!.textContent!.trim(), "Loading credentials…");
+    assert.equal((f.document.querySelector("#sc-add") as HTMLButtonElement).disabled, true);
+    assert.equal(context.serviceCredList.length, 0);
+    pending.resolve({ ok: false, status: 500 });
+    await work;
+    assert.ok(f.document.querySelector("#sc-list")!.textContent!.includes("Could not load credentials."));
+    f.document.querySelector<HTMLButtonElement>("#sc-list button")!.click();
+    assert.equal(retries, 1);
+  } finally {
+    f.dom.window.close();
+  }
 });
 
 test("admin requests convert rejected fetches and interrupted bodies into failure states", async () => {

@@ -214,7 +214,7 @@ test("control-plane pages use the shared web UI canvas without redundant page in
   assert.match(html, /data-checkbox-for="external-slack-participants"/);
   assert.match(html, /governanceUI\.createCard\("card-governance-org-ambient"\)/);
   assert.match(html, /id="sc-editor"/);
-  assert.match(html, /id="sc-add"[^>]*>\+ Add credential/);
+  assert.match(html, /id="sc-add"[^>]*>\s*\+ Add credential/);
   assert.match(html, /id="conn-editor"/);
   assert.match(html, /id="slack-token-editor"/);
   assert.match(html, /id="soul-preview"/);
