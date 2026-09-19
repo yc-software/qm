@@ -13,6 +13,7 @@ import { dirname, extname, join, normalize } from "node:path";
 import { randomBytes } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import {
+  fetchCoreText,
   signedHeaders,
   withSourceAuthNonce,
   CAPABILITY_HEADER,
@@ -594,19 +595,16 @@ async function coreFetch(
   rawBody = "",
   timeoutMs?: number,
 ): Promise<{ status: number; text: string }> {
-  const signedPath = withSourceAuthNonce(pathWithQuery, CORE_SIGNING_SECRET);
   const portalTok = portalTokenStore.getStore();
-  const r = await fetch(`${CORE}${signedPath}`, {
+  return fetchCoreText({
+    origin: CORE,
+    secret: CORE_SIGNING_SECRET,
     method,
-    headers: {
-      ...signedHeaders(CORE_SIGNING_SECRET, method, signedPath, rawBody),
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-    },
-    ...(rawBody ? { body: rawBody } : {}),
-    ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
-    redirect: "manual",
+    path: pathWithQuery,
+    body: rawBody,
+    headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
   });
-  return { status: r.status, text: await r.text() };
 }
 
 async function coreFetchCap(
@@ -1881,7 +1879,28 @@ const apiRoutes: readonly WebRoute[] = [
         const v = url.searchParams.get(p);
         if (v !== null) qs.set(p, v);
       }
-      return relayCore(res, "GET", `/v1/sessions/${encodeURIComponent(id)}?${qs.toString()}`);
+      const cancel = new AbortController();
+      const onClose = () => cancel.abort();
+      res.once("close", onClose);
+      try {
+        const portalTok = portalTokenStore.getStore();
+        return relay(
+          res,
+          await fetchCoreText({
+            origin: CORE,
+            secret: CORE_SIGNING_SECRET,
+            method: "GET",
+            path: `/v1/sessions/${encodeURIComponent(id)}?${qs.toString()}`,
+            headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+            signal: AbortSignal.any([cancel.signal, AbortSignal.timeout(30_000)]),
+            retrySafeRead: true,
+          }),
+        );
+      } catch (error) {
+        if (!cancel.signal.aborted) throw error;
+      } finally {
+        res.off("close", onClose);
+      }
     },
   },
   {
