@@ -1,4 +1,4 @@
-import { swallow, swallowAs } from "./errors.ts";
+import { reportFailure, reportFailureAs } from "./errors.ts";
 
 export interface Sweeper {
   start(intervalMs?: number): void;
@@ -16,11 +16,11 @@ export function createSweeper(
   let stopping: Promise<void> | null = null;
   const sweep = (): void => {
     try {
-      const work = Promise.resolve(fn()).then(() => {}, swallowAs(`${label}: sweep failed`, undefined));
+      const work = Promise.resolve(fn()).then(() => {}, reportFailureAs(`${label}: sweep failed`, undefined));
       pending.add(work);
       void work.finally(() => pending.delete(work));
     } catch (e) {
-      swallow(`${label}: sweep failed`, e);
+      reportFailure(`${label}: sweep failed`, e);
     }
   };
   return {

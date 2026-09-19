@@ -1,3 +1,4 @@
+import { readAdminSource } from "./admin-source.ts";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
@@ -89,8 +90,12 @@ test("the brand icon is a CSS variable the org can point at its own image", () =
     /var\(--brand-mark-image, url\("\.\/brand-mark\.svg"\)\)/,
     "the badge paints from the variable and falls back to the shipped mark",
   );
-  assert.match(shell, /id="branding-mark-url"/, "the admin form can set it");
-  assert.match(shell, /markUrl: \$\("branding-mark-url"\)\.value\.trim\(\)/, "and saves it with the rest of branding");
+  assert.match(readAdminSource(), /id="branding-mark-url"/, "the admin form can set it");
+  assert.match(
+    shell,
+    /governanceUI.settings.load\(r.data, scope, "branding"\)/,
+    "loads the state-driven branding editor",
+  );
 });
 
 test("design system routes embed the shared component library and retain the script CSP", async () => {
@@ -106,7 +111,9 @@ test("design system routes embed the shared component library and retain the scr
 });
 
 test("design system routes use the inbox allowlist", async () => {
-  const denied = await fetch(base + "/design-system", { headers: { cookie: "admin=U-rando" } });
-  assert.equal(denied.status, 404);
-  assert.deepEqual(await denied.json(), { error: "not_found" });
+  for (const path of ["/design-system", "/design-system/"]) {
+    const denied = await fetch(base + path, { headers: { cookie: "admin=U-rando" } });
+    assert.equal(denied.status, 404);
+    assert.deepEqual(await denied.json(), { error: "not_found" });
+  }
 });

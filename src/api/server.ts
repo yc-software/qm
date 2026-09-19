@@ -1,4 +1,5 @@
-import { reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
+import { reportBackendError, startTiming } from "../../plugins/chassis/src/error-reporting.ts";
+import { traceStatus } from "../../plugins/chassis/src/timing.ts";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -30,7 +31,7 @@ import {
   sendJson,
   verifyOrReject,
 } from "./http.ts";
-import { dispatch, findRoute, run, type ApiCtx, type BaseCtx, type Route, type RouteAuth } from "./routes/route.ts";
+import { findRoute, run, type ApiCtx, type BaseCtx, type Route, type RouteAuth } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
@@ -488,7 +489,17 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     requirePortalIdentity,
     allowUnsignedSourceAuth,
   };
+  const requestNames = new WeakMap<IncomingMessage, string>();
   const server = createHttpServer((req, res) => {
+    const finishTiming = req.url === "/healthz" ? undefined : startTiming("http.server", `${req.method ?? "GET"} /*`);
+    if (finishTiming)
+      res.once("close", () =>
+        finishTiming({
+          name: `${req.method ?? "GET"} ${requestNames.get(req) ?? "/*"}`,
+          status: res.writableFinished ? traceStatus(res.statusCode) : "cancelled",
+          data: { http_status: res.writableFinished ? String(res.statusCode) : undefined },
+        }),
+      );
     req.on("error", () => res.destroy());
     res.on("error", () => res.destroy());
     void front(req, res).catch((err: unknown) => respondError(req, res, err));
@@ -504,9 +515,18 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
     armBodyDeadline(req, 30_000);
     const base = baseCtx(req, res, wiring);
-    if (await proxyDeploymentSubdomain(base)) return;
-    if (await dispatch(rawRoutes, base)) return;
+    if (await proxyDeploymentSubdomain(base)) {
+      requestNames.set(req, "/deployment-proxy/*");
+      return;
+    }
+    const raw = findRoute(rawRoutes, base.method, base.pathname);
+    if (raw) {
+      if ("path" in raw.route) requestNames.set(req, raw.route.path);
+      await run(raw.route, raw.params, base);
+      return;
+    }
     const matched = findRoute(apiRoutes, base.method, base.pathname);
+    if (matched && "path" in matched.route) requestNames.set(req, matched.route.path);
     const routeAuth = matched?.route.auth;
     const acceptsSourceAuth = !matched || routeAuth === "source" || routeAuth === "either";
     if (wiring.secret && !capabilityFromHeaders(req) && routeAuth !== "public" && acceptsSourceAuth) {

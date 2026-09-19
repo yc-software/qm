@@ -47,6 +47,8 @@ async function call(
   actor = "josh",
   mode: "capability" | "source" = "capability",
   liveActor = true,
+  isAdmin = true,
+  managesScope = false,
 ): Promise<{ status: number; body: unknown }> {
   const found = findRoute(loopRoutes as ReadonlyArray<Route<ApiCtx>>, method, path);
   assert.ok(found, `no route for ${method} ${path}`);
@@ -69,10 +71,10 @@ async function call(
         : null,
     app: {
       membershipControlsScope: async () => false,
-      managesScope: async () => false,
+      managesScope: async () => managesScope,
       samePerson: async (a: string, b: string) => a === b,
     },
-    deps: { loops: deps },
+    deps: { loops: deps, admin: { adminStatusOf: async () => ({ isAdmin }) } },
   } as unknown as ApiCtx;
   await found.route.handle(ctx);
   return out;
@@ -701,4 +703,87 @@ test("only a live human can re-enable an archived loop", async () => {
   const revived = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { state: "enabled" });
   assert.equal(revived.status, 200);
   assert.equal((revived.body as { loop: Loop }).loop.state, "enabled");
+});
+
+async function privilegedLoop(deps: LoopServiceDeps): Promise<Loop> {
+  const created = await call(deps, "POST", "/v1/loops", { ...CREATE, schedule: { everyMs: 60_000 } });
+  const loop = (created.body as { loop: Loop }).loop;
+  await deps.crons!.update(loop.cronId!, { unattendedGrants: ["admin.sessions.read"] });
+  return loop;
+}
+
+test("privileged loop config and manual fires use the cron live-owner-admin gate", async () => {
+  const deps = services();
+  const loop = await privilegedLoop(deps);
+  let fires = 0;
+  deps.fire = {
+    fire: async () => {
+      fires++;
+      return { status: "ok" };
+    },
+  } as never;
+  for (const [method, suffix, body] of [
+    ["PATCH", "", { playbook: "changed instructions" }],
+    ["PATCH", "", { successCondition: "changed condition" }],
+    ["PATCH", "", { state: "enabled" }],
+    ["POST", "/fire", {}],
+    ["POST", "/autopilot", { enabled: true }],
+    ["POST", "/grants", { shipAction: "open_pr" }],
+    ["POST", "/outputs/output/decide", { decision: "return", note: "new instructions" }],
+  ] as const) {
+    const path = `/v1/loops/${loop.id}${suffix}`;
+    assert.equal((await call(deps, method, path, body, "josh", "capability", false)).status, 403);
+    assert.equal((await call(deps, method, path, body, "josh", "capability", true, false)).status, 403);
+    assert.equal((await call(deps, method, path, body, "mallory", "capability", true, true, true)).status, 403);
+    assert.equal((await call(deps, method, path, body, "josh", "source")).status, 403);
+  }
+  assert.equal(fires, 0);
+  assert.equal((await deps.store.get(loop.id))?.playbook, loop.playbook);
+  const permitted = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "owner revision" });
+  assert.equal(permitted.status, 200);
+  assert.deepEqual((await deps.crons!.get(loop.cronId!))?.unattendedGrants, ["admin.sessions.read"]);
+  assert.equal((await call(deps, "POST", `/v1/loops/${loop.id}/fire`, {})).status, 200);
+  assert.equal(fires, 1);
+  await deps.crons!.update(loop.cronId!, { unattendedGrants: [] });
+  assert.equal(
+    (await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "ordinary revision" }, "josh", "capability", false))
+      .status,
+    200,
+  );
+});
+
+test("loop mutation and manual fire reject a drifted native binding", async () => {
+  const deps = services();
+  const loop = await privilegedLoop(deps);
+  await deps.crons!.update(loop.cronId!, { runAs: "scopeFloor" });
+  assert.equal((await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "revision" })).status, 409);
+  assert.equal((await call(deps, "POST", `/v1/loops/${loop.id}/fire`, {})).status, 409);
+  assert.equal((await deps.store.get(loop.id))?.playbook, loop.playbook);
+});
+
+test("a legacy inbox sync cron cannot be re-enabled through an autonomous Loop patch", async () => {
+  const deps = services();
+  const { loop } = await deps.store.create({
+    owner: "josh",
+    createdBy: "josh",
+    ownerScopeId: scopeId("personal", "josh"),
+    ...CREATE,
+    surface: "inbox",
+    shipActions: [],
+  });
+  const cron = await deps.crons!.create({
+    owner: loop.owner,
+    createdBy: loop.owner,
+    ownerScopeId: loop.ownerScopeId,
+    schedule: { everyMs: 60_000 },
+    action: "Inbox sync v3.",
+    unattendedGrants: ["admin.sessions.read"],
+  });
+  await deps.store.update(loop.id, { cronId: cron.id, state: "paused" });
+  await deps.crons!.setEnabled(cron.id, false);
+  const refused = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { state: "enabled" }, "josh", "capability", false);
+  assert.equal(refused.status, 403);
+  assert.equal((await deps.crons!.get(cron.id))?.enabled, false);
+  assert.equal((await call(deps, "PATCH", `/v1/loops/${loop.id}`, { state: "enabled" })).status, 200);
+  assert.equal((await deps.crons!.get(cron.id))?.enabled, true);
 });

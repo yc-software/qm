@@ -1,7 +1,7 @@
 import { SlackPluginStartCleanupError } from "../surfaces/slack-runtime.ts";
 import { createSlackRateLimitNotice } from "./rate-limit-notice.ts";
 import { createSlackHistoryReader } from "./history.ts";
-import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { createEnvelopeStaging } from "./envelope-staging.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import bolt from "@slack/bolt";
@@ -290,7 +290,7 @@ export async function startSlackPlugin(
             }
           }
         } catch (err) {
-          console.error("[slack] channel header default sweep failed:", errMessage(err));
+          reportFailure("slack: channel header default sweep", err);
         }
       })();
     });

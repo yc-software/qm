@@ -1,3 +1,4 @@
+import { buildGovernanceUI } from "./governance-bundle.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -33,6 +34,7 @@ function signedHeaders(method: string, corePath: string, rawBody: string): Recor
 
 const BASE_HTML = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8")
   .replaceAll("__ADMIN_BASE__", () => ADMIN_BASE_PATH)
+  .replace('"__GOVERNANCE_UI__";', () => buildGovernanceUI())
   .replace(
     "<style data-admin-components></style>",
     () =>
@@ -500,7 +502,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return forward(req, res, principal, "GET", `/v1/admin/${rest}${url.search}`);
   }
 
-  if (method === "GET" && pathname === "/design-system") {
+  if (method === "GET" && (pathname === "/design-system" || pathname === "/design-system/")) {
     const viewer = cookiePrincipal(req);
     if (!viewer || !principalInAllowlist(viewer, process.env.INBOX_USERS)) {
       return json(res, 404, { error: "not_found" });

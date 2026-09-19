@@ -1,3 +1,4 @@
+import { unattendedGrantRefusal } from "../cron/authority.ts";
 import { isDeepStrictEqual } from "node:util";
 import type { Cron, CronFireLogEntry, CronSchedule, Destination, Principal, Webhook } from "../types.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
@@ -322,21 +323,6 @@ const UNATTENDED_GRANTS = new Set([
 
 function validateUnattendedGrants(grants: string[]): string | null {
   if (!grants.every((grant) => UNATTENDED_GRANTS.has(grant))) return "unknown unattended grant";
-  return null;
-}
-
-async function unattendedGrantRefusal(
-  app: App,
-  admin: AdminService | undefined,
-  cron: Pick<Cron, "owner" | "ownerScopeId" | "runAs">,
-  capability: CapabilityClaims,
-): Promise<string | null> {
-  if (capability.liveActor !== true) return "unattended grants require a live turn started by the cron owner";
-  if (!(await app.samePerson(cron.owner, capability.actorId))) return "only the cron owner may set unattended grants";
-  if (!cron.ownerScopeId.startsWith("personal:") || (cron.runAs !== undefined && cron.runAs !== "owner"))
-    return "unattended grants require a personal-scope cron that runs as its owner";
-  const status = await admin?.adminStatusOf({ id: capability.actorId, type: "internal" }).catch(() => undefined);
-  if (!status?.isAdmin) return "unattended grants require the cron owner to be a current org admin";
   return null;
 }
 

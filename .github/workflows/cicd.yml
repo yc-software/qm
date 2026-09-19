@@ -229,8 +229,11 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             plugins/web-ui/package-lock.json
-      - name: Install core dependencies
-        run: npm ci
+            plugins/admin/package-lock.json
+      - name: Install core and mounted admin dependencies
+        run: |
+          npm ci
+          npm ci --prefix plugins/admin
       - name: Install, typecheck, test, build
         working-directory: plugins/web-ui
         run: |

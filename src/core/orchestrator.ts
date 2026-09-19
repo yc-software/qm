@@ -11,7 +11,6 @@ import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import { shq } from "../util/shell.ts";
 import { goalViewFromEntry } from "../runs/turn-stream.ts";
-import { markErrorRecorded } from "../admin/error-log.ts";
 import type {
   CommandApprovalGrant,
   DeliveryProvenance,
@@ -162,7 +161,7 @@ import {
   selectOverheardToImport,
   type OverheardEntryPayload,
 } from "../harness/replay.ts";
-import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { absoluteAppLinks, headSlice, jsonbSafeStringify } from "../util/text.ts";
 import { NonRetryableTurnError, TitleRejected, turnFailureMessage, type TurnFailurePayload } from "./turn-error.ts";
@@ -738,7 +737,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         try {
           await deps.sessions.recordLlmRequest(screenSession.id, { ...rec, scopeLabel: scopeId }, signal);
         } catch (err) {
-          console.error("[orchestrator] failed to persist security screen request snapshot:", errMessage(err));
+          reportFailure("orchestrator: persist security screen request snapshot", err);
         }
       };
       let screenedOverheard: OverheardEntryPayload[] = [];
@@ -3412,7 +3411,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               try {
                 await deps.sessions.recordLlmRequest(session.id, { ...rec, scopeLabel: scopeId }, signal);
               } catch (err) {
-                console.error("[orchestrator] failed to persist LLM request snapshot:", errMessage(err));
+                reportFailure("orchestrator: persist LLM request snapshot", err);
               }
             },
           });
@@ -3536,7 +3535,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               spine.surfaceOutboundCount += 1;
               if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
             } catch (e) {
-              console.error("%s", `[orchestrator] direct reply delivery failed session=${session.id}:`, errMessage(e));
+              reportFailure("orchestrator: direct reply delivery", e, `session=${session.id}`);
             }
           }
           if (spine.surfaceOutboundCount === 0 && !silentPollNarration) {
@@ -3969,7 +3968,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           err,
         );
-        markErrorRecorded(err);
         if ((err instanceof NonRetryableTurnError || input.finalAttempt) && !input.cancel?.aborted) {
           const mirrorFailureEntry = async (entry: SessionEntry | undefined): Promise<void> => {
             if (!entry) return;

@@ -106,7 +106,7 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     const count = launches.length;
     element.querySelector<HTMLButtonElement>(".welcome-slack")!.click();
     await settle();
-    assert.equal(fallback.location.href, "/admin/connectors?setup=slack");
+    assert.equal(fallback.location.href, "/admin/slack-settings?setup=slack");
     assert.equal(launches.length, count);
   } finally {
     releaseStatus();

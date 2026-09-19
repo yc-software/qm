@@ -83,9 +83,9 @@ test("createSweeper start(intervalMs) overrides the construction-time interval",
   assert.ok(ticks >= 2, `expected ticks at the start-time interval, got ${ticks}`);
 });
 
-test("createSweeper tags swallowed failures with its label", async (t) => {
+test("createSweeper tags reported failures with its label", async (t) => {
   const logged: string[] = [];
-  t.mock.method(console, "warn", (...args: unknown[]) => {
+  t.mock.method(console, "error", (...args: unknown[]) => {
     logged.push(args.map(String).join(" "));
   });
   const s = createSweeper(
@@ -100,7 +100,7 @@ test("createSweeper tags swallowed failures with its label", async (t) => {
   s.stop();
   assert.ok(
     logged.some((l) => l.includes("test-loop: sweep failed") && l.includes("boom")),
-    `expected a labelled swallow line, got: ${logged.join(" | ")}`,
+    `expected a labelled failure line, got: ${logged.join(" | ")}`,
   );
 });
 

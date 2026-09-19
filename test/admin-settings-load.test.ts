@@ -31,7 +31,15 @@ test("settings projections preserve values while excluding unrelated payloads", 
   await srv.built.config.flushScope("org:default-org");
   await srv.built.directory.replaceChannels([{ channelId: "C-settings", name: "settings-test" }]);
   const full = (await (await fetch(srv.base + scopePath, { headers: ADMIN })).json()) as Record<string, unknown>;
-  for (const view of ["customize", "governance", "models", "credentials", "connectors", "onboarding"]) {
+  for (const view of [
+    "customize",
+    "governance",
+    "models",
+    "credentials",
+    "connectors",
+    "slack-settings",
+    "onboarding",
+  ]) {
     const response = await fetch(srv.base + scopePath + "?view=" + view, { headers: ADMIN });
     assert.equal(response.status, 200, view);
     const projected = (await response.json()) as Record<string, unknown> & { branding: { selfLabel: string } };
@@ -41,9 +49,16 @@ test("settings projections preserve values while excluding unrelated payloads", 
     assert.match(response.headers.get("server-timing") ?? "", /authorize;dur=/);
     if (["customize", "credentials", "connectors"].includes(view))
       assert.equal("modelsByHarness" in projected, false, view);
+    if (view === "slack-settings") {
+      for (const key of ["externalSlackParticipants", "internalMemberOverrides", "channelHeaderPinDefault", "ackEmoji"])
+        assert.equal(key in projected, true);
+      assert.equal("orgAmbient" in projected, false);
+    }
     if (view === "customize") {
       assert.equal(projected.branding.selfLabel, "Test assistant");
-      assert.equal(projected.turnWallClockSec, 120);
+      assert.equal("turnWallClockSec" in projected, false);
+      assert.equal("orgAmbient" in projected, false);
+      assert.equal("channelHeaderPinDefault" in projected, false);
       assert.equal("soulHistory" in projected, true);
       assert.equal("connectors" in projected, false);
     }
@@ -106,7 +121,15 @@ test("each settings projection retains authorization before reading configuratio
   t.mock.method(srv.built.config, "refreshScope", async () => {
     reads++;
   });
-  for (const view of ["customize", "governance", "models", "credentials", "connectors", "onboarding"]) {
+  for (const view of [
+    "customize",
+    "governance",
+    "models",
+    "credentials",
+    "connectors",
+    "slack-settings",
+    "onboarding",
+  ]) {
     const response = await fetch(srv.base + scopePath + "?view=" + view, {
       headers: { "x-admin-actor": "nobody@default-org" },
     });

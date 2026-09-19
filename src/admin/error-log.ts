@@ -1,4 +1,5 @@
 import { reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
+import { errorAlreadyReported, markErrorReported } from "../util/errors.ts";
 import type { ScopeId } from "../types.ts";
 import { createTimestampedEventSink } from "./scoped-event-sink.ts";
 
@@ -30,21 +31,14 @@ export function createErrorLog(): ErrorLog {
   };
 }
 
-const recordedErrors = new WeakSet<object>();
-
-export function markErrorRecorded(err: unknown): void {
-  if (typeof err === "object" && err !== null) recordedErrors.add(err);
-}
-
-export function errorAlreadyRecorded(err: unknown): boolean {
-  return typeof err === "object" && err !== null && recordedErrors.has(err);
-}
-
 export function withErrorReporting(store: ErrorLog): ErrorLog {
   return {
     ...store,
     record(event, error) {
-      reportBackendError(error ?? new Error("Recorded backend failure"), `${event.category}:${event.code}`);
+      if (!errorAlreadyReported(error)) {
+        reportBackendError(error ?? new Error("Recorded backend failure"), `${event.category}:${event.code}`);
+        markErrorReported(error);
+      }
       store.record(event);
     },
   };

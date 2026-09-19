@@ -1,3 +1,7 @@
+import { cronTriggerAuthority } from "../cron/authority.ts";
+import type { CronStore } from "../cron/cron-store.ts";
+import { boundLoopCron } from "./authority.ts";
+import { samePerson } from "../directory/person.ts";
 import type { Loop, LoopItem, LoopOutput, TurnResult } from "../types.ts";
 import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
@@ -27,6 +31,8 @@ import { adapterForItem } from "./sources/index.ts";
 
 export interface LoopFireDeps {
   loops: LoopStore;
+  crons?: Pick<CronStore, "get">;
+  samePerson?: (a: string, b: string) => Promise<boolean>;
   items: LoopItemLedger;
   outputs: LoopOutputStore;
   grants: ShipGrantStore;
@@ -48,9 +54,15 @@ interface ItemTurnResult {
 }
 
 export interface LoopFireService {
-  fire(loopId: string, fireKey: string): Promise<LoopFireResult>;
+  fire(loopId: string, fireKey: string, cronId?: string): Promise<LoopFireResult>;
   followUp(loop: Loop, item: LoopItem, message: string, actorId: string): Promise<LoopItem | null>;
-  itemAction(loop: Loop, item: LoopItem, kind: string, args: Record<string, unknown>): Promise<ItemTurnResult>;
+  itemAction(
+    loop: Loop,
+    item: LoopItem,
+    kind: string,
+    args: Record<string, unknown>,
+    actorId: string,
+  ): Promise<ItemTurnResult>;
   shipOutput(loopId: string, outputId: string, actorId: string, note?: string): Promise<LoopOutput | null>;
   returnOutput(loopId: string, outputId: string, actorId: string, note: string): Promise<LoopOutput | null>;
   sweepStale(now: number): Promise<void>;
@@ -352,15 +364,36 @@ function shipPrompt(loop: Loop, output: LoopOutput, note?: string): string {
 }
 
 export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
-  async function stageTurn(loop: Loop, fireKey: string, threadRef: string, input: string): Promise<TriggerOutcome> {
+  async function stageTurn(
+    loop: Loop,
+    fireKey: string,
+    threadRef: string,
+    input: string,
+    actorId?: string,
+  ): Promise<TriggerOutcome> {
+    let cron;
+    try {
+      const bound = await boundLoopCron(loop, deps.crons);
+      cron = bound?.loopId === loop.id ? bound : null;
+    } catch (e) {
+      return { authzFailed: true, ran: false, note: errMessage(e) };
+    }
+    if (cron?.unattendedGrants?.length && (!cron.enabled || cron.archived)) {
+      return { authzFailed: true, ran: false, note: "loop cron is disabled or archived" };
+    }
+    if (
+      cron?.unattendedGrants?.length &&
+      actorId !== undefined &&
+      !(await (deps.samePerson ?? samePerson)(cron.owner, actorId))
+    ) {
+      return { authzFailed: true, ran: false, note: "only the owner may direct a privileged loop turn" };
+    }
     return runTrigger(deps.trigger, {
-      owner: loop.owner,
-      ownerScopeId: loop.ownerScopeId,
+      ...cronTriggerAuthority(cron ?? loop),
       input,
       fireKey,
       threadRef,
       surface: "loop",
-      ...(loop.runAs ? { runAs: loop.runAs } : {}),
     });
   }
 
@@ -427,9 +460,14 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     }
   }
 
-  async function fire(loopId: string, fireKey: string): Promise<LoopFireResult> {
+  async function fire(loopId: string, fireKey: string, cronId?: string): Promise<LoopFireResult> {
     const loop = await deps.loops.get(loopId);
     if (!loop) return { status: "failed", note: "loop not found" };
+    try {
+      await boundLoopCron(loop, deps.crons, cronId);
+    } catch (e) {
+      return { status: "failed", note: errMessage(e) };
+    }
     if (loop.state === "enabled" && (await deps.trigger.idempotency.committed(`${fireKey}:intake`))) {
       return { status: "silent", note: "duplicate fire key" };
     }
@@ -554,6 +592,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         fireKey,
         loopFireThreadRef(loopId, fireKey),
         shipPrompt(loop, claimed, note),
+        actorId,
       );
       if (!outcome.ran && !outcome.authzFailed && (await deps.outputs.get(outputId))?.shipFireKey === fireKey) {
         return deps.outputs.markUnconfirmed(outputId, claimToken);
@@ -624,8 +663,14 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     }
   }
 
-  async function itemTurn(loop: Loop, item: LoopItem, input: string, fireKey: string): Promise<ItemTurnResult> {
-    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), input);
+  async function itemTurn(
+    loop: Loop,
+    item: LoopItem,
+    input: string,
+    fireKey: string,
+    actorId: string,
+  ): Promise<ItemTurnResult> {
+    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), input, actorId);
     const failure = stageFailure("item turn", outcome);
     if (failure) return { ok: false, note: failure.error.message, userNote: failure.userMessage };
     return {
@@ -639,7 +684,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     await deps.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
     const asked = (await deps.items.get(item.id)) ?? item;
     const fireKey = `loop:${loop.id}:item:${item.id}:followup:${Date.now()}`;
-    const turn = await itemTurn(loop, asked, followUpPrompt(loop, asked, message), fireKey);
+    const turn = await itemTurn(loop, asked, followUpPrompt(loop, asked, message), fireKey, actorId);
     if (!turn.ok) {
       await deps.items.appendThread(item.id, [
         { role: "system", text: `The agent could not answer: ${turn.userNote ?? "the turn did not run"}` },
@@ -669,9 +714,10 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     item: LoopItem,
     kind: string,
     args: Record<string, unknown>,
+    actorId: string,
   ): Promise<ItemTurnResult> {
     const fireKey = `loop:${loop.id}:item:${item.id}:action:${kind}:${Date.now()}`;
-    return itemTurn(loop, item, itemActionPrompt(loop, item, kind, args), fireKey);
+    return itemTurn(loop, item, itemActionPrompt(loop, item, kind, args), fireKey, actorId);
   }
 
   return { fire, shipOutput, returnOutput, sweepStale, followUp, itemAction };

@@ -20,7 +20,7 @@ import type { DeployProfile, DeployProvider } from "./deploy-provider.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { errMessage, swallow } from "../util/errors.ts";
+import { errMessage, reportFailure, swallow } from "../util/errors.ts";
 
 export interface DeployFile {
   path: string;
@@ -602,7 +602,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             scopeLabel: before.ownerScopeId,
           });
         } catch (e) {
-          console.error("%s", `[deploy] failed to register pushed version for ${id}:`, errMessage(e));
+          reportFailure("deploy: register pushed version", e, `deployment=${id}`);
           deps.auditLog.record({
             at: Date.now(),
             principalId: "system",
