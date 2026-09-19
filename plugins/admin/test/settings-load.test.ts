@@ -19,9 +19,14 @@ test("settings navigation never starts the all-scopes history scan", () => {
     let settings = 0;
     const node = { classList: { toggle() {} } };
     const context = vm.createContext({
+      governanceUI: { transcript: { cancel() {} } },
       transcriptObserver: null,
+      adminPreviewTheme: null,
+      syncAdminTheme() {},
+      governanceReadyScope: "org:example",
+      setGovernancePending() {},
       scopeDir: null,
-      document: { body: { dataset: {}, ...node } },
+      document: { body: { dataset: {}, ...node }, documentElement: { style: { removeProperty() {} } } },
       $: () => node,
       isGovLike: (view: string) => ["customize", "models", "credentials", "governance"].includes(view),
       loadScopeDirectory: () => {
@@ -96,33 +101,50 @@ test("catalog completion appends options only to the requesting settings view", 
   }
 });
 
-test("branding reload clears only the committed draft and preserves other unsaved settings", () => {
-  const source = extract('} else if (key === "branding") {', "} else if (SAVE_RELOADS");
+test("branding saves preserve stored names and other unsaved settings", () => {
+  const source = extract("} else if (isBranding) {", "} else if (SAVE_RELOADS");
   const block = source.slice(source.indexOf("{") + 1);
-  for (const otherDraft of [false, true]) {
-    const snapshots = new Map();
-    let reloads = 0;
-    let recorded = false;
-    const context = vm.createContext({
-      key: "branding",
-      body: { selfLabel: "Saved name" },
-      sectionSnapshots: snapshots,
-      updateSectionDirty: () => {
-        recorded = snapshots.has("branding");
-      },
-      SAVE_ST: { branding: "st-branding" },
-      setStatus() {},
-      hasGovernanceDraft: () => otherDraft,
-      location: {
-        reload: () => {
-          reloads++;
+  for (const key of ["branding"]) {
+    for (const otherDraft of [false, true]) {
+      const body = { accent: "#123456" };
+      const brandingBody = { selfLabel: "Saved name", accent: "#123456" };
+      const snapshots = new Map();
+      let reloads = 0;
+      let recorded = false;
+      const context = vm.createContext({
+        key,
+        body,
+        brandingBody,
+        savedBranding: {},
+        sectionSnapshots: snapshots,
+        updateSectionDirty: () => {
+          recorded = snapshots.has(key);
         },
-      },
-    });
-    vm.runInContext(`(() => {${block}})()`, context);
-    assert.equal(recorded, true);
-    assert.equal(snapshots.get("branding"), JSON.stringify({ selfLabel: "Saved name" }));
-    assert.equal(reloads, otherDraft ? 0 : 1);
+        SAVE_ST: { branding: "st-branding" },
+        setStatus() {},
+        hasGovernanceDraft: () => otherDraft,
+        location: {
+          reload: () => {
+            reloads++;
+          },
+        },
+      });
+      vm.runInContext(`(() => {${block}})()`, context);
+      assert.equal(recorded, true);
+      assert.equal(snapshots.get(key), JSON.stringify(body));
+      assert.equal(context.savedBranding, brandingBody);
+      assert.equal(reloads, otherDraft ? 0 : 1);
+    }
+  }
+});
+
+test("other settings projections leave the loaded Governance cards intact", () => {
+  const load = html.slice(html.indexOf("async function loadScope()"));
+  const start = load.indexOf('if (requestedView === "governance") {');
+  const end = load.indexOf('if (requestedView === "customize")', start);
+  const source = load.slice(start, end);
+  for (const requestedView of ["customize", "models", "credentials", "slack-settings"]) {
+    vm.runInNewContext(source, { requestedView });
   }
 });
 

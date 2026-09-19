@@ -824,7 +824,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/admin/users",
         summary:
-          "org roster with admin status plus externalUsers (invited outside collaborators with role, expiry, status); /v1/admin/users/:id for one user's activity, conversations, and personal-scope artifacts (DM or effective Open sharing)",
+          "org roster with admin status plus externalUsers (invited outside collaborators with role, expiry, status); /v1/admin/users/:id for one user's personal conversation count, admin status, configuration, and onboarding (DM or effective Open sharing)",
       },
       {
         method: "POST",

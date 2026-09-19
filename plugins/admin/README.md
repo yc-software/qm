@@ -43,7 +43,11 @@ CORE_API_URL=http://localhost:8080 CORE_ORG_ID=acme PORT=8090 npm start
 
 ```
 
-No build step, an optional Sentry backend error reporter (pure `node:http` + native TS). Node 24+.
+No separate build command is needed. The Node 24+ server bundles the admin Lit modules once at startup and embeds them in the existing CSP-hashed script. The backend uses `node:http` and native TypeScript, with optional Sentry error reporting.
+
+The admin tabs render through the Lit modules in `ui/`, with `ui/admin.ts` as their shared entry point. They use the existing light-DOM elements, classes, and styles without layout wrappers. Settings drafts, validation, dirty state, and save feedback render from state; list views own filtering, pagination, and editor state. Stable row keys preserve focus. Shared table, card, and list templates live in `ui/shared.ts`. Specialized safe Markdown, XML, and tool-output formatters remain shared adapters in the shell.
+
+The shared admin controller retains routing, API calls, and change-review dialogs. Successful saves commit the submitted snapshot, preserving newer edits made while a request was in flight. Scope and render generations prevent stale requests from replacing a newer page. Related settings refresh independently so changing one section cannot discard neighboring drafts. Run `npm test` and `npm run typecheck` from this directory after changing the UI.
 
 Env: `CORE_API_URL` (default `http://localhost:8080`), `CORE_ORG_ID` (default `acme`),
 `PORT` (default `8090`) and `CORE_SIGNING_SECRET` (required outside isolated development). The

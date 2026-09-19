@@ -1,57 +1,33 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
-import vm from "node:vm";
+import { litFixture } from "./lit-fixture.ts";
 
-const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
-
-class Container {
-  children: unknown[] = [];
-  append(...children: unknown[]) {
-    this.children.push(...children);
-  }
-  appendChild(child: unknown) {
-    this.append(child);
-  }
-  prepend(child: unknown) {
-    this.children.unshift(child);
-  }
-}
-
-test("external invitation controls stay in External users", () => {
-  const start = html.indexOf("const usersCard = dataCard(");
-  const end = html.indexOf("\n        };\n        drawLists();", start);
-  assert.ok(start >= 0 && end > start);
-  const cards = new Map<string, { heading: Container; body: Container }>();
-  const addBtn = {};
-  const invite = {};
-  const externalSt = {};
-  vm.runInNewContext(html.slice(start, end), {
-    dataCard(title: string, _description: string, content: unknown) {
-      const heading = new Container();
-      const body = new Container();
-      body.append(content);
-      cards.set(title, { heading, body });
-      return {
-        classList: { add() {} },
-        querySelector: (selector: string) => (selector === ".head h2" || selector === ".head" ? heading : body),
-      };
-    },
-    actionTable: () => ({}),
-    lists: new Container(),
-    roster: {},
-    addBtn,
-    invite,
-    externalSt,
-    filteredExternal: [],
-    externalUsers: [],
+test("external invitation form stays in External users and preserves draft through async counts", async () => {
+  const f = litFixture();
+  let resolve!: (v: any) => void;
+  const pending = new Promise((r) => {
+    resolve = r;
   });
-  const users = cards.get("Users")!;
-  const external = cards.get("External users")!;
-  assert.ok(external.heading.children.includes(addBtn), "invite control is on External users");
-  assert.ok(external.body.children.includes(invite), "form is on External users");
-  assert.ok(external.body.children.includes(externalSt), "feedback is on External users");
-  assert.ok(!users.heading.children.includes(addBtn));
-  assert.ok(!users.body.children.includes(invite));
-  assert.ok(!users.body.children.includes(externalSt));
+  const controller = f.ui.users.users(
+    f.root,
+    { users: [], grants: [], externalUsers: [] },
+    { defaultShell() {}, api: () => pending },
+  );
+  assert.deepEqual(
+    [...f.root.querySelectorAll("h2")].map((e) => e.textContent),
+    ["External users", "Users"],
+  );
+  const invite = f.root.querySelector<HTMLButtonElement>('[aria-label="Invite external user"]')!;
+  invite.click();
+  const input = f.root.querySelector<HTMLInputElement>("#users-email")!;
+  input.value = "guest@example.com";
+  input.dispatchEvent(new f.window.Event("input", { bubbles: true }));
+  resolve({ ok: true, data: { people: [] } });
+  await pending;
+  await Promise.resolve();
+  assert.equal(controller.email, "guest@example.com");
+  assert.equal(input, f.root.querySelector("#users-email"));
+  assert.equal(input.value, "guest@example.com");
+  assert.equal(input.closest("section")!.querySelector("h2")!.textContent, "External users");
+  f.dom.window.close();
 });

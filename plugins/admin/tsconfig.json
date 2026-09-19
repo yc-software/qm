@@ -3,7 +3,7 @@
     "target": "esnext",
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "lib": ["esnext"],
+    "lib": ["esnext", "dom", "dom.iterable"],
     "types": ["node"],
     "strict": true,
     "verbatimModuleSyntax": true,
@@ -16,5 +16,5 @@
       "@sentry/node": ["./node_modules/@sentry/node/build/types/index.d.ts"]
     }
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "ui/**/*.ts"]
 }
