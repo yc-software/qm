@@ -448,6 +448,7 @@ export interface ToolContextDeps {
   grantedHandles: GrantedHandle[];
   context?: TurnContext;
   sharedMaterializeDir?: string;
+  materializeLargeFile?: (path: string, signal?: AbortSignal) => Promise<string | undefined>;
   sandboxMigration?: SandboxMigrationRunner;
   sandboxResources?: SandboxResources;
   invalidateProvision?: () => void;
@@ -825,6 +826,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const content = await withAbort(() => deps.memory!.read(deps.memoryScopeId!), signal);
         if (content) return { content, sourceScopeId: deps.memoryScopeId };
       }
+      const materialized = await deps.materializeLargeFile?.(path, signal);
+      if (materialized) return { content: materialized, sourceScopeId: null, shared: true };
       const sharedFile = deps.context
         ? await withAbort(() => deps.context!.readFile(path), signal)
         : await withAbort(() => readContextFile(path, deps.grantedHandles, deps.workspace, deps.files), signal);

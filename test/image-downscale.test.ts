@@ -155,3 +155,19 @@ test("downscaleVisionImage falls back to original bytes when no converter is ava
   assert.equal(warnings.length, 1);
   assert.match(warnings[0]!, /no image converter was found on PATH/);
 });
+
+test("image converters are killed before buffering oversized output", async () => {
+  let killed = 0;
+  const handlers = Array.from({ length: 3 }, () => (child: FakeChild) => {
+    Object.assign(child, {
+      kill: () => {
+        killed++;
+        return true;
+      },
+    });
+    child.stdout.write(Buffer.alloc(5_000_001));
+  });
+  const original = png(2400, 1800);
+  assert.equal(await downscaleVisionImage(original, "image/png", depsFromHandlers(handlers)), original);
+  assert.equal(killed, 3);
+});

@@ -6,6 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
+import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function freshApp() {
@@ -103,5 +104,56 @@ for (const extension of ["docx", "pdf"]) {
       (record) => record.model === "mock",
     );
     assert.doesNotMatch(JSON.stringify(followupCalls.at(-1)?.promptEnvelope), /"documents":/);
+  });
+}
+
+test("plain upload intake and document reading work while computer provisioning is unavailable", async () => {
+  const built = freshApp();
+  let provisioned = 0;
+  built.sandbox.provision = async () => {
+    provisioned++;
+    throw new Error("computer unavailable");
+  };
+  const blob = await built.blobTransfer.put(Buffer.from("UPLOAD_WITHOUT_COMPUTER_742"));
+  const result = await built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "dm:U1:no-computer" },
+    text: "summarize this upload",
+    attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+  });
+  assert.equal(result.status, "ok");
+  assert.equal(provisioned, 0);
+  const entries = await built.sessions.getEntries(result.sessionId!);
+  const user = entries.find((entry) => entry.type === "user")!;
+  const meta = (user.payload as { attachments: Array<{ artifactId: string }> }).attachments[0]!;
+  assert.ok(await built.files.get(meta.artifactId));
+  const calls = await built.sessions.listLlmRequests(result.sessionId!);
+  assert.match(JSON.stringify(calls), /UPLOAD_WITHOUT_COMPUTER_742/);
+});
+
+for (const text of ["please read the upload", ""]) {
+  test(`intake failure retains the ${text ? "text" : "attachment-only"} initiating user turn`, async () => {
+    const built = freshApp();
+    const blob = await built.blobTransfer.put(Buffer.from("some bytes"));
+    built.files.put = async () => {
+      throw new NonRetryableTurnError("artifact store unavailable");
+    };
+    await assert.rejects(
+      built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "dm:U1:intake-failure" },
+        text,
+        attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+      }),
+      /artifact store unavailable/,
+    );
+    const session = (await built.sessions.listByParticipant("U1"))[0]!;
+    const entries = await built.sessions.getEntries(session.id);
+    const users = entries.filter((entry) => entry.type === "user");
+    assert.equal(users.length, 1);
+    assert.equal((users[0]!.payload as { text: string }).text, text);
+    assert.equal((users[0]!.payload as { attachments: Array<{ name: string }> }).attachments[0]!.name, "notes.txt");
   });
 }

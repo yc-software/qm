@@ -125,7 +125,18 @@ export function sniffImageDimensions(bytes: Uint8Array): ImageDimensions | undef
 }
 
 function imageMagickArgs(format: ImageDimensions["format"]): string[] {
-  return ["-", "-resize", `${MAX_VISION_IMAGE_DIMENSION}x${MAX_VISION_IMAGE_DIMENSION}>`, `${format}:-`];
+  return [
+    "-limit",
+    "memory",
+    "128MiB",
+    "-limit",
+    "map",
+    "256MiB",
+    "-[0]",
+    "-resize",
+    `${MAX_VISION_IMAGE_DIMENSION}x${MAX_VISION_IMAGE_DIMENSION}>`,
+    `${format}:-`,
+  ];
 }
 
 function ffmpegArgs(format: ImageDimensions["format"]): string[] {
@@ -156,12 +167,17 @@ async function runConverter(
 ): Promise<{ missing: boolean; output?: Uint8Array }> {
   return await new Promise((resolve) => {
     let settled = false;
+    let child: ChildProcessWithoutNullStreams;
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish({ missing: false });
+    }, 5_000);
     const finish = (result: { missing: boolean; output?: Uint8Array }) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       resolve(result);
     };
-    let child: ChildProcessWithoutNullStreams;
     try {
       child = deps.spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
     } catch (err) {
@@ -169,7 +185,14 @@ async function runConverter(
       return;
     }
     const stdout: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    let outputBytes = 0;
+    child.stdout.on("data", (chunk: Buffer) => {
+      outputBytes += chunk.length;
+      if (outputBytes > 5_000_000) {
+        child.kill("SIGKILL");
+        finish({ missing: false });
+      } else if (!settled) stdout.push(chunk);
+    });
     child.stderr.resume();
     child.stdin.on("error", () => {});
     child.on("error", (err: NodeJS.ErrnoException) => finish({ missing: err.code === "ENOENT" }));

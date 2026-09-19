@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { collectNamedOutbound, materializeInbound, type ArtifactRegistration } from "../src/core/attachments.ts";
+import { collectNamedOutbound, ingestInbound, type ArtifactRegistration } from "../src/core/attachments.ts";
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createMemoryFileArtifactStore, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
@@ -103,15 +103,12 @@ test("a doc-store fault does NOT break delivery (best-effort registration)", asy
   assert.equal(errors.length, 1, "the fault is reported, not swallowed silently");
 });
 
-test("materializeInbound registers an 'in' artifact, openable", async () => {
+test("ingestInbound registers an 'in' artifact, openable", async () => {
   const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   const transfer = createMemoryBlobTransferStore();
   const { blobId } = await transfer.put(PNG);
-  const { sandbox } = memSandbox();
 
-  const inb = await materializeInbound(
-    sandbox,
-    HANDLE,
+  const inb = await ingestInbound(
     [{ name: "shared.png", mimetype: "image/png", sizeBytes: PNG.length, blobId }],
     transfer,
     reg(store),
@@ -134,35 +131,18 @@ test("materializeInbound registers an 'in' artifact, openable", async () => {
   );
 });
 
-test("materializeInbound omits artifactId when registration fails or is absent", async () => {
+test("ingestInbound rejects storage faults instead of claiming an unavailable upload", async () => {
   const transfer = createMemoryBlobTransferStore();
   const { blobId } = await transfer.put(PNG);
-  const { sandbox } = memSandbox();
-  const noReg = await materializeInbound(
-    sandbox,
-    HANDLE,
-    [{ name: "a.png", mimetype: "image/png", sizeBytes: PNG.length, blobId }],
-    transfer,
-  );
-  assert.equal(noReg.metas[0]!.artifactId, undefined);
-
   const throwing = {
     put: async () => {
       throw new Error("doc store down");
     },
   } as unknown as FileArtifactStore;
-  const { blobId: blob2 } = await transfer.put(PNG);
-  const errors: unknown[] = [];
-  const failed = await materializeInbound(
-    sandbox,
-    HANDLE,
-    [{ name: "b.png", mimetype: "image/png", sizeBytes: PNG.length, blobId: blob2 }],
-    transfer,
-    reg(throwing, { onError: (e) => errors.push(e) }),
+  await assert.rejects(
+    ingestInbound([{ name: "a.png", mimetype: "image/png", sizeBytes: PNG.length, blobId }], transfer, reg(throwing)),
+    /doc store down/,
   );
-  assert.equal(failed.metas.length, 1, "the file still reaches the inbox");
-  assert.equal(failed.metas[0]!.artifactId, undefined, "no artifactId is fabricated on a store fault");
-  assert.equal(errors.length, 1);
 });
 
 test("write+share registers an artifact keyed on the SAME (owner, path) as the grant", async () => {

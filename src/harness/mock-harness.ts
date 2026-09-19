@@ -383,7 +383,7 @@ export function createMockHarness(): Harness {
           let tag = "!run ";
           if (command0.startsWith("!scratch ")) tag = "!scratch ";
           else if (command0.startsWith("!owner ")) tag = "!owner ";
-          const inboxDir = /available in \.\/(\S+?)\/:/.exec(turn.environment ?? "")?.[1] ?? "inbox";
+          const inboxDir = /^- (\S+)\/[^/]+ \(/m.exec(turn.environment ?? "")?.[1] ?? "inbox";
           const command = cmd.slice(cmd.indexOf(tag) + tag.length).replaceAll("{INBOX}", inboxDir);
           if (gateTool("execute")) {
             await turn.emit({

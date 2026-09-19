@@ -144,7 +144,8 @@ import {
   inboundManifest,
   isVisionAttachment,
   MAX_HISTORY_IMAGE_BYTES,
-  materializeInbound,
+  ingestInbound,
+  materializeArtifact,
   safeAttachmentName,
   senderNote,
   sharedFilesSystemSection,
@@ -1698,7 +1699,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ownerAuthBox,
         ownerAuthCommand,
         scopedCommand,
-        provision,
+        provision: provisionComputer,
         provisionScratch,
         provisionResource,
         provisionOwnerAuth,
@@ -1737,6 +1738,23 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         emitGapWork,
         perf,
       });
+      const inboundArtifacts = new Map<string, { id: string; ownerScopeId: ScopeId; path: string }>();
+      const stagedArtifacts = new Map<string, Promise<void>>();
+      const provision = async (eager = false) => {
+        const handle = await provisionComputer(eager);
+        if (eager) return handle;
+        for (const [path, ref] of inboundArtifacts) {
+          const key = `${handle.id}:${path}`;
+          let staged = stagedArtifacts.get(key);
+          if (!staged) {
+            staged = materializeArtifact(deps.files, blobTransfer, deps.sandbox, handle, ref, path, turnAbort.signal);
+            stagedArtifacts.set(key, staged);
+            staged.catch(() => stagedArtifacts.delete(key));
+          }
+          await staged;
+        }
+        return handle;
+      };
       const leaseStart = Date.now();
       const acquired = await acquireTurnLeaseOrRefuse({
         sessionId: session.id,
@@ -2204,27 +2222,30 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if ((conversation.kind === "group" || conversation.kind === "dm") && scopeId !== fileOwnerScopeId) {
           fileGrantees.push(scopeId);
         }
+        let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
         const fileRegistration: ArtifactRegistration = {
           store: deps.files,
           ownerScopeId: fileOwnerScopeId,
           createdBy: actor.id,
           createdInScope: scopeId,
           seed: input.runId ?? `${session.id}:${Date.now()}`,
-          ...(fileGrantees.length
-            ? {
-                onRegistered: async ({ ownerScopeId, path }) => {
-                  for (const granteeScopeId of fileGrantees) {
-                    await deps.acl.grant({
-                      ownerScopeId,
-                      ref: path,
-                      granteeScopeId,
-                      permission: "read",
-                      grantedBy: actor.id,
-                    });
-                  }
-                },
-              }
-            : {}),
+          onRegistered: async ({ id, ownerScopeId, path, direction }) => {
+            readableHandles = undefined;
+            const handlePath = `${turnInboxDir}/${id}/${path.split("/").at(-1)}`;
+            if (direction === "in") inboundArtifacts.set(handlePath, { id, ownerScopeId, path });
+            for (const granteeScopeId of fileGrantees) {
+              await deps.acl.grant({
+                ownerScopeId,
+                ref: path,
+                granteeScopeId,
+                permission: "read",
+                grantedBy: actor.id,
+              });
+            }
+            if (direction === "in" && !resolution.grantedHandles.some((h) => h.handlePath === handlePath)) {
+              resolution.grantedHandles.push({ handlePath, ownerScopeId, ownerPath: path, permission: "read" });
+            }
+          },
           onError: (e) =>
             deps.errors?.record(
               {
@@ -2327,6 +2348,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           grantedHandles: resolution.grantedHandles,
           context,
           sharedMaterializeDir: turnSharedDir,
+          materializeLargeFile: async (path, signal) => {
+            const ref = inboundArtifacts.get(path);
+            if (!ref) return undefined;
+            const artifact = await deps.files.get(ref.id);
+            if (!artifact || artifact.sizeBytes <= 10 * 1024 * 1024) return undefined;
+            signal?.throwIfAborted();
+            await provision();
+            signal?.throwIfAborted();
+            return `[file materialized into the computer at ${path} (${artifact.sizeBytes} bytes) — use execute to inspect it]`;
+          },
           workspace: deps.workspace,
           deploy: deps.deploy,
           acl: deps.acl,
@@ -2548,6 +2579,30 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
         });
 
+        if (
+          !automatedTurn &&
+          !input.proactiveOpener &&
+          !input.approval &&
+          (input.text.trim() || input.attachments?.length)
+        ) {
+          failureUserPayload = {
+            text: input.text,
+            ...(input.attachments?.length
+              ? {
+                  attachments: input.attachments.map((attachment) => ({
+                    name: safeAttachmentName(attachment.name),
+                    mimetype: attachment.mimetype,
+                    sizeBytes: attachment.sizeBytes,
+                    direction: "in",
+                    ...(attachment.sourceId ? { sourceId: attachment.sourceId } : {}),
+                  })),
+                }
+              : {}),
+            ...((messageTs ?? entryTs) ? { ts: messageTs ?? entryTs } : {}),
+            ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
+            ...(input.displayText?.trim() ? { display: input.displayText } : {}),
+          };
+        }
         if (input.attachments?.some((attachment) => attachment.sourceId)) {
           input.attachments = withoutAlreadyIngested(
             input.attachments,
@@ -2556,13 +2611,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         const inbound =
           input.attachments?.length && !strictReadOnly
-            ? await materializeInbound(
-                deps.sandbox,
-                await provision(),
+            ? await ingestInbound(
                 input.attachments,
                 blobTransfer,
                 fileRegistration,
-                turnInboxDir,
                 securityPolicy.inboundScreening === "external" &&
                   (deps.securityScreener || deps.harness.models.screenSecurity)
                   ? ({ content }) =>
@@ -2573,8 +2625,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                         origin: input.origin.kind,
                       })
                   : undefined,
+                turnAbort.signal,
               )
             : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] };
+        if (failureUserPayload && inbound.metas.length) failureUserPayload.attachments = inbound.metas;
         const manifest = inboundManifest(inbound.metas, turnInboxDir);
         const inboundIssues = inboundIssueList({
           tooMany: inbound.tooMany,
@@ -2660,7 +2714,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await deps.harness.turns.resetSession?.(session.id);
         }
         const visibleHistory = filterHistory(forModelContext(rawEntries, { includeSecurityTainted: false }));
-        let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
         const mayReadArtifact = async (artifact: FileArtifact): Promise<boolean> => {
           if (
             conversation.audience.every((principal) =>
@@ -2904,9 +2957,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const syntheticPrompt =
           (input.proactiveOpener && !input.text.trim()) || automatedTurn || partial || approvalReplay;
         failureUserPayload =
-          !syntheticPrompt && input.text.trim()
+          !syntheticPrompt && (input.text.trim() || inbound.metas.length)
             ? {
                 text: input.text,
+                ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
                 ...((messageTs ?? entryTs) ? { ts: messageTs ?? entryTs } : {}),
                 ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
                 ...(input.displayText?.trim() ? { display: input.displayText } : {}),
@@ -3143,16 +3197,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             prepareSteer: async (text, request) => {
               if (!request?.attachments?.length) return { text };
               const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
-              const inboxDir = `${turnInboxDir}/${randomUUID()}`;
+              const inboxDir = turnInboxDir;
               const received = strictReadOnly
                 ? { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] }
-                : await materializeInbound(
-                    deps.sandbox,
-                    await provision(),
+                : await ingestInbound(
                     request.attachments,
                     blobTransfer,
                     { ...fileRegistration, seed },
-                    inboxDir,
                     securityPolicy.inboundScreening === "external"
                       ? ({ content, name, mimetype }) =>
                           classifySecurityData(
@@ -3167,6 +3218,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                             },
                           )
                       : undefined,
+                    turnAbort.signal,
                   );
               const steeredDocuments = await loadDocumentInputs(
                 deps.files,
