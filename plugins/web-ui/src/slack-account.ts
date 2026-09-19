@@ -156,7 +156,7 @@ export class SlackAccount extends LitElement {
               </div>
               <span
                 ><strong>${this.busy ? "Linking Slack…" : "Link your Slack account"}</strong
-                ><small>Let QM manage and search for you (Highly recommended!)</small></span
+                ><small>Let QM search Slack and take action on your behalf.</small></span
               >
               ${icon(ArrowUpRight, 16)}
             </button>`
