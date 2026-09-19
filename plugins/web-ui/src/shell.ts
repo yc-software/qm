@@ -1,5 +1,6 @@
 import { initializeBrowserErrors, stopBrowserErrors } from "./browser-errors";
 import { initializeAnalytics, capturePageview, stopAnalytics } from "./product-analytics";
+import { captureSlackReturn } from "./slack-account";
 import { captureConnectionReturn } from "./connection-return";
 import { renderModelConnectGate } from "./model-connect";
 import { html, nothing, render, type TemplateResult } from "lit";
@@ -998,6 +999,7 @@ export async function bootSafely(): Promise<void> {
 
 export async function boot(): Promise<void> {
   captureConnectionReturn(location.href);
+  captureSlackReturn(location.href);
   const params = new URLSearchParams(location.search);
   const {
     view: wanted,

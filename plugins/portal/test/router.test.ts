@@ -49,6 +49,18 @@ const upstream = createServer((req: IncomingMessage, res) => {
       JSON.stringify({ status: "authorize", authorizeUrl: "https://accounts.google.test/o/oauth2?x=1" }),
     );
   }
+  if (req.url?.startsWith("/v1/principals/U-admin-alias/canonical")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ canonicalId: "U-admin" }));
+  }
+  if (req.url?.startsWith("/v1/principals/U-alias/canonical")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ principalId: "U-alias", canonicalId: "U1" }));
+  }
+  if (req.url?.startsWith("/v1/principals/U-unresolved/canonical")) {
+    res.writeHead(500, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ error: "boom" }));
+  }
   if (req.url === "/api/whoami") {
     whoamiProbes++;
     const m = (req.headers.cookie ?? "").match(/admin=([^;]+)/);
@@ -165,6 +177,27 @@ test("valid session: upstream receives ONLY the synthesized cookie, prefix strip
   assert.equal(body.cookie, "webuiuser=U1");
   assert.equal(body.headers["x-as-principal"], undefined);
   assert.equal(body.headers["x-admin-actor"], undefined);
+});
+
+test("a session whose subject core links to another principal is proxied as that canonical principal", async () => {
+  const r = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-alias") } });
+  assert.equal(r.status, 200);
+  const body = (await r.json()) as { cookie: string };
+  assert.equal(body.cookie, "webuiuser=U1");
+  const unlinked = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-solo") } });
+  assert.equal(((await unlinked.json()) as { cookie: string }).cookie, "webuiuser=U-solo");
+});
+
+test("when core cannot resolve the session subject the portal refuses to proxy instead of guessing", async () => {
+  const r = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-unresolved") } });
+  assert.equal(r.status, 503);
+  assert.equal(((await r.json()) as { error: string }).error, "identity_unavailable");
+  const logout = await fetch(`${base}/auth/logout`, {
+    method: "POST",
+    headers: { cookie: sessionCookie("U-unresolved"), origin: PUBLIC },
+    redirect: "manual",
+  });
+  assert.notEqual(logout.status, 503, "auth routes still work without core");
 });
 
 test("web-ui /app-edit drops x-frame-options so its own frame-ancestors CSP can allow the app origin", async () => {
@@ -676,4 +709,19 @@ test("background ownership forwards both credentials only on its exact control r
     });
     assert.equal(response.status, 404);
   }
+});
+
+test("linked administrator impersonation follows the target", async () => {
+  const start = await fetch(`${base}/auth/impersonate?target=alice@acme`, {
+    method: "POST",
+    headers: { cookie: sessionCookie("U-admin-alias"), origin: PUBLIC },
+  });
+  assert.equal(start.status, 200);
+  const imp = (start.headers.get("set-cookie") ?? "").match(/portal_impersonate=([^;]+)/);
+  assert.ok(imp);
+  const web = await fetch(`${base}/api/x`, {
+    headers: { cookie: `${sessionCookie("U-admin-alias")}; portal_impersonate=${imp[1]}` },
+  });
+  const body = (await web.json()) as { cookie: string };
+  assert.match(body.cookie, /webuiuser=alice%40acme/);
 });

@@ -48,6 +48,7 @@ import { deleteModelProvider, getModelProviders, putModelProvider } from "./admi
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
 import { listSecurityFlags, releaseSecurityTaint } from "./admin/security.ts";
+import { createPrincipalLink, deletePrincipalLink, listPrincipalLinks } from "./admin/principal-links.ts";
 
 const timed =
   (handle: (ctx: ApiCtx) => void | Promise<void>) =>
@@ -148,6 +149,9 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/admin/users/:principalId", auth: "either", handle: getUserDetail },
   { method: "PUT", path: "/v1/admin/users/:principalId/onboarding", auth: "either", handle: setUserOnboarding },
   { method: "POST", path: "/v1/admin/users/:principalId/reset", auth: "either", handle: resetUserToBrandNew },
+  { method: "GET", path: "/v1/admin/principal-links", auth: "either", handle: listPrincipalLinks },
+  { method: "POST", path: "/v1/admin/principal-links", auth: "either", handle: createPrincipalLink },
+  { method: "DELETE", path: "/v1/admin/principal-links/:principalId", auth: "either", handle: deletePrincipalLink },
   { method: "POST", path: "/v1/admin/grants", auth: "either", handle: createAdminGrant },
   { method: "DELETE", path: "/v1/admin/grants/:principalId", auth: "either", handle: revokeAdminGrant },
   { method: "POST", path: "/v1/admin/external-users", auth: "either", handle: inviteExternalUser },
