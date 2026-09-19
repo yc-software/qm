@@ -790,13 +790,25 @@ function withToolsBin(stubs: Record<string, string>, body: (dir: string, bin: st
 
 const MUST_NOT_RUN = 'echo "$0 must not run" >&2; exit 99';
 
+const RECORD_AND_PIN = `printf '%s\\n' "$*" >> "$HOME/npm-args"; : > "$HOME/pinned"`;
+const RECORD_ONLY = `printf '%s\\n' "$*" >> "$HOME/npm-args"`;
+
+const npmStub = (shipped: string, installArm: string = RECORD_AND_PIN) =>
+  `case "$1 ${"$"}{2:-}" in
+     --version*) [ -f "$HOME/pinned" ] && echo 11.16.0 || echo ${shipped};;
+     "install -h") echo "[--allow-scripts <package-list>]";;
+     install*) ${installArm};;
+   esac`;
+
+const NPM_11 = npmStub("11.16.0", MUST_NOT_RUN);
+
 test("tools.sh ensure installs nothing when node, gh, and claude are already present", () => {
   withToolsBin(
     {
       node: "echo v24.18.0",
       gh: 'echo "gh version 2.93.0 (2026-01-01)"',
       claude: 'echo "2.1.210 (Claude Code)"',
-      npm: MUST_NOT_RUN,
+      npm: NPM_11,
       curl: MUST_NOT_RUN,
     },
     (dir, bin) => {
@@ -823,7 +835,10 @@ test("tools.sh ensure installs claude through npm with the allow-scripts flag wh
       node: "echo v24.18.0",
       gh: 'echo "gh version 2.93.0 (2026-01-01)"',
       curl: MUST_NOT_RUN,
-      npm: `case "$1 ${"$"}{2:-}" in "install -h") echo "[--allow-scripts <package-list>]";; install*) printf '%s\\n' "$*" > "$HOME/npm-args"; cp "$HOME/claude-stub" "$(dirname "$0")/claude";; esac`,
+      npm: npmStub(
+        "11.16.0",
+        `printf '%s\\n' "$*" > "$HOME/npm-args"; cp "$HOME/claude-stub" "$(dirname "$0")/claude"`,
+      ),
     },
     (dir, bin) => {
       stubTool(dir, "claude-stub", 'echo "2.1.210 (Claude Code)"');
@@ -846,7 +861,7 @@ test("tools.sh ensure fails closed when the gh tarball checksum does not match",
     {
       node: "echo v24.18.0",
       claude: 'echo "2.1.210 (Claude Code)"',
-      npm: MUST_NOT_RUN,
+      npm: NPM_11,
       uname: "echo aarch64",
       curl: 'out=""; while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out="$2"; shift; done; echo "not a tarball" > "$out"',
     },
@@ -859,15 +874,211 @@ test("tools.sh ensure fails closed when the gh tarball checksum does not match",
   );
 });
 
+const PIN_LINE = /^\[factory-tools\] pinned npm 11\.16\.0\b/m;
+
+test("tools.sh ensure pins npm 11.16.0 when the sandbox ships npm 12 and leaves it alone on a second run", () => {
+  withToolsBin(
+    {
+      node: "echo v24.18.0",
+      gh: 'echo "gh version 2.93.0 (2026-01-01)"',
+      claude: 'echo "2.1.210 (Claude Code)"',
+      npm: npmStub("12.0.2"),
+      curl: MUST_NOT_RUN,
+    },
+    (dir, bin) => {
+      const result = runTools(["ensure"], { PATH: bin }, dir);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(readFileSync(join(dir, "npm-args"), "utf8"), "install -g npm@11.16.0\n");
+      assert.match(result.stderr, PIN_LINE);
+      assert.equal(result.stderr.trimEnd().split("\n").length, 1, result.stderr);
+      assert.equal(result.stdout, "");
+
+      const again = runTools(["ensure"], { PATH: bin }, dir);
+      assert.equal(again.status, 0, again.stderr);
+      assert.equal(again.stderr, "", "a box already pinned to npm 11 must install nothing");
+      assert.equal(readFileSync(join(dir, "npm-args"), "utf8"), "install -g npm@11.16.0\n");
+    },
+  );
+});
+
+test("tools.sh ensure pins every npm at or above 12.0.0 and no npm below it", () => {
+  for (const [shipped, pins] of [
+    ["12.0.0", true],
+    ["13.0.0", true],
+    ["11.10.0", false],
+    ["11.0.0", false],
+  ] as const) {
+    withToolsBin(
+      {
+        node: "echo v24.18.0",
+        gh: 'echo "gh version 2.93.0 (2026-01-01)"',
+        claude: 'echo "2.1.210 (Claude Code)"',
+        npm: npmStub(shipped),
+        curl: MUST_NOT_RUN,
+      },
+      (dir, bin) => {
+        const result = runTools(["ensure"], { PATH: bin }, dir);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout, "");
+        if (pins) {
+          assert.equal(readFileSync(join(dir, "npm-args"), "utf8"), "install -g npm@11.16.0\n", `npm ${shipped}`);
+          assert.match(result.stderr, PIN_LINE);
+        } else {
+          assert.equal(existsSync(join(dir, "npm-args")), false, `npm ${shipped} must not be re-pinned`);
+          assert.equal(result.stderr, "", `npm ${shipped}`);
+        }
+      },
+    );
+  }
+});
+
+test("tools.sh ensure pins npm before it installs claude", () => {
+  withToolsBin(
+    {
+      node: "echo v24.18.0",
+      gh: 'echo "gh version 2.93.0 (2026-01-01)"',
+      curl: MUST_NOT_RUN,
+      npm: npmStub(
+        "12.0.2",
+        `${RECORD_AND_PIN}; case "$*" in *claude-code*) cp "$HOME/claude-stub" "$(dirname "$0")/claude";; esac`,
+      ),
+    },
+    (dir, bin) => {
+      stubTool(dir, "claude-stub", 'echo "2.1.210 (Claude Code)"');
+      const result = runTools(["ensure"], { PATH: bin }, dir);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(readFileSync(join(dir, "npm-args"), "utf8").trimEnd().split("\n"), [
+        "install -g npm@11.16.0",
+        "install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@2.1.210",
+      ]);
+      assert.match(result.stderr, PIN_LINE);
+      assert.match(result.stderr, /^\[factory-tools\] installed: claude \(node v24\.18\.0, /m);
+    },
+  );
+});
+
+test("tools.sh ensure fails closed when the npm pin cannot be installed", () => {
+  withToolsBin(
+    {
+      node: "echo v24.18.0",
+      curl: MUST_NOT_RUN,
+      npm: npmStub("12.0.2", `for i in {1..30}; do printf 'npm-line-%s\\n' "$i"; done; exit 1`),
+    },
+    (dir, bin) => {
+      const result = runTools(["ensure"], { PATH: bin, TMPDIR: dir }, dir);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /^npm-line-11$/m);
+      assert.match(result.stderr, /^npm-line-30$/m);
+      assert.doesNotMatch(result.stderr, /^npm-line-10$/m, "only the last 20 lines of npm output belong on stderr");
+      assert.match(result.stderr, /^\[factory-tools\] FAIL: could not install npm@11\.16\.0\b/m);
+      assert.equal(result.stdout, "");
+      assert.doesNotMatch(result.stderr, /must not run/, "the gh installer must not run after a failed pin");
+      assert.equal(existsSync(join(dir, "npm-args")), false);
+      assert.deepEqual(
+        readdirSync(dir).filter((entry) => entry.startsWith("factory-npm")),
+        [],
+        "the captured npm output was left behind",
+      );
+    },
+  );
+});
+
+test("tools.sh ensure fails closed when the npm pin installs but does not take", () => {
+  withToolsBin(
+    {
+      node: "echo v24.18.0",
+      curl: MUST_NOT_RUN,
+      npm: npmStub("12.0.2", RECORD_ONLY),
+    },
+    (dir, bin) => {
+      const result = runTools(["ensure"], { PATH: bin }, dir);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /^\[factory-tools\] FAIL: npm still reports 12\.0\.2\b/m);
+      assert.equal(result.stdout, "");
+      assert.equal(
+        readFileSync(join(dir, "npm-args"), "utf8"),
+        "install -g npm@11.16.0\n",
+        "claude must not be installed after the pin failed to take",
+      );
+    },
+  );
+});
+
+test("tools.sh ensure still reports a missing npm as the reason claude cannot be installed", () => {
+  withToolsBin(
+    { node: "echo v24.18.0", gh: 'echo "gh version 2.93.0 (2026-01-01)"', curl: MUST_NOT_RUN },
+    (dir, bin) => {
+      const result = runTools(["ensure"], { PATH: bin }, dir);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /FAIL: claude is not installed and npm is missing/);
+    },
+  );
+});
+
 test("the wrapper runs the tool preflight before it touches the claude CLI", () => {
   const preflight = WRAP.indexOf("tools/factory/tools.sh");
   const auth = WRAP.indexOf("export ANTHROPIC_API_KEY=");
   assert.ok(preflight > 0, "the wrapper does not call tools.sh");
   assert.ok(preflight < auth, "tools.sh must run before the claude auth bridge");
+  assert.ok(preflight > WRAP.indexOf('cd "$REPO"'), "the preflight must run after the repo checkout exists");
   assert.match(WRAP, /IO_FACTORY_TOOLS_SH:-\$\{IO_FACTORY_SOURCE_DIR:-/);
   assert.match(
     WRAP,
     /\[ "\$\{IS_SANDBOX:-\}" = "1" \] && ! bash "\$\{IO_FACTORY_TOOLS_SH/,
     "the preflight must run only inside a sandbox",
   );
+});
+
+function traceWrapperBoot(
+  env: Record<string, string>,
+  body: (booted: { status: number | null; stderr: string }, trace: string) => void,
+): void {
+  const dir = mkdtempSync(join(tmpdir(), "qm-factory-order-"));
+  try {
+    const home = join(dir, "home");
+    const repo = join(dir, "repo");
+    mkdirSync(home);
+    mkdirSync(repo);
+    const trace = join(dir, "trace");
+    writeFileSync(trace, "");
+    const tools = join(dir, "tools.sh");
+    writeFileSync(tools, `#!/bin/bash\nprintf 'preflight\\n' >> "$TRACE"\nexit "${"$"}{STUB_ENSURE_STATUS:-0}"\n`);
+    chmodSync(tools, 0o755);
+    const booted = spawnSync("bash", [join(factoryRoot, WRAP_REL)], {
+      cwd: dir,
+      encoding: "utf8",
+      env: {
+        ...PATH_ONLY,
+        HOME: home,
+        TMPDIR: dir,
+        TRACE: trace,
+        IO_REPO_DIR: repo,
+        IO_FACTORY_SOURCE_DIR: factoryRoot,
+        IO_FACTORY_TOOLS_SH: tools,
+        IO_REPO_SETUP_CMD: `printf 'setup\\n' >> "$TRACE"`,
+        IO_WORKFLOW_MODE: "conflict",
+        ANTHROPIC_API_KEY: "synthetic-never-used",
+        ...env,
+      },
+      timeout: 60_000,
+    });
+    assert.equal(booted.error, undefined, `the wrapper did not finish: ${booted.error?.message}`);
+    body(booted, trace);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("the wrapper runs the sandbox tool preflight before the repo setup command installs dependencies", () => {
+  traceWrapperBoot({ IS_SANDBOX: "1" }, (_booted, trace) => {
+    assert.equal(readFileSync(trace, "utf8"), "preflight\nsetup\n");
+  });
+  traceWrapperBoot({}, (_booted, trace) => {
+    assert.equal(readFileSync(trace, "utf8"), "setup\n", "the preflight must stay gated on IS_SANDBOX");
+  });
+  traceWrapperBoot({ IS_SANDBOX: "1", STUB_ENSURE_STATUS: "1" }, (booted, trace) => {
+    assert.equal(booted.status, 1);
+    assert.match(booted.stderr, /FAIL: the sandbox is missing a tool the factory needs/);
+    assert.equal(readFileSync(trace, "utf8"), "preflight\n", "a failed preflight must block the repo setup command");
+  });
 });

@@ -1,10 +1,12 @@
 #!/bin/bash
-# Sprites boxes boot a stock image with Node but without gh or claude; the wrapper needs all three before its first turn.
+# Sprites boxes boot a stock image with the wrong npm and without gh or claude; the preflight fixes all three before the box installs anything.
 set -uo pipefail
 
 NODE_FLOOR="24.15.0"
 GH_VERSION="2.93.0"
 CLAUDE_VERSION="2.1.210"
+NPM_PIN="11.16.0"
+NPM_REPIN_FLOOR="12.0.0"
 GH_SHA_AMD64="02d1290eba130e0b896f3709ffff22e1c75a51475ddb70476a85abc6b5807af0"
 GH_SHA_ARM64="c55feb33684abba57e9909737340d5b39282257c0363e1edde6785ac4a413be7"
 
@@ -53,15 +55,35 @@ install_gh() {
   rm -rf "$tmp"
 }
 
-install_claude() {
-  local -a args=(install -g)
+npm_install_global() {
   local out
-  if npm install -h 2>&1 | grep -q -- '--allow-scripts'; then args+=("--allow-scripts=@anthropic-ai/claude-code"); fi
   out="$(mktemp "${TMPDIR:-/tmp}/factory-npm.XXXXXX")" || return 1
-  if ! npm "${args[@]}" "@anthropic-ai/claude-code@${CLAUDE_VERSION}" >"$out" 2>&1; then
+  if ! npm install -g "$@" >"$out" 2>&1; then
     tail -20 "$out" >&2; rm -f "$out"; return 1
   fi
   rm -f "$out"
+}
+
+pin_npm() {
+  local shipped now
+  command -v npm >/dev/null 2>&1 || return 0
+  shipped="$(npm --version 2>/dev/null)"
+  version_at_least "$shipped" "$NPM_REPIN_FLOOR" || return 0
+  npm_install_global "npm@${NPM_PIN}" \
+    || { log "FAIL: could not install npm@${NPM_PIN} over npm $shipped"; return 1; }
+  hash -r
+  now="$(npm --version 2>/dev/null)"
+  [ "$now" = "$NPM_PIN" ] \
+    || { log "FAIL: npm still reports ${now:-no version} after installing npm@${NPM_PIN}"; return 1; }
+  log "pinned npm ${NPM_PIN} (the sandbox shipped $shipped)"
+}
+
+install_claude() {
+  local -a args=("@anthropic-ai/claude-code@${CLAUDE_VERSION}")
+  if npm install -h 2>&1 | grep -q -- '--allow-scripts'; then
+    args=("--allow-scripts=@anthropic-ai/claude-code" "${args[@]}")
+  fi
+  npm_install_global "${args[@]}"
 }
 
 ensure() {
@@ -71,6 +93,7 @@ ensure() {
   if ! version_at_least "$node_v" "$NODE_FLOOR"; then
     log "FAIL: node $node_v is below the ${NODE_FLOOR} floor the factory needs"; return 1
   fi
+  pin_npm || return 1
   if ! command -v gh >/dev/null 2>&1; then
     install_gh || return 1
     installed="$installed gh"

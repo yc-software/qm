@@ -23,7 +23,7 @@ set -uo pipefail
 #   gitlab:  optional GITLAB_USER_TOKEN (+ GITLAB_USER_NAME/GITLAB_USER_EMAIL) — the responsible
 #            user's credential + commit identity; absent ⇒ the entrypoint's bot token/identity
 #   repo:    optional IO_REPO_DIR (default /workspace/repo, the subject repository checkout) — cloned from
-#            IO_REPO_CLONE_URL when absent, then IO_REPO_SETUP_CMD is eval'd in it
+#            IO_REPO_CLONE_URL when absent, then the tool preflight runs and the setup command (repoSetupCmd) is eval'd in it
 
 # bash re-reads a script by byte offset, so a run that edits the repo copy would execute fragments of it.
 if [ -z "${IO_WRAPPER_REEXEC:-}" ]; then
@@ -56,6 +56,11 @@ if [ ! -d "$REPO" ] && [ -n "${IO_REPO_CLONE_URL:-}" ]; then
     || { echo "[io-coding-agent-js] clone failed: $IO_REPO_CLONE_URL" >&2; exit 2; }
 fi
 cd "$REPO" || { echo "[io-coding-agent-js] repo dir not found: $REPO" >&2; exit 2; }
+# A hosted sandbox boots a stock image with the wrong npm and without gh or claude; fix the toolchain before the repo install runs under it.
+if [ "${IS_SANDBOX:-}" = "1" ] && ! bash "${IO_FACTORY_TOOLS_SH:-${IO_FACTORY_SOURCE_DIR:-${IO_REPO_DIR:-/workspace/repo}}/tools/factory/tools.sh}" ensure; then
+  echo "[io-coding-agent-js] FAIL: the sandbox is missing a tool the factory needs (see factory-tools lines above)" >&2
+  exit 1
+fi
 if [ -n "${IO_REPO_SETUP_CMD:-}" ]; then
   # Subshell: a config string that ends in `exit` would otherwise become the wrapper's own status.
   ( eval "$IO_REPO_SETUP_CMD" ) \
@@ -193,12 +198,6 @@ fi
 # A wrapper death must remove the snapshot and any later background processes. Install the one
 # EXIT trap before the first post-snapshot failure path; every variable is unset-safe.
 trap 'kill "${TRAIL_TAILER_PID:-}" 2>/dev/null || true; kill "${HEARTBEAT_PID:-}" 2>/dev/null || true; kill "${STEERING_BRIDGE_PID:-}" 2>/dev/null || true; kill "${CLAUDE_PID:-}" 2>/dev/null || true; if command -v emit_ai_spend_usage >/dev/null 2>&1; then emit_ai_spend_usage || true; fi; exec 3>&- 2>/dev/null || true; rm -f "${IO_INBOX_PIPE:-}" "${IO_STALL_FLAG:-}" "${IO_CONVERGE_ACTIVE:-}" "${IO_CONVERGE_VECTOR_ERR:-}" "${IO_CONVERGE_FETCH_OUTPUT:-}" 2>/dev/null || true; rm -f "${IO_STEERING_DISARM_FILE:-}" "${IO_HB_DISARM_FILE:-}" 2>/dev/null || true; if [ -n "${IO_FACTORY_CONTROL_PLANE_DIR:-}" ]; then rm -rf -- "$IO_FACTORY_CONTROL_PLANE_DIR"; fi; if [ -n "${IO_FACTORY_SHIP_CONTROL_PLANE_DIR:-}" ]; then rm -rf -- "$IO_FACTORY_SHIP_CONTROL_PLANE_DIR"; fi' EXIT
-
-# A hosted sandbox boots a stock image that has Node but not gh or claude; install what is missing before the first turn.
-if [ "${IS_SANDBOX:-}" = "1" ] && ! bash "${IO_FACTORY_TOOLS_SH:-${IO_FACTORY_SOURCE_DIR:-${IO_REPO_DIR:-/workspace/repo}}/tools/factory/tools.sh}" ensure; then
-  echo "[io-coding-agent-js] FAIL: the sandbox is missing a tool the factory needs (see factory-tools lines above)" >&2
-  exit 1
-fi
 
 # The `claude` CLI authenticates via ANTHROPIC_API_KEY, but the coding-agent worker task
 # definition provides the key as CLAUDE_API_KEY (an SSM secret) and does NOT export the former.
