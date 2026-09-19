@@ -1,8 +1,11 @@
 import type { Loop, ScopeId } from "../../types.ts";
+import type { CronStore } from "../../cron/cron-store.ts";
 import type { LoopStore } from "../loop-store.ts";
 import { FACTORY_LOOP_SURFACE, isFactoryLoop } from "./effects.ts";
 
 const FACTORY_LOOP_NAME = "Software factory";
+
+const FACTORY_LOOP_FIRE_EVERY_MS = 5 * 60 * 1000;
 
 const FACTORY_LOOP_PURPOSE = "Tickets from the configured Linear team, worked to a verified pull request.";
 
@@ -38,4 +41,22 @@ export async function ensureFactoryLoop(
     ],
   });
   return loop;
+}
+
+export async function ensureFactoryLoopCron(
+  deps: { store: LoopStore; crons?: CronStore },
+  loop: Loop,
+): Promise<Loop> {
+  if (!deps.crons || loop.cronId) return loop;
+  const cron = await deps.crons.create({
+    owner: loop.owner,
+    createdBy: loop.createdBy,
+    ownerScopeId: loop.ownerScopeId,
+    schedule: { everyMs: FACTORY_LOOP_FIRE_EVERY_MS },
+    title: `Loop: ${FACTORY_LOOP_NAME}`,
+    action: `fire loop ${loop.id}`,
+    loopId: loop.id,
+    ownerConsentedAt: Date.now(),
+  });
+  return (await deps.store.update(loop.id, { cronId: cron.id })) ?? loop;
 }

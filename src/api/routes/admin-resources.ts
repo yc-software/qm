@@ -36,7 +36,7 @@ import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oaut
 import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { audit, orgScope } from "./shared.ts";
-import { ensureFactoryLoop } from "../../loops/factory/factory-loop.ts";
+import { ensureFactoryLoop, ensureFactoryLoopCron } from "../../loops/factory/factory-loop.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
   DEFAULT_SECURITY_SCREEN_RUBRIC,
@@ -869,8 +869,10 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const parsed = parseFactoryConfig(body);
       if ("error" in parsed) return parsed;
       ctx.deps.config!.setFactoryConfig(parsed.value);
-      if (ctx.deps.loops)
-        await ensureFactoryLoop(ctx.deps.loops.store, { owner: actor.id, orgScopeId: orgScope(ctx.deps) });
+      if (ctx.deps.loops) {
+        const loop = await ensureFactoryLoop(ctx.deps.loops.store, { owner: actor.id, orgScopeId: orgScope(ctx.deps) });
+        await ensureFactoryLoopCron(ctx.deps.loops, loop);
+      }
       return { ok: true };
     },
   },

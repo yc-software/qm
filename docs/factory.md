@@ -21,7 +21,8 @@ A missing or disabled credential fails the fire before any sandbox work, naming 
 
 The Software factory card in the admin console, at org scope, writes the factory config and
 creates the loop on Apply. Applying again finds the same loop. Clear removes the config and leaves
-the loop.
+the loop and its cron, whose every fire then fails with `factory_config_missing`; disable or
+delete the loop from the Loops page to stop it.
 
 | Field                                                  | Meaning                                                                                                                                               |
 | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -34,7 +35,11 @@ the loop.
 | `bugbotRequired`                                       | Whether convergence needs a Bugbot review of the exact head; the loop enforces it, the wrapper-side check is off until a Bugbot user id is configured |
 | `followupsEnabled`                                     | Whether the run may file follow-up tickets                                                                                                            |
 
-The loop has no schedule. Fire it from the Loops page, or through `POST /v1/loops/:id/fire`.
+Apply also gives the loop a cron that fires it every five minutes, so tickets are picked up
+without anyone asking. Applying again reuses that cron. Fire it early from the Loops page, or
+through `POST /v1/loops/:id/fire`. Three consecutive failed fires quarantine the loop, which on a
+five-minute cron is fifteen minutes: put the three credentials in the keychain before Apply, and
+re-enable a quarantined loop from the Loops page.
 
 ## What a run does
 

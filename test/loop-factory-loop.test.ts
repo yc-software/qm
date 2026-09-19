@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createLoopStore } from "../src/loops/loop-store.ts";
-import { ensureFactoryLoop, findFactoryLoop } from "../src/loops/factory/factory-loop.ts";
+import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
+import { ensureFactoryLoop, ensureFactoryLoopCron, findFactoryLoop } from "../src/loops/factory/factory-loop.ts";
 import { ensureInboxLoop } from "../src/loops/inbox-loop.ts";
 import { FACTORY_LOOP_SURFACE } from "../src/loops/factory/effects.ts";
 import { decideShip, undeclaredShipActions } from "../src/loops/ship-gate.ts";
@@ -65,6 +66,68 @@ test("ensureFactoryLoop is idempotent across repeat calls, other admins, and con
   ]);
   assert.equal((await store.list()).length, 1);
   for (const loop of raced) assert.equal(loop.surface, FACTORY_LOOP_SURFACE);
+});
+
+test("ensureFactoryLoopCron gives the factory loop one fire cron and a repeat save adds no second", async () => {
+  const store = createLoopStore();
+  const crons = createCronStore();
+  let creates = 0;
+  const counted: CronStore = {
+    ...crons,
+    create: (input) => {
+      creates += 1;
+      return crons.create(input);
+    },
+  };
+  const deps = { store, crons: counted };
+
+  const minted = await ensureFactoryLoop(store, { owner: "admin-alice", orgScopeId: ORG });
+  const scheduled = await ensureFactoryLoopCron(deps, minted);
+
+  const rows = await crons.list();
+  assert.equal(rows.length, 1);
+  const cron = rows[0]!;
+  assert.equal(cron.loopId, minted.id);
+  assert.equal(cron.action, `fire loop ${minted.id}`);
+  assert.equal(cron.title, "Loop: Software factory");
+  assert.equal(cron.schedule.everyMs, 5 * 60 * 1000);
+  assert.equal(cron.owner, minted.owner);
+  assert.equal(cron.createdBy, minted.createdBy);
+  assert.equal(cron.ownerScopeId, minted.ownerScopeId);
+  assert.equal(scheduled.cronId, cron.id);
+  assert.equal((await store.get(minted.id))?.cronId, cron.id);
+
+  const resaved = await ensureFactoryLoop(store, { owner: "admin-bob", orgScopeId: ORG });
+  assert.equal((await ensureFactoryLoopCron(deps, resaved)).cronId, cron.id);
+  assert.equal(creates, 1);
+  assert.deepEqual(await crons.list(), [cron]);
+});
+
+test("concurrent factory-config applies converge on one fire cron", async () => {
+  const store = createLoopStore();
+  const crons = createCronStore();
+  const loop = await ensureFactoryLoop(store, { owner: "admin-alice", orgScopeId: ORG });
+
+  const raced = await Promise.all([
+    ensureFactoryLoopCron({ store, crons }, loop),
+    ensureFactoryLoopCron({ store, crons }, loop),
+  ]);
+
+  const rows = await crons.list();
+  assert.equal(rows.length, 1);
+  assert.deepEqual(
+    raced.map((scheduled) => scheduled.cronId),
+    [rows[0]!.id, rows[0]!.id],
+  );
+  assert.equal((await store.get(loop.id))?.cronId, rows[0]!.id);
+});
+
+test("ensureFactoryLoopCron leaves the loop unscheduled on a deployment with no cron store", async () => {
+  const store = createLoopStore();
+  const loop = await ensureFactoryLoop(store, { owner: "admin-alice", orgScopeId: ORG });
+
+  assert.equal((await ensureFactoryLoopCron({ store }, loop)).cronId, undefined);
+  assert.equal((await store.get(loop.id))?.cronId, undefined);
 });
 
 test("the factory's declared ship actions are the ones its outputs carry, and both ship without a grant", async () => {

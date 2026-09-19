@@ -1186,6 +1186,37 @@ test("applying a factory config mints one factory loop owned by the acting admin
   }
 });
 
+test("applying a factory config schedules the loop so it fires unattended, and re-applying adds no second cron", async () => {
+  const srv = start();
+  try {
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    const loop = (await factoryLoops(srv.built))[0]!;
+    const crons = await srv.built.crons.list();
+    assert.equal(crons.length, 1);
+    const cron = crons[0]!;
+    assert.equal(cron.loopId, loop.id);
+    assert.equal(loop.cronId, cron.id);
+
+    const due = cron.nextFireAt!;
+    await srv.built.scheduler.tick(due - 1);
+    assert.equal((await srv.built.crons.listFires(cron.id)).total, 0);
+
+    await srv.built.scheduler.tick(due);
+    const fires = await srv.built.crons.listFires(cron.id);
+    assert.equal(fires.total, 1);
+    assert.equal(fires.runs[0]!.fireKey, `cron:${cron.id}:${due}`);
+    assert.match(fires.runs[0]!.note ?? "", /factory_credentials_missing/);
+
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    assert.deepEqual(
+      (await srv.built.crons.list()).map((c) => c.id),
+      [cron.id],
+    );
+  } finally {
+    await srv.close();
+  }
+});
+
 test("re-applying a factory config never mints a second loop and never re-owns the first", async () => {
   const srv = start();
   try {
