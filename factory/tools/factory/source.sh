@@ -4,7 +4,7 @@ set -u
 
 base="${IO_SOURCE_BASE_REF:-origin/main}"
 remote="${IO_SOURCE_REMOTE:-origin}"
-dirs="${IO_SOURCE_APP_DIRS:-src plugins scripts cli deploy skills-seed docs fly aws local .github .codex .claude .husky .scenarios}"
+dirs="${IO_SOURCE_APP_DIRS:-src plugins scripts cli deploy skills-seed docs fly aws local factory .github .codex .claude .husky .scenarios}"
 
 case "${1:-}" in
   base-ref)

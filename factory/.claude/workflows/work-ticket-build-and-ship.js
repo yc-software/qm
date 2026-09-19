@@ -1427,7 +1427,7 @@ async function runMutationGate(label) {
     [ -n "$test_re" ] || test_re='(^|/)test/.*\\.(test|spec)\\.(ts|tsx)$'
     impl_dirs=$(printenv IO_SOURCE_APP_DIRS 2>/dev/null || true)
     app_dirs_configured="$impl_dirs"
-    [ -n "$impl_dirs" ] || impl_dirs='src plugins scripts cli deploy skills-seed docs fly aws local .github .codex .claude .husky .scenarios'
+    [ -n "$impl_dirs" ] || impl_dirs='src plugins scripts cli deploy skills-seed docs fly aws local factory .github .codex .claude .husky .scenarios'
     test_cmd=$(printenv IO_VERIFY_TEST_FILE_CMD 2>/dev/null || true)
     [ -n "$test_cmd" ] || test_cmd='NODE_ENV=test ALLOW_UNSIGNED_TEST_IDENTITY=1 node --experimental-test-module-mocks --test'
     classify_path() {
