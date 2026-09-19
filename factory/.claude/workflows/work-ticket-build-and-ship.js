@@ -683,6 +683,9 @@ function note(msg) {
   const clean = String(msg).replace(/`/g, "'").replace(/\s*\n\s*/g, '; ')
   trail.push(`[${curPhase}] ${clean}`)
 }
+function objection(result) {
+  return (typeof result?.summary === 'string' ? result.summary : '').replace(/\s+/g, ' ').replace(/FLUSH_(BEGIN|END)/g, 'FLUSH $1').trim().slice(0, 200)
+}
 // Kept byte-identical with the copy in the sibling work-ticket-*.js half. Flushes are
 // serialized through a chain: phaseT fires an unawaited flush at each transition, and a
 // concurrent pair would double-append the same trail lines.
@@ -2924,7 +2927,7 @@ for (let i = 0; i < FIX_ATTEMPTS; i++) {
     note(`Plan approved on review iteration ${i + 1}`)
     break
   }
-  note(`Plan review iteration ${i + 1}: issues found, fixing`)
+  note(`Plan review iteration ${i + 1}: ${objection(review) || 'issues found, fixing'}`)
   if (i === FIX_ATTEMPTS - 1) note(`Plan review did not pass after ${FIX_ATTEMPTS} iterations — proceeding`)
 }
 await flushTrail('plan')
@@ -3141,7 +3144,7 @@ for (let i = 0; i < FIX_ATTEMPTS; i++) {
     break
   }
   codeChangedSinceVerify = true
-  note(`Review iteration ${i + 1}: fixing issues`)
+  note(`Review iteration ${i + 1}: ${objection(review) || 'fixing issues'}`)
   if (i === FIX_ATTEMPTS - 1) note(`Review did not pass after ${FIX_ATTEMPTS} iterations — proceeding`)
 }
 
@@ -3301,7 +3304,7 @@ if (await frontendChanged('ui-consistency-detect')) {
 
     if (ui?.passed) { note(`UI consistency clean on iteration ${i + 1}`); break }
     codeChangedSinceVerify = true
-    note(`UI consistency iteration ${i + 1}: fixing design-system deviations`)
+    note(`UI consistency iteration ${i + 1}: ${objection(ui) || 'fixing design-system deviations'}`)
     if (i === FIX_ATTEMPTS - 1) note(`UI consistency not clean after ${FIX_ATTEMPTS} iterations — proceeding`)
   }
 }

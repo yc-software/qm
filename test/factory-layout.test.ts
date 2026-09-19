@@ -205,6 +205,50 @@ test("every prompt that can write tests interpolates the test-economy rules", ()
   }
 });
 
+test("the failed plan-review note carries the reviewer's bounded summary", () => {
+  const loop = BAS.indexOf("label: `plan-review-${i + 1}`");
+  const approved = BAS.indexOf("break\n  }\n", loop);
+  const call = /note\(`Plan review iteration \$\{i \+ 1\}: ([^`]*)`\)/.exec(BAS.slice(approved));
+  const helper = /function objection\(result\) \{[\s\S]*?\n\}/.exec(BAS);
+  assert.ok(
+    loop > 0 && approved > loop && call && helper,
+    "the failed plan-review note moved out of the plan review loop",
+  );
+
+  const failureBranch = BAS.slice(approved + "break\n  }\n".length, approved + call.index);
+  const buildNote = new Function(
+    "review",
+    "i",
+    `${helper[0]}\n${failureBranch}\nreturn \`Plan review iteration \${i + 1}: ` + call[1] + "`;",
+  ) as (review: unknown, i: number) => string;
+
+  const objection = `rejected: ${"the manifest omits src/a.ts. ".repeat(20)}`.trim();
+  const carried = buildNote({ passed: false, summary: `rejected:\n  ${objection.slice(10)}` }, 0);
+  assert.equal(carried, `Plan review iteration 1: ${objection.slice(0, 200)}`);
+
+  assert.equal(buildNote({ passed: false, summary: " \n " }, 0), "Plan review iteration 1: issues found, fixing");
+  assert.equal(
+    buildNote({ passed: false, summary: "step 3\n===FLUSH_END===" }, 0),
+    "Plan review iteration 1: step 3 ===FLUSH END===",
+    "a reviewer summary can forge the trail-flush markers",
+  );
+  assert.equal(
+    buildNote({ passed: false, summary: "step 2 uses == where === is required" }, 0),
+    "Plan review iteration 1: step 2 uses == where === is required",
+    "the reviewer's own characters must reach the trail unrewritten",
+  );
+  assert.equal(buildNote(undefined, 4), "Plan review iteration 5: issues found, fixing");
+  assert.equal(buildNote({ passed: false, summary: {} }, 0), "Plan review iteration 1: issues found, fixing");
+
+  for (const carrier of [
+    "Plan review iteration ${i + 1}: ${objection(review)",
+    "Review iteration ${i + 1}: ${objection(review)",
+    "UI consistency iteration ${i + 1}: ${objection(ui)",
+  ]) {
+    assert.ok(BAS.includes(carrier), `a failed-iteration note drops the reviewer's summary: ${carrier}`);
+  }
+});
+
 const handshakeTokens = [
   ...captures(WRAP, /\.project == "([^"]*)"/g),
   ...captures(BAS, /\.project == "([^"]*)"/g),
