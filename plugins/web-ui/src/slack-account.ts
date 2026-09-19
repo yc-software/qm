@@ -1,5 +1,7 @@
 import { LitElement, html, nothing } from "lit";
-import { slackMark } from "./ui";
+import { ArrowUpRight, Check, Link2 } from "lucide";
+import { icon } from "./ui";
+import "./slack-account.css";
 import { withBase } from "./core-bridge";
 
 interface SlackAttempt {
@@ -140,17 +142,22 @@ export class SlackAccount extends LitElement {
   }
 
   protected render() {
-    return html`<section class="settings-row slack-account" aria-label="Your Slack account">
-      <div class="settings-row-copy">
-        <div class="settings-row-title">
-          ${slackMark(20)} ${this.connected ? "Your Slack account is linked" : "Connect your Slack account"}
-        </div>
-        <p class="settings-row-note">
-          ${this.connected ? this.label : "Let QM recognize you in Slack and search conversations you can access. Connect the Slack account you want to use with this QM account."}
-        </p>
-        ${this.error ? html`<p role="alert">${this.error}</p>` : nothing}
-      </div>
-      ${this.connected ? nothing : html`<button class="btn" type="button" ?disabled=${this.busy} @click=${() => void this.connect()}>${this.busy ? "Connecting…" : "Connect Slack"}</button>`}
+    return html`<section class="slack-account" aria-label="Your Slack account">
+      ${
+        this.connected
+          ? html`<div class="slack-connected" role="status">
+              ${icon(Check, 14)}<span>Your Slack account is linked${this.label ? ` · ${this.label}` : ""}</span>
+            </div>`
+          : html`<button class="welcome-slack" type="button" ?disabled=${this.busy} @click=${() => void this.connect()}>
+              <div class="slack-link-icon">${icon(Link2, 24)}</div>
+              <span
+                ><strong>${this.busy ? "Linking Slack…" : "Link your Slack account"}</strong
+                ><small>Use your connected apps in Slack and search conversations you can access.</small></span
+              >
+              ${icon(ArrowUpRight, 16)}
+            </button>`
+      }
+      ${this.error ? html`<p class="slack-account-error" role="alert">${this.error}</p>` : nothing}
       ${this.attempt && !this.connected ? html`<button class="btn" type="button" ?disabled=${this.busy} @click=${() => void this.complete()}>Check connection</button>` : nothing}
     </section>`;
   }

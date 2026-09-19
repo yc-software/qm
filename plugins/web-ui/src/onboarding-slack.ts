@@ -1,3 +1,4 @@
+import "./slack-account.css";
 import { LitElement, html, nothing } from "lit";
 import { ArrowUpRight, Check } from "lucide";
 import { icon, slackMark } from "./ui";
@@ -122,11 +123,7 @@ export class OnboardingSlack extends LitElement {
     if (this.installAvailable === undefined) label = "Checking Slack…";
     return html`${
       this.connected
-        ? html`<div class="welcome-slack" role="status">
-            ${slackMark(24)}<span
-              ><strong>QM is installed in Slack</strong><small>QM is ready in your workspace.</small></span
-            >${icon(Check, 16)}
-          </div>`
+        ? html`<div class="slack-connected" role="status">${icon(Check, 14)} QM added to Slack</div>`
         : html`<button
             class="welcome-slack"
             type="button"
