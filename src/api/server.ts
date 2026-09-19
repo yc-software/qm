@@ -35,6 +35,7 @@ import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
+import { canonicalPerson, samePerson } from "../directory/person.ts";
 
 const safeDecode = (s: string): string => {
   try {
@@ -61,6 +62,9 @@ async function capabilityAdminDenied(
   }
   if (pathname.startsWith("/v1/admin/impersonate")) {
     return "impersonating a user is portal-only — the agent cannot act as another person";
+  }
+  if (pathname.startsWith("/v1/admin/principal-links")) {
+    return "identity links are portal-only — the agent cannot decide which sign-ins belong to one person";
   }
   if (method === "GET" && isAdminContentRead(pathname) && parseScopeId(claims.scopeId).kind !== "personal") {
     let target = "";
@@ -299,6 +303,8 @@ async function gate(
       await deps.identity.refresh();
       if (deps.identity.classify(actor.p).type !== "internal") actor = null;
     }
+    if (actor)
+      actor = { ...actor, p: canonicalPerson(actor.p), ...(actor.imp ? { imp: canonicalPerson(actor.imp) } : {}) };
     if (!isPublicRoute && requirePortalIdentity) {
       const webTurn =
         method === "POST" &&
@@ -320,7 +326,9 @@ async function gate(
         let asserted: unknown = null;
         if (webTurn) asserted = (body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null;
         else if (field) asserted = assertedActor(field, url, body, req);
-        if ((field && asserted !== actor.p) || (!field && asserted !== null && asserted !== actor.p)) {
+        const actorId = actor.p;
+        const matchesActor = (value: unknown): boolean => typeof value === "string" && samePerson(value, actorId);
+        if ((field && !matchesActor(asserted)) || (!field && asserted !== null && !matchesActor(asserted))) {
           sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
           return null;
         }

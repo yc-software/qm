@@ -42,6 +42,7 @@ import type { EnvironmentStore } from "../environments/environment-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import type { WebhookReceiver } from "../webhooks/webhook-receiver.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
+import type { PrincipalLinkService } from "../identity/principal-links.ts";
 import type { DeviceFlowCutoverStore } from "../credentials/device-flow-cutover.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type {
@@ -178,6 +179,7 @@ export interface ServerDeps {
   scheduler?: Scheduler;
   webhookReceiver?: WebhookReceiver;
   identity?: IdentityService;
+  principalLinks?: PrincipalLinkService;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;

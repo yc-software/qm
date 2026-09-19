@@ -60,6 +60,12 @@ import {
   type DeactivationRecord,
   type IdentityService,
 } from "./identity/identity-service.ts";
+import {
+  createPrincipalLinkService,
+  type PrincipalLink,
+  type PrincipalLinkService,
+} from "./identity/principal-links.ts";
+import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { createResendMailer } from "./admin/invite-email.ts";
 import {
@@ -496,6 +502,7 @@ export interface BuiltApp {
   credentialUsage: CredentialUsageSink;
   egressAudit: EgressAuditSink;
   identity: IdentityService;
+  principalLinks: PrincipalLinkService;
   keychain?: Keychain;
   serviceCreds: ServiceCredentialStore;
   deliveries: DeliveryStore;
@@ -618,10 +625,13 @@ export function buildApp(
       };
     },
   };
+  const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"));
+  installPrincipalLinks(principalLinks);
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
     isOverridden: (id) => configStore.getInternalMemberOverrides().includes(id.trim().toLowerCase()),
     directorySyncProtected: config.emailAuthPrincipals,
     externalMembers: artifactMap<ExternalMember>("external_members"),
+    principalLinks,
   });
   void identity.hydrate();
   const leaderLease: LeaderLease = pgArtifactMap
@@ -2574,6 +2584,7 @@ export function buildApp(
     credentialUsage,
     egressAudit,
     identity,
+    principalLinks,
     workspace,
     memory,
     ...(keychain ? { keychain } : {}),
@@ -2706,6 +2717,7 @@ export function serverDeps(
     scheduler: built.scheduler,
     webhookReceiver: built.webhookReceiver,
     identity: built.identity,
+    principalLinks: built.principalLinks,
     ...(built.keychain ? { keychain: built.keychain } : {}),
     serviceCreds: built.serviceCreds,
     deliveries: built.deliveries,
