@@ -1881,6 +1881,7 @@ export function buildApp(
       credentials: credentialStore,
       orgScopeId: orgScope,
       loops: loopStore,
+      ...(config.buildSha ? { buildSha: config.buildSha } : {}),
     },
   });
   const loops: LoopServiceDeps = {

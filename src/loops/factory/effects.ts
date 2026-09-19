@@ -31,25 +31,37 @@ import type { ForgeRef } from "./ship.ts";
 const DEFAULT_FACTORY_REPO_DIR = "/workspace/repo";
 const DEFAULT_PAUSE_POLL_MS = 30_000;
 
-const FACTORY_SOURCE_CLONE_DIR = "/workspace/qm-yc";
-const FACTORY_SOURCE_CLONE_URL = "https://github.com/yc-software/qm-yc.git";
+const FACTORY_SOURCE_CLONE_DIR = "/workspace/qm-source";
+const FACTORY_SOURCE_CLONE_URL = "https://github.com/yc-software/qm.git";
 const FACTORY_SOURCE_BOOTSTRAP_TIMEOUT_MS = 300_000;
 
 const SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage";
 const SLACK_POST_TIMEOUT_MS = 10_000;
 
-export const FACTORY_SOURCE_DIR = `${FACTORY_SOURCE_CLONE_DIR}/layer/factory`;
-export const FACTORY_SOURCE_BRANCH = "qm-30-s18477";
+export const FACTORY_SOURCE_DIR = `${FACTORY_SOURCE_CLONE_DIR}/factory`;
+// A core built from a checkout knows its own commit; a dev core does not and runs the published default branch.
+export const FACTORY_SOURCE_DEFAULT_REF = "main";
 
-const FACTORY_SOURCE_BOOTSTRAP_SCRIPT = [
-  "set -e;",
-  `if [ -d ${shq(`${FACTORY_SOURCE_CLONE_DIR}/.git`)} ]; then`,
-  `git -C ${shq(FACTORY_SOURCE_CLONE_DIR)} fetch --depth 1 origin ${shq(FACTORY_SOURCE_BRANCH)};`,
-  `git -C ${shq(FACTORY_SOURCE_CLONE_DIR)} checkout -f FETCH_HEAD;`,
-  "else",
-  `git clone --depth 1 --single-branch --branch ${shq(FACTORY_SOURCE_BRANCH)} ${shq(FACTORY_SOURCE_CLONE_URL)} ${shq(FACTORY_SOURCE_CLONE_DIR)};`,
-  "fi",
-].join(" ");
+// The wrapper the sandbox runs must be the one this core was built with, so the ref is the deployed commit itself,
+// which `git clone --branch` cannot take; fetch-then-checkout handles a sha and a branch name alike. Only a full
+// sha is fetchable by name (a shallow fetch of an abbreviated sha fails), so anything else runs the default branch.
+export function factorySourceRef(buildSha: string | undefined): string {
+  const sha = buildSha?.trim().replace(/-dirty$/, "") ?? "";
+  return /^[0-9a-f]{40}$/i.test(sha) ? sha : FACTORY_SOURCE_DEFAULT_REF;
+}
+
+function factorySourceBootstrapScript(ref: string): string {
+  const dir = shq(FACTORY_SOURCE_CLONE_DIR);
+  return [
+    "set -e;",
+    `if [ ! -d ${shq(`${FACTORY_SOURCE_CLONE_DIR}/.git`)} ]; then`,
+    `git init -q ${dir};`,
+    `git -C ${dir} remote add origin ${shq(FACTORY_SOURCE_CLONE_URL)};`,
+    "fi;",
+    `git -C ${dir} fetch --depth 1 origin ${shq(ref)};`,
+    `git -C ${dir} checkout -f FETCH_HEAD;`,
+  ].join(" ");
+}
 
 export const FACTORY_LOOP_SURFACE = "factory";
 
@@ -80,6 +92,7 @@ export interface FactoryEffectsDeps {
   credentials: ServiceCredentialReader;
   orgScopeId: ScopeId;
   loops: Pick<LoopStore, "get">;
+  buildSha?: string;
   repoDir?: string;
   fetch?: typeof globalThis.fetch;
   pausePollMs?: number;
@@ -147,11 +160,16 @@ const factorySourceGitEnv = (githubToken: string): Record<string, string> => ({
   GIT_CONFIG_VALUE_0: "https://github.com/",
 });
 
-async function bootstrapFactorySource(sandbox: Sandbox, handle: SandboxHandle, githubToken: string): Promise<void> {
+async function bootstrapFactorySource(
+  sandbox: Sandbox,
+  handle: SandboxHandle,
+  githubToken: string,
+  ref: string,
+): Promise<void> {
   if (!supportsProcessSessions(sandbox)) {
     throw new CapabilityUnsupportedError(sandbox.profile.backend, "process sessions");
   }
-  const { processId } = await sandbox.startProcess(handle, FACTORY_SOURCE_BOOTSTRAP_SCRIPT, {
+  const { processId } = await sandbox.startProcess(handle, factorySourceBootstrapScript(ref), {
     env: factorySourceGitEnv(githubToken),
   });
   const { output, status } = await pollProcess(sandbox, handle, processId, {
@@ -224,6 +242,7 @@ export async function loadFactoryContext(deps: FactoryEffectsDeps): Promise<Fact
 
 export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkEffects {
   const repoDir = deps.repoDir ?? DEFAULT_FACTORY_REPO_DIR;
+  const sourceRef = factorySourceRef(deps.buildSha);
   const runs = new Map<string, FactoryRun>();
 
   const provisionWorkspace = (scopeId: ScopeId): Promise<SandboxHandle> =>
@@ -258,7 +277,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
       let preflight: PreflightResult;
       try {
         preflight = await preflightFactorySandbox(deps.sandbox, preflightHandle);
-        if (preflight.ok) await bootstrapFactorySource(deps.sandbox, preflightHandle, githubToken);
+        if (preflight.ok) await bootstrapFactorySource(deps.sandbox, preflightHandle, githubToken, sourceRef);
       } finally {
         await teardownWarm(preflightHandle);
       }
