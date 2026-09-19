@@ -172,6 +172,7 @@ export interface Config {
   heartbeatIntervalMs: number;
   reaperIntervalMs: number;
   shutdownDrainMs: number;
+  backgroundHandoffGraceMs: number;
   maxAttempts: number;
   maxClaims: number;
   processReaperIntervalMs: number;
@@ -878,6 +879,7 @@ export const CONFIG_DEFAULTS = {
   heartbeatIntervalMs: 10_000,
   reaperIntervalMs: 15_000,
   shutdownDrainMs: 10_000,
+  backgroundHandoffGraceMs: 120_000,
   maxAttempts: 3,
   maxClaims: 8,
   processReaperIntervalMs: 30_000,
@@ -1535,6 +1537,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       Math.max(1_000, Math.floor((numEnvStrict("LEASE_TTL_MS", env.LEASE_TTL_MS) ?? CONFIG_DEFAULTS.leaseTtlMs) / 3)),
     reaperIntervalMs: numEnvStrict("REAPER_INTERVAL_MS", env.REAPER_INTERVAL_MS) ?? CONFIG_DEFAULTS.reaperIntervalMs,
     shutdownDrainMs: numEnvStrict("SHUTDOWN_DRAIN_MS", env.SHUTDOWN_DRAIN_MS) ?? CONFIG_DEFAULTS.shutdownDrainMs,
+    backgroundHandoffGraceMs:
+      numEnvStrict("BACKGROUND_HANDOFF_GRACE_MS", env.BACKGROUND_HANDOFF_GRACE_MS) ??
+      CONFIG_DEFAULTS.backgroundHandoffGraceMs,
     maxAttempts: numEnvStrict("MAX_ATTEMPTS", env.MAX_ATTEMPTS) ?? CONFIG_DEFAULTS.maxAttempts,
     maxClaims: numEnvStrict("MAX_CLAIMS", env.MAX_CLAIMS) ?? CONFIG_DEFAULTS.maxClaims,
     processReaperIntervalMs:

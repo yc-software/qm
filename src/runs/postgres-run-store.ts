@@ -7,7 +7,7 @@ import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
-import { isTerminal, releasesDedupKey } from "./run-store.ts";
+import { isTerminal, releasesDedupKey, claimsSpent } from "./run-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
@@ -33,6 +33,7 @@ function rowToRun(r: Record<string, unknown>): Run {
     turnUserSeq: r.turn_user_seq != null ? Number(r.turn_user_seq) : null,
     dedupKey: (r.idempotency_key as string | null) ?? null,
     attempts: Number(r.attempts),
+    handoffs: Number(r.handoffs ?? 0),
     errorAttempts: Number(r.error_attempts),
     maxAttempts: Number(r.max_attempts),
     leaseToken: (r.lease_token as string | null) ?? null,
@@ -115,6 +116,21 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         statements: [
           `ALTER TABLE runs ADD COLUMN IF NOT EXISTS returned_at BIGINT`,
           `CREATE INDEX IF NOT EXISTS idx_runs_pending_child_returns ON runs(id) WHERE status IN ('done','failed') AND returned_at IS NULL AND session_id LIKE 'agent:main:subagent:%'`,
+        ],
+      },
+      {
+        id: "runs/store/0005-handoffs",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `ALTER TABLE runs ADD COLUMN IF NOT EXISTS handoffs INT NOT NULL DEFAULT 0`,
+        ],
+      },
+      {
+        id: "runs/store/0006-pending-deliveries",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `ALTER TABLE runs ADD COLUMN IF NOT EXISTS delivery_pending BOOLEAN NOT NULL DEFAULT false`,
+          `CREATE INDEX IF NOT EXISTS idx_runs_pending_deliveries ON runs(id) WHERE delivery_pending`,
         ],
       },
     ],
@@ -206,7 +222,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     const ifExpiredAt = opts?.ifExpiredAt ?? null;
     const countsAsError = opts?.countsAsError ?? false;
     const errorAttemptsAfter = run.errorAttempts + (countsAsError ? 1 : 0);
-    const overClaimed = run.attempts >= maxClaims;
+    const overClaimed = claimsSpent(run) >= maxClaims;
     if (retry && errorAttemptsAfter < run.maxAttempts && !overClaimed) {
       const { rowCount } = await q(
         `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL,
@@ -218,11 +234,11 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     }
     const reason =
       !countsAsError && overClaimed && retry && errorAttemptsAfter < run.maxAttempts
-        ? `run parked after ${run.attempts} claims without completing (suspected crash loop)`
+        ? `run parked after ${claimsSpent(run)} claims without completing (suspected crash loop)`
         : error;
     const result: TurnResult = { status: "failed", sessionId: run.sessionId, reason };
     const { rowCount } = await q(
-      `UPDATE runs SET status='failed', result=$4, lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, finished_at=$5,
+      `UPDATE runs SET status='failed', delivery_pending=true, result=$4, lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, finished_at=$5,
          error_attempts=error_attempts+$6
        WHERE id=$1 AND lease_token=$2 AND status='running' AND ($3::bigint IS NULL OR lease_expires_at <= $3) RETURNING pg_notify('qm_run_available', 'null')`,
       [run.id, run.leaseToken, ifExpiredAt, JSON.stringify(result), Date.now(), countsAsError ? 1 : 0],
@@ -311,17 +327,19 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       return rowCount > 0;
     },
 
-    async releaseLease(runId, leaseToken): Promise<boolean> {
+    async releaseLease(runId, leaseToken, opts): Promise<boolean> {
       const { rowCount } = await q(
-        "UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL WHERE id=$1 AND lease_token=$2 AND status='running' RETURNING pg_notify('qm_run_available', 'null')",
-        [runId, leaseToken],
+        `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL,
+           handoffs=handoffs+$3
+         WHERE id=$1 AND lease_token=$2 AND status='running' RETURNING pg_notify('qm_run_available', 'null')`,
+        [runId, leaseToken, opts?.handoff ? 1 : 0],
       );
       return rowCount > 0;
     },
 
     async complete(runId, leaseToken, result): Promise<boolean> {
       const { rowCount } = await q(
-        `UPDATE runs SET status='done', result=$1, lease_token=NULL, lease_expires_at=NULL, finished_at=$2,
+        `UPDATE runs SET status='done', delivery_pending=true, result=$1, lease_token=NULL, lease_expires_at=NULL, finished_at=$2,
            idempotency_key = CASE WHEN $5 THEN NULL ELSE idempotency_key END
          WHERE id=$3 AND lease_token=$4 RETURNING pg_notify('qm_run_available', 'null')`,
         [JSON.stringify(result), Date.now(), runId, leaseToken, releasesDedupKey(result)],
@@ -381,6 +399,13 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     },
     async markReturned(runId) {
       await q("UPDATE runs SET returned_at = $2 WHERE id = $1 AND status IN ('done','failed')", [runId, Date.now()]);
+    },
+    async pendingDeliveries(limit = 100) {
+      const { rows } = await q("SELECT * FROM runs WHERE delivery_pending ORDER BY id LIMIT $1", [limit]);
+      return rows.map(rowToRun);
+    },
+    async markDeliveryQueued(runId) {
+      await q("UPDATE runs SET delivery_pending=false WHERE id=$1", [runId]);
     },
     onTerminal(listener): void {
       terminalListeners.push(listener);

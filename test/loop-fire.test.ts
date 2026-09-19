@@ -1,3 +1,6 @@
+import { TurnHandedOff } from "../src/core/turn-error.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import type { LoopFireContinuation } from "../src/loops/loop-fire.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createLoopFireService } from "../src/loops/loop-fire.ts";
@@ -39,22 +42,25 @@ function service(respond: Responder, overrides?: { grants?: ReturnType<typeof cr
   const deliveries = fakeDeliveries();
   const turns: TurnRequest[] = [];
   const idempotency = createIdempotencyStore();
-  const fire = createLoopFireService({
-    loops,
-    items,
-    outputs,
-    grants,
-    trigger: {
-      deliveries: deliveries.store as never,
-      idempotency,
-      identity: fakeIdentity() as never,
-      run: async (req): Promise<TurnResult> => {
-        turns.push(req);
-        return { status: "ok", reply: respond(req), sessionId: `s${turns.length}` };
+  const continuations = createMemoryMap<LoopFireContinuation>();
+  const recreate = () =>
+    createLoopFireService({
+      continuations,
+      loops,
+      items,
+      outputs,
+      grants,
+      trigger: {
+        deliveries: deliveries.store as never,
+        idempotency,
+        identity: fakeIdentity() as never,
+        run: async (req): Promise<TurnResult> => {
+          turns.push(req);
+          return { status: "ok", reply: respond(req), sessionId: `s${turns.length}` };
+        },
       },
-    },
-  });
-  return { loops, items, outputs, grants, fire, turns, deliveries, idempotency };
+    });
+  return { loops, items, outputs, grants, fire: recreate(), recreate, turns, deliveries, idempotency, continuations };
 }
 
 const base = { owner: "josh", createdBy: "josh", ownerScopeId: scopeId("personal", "josh") };
@@ -544,3 +550,105 @@ test("a paused loop refuses to fire", async () => {
   assert.equal(result.status, "silent");
   assert.equal(s.turns.length, 0);
 });
+
+for (const interruptedStage of ["work", "judge", "ship"]) {
+  test(`a new loop service resumes a handed-off ${interruptedStage} stage without redoing completed stages`, async () => {
+    let interrupted = false;
+    const s = service((req) => {
+      if (stage(req) === interruptedStage && !interrupted) {
+        interrupted = true;
+        throw new TurnHandedOff();
+      }
+      return HAPPY(req);
+    });
+    const loop = await makeLoop(s.loops, { shipActions: [{ action: "open_pr", gate: "auto" }] });
+    await assert.rejects(s.fire.fire(loop.id, "handoff"), TurnHandedOff);
+    const held = (await s.items.byLoop(loop.id))[0]!;
+    assert.equal(held.attempts, 1);
+    const result = await s.recreate().fire(loop.id, "handoff");
+    assert.notEqual(result.status, "failed");
+    assert.equal((await s.items.get(held.id))?.attempts, 1);
+    assert.equal((await s.items.get(held.id))?.status, "shipped");
+    assert.equal(s.turns.filter((req) => stage(req) === "intake").length, 1);
+    assert.equal(s.turns.filter((req) => stage(req) === "work").length, interruptedStage === "work" ? 2 : 1);
+  });
+}
+
+test("pausing suspends a loop continuation until it is enabled again", async () => {
+  let interrupted = false;
+  const s = service((req) => {
+    if (stage(req) === "work" && !interrupted) {
+      interrupted = true;
+      throw new TurnHandedOff();
+    }
+    return HAPPY(req);
+  });
+  const loop = await makeLoop(s.loops);
+  await assert.rejects(s.fire.fire(loop.id, "paused-handoff"), TurnHandedOff);
+  await s.loops.setState(loop.id, "paused");
+  const calls = s.turns.length;
+  await s.recreate().sweepStale(Date.now());
+  assert.equal(s.turns.length, calls);
+  assert.equal((await s.continuations.get("paused-handoff"))?.result, undefined);
+  await s.loops.setState(loop.id, "enabled");
+  await s.recreate().sweepStale(Date.now());
+  assert.equal((await s.items.byLoop(loop.id))[0]?.status, "ready");
+});
+
+test("a transient item read failure does not finalize or strand a handed-off loop", async () => {
+  let interrupted = false;
+  const s = service((req) => {
+    if (stage(req) === "work" && !interrupted) {
+      interrupted = true;
+      throw new TurnHandedOff();
+    }
+    return HAPPY(req);
+  });
+  const loop = await makeLoop(s.loops);
+  await assert.rejects(s.fire.fire(loop.id, "read-failure"), TurnHandedOff);
+  const get = s.items.get;
+  s.items.get = async () => {
+    throw new Error("database unavailable");
+  };
+  await assert.rejects(s.recreate().fire(loop.id, "read-failure"), /database unavailable/);
+  assert.equal((await s.continuations.get("read-failure"))?.result, undefined);
+  s.items.get = get;
+  await s.recreate().fire(loop.id, "read-failure");
+  assert.equal((await s.items.byLoop(loop.id))[0]?.status, "ready");
+});
+
+for (const recovery of ["decision lease", "unconfirmed output"]) {
+  test(`loop recovery preserves a pending ${recovery}`, async () => {
+    let interrupted = false;
+    const s = service((req) => {
+      if (stage(req) === "ship" && !interrupted) {
+        interrupted = true;
+        throw new TurnHandedOff();
+      }
+      return HAPPY(req);
+    });
+    const loop = await makeLoop(s.loops, { shipActions: [{ action: "open_pr", gate: "auto" }] });
+    await assert.rejects(s.fire.fire(loop.id, "crash"), TurnHandedOff);
+    const item = (await s.items.byLoop(loop.id))[0]!;
+    const output = (await s.outputs.byItem(item.id))[0]!;
+    if (recovery === "decision lease") {
+      const token = await s.items.acquireDecision(item.id);
+      assert.ok(token);
+      const deferred = await s.recreate().fire(loop.id, "crash");
+      assert.equal(deferred.deferred, true);
+      assert.equal((await s.continuations.get("crash"))?.result, undefined);
+      assert.equal((await s.items.get(item.id))?.status, "ready");
+      await s.items.releaseDecision(item.id, token);
+      await s.recreate().fire(loop.id, "crash");
+      assert.equal((await s.items.get(item.id))?.status, "shipped");
+    } else {
+      await s.outputs.markUnconfirmed(output.id, output.claimToken!);
+      await s.recreate().fire(loop.id, "crash");
+      assert.equal((await s.items.get(item.id))?.status, "ready");
+      assert.equal((await s.outputs.get(output.id))?.state, "unconfirmed");
+      await s.recreate().shipOutput(loop.id, output.id, loop.owner);
+      assert.equal((await s.items.get(item.id))?.status, "shipped");
+    }
+    assert.equal(s.turns.filter((req) => stage(req) === "work").length, 1);
+  });
+}

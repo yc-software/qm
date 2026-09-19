@@ -66,7 +66,7 @@ test("a failing loop fire is recorded on the cron's fire log and the schedule ad
       return { status: "ok" };
     },
     fireLoop: async () => {
-      throw new Error("loop exploded");
+      return { status: "failed", note: "loop exploded" };
     },
   });
   const cron = await crons.create({ ...base, schedule: { everyMs: 60_000 }, action: "fire loop L1", loopId: "L1" });
@@ -109,3 +109,31 @@ test("creating the same loop-backed cron twice dedupes, and loopId distinguishes
   assert.notEqual(a.id, c.id);
   assert.equal(a.loopId, "L1");
 });
+
+for (const interrupted of ["busy", "infrastructure"]) {
+  test(`a one-shot loop cron retains its fire after ${interrupted} interruption`, async () => {
+    const crons = createCronStore();
+    let calls = 0;
+    const scheduler = createScheduler({
+      crons,
+      deliveries: { enqueue: async () => ({ id: "d" }) } as never,
+      idempotency: createIdempotencyStore(),
+      identity: { refresh: async () => {}, classify: () => ({ type: "internal" as const }) } as never,
+      run: async () => ({ status: "ok" }),
+      fireLoop: async () => {
+        if (++calls === 1) {
+          if (interrupted === "infrastructure") throw new Error("database unavailable");
+          return { status: "silent", deferred: true };
+        }
+        return { status: "ok" };
+      },
+    });
+    const cron = await crons.create({ ...base, schedule: { firstFireAt: 1 }, action: "fire", loopId: "L1" });
+    await scheduler.tick(2);
+    assert.equal((await crons.get(cron.id))?.enabled, true);
+    await scheduler.tick(3);
+    assert.equal(calls, 2);
+    assert.equal((await crons.get(cron.id))?.enabled, false);
+    assert.equal((await crons.listFires(cron.id)).runs[0]?.status, "ok");
+  });
+}

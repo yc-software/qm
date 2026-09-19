@@ -894,3 +894,15 @@ test("backfillFires survives a cron deleted mid-loop: entries still reach the ta
   assert.equal((await store.listFires("stays")).total, 1);
   assert.equal((await backing.get("stays"))!.fireLog, undefined, "the surviving cron is still stripped");
 });
+
+test("recovering an older fire cannot rewind a newer claimed slot", async () => {
+  const store = createCronStore();
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  const first = cron.nextFireAt!;
+  assert.equal(await store.claimSlot(cron.id, first, first), true);
+  assert.equal(await store.claimSlot(cron.id, first + 60_000, first + 60_000), true);
+  await store.markFired(cron.id, first, first);
+  const current = await store.get(cron.id);
+  assert.equal(current?.lastFiredAt, first + 60_000);
+  assert.equal(current?.nextFireAt, first + 120_000);
+});

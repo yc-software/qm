@@ -7,7 +7,6 @@ import type { TurnFailurePayload } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import {
-  acquireLeaseWithin,
   appendEntryOutsideTurn,
   entryDeliveryKey,
   type SessionStore,
@@ -99,9 +98,8 @@ export type TurnFailureSessions = TranscriptAppendSessions &
   Pick<SessionStore, "getByThread" | "acquireLease" | "peekLease" | "releaseLease" | "getEntries">;
 
 const FAILURE_RECORD_SCAN_LIMIT = 200;
-const FAILURE_RECORD_WAIT_MS = 10 * 60_000;
 
-export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: Run): Promise<boolean> {
+export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: Run): Promise<boolean | null> {
   if (run.status !== "failed" || run.request.swarm) return false;
   const session = await sessions.getByThread(run.sessionId);
   if (!session) {
@@ -110,10 +108,9 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
     );
     return false;
   }
-  const { lease } = await acquireLeaseWithin(sessions, session.id, "backfill", FAILURE_RECORD_WAIT_MS);
+  const { lease } = await sessions.acquireLease(session.id, "backfill");
   if (!lease) {
-    console.error(`[delivery] session ${session.id} stayed busy — failed run ${run.id} has no turn_failure entry`);
-    return false;
+    return null;
   }
   try {
     const tail = await sessions.getEntries(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT });
@@ -137,20 +134,38 @@ export function wireRunResultDeliveries(
   tasks?: TaskStore,
   adminUrlFor?: AdminUrlFor,
   sessions?: TurnFailureSessions,
-): void {
-  runs.onTerminal((run) => {
-    if (sessions) {
-      void recordRunFailureEntry(sessions, run).catch((err) =>
-        console.error("%s", `[delivery] failed to record turn_failure entry for run ${run.id}:`, errMessage(err)),
-      );
-    }
-    void (async () => {
+): { sweep(): Promise<void> } {
+  const inFlight = new Set<string>();
+  let sweeping: Promise<void> | undefined;
+  const deliver = async (run: Run): Promise<void> => {
+    if (inFlight.has(run.id)) return;
+    inFlight.add(run.id);
+    try {
       const taskList = tasks ? await tasks.list({ originRunId: run.id }) : [];
       const delivery = runResultDelivery(run, taskList, adminUrlFor);
-      if (!delivery) return;
-      await deliveries.enqueue(delivery);
-    })().catch((err) =>
+      if (delivery) await deliveries.enqueue(delivery);
+      if (sessions && (await recordRunFailureEntry(sessions, run)) === null) return;
+      await runs.markDeliveryQueued(run.id);
+    } finally {
+      inFlight.delete(run.id);
+    }
+  };
+  runs.onTerminal((run) => {
+    void deliver(run).catch((err) =>
       console.error("%s", `[delivery] failed to enqueue recovery delivery for run ${run.id}:`, errMessage(err)),
     );
   });
+  return {
+    sweep() {
+      return (sweeping ??= (async () => {
+        for (const run of await runs.pendingDeliveries()) {
+          await deliver(run).catch((err) =>
+            console.error("%s", `[delivery] recovery for run ${run.id} failed:`, errMessage(err)),
+          );
+        }
+      })().finally(() => {
+        sweeping = undefined;
+      }));
+    },
+  };
 }

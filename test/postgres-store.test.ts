@@ -2553,3 +2553,33 @@ test("pg personal conversation counts tolerate legacy null characters", { skip }
     await raw.end();
   }
 });
+
+test("pg handoff and terminal delivery checkpoints survive reopening", { skip }, async () => {
+  const first = createPostgresRunStore(URL!);
+  const queued = await first.runs.enqueue({
+    sessionId: `handoff-${randomUUID()}`,
+    request: turn("resume"),
+    maxAttempts: 1,
+  });
+  const claim = await first.runs.claimById(queued.run.id, "old", 5000);
+  assert.ok(claim);
+  await first.runs.releaseLease(claim.id, claim.leaseToken!, { handoff: true });
+  await first.close();
+  const next = createPostgresRunStore(URL!);
+  try {
+    const resumed = await next.runs.claimById(claim.id, "new", 5000);
+    assert.ok(resumed);
+    assert.equal(resumed.handoffs, 1);
+    await next.runs.complete(resumed.id, resumed.leaseToken!, { status: "ok", reply: "finished" });
+  } finally {
+    await next.close();
+  }
+  const recovery = createPostgresRunStore(URL!);
+  try {
+    assert.ok((await recovery.runs.pendingDeliveries(10000)).some((run) => run.id === claim.id));
+    await recovery.runs.markDeliveryQueued(claim.id);
+    assert.ok(!(await recovery.runs.pendingDeliveries(10000)).some((run) => run.id === claim.id));
+  } finally {
+    await recovery.close();
+  }
+});

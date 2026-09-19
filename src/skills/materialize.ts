@@ -3,9 +3,25 @@ import { safeSkillFilePath, type SkillFile, type SkillResolution } from "./skill
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import { swallow } from "../util/errors.ts";
 import { assertSafeSkillName } from "./skill-name.ts";
+import { hashId } from "../util/crypto.ts";
 import type { ScopeId } from "../types.ts";
 
 export const SKILLS_DIR = "skills";
+
+export function skillTreeFingerprint(resolution: SkillResolution, bundles: SkillBundle[]): string {
+  return hashId(
+    [
+      JSON.stringify([
+        resolution.skill?.id,
+        resolution.skill?.scopeId,
+        resolution.skill?.manifest,
+        resolution.skill?.pack,
+        bundles,
+      ]),
+    ],
+    64,
+  );
+}
 
 export function safeSkillDirName(name: string): string {
   return assertSafeSkillName(name);

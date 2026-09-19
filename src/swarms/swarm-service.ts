@@ -145,6 +145,8 @@ function matchesDispatch(input: OrchestratorInput, expected: OrchestratorInput):
     finalAttempt: true,
     background: true,
     cancel: true,
+    handoff: true,
+    handoffDeadline: true,
     queueMs: true,
     runStartedAt: true,
   };

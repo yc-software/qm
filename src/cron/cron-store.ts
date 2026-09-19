@@ -217,14 +217,21 @@ export function createCronStore(
       return applied ? "applied" : "superseded";
     },
     async markFired(id, at, scheduledAt) {
-      const cron = await backing.get(id);
-      if (!cron) return;
-      const advanceFrom = isCalendarSchedule(cron.schedule) ? (scheduledAt ?? at) : at;
-      await backing.merge(id, {
-        lastFiredAt: at,
-        nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom),
-        deferUntil: undefined,
-      });
+      const transform = (cron: Cron): Cron => {
+        if (cron.lastFiredAt !== undefined && cron.lastFiredAt >= at) return cron;
+        const advanceFrom = isCalendarSchedule(cron.schedule) ? (scheduledAt ?? at) : at;
+        return {
+          ...cron,
+          lastFiredAt: at,
+          nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom),
+          deferUntil: undefined,
+        };
+      };
+      if (backing.update) await backing.update(id, transform);
+      else {
+        const cron = await backing.get(id);
+        if (cron) await backing.merge(id, transform(cron));
+      }
     },
     async claimSlot(id, scheduledAt, at) {
       let claimed = false;

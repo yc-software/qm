@@ -68,7 +68,7 @@ export interface LoopItemLedger {
   get(id: string): Promise<LoopItem | null>;
   byLoop(loopId: string): Promise<LoopItem[]>;
   queued(loopId: string, limit?: number): Promise<LoopItem[]>;
-  claim(id: string, claimedAt?: number): Promise<LoopItem | null>;
+  claim(id: string, claimedAt?: number, fireKey?: string): Promise<LoopItem | null>;
   acquireDecision(id: string, decisionAt?: number): Promise<string | null>;
   releaseDecision(id: string, token: string): Promise<boolean>;
   recordRun(id: string, runId: string, claimToken: string): Promise<LoopItem | null>;
@@ -370,11 +370,16 @@ export function createLoopItemLedger(
         .sort((a, b) => a.createdAt - b.createdAt);
       return limit === undefined ? queued : queued.slice(0, limit);
     },
-    async claim(id, claimedAt = Date.now()) {
+    async claim(id, claimedAt = Date.now(), fireKey) {
       const now = claimedAt;
       let applied = false;
       const after = await update(id, (item) => {
-        const stale = item.status === "in_progress" && (item.claimedAt ?? 0) + CLAIM_LEASE_MS <= now;
+        if (fireKey && item.claimFireKey === fireKey) {
+          applied = item.status === "in_progress";
+          return item;
+        }
+        const stale =
+          !item.claimFireKey && item.status === "in_progress" && (item.claimedAt ?? 0) + CLAIM_LEASE_MS <= now;
         if (item.status !== "queued" && !stale) return item;
         applied = true;
         return {
@@ -383,6 +388,7 @@ export function createLoopItemLedger(
           attempts: item.attempts + 1,
           claimedAt: now,
           claimToken: randomUUID(),
+          ...(fireKey ? { claimFireKey: fireKey } : {}),
           parkedReason: undefined,
           updatedAt: now,
         };

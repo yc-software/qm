@@ -1,3 +1,6 @@
+import { TurnHandedOff } from "../core/turn-error.ts";
+import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
 import {
@@ -66,7 +69,17 @@ export interface Scheduler {
   stop(): Promise<void>;
 }
 
+export interface PendingCronFire {
+  cron: Cron;
+  cronId: string;
+  firedAt: number;
+  fireKey: string;
+  scheduledAt?: number;
+}
+
 export interface SchedulerDeps {
+  pendingFires?: DurableMap<PendingCronFire>;
+  lock?: AdvisoryLock;
   admittedWork?: AdmittedWork;
   crons: CronStore;
   deliveries: DeliveryStore;
@@ -85,7 +98,10 @@ export interface SchedulerDeps {
   jobQueue?: CronJobQueue;
   requireQueueStart?: boolean;
   sessions?: TriggerDeps["sessions"];
-  fireLoop?: (loopId: string, fireKey: string) => Promise<{ status?: TurnResult["status"]; note?: string }>;
+  fireLoop?: (
+    loopId: string,
+    fireKey: string,
+  ) => Promise<{ status?: TurnResult["status"]; note?: string; deferred?: boolean }>;
 }
 
 function truncate(s: string, maxChars: number): string {
@@ -189,12 +205,61 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
 }
 
 export function createScheduler(deps: SchedulerDeps): Scheduler {
+  const pendingFires = deps.pendingFires ?? createMemoryMap<PendingCronFire>();
+  const lock = deps.lock ?? createMemoryAdvisoryLock();
   const now = deps.now ?? (() => Date.now());
   const withWork = <T>(work: () => Promise<T>): Promise<T> => deps.admittedWork?.run(work) ?? work();
   const maxFiresPerTick = deps.maxFiresPerTick ?? 100;
   const leaderLease = deps.leaderLease ?? createNoopLeaderLease();
 
   async function fire(cron: Cron, t: number, fireKey: string, scheduledAt?: number): Promise<FireResult> {
+    const execute = async () => {
+      const resuming = (await pendingFires.get(fireKey)) !== null;
+      const pending = await pendingFires.putIfAbsent(fireKey, {
+        cron,
+        cronId: cron.id,
+        firedAt: t,
+        fireKey,
+        ...(scheduledAt !== undefined ? { scheduledAt } : {}),
+      });
+      const result = await executeFire(pending.cron, t, fireKey, scheduledAt, resuming);
+      if (!result.deferred) await pendingFires.delete(fireKey);
+      return result;
+    };
+    return (
+      (await (lock.tryWithLock
+        ? lock.tryWithLock(`cron-fire:${fireKey}`, execute)
+        : lock.withLock(`cron-fire:${fireKey}`, execute))) ?? { authzFailed: false, deferred: true }
+    );
+  }
+
+  async function resumeFires(t: number): Promise<void> {
+    for (const pending of await pendingFires.all()) {
+      if (stopped) break;
+      const cron = await deps.crons.get(pending.cronId);
+      if (!cron || cron.archived || !cron.enabled) {
+        await pendingFires.delete(pending.fireKey);
+        continue;
+      }
+      if (isDeferred(cron, t)) continue;
+      try {
+        const result = await fire(cron, pending.firedAt, pending.fireKey, pending.scheduledAt);
+        if (!result.authzFailed && !result.deferred && pending.scheduledAt !== undefined)
+          await deps.crons.markFired(cron.id, pending.firedAt, pending.scheduledAt);
+      } catch (error) {
+        if (error instanceof TurnHandedOff) throw error;
+        console.error("[scheduler] recovery failed:", errMessage(error));
+      }
+    }
+  }
+
+  async function executeFire(
+    cron: Cron,
+    t: number,
+    fireKey: string,
+    scheduledAt?: number,
+    replayCommitted = false,
+  ): Promise<FireResult> {
     const threadRef = cronFireThreadRef(cron.id, fireKey);
     const runningEntry: CronFireLogEntry = {
       fireKey,
@@ -205,15 +270,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     };
     if (cron.loopId) {
       await deps.crons.beginFire(cron.id, runningEntry);
-      let result: { status?: TurnResult["status"]; note?: string };
+      let result: { status?: TurnResult["status"]; note?: string; deferred?: boolean };
       if (!deps.fireLoop) {
         result = { status: "failed", note: "loop service unavailable" };
-      } else
-        try {
-          result = await deps.fireLoop(cron.loopId, fireKey);
-        } catch (e) {
-          result = { status: "failed", note: errMessage(e) };
-        }
+      } else result = await deps.fireLoop(cron.loopId, fireKey);
+      if (result.deferred) return { authzFailed: false, deferred: true };
       await deps.crons.recordFire(cron.id, {
         fireKey,
         threadRef,
@@ -257,10 +318,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ...(cron.members ? { members: cron.members } : {}),
           ...(cron.recipientConsent ? { recipientConsent: cron.recipientConsent } : {}),
           recipientConsentRequired: cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined,
+          replayCommitted,
           deferWhenBusy: scheduledAt !== undefined && t - scheduledAt <= BUSY_DEFER_MAX_LATE_MS,
         },
       );
     } catch (e) {
+      if (e instanceof TurnHandedOff) throw e;
       await deps.crons.recordFire(cron.id, {
         fireKey,
         threadRef,
@@ -332,7 +395,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   };
 
   const fireDue = async (t: number, observed: number): Promise<void> => {
-    const due = await deps.crons.due(t);
+    const recovering = new Set((await pendingFires.all()).map((fire) => fire.cronId));
+    const due = (await deps.crons.due(t)).filter((cron) => !recovering.has(cron.id));
     let batch = due;
     if (due.length > maxFiresPerTick) {
       const ordered = [...due].sort((a, b) => (a.lastAttemptAt ?? 0) - (b.lastAttemptAt ?? 0));
@@ -364,6 +428,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const observed = epoch;
     await withWork(() =>
       leaderLease.hold(TICK_LEASE_KEY, async () => {
+        await resumeFires(t);
         await fireDue(t, observed);
         await sweepStranded(t);
         await gcFires(t);
@@ -438,6 +503,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   async function reconcile(): Promise<void> {
     try {
+      await resumeFires(now());
       for (const cron of await deps.crons.list()) {
         if (stopped) break;
         if (cron.archived || !cron.enabled) continue;

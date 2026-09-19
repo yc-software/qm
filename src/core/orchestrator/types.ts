@@ -100,6 +100,8 @@ export interface OrchestratorInput extends Omit<
   finalAttempt?: boolean;
   background?: boolean;
   cancel?: AbortSignal;
+  handoff?: AbortSignal;
+  handoffDeadline?: AbortSignal;
   queueMs?: number;
   sessionParticipantIds?: readonly string[];
   scopeVersion?: string;

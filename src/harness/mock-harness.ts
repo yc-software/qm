@@ -1,3 +1,4 @@
+import { isOverheardEntry } from "../sessions/session-store.ts";
 import {
   defineHarness,
   type Harness,
@@ -33,6 +34,7 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!read ",
   "!skill ",
   "!skill-run ",
+  "!skill-then-boom ",
   "!write ",
   "!attach ",
   "!writeattach ",
@@ -95,15 +97,20 @@ export function createMockHarness(): Harness {
     },
     {
       async runTurn(turn: HarnessTurnInput): Promise<HarnessTurnResult> {
-        const userEntry = await turn.emit({
-          type: "user",
-          payload: {
-            text: turn.input,
-            ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
-            ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
-          },
-          scopeLabel: turn.scopeLabel,
-        });
+        const continuedUserEntry = turn.continueTurn
+          ? [...turn.history].reverse().find((e) => e.type === "user" && !isOverheardEntry(e))
+          : undefined;
+        const userEntry =
+          continuedUserEntry ??
+          (await turn.emit({
+            type: "user",
+            payload: {
+              text: turn.input,
+              ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
+              ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
+            },
+            scopeLabel: turn.scopeLabel,
+          }));
         const modelPrompt = [turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
 
         turn.recordModelCall({
@@ -175,6 +182,28 @@ export function createMockHarness(): Harness {
 
         if (turn.readOnly && READ_ONLY_BLOCKED_PREFIXES.some((prefix) => command0.startsWith(prefix))) {
           reply = "[strict/read-only posture: that tool is unavailable]";
+        } else if (turn.continueTurn && textPayload(continuedUserEntry?.payload).startsWith("!skill-then-boom ")) {
+          const prior = [...turn.history]
+            .reverse()
+            .find((entry) => entry.type === "tool_result" && (entry.payload as { tool?: string }).tool === "skill");
+          const dir = (prior?.payload as { dir?: string })?.dir;
+          const ran = await turn.tools.execute(`sh ${dir}/scripts/run.sh`);
+          reply = (ran.stdout || ran.stderr).trim();
+          usedTool = true;
+        } else if (command0.startsWith("!skill-then-boom ")) {
+          const name = command0.slice("!skill-then-boom ".length);
+          await turn.emit({
+            type: "tool_call",
+            payload: { tool: "skill", name, callId: "mock-skill" },
+            scopeLabel: turn.scopeLabel,
+          });
+          const result = await turn.tools.skill(name);
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "skill", name, callId: "mock-skill", ...result },
+            scopeLabel: turn.scopeLabel,
+          });
+          throw new Error("boom: simulated fault after skill load");
         } else if (command0 === "!boom") {
           throw new Error("boom: simulated turn fault");
         } else if (command0 === "!boom-always" || boomAlwaysSessions.has(turn.session.id)) {
@@ -200,7 +229,7 @@ export function createMockHarness(): Harness {
           const msg = cmd.slice(cmd.indexOf("!post-lost-result ") + "!post-lost-result ".length);
           await turn.emit({
             type: "tool_call",
-            payload: { tool: "slack", action: "post", bytes: msg.length },
+            payload: { tool: "slack", callId: "mock-lost-post", action: "post", bytes: msg.length },
             scopeLabel: turn.scopeLabel,
           });
           await turn.tools.post(msg);
@@ -227,10 +256,14 @@ export function createMockHarness(): Harness {
         } else if (command0 === "!work-then-boom") {
           await turn.emit({
             type: "tool_call",
-            payload: { tool: "execute", command: "make build" },
+            payload: { tool: "execute", callId: "mock-work", command: "make build" },
             scopeLabel: turn.scopeLabel,
           });
-          await turn.emit({ type: "tool_result", payload: { tool: "execute", ok: true }, scopeLabel: turn.scopeLabel });
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "execute", callId: "mock-work", ok: true },
+            scopeLabel: turn.scopeLabel,
+          });
           throw new Error("boom: simulated mid-turn fault");
         } else if (command0 === "!refuse") {
           throw new NonRetryableTurnError(
@@ -866,6 +899,8 @@ export function createMockHarness(): Harness {
                 .map((m) => `${m.name ?? "you"}@${m.ts}: ${m.text}${m.files?.length ? ` [${m.files.join(",")}]` : ""}`)
                 .join("\n")
             : "overheard:none";
+        } else if (turn.continueTurn) {
+          reply = "(continued from the recorded conversation)";
         } else {
           reply = `You said: ${modelPrompt}`;
         }

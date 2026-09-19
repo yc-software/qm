@@ -12,15 +12,14 @@ type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => Asy
 const toolHandlers = new Map<string, (args: unknown) => Promise<unknown>>();
 
 let currentScript: Script = async function* () {};
+let initialize: () => Promise<unknown> = async () => ({});
 
 mock.module("@anthropic-ai/claude-agent-sdk", {
   namedExports: {
     query: ({ prompt }: { prompt: AsyncIterable<{ message: { content: unknown } }> }) => {
       const generator = currentScript(prompt);
       return {
-        async initializationResult() {
-          return {};
-        },
+        initializationResult: () => initialize(),
         async interrupt() {
           await generator.return?.(undefined as never);
         },
@@ -619,4 +618,56 @@ test("Claude includes steered native and fallback documents without capturing th
   assert.ok(sent.includes("DOCX-QUARTZ-731"));
   assert.ok(!JSON.stringify(tape).includes(pdf));
   assert.ok(!JSON.stringify(tape).includes("DOCX-QUARTZ-731"));
+});
+
+test("Claude deadline hands off even when the SDK interrupt never settles", { timeout: 3_000 }, async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    entered.resolve();
+    await release.promise;
+    yield resultMessage("late completion");
+  };
+  const deadline = new AbortController();
+  const harness = createClaudeHarness({ turnWallClockMs: 0 });
+  const { turn, entries } = harnessTurn({ handoff: AbortSignal.abort(), handoffDeadline: deadline.signal });
+  const pending = harness.turns.runTurn(turn);
+  await entered.promise;
+  deadline.abort();
+  try {
+    const result = await pending;
+    assert.equal(result.handedOff, true);
+    assert.equal(result.stopped, undefined);
+    assert.equal(
+      entries.some((entry) => entry.type === "assistant"),
+      false,
+    );
+  } finally {
+    release.resolve();
+    await harness.turns.close?.();
+  }
+});
+
+test("Claude deadline bounds SDK initialization", { timeout: 3000 }, async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  initialize = async () => {
+    entered.resolve();
+    await release.promise;
+    return {};
+  };
+  const deadline = new AbortController();
+  const harness = createClaudeHarness({ turnWallClockMs: 0 });
+  const { turn } = harnessTurn({ handoff: AbortSignal.abort(), handoffDeadline: deadline.signal });
+  try {
+    const pending = harness.turns.runTurn(turn);
+    await entered.promise;
+    deadline.abort();
+    assert.equal((await pending).handedOff, true);
+  } finally {
+    initialize = async () => ({});
+    release.resolve();
+    await harness.turns.close?.();
+  }
 });

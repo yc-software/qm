@@ -34,6 +34,7 @@ function run(over: Partial<Run>): Run {
     turnUserSeq: null,
     dedupKey: null,
     attempts: 1,
+    handoffs: 0,
     errorAttempts: 0,
     maxAttempts: 3,
     leaseToken: null,
@@ -386,4 +387,39 @@ test("failed internal swarm notifications never append user-facing failure entri
     },
   } as unknown as TurnFailureSessions;
   assert.equal(await recordRunFailureEntry(sessions, failed), false);
+});
+
+test("terminal delivery is recovered when the process missed its terminal callback", async () => {
+  const { runs } = createMemoryRunStore();
+  const deliveries = createDeliveryStore();
+  const queued = await runs.enqueue({ sessionId: "t", request: turn("hello", "C9:171.001") });
+  const claimed = await runs.claimById(queued.run.id, "outgoing", 5_000);
+  await runs.complete(claimed!.id, claimed!.leaseToken!, { status: "ok", reply: "durable reply" });
+  assert.equal((await runs.pendingDeliveries()).length, 1);
+  const recovery = wireRunResultDeliveries(runs, deliveries);
+  await recovery.sweep();
+  assert.equal((await runs.pendingDeliveries()).length, 0);
+  const [delivery] = await deliveries.claimPending("slack", 5_000);
+  assert.equal(delivery?.text, "durable reply");
+  await recovery.sweep();
+  assert.deepEqual(await deliveries.claimPending("slack", 5_000), []);
+});
+
+test("busy failure backfill leaves recovery pending without blocking shutdown", async () => {
+  const { createMemorySessionStore } = await import("../src/sessions/memory-session-store.ts");
+  const sessions = createMemorySessionStore();
+  const session = await sessions.getOrCreateByThread("t", "dm", "personal:internal:U1");
+  const { lease } = await sessions.acquireLease(session.id);
+  assert.ok(lease);
+  const { runs } = createMemoryRunStore();
+  const queued = await runs.enqueue({ sessionId: "t", request: turn("hello", "C9:171.001"), maxAttempts: 1 });
+  const claimed = await runs.claimById(queued.run.id, "outgoing", 5_000);
+  await runs.fail(claimed!.id, claimed!.leaseToken!, "test failure", { retry: true });
+  const recovery = wireRunResultDeliveries(runs, createDeliveryStore(), undefined, undefined, sessions);
+  await Promise.all([recovery.sweep(), recovery.sweep()]);
+  assert.equal((await runs.pendingDeliveries()).length, 1);
+  await sessions.releaseLease(lease);
+  await recovery.sweep();
+  assert.equal((await runs.pendingDeliveries()).length, 0);
+  assert.equal((await sessions.getEntries(session.id)).length, 1);
 });

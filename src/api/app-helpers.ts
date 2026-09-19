@@ -1,3 +1,4 @@
+import { TurnHandedOff } from "../core/turn-error.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
   PendingApproval,
@@ -211,14 +212,20 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           run.result ?? { status: "failed", sessionId: run.sessionId, reason: "run produced no result" },
         );
       }
+      const handoff = deps.handoff?.signals();
+      if (handoff?.requested.aborted) throw new TurnHandedOff();
       const claimed = await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
       if (claimed) {
         const result = processRun(
           { runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
           claimed,
+          { handoff },
         );
         if (claimed.id === runId) return withAdminLink(await result);
-        await result.catch((error: unknown) => swallow("inline predecessor run failed", error));
+        await result.catch((error: unknown) => {
+          if (error instanceof TurnHandedOff) throw error;
+          swallow("inline predecessor run failed", error);
+        });
         continue;
       }
       const remaining = deadline - performance.now();

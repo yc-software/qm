@@ -4,6 +4,7 @@ import {
   filterTapeForAudience,
   foldTape,
   lintFold,
+  tapeEndsAtCommittedStep,
   planTapeSeed,
   rehydrateFoldImages,
   tapeNeedsInterruptHeal,
@@ -730,4 +731,30 @@ test("dangling calls heal only after every image is rehydrated", async () => {
     2,
   );
   assert.ok(tapeNeedsInterruptHeal(rows, hydrated));
+});
+
+test("a fold ends at a committed step only when its last message is a tool result or user turn with no open calls", () => {
+  const user = { role: "user", content: [{ type: "text", text: "go" }] };
+  const call = { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "exec", arguments: {} }] };
+  const result = { role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: "done" }] };
+  const answer = { role: "assistant", content: [{ type: "text", text: "all set" }] };
+  assert.equal(tapeEndsAtCommittedStep([user, call, result]), true);
+  assert.equal(tapeEndsAtCommittedStep([user]), true);
+  assert.equal(tapeEndsAtCommittedStep([user, call]), false, "a dangling tool call is not a committed step");
+  assert.equal(tapeEndsAtCommittedStep([user, call, result, answer]), false, "a finished answer is not resumable");
+  assert.equal(tapeEndsAtCommittedStep([]), false);
+  assert.equal(tapeEndsAtCommittedStep(undefined), false);
+});
+
+test("interrupted tool results cannot masquerade as a committed batch", () => {
+  const rows = [
+    user("go"),
+    assistant([
+      { type: "toolCall", id: "c1", name: "exec" },
+      { type: "toolCall", id: "c2", name: "exec" },
+    ]),
+    toolResult("c1", INTERRUPTED_TOOL_RESULT),
+    toolResult("c2", "done"),
+  ];
+  assert.equal(tapeEndsAtCommittedStep(foldTape(rows)), false);
 });

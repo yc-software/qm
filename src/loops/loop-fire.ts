@@ -1,3 +1,7 @@
+import { TurnHandedOff } from "../core/turn-error.ts";
+import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { LoopFireProgress } from "./runner.ts";
 import type { Loop, LoopItem, LoopOutput, TurnResult } from "../types.ts";
 import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
@@ -13,6 +17,7 @@ import {
   DEFAULT_MAX_ATTEMPTS,
   DuplicateLoopFireError,
   runLoopFire,
+  LoopFireDeferred,
   type CapturedArtifact,
   type FireSummary,
   type IntakeCandidate,
@@ -25,7 +30,18 @@ import { evaluateSuccess, type SuccessCheckResult, type SuccessVerdict } from ".
 import { ledgerState } from "./ledger-view.ts";
 import { adapterForItem } from "./sources/index.ts";
 
+export interface LoopFireContinuation {
+  loopId: string;
+  fireKey: string;
+  progress: LoopFireProgress;
+  stages: Record<string, TriggerOutcome>;
+  result?: LoopFireResult;
+  createdAt: number;
+}
+
 export interface LoopFireDeps {
+  continuations?: DurableMap<LoopFireContinuation>;
+  lock?: AdvisoryLock;
   loops: LoopStore;
   items: LoopItemLedger;
   outputs: LoopOutputStore;
@@ -34,6 +50,7 @@ export interface LoopFireDeps {
 }
 
 interface LoopFireResult {
+  deferred?: boolean;
   status: TurnResult["status"];
   note?: string;
   summary?: FireSummary;
@@ -352,8 +369,20 @@ function shipPrompt(loop: Loop, output: LoopOutput, note?: string): string {
 }
 
 export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
-  async function stageTurn(loop: Loop, fireKey: string, threadRef: string, input: string): Promise<TriggerOutcome> {
-    return runTrigger(deps.trigger, {
+  const continuations = deps.continuations ?? createMemoryMap<LoopFireContinuation>();
+  const lock = deps.lock ?? createMemoryAdvisoryLock();
+  async function stageTurn(
+    loop: Loop,
+    fireKey: string,
+    threadRef: string,
+    input: string,
+    continuation?: LoopFireContinuation,
+    replayCommitted = false,
+  ): Promise<TriggerOutcome> {
+    const cached = continuation?.stages[fireKey];
+    if (cached) return cached;
+    const outcome = await runTrigger(deps.trigger, {
+      ...(continuation || replayCommitted ? { replayCommitted: true } : {}),
       owner: loop.owner,
       ownerScopeId: loop.ownerScopeId,
       input,
@@ -362,6 +391,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       surface: "loop",
       ...(loop.runAs ? { runAs: loop.runAs } : {}),
     });
+    if (continuation && (outcome.ran || outcome.authzFailed)) {
+      continuation.stages[fireKey] = outcome;
+      await continuations.put(continuation.fireKey, continuation);
+    }
+    return outcome;
   }
 
   function stageFailure(stage: string, outcome: TriggerOutcome): { error: Error; userMessage: string } | null {
@@ -428,11 +462,44 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function fire(loopId: string, fireKey: string): Promise<LoopFireResult> {
+    const execute = async () => {
+      const saved = await continuations.get(fireKey);
+      if (saved?.result) return saved.result;
+      const current = await deps.loops.get(loopId);
+      if (!current || !isRunnable(current))
+        return { status: "silent" as const, note: "loop is not runnable", ...(saved ? { deferred: true } : {}) };
+      if (!saved && (await deps.trigger.idempotency.committed(`${fireKey}:intake`)))
+        return { status: "silent" as const, note: "duplicate fire key" };
+      const continuation = saved ?? { loopId, fireKey, progress: {}, stages: {}, createdAt: Date.now() };
+      await continuations.put(fireKey, continuation);
+      const result = await fireContinued(loopId, fireKey, continuation).catch((error) => {
+        if (error instanceof LoopFireDeferred)
+          return { status: "silent" as const, deferred: true, note: error.message };
+        throw error;
+      });
+      if (result.deferred) return result;
+      continuation.result = result;
+      await continuations.put(fireKey, continuation);
+      return result;
+    };
+    return (
+      (await (lock.tryWithLock
+        ? lock.tryWithLock(`loop-fire:${fireKey}`, execute)
+        : lock.withLock(`loop-fire:${fireKey}`, execute))) ?? {
+        status: "silent",
+        deferred: true,
+        note: "fire already running",
+      }
+    );
+  }
+
+  async function fireContinued(
+    loopId: string,
+    fireKey: string,
+    continuation: LoopFireContinuation,
+  ): Promise<LoopFireResult> {
     const loop = await deps.loops.get(loopId);
     if (!loop) return { status: "failed", note: "loop not found" };
-    if (loop.state === "enabled" && (await deps.trigger.idempotency.committed(`${fireKey}:intake`))) {
-      return { status: "silent", note: "duplicate fire key" };
-    }
     const threadRef = loopFireThreadRef(loopId, fireKey);
     const maxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
     const grants = await deps.grants.byLoop(loopId);
@@ -445,7 +512,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         { loops: deps.loops, items: deps.items, outputs: deps.outputs },
         {
           enumerate: async () => {
-            const outcome = await stageTurn(loop, `${fireKey}:intake`, threadRef, intakePrompt(loop));
+            const outcome = await stageTurn(loop, `${fireKey}:intake`, threadRef, intakePrompt(loop), continuation);
             if (!outcome.ran && !outcome.authzFailed) throw new DuplicateLoopFireError("duplicate fire key");
             const failure = stageFailure("intake", outcome);
             if (failure) throw failure.error;
@@ -457,6 +524,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
               `${fireKey}:work:${item.id}:${item.attempts}`,
               threadRef,
               workPrompt(loop, item, guidance),
+              continuation,
             );
             const failure = stageFailure("work", outcome);
             if (failure) throw failure.error;
@@ -470,6 +538,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
               `${fireKey}:judge:${item.id}:${attempt}`,
               threadRef,
               judgePrompt(loop, item),
+              continuation,
             );
             const failure = stageFailure("judge", outcome);
             if (failure) throw failure.error;
@@ -492,12 +561,12 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
           ship: async ({ output }) => shipOutput(loop.id, output.id, loop.owner, "auto-shipped by policy", true),
         },
         grants,
+        { fireKey, progress: continuation.progress, save: () => continuations.put(fireKey, continuation) },
       );
     } catch (e) {
+      if (e instanceof TurnHandedOff) throw e;
       if (e instanceof DuplicateLoopFireError) return { status: "silent", note: "duplicate fire key" };
-      await deps.loops.recordFireOutcome(loopId, true);
-      await applyGovernor(loopId);
-      return { status: "failed", note: errMessage(e) };
+      throw e;
     }
 
     if (!summary.ran) return { status: "silent", note: "loop is not runnable" };
@@ -527,7 +596,10 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     if (output.state === "shipped") return output;
     const decisionItemId = output.itemId;
     const decisionToken = await deps.items.acquireDecision(decisionItemId);
-    if (!decisionToken) return null;
+    if (!decisionToken) {
+      if (requireAuto) throw new LoopFireDeferred("waiting for the item decision lease");
+      return null;
+    }
     try {
       output = await deps.outputs.get(outputId);
       if (!output || output.loopId !== loopId) return null;
@@ -544,16 +616,22 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         if (shipped) await settleItem(loopId, shipped.itemId);
         return shipped;
       }
-      const claimed = await deps.outputs.claimShipping(outputId);
-      if (!claimed) return null;
-      const claimToken = claimed.claimToken!;
       const fireKey = `loop:${loopId}:ship:${outputId}`;
+      const resuming = output.state === "shipping" && (!output.shipFireKey || output.shipFireKey === fireKey);
+      const claimed = resuming ? output : await deps.outputs.claimShipping(outputId);
+      if (!claimed) {
+        if (requireAuto) throw new LoopFireDeferred("waiting for the output shipping lease");
+        return null;
+      }
+      const claimToken = claimed.claimToken!;
       if (!(await deps.outputs.beginShipAttempt(outputId, claimToken, fireKey))) return null;
       const outcome = await stageTurn(
         loop,
         fireKey,
         loopFireThreadRef(loopId, fireKey),
         shipPrompt(loop, claimed, note),
+        undefined,
+        resuming,
       );
       if (!outcome.ran && !outcome.authzFailed && (await deps.outputs.get(outputId))?.shipFireKey === fireKey) {
         return deps.outputs.markUnconfirmed(outputId, claimToken);
@@ -613,6 +691,10 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function sweepStale(now: number): Promise<void> {
+    for (const [key, continuation] of await continuations.entries()) {
+      if (!continuation.result) await fire(continuation.loopId, continuation.fireKey);
+      else if (now - continuation.createdAt > 14 * 24 * 60 * 60_000) await continuations.delete(key);
+    }
     for (const loop of await deps.loops.list()) {
       if (
         loop.state === "enabled" &&

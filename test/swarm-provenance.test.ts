@@ -40,6 +40,8 @@ test("execution metadata does not change stable dispatch provenance", async () =
       background: true,
       finalAttempt: false,
       cancel: new AbortController().signal,
+      handoff: new AbortController().signal,
+      handoffDeadline: new AbortController().signal,
       queueMs: 7,
       runStartedAt: Date.now(),
     }),

@@ -48,6 +48,12 @@ A process records `admitted` before starting background resources. The desired d
 
 `drained` means the process's admitted background work has finished. Releasing ownership and making a deployment safe to replace are separate gates. Do not terminate a relinquished but undrained process merely to meet a rollout time target.
 
+Relinquishing requests a handoff from both background workers and admitted synchronous turns. The current tool can finish and commit its result, after which the harness yields instead of starting another model step. The run lease returns to the queue with the handoff counted separately from retry attempts, so repeated deployments do not exhaust a healthy run's retry budget. `BACKGROUND_HANDOFF_GRACE_MS` defaults to 120 seconds. At the deadline, the harness aborts remaining provider work and refuses new tool dispatch. A later shutdown may shorten that deadline; returning leadership creates fresh signals without cancelling the retiring generation's deadline.
+
+Pi resumes a clean native tape with `continue()`, without another user message or interruption note. An interrupted tool result, incomplete legacy transcript, or context rewrite uses the existing hidden recovery note. Committed skill loads restore their files at the recorded paths before continuation, only when the currently authorized skill and pack contents match the recorded fingerprint. Changed or revoked skills fail closed. Other provider adapters honor handoff and deadline signals but retain their existing transcript reconstruction and recovery-note behavior. A tool that exceeds the grace may have an unknown outcome. Reattaching foreground sandbox executions by durable process ID is a separate optimization; this change does not claim exactly-once execution for uncommitted external effects.
+
+Loop fires persist their batch and completed intake, work, and judge outcomes. Recovery resumes the same item attempt and shipping fire key without rerunning completed stages or spending another item attempt. Busy decision leases defer recovery; outputs awaiting confirmation remain reviewable. Cron journals retain the original fire specification and key across handoff or infrastructure failure, including manually fired crons. Completed runs retain a durable delivery-pending marker until their outbox delivery and failure-transcript backfill have been handled. The delivery sweeper retries missed terminal callbacks without waiting for a busy session lease.
+
 Database errors or an expired local validity watchdog fence new local work. They do not establish durable relinquishment or authorize another deployment to bypass an outstanding member.
 
 ## Terminated processes
@@ -117,7 +123,7 @@ to resume their existing claim loop.
 Synchronous turns and manually started cron callbacks are admitted work too. A
 paused deployment refuses new synchronous execution while still accepting durable
 asynchronous submissions for the active workers. Accepted turns, scheduled
-callbacks, and their nested work keep running with their existing leases; their
-completion is part of the deployment's drain acknowledgment. Resuming ownership
-restores synchronous admission without restarting or canceling those calls.
+callbacks, and their nested work retain their leases until completion or handoff;
+that settlement is part of the deployment's drain acknowledgment. Resuming ownership
+restores synchronous admission with a fresh handoff generation.
 Task protection also counts admitted foreground work while the process drains.

@@ -1,3 +1,5 @@
+import { TurnHandedOff } from "../src/core/turn-error.ts";
+import type { PendingCronFire } from "../src/cron/scheduler.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createScheduler } from "../src/cron/scheduler.ts";
@@ -39,16 +41,20 @@ function harness(
     }
     return { status: "ok", reply };
   };
-  const scheduler = createScheduler({
-    crons,
-    deliveries,
-    idempotency: createIdempotencyStore(),
-    identity,
-    run,
-    ...(directory ? { directory } : {}),
-    ...(maxFiresPerTick !== undefined ? { maxFiresPerTick } : {}),
-  });
-  return { crons, deliveries, calls, scheduler, identity };
+  const pendingFires = createMemoryMap<PendingCronFire>();
+  const idempotency = createIdempotencyStore();
+  const recreate = () =>
+    createScheduler({
+      pendingFires,
+      crons,
+      deliveries,
+      idempotency,
+      identity,
+      run,
+      ...(directory ? { directory } : {}),
+      ...(maxFiresPerTick !== undefined ? { maxFiresPerTick } : {}),
+    });
+  return { crons, deliveries, calls, scheduler: recreate(), recreate, pendingFires, identity };
 }
 
 const member = (id: string) => ({ id, type: "internal" as const });
@@ -1705,4 +1711,33 @@ test("manual cron preparation and detached fire retain admission across pause", 
   assert.equal(resumed.started, true);
   if (resumed.started) await resumed.settled;
   await scheduler.stop();
+});
+
+test("a new scheduler resumes a manually fired cron handed off during its turn", async () => {
+  let yielded = false;
+  const h = harness(async () => {
+    if (!yielded) {
+      yielded = true;
+      throw new TurnHandedOff();
+    }
+    return { status: "ok", reply: "finished after handoff" };
+  });
+  const cron = await h.crons.create({
+    schedule: { everyMs: 43_200_000 },
+    action: "do work",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  const started = await h.scheduler.runNow(cron.id);
+  assert.equal(started.started, true);
+  if (!started.started) return;
+  await started.settled;
+  assert.equal((await h.pendingFires.all()).length, 1);
+  await h.recreate().tick();
+  assert.equal((await h.pendingFires.all()).length, 0);
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls[0]?.idempotencyKey, h.calls[1]?.idempotencyKey);
+  const logs = await h.crons.listFires(cron.id);
+  assert.equal(logs.runs[0]?.status, "ok");
 });

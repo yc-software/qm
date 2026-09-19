@@ -1,4 +1,4 @@
-import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
+import type { Principal, Resolution, ScopeId, Session, SessionEntry } from "../../types.ts";
 import { personalScope } from "../../types.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions } from "../../sandbox/sandbox.ts";
@@ -17,6 +17,7 @@ import {
   rehomeSkillPaths,
   renderSkillBody,
   skillDir,
+  skillTreeFingerprint,
   SKILLS_DIR,
 } from "../../skills/materialize.ts";
 import { safeSkillFilePath, type SkillResolution } from "../../skills/skill-store.ts";
@@ -314,15 +315,23 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     return handle;
   };
   const skillsRoot = `${turnFilesDir}/${SKILLS_DIR}`;
-  const laidTrees = new Set<string>();
-  const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution, sandboxId?: string): Promise<void> => {
+  const laidTrees = new Map<string, string>();
+  const restoredDirs = new Map<string, Set<string>>();
+  const materializeSkillTree = async (
+    handle: SandboxHandle,
+    r: SkillResolution,
+    sandboxId?: string,
+  ): Promise<string> => {
     const treeKey = `${sandboxId ?? "default"}:${skillDir(skillsRoot, r)}`;
-    if (laidTrees.has(treeKey)) return;
+    const existing = laidTrees.get(treeKey);
+    if (existing) return existing;
     const start = Date.now();
     try {
       const bundles = r.screenedBundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [r]) : []);
       await laySkillTree(deps.sandbox, handle, skillsRoot, r, bundles);
-      laidTrees.add(treeKey);
+      const fingerprint = skillTreeFingerprint(r, bundles);
+      laidTrees.set(treeKey, fingerprint);
+      return fingerprint;
     } catch (err) {
       deps.errors?.record(
         {
@@ -365,14 +374,54 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       void deps.skills.recordUse(resolution.skill.id).catch((e) => swallow("orchestrator: skill recordUse", e));
     if (!shipsFiles) return { content, sourceScopeId: resolution.skill.scopeId };
     const handle = sandboxId ? await provisionResource(sandboxId) : await provision();
-    await materializeSkillTree(handle, resolution, sandboxId);
+    const fingerprint = await materializeSkillTree(handle, resolution, sandboxId);
     const pack = packRoot(skillsRoot, resolution);
     return {
       content,
       sourceScopeId: resolution.skill.scopeId,
       dir: skillDir(skillsRoot, resolution),
+      fingerprint,
       ...(pack ? { packDir: pack } : {}),
     };
+  };
+  const restoreSkillFiles = async (entries: readonly SessionEntry[]): Promise<void> => {
+    const visible = await visibleSkillsForTurn();
+    for (const entry of entries) {
+      if (entry.type !== "tool_result") continue;
+      const payload = entry.payload as {
+        tool?: string;
+        name?: string;
+        dir?: string;
+        fingerprint?: string;
+        sandboxId?: string;
+        isError?: boolean;
+      } | null;
+      if (payload?.tool !== "skill" || !payload.dir || payload.isError) continue;
+      const prefix = `${turnSessionDir}/`;
+      const relative = payload.dir.startsWith(prefix) ? payload.dir.slice(prefix.length).split("/") : [];
+      if (
+        relative.length !== 3 ||
+        !/^[a-z0-9]+-[a-f0-9]{24}$/.test(relative[0]!) ||
+        relative[1] !== SKILLS_DIR ||
+        relative[2] !== payload.name ||
+        !isSafeSkillName(relative[2]!)
+      )
+        throw new Error("Cannot restore skill files outside this turn's directory");
+      const resolution = visible.find((r) => r.skill?.manifest.name === payload.name);
+      if (!resolution?.skill) throw new Error(`Cannot restore unavailable skill ${payload.name}`);
+      const bundles =
+        resolution.screenedBundles ??
+        (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [resolution]) : []);
+      if (!payload.fingerprint || skillTreeFingerprint(resolution, bundles) !== payload.fingerprint)
+        throw new Error(`Cannot restore changed skill ${payload.name}`);
+      const handle = payload.sandboxId ? await provisionResource(payload.sandboxId) : await provision();
+      const root = `${prefix}${relative[0]}/${SKILLS_DIR}`;
+      const key = `${handle.backend}:${handle.id}`;
+      const dirs = restoredDirs.get(key) ?? new Set<string>();
+      dirs.add(`${prefix}${relative[0]}`);
+      restoredDirs.set(key, dirs);
+      await laySkillTree(deps.sandbox, handle, root, resolution, bundles);
+    }
   };
   const provisionResource = (id: string): Promise<SandboxHandle> => {
     const existing = resourceHandles.get(id);
@@ -534,7 +583,11 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const clearTurnFiles = async (handle: SandboxHandle): Promise<void> => {
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        await deps.sandbox.removeDir(handle, turnFilesDir);
+        await Promise.all(
+          [turnFilesDir, ...(restoredDirs.get(`${handle.backend}:${handle.id}`) ?? [])].map((dir) =>
+            deps.sandbox.removeDir(handle, dir),
+          ),
+        );
         return;
       } catch (err) {
         if (attempt === 3) swallow("orchestrator: turn file cleanup", err);
@@ -689,6 +742,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     provisionResource,
     provisionOwnerAuth,
     useSkill,
+    restoreSkillFiles,
     provisionForReach,
     reclaimBox,
     provisionPending: () => provisionInFlight !== null,

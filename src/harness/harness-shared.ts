@@ -70,6 +70,9 @@ export function withTapedEntryMirrors(turn: HarnessTurnInput): HarnessTurnInput 
 export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
   return {
     current: turn.tools,
+    get handoffRequested() {
+      return turn.handoff?.aborted === true;
+    },
     runtimeRunId: turn.runId,
     runtimeActorId: turn.runtimeActorId,
     pendingApprovals: [],
@@ -109,7 +112,17 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
 }
 
 export function bridgedTools(ref: ToolContextRef, options: AgentToolsOptions): BridgedTool[] {
-  return createAgentTools(ref, options) as unknown as BridgedTool[];
+  return (createAgentTools(ref, options) as unknown as BridgedTool[]).map((tool) => ({
+    ...tool,
+    async execute(...args: Parameters<BridgedTool["execute"]>) {
+      const result = await tool.execute(...args);
+      if (ref.handoffRequested && !ref.pausedOnApproval && !ref.silentRequested && !ref.runtimeHandoff) {
+        ref.handoffStopped = true;
+        return { ...result, terminate: true };
+      }
+      return result;
+    },
+  }));
 }
 
 export function bridgedToolText(result: Awaited<ReturnType<BridgedTool["execute"]>>): string {

@@ -2,7 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CapabilityUnsupportedError, type Sandbox, type SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
-import { materializeSkillTree, renderSkillBody, safeSkillDirName } from "../src/skills/materialize.ts";
+import {
+  materializeSkillTree,
+  renderSkillBody,
+  safeSkillDirName,
+  skillTreeFingerprint,
+} from "../src/skills/materialize.ts";
 import { computeBundleHash, type SkillBundle } from "../src/skills/skill-bundle-store.ts";
 
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
@@ -147,4 +152,18 @@ test("a pack bundle may ship a root SKILL.md of its own", async () => {
     bundle("s1", [{ path: "SKILL.md", content: "pack readme" }]),
   ]);
   assert.equal(files.get(`${root}/.packs/s1/SKILL.md`), "pack readme");
+});
+
+test("skill recovery fingerprints include scripts and packs but ignore usage timestamps", () => {
+  const original = res("helper", "body", [{ path: "run.sh", content: "echo original" }], "pack");
+  const pack = bundle("pack", [{ path: "shared.sh", content: "echo shared" }]);
+  const fingerprint = skillTreeFingerprint(original, [pack]);
+  original.skill!.lastUsedAt = Date.now();
+  assert.equal(skillTreeFingerprint(original, [pack]), fingerprint);
+  const changed = structuredClone(original);
+  changed.skill!.manifest.files![0]!.content = "echo changed";
+  assert.notEqual(skillTreeFingerprint(changed, [pack]), fingerprint);
+  const changedPack = structuredClone(pack);
+  changedPack.files[0]!.content = "echo changed";
+  assert.notEqual(skillTreeFingerprint(original, [changedPack]), fingerprint);
 });

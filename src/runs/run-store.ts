@@ -28,6 +28,7 @@ export interface Run {
   turnUserSeq: number | null;
   dedupKey: string | null;
   attempts: number;
+  handoffs: number;
   errorAttempts: number;
   maxAttempts: number;
   leaseToken: string | null;
@@ -66,7 +67,7 @@ export interface RunStore {
 
   heartbeat(runId: string, leaseToken: string, ttlMs: number): Promise<boolean>;
 
-  releaseLease(runId: string, leaseToken: string): Promise<boolean>;
+  releaseLease(runId: string, leaseToken: string, opts?: { handoff?: boolean }): Promise<boolean>;
 
   complete(runId: string, leaseToken: string, result: TurnResult): Promise<boolean>;
 
@@ -84,6 +85,9 @@ export interface RunStore {
   latestForThread(threadRef: string, opts?: { excludePrivateMessages?: boolean }): Promise<Run | null>;
   pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;
+
+  pendingDeliveries(limit?: number): Promise<Run[]>;
+  markDeliveryQueued(runId: string): Promise<void>;
 
   onTerminal(listener: (run: Run) => void): void;
 
@@ -121,8 +125,15 @@ export function releasesDedupKey(result: TurnResult): boolean {
   return result.refusalKind === "session_busy";
 }
 
-export function errorParks(run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts">, maxClaims?: number): boolean {
-  return run.errorAttempts + 1 >= run.maxAttempts || (maxClaims !== undefined && run.attempts >= maxClaims);
+export function claimsSpent(run: Pick<Run, "attempts" | "handoffs">): number {
+  return Math.max(0, run.attempts - run.handoffs);
+}
+
+export function errorParks(
+  run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts" | "handoffs">,
+  maxClaims?: number,
+): boolean {
+  return run.errorAttempts + 1 >= run.maxAttempts || (maxClaims !== undefined && claimsSpent(run) >= maxClaims);
 }
 
 export function leaseLapsed(run: Pick<Run, "status" | "leaseExpiresAt">, asOf: number): boolean {
