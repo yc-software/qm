@@ -48,12 +48,15 @@ interface PiAttachment {
   size: number;
   content: string;
   extractedText?: string;
+  preview?: string;
 }
 export interface CoreAttachment {
   name: string;
   mimetype: string;
   sizeBytes: number;
   blobId: string;
+  previewBlobId?: string;
+  previewMimetype?: string;
 }
 
 export const MAX_ATTACHMENT_BYTES = 1_000_000_000;
@@ -636,15 +639,29 @@ function toHex(buf: ArrayBuffer): string {
 
 async function toCoreAttachment(a: PiAttachment): Promise<CoreAttachment> {
   const bytes = attachmentBytes(a);
-  const sha256 = toHex(await crypto.subtle.digest("SHA-256", bytes as unknown as ArrayBuffer));
-  const r = await webFetch(withBase(`/api/blobs?sha=${sha256}`), {
-    method: "POST",
-    headers: { "content-type": "application/octet-stream" },
-    body: bytes as unknown as BodyInit,
-  });
-  if (!r.ok) throw new ApiError(`attachment upload failed: HTTP ${r.status}`, r.status);
-  const { blobId, sizeBytes } = (await r.json()) as { blobId: string; sizeBytes: number };
-  return { name: a.fileName, mimetype: a.mimeType, sizeBytes: sizeBytes ?? a.size, blobId };
+  const upload = async (data: Uint8Array): Promise<{ blobId: string; sizeBytes: number }> => {
+    const sha256 = toHex(await crypto.subtle.digest("SHA-256", data as unknown as ArrayBuffer));
+    const response = await webFetch(withBase(`/api/blobs?sha=${sha256}`), {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: data as unknown as BodyInit,
+    });
+    if (!response.ok) throw new ApiError(`attachment upload failed: HTTP ${response.status}`, response.status);
+    return (await response.json()) as { blobId: string; sizeBytes: number };
+  };
+  const { blobId, sizeBytes } = await upload(bytes);
+  const previewBytes = a.preview?.startsWith("data:image/webp;base64,")
+    ? base64ToBytes(a.preview.slice("data:image/webp;base64,".length))
+    : undefined;
+  const preview =
+    previewBytes && previewBytes.length <= 1_000_000 ? await upload(previewBytes).catch(() => undefined) : undefined;
+  return {
+    name: a.fileName,
+    mimetype: a.mimeType,
+    sizeBytes: sizeBytes ?? a.size,
+    blobId,
+    ...(preview ? { previewBlobId: preview.blobId, previewMimetype: "image/webp" } : {}),
+  };
 }
 
 export class ApiError extends Error {
@@ -1633,6 +1650,7 @@ interface HistoryAttachment {
   mimeType: string;
   size?: number;
   artifactId?: string;
+  previewArtifactId?: string;
 }
 
 interface HistoryUserMessage {
@@ -1876,7 +1894,13 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       text?: string;
       display?: string;
       callId?: string;
-      attachments?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
+      attachments?: Array<{
+        name?: string;
+        mimetype?: string;
+        sizeBytes?: number;
+        artifactId?: string;
+        previewArtifactId?: string;
+      }>;
       files?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
       hidden?: boolean;
       steered?: boolean;
@@ -1968,6 +1992,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
             mimeType: a.mimetype ?? "application/octet-stream",
             ...(typeof a.sizeBytes === "number" ? { size: a.sizeBytes } : {}),
             ...(a.artifactId ? { artifactId: a.artifactId } : {}),
+            ...(a.previewArtifactId ? { previewArtifactId: a.previewArtifactId } : {}),
           }));
         }
         out.push(msg as AgentMessage);

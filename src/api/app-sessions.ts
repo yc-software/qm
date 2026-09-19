@@ -2,7 +2,7 @@ import { sessionTreeRoot, sessionTreeRunCount, SUBAGENT_TREE_RUN_CAP } from "../
 import type { PendingApprovalRecord } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
-import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
+import { fileArtifactId, artifactPath, isPreviewArtifactPath } from "../files/file-artifact-store.ts";
 import { entryWithinTenure, transcriptEntries, windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../harness/tape-projection.ts";
 import { appendCoverageImport } from "../harness/replay.ts";
@@ -370,9 +370,10 @@ export function createSessionMethods(
       return toFileItem(artifact);
     },
 
-    async openFileForViewer(id, principalId) {
-      const art = await deps.files.get(id);
+    async openFileForViewer(id, principalId, opts) {
+      const art = await deps.files.get(id, opts?.preview ? { includeDisabled: true } : undefined);
       if (!art) return null;
+      if (opts?.preview && !isPreviewArtifactPath(art.path)) return null;
       const myScopes = await currentResourceScopesForViewer(principalId);
       let allowed = myScopes.includes(art.ownerScopeId);
       if (!allowed) {
@@ -380,7 +381,7 @@ export function createSessionMethods(
         allowed = grants.some((g) => myScopes.includes(g.granteeScopeId));
       }
       if (!allowed) return null;
-      const opened = await deps.files.open(id);
+      const opened = await deps.files.open(id, opts?.preview ? { includeDisabled: true } : undefined);
       if (!opened) return null;
       return { name: art.name, mimetype: art.mimetype, sizeBytes: opened.sizeBytes, stream: opened.stream };
     },

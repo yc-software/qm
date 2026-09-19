@@ -686,6 +686,8 @@ export function createChatSurface(
 
   function dispose(): void {
     redrawHooks.delete(redrawForConnector);
+    for (const url of localAttachmentUrls.values()) URL.revokeObjectURL(url);
+    localAttachmentUrls.clear();
     teardownActiveChat();
   }
 
@@ -1630,7 +1632,13 @@ export function createChatSurface(
               ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
             </div>
             <button class="pin-toggle" type="button" hidden aria-expanded="false">Show more</button>
-            ${attachments.length ? html`<div class="message-files">${attachments.map(userAttachmentBadge)}</div>` : nothing}
+            ${
+              attachments.length
+                ? html`<div class="message-files">
+                    ${attachments.map((attachment) => userAttachmentBadge(attachment, message))}
+                  </div>`
+                : nothing
+            }
           </div>
           ${
             sendFailure
@@ -2797,10 +2805,13 @@ export function createChatSurface(
     mimeType?: string;
     size?: number;
     content?: string;
+    preview?: string;
     artifactId?: string;
+    previewArtifactId?: string;
   }
 
   const localAttachmentUrls = new Map<UserAttachmentView, string>();
+  const brokenUserImageSources = new Set<string>();
 
   function localContentUrl(a: UserAttachmentView): string | undefined {
     if (!a.content) return undefined;
@@ -2818,13 +2829,28 @@ export function createChatSurface(
     }
   }
 
-  function userAttachmentBadge(a: UserAttachmentView): TemplateResult {
+  function userAttachmentBadge(a: UserAttachmentView, message: AgentMessage): TemplateResult | typeof nothing {
     const artifactHref = a.artifactId ? fileContentUrl(a.artifactId, a.fileName) : undefined;
     if (a.mimeType?.startsWith("image/")) {
-      const dataUrl =
-        a.content && (a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`);
-      const download = !artifactHref || !browserRenderableImage(a.mimeType);
-      return chipBadge(FileImage, a.fileName, a.size, artifactHref ?? dataUrl ?? undefined, download);
+      const preview = a.preview?.startsWith("data:image/") ? a.preview : undefined;
+      const persistedPreview = a.previewArtifactId
+        ? `${fileContentUrl(a.previewArtifactId, a.fileName)}?preview=1`
+        : undefined;
+      const src = preview ?? persistedPreview;
+      if (browserRenderableImage(a.mimeType) && src && !brokenUserImageSources.has(src)) {
+        return html`<img
+          class="user-image-attachment"
+          src=${src}
+          alt="Attached image"
+          loading="lazy"
+          @error=${() => {
+            brokenUserImageSources.add(src);
+            settledRowCache.delete(message as object);
+            redrawTranscript();
+          }}
+        />`;
+      }
+      return imageChip(a.fileName, a.size, artifactHref);
     }
     if (inlineHtmlName(a.fileName, a.mimeType)) {
       let src = artifactHref;

@@ -43,6 +43,7 @@ export interface PutFileInput {
   createdAt?: number;
   maxBytes?: number;
   reuseExistingPath?: boolean;
+  enabled?: boolean;
 }
 
 type PublishFileInput = Omit<PutFileInput, "data" | "maxBytes"> & {
@@ -78,7 +79,10 @@ export interface FileArtifactStore {
 
   get(id: string, opts?: { includeDisabled?: boolean }): Promise<FileArtifact | null>;
 
-  open(id: string): Promise<{ artifact: FileArtifact; sizeBytes: number; stream: Readable } | null>;
+  open(
+    id: string,
+    opts?: { includeDisabled?: boolean },
+  ): Promise<{ artifact: FileArtifact; sizeBytes: number; stream: Readable } | null>;
 
   listOwnedByScopes(scopes: readonly ScopeId[], opts?: ListOwnedOptions): Promise<FilePage>;
 
@@ -107,6 +111,14 @@ export function fileArtifactId(seed: string, direction: FileDirection, batchInde
  */
 export function artifactPath(id: string, name: string): string {
   return `artifacts/${id}/${name}`;
+}
+
+export function previewArtifactPath(id: string, name: string): string {
+  return `previews/${id}/${name}`;
+}
+
+export function isPreviewArtifactPath(path: string): boolean {
+  return /^previews\/[0-9a-f]{32}\//.test(path);
 }
 
 export function isArtifactPath(path: string): boolean {
@@ -221,7 +233,7 @@ export function createMemoryFileArtifactStore(byteStore: DurableByteStore): File
         ...(input.createdInScope ? { createdInScope: input.createdInScope } : {}),
         createdAt: at,
         updatedAt: at,
-        enabled: true,
+        enabled: input.enabled !== false,
       };
       rows.set(artifact.id, artifact);
       return { artifact, created: true };
@@ -234,9 +246,9 @@ export function createMemoryFileArtifactStore(byteStore: DurableByteStore): File
       return r;
     },
 
-    async open(id) {
+    async open(id, opts) {
       const r = rows.get(id);
-      if (!r || !r.enabled || !r.blobKey) return null;
+      if (!r || (!r.enabled && !opts?.includeDisabled) || !r.blobKey) return null;
       const bytes = await byteStore.open(r.blobKey);
       if (!bytes) return null;
       return { artifact: r, sizeBytes: bytes.sizeBytes, stream: bytes.stream };

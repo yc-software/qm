@@ -7,6 +7,7 @@ import {
   type SharedMessage,
 } from "../../sessions/session-share.ts";
 import { MAX_ATTACHMENT_BYTES } from "../../core/attachments.ts";
+import { browserRenderableImage } from "../../../plugins/chassis/src/image-mime.ts";
 import { pipeToResponse, sendJson } from "../http.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -43,7 +44,8 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   }
   const projected = sharedMessages(source.entries, deliveredAttachments);
   if (!projected.length) return sendJson(res, 400, { error: "empty_conversation" });
-  const ids = [...new Set(projected.flatMap((m) => m.attachmentIds ?? []))];
+  const previewIds = new Set(projected.flatMap((m) => m.inlinePreviewIds ?? []));
+  const ids = [...new Set([...projected.flatMap((m) => m.attachmentIds ?? []), ...previewIds])];
   if (ids.length > 100 || Buffer.byteLength(JSON.stringify(projected)) > 2_000_000)
     return sendJson(res, 413, { error: "share_too_large" });
   const files: SessionShare["files"] = [];
@@ -51,15 +53,19 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   const pending: Array<{ sourceId: string; name: string; mimetype: string; data: Buffer }> = [];
   let totalBytes = 0;
   for (const id of ids) {
-    const file = await app.openFileForViewer(id, viewer);
-    if (!file)
+    const preview = previewIds.has(id);
+    const file = await app.openFileForViewer(id, viewer, preview ? { preview: true } : undefined);
+    if (!file) {
+      if (preview) continue;
       return sendJson(res, 409, {
         error: "attachment_unavailable",
         message: "An attachment is no longer available to share.",
       });
+    }
     const maxBytes = Math.min(MAX_ATTACHMENT_BYTES, 100 * 1024 * 1024 - totalBytes);
     if (file.sizeBytes > maxBytes) {
       file.stream.destroy();
+      if (preview) continue;
       return sendJson(res, 413, { error: "attachments_too_large" });
     }
     try {
@@ -68,20 +74,38 @@ async function createShare(ctx: ApiCtx): Promise<void> {
       pending.push({ sourceId: id, name: file.name, mimetype: file.mimetype, data: collected.data });
     } catch {
       file.stream.destroy();
+      if (preview) continue;
       return sendJson(res, 409, { error: "attachment_unavailable", message: "An attachment could not be copied." });
     }
   }
   for (const file of pending) {
     const stored = await deps.sessionShareBytes.put(file.data, { maxBytes: MAX_ATTACHMENT_BYTES });
-    const attachment = { id: randomUUID(), name: file.name, mimetype: file.mimetype, sizeBytes: stored.sizeBytes };
+    const attachment = {
+      id: randomUUID(),
+      name: file.name,
+      mimetype: file.mimetype,
+      sizeBytes: stored.sizeBytes,
+      ...(previewIds.has(file.sourceId) ? { inlinePreview: true } : {}),
+    };
     attachments.set(file.sourceId, attachment);
     files.push({ ...attachment, blobKey: stored.blobKey });
   }
-  const messages: SharedMessage[] = projected.map(({ role, text, attachmentIds }) => ({
-    role,
-    text,
-    ...(attachmentIds?.length ? { attachments: attachmentIds.map((id) => attachments.get(id)!) } : {}),
-  }));
+  const messages: SharedMessage[] = projected.map(({ role, text, attachmentIds, previewPairs }) => {
+    const previews = new Map(previewPairs?.map((pair) => [pair.attachmentId, attachments.get(pair.previewId)?.id]));
+    return {
+      role,
+      text,
+      ...(attachmentIds?.length
+        ? {
+            attachments: attachmentIds.map((id) => {
+              const attachment = attachments.get(id)!;
+              const previewId = previews.get(id);
+              return previewId ? { ...attachment, inlinePreview: true, previewId } : attachment;
+            }),
+          }
+        : {}),
+    };
+  });
   const share: SessionShare = {
     token: randomUUID(),
     sessionId: params.id!,
@@ -132,7 +156,7 @@ async function readShare(ctx: ApiCtx): Promise<void> {
     const file = share.files.find((file) => file.id === params.fileId);
     const opened = file && (await deps.sessionShareBytes?.open(file.blobKey));
     if (!file || !opened) return sendJson(res, 404, { error: "not_found" });
-    const inline = url.searchParams.get("inline") === "1" && /^image\/(png|jpeg|gif|webp|avif)$/.test(file.mimetype);
+    const inline = url.searchParams.get("inline") === "1" && browserRenderableImage(file.mimetype);
     res.writeHead(200, {
       "content-type": inline ? file.mimetype : "application/octet-stream",
       "content-length": String(opened.sizeBytes),

@@ -44,7 +44,7 @@ import {
   type QueuedRun,
 } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { fieldSelect, icon, modelMark } from "./ui";
+import { browserRenderableImage, fieldSelect, icon, modelMark } from "./ui";
 import {
   EFFORT_LEVELS,
   defaultEffortForModel,
@@ -466,6 +466,43 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     }
   }
 
+  function stagedAttachment(attachment: Attachment, agent: Agent): TemplateResult {
+    const remove = (showTooltip: boolean) => html`
+      <button
+        type="button"
+        class="chip-x"
+        aria-label="Remove attachment"
+        ${showTooltip ? tip("Remove") : nothing}
+        @click=${() => removeAttachment(attachment.id, agent)}
+      >
+        ${icon(X, 13)}
+      </button>
+    `;
+    if (browserRenderableImage(attachment.mimeType) && attachment.preview?.startsWith("data:image/")) {
+      return html`<span class="image-preview"
+        ><img src=${attachment.preview} alt=${attachment.fileName} />${remove(false)}</span
+      >`;
+    }
+    if (pastedTextIds.has(attachment.id)) {
+      return html`<span class="file-chip">
+        <button
+          type="button"
+          class="chip-open"
+          aria-label="View pasted text"
+          ${tip("View pasted text")}
+          @click=${() => openPasteView(attachment.id, agent)}
+        >
+          ${icon(FileText, 14)}
+          <span>${pasteChipLabel(attachment.extractedText?.length ?? 0)}</span>
+        </button>
+        ${remove(true)}
+      </span>`;
+    }
+    return html`<span class="file-chip">
+      ${icon(Paperclip, 14)}<span dir="auto">${attachment.fileName}</span>${remove(true)}
+    </span>`;
+  }
+
   function composerForm(agent: Agent, header: TemplateResult | typeof nothing = nothing): TemplateResult {
     const activeRuntimeConfig = getRuntimeConfig(scopeKey());
     const selectedModel = currentModelOption();
@@ -563,37 +600,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
           composerState.attachments.length
             ? html`
                 <div class="attachment-strip">
-                  ${composerState.attachments.map(
-                    (a) => html`
-                      <span class="file-chip">
-                        ${
-                          pastedTextIds.has(a.id)
-                            ? html`
-                                <button
-                                  type="button"
-                                  class="chip-open"
-                                  aria-label="View pasted text"
-                                  ${tip("View pasted text")}
-                                  @click=${() => openPasteView(a.id, agent)}
-                                >
-                                  ${icon(FileText, 14)}
-                                  <span>${pasteChipLabel(a.extractedText?.length ?? 0)}</span>
-                                </button>
-                              `
-                            : html`${icon(Paperclip, 14)}<span dir="auto">${a.fileName}</span>`
-                        }
-                        <button
-                          type="button"
-                          class="chip-x"
-                          aria-label="Remove attachment"
-                          ${tip("Remove")}
-                          @click=${() => removeAttachment(a.id, agent)}
-                        >
-                          ${icon(X, 13)}
-                        </button>
-                      </span>
-                    `,
-                  )}
+                  ${composerState.attachments.map((attachment) => stagedAttachment(attachment, agent))}
                 </div>
               `
             : nothing
@@ -2189,10 +2196,126 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     return bytesToBase64(new Uint8Array(await file.arrayBuffer()));
   }
 
+  const IMAGE_PREVIEW_EDGE = 512;
+  const IMAGE_PREVIEW_SOURCE_BYTES = 10_000_000;
+  const IMAGE_PREVIEW_BYTES = 1_000_000;
+  const IMAGE_PREVIEW_SOURCE_PIXELS = 16_777_216;
+  let imagePreviewQueue = Promise.resolve();
+
+  async function imageDimensions(file: File): Promise<{ width: number; height: number } | undefined> {
+    const bytes = new Uint8Array(await file.slice(0, 262_144).arrayBuffer());
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const type = file.type.toLowerCase();
+    const signature = (start: number, end: number) => String.fromCharCode(...bytes.subarray(start, end));
+    if (
+      (type === "image/png" || type === "image/apng") &&
+      bytes.length >= 24 &&
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47 &&
+      bytes[4] === 0x0d &&
+      bytes[5] === 0x0a &&
+      bytes[6] === 0x1a &&
+      bytes[7] === 0x0a
+    ) {
+      return { width: view.getUint32(16), height: view.getUint32(20) };
+    }
+    if (type === "image/gif" && bytes.length >= 10 && (signature(0, 6) === "GIF87a" || signature(0, 6) === "GIF89a")) {
+      return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
+    }
+    if (
+      ["image/bmp", "image/x-ms-bmp"].includes(type) &&
+      bytes.length >= 26 &&
+      bytes[0] === 0x42 &&
+      bytes[1] === 0x4d
+    ) {
+      return { width: Math.abs(view.getInt32(18, true)), height: Math.abs(view.getInt32(22, true)) };
+    }
+    if (type === "image/webp" && bytes.length >= 30 && signature(0, 4) === "RIFF" && signature(8, 12) === "WEBP") {
+      let offset = 12;
+      while (offset + 8 <= bytes.length) {
+        const chunk = String.fromCharCode(...bytes.subarray(offset, offset + 4));
+        const size = view.getUint32(offset + 4, true);
+        const data = offset + 8;
+        if (chunk === "VP8X" && data + 10 <= bytes.length) {
+          const width = 1 + bytes[data + 4]! + (bytes[data + 5]! << 8) + (bytes[data + 6]! << 16);
+          const height = 1 + bytes[data + 7]! + (bytes[data + 8]! << 8) + (bytes[data + 9]! << 16);
+          return { width, height };
+        }
+        if (chunk === "VP8L" && data + 5 <= bytes.length && bytes[data] === 0x2f) {
+          const packed = view.getUint32(data + 1, true);
+          return { width: (packed & 0x3fff) + 1, height: ((packed >>> 14) & 0x3fff) + 1 };
+        }
+        if (chunk === "VP8 " && data + 10 <= bytes.length) {
+          return { width: view.getUint16(data + 6, true) & 0x3fff, height: view.getUint16(data + 8, true) & 0x3fff };
+        }
+        offset = data + size + (size % 2);
+      }
+    }
+    if (["image/jpeg", "image/jpg", "image/pjpeg"].includes(type) && bytes[0] === 0xff && bytes[1] === 0xd8) {
+      let offset = 2;
+      while (offset + 8 < bytes.length) {
+        if (bytes[offset++] !== 0xff) return undefined;
+        while (bytes[offset] === 0xff) offset++;
+        const marker = bytes[offset++]!;
+        const length = view.getUint16(offset);
+        if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker)) {
+          return { width: view.getUint16(offset + 5), height: view.getUint16(offset + 3) };
+        }
+        if (length < 2 || offset + length > bytes.length) return undefined;
+        offset += length;
+      }
+    }
+    return undefined;
+  }
+
+  async function boundedImagePreview(file: File): Promise<string | undefined> {
+    if (
+      !browserRenderableImage(file.type) ||
+      file.size > IMAGE_PREVIEW_SOURCE_BYTES ||
+      typeof createImageBitmap !== "function"
+    )
+      return undefined;
+    let bitmap: ImageBitmap | undefined;
+    try {
+      const dimensions = await imageDimensions(file);
+      if (
+        !dimensions ||
+        dimensions.width <= 0 ||
+        dimensions.height <= 0 ||
+        dimensions.width > IMAGE_PREVIEW_SOURCE_PIXELS / dimensions.height
+      )
+        return undefined;
+      const scale = Math.min(1, IMAGE_PREVIEW_EDGE / dimensions.width, IMAGE_PREVIEW_EDGE / dimensions.height);
+      const width = Math.max(1, Math.round(dimensions.width * scale));
+      const height = Math.max(1, Math.round(dimensions.height * scale));
+      bitmap = await createImageBitmap(file, { resizeWidth: width, resizeHeight: height, resizeQuality: "high" });
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context) return undefined;
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const preview = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", 0.82));
+      if (!preview || preview.size > IMAGE_PREVIEW_BYTES) return undefined;
+      return `data:${preview.type};base64,${bytesToBase64(new Uint8Array(await preview.arrayBuffer()))}`;
+    } catch {
+      return undefined;
+    } finally {
+      bitmap?.close();
+    }
+  }
+
   async function loadAnyAttachment(file: File): Promise<Attachment> {
+    const preview = imagePreviewQueue.then(() => boundedImagePreview(file));
+    imagePreviewQueue = preview.then(
+      () => undefined,
+      () => undefined,
+    );
     try {
       const { loadAttachment } = await import("@earendil-works/pi-web-ui");
-      return await loadAttachment(file);
+      return { ...(await loadAttachment(file)), preview: await preview };
     } catch {
       return {
         id: `${file.name}_${Date.now()}_${Math.random()}`,
@@ -2201,6 +2324,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         mimeType: file.type || "application/octet-stream",
         size: file.size,
         content: await fileToBase64(file),
+        preview: await preview,
       };
     }
   }

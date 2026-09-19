@@ -96,6 +96,8 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   let visible = original;
   let accessible = true;
   let fileData: string | null = "<script>attachment contents</script>";
+  let fileName = "example.html";
+  let fileMime = "text/html";
   const server = createServer(async (req, res) => {
     const url = new URL(req.url!, "http://localhost");
     const parts = url.pathname.split("/");
@@ -135,15 +137,17 @@ test("fresh shares freeze messages and authorized attachments with separate audi
                 entries: visible,
               }
             : null,
-        openFileForViewer: async (id: string, user: string) =>
-          id === "f1" && user === "alice" && fileData !== null
-            ? {
-                name: "example.html",
-                mimetype: "text/html",
-                sizeBytes: Buffer.byteLength(fileData),
-                stream: Readable.from(fileData),
-              }
-            : null,
+        openFileForViewer: async (id: string, user: string, opts?: { preview?: boolean }) => {
+          if (user !== "alice" || fileData === null || !["f1", "p1"].includes(id)) return null;
+          if (id === "p1" && !opts?.preview) return null;
+          const data = id === "p1" ? "PREVIEW" : fileData;
+          return {
+            name: id === "p1" ? "example.webp" : fileName,
+            mimetype: id === "p1" ? "image/webp" : fileMime,
+            sizeBytes: Buffer.byteLength(data),
+            stream: Readable.from(data),
+          };
+        },
       },
     } as unknown as ApiCtx);
   });
@@ -181,6 +185,29 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   assert.equal((await read(external.share.token, "external", "", "")).status, 200);
   assert.equal((await read(external.share.token)).status, 404);
   assert.equal((await read(second.share.token, "internal", `/files/${fileId}`)).status, 404);
+  fileData = "BM";
+  fileName = "example.bmp";
+  fileMime = "image/bmp";
+  visible = [
+    ...entries,
+    entry("user", { text: "Image", attachments: [{ artifactId: "f1", previewArtifactId: "p1" }] }, 12),
+  ];
+  const imageShare = (await (await create()).json()) as { share: { token: string } };
+  const imageSnapshot = (await (await read(imageShare.share.token)).json()) as {
+    messages: Array<{ attachments?: Array<{ id: string; previewId?: string }> }>;
+  };
+  const imageAttachment = imageSnapshot.messages.find((message) => message.attachments?.length)?.attachments?.[0];
+  const imageFileId = imageAttachment?.id;
+  assert.ok(imageFileId);
+  assert.ok(imageAttachment.previewId);
+  const inlineImage = await read(imageShare.share.token, "internal", `/files/${imageFileId}`);
+  assert.equal(inlineImage.headers.get("content-type"), "image/bmp");
+  assert.match(inlineImage.headers.get("content-disposition")!, /^inline;/);
+  const previewImage = await read(imageShare.share.token, "internal", `/files/${imageAttachment.previewId}`);
+  assert.equal(await previewImage.text(), "PREVIEW");
+  fileData = "<script>attachment contents</script>";
+  fileName = "example.html";
+  fileMime = "text/html";
   visible = [entry("user", { text: "Generate file" }, 1), entry("assistant", { text: "Generated" }, 2)];
   const delivery = await deliveries.enqueue({
     destination: { type: "web", target: "web:alice:s1" },
@@ -248,7 +275,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
 
 test("attachment projection includes only user and delivered attachments", () => {
   const messages = sharedMessages([
-    entry("user", { attachments: [{ artifactId: "user" }] }, 1),
+    entry("user", { attachments: [{ artifactId: "user", previewArtifactId: "user-preview" }] }, 1),
     entry("tool_result", { tool: "execute", files: [{ artifactId: "private" }] }, 2),
     entry("tool_result", { tool: "attach", files: [{ artifactId: "failed" }], isError: true }, 3),
     entry("tool_result", { tool: "attach", files: [{ artifactId: "old", name: "a" }] }, 4),
@@ -260,7 +287,13 @@ test("attachment projection includes only user and delivered attachments", () =>
     entry("assistant", { text: "private final" }, 10),
   ]);
   assert.deepEqual(messages, [
-    { role: "user", text: "", attachmentIds: ["user"] },
+    {
+      role: "user",
+      text: "",
+      attachmentIds: ["user"],
+      inlinePreviewIds: ["user-preview"],
+      previewPairs: [{ attachmentId: "user", previewId: "user-preview" }],
+    },
     { role: "assistant", text: "Here", attachmentIds: ["new"] },
     { role: "assistant", text: "Posted", attachmentIds: ["posted"] },
   ]);

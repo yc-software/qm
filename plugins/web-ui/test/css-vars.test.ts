@@ -24,6 +24,65 @@ test("every no-fallback var() in shell.css names a property something defines", 
   assert.deepEqual([...dead], [], "var() references that nothing defines (add the property or a fallback)");
 });
 
+test("composer attachments share the textarea text inset", () => {
+  assert.match(shellCss, /--composer-input-pad-inline:\s*8px;/);
+  assert.match(shellCss, /\.composer-input \{[\s\S]*?padding:\s*7px var\(--composer-input-pad-inline\) 8px;/);
+  assert.match(
+    shellCss,
+    /\.attachment-strip \{\s*margin-inline:\s*var\(--composer-input-pad-inline\);\s*margin-bottom:\s*4px;\s*\}/,
+  );
+  assert.match(
+    shellCss,
+    /\.composer-wrap:has\(\.composer-input:dir\(rtl\)\) \.attachment-strip \{\s*direction:\s*rtl;/,
+  );
+  assert.match(shellCss, /--composer-input-pad-inline:\s*10px;/);
+});
+
+test("composer image previews are 25% larger", () => {
+  const preview = shellCss.match(/\.image-preview \{[^}]+\}/)?.[0] ?? "";
+  assert.match(preview, /width:\s*70px;\s*height:\s*70px;/);
+  assert.doesNotMatch(preview, /border:/);
+});
+
+test("sent user images have a passive medium presentation", () => {
+  const image = shellCss.match(/\.user-image-attachment \{[^}]+\}/)?.[0] ?? "";
+  assert.match(image, /max-width:\s*min\(360px, 100%\);/);
+  assert.match(image, /max-height:\s*360px;/);
+  assert.match(image, /border-radius:\s*10px;/);
+  assert.doesNotMatch(image, /border:|cursor:/);
+});
+
+test("two sent user images form a compact side-by-side pair", () => {
+  const pair =
+    shellCss.match(/\.message-files:has\([\s\S]*?\.user-image-attachment:last-child\s*\) \{[^}]+\}/)?.[0] ?? "";
+  assert.match(pair, /display:\s*grid;/);
+  assert.match(pair, /grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/);
+  assert.match(pair, /width:\s*324px;/);
+  assert.match(pair, /max-width:\s*100%;/);
+  assert.match(pair, /gap:\s*4px;/);
+  const images = shellCss.match(/\.message-files:has\([\s\S]*?> \.user-image-attachment \{[^}]+\}/)?.[0] ?? "";
+  assert.match(images, /aspect-ratio:\s*1;/);
+  assert.match(images, /object-fit:\s*cover;/);
+});
+
+test("image remove actions follow the sidebar conversation action styling", () => {
+  const imageAction = shellCss.match(/\.image-preview \.chip-x \{[^}]+\}/)?.[0] ?? "";
+  assert.match(imageAction, /width:\s*26px;/);
+  assert.match(imageAction, /height:\s*26px;/);
+  assert.match(imageAction, /border-radius:\s*6px;/);
+  assert.match(imageAction, /background:\s*color-mix\(in srgb, var\(--background\) 44%, transparent\);/);
+  assert.match(imageAction, /color:\s*var\(--muted-foreground\);/);
+  assert.match(imageAction, /opacity 0\.12s ease,/);
+  assert.match(imageAction, /background 0\.12s ease,/);
+  assert.match(imageAction, /color 0\.12s ease;/);
+  assert.match(
+    shellCss,
+    /\.image-preview \.chip-x:hover,\s*\.image-preview \.chip-x:focus-visible \{\s*background:\s*var\(--secondary\);\s*color:\s*var\(--foreground\);/,
+  );
+  assert.match(shellCss, /\.image-preview:hover \.chip-x,\s*\.image-preview:focus-within \.chip-x \{\s*opacity:\s*1;/);
+  assert.match(shellCss, /@media \(hover: none\) \{\s*\.image-preview \.chip-x \{\s*width:\s*32px;\s*height:\s*32px;/);
+});
+
 test("colored session actions keep their row hue at rest and on hover", () => {
   const variables = shellCss.match(/\.session-row\.colored \{[^}]+\}/)?.[0] ?? "";
   assert.match(variables, /--session-action-hover:\s*color-mix\([^;]+var\(--session-color\)/);

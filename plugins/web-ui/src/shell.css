@@ -2040,6 +2040,13 @@ qm-markdown .tok-in {
   gap: 6px;
   margin-top: 9px;
 }
+.attachment-strip {
+  margin-inline: var(--composer-input-pad-inline);
+  margin-bottom: 4px;
+}
+.composer-wrap:has(.composer-input:dir(rtl)) .attachment-strip {
+  direction: rtl;
+}
 .queued-strip,
 .chat-bottom-dock > .bg-activity {
   position: relative;
@@ -2143,6 +2150,55 @@ qm-markdown .tok-in {
 .file-chip small {
   color: var(--muted-foreground);
 }
+.image-preview {
+  position: relative;
+  display: inline-flex;
+  width: 70px;
+  height: 70px;
+  border-radius: 8px;
+  background: var(--secondary);
+  overflow: hidden;
+}
+.image-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.image-preview .chip-x {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--background) 44%, transparent);
+  color: var(--muted-foreground);
+  transition:
+    opacity 0.12s ease,
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.image-preview .chip-x:hover,
+.image-preview .chip-x:focus-visible {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+@media (hover: hover) and (pointer: fine) {
+  .image-preview .chip-x {
+    opacity: 0;
+  }
+  .image-preview:hover .chip-x,
+  .image-preview:focus-within .chip-x {
+    opacity: 1;
+  }
+}
+@media (hover: none) {
+  .image-preview .chip-x {
+    width: 32px;
+    height: 32px;
+  }
+}
 .file-image {
   display: inline-block;
 
@@ -2160,6 +2216,50 @@ qm-markdown .tok-in {
   width: auto;
   height: auto;
   object-fit: contain;
+}
+.user-image-attachment {
+  display: block;
+  max-width: min(360px, 100%);
+  max-height: 360px;
+  width: auto;
+  height: auto;
+  border-radius: 10px;
+  object-fit: contain;
+}
+a.user-image-attachment {
+  display: inline-block;
+  overflow: hidden;
+  line-height: 0;
+}
+a.user-image-attachment > img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+.message-files:has(> .user-image-attachment:first-child:nth-last-child(2) + .user-image-attachment:last-child) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 324px;
+  max-width: 100%;
+  gap: 4px;
+}
+.message-files:has(> .user-image-attachment:first-child:nth-last-child(2) + .user-image-attachment:last-child)
+  > .user-image-attachment {
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  aspect-ratio: 1;
+  object-fit: cover;
+}
+.message-files:has(> .user-image-attachment:first-child:nth-last-child(2) + .user-image-attachment:last-child)
+  > a.user-image-attachment
+  > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .file-html-unfurl {
   display: flex;
@@ -3230,6 +3330,7 @@ qm-markdown .tok-in {
   --composer-pad-block: 12px;
   --composer-pad-inline: 12px;
   --composer-pad-end: var(--composer-pad-inline);
+  --composer-input-pad-inline: 8px;
   position: relative;
   z-index: 1;
   width: min(var(--content-w), calc(100% - 32px));
@@ -3259,7 +3360,7 @@ qm-markdown .tok-in {
   font: inherit;
   font-size: var(--composer-font-size);
   line-height: 1.5;
-  padding: 7px 8px 8px;
+  padding: 7px var(--composer-input-pad-inline) 8px;
   box-sizing: border-box;
 }
 .composer-input::placeholder {
@@ -10529,6 +10630,7 @@ h3.ambient-field-label {
     --composer-pad-block: 8px;
     --composer-pad-inline: 10px;
     --composer-pad-end: 8px;
+    --composer-input-pad-inline: 10px;
     padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
     border-radius: 20px;
   }
@@ -10536,7 +10638,7 @@ h3.ambient-field-label {
     line-height: 1.4;
     min-height: 40px;
     max-height: 32vh;
-    padding: 12px 10px 6px;
+    padding: 12px var(--composer-input-pad-inline) 6px;
   }
   .composer-wrap.compact .composer-toolbar {
     flex-wrap: nowrap;

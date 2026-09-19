@@ -789,6 +789,8 @@ interface CoreAttachment {
   mimetype: string;
   sizeBytes: number;
   blobId: string;
+  previewBlobId?: string;
+  previewMimetype?: string;
 }
 
 interface CoreApprovalRecord {
@@ -1038,7 +1040,7 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
   const { res, user, url } = c;
   const id = c.params.id!;
   const corePath = withSourceAuthNonce(
-    `/v1/files/${encodeURIComponent(id)}/content?viewer=${encodeURIComponent(user)}`,
+    `/v1/files/${encodeURIComponent(id)}/content?viewer=${encodeURIComponent(user)}${url.searchParams.get("preview") === "1" ? "&preview=1" : ""}`,
     CORE_SIGNING_SECRET,
   );
   const portalTok = portalTokenStore.getStore();
@@ -2330,13 +2332,27 @@ const apiRoutes: readonly WebRoute[] = [
         if (Array.isArray(p.attachments)) {
           for (const raw of p.attachments as unknown[]) {
             if (!raw || typeof raw !== "object") continue;
-            const a = raw as { name?: unknown; mimetype?: unknown; sizeBytes?: unknown; blobId?: unknown };
+            const a = raw as {
+              name?: unknown;
+              mimetype?: unknown;
+              sizeBytes?: unknown;
+              blobId?: unknown;
+              previewBlobId?: unknown;
+              previewMimetype?: unknown;
+            };
             if (typeof a.name !== "string" || typeof a.blobId !== "string" || !a.blobId) continue;
             attachments.push({
               name: a.name,
               mimetype: typeof a.mimetype === "string" && a.mimetype ? a.mimetype : "application/octet-stream",
               sizeBytes: typeof a.sizeBytes === "number" ? a.sizeBytes : 0,
               blobId: a.blobId,
+              ...(typeof a.previewBlobId === "string" && a.previewBlobId
+                ? {
+                    previewBlobId: a.previewBlobId,
+                    previewMimetype:
+                      typeof a.previewMimetype === "string" ? a.previewMimetype : "application/octet-stream",
+                  }
+                : {}),
             });
           }
         }

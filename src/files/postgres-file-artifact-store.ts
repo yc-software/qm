@@ -167,7 +167,7 @@ export function createPostgresFileArtifactStore(
           `INSERT INTO file_artifacts
            (id, kind, owner_scope_id, path, name, mimetype, size_bytes, blob_key, sha256,
             direction, created_by, created_in_scope, created_at, updated_at, enabled, source)
-         VALUES ($1,'file',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,TRUE,'live')
+         VALUES ($1,'file',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,$13,'live')
          ON CONFLICT (id) DO NOTHING`,
           [
             input.id,
@@ -182,6 +182,7 @@ export function createPostgresFileArtifactStore(
             input.createdBy,
             input.createdInScope ?? null,
             at,
+            input.enabled !== false,
           ],
         );
         const result = await client.query("SELECT * FROM file_artifacts WHERE id=$1", [input.id]);
@@ -196,9 +197,9 @@ export function createPostgresFileArtifactStore(
       return r;
     },
 
-    async open(id) {
+    async open(id, opts) {
       const r = await getRow(id);
-      if (!r || !r.enabled || !r.blobKey) return null;
+      if (!r || (!r.enabled && !opts?.includeDisabled) || !r.blobKey) return null;
       const bytes = await byteStore.open(r.blobKey);
       if (!bytes) return null;
       return { artifact: r, sizeBytes: bytes.sizeBytes, stream: bytes.stream };

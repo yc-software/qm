@@ -541,6 +541,8 @@ interface BlobAttachment {
 export type IncomingAttachment = BlobAttachment & {
   sourceId?: string;
   author?: string;
+  previewBlobId?: string;
+  previewMimetype?: string;
 };
 
 export type OutgoingAttachment = BlobAttachment & {
@@ -555,6 +557,7 @@ export interface AttachmentMeta {
   direction: "in" | "out";
   author?: string;
   artifactId?: string;
+  previewArtifactId?: string;
   sourceId?: string;
 }
 

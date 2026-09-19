@@ -17,6 +17,18 @@ const owner = scopeId("channel", "C1");
 const HANDLE = { id: "h", rootDir: "/workspace" } as SandboxHandle;
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
 
+function webp(width: number, height: number): Buffer {
+  const bytes = Buffer.alloc(30);
+  bytes.write("RIFF", 0, "ascii");
+  bytes.writeUInt32LE(22, 4);
+  bytes.write("WEBP", 8, "ascii");
+  bytes.write("VP8X", 12, "ascii");
+  bytes.writeUInt32LE(10, 16);
+  bytes.writeUIntLE(width - 1, 24, 3);
+  bytes.writeUIntLE(height - 1, 27, 3);
+  return bytes;
+}
+
 function memSandbox(seed: Record<string, Uint8Array | string> = {}): {
   sandbox: Sandbox;
   files: Map<string, Uint8Array>;
@@ -132,6 +144,40 @@ test("materializeInbound registers an 'in' artifact, openable", async () => {
     page.files[0]!.id,
     "the exact model image carries the same durable ref for tape replay",
   );
+});
+
+test("materializeInbound registers a bounded image preview beside the original", async () => {
+  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const transfer = createMemoryBlobTransferStore();
+  const { blobId } = await transfer.put(PNG);
+  const preview = webp(512, 384);
+  const { blobId: previewBlobId } = await transfer.put(preview);
+  const { sandbox } = memSandbox();
+
+  const inbound = await materializeInbound(
+    sandbox,
+    HANDLE,
+    [
+      {
+        name: "shared.png",
+        mimetype: "image/png",
+        sizeBytes: PNG.length,
+        blobId,
+        previewBlobId,
+        previewMimetype: "image/webp",
+      },
+    ],
+    transfer,
+    reg(store),
+  );
+
+  assert.notEqual(inbound.metas[0]!.previewArtifactId, inbound.metas[0]!.artifactId);
+  const opened = await store.open(inbound.metas[0]!.previewArtifactId!, { includeDisabled: true });
+  assert.ok(opened);
+  const chunks: Buffer[] = [];
+  for await (const chunk of opened.stream) chunks.push(chunk as Buffer);
+  assert.deepEqual(Buffer.concat(chunks), preview);
+  assert.equal((await store.listOwnedByScopes([owner])).files.length, 1);
 });
 
 test("materializeInbound omits artifactId when registration fails or is absent", async () => {
