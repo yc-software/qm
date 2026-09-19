@@ -28,7 +28,7 @@ import type { WorkspaceLayer } from "../src/types.ts";
 const HANDLE: SandboxHandle = { id: "sbx-1", rootDir: "/workspace" };
 const SCOPE_ID = "org:acme";
 const REPO_DIR = "/workspace/repo";
-const SOURCE_DIR = "/workspace/qm-yc/layer/factory";
+const SOURCE_DIR = "/workspace/qm-source/factory";
 const TICKET = "QM-12";
 
 type ProcessMethod = "startProcess" | "readProcess" | "writeStdin" | "signalProcess" | "listProcesses";

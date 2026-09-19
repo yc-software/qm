@@ -7,7 +7,8 @@ import { join } from "node:path";
 import {
   createFactoryLoopEffects,
   loadFactoryContext,
-  FACTORY_SOURCE_BRANCH,
+  FACTORY_SOURCE_DEFAULT_REF,
+  factorySourceRef,
   FACTORY_SOURCE_DIR,
   type FactoryContext,
   type FactoryEffectsDeps,
@@ -49,8 +50,8 @@ const SECRET_BY_SLUG: Record<string, string> = {
   [FACTORY_SLACK_SLUG]: SLACK_TOKEN,
 };
 const REPO_DIR = "/workspace/repo";
-const CLONE_DIR = "/workspace/qm-yc";
-const CLONE_URL = "https://github.com/yc-software/qm-yc.git";
+const CLONE_DIR = "/workspace/qm-source";
+const CLONE_URL = "https://github.com/yc-software/qm.git";
 const TICKET = "QM-12";
 
 const CONFIG: FactoryConfig = {
@@ -383,12 +384,12 @@ async function workedRunId(effects: FactoryWorkEffects, item: LoopItem = ITEM): 
 const tempCloneDir = (t: TestContext): string => {
   const root = mkdtempSync(join(tmpdir(), "factory-bootstrap-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  return join(root, "qm-yc");
+  return join(root, "qm-source");
 };
 
-async function recordedBootstrapScript(cloneDir: string): Promise<string> {
+async function recordedBootstrapScript(cloneDir: string, buildSha?: string): Promise<string> {
   const fake = fakeSandbox();
-  await workedRunId(createFactoryLoopEffects(deps({ sandbox: fake.sandbox })));
+  await workedRunId(createFactoryLoopEffects(deps({ sandbox: fake.sandbox, ...(buildSha ? { buildSha } : {}) })));
   const bootstrap = bootstrapStarts(fake.calls)[0];
   assert.ok(bootstrap);
   return bootstrap.command.replaceAll(CLONE_DIR, cloneDir);
@@ -614,7 +615,7 @@ test("work bootstraps the factory control plane on the preflight handle before t
   assert.equal(bootstrapStarts(fake.calls).length, 2);
 });
 
-test("the bootstrap command clones a cold checkout and converges a warm one without re-cloning", async (t) => {
+test("the bootstrap command initializes a cold checkout and converges a warm one without re-cloning", async (t) => {
   const cloneDir = tempCloneDir(t);
   const script = await recordedBootstrapScript(cloneDir);
 
@@ -622,7 +623,10 @@ test("the bootstrap command clones a cold checkout and converges a warm one with
 
   assert.equal(cold.code, 0, cold.output);
   assert.deepEqual(cold.git, [
-    `clone --depth 1 --single-branch --branch ${FACTORY_SOURCE_BRANCH} ${CLONE_URL} ${cloneDir}`,
+    `init -q ${cloneDir}`,
+    `-C ${cloneDir} remote add origin ${CLONE_URL}`,
+    `-C ${cloneDir} fetch --depth 1 origin ${FACTORY_SOURCE_DEFAULT_REF}`,
+    `-C ${cloneDir} checkout -f FETCH_HEAD`,
   ]);
 
   mkdirSync(join(cloneDir, ".git"), { recursive: true });
@@ -630,9 +634,43 @@ test("the bootstrap command clones a cold checkout and converges a warm one with
 
   assert.equal(warm.code, 0, warm.output);
   assert.deepEqual(warm.git, [
-    `-C ${cloneDir} fetch --depth 1 origin ${FACTORY_SOURCE_BRANCH}`,
+    `-C ${cloneDir} fetch --depth 1 origin ${FACTORY_SOURCE_DEFAULT_REF}`,
     `-C ${cloneDir} checkout -f FETCH_HEAD`,
   ]);
+});
+
+test("a core that knows its build commit fetches the wrapper at that exact commit", async (t) => {
+  const cloneDir = tempCloneDir(t);
+  const script = await recordedBootstrapScript(cloneDir, "0123abcd4567ef890123abcd4567ef8901234567-dirty");
+
+  const result = runWithFakeGit(script);
+
+  assert.equal(result.code, 0, result.output);
+  assert.ok(
+    result.git.includes(`-C ${cloneDir} fetch --depth 1 origin 0123abcd4567ef890123abcd4567ef8901234567`),
+    result.git.join("\n"),
+  );
+  assert.equal(
+    result.git.some((line) => line.includes("-dirty")),
+    false,
+  );
+});
+
+test("factorySourceRef pins a real commit and falls back to the default branch otherwise", () => {
+  assert.equal(
+    factorySourceRef("2d10c86b6863a99edd0eab891a6dde17d6ac60f1"),
+    "2d10c86b6863a99edd0eab891a6dde17d6ac60f1",
+  );
+  assert.equal(
+    factorySourceRef("2d10c86b6863a99edd0eab891a6dde17d6ac60f1-dirty"),
+    "2d10c86b6863a99edd0eab891a6dde17d6ac60f1",
+  );
+  assert.equal(factorySourceRef("2d10c86"), FACTORY_SOURCE_DEFAULT_REF);
+  assert.equal(factorySourceRef("2d10c86-dirty"), FACTORY_SOURCE_DEFAULT_REF);
+  assert.equal(factorySourceRef(undefined), FACTORY_SOURCE_DEFAULT_REF);
+  assert.equal(factorySourceRef(""), FACTORY_SOURCE_DEFAULT_REF);
+  assert.equal(factorySourceRef("main; rm -rf /"), FACTORY_SOURCE_DEFAULT_REF);
+  assert.equal(factorySourceRef("abc"), FACTORY_SOURCE_DEFAULT_REF);
 });
 
 test("a failed fetch fails the bootstrap instead of checking out a stale FETCH_HEAD", async (t) => {
@@ -643,7 +681,7 @@ test("a failed fetch fails the bootstrap instead of checking out a stale FETCH_H
   const result = runWithFakeGit(script, "fetch");
 
   assert.notEqual(result.code, 0);
-  assert.deepEqual(result.git, [`-C ${cloneDir} fetch --depth 1 origin ${FACTORY_SOURCE_BRANCH}`]);
+  assert.deepEqual(result.git, [`-C ${cloneDir} fetch --depth 1 origin ${FACTORY_SOURCE_DEFAULT_REF}`]);
 });
 
 test("a bootstrap that exits non-zero fails the run loudly, starts no wrapper and stores nothing", async () => {
@@ -667,7 +705,7 @@ test("a bootstrap that exits non-zero fails the run loudly, starts no wrapper an
 test("a failed bootstrap names git's reason in the error and masks the token", async () => {
   const fake = fakeSandbox({
     bootstrapExit: 128,
-    bootstrapOutput: `Cloning into '/workspace/qm-yc'...\nfatal: could not read Username for 'https://github.com/': terminal prompts disabled\nremote: ${GITHUB_TOKEN}\n`,
+    bootstrapOutput: `Cloning into '/workspace/qm-source'...\nfatal: could not read Username for 'https://github.com/': terminal prompts disabled\nremote: ${GITHUB_TOKEN}\n`,
   });
   const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox }));
 
