@@ -32,6 +32,7 @@ import {
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
+import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 
 import {
   CORE_API_URL as CORE,
@@ -55,15 +56,8 @@ const ALLOW = (process.env.WEB_UI_PRINCIPALS ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
-const INBOX_USERS = new Set(
-  (process.env.INBOX_USERS ?? "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean),
-);
-
-export function isInboxUser(principalId: string): boolean {
-  return INBOX_USERS.has("all") || INBOX_USERS.has(principalId.trim().toLowerCase());
+export function isInboxUser(principalId: string, configuredUsers = process.env.INBOX_USERS): boolean {
+  return principalInAllowlist(principalId, configuredUsers);
 }
 
 export function isLoopsUser(principalId: string, configuredUsers = process.env.LOOPS_USERS): boolean {
