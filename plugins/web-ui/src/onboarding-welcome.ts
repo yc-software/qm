@@ -48,6 +48,7 @@ export class OnboardingWelcome extends LitElement {
     connections: { state: true },
     connectionError: { state: true },
     workspaceConnected: { state: true },
+    workspaceError: { state: true },
   };
   declare me: Me | null;
   declare onMoreIdeas: (() => void) | undefined;
@@ -65,6 +66,7 @@ export class OnboardingWelcome extends LitElement {
   private connections: Array<{ id: string; toolkit: string }> = [];
   private connectionError = "";
   private workspaceConnected: boolean | null = null;
+  private workspaceError = false;
   private realReturn: ConnectionAttempt | null = null;
   private connectionsController?: AbortController;
   private restoreScrollTop: number | null = null;
@@ -113,9 +115,12 @@ export class OnboardingWelcome extends LitElement {
         cache: "no-store",
         signal: AbortSignal.timeout(10000),
       });
-      this.workspaceConnected = response.ok && (await response.json()).workspaceInstalled === true;
+      if (!response.ok) throw Error("Slack status unavailable");
+      this.workspaceConnected = (await response.json()).workspaceInstalled === true;
+      this.workspaceError = false;
     } catch {
-      this.workspaceConnected = false;
+      this.workspaceConnected = null;
+      this.workspaceError = true;
     }
   }
   protected firstUpdated(): void {
@@ -457,6 +462,7 @@ export class OnboardingWelcome extends LitElement {
             ></qm-onboarding-slack>`
           : nothing
       }
+      ${this.widget === "slack-account" && this.workspaceError ? html`<p role="status">Could not check Slack setup. <button class="btn" @click=${() => void this.refreshWorkspace()}>Try again</button></p>` : nothing}
       ${this.widget === "slack-account" && this.workspaceConnected === false ? html`<p role="status">QM needs to be added to your company’s Slack workspace before you can link your account. Ask an administrator to finish setup.</p>` : nothing}
       <div class="welcome-beat" style=${`--welcome-delay:${cohort ? 3250 : 1100}ms`}>
         ${this.workspaceConnected && this.widget !== "apps" && (["slack", "slack-account"].includes(this.widget) || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()}></qm-slack-account>` : nothing}
