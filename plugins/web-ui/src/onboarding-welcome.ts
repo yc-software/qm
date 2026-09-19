@@ -47,6 +47,7 @@ export class OnboardingWelcome extends LitElement {
     connectionOutcome: { state: true },
     connections: { state: true },
     connectionError: { state: true },
+    workspaceConnected: { state: true },
   };
   declare me: Me | null;
   declare onMoreIdeas: (() => void) | undefined;
@@ -63,12 +64,14 @@ export class OnboardingWelcome extends LitElement {
   declare authorizationError: string;
   private connections: Array<{ id: string; toolkit: string }> = [];
   private connectionError = "";
+  private workspaceConnected = false;
   private realReturn: ConnectionAttempt | null = null;
   private connectionsController?: AbortController;
   private restoreScrollTop: number | null = null;
   private returnError = "";
   private returnAccount = "";
   private refreshConnections = () => {
+    if (!document.hidden) void this.refreshWorkspace();
     if (!this.preview && this.widget !== "slack" && !document.hidden) void this.loadConnections();
   };
   private preview = connectionPreviewEnabled();
@@ -102,7 +105,20 @@ export class OnboardingWelcome extends LitElement {
   private previewUser(): string {
     return `${this.me?.org}:${this.me?.user}`;
   }
+  private async refreshWorkspace(): Promise<void> {
+    if (this.widget === "apps" || this.me?.permissions?.includes("admin")) return;
+    try {
+      const response = await fetch(`${this.base}api/composio/slack`, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(10000),
+      });
+      this.workspaceConnected = response.ok && (await response.json()).workspaceInstalled === true;
+    } catch {
+      this.workspaceConnected = false;
+    }
+  }
   protected firstUpdated(): void {
+    void this.refreshWorkspace();
     const params = previewParameters();
     const returnUrl =
       !this.preview && this.widget !== "slack" ? takeConnectionReturn(this.previewUser(), this.returnKey) : null;
@@ -426,18 +442,21 @@ export class OnboardingWelcome extends LitElement {
                       <p class="welcome-beat" style="--welcome-delay:700ms">The easiest way to get up and running:</p>`
               }`
       }
-      <div class="welcome-beat" style=${`--welcome-delay:${cohort ? 3050 : 900}ms`}>
-        ${this.widget !== "apps" && (this.widget === "slack" || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()}></qm-slack-account>` : nothing}
-      </div>
       ${
         this.widget !== "apps" && this.me?.permissions?.includes("admin")
           ? html`<qm-onboarding-slack
               class="welcome-beat"
-              style=${`--welcome-delay:${cohort ? 3250 : 1100}ms`}
+              style=${`--welcome-delay:${cohort ? 3050 : 900}ms`}
               .adminBase=${this.adminBase}
+              @slack-installation-status=${(event: CustomEvent<{ connected: boolean }>) => {
+                this.workspaceConnected = event.detail.connected;
+              }}
             ></qm-onboarding-slack>`
           : nothing
       }
+      <div class="welcome-beat" style=${`--welcome-delay:${cohort ? 3250 : 1100}ms`}>
+        ${this.workspaceConnected && this.widget !== "apps" && (this.widget === "slack" || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()}></qm-slack-account>` : nothing}
+      </div>
       ${
         this.widget === "slack"
           ? nothing
@@ -454,6 +473,7 @@ export class OnboardingWelcome extends LitElement {
                         @click=${() => {
                           void this.loadCatalog();
                           void this.loadConnections();
+                          void this.refreshWorkspace();
                         }}
                       >
                         Try again

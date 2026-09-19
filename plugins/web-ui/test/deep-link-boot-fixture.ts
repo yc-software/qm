@@ -106,7 +106,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       });
     if (path === "/api/composio/slack/complete")
       return Response.json({ connected: true, user: "Alice", workspace: "Acme" });
-    if (path === "/api/composio/slack") return Response.json({ connected: false });
+    if (path === "/api/composio/slack") return Response.json({ connected: false, workspaceInstalled: true });
     if (path.startsWith("/api/composio/connections"))
       return Response.json({ items: connectedItems, nextCursor: null }, { status: connectedStatus });
     if (path.startsWith("/api/composio/toolkits"))

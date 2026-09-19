@@ -260,9 +260,12 @@ export interface SlackAccountLink {
 async function slackStatus(ctx: ApiCtx): Promise<void> {
   const access = await credential(ctx);
   if (!access) return;
+  const installation = await ctx.deps.slackInstallation?.get();
+  const workspaceInstalled = Boolean(installation?.botToken || ctx.deps.slackEnvBotToken);
   const record = await ctx.deps.slackAccounts?.get(access.principal);
   ctx.res.setHeader("Cache-Control", "no-store");
-  if (!record || !samePerson(record.memberId, access.principal)) return sendJson(ctx.res, 200, { connected: false });
+  if (!record || !samePerson(record.memberId, access.principal))
+    return sendJson(ctx.res, 200, { connected: false, workspaceInstalled });
   try {
     const account = await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(record.accountId)}`);
     const toolkit = account.toolkit as { slug?: string } | undefined;
@@ -272,7 +275,7 @@ async function slackStatus(ctx: ApiCtx): Promise<void> {
       toolkit?.slug === "slack" &&
       account.status === "ACTIVE" &&
       account.is_disabled !== true;
-    return sendJson(ctx.res, 200, { connected, user: record.user, workspace: record.workspace });
+    return sendJson(ctx.res, 200, { connected, workspaceInstalled, user: record.user, workspace: record.workspace });
   } catch {
     return sendJson(ctx.res, 502, { error: "status_unavailable" });
   }

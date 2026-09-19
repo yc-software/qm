@@ -69,6 +69,9 @@ export class OnboardingSlack extends LitElement {
     } finally {
       clearTimeout(timeout);
       this.request = undefined;
+      this.dispatchEvent(
+        new window.CustomEvent("slack-installation-status", { detail: { connected: this.connected } }),
+      );
       if (this.isConnected && !this.connected && Date.now() < this.pollUntil)
         this.timer = setTimeout(this.refreshVisible, 5000);
     }
