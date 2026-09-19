@@ -934,6 +934,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const verdict = computerVerdict(s);
         const machineLine = s.listed && s.listed !== s.machine ? `${s.machine} (listed: ${s.listed})` : s.machine;
         const pressureLine = s.pressure ? `; io pressure: ${s.pressure.ioFull60}% (load ${s.pressure.load1})` : "";
+        const resourcesLine = s.resources
+          ? `; cpu ${s.resources.cpuUsedPct}%, memory ${s.resources.memUsedMb}/${s.resources.memTotalMb} MiB, disk ${s.resources.diskUsedGb}/${s.resources.diskTotalGb} GiB`
+          : "";
         let shellLine = s.guestResponsive ? "answering" : `NOT answering${s.probeError ? ` (${s.probeError})` : ""}`;
         if (s.lifecycleState === "paused") shellLine = "paused (not probed)";
         const recoveryLines: string[] = [];
@@ -960,7 +963,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           callId,
           { tool: "sandbox", action: "status", verdict, ...s },
           text(
-            [`machine: ${machineLine}; shell: ${shellLine}${pressureLine}${verdictLine}`, ...recoveryLines].join("\n"),
+            [
+              `machine: ${machineLine}; shell: ${shellLine}${pressureLine}${resourcesLine}${verdictLine}`,
+              ...recoveryLines,
+            ].join("\n"),
           ),
         );
       } catch (e) {

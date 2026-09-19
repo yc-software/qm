@@ -373,6 +373,8 @@ interface E2bSandboxEnv {
   egressProxyUrl?: string;
   snapshotS3Bucket?: string;
   snapshotIntervalSec?: number;
+  nativeSnapshotIntervalSec?: number;
+  maxLifetimeSec?: number;
   defaultTimeoutSec?: number;
 }
 
@@ -384,11 +386,22 @@ function e2bSandboxEnv(env: NodeJS.ProcessEnv): E2bSandboxEnv {
     ...(numEnvStrict("E2B_SANDBOX_TTL_SEC", env.E2B_SANDBOX_TTL_SEC) !== undefined
       ? { sandboxTtlSec: numEnvStrict("E2B_SANDBOX_TTL_SEC", env.E2B_SANDBOX_TTL_SEC) }
       : {}),
+    ...(numEnvStrict("E2B_MAX_LIFETIME_SEC", env.E2B_MAX_LIFETIME_SEC) !== undefined
+      ? { maxLifetimeSec: numEnvStrict("E2B_MAX_LIFETIME_SEC", env.E2B_MAX_LIFETIME_SEC) }
+      : {}),
     ...(env.E2B_PROXY ? { proxy: env.E2B_PROXY } : {}),
     ...(env.E2B_EGRESS_PROXY_URL ? { egressProxyUrl: env.E2B_EGRESS_PROXY_URL } : {}),
     ...(env.E2B_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.E2B_SNAPSHOT_S3_BUCKET } : {}),
     ...(numEnvStrict("E2B_SNAPSHOT_INTERVAL_SEC", env.E2B_SNAPSHOT_INTERVAL_SEC) !== undefined
       ? { snapshotIntervalSec: numEnvStrict("E2B_SNAPSHOT_INTERVAL_SEC", env.E2B_SNAPSHOT_INTERVAL_SEC) }
+      : {}),
+    ...(numEnvStrict("E2B_NATIVE_SNAPSHOT_INTERVAL_SEC", env.E2B_NATIVE_SNAPSHOT_INTERVAL_SEC) !== undefined
+      ? {
+          nativeSnapshotIntervalSec: numEnvStrict(
+            "E2B_NATIVE_SNAPSHOT_INTERVAL_SEC",
+            env.E2B_NATIVE_SNAPSHOT_INTERVAL_SEC,
+          ),
+        }
       : {}),
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
@@ -1152,6 +1165,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (env.SANDBOX_BACKEND === "sprites" && !env.SPRITES_EGRESS_PROXY_URL) {
     console.warn(
       "[config] SANDBOX_BACKEND=sprites without SPRITES_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set SPRITES_EGRESS_PROXY_URL to the public egress proxy to force sandbox traffic through it.",
+    );
+  }
+  if (env.SANDBOX_BACKEND === "e2b" && !env.E2B_EGRESS_PROXY_URL) {
+    console.warn(
+      "[config] SANDBOX_BACKEND=e2b without E2B_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set E2B_EGRESS_PROXY_URL to the public egress proxy so E2B's network rules admit only that host.",
     );
   }
   const dataDir = resolve(env.DATA_DIR ?? "./data");

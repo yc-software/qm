@@ -156,6 +156,15 @@ export interface ComputerStatus {
   guestResponsive: boolean;
   probeError?: string;
   pressure?: ExecPressure;
+  resources?: ComputerResources;
+}
+
+export interface ComputerResources {
+  cpuUsedPct: number;
+  memUsedMb: number;
+  memTotalMb: number;
+  diskUsedGb: number;
+  diskTotalGb: number;
 }
 
 export type ComputerVerdict = "ok" | "wedged" | "down";
