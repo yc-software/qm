@@ -27,6 +27,9 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async computerStatus() {
       return { machine: "healthy", guestResponsive: true };
     },
+    async skill() {
+      return { content: null, sourceScopeId: null };
+    },
     async read(path) {
       return path === "a.txt"
         ? { content: "data", sourceScopeId: "personal:U1" }
@@ -378,7 +381,7 @@ test("each agent tool emits a tool_call then a tool_result", async () => {
     },
     scopeLabel: "personal:U1",
   };
-  const [execute, read, write] = createAgentTools(ref);
+  const [execute, , read, write] = createAgentTools(ref);
 
   await call(execute, { command: "echo hi" });
   await call(read, { path: "a.txt" });
@@ -1498,7 +1501,7 @@ test("a cross-scope read's tool_result keeps the SOURCE scope label so the audie
     scopeLabel: "channel:C1",
     orgScopeId: "org:default-org",
   };
-  const [execute, read] = createAgentTools(ref);
+  const [execute, , read] = createAgentTools(ref);
 
   await call(read, { path: "a.txt" });
   await call(read, { path: "missing.txt" });
@@ -1563,7 +1566,7 @@ test("a cross-scope result's classified label is recorded by callId for the tape
     scopeLabel: "channel:C1",
     orgScopeId: "org:acme",
   };
-  const [execute, read] = createAgentTools(ref);
+  const [execute, , read] = createAgentTools(ref);
 
   await callWith(read, "call-private", { path: "a.txt" });
   await callWith(read, "call-missing", { path: "missing.txt" });
@@ -1583,7 +1586,7 @@ test("tool entries carry the call id + faithful model-facing result (WAL replay 
     },
     scopeLabel: "personal:U1",
   };
-  const [execute, read, , , memory] = createAgentTools(ref);
+  const [execute, , read, , , memory] = createAgentTools(ref);
 
   await callWith(execute, "call-exec", { command: "echo hi" });
   await callWith(read, "call-read", { path: "a.txt" });
@@ -1750,7 +1753,7 @@ test("not-found read and denied command record isError + the faithful error text
     },
     scopeLabel: "org:default-org",
   };
-  const [execute, read] = createAgentTools(ref);
+  const [execute, , read] = createAgentTools(ref);
   await callWith(execute, "c1", { command: "rm -rf /" });
   await callWith(read, "c2", { path: "missing.txt" });
 
@@ -1780,7 +1783,7 @@ test("a denied command still emits a tool_result (denied), and a missing read re
     },
     scopeLabel: "org:default-org",
   };
-  const [execute, read] = createAgentTools(ref);
+  const [execute, , read] = createAgentTools(ref);
 
   await call(execute, { command: "rm -rf /" });
   await call(read, { path: "missing.txt" });
@@ -1905,7 +1908,7 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
   });
 
   const org = textOf(
-    await call(createAgentTools({ current: withAudience({ kind: "org", orgId: "acme" }) })[3], {
+    await call(createAgentTools({ current: withAudience({ kind: "org", orgId: "acme" }) })[4], {
       entrypoint: "x",
       name: "site",
     }),
@@ -1914,7 +1917,7 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
   assert.match(org, /anyone at acme/);
 
   const members = textOf(
-    await call(createAgentTools({ current: withAudience({ kind: "members", channelRef: "C1", memberCount: 3 }) })[3], {
+    await call(createAgentTools({ current: withAudience({ kind: "members", channelRef: "C1", memberCount: 3 }) })[4], {
       entrypoint: "x",
       name: "site",
     }),
@@ -1922,7 +1925,7 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
   assert.match(members, /reachable by the 3 people currently in #C1/);
 
   const owner = textOf(
-    await call(createAgentTools({ current: withAudience({ kind: "owner" }) })[3], { entrypoint: "x", name: "site" }),
+    await call(createAgentTools({ current: withAudience({ kind: "owner" }) })[4], { entrypoint: "x", name: "site" }),
   );
   assert.match(owner, /owner-only/);
 
@@ -1933,7 +1936,7 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
           kind: "owner",
           note: "couldn't enumerate the channel's members to auto-share — share manually",
         }),
-      })[3],
+      })[4],
       { entrypoint: "x", name: "site" },
     ),
   );
@@ -1954,7 +1957,7 @@ test("publish reply: the reply never carries a capability token, even from a sta
       } as never;
     },
   };
-  const out = textOf(await call(createAgentTools({ current: stale })[3], { entrypoint: "x", name: "site" }));
+  const out = textOf(await call(createAgentTools({ current: stale })[4], { entrypoint: "x", name: "site" }));
   assert.match(out, /https:\/\/site\.apps\.example\.com\//, "the bare URL is in the reply");
   assert.doesNotMatch(out, /access=/, "no capability token in the reply");
   assert.doesNotMatch(out, /anyone with this link/, "reach is described by the audience, never a bearer claim");

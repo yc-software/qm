@@ -14,7 +14,7 @@ import {
   type TranscriptAppendSessions,
 } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
-import { errMessage } from "../util/errors.ts";
+import { reportFailureAs } from "../util/errors.ts";
 
 export interface RunResultDelivery {
   destination: Destination;
@@ -140,8 +140,8 @@ export function wireRunResultDeliveries(
 ): void {
   runs.onTerminal((run) => {
     if (sessions) {
-      void recordRunFailureEntry(sessions, run).catch((err) =>
-        console.error("%s", `[delivery] failed to record turn_failure entry for run ${run.id}:`, errMessage(err)),
+      void recordRunFailureEntry(sessions, run).catch(
+        reportFailureAs("delivery: record turn_failure entry", undefined, `run=${run.id}`),
       );
     }
     void (async () => {
@@ -149,8 +149,6 @@ export function wireRunResultDeliveries(
       const delivery = runResultDelivery(run, taskList, adminUrlFor);
       if (!delivery) return;
       await deliveries.enqueue(delivery);
-    })().catch((err) =>
-      console.error("%s", `[delivery] failed to enqueue recovery delivery for run ${run.id}:`, errMessage(err)),
-    );
+    })().catch(reportFailureAs("delivery: enqueue recovery delivery", undefined, `run=${run.id}`));
   });
 }

@@ -1,6 +1,6 @@
 import type { ScopeId } from "../types.ts";
 import { createPgPool, type PgMigrationDefinition, type PgPool } from "../persistence/pg-pool.ts";
-import { errMessage } from "../util/errors.ts";
+import { reportFailureAs } from "../util/errors.ts";
 
 export interface ScopedEvent {
   scopeLabel: ScopeId;
@@ -193,7 +193,7 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
       const s = input as Record<string, unknown>;
       const values = cfg.columns.map(([, js]) => (js === "ts" ? Date.now() : (s[js] ?? null)));
       const write = q(insertSql, values)
-        .catch((err) => console.error(cfg.persistErrorMessage, errMessage(err)))
+        .catch(reportFailureAs(cfg.persistErrorMessage, undefined))
         .finally(() => pendingWrites.delete(write));
       pendingWrites.add(write);
     },

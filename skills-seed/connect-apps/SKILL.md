@@ -6,7 +6,7 @@ description: Connect an administrator-enabled SaaS app for a user with a one-tim
 ## Connecting SaaS apps
 
 Check the live credential inventory first. When an authorized Composio credential is
-available, read `skill://composio/SKILL.md` and use its discovery and consent flow instead
+available, load the `composio` skill and use its discovery and consent flow instead
 of the direct OAuth flow below. An empty direct OAuth list or a native
 `oauth_not_configured` error does not describe Composio availability. Preserve explicit
 app restrictions and account permissions; never switch credentials to evade a denial.

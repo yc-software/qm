@@ -6,7 +6,7 @@ import vm from "node:vm";
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 const source = html.slice(
   html.indexOf("      function slackUnescape("),
-  html.indexOf("      function slackAuthorLabel("),
+  html.indexOf("      governanceUI.slackActivity.configure("),
 );
 
 class RenderNode {

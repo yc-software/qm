@@ -1,34 +1,30 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import vm from "node:vm";
-
-const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+import { JSDOM } from "jsdom";
+import { buildSync } from "esbuild";
+const bundle = buildSync({
+  entryPoints: [new URL("../ui/integrations.ts", import.meta.url).pathname],
+  bundle: true,
+  write: false,
+  format: "iife",
+  globalName: "ui",
+}).outputFiles[0].text;
 async function render(data: Record<string, unknown>) {
-  const elements = new Map<string, any>();
-  const start = html.indexOf("async function loadSlackInstallation() {");
-  const end = html.indexOf('$("slack-installation-start").onclick', start);
-  await vm.runInNewContext(html.slice(start, end) + "loadSlackInstallation()", {
-    $: (id: string) => {
-      assert.ok(html.includes(`id="${id}"`), `missing ${id}`);
-      if (!elements.has(id)) {
-        const hidden = new Set<string>();
-        elements.set(id, {
-          open: false,
-          classList: {
-            toggle: (name: string, value: boolean) => (value ? hidden.add(name) : hidden.delete(name)),
-            contains: (name: string) => hidden.has(name),
-          },
-        });
-      }
-      return elements.get(id);
-    },
-    api: async () => ({ ok: true, data }),
-    slackLinkStarted: false,
-    URLSearchParams,
-    location: { search: "" },
+  const dom = new JSDOM(readFileSync(new URL("../public/index.html", import.meta.url), "utf8"), {
+    runScripts: "outside-only",
+    url: "http://localhost/admin/slack-settings",
   });
-  return (id: string) => elements.get(id);
+  dom.window.eval(
+    bundle +
+      ";window.ui=ui;ui.mountCards();ui.configure({api:async()=>({ok:true,data:" +
+      JSON.stringify(data) +
+      '}),orgScope:()=>"org:test",connectorName:x=>x,fmtTime:x=>x});',
+  );
+  await dom.window.eval("ui.loadSlackInstallation()");
+  const result = (id: string) => dom.window.document.getElementById(id) as any;
+  test.after(() => dom.window.close());
+  return result;
 }
 
 test("public QM leads with manifest setup and hides hosted actions and instructions", async () => {
@@ -39,30 +35,40 @@ test("public QM leads with manifest setup and hides hosted actions and instructi
   });
   assert.equal(el("slack-installation-start").classList.contains("hidden"), true);
   assert.equal(el("slack-own-app-guide").open, true);
-  assert.equal(el("slack-own-app-label").textContent, "Set up Slack");
+  assert.equal(el("slack-own-app-label").textContent.trim(), "Set up Slack");
   assert.equal(el("slack-hosted-switch").classList.contains("hidden"), true);
-  assert.match(el("slack-installation-description").textContent, /manifest/);
+  assert.match(el("slack-installation-description").textContent.trim(), /manifest/);
   assert.match(el("slack-installation-create").href, /manifest_json/);
 });
 
 test("hosted connection offers re-add and keeps custom setup secondary", async () => {
   const el = await render({ configured: true, source: "service", installAvailable: true, teamName: "Development YC" });
-  assert.equal(el("slack-installation-start-label").textContent, "Re-add to Slack");
+  assert.equal(el("slack-installation-start-label").textContent.trim(), "Re-add to Slack");
   assert.equal(el("slack-installation-start").disabled, false);
-  assert.equal(el("slack-installation-state").textContent, "Development YC");
-  assert.equal(el("slack-own-app-label").textContent, "Use your own Slack app");
-  assert.equal(el("slack-own-app-guide"), undefined);
+  assert.equal(el("slack-installation-state").textContent.trim(), "Development YC");
+  assert.equal(el("slack-own-app-label").textContent.trim(), "Use your own Slack app");
+  assert.equal(el("slack-own-app-guide").open, false);
 });
 
 test("custom connection cannot be replaced by hosted OAuth without disconnecting", async () => {
   const el = await render({ configured: true, source: "admin", installAvailable: true });
   assert.equal(el("slack-installation-start").disabled, true);
-  assert.equal(el("slack-installation-description").textContent, "Custom app");
+  assert.equal(el("slack-installation-description").textContent.trim(), "Custom app");
 });
 
-test("managed credentials alone do not block retry of an unfinished route activation", () => {
-  assert.match(
-    html,
-    /r\.data\.configured && !\(r\.data\.source === "service" && r\.data\.setup\?\.connected === false\)/,
-  );
+test("managed credentials alone do not block retry of an unfinished route activation", async () => {
+  const dom = new JSDOM('<template data-integrations-card="card-slack-installation"></template>', {
+    runScripts: "outside-only",
+    url: "http://localhost/admin/slack-settings?slack=install",
+  });
+  try {
+    dom.window.eval(
+      bundle +
+        ';window.ui=ui;window.methods=[];ui.mountCards();ui.configure({api:async(method)=>{methods.push(method);return {ok:true,data:{configured:true,source:"service",installAvailable:true,setup:{connected:false}}}},orgScope:()=>"org:test"});',
+    );
+    await dom.window.eval("ui.loadSlackInstallation()");
+    assert.deepEqual(JSON.parse(String(dom.window.eval("JSON.stringify(methods)"))), ["GET", "POST"]);
+  } finally {
+    dom.window.close();
+  }
 });

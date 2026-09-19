@@ -127,3 +127,55 @@ test("credentials-page summary avoids unrelated history and exposes counts only"
   });
   assert.equal(denied.status, 403);
 });
+
+test("user keychain reads only the selected owner's metadata and grants", async (t) => {
+  const s = start();
+  t.after(s.close);
+  const credential = await s.keychain.save({
+    ownerId: "alice@example.com",
+    service: "github",
+    secret: "private-user-secret",
+    envKey: "GITHUB_TOKEN",
+  });
+  await s.keychain.save({
+    ownerId: "bob@example.com",
+    service: "github",
+    secret: "other-user-secret",
+    envKey: "GITHUB_TOKEN",
+  });
+  const grant = await s.keychain.createGrant({
+    credentialId: credential.id,
+    ownerId: "alice@example.com",
+    audienceScopeId: scopeId("channel", "C1"),
+    mode: "standing",
+    purpose: "test",
+  });
+  const fail = () => {
+    throw new Error("User keychain must not load unrelated org data");
+  };
+  t.mock.method(s.keychain, "listAllMetadata", fail);
+  t.mock.method(s.keychain, "listAsks", fail);
+  t.mock.method(s.built.sessions, "distinctParticipants", fail);
+  t.mock.method(s.built.app, "directoryMembers", fail);
+  if (s.built.auditLog.tallyByResource)
+    t.mock.method(s.built.auditLog as Required<typeof s.built.auditLog>, "tallyByResource", fail);
+  const response = await fetch(s.base + "/v1/admin/keychain?principal=Alice%40example.com", {
+    headers: { "x-admin-actor": "admin-alice@default-org" },
+  });
+  assert.equal(response.status, 200);
+  const data = (await response.json()) as any;
+  assert.deepEqual(
+    data.credentials.map((c: { id: string }) => c.id),
+    [credential.id],
+  );
+  assert.deepEqual(
+    data.grants.map((g: { id: string }) => g.id),
+    [grant.id],
+  );
+  assert.equal(JSON.stringify(data).includes("private-user-secret"), false);
+  assert.equal(JSON.stringify(data).includes("bob@example.com"), false);
+  const denied = await fetch(s.base + "/v1/admin/keychain?principal=alice%40example.com", {
+    headers: { "x-admin-actor": "nobody@default-org" },
+  });
+  assert.equal(denied.status, 403);
+});

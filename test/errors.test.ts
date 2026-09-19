@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { asError, errMessage } from "../src/util/errors.ts";
+import { asError, errMessage, errorAlreadyReported, failureCode, reportFailure } from "../src/util/errors.ts";
+import { WorkAdmissionClosed } from "../src/util/admitted-work.ts";
 import { errMessage as pluginErrMessage } from "../plugins/chassis/src/errors.ts";
 import { runInNewContext } from "node:vm";
 
@@ -78,4 +79,37 @@ test("asError preserves cross-realm messages without invoking custom stringifier
     asError({ toString: () => assert.fail("object stringification must not run") }).message,
     "Unknown error",
   );
+});
+
+test("failureCode turns a static context into a Sentry-safe grouping code", () => {
+  assert.equal(failureCode("scheduler: fire"), "scheduler:fire");
+  assert.equal(
+    failureCode("web delivery: transcript write gave up (delivering as a nudge only)"),
+    "web_delivery:transcript_write_gave_up_delivering_as_a_nudge_only",
+  );
+  assert.equal(failureCode("x".repeat(200)).length, 120);
+  assert.match(failureCode("Ünïcode / spaces"), /^[a-z0-9_.:-]+$/);
+});
+
+test("reportFailure logs every failure but marks only reportable ones as reported", (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  });
+  const cancelled = new DOMException("stopped", "AbortError");
+  reportFailure("scheduler: fire", cancelled);
+  assert.equal(errorAlreadyReported(cancelled), false, "cancellations are logged, never reported");
+  const closed = new WorkAdmissionClosed();
+  reportFailure("scheduler: tick", closed);
+  assert.equal(errorAlreadyReported(closed), false, "admission closed during handoff is logged, never reported");
+  const boom = new Error("boom");
+  reportFailure("scheduler: fire", boom);
+  assert.equal(errorAlreadyReported(boom), true);
+  reportFailure("worker: retry", "a string throw", "run=r1");
+  assert.deepEqual(logged, [
+    "[failed] scheduler: fire: stopped",
+    "[failed] scheduler: tick: This deployment is not accepting synchronous work",
+    "[failed] scheduler: fire: boom",
+    "[failed] worker: retry (run=r1): a string throw",
+  ]);
 });

@@ -35,7 +35,7 @@ import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oaut
 import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { audit } from "./shared.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, reportFailure } from "../../util/errors.ts";
 import {
   DEFAULT_SECURITY_SCREEN_RUBRIC,
   parseSecurityPosture,
@@ -1111,7 +1111,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           auditGrantChanges(grantChanges(replacement));
           return { ok: true };
         } catch (e) {
-          console.error("[admin] credential delete failed after conditional mutation:", errMessage(e));
+          reportFailure("admin: credential delete after conditional mutation", e);
           return mutationFailed("delete");
         }
       }
@@ -1219,7 +1219,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         auditGrantChanges(grantChanges(replacement));
         return { ok: true };
       } catch (e) {
-        console.error("[admin] credential update failed after conditional mutation:", errMessage(e));
+        reportFailure("admin: credential update after conditional mutation", e);
         return mutationFailed(existing ? "update" : "create");
       }
     },

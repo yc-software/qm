@@ -678,7 +678,7 @@ a.chat-row-open {
   align-items: center;
   gap: 5px;
   min-height: 30px;
-  margin: 3px 0 5px 4px;
+  margin: 3px 0 0 4px;
   padding: 4px 3px 4px 2px;
   color: var(--foreground);
   font-size: 12.5px;
@@ -708,41 +708,31 @@ a.chat-row-open {
   --session-action-hover: color-mix(in srgb, var(--session-color) 24%, var(--secondary));
   --session-action-foreground: color-mix(in srgb, var(--session-color) 68%, var(--foreground));
 }
+.session-row:is(.colored, .active, .menu-open, .selected, .read-only, :hover) .session {
+  width: calc(100% + 4px);
+  margin-left: -4px;
+  padding-left: 15px;
+}
 .session-row.colored .session {
-  background: linear-gradient(
-    110deg,
-    color-mix(in srgb, var(--session-color) 22%, transparent),
-    color-mix(in srgb, var(--session-color) 10%, transparent)
-  );
+  background: color-mix(in srgb, var(--session-color) 16%, transparent);
+}
+.recent-project-children .session-row:is(.colored, .active, .menu-open, .selected, .read-only, :hover) .session,
+.archived-children .session-row:is(.colored, .active, .menu-open, .selected, .read-only, :hover) .session,
+.pinned-children .session-row:is(.colored, .active, .menu-open, .selected, .read-only, :hover) .session {
+  padding-left: 10px;
 }
 .session-row.colored .session:hover,
 .session-row.colored.menu-open .session {
-  background: linear-gradient(
-    110deg,
-    color-mix(in srgb, var(--session-color) 30%, transparent),
-    color-mix(in srgb, var(--session-color) 16%, transparent)
-  );
+  background: color-mix(in srgb, var(--session-color) 23%, transparent);
 }
 .session-row.colored.active .session {
-  background: linear-gradient(
-    110deg,
-    color-mix(in srgb, var(--session-color) 34%, var(--secondary)),
-    color-mix(in srgb, var(--session-color) 20%, var(--secondary))
-  );
+  background: color-mix(in srgb, var(--session-color) 27%, var(--secondary));
 }
 .list-row.chat-row.colored {
-  background: linear-gradient(
-    110deg,
-    color-mix(in srgb, var(--session-color) 20%, transparent),
-    color-mix(in srgb, var(--session-color) 8%, transparent)
-  );
+  background: color-mix(in srgb, var(--session-color) 14%, transparent);
 }
 .list-row.chat-row.colored:hover {
-  background: linear-gradient(
-    110deg,
-    color-mix(in srgb, var(--session-color) 28%, transparent),
-    color-mix(in srgb, var(--session-color) 14%, transparent)
-  );
+  background: color-mix(in srgb, var(--session-color) 21%, transparent);
 }
 
 .session-menu-colors {
@@ -1198,6 +1188,9 @@ a.chat-row-open {
   grid-template-rows: auto minmax(0, 1fr) auto minmax(0, 1fr);
 }
 .custom-chat-shell.in-pane.empty-chat {
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+.split-canvas:not(.single-pane) .custom-chat-shell.in-pane.empty-chat {
   grid-template-rows: minmax(0, 1fr) auto;
 }
 .drop-overlay {
@@ -2777,13 +2770,13 @@ qm-markdown .tok-in {
   display: grid;
   grid-template-rows: 1fr;
   width: min(var(--content-w), calc(100% - 32px));
-  margin: 0 auto 10px;
+  margin: 10px auto max(18px, calc(10px + env(safe-area-inset-bottom)));
   padding: 0 2px;
   opacity: 1;
   visibility: visible;
   transition:
     grid-template-rows 220ms ease,
-    margin-bottom 220ms ease,
+    margin-top 220ms ease,
     opacity 160ms ease,
     visibility 0s;
 }
@@ -2793,15 +2786,18 @@ qm-markdown .tok-in {
 }
 .suggested-activities.is-collapsed {
   grid-template-rows: 0fr;
-  margin-bottom: 0;
+  margin-top: 0;
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
   transition:
     grid-template-rows 220ms ease,
-    margin-bottom 220ms ease,
+    margin-top 220ms ease,
     opacity 140ms ease,
     visibility 0s 220ms;
+}
+.empty-chat:has(.suggested-activities) .composer-wrap {
+  margin-bottom: 0;
 }
 .empty-chat:has(.suggested-activities) .chat-cta {
   transform: translateY(8px);
@@ -2863,7 +2859,7 @@ qm-markdown .tok-in {
 @media (max-width: 860px) {
   .suggested-activities {
     padding: 0 2px;
-    margin-bottom: 12px;
+    margin-top: 12px;
   }
 }
 .custom-chat-shell:has(> .chat-scroll):not(.empty-chat) > .chat-bottom-dock {
@@ -8252,35 +8248,38 @@ h3.ambient-field-label {
 }
 
 .split-pane-chat {
-  --chat-pad: 13px;
-  --composer-inset: 10px;
-  --meta-lane: 19px;
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
-  font-size: 12px;
   overflow: hidden;
 }
 
-.split-pane-chat .assistant-body,
-.split-pane-chat .message-bubble,
-.split-pane-chat .message-stack {
+.split-canvas:not(.single-pane) .split-pane-chat {
+  --chat-pad: 13px;
+  --composer-inset: 10px;
+  --meta-lane: 19px;
   font-size: 12px;
 }
 
-.split-pane-chat .chat-cta {
+.split-canvas:not(.single-pane) .split-pane-chat .assistant-body,
+.split-canvas:not(.single-pane) .split-pane-chat .message-bubble,
+.split-canvas:not(.single-pane) .split-pane-chat .message-stack {
+  font-size: 12px;
+}
+
+.split-canvas:not(.single-pane) .split-pane-chat .chat-cta {
   font-size: 21px;
 }
 
-.dockview-theme-qm .dv-tabs-and-actions-container .icon-btn {
+.split-canvas:not(.single-pane) .dockview-theme-qm .dv-tabs-and-actions-container .icon-btn {
   width: 27px;
   height: 27px;
   min-width: 27px;
   border-radius: 0;
 }
 
-.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
+.split-canvas:not(.single-pane) .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
   height: 27px;
   border-radius: 0;
 }
@@ -8542,7 +8541,7 @@ h3.ambient-field-label {
   display: none;
 }
 
-.split-pane-chat .custom-chat-shell .composer-wrap {
+.split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap {
   --composer-font-size: 12px;
   --composer-pad-block: 10px;
   --composer-pad-inline: 10px;

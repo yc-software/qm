@@ -82,7 +82,7 @@ export class OnboardingSlack extends LitElement {
     }
     popup.opener = null;
     if (this.installAvailable === false) {
-      popup.location.href = `${this.adminBase}/connectors?setup=slack`;
+      popup.location.href = `${this.adminBase}/slack-settings?setup=slack`;
       return;
     }
     popup.document.title = "Connecting Slack";
