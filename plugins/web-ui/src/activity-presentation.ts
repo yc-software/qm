@@ -3,7 +3,7 @@ import type { WorkBlock } from "./core-bridge.ts";
 
 export type ActivityCategory = "read" | "search" | "execute" | "other";
 
-export function compactPath(path: string): string {
+function compactPath(path: string): string {
   const parts = path.replace(/\/$/, "").split("/");
   return parts.at(-1) === "SKILL.md" ? parts.slice(-2).join("/") : parts.at(-1) || path;
 }
