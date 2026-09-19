@@ -426,12 +426,14 @@ export class OnboardingWelcome extends LitElement {
                       <p class="welcome-beat" style="--welcome-delay:700ms">The easiest way to get up and running:</p>`
               }`
       }
-      ${this.widget !== "apps" && (this.widget === "slack" || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()}></qm-slack-account>` : nothing}
+      <div class="welcome-beat" style=${`--welcome-delay:${cohort ? 3050 : 900}ms`}>
+        ${this.widget !== "apps" && (this.widget === "slack" || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()}></qm-slack-account>` : nothing}
+      </div>
       ${
         this.widget !== "apps" && this.me?.permissions?.includes("admin")
           ? html`<qm-onboarding-slack
               class="welcome-beat"
-              style=${`--welcome-delay:${cohort ? 3050 : 900}ms`}
+              style=${`--welcome-delay:${cohort ? 3250 : 1100}ms`}
               .adminBase=${this.adminBase}
             ></qm-onboarding-slack>`
           : nothing
@@ -439,7 +441,7 @@ export class OnboardingWelcome extends LitElement {
       ${
         this.widget === "slack"
           ? nothing
-          : html`<div class="welcome-beat" style=${`--welcome-delay:${cohort ? 3300 : 1100}ms`}>
+          : html`<div class="welcome-beat" style=${`--welcome-delay:${cohort ? 3450 : 1300}ms`}>
               ${this.loading ? html`<div class="welcome-load" role="status">Loading your available apps…</div>` : nothing}
               ${
                 this.error
@@ -450,9 +452,9 @@ export class OnboardingWelcome extends LitElement {
                         type="button"
                         class="btn"
                         @click=${() => {
-                        void this.loadCatalog();
-                        void this.loadConnections();
-                      }}
+                          void this.loadCatalog();
+                          void this.loadConnections();
+                        }}
                       >
                         Try again
                       </button>
