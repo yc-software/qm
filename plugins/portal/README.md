@@ -42,6 +42,10 @@ surfaces, and it does **not** import the core.
    **exact first path segment**, strips the prefix, and proxies to the private upstream,
    synthesizing the surface cookie for compatibility and attaching a short-lived signed portal
    identity. Surfaces pass that identity to core, which verifies it before any user-scoped action.
+   Before proxying, the portal asks core for the session subject's canonical principal
+   (`GET /v1/principals/:id/canonical`, cached for a minute). A sign-in that an org admin has
+   linked to another identity therefore acts as that person's canonical principal; see
+   [`docs/principal-links.md`](../../docs/principal-links.md).
 
 ## Additional trusted entry (PoC)
 

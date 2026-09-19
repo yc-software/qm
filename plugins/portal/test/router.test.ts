@@ -49,6 +49,10 @@ const upstream = createServer((req: IncomingMessage, res) => {
       JSON.stringify({ status: "authorize", authorizeUrl: "https://accounts.google.test/o/oauth2?x=1" }),
     );
   }
+  if (req.url?.startsWith("/v1/principals/U-alias/canonical")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ principalId: "U-alias", canonicalId: "U1" }));
+  }
   if (req.url === "/api/whoami") {
     whoamiProbes++;
     const m = (req.headers.cookie ?? "").match(/admin=([^;]+)/);
@@ -165,6 +169,15 @@ test("valid session: upstream receives ONLY the synthesized cookie, prefix strip
   assert.equal(body.cookie, "webuiuser=U1");
   assert.equal(body.headers["x-as-principal"], undefined);
   assert.equal(body.headers["x-admin-actor"], undefined);
+});
+
+test("a session whose subject core links to another principal is proxied as that canonical principal", async () => {
+  const r = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-alias") } });
+  assert.equal(r.status, 200);
+  const body = (await r.json()) as { cookie: string };
+  assert.equal(body.cookie, "webuiuser=U1");
+  const unlinked = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-solo") } });
+  assert.equal(((await unlinked.json()) as { cookie: string }).cookie, "webuiuser=U-solo");
 });
 
 test("web-ui /app-edit drops x-frame-options so its own frame-ancestors CSP can allow the app origin", async () => {
