@@ -188,6 +188,23 @@ test("factory/README.md is at most ten lines", () => {
   );
 });
 
+test("every prompt that can write tests interpolates the test-economy rules", () => {
+  for (const label of ["feedback-revise", "implement", "add-tests"]) {
+    const end = BAS.indexOf(`{ label: '${label}' }`);
+    assert.notEqual(end, -1, `no agent call labelled ${label} in ${BAS_REL}`);
+    const start = BAS.lastIndexOf("agent(`", end);
+    assert.ok(start !== -1 && start < end, `the ${label} prompt is not an inline agent(\`…\`) literal`);
+    const prompt = BAS.slice(start, end);
+    assert.ok(
+      !prompt.includes("{ label:"),
+      `the ${label} prompt slice spans another agent call — the back-scan mis-attached`,
+    );
+    for (const rule of ["${TEST_QUALITY_RULES}", "${TEST_HOWTO}"]) {
+      assert.ok(prompt.includes(rule), `the ${label} prompt does not interpolate ${rule}`);
+    }
+  }
+});
+
 const handshakeTokens = [
   ...captures(WRAP, /\.project == "([^"]*)"/g),
   ...captures(BAS, /\.project == "([^"]*)"/g),
