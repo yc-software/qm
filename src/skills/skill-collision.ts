@@ -1,5 +1,4 @@
-import { safeSkillDirName } from "./materialize.ts";
-import { isSkillMaterializationControlPath, SKILLS_DIR, SKILL_TREE_MARKER } from "./materialization-paths.ts";
+import { safeSkillDirName, SKILLS_DIR } from "./materialize.ts";
 import { safeSkillFilePath, type SkillFile } from "./skill-store.ts";
 import { isSafeSkillName } from "./skill-name.ts";
 
@@ -7,24 +6,15 @@ export const SKILL_MATERIALIZATION_LOCK = "skills:materialization";
 
 export function skillRecordPaths(name: string, files: SkillFile[] | undefined): string[] {
   const dir = `${SKILLS_DIR}/${safeSkillDirName(name)}`;
-  const out = [`${dir}/SKILL.md`, `${dir}/${SKILL_TREE_MARKER}`];
+  const out = [`${dir}/SKILL.md`];
   for (const f of files ?? []) {
-    let rel: string;
     try {
-      rel = safeSkillFilePath(f.path);
+      out.push(`${dir}/${safeSkillFilePath(f.path)}`);
     } catch {
       continue;
     }
-    const path = `${dir}/${rel}`;
-    if (!isSkillMaterializationControlPath(path)) out.push(path);
   }
   return out;
-}
-
-export function materializationControlPathCollisions(paths: string[]): PathCollision[] {
-  return paths
-    .filter(isSkillMaterializationControlPath)
-    .map((path) => ({ path, owner: "core skill materialization metadata" }));
 }
 
 export function persistedSkillRecordPaths(name: string, files: SkillFile[] | undefined): string[] {

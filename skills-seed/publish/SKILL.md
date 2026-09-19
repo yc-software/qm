@@ -25,9 +25,9 @@ asked for a different look:
 - **The deployment's house-style skill** — if a `*-design` skill is installed (list
   `skills/`), it carries the org's look as ready-to-paste CSS and design tokens. Start
   there for the look.
-- **`skill://taste-skill/SKILL.md`** — the design _process_: reading the brief, layout,
+- **`taste-skill`** — the design _process_: reading the brief, layout,
   hierarchy, verifying the result, avoiding generic AI-design slop.
-- **`skill://popular-web-designs/SKILL.md`** — when the user wants a specific visual
+- **`popular-web-designs`** — when the user wants a specific visual
   reference (Stripe, Linear, Vercel…).
 
 This is about the page a person sees — skip it for an internal-only API or a script with

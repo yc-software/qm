@@ -975,13 +975,61 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
+  const skill = defineTool({
+    name: "skill",
+    label: "skill",
+    description:
+      "Load a skill from the Skills index before relying on it. Returns its SKILL.md instructions (or the relative file named by `path`) straight from the published source, without starting a sandbox. When the skill ships scripts or supporting files, this call also syncs them into a directory that lives for this turn and reports it; run and read them there with execute and read, in this turn.",
+    parameters: Type.Object({
+      name: Type.String({ description: "Skill name exactly as listed in the Skills index." }),
+      path: Type.Optional(
+        Type.String({ description: "Relative file within the skill to return instead of SKILL.md." }),
+      ),
+      ...(opts?.sandboxResources
+        ? {
+            sandbox_id: Type.Optional(
+              Type.String({ description: "Sync the skill's files into this sandbox instead of the default." }),
+            ),
+          }
+        : {}),
+    }),
+    async execute(callId, params) {
+      const tc = ref.current;
+      if (!tc) return text("[error] no active tool context");
+      const p = params as { name: string; path?: string; sandbox_id?: string };
+      await recordCall(callId, { tool: "skill", name: p.name, ...(p.path ? { path: p.path } : {}) });
+      const signal = ref.abortSignal;
+      signal?.throwIfAborted();
+      const { content, sourceScopeId, dir, packDir } = await tc.skill(p.name, {
+        ...(p.path ? { path: p.path } : {}),
+        ...(p.sandbox_id ? { sandboxId: p.sandbox_id } : {}),
+        ...(signal ? { signal } : {}),
+      });
+      signal?.throwIfAborted();
+      const where = dir ? `[skill files synced to ${dir}/${packDir ? `; pack files at ${packDir}/` : ""}]\n\n` : "";
+      return recordResult(
+        callId,
+        {
+          tool: "skill",
+          name: p.name,
+          ...(p.path ? { path: p.path } : {}),
+          found: content !== null,
+          ...(content !== null ? { bytes: content.length, sourceScopeId } : {}),
+          ...(dir ? { dir } : {}),
+        },
+        text(content === null ? `[no such skill file: ${p.name}/${p.path ?? "SKILL.md"}]` : `${where}${content}`),
+        content === null,
+        sourceScopeId,
+      );
+    },
+  });
+
   const read = defineTool({
     name: "read",
     label: "read",
-    description:
-      "Read published skill sources at skill://<name>/<path> without a sandbox, or workspace files (scope, then global). Returns contents.",
+    description: "Read a file from the workspace (scope, then global). Returns its contents.",
     parameters: Type.Object({
-      path: Type.String({ description: "Published skill URI or relative path within the workspace." }),
+      path: Type.String({ description: "Relative path within the workspace." }),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -3847,6 +3895,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const tools = [
     ...(!opts?.sandboxResources ? [execute] : []),
     ...(credentialExecServices.length ? [credentialExec] : []),
+    skill,
     read,
     write,
     publish,

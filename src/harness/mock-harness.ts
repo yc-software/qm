@@ -31,6 +31,8 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!screened-run ",
   "!double-exec ",
   "!read ",
+  "!skill ",
+  "!skill-run ",
   "!write ",
   "!attach ",
   "!writeattach ",
@@ -553,6 +555,39 @@ export function createMockHarness(): Harness {
           const added = await turn.tools.memoryRemember([fact]);
           usedTool = true;
           reply = added === null ? "(memory unavailable)" : `remembered ${added}`;
+        } else if (command0.startsWith("!skill-run ")) {
+          const rest = command0.slice(11).trim();
+          const sp = rest.indexOf(" ");
+          const name = sp === -1 ? rest : rest.slice(0, sp);
+          const r = await turn.tools.skill(name);
+          usedTool = true;
+          if (r.content == null) reply = `(no skill file: ${name}/SKILL.md)`;
+          else {
+            const command = rest
+              .slice(sp + 1)
+              .split("{dir}")
+              .join(r.dir ?? "");
+            const ran = await turn.tools.execute(command);
+            reply = (ran.stdout || ran.stderr).trim();
+          }
+        } else if (command0.startsWith("!skill ")) {
+          const [name, path] = command0.slice(7).trim().split(/\s+/);
+          const r = await turn.tools.skill(name!, path ? { path } : undefined);
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "skill", name, found: r.content != null, ...(r.dir ? { dir: r.dir } : {}) },
+            scopeLabel: classifyScopeLabel({
+              type: "tool_result",
+              sessionScopeId: turn.scopeLabel,
+              orgScopeId: turn.orgScopeId,
+              sourceScopeId: r.sourceScopeId,
+            }),
+          });
+          usedTool = true;
+          reply =
+            r.content == null
+              ? `(no skill file: ${name}/${path ?? "SKILL.md"})`
+              : `${r.dir ? `${r.dir}\n` : ""}${r.content}`;
         } else if (command0.startsWith("!write ")) {
           const rest = command0.slice(7);
           const sp = rest.indexOf(" ");
