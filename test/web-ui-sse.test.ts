@@ -145,10 +145,7 @@ test("active run lookup returns the latest tracked run for the caller's web thre
   assert.equal(activeRes.status, 200);
   const active = (await activeRes.json()) as { runId?: string | null; run?: { status?: string } | null };
   assert.equal(active.runId, submit.runId);
-  assert.ok(
-    ["pending", "running"].includes(active.run?.status ?? ""),
-    "active lookup returns a run snapshot",
-  );
+  assert.ok(["pending", "running"].includes(active.run?.status ?? ""), "active lookup returns a run snapshot");
 
   const otherUser = await fetch(
     `${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`,
