@@ -1,6 +1,6 @@
 import { LitElement, html, nothing } from "lit";
-import { ArrowUpRight, Check, Link2 } from "lucide";
-import { icon } from "./ui";
+import { ArrowUpRight, Check, Link2, UserRound } from "lucide";
+import { icon, slackMark } from "./ui";
 import "./slack-account.css";
 import { withBase } from "./core-bridge";
 
@@ -149,10 +149,14 @@ export class SlackAccount extends LitElement {
               ${icon(Check, 14)}<span>Your Slack account is linked${this.label ? ` · ${this.label}` : ""}</span>
             </div>`
           : html`<button class="welcome-slack" type="button" ?disabled=${this.busy} @click=${() => void this.connect()}>
-              <div class="slack-link-icon">${icon(Link2, 24)}</div>
+              <div class="slack-link-icon" aria-hidden="true">
+                <span class="slack-link-person">${icon(UserRound, 17)}</span>
+                <span class="slack-link-service">${slackMark(18)}</span>
+                <span class="slack-link-chain">${icon(Link2, 13)}</span>
+              </div>
               <span
                 ><strong>${this.busy ? "Linking Slack…" : "Link your Slack account"}</strong
-                ><small>Use your connected apps in Slack and search conversations you can access.</small></span
+                ><small>Let QM manage and search for you (Highly recommended!)</small></span
               >
               ${icon(ArrowUpRight, 16)}
             </button>`

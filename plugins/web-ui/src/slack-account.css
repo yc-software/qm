@@ -55,8 +55,44 @@ qm-onboarding-slack {
   flex: none;
 }
 .slack-link-icon {
-  color: var(--muted-foreground);
+  position: relative;
+  width: 44px;
+  height: 39px;
   flex: none;
+}
+.slack-link-person,
+.slack-link-service {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 27px;
+  height: 27px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--background);
+}
+.slack-link-person {
+  top: 0;
+  left: 0;
+  background: var(--secondary);
+  color: var(--foreground);
+}
+.slack-link-service {
+  top: 10px;
+  right: 0;
+}
+.slack-link-chain {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  bottom: 0;
+  left: 10px;
+  width: 19px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  transform: rotate(-35deg);
 }
 .slack-account-error {
   font-size: 12px;
