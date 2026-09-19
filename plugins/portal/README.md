@@ -281,3 +281,5 @@ The label is the provider display name. Without it, the email page and primary
 login routing retain their existing behavior. Switching keeps the destination
 from the signed email login transaction.
 The link is available without a remembered browser preference.
+
+The proxy also signs the original authenticated subject as `authenticatedAs`. Core verifies that it still belongs to the canonical person, rejecting stale claims after unlinking. Trusted-entry failures offer retry of that provider without an alternate email sign-in link; invitation authentication remains unchanged.

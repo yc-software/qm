@@ -562,8 +562,7 @@ export function signInErrorHtml(
     icon: ALERT_ICON,
     warn: true,
     extra: `<p class="reason"><strong>Details</strong>${escapeHtml(detail)}</p>`,
-    actions: `<a class="btn primary" href="${retryPath}">Try signing in again</a>
-        ${retryPath === "/auth/trusted/login" && trustedSignInLabel ? '<a class="btn ghost" href="/auth/login?provider=primary">Use another sign-in method</a>' : '<a class="btn ghost" href="/">Back to start</a>'}`,
+    actions: `<a class="btn primary" href="${retryPath}">Try signing in again</a>`,
     help: "Still stuck? Check that your account has access, then contact your admin.",
   });
 }
@@ -1054,7 +1053,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   let session = currentSession(req);
   if (session) renewSessionCookie(req, res);
-  if (session && !session.anon && !pathname.startsWith("/auth/")) {
+  const authenticatedPrincipal = session?.sub;
+  if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
     const canonical = await canonicalPrincipal(session.sub);
     if (canonical === null) return identityUnavailable(req, res);
     session = { ...session, sub: canonical };
@@ -1305,6 +1305,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     ...(!impersonator && session.name ? { displayName: session.name } : {}),
     ...(impersonator ? { impersonator } : {}),
     ...(PORTAL_IDENTITY_SECRET ? { identitySecret: PORTAL_IDENTITY_SECRET } : {}),
+    authenticatedPrincipal,
   });
 }
 

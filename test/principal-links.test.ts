@@ -417,3 +417,107 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
     assert.equal((await get(OIDC, "casey@acme.test")).status, 403);
   });
 });
+
+describe("link mutation serialization", () => {
+  it("rejects concurrent chains", async () => {
+    const links = createPrincipalLinkService();
+    const results = await Promise.allSettled([
+      links.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" }),
+      links.link({ principalId: "B", canonicalId: "C", evidence: "qa", linkedBy: "qa" }),
+    ]);
+    assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
+    assert.equal((await links.list()).length, 1);
+  });
+  it("does not reuse a snapshot begun before the mutation lock", async () => {
+    const { createMemoryAdvisoryLock } = await import("../src/persistence/advisory-lock.ts");
+    const backing = createMemoryMap<PrincipalLink>();
+    const lock = createMemoryAdvisoryLock();
+    const delayed = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    let delay = true;
+    const a = createPrincipalLinkService(
+      {
+        ...backing,
+        async all() {
+          const rows = await backing.all();
+          if (delay) {
+            delay = false;
+            started.resolve();
+            await delayed.promise;
+          }
+          return rows;
+        },
+      },
+      lock,
+    );
+    const b = createPrincipalLinkService(backing, lock);
+    const pending = a.refresh(true);
+    await started.promise;
+    await b.link({ principalId: "B", canonicalId: "C", evidence: "qa", linkedBy: "qa" });
+    const result = a.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" });
+    delayed.resolve();
+    await pending;
+    await assert.rejects(result, /itself linked/);
+  });
+  it("manual blocks win over directory records during hydration and refresh in either order", async () => {
+    for (const reverse of [false, true]) {
+      const links = createPrincipalLinkService();
+      await links.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" });
+      installPrincipalLinks(links);
+      try {
+        const store = createMemoryMap<import("../src/identity/identity-service.ts").DeactivationRecord>();
+        const rows: import("../src/identity/identity-service.ts").DeactivationRecord[] = [
+          { principalId: "A", source: reverse ? "directory-sync" : "manual", at: 1 },
+          { principalId: "B", source: reverse ? "manual" : "directory-sync", at: 2 },
+        ];
+        for (const row of reverse ? rows.reverse() : rows) await store.put(row.principalId, row);
+        const identity = createIdentityService(store, { principalLinks: links, directorySyncProtected: ["B"] });
+        await identity.hydrate();
+        assert.equal(identity.classify("B").type, "guest");
+        await identity.refresh(true);
+        assert.equal(identity.classify("B").type, "guest");
+      } finally {
+        installPrincipalLinks(null);
+      }
+    }
+  });
+});
+
+describe("canonical portal claims retain proof of the original sign-in", () => {
+  it("accepts a linked sign-in and rejects its stale canonical claim after unlink", async () => {
+    const secret = "authenticated-as-test-secret-0123456789";
+    const app = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "slack-link-proof-")) }));
+    await app.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "qa" });
+    await app.identity.refresh(true);
+    const server = createInsecureTestServer(app.app, {
+      portalIdentitySecret: secret,
+      requireSignedPortalIdentity: true,
+      identity: app.identity,
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    const token = await mintSignedPayload({ p: EMAIL, authenticatedAs: OIDC, exp: Date.now() + 60000 }, secret);
+    const get = () =>
+      fetch(`${base}/v1/sessions/missing?viewer=${encodeURIComponent(EMAIL)}`, {
+        headers: { "x-portal-identity": token },
+      });
+    try {
+      assert.equal((await get()).status, 404);
+      const impersonation = await mintSignedPayload(
+        { p: "another-person", imp: EMAIL, authenticatedAs: OIDC, exp: Date.now() + 60000 },
+        secret,
+      );
+      const impersonate = () =>
+        fetch(`${base}/v1/sessions/missing?viewer=another-person`, {
+          headers: { "x-portal-identity": impersonation },
+        });
+      assert.equal((await impersonate()).status, 404);
+      await app.principalLinks.unlink(OIDC);
+      assert.equal((await impersonate()).status, 401);
+      assert.equal((await get()).status, 401);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      installPrincipalLinks(null);
+    }
+  });
+});

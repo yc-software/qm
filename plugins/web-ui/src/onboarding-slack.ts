@@ -63,7 +63,7 @@ export class OnboardingSlack extends LitElement {
     } catch {
       if (this.isConnected) {
         this.connected = false;
-        this.error = "Could not check Slack connection. Try again.";
+        this.error = "Could not check the Slack installation. Try again.";
       }
     } finally {
       clearTimeout(timeout);
@@ -77,7 +77,7 @@ export class OnboardingSlack extends LitElement {
     if (this.busy || this.installAvailable === undefined) return;
     const popup = window.open("", "_blank");
     if (!popup) {
-      this.error = "Allow a new tab to connect Slack, then try again.";
+      this.error = "Allow a new tab to install QM, then try again.";
       return;
     }
     popup.opener = null;
@@ -123,7 +123,8 @@ export class OnboardingSlack extends LitElement {
     return html`${
       this.connected
         ? html`<div class="welcome-slack" role="status">
-            ${slackMark(24)}<span><strong>Connected to Slack</strong><small>QM is ready in your workspace.</small></span
+            ${slackMark(24)}<span
+              ><strong>QM is installed in Slack</strong><small>QM is ready in your workspace.</small></span
             >${icon(Check, 16)}
           </div>`
         : html`<button

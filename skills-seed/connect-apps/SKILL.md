@@ -26,3 +26,7 @@ curl -sS -X POST "$AGENT_API_URL/v1/connectors/oauth/consent/mint" \
   direct OAuth path or re-send old links; this does not establish that every access path is unavailable.
 - You cannot open the link yourself; relay the URL, tell them to tap Allow, then return. After they
   connect, the app's tools/skills work in your 1:1s with them.
+
+## Connect a personal Slack account
+
+When someone asks to connect Slack or use their existing web connectors from Slack, direct them to their QM web Settings (`/?view=settings`) and the **Connect Slack** button. They must sign in with their existing web account before connecting. This authorizes personal Slack access and links their verified Slack identity to that QM account. Workspace bot installation is separate. Do not create a generic Composio Slack link or infer identity from matching emails.

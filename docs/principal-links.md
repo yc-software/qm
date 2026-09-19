@@ -18,7 +18,7 @@ before proxying, and the keychain stores credentials under the canonical owner.
 
 ## Rules
 
-- **The directory member is canonical.** When the company runs Slack, the
+- **Administrative links keep the directory member canonical.** When the company runs Slack, the
   Slack-verified directory principal is the person's canonical id and the
   trusted OIDC subject is the linked sign-in. The admin API refuses a link
   whose linked side is a directory member, by principal id or Slack id.
@@ -54,3 +54,7 @@ core cannot answer, rather than acting as the unresolved subject. A deleted
 link therefore stays effective for at most a minute of cached sessions.
 
 Links live in the `principal_links` durable map of the company database.
+
+## Self-service Slack linking
+
+The dedicated Connect Slack flow preserves the signed-in web principal as canonical, keeping its existing connector ownership. Completion verifies a short-lived signed ticket, Composio account ownership, Slack user identity, and the installed company workspace before linking the directory member. Existing credentials or Composio accounts on the Slack principal require support instead of being silently stranded. Email similarity is not proof of identity.
