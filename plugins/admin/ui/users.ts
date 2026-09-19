@@ -19,24 +19,13 @@ export class UsersView {
   tone = "";
   externalMessage = "";
   externalTone = "";
+  search: HTMLElement | null = null;
   constructor(root: HTMLElement, data: any, services: Services) {
     this.root = root;
     this.data = data;
     this.services = services;
     this.paint = renderer(root);
-    services.defaultShell({
-      stats: [
-        [(data.users || []).length, "Users"],
-        [(data.grants || []).length, "Admins"],
-      ],
-      search: {
-        placeholder: "principal, role, or scope",
-        onInput: (value: string) => {
-          this.filter = value;
-          this.draw();
-        },
-      },
-    });
+    this.renderShell();
     this.draw();
     void services
       .api("GET", "/api/keychain")
@@ -48,6 +37,32 @@ export class UsersView {
         this.draw();
       })
       .catch(() => {});
+  }
+  renderShell() {
+    const document = this.root.ownerDocument;
+    const previous = this.search;
+    if (previous && !previous.isConnected) return;
+    const active = document.activeElement as HTMLElement | null;
+    const focused = !!active && !!previous?.contains(active);
+    this.services.defaultShell({
+      stats: [
+        [(this.data.users || []).length, "Users"],
+        [(this.data.grants || []).length, "Admins"],
+      ],
+      search: {
+        value: this.filter,
+        placeholder: "principal, role, or scope",
+        onInput: (value: string) => {
+          this.filter = value;
+          this.draw();
+        },
+      },
+    });
+    const search = document.querySelector<HTMLElement>("#shellbar .shell-search");
+    if (previous && search) {
+      search.replaceWith(previous);
+      if (focused) active?.focus({ preventScroll: true });
+    } else this.search = search;
   }
   async action(key: string, work: () => Promise<void>, external = false) {
     if (this.pending.has(key)) return;
@@ -77,7 +92,10 @@ export class UsersView {
     const request = ++this.refreshRequest;
     const r = await this.services.api("GET", "/api/users");
     if (request !== this.refreshRequest) return;
-    if (r.ok) this.data = r.data;
+    if (r.ok) {
+      this.data = r.data;
+      this.renderShell();
+    }
     this.services.clearCache();
   }
   async admin(user: any, event: Event) {

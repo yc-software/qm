@@ -102,39 +102,56 @@ test("catalog completion appends options only to the requesting settings view", 
   }
 });
 
-test("branding saves preserve stored names and other unsaved settings", () => {
-  const source = extract("} else if (isBranding) {", "} else if (SAVE_RELOADS");
-  const block = source.slice(source.indexOf("{") + 1);
-  for (const key of ["branding"]) {
-    for (const otherDraft of [false, true]) {
-      const body = { accent: "#123456" };
-      const brandingBody = { selfLabel: "Saved name", accent: "#123456" };
+test("branding saves commit the Lit draft and preserve unrelated settings", async () => {
+  const source = extract('document.querySelectorAll("[data-save]").forEach', '$("view-governance").addEventListener("input"');
+  for (const otherDraft of [false, true]) {
+    const f = litFixture();
+    try {
+      f.ui.settings.load({ branding: { selfLabel: "Saved name", accent: "#111111" }, soul: "Original SOUL" }, "org:test");
+      f.ui.settings.states.get("branding").change("accent", "#123456");
+      if (otherDraft) f.ui.settings.states.get("soul").change("content", "Unsaved SOUL");
+      const body = f.ui.collect("branding");
       const snapshots = new Map();
+      const requests: any[] = [];
       let reloads = 0;
-      let recorded = false;
+      const button = f.document.createElement("button");
+      button.dataset.save = "branding";
+      f.root.append(button);
       const context = vm.createContext({
-        key,
-        body,
-        brandingBody,
-        savedBranding: {},
-        sectionSnapshots: snapshots,
-        updateSectionDirty: () => {
-          recorded = snapshots.has(key);
-        },
+        document: f.document,
+        governanceUI: f.ui,
+        scope: "org:test",
+        governanceReq: 1,
+        governanceSaveSeq: 0,
+        SAVE: { branding: () => f.ui.collect("branding") },
         SAVE_ST: { branding: "st-branding" },
-        setStatus() {},
-        hasGovernanceDraft: () => otherDraft,
-        location: {
-          reload: () => {
-            reloads++;
-          },
+        governanceSaveReview: async () => true,
+        setStatus: (_id: string, message: string, tone: string) => f.ui.status("branding", message, tone),
+        savedBranding: { selfLabel: "Saved name", accent: "#111111", iconUrl: "https://example.com/icon.png" },
+        sectionSnapshots: snapshots,
+        api: async (...args: any[]) => {
+          requests.push(args);
+          return { ok: true };
         },
+        hasGovernanceDraft: () => [...f.ui.settings.states.values()].some((state: any) => state.dirty),
+        location: { reload: () => reloads++ },
       });
-      vm.runInContext(`(() => {${block}})()`, context);
-      assert.equal(recorded, true);
-      assert.equal(snapshots.get(key), JSON.stringify(body));
-      assert.equal(context.savedBranding, brandingBody);
+      vm.runInContext(source, context);
+      await button.onclick!(new f.window.PointerEvent("click"));
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0][0], "PUT");
+      assert.equal(requests[0][1], "/api/scopes/org%3Atest/branding");
+      assert.equal(requests[0][2].selfLabel, "Saved name");
+      assert.equal(requests[0][2].iconUrl, "https://example.com/icon.png");
+      assert.equal(requests[0][2].accent, "#123456");
+      assert.equal(context.savedBranding, requests[0][2]);
+      assert.equal(snapshots.get("branding"), JSON.stringify(body));
+      assert.equal(f.ui.states.get("branding").dirty, false);
+      assert.equal(f.ui.states.get("soul").dirty, otherDraft);
+      assert.equal(f.ui.collect("soul").content, otherDraft ? "Unsaved SOUL" : "Original SOUL");
       assert.equal(reloads, otherDraft ? 0 : 1);
+    } finally {
+      f.dom.window.close();
     }
   }
 });

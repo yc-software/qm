@@ -67,6 +67,7 @@ function start() {
     admin: built.admin,
     sessions: built.sessions,
     files: built.files,
+    directory: built.directory,
     memory: built.memory,
     auditLog: built.auditLog,
   });
@@ -345,3 +346,39 @@ test("user detail resolves mixed-case email links to the canonical personal scop
     await s.close();
   }
 });
+
+for (const canonicalPrincipal of ["alice@example.com", "Alice@example.com"]) {
+  test(`mixed-case user mutations target canonical scope ${canonicalPrincipal}`, async () => {
+    const s = start();
+    try {
+      if (canonicalPrincipal === "Alice@example.com")
+        await s.built.directory.replace([{ principalId: canonicalPrincipal, displayName: "Alice", type: "internal" }]);
+      const scope = "personal:" + canonicalPrincipal;
+      const session = await s.built.sessions.getOrCreateByThread("dm:case-test", "dm", scope);
+      await s.built.sessions.addParticipant(session.id, canonicalPrincipal);
+      const other = await s.built.sessions.getOrCreateByThread("channel:case-test", "channel", "channel:C1");
+      await s.built.sessions.addParticipant(other.id, canonicalPrincipal);
+      const base = `${s.base}/v1/admin/users/ALICE%40example.com`;
+      const headers = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
+      const detail = async () => (await (await fetch(base, { headers })).json()) as any;
+      const update = await fetch(base + "/onboarding", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ status: "completed" }),
+      });
+      assert.equal(update.status, 200);
+      assert.equal(((await update.json()) as any).scopeId, scope);
+      assert.equal((await detail()).onboarding, "completed");
+      const reset = await fetch(base + "/reset", { method: "POST", headers });
+      assert.equal(reset.status, 200);
+      assert.equal(((await reset.json()) as any).deletedSessions, 1);
+      assert.equal((await detail()).onboarding, "not_started");
+      assert.equal((await detail()).stats.sessions, 0);
+      assert.equal(await s.built.sessions.get(session.id), null);
+      assert.ok(await s.built.sessions.get(other.id));
+      assert.equal(await s.built.memory.read("personal:ALICE@example.com"), "");
+    } finally {
+      await s.close();
+    }
+  });
+}

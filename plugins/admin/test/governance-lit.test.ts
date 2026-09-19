@@ -53,6 +53,24 @@ test("editing and reverting a posture drives radio, dirty state and save button"
     dom.window.close();
   }
 });
+test("loading another scope resets posture radios after both choices were clicked", () => {
+  const dom = setup();
+  try {
+    dom.window.eval('governanceUI.load({securityPosture:"auto"},"org:first")');
+    const doc = dom.window.document;
+    const strict = doc.querySelector<HTMLInputElement>('[name="security-posture-choice"][value="strict"]')!;
+    const auto = doc.querySelector<HTMLInputElement>('[name="security-posture-choice"][value="auto"]')!;
+    strict.click();
+    auto.click();
+    dom.window.eval('governanceUI.load({securityPosture:"strict"},"org:second")');
+    assert.equal(strict.checked, true);
+    assert.equal(auto.checked, false);
+    assert.equal(dom.window.eval('governanceUI.collect("security-posture").posture'), "strict");
+    assert.equal(doc.querySelector<HTMLButtonElement>('[data-save="security-posture"]')!.disabled, true);
+  } finally {
+    dom.window.close();
+  }
+});
 test("keyed Lit rules preserve focus, escape values, validate and remove from state", () => {
   const dom = setup();
   try {

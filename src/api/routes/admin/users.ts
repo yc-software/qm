@@ -302,13 +302,17 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { scopeId: scope, people, credentials, grants: grantsWithUse, asks, enabled: true });
 }
 
+async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string) {
+  const member = await deps.directory?.get(requestedPrincipal);
+  return { member, principalId: member?.principalId ?? personKey(requestedPrincipal) };
+}
+
 export async function getUserDetail(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;
   const org = orgScope(deps);
   const actor = await authorizeAdmin(ctx, org);
   if (!actor) return;
-  const member = await deps.directory?.get(params.principalId!);
-  const principalId = member?.principalId ?? personKey(params.principalId);
+  const { member, principalId } = await resolveAdminUser(deps, params.principalId!);
   const personal = makeScopeId("personal", principalId);
   audit(deps, { principalId: actor.id, action: "user.read", resource: principalId, scopeLabel: org });
 
@@ -370,7 +374,7 @@ export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
   if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
-  const principalId = params.principalId!;
+  const { principalId } = await resolveAdminUser(deps, params.principalId!);
   const status = (body as { status?: unknown }).status;
   if (typeof status !== "string" || !ONBOARDING_STATUSES.has(status as OnboardingStatus)) {
     return sendJson(res, 400, {
@@ -396,7 +400,7 @@ export async function resetUserToBrandNew(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
   if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
-  const principalId = params.principalId!;
+  const { principalId } = await resolveAdminUser(deps, params.principalId!);
   const personal = makeScopeId("personal", principalId);
   const today = new Date().toISOString().slice(0, 10);
   await deps.memory.replace(

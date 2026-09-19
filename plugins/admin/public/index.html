@@ -8954,13 +8954,6 @@
                 }
               }
               return;
-            } else if (isBranding) {
-              savedBranding = brandingBody;
-              sectionSnapshots.set(key, JSON.stringify(body));
-              updateSectionDirty(key);
-              setStatus(SAVE_ST[key], "Saved", "ok");
-              if (!hasGovernanceDraft()) location.reload();
-              return;
             } else if (SAVE_RELOADS.has(key)) await loadScope();
             else {
               if (key === "command-policy") loadedCommandPolicyPresent = true;

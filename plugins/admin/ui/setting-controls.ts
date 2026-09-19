@@ -41,7 +41,7 @@ export function choiceGroup(
             value=${value}
             data-choice-for=${ifDefined(options.choiceFor)}
             data-checkbox-for=${ifDefined(options.checkboxFor)}
-            ?checked=${options.value === value}
+            .checked=${options.value === value}
             @change=${options.onChange}
           /><span><strong>${title}</strong><small>${description}</small></span></label
         >`,
