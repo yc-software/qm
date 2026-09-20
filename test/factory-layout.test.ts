@@ -279,6 +279,30 @@ test("the failed plan-review note carries the reviewer's bounded summary", () =>
   }
 });
 
+test("the plan-review prompt makes the reviewer's summary lead with the objection", () => {
+  const label = BAS.indexOf("label: `plan-review-${i + 1}`");
+  const start = BAS.lastIndexOf("await agent(`", label);
+  assert.ok(label > 0 && start > 0, "the plan-review prompt moved out of its agent call");
+
+  const prompt = BAS.slice(start, label).replace(/\s+/g, " ");
+  for (const clause of [
+    "ONE sentence",
+    "states the blocking issue",
+    "no account of what was reviewed or how",
+    "one short sentence",
+  ]) {
+    assert.ok(prompt.includes(clause), `the plan-review summary contract dropped: ${clause}`);
+  }
+
+  const examples = captures(prompt, /Example: "([^"]*)"/g);
+  assert.equal(examples.length, 2, "the plan-review prompt needs one worked summary example per shape");
+  for (const example of examples) {
+    for (const input of ["ticket.md", "root-cause.md", "user-stories.txt", "manifest.json"]) {
+      assert.ok(!example.includes(input), `an example summary re-primes narration about ${input}`);
+    }
+  }
+});
+
 const handshakeTokens = [
   ...captures(WRAP, /\.project == "([^"]*)"/g),
   ...captures(BAS, /\.project == "([^"]*)"/g),

@@ -2932,6 +2932,14 @@ for (let i = 0; i < FIX_ATTEMPTS; i++) {
     If you find ANY blocking issue: fix it directly in ${workDir}/plan.md (and keep
     ${workDir}/manifest.json in sync if you add, drop, or repurpose a source file), then report
     passed=false. If the plan is sound, report passed=true.
+
+    The summary field is this iteration's only line in the run trail and only its first 200
+    characters survive, so LEAD WITH THE VERDICT. When passed=false, summary is ONE sentence
+    that states the blocking issue and the plan step it is in, with no account of what was
+    reviewed or how. Example: "Step 4 edits src/scheduler.ts, which the scope contract does
+    not list, so the plan changes an out-of-scope file." When passed=true, summary is one
+    short sentence. Example: "Plan is sound: every step traces to the root cause and stays
+    in scope."
   `, { label: `plan-review-${i + 1}`, schema: PASS_FAIL })
 
   if (review?.passed) {
