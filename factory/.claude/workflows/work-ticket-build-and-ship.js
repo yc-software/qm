@@ -2132,7 +2132,18 @@ async function runSelfVerifyPanel(tag) {
   environment/boot/tooling config (e.g. package.json, tsconfig*.json, .github/workflows,
   deploy/ or fly/ files) and the ticket did not ask for it, ALWAYS report it as a
   shortfall, even if it was "needed to verify" or appears in manifest.json — per this rule:
-  ${ENV_SCOPE_RULE}`
+  ${ENV_SCOPE_RULE}
+
+  BLOCKING criterion — FACTORY TEST SCOPE: the rule quoted below is the rule this diff's tests
+  were written under. It judges EXCESS only: absent or weak coverage stays with the
+  deterministic-verification bullet above, and this criterion never asks for more tests. When a
+  test file this diff CHANGED breaks it — more than one test for the same materially different
+  outcome, enumerated equivalent inputs, or frozen prose, layout, or internal sequencing —
+  ALWAYS report it as a shortfall that names the specific tests to merge or drop and the rule
+  they break, even when every test passes and the ticket's required coverage is delivered. Test
+  files this diff did not touch are out of scope, and security, authorization, money, sends, and
+  destructive actions keep their distinct allowed, denied, and safe outcomes — per this rule:
+  ${TEST_QUALITY_RULES}`
 
   let result
   // True if this call mutated the tree (the adjudicator repaired or applied something), so the
@@ -2810,7 +2821,7 @@ const reviewReceipts = new Map()
 const reviewUnresolvedInputs = new Set()
 const proofReceipts = new Map()
 const proofUnresolvedInputs = new Set()
-const REVIEW_PROMPT_SCHEMA_VERSION = 'factory-review-v2'
+const REVIEW_PROMPT_SCHEMA_VERSION = 'factory-review-v3'
 const PROOF_PROMPT_SCHEMA_VERSION = 'factory-proof-v2'
 
 async function semanticInputFingerprint(kind, extra = '', includeProofOutputs = true) {

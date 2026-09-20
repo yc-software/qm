@@ -205,6 +205,36 @@ test("every prompt that can write tests interpolates the test-economy rules", ()
   }
 });
 
+test("the self-verify blocking bar carries the test-economy rules by reference", () => {
+  const anchor = "const reviewPrompt = `";
+  const start = BAS.indexOf(anchor);
+  assert.notEqual(start, -1, `no inline reviewPrompt literal in ${BAS_REL}`);
+  const literalEnd = BAS.indexOf("`", start + anchor.length);
+  const blockingBar = BAS.indexOf("BLOCKING BAR", start);
+  const clauseStart = BAS.indexOf("BLOCKING criterion — FACTORY TEST SCOPE:", start);
+  assert.ok(
+    literalEnd !== -1 && blockingBar !== -1 && clauseStart !== -1,
+    "the self-verify blocking bar has no FACTORY TEST SCOPE criterion",
+  );
+  assert.ok(
+    start < blockingBar && blockingBar < clauseStart && clauseStart < literalEnd,
+    "the FACTORY TEST SCOPE criterion is outside the self-verify blocking bar",
+  );
+  assert.ok(
+    literalEnd < BAS.indexOf("{ label: `self-verify-", start) &&
+      literalEnd < BAS.indexOf("You are the self-verify ADJUDICATOR", start),
+    "the reviewPrompt literal slice runs past the prompt the self-verify jurors receive",
+  );
+
+  const clause = BAS.slice(clauseStart, literalEnd);
+  for (const token of ["${TEST_QUALITY_RULES}", "merge or drop"]) {
+    assert.ok(
+      clause.includes(token),
+      `the self-verify blocking bar's FACTORY TEST SCOPE criterion does not carry ${token}`,
+    );
+  }
+});
+
 test("the failed plan-review note carries the reviewer's bounded summary", () => {
   const loop = BAS.indexOf("label: `plan-review-${i + 1}`");
   const approved = BAS.indexOf("break\n  }\n", loop);
