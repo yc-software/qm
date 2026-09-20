@@ -48,6 +48,22 @@ repoint_github_auth() {
   git config --global --add url."https://x-access-token:${token}@github.com/".insteadOf "git@github.com:"
 }
 
+remove_foreign_work_dirs() {
+  local keep dir removed=""
+  if [ -n "${IO_FACTORY_HANDOFF_ONLY_ARGS:-}" ] || [ -n "${IO_FACTORY_SHIP_ONLY_ENVELOPE:-}" ]; then
+    return 0
+  fi
+  keep="$(basename -- "${1:-}")"
+  for dir in .io-agent-*; do
+    [ -d "$dir" ] || continue
+    [ -L "$dir" ] && continue
+    [ "$dir" = "$keep" ] && continue
+    rm -rf -- "$dir" && removed="${removed:+$removed }$dir"
+  done
+  [ -n "$removed" ] && echo "[io-coding-agent-js] removed stale work dirs: $removed" >&2
+  return 0
+}
+
 REPO="${IO_REPO_DIR:-/workspace/repo}"
 # The default path is not pre-baked here, so the clone below is the normal path, not a fallback.
 if [ ! -d "$REPO" ] && [ -n "${IO_REPO_CLONE_URL:-}" ]; then
@@ -56,6 +72,11 @@ if [ ! -d "$REPO" ] && [ -n "${IO_REPO_CLONE_URL:-}" ]; then
     || { echo "[io-coding-agent-js] clone failed: $IO_REPO_CLONE_URL" >&2; exit 2; }
 fi
 cd "$REPO" || { echo "[io-coding-agent-js] repo dir not found: $REPO" >&2; exit 2; }
+KEEP_WORK_DIR="${IO_WORK_DIR:-}"
+if [ -z "$KEEP_WORK_DIR" ] && [ -n "${1:-${IO_TICKET_ID:-}}" ]; then
+  KEEP_WORK_DIR=".io-agent-$(printf '%s' "${1:-${IO_TICKET_ID:-}}" | tr '[:upper:]' '[:lower:]')"
+fi
+remove_foreign_work_dirs "$KEEP_WORK_DIR"
 # A hosted sandbox boots a stock image with the wrong npm and without gh or claude; fix the toolchain before the repo install runs under it.
 if [ "${IS_SANDBOX:-}" = "1" ] && ! bash "${IO_FACTORY_TOOLS_SH:-${IO_FACTORY_SOURCE_DIR:-${IO_REPO_DIR:-/workspace/repo}}/tools/factory/tools.sh}" ensure; then
   echo "[io-coding-agent-js] FAIL: the sandbox is missing a tool the factory needs (see factory-tools lines above)" >&2

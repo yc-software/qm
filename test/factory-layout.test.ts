@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -1105,7 +1105,8 @@ test("the wrapper runs the tool preflight before it touches the claude CLI", () 
 
 function traceWrapperBoot(
   env: Record<string, string>,
-  body: (booted: { status: number | null; stderr: string }, trace: string) => void,
+  body: (booted: { status: number | null; stderr: string }, trace: string, repo: string) => void,
+  options: { argv?: string[]; seed?: (repo: string) => Record<string, string> | void } = {},
 ): void {
   const dir = mkdtempSync(join(tmpdir(), "qm-factory-order-"));
   try {
@@ -1118,7 +1119,8 @@ function traceWrapperBoot(
     const tools = join(dir, "tools.sh");
     writeFileSync(tools, `#!/bin/bash\nprintf 'preflight\\n' >> "$TRACE"\nexit "${"$"}{STUB_ENSURE_STATUS:-0}"\n`);
     chmodSync(tools, 0o755);
-    const booted = spawnSync("bash", [join(factoryRoot, WRAP_REL)], {
+    const seeded = options.seed?.(repo) ?? {};
+    const booted = spawnSync("bash", [join(factoryRoot, WRAP_REL), ...(options.argv ?? [])], {
       cwd: dir,
       encoding: "utf8",
       env: {
@@ -1133,11 +1135,12 @@ function traceWrapperBoot(
         IO_WORKFLOW_MODE: "conflict",
         ANTHROPIC_API_KEY: "synthetic-never-used",
         ...env,
+        ...seeded,
       },
       timeout: 60_000,
     });
     assert.equal(booted.error, undefined, `the wrapper did not finish: ${booted.error?.message}`);
-    body(booted, trace);
+    body(booted, trace, repo);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1155,4 +1158,188 @@ test("the wrapper runs the sandbox tool preflight before the repo setup command 
     assert.match(booted.stderr, /FAIL: the sandbox is missing a tool the factory needs/);
     assert.equal(readFileSync(trace, "utf8"), "preflight\n", "a failed preflight must block the repo setup command");
   });
+});
+
+const workDirsNamed = (line: string): string[] => (line.match(/\.io-agent-[A-Za-z0-9._-]+/g) ?? []).sort();
+
+const prunedLines = (stderr: string): string[] =>
+  stderr.split("\n").filter((line) => line.includes("removed stale work dirs"));
+
+test("remove_foreign_work_dirs removes every foreign .io-agent-* dir and keeps this run's own", () => {
+  withHarness(["remove_foreign_work_dirs"], (dir, run) => {
+    const seedWorkDirs = (...names: string[]) => {
+      for (const entry of readdirSync(dir)) {
+        if (entry.startsWith(".io-agent-")) rmSync(join(dir, entry), { recursive: true, force: true });
+      }
+      for (const name of names) mkdirSync(join(dir, name), { recursive: true });
+    };
+    const prune = (keep: string, env: Record<string, string> = {}, prelude = "") =>
+      run(`${prelude}remove_foreign_work_dirs ${JSON.stringify(keep)}`, env);
+
+    seedWorkDirs(".io-agent-qm-1", ".io-agent-qm-2", ".io-agent-qm-42", ".io-agent-qm-61");
+    mkdirSync(join(dir, ".io-agent-qm-1", "proof"));
+    writeFileSync(join(dir, ".io-agent-qm-1", "proof", "panel.mjs"), "import { readdirSync } from 'node:fs'\n");
+    writeFileSync(join(dir, ".io-agent-qm-2", "ticket.md"), "keep me\n");
+
+    const first = prune(".io-agent-qm-2");
+    assert.equal(first.status, 0, "a prune that removed stale dirs must not fail the run");
+    assert.equal(first.stdout, "", "the prune must keep stdout clean for the wrapper's own contract");
+    for (const stale of [".io-agent-qm-1", ".io-agent-qm-42", ".io-agent-qm-61"]) {
+      assert.equal(existsSync(join(dir, stale)), false, `${stale} survived the prune`);
+    }
+    assert.equal(readFileSync(join(dir, ".io-agent-qm-2", "ticket.md"), "utf8"), "keep me\n");
+    const announced = first.stderr.split("\n").filter((line) => line.length > 0);
+    assert.equal(announced.length, 1, `the prune must print exactly one line, got ${JSON.stringify(first.stderr)}`);
+    assert.ok(announced[0]!.includes("[io-coding-agent-js]"), "the removal line must carry the wrapper's tag");
+    assert.deepEqual(workDirsNamed(announced[0]!), [".io-agent-qm-1", ".io-agent-qm-42", ".io-agent-qm-61"]);
+
+    writeFileSync(join(dir, ".io-agent-note.txt"), "not a work dir\n");
+    const second = prune(".io-agent-qm-2");
+    assert.equal(second.status, 0);
+    assert.equal(second.stdout, "");
+    assert.equal(second.stderr, "", "a second prologue in the same warm sandbox must be a silent no-op");
+    assert.equal(readFileSync(join(dir, ".io-agent-qm-2", "ticket.md"), "utf8"), "keep me\n");
+    assert.equal(readFileSync(join(dir, ".io-agent-note.txt"), "utf8"), "not a work dir\n");
+    assert.ok(existsSync(dir), "the prune must never remove the repo root");
+
+    seedWorkDirs(".io-agent-qm-1", ".io-agent-qm-2");
+    writeFileSync(join(dir, ".io-agent-qm-2", "ticket.md"), "keep me\n");
+    const normalized = prune(`${join(dir, ".io-agent-qm-2")}/`);
+    assert.equal(normalized.status, 0);
+    assert.equal(existsSync(join(dir, ".io-agent-qm-1")), false, "an absolute keep path pruned nothing");
+    assert.equal(
+      readFileSync(join(dir, ".io-agent-qm-2", "ticket.md"), "utf8"),
+      "keep me\n",
+      "an absolute keep path with a trailing slash did not normalize to the run's own work dir",
+    );
+
+    seedWorkDirs(".io-agent-qm-2");
+    assert.equal(prune(".io-agent-QM-2").status, 0);
+    assert.equal(
+      existsSync(join(dir, ".io-agent-qm-2")),
+      false,
+      "the keep name must match exactly; the call site owns lowercasing",
+    );
+
+    seedWorkDirs(".io-agent-qm-2", ".io-agent-qm-3");
+    const unremovable = prune(".io-agent-qm-2", {}, "rm() { return 1; }\n");
+    assert.equal(unremovable.status, 0, "a dir the prune cannot remove must not abort the run");
+    assert.ok(existsSync(join(dir, ".io-agent-qm-3")));
+    assert.equal(unremovable.stdout, "");
+    assert.equal(unremovable.stderr, "", "a dir whose removal failed must not be claimed as removed");
+
+    seedWorkDirs(".io-agent-qm-2");
+    mkdirSync(join(dir, "outside"));
+    writeFileSync(join(dir, "outside", "precious.txt"), "do not follow\n");
+    symlinkSync(join(dir, "outside"), join(dir, ".io-agent-evil"));
+    const linked = prune(".io-agent-qm-2");
+    assert.equal(linked.status, 0);
+    assert.equal(readFileSync(join(dir, "outside", "precious.txt"), "utf8"), "do not follow\n");
+    assert.ok(readdirSync(dir).includes(".io-agent-evil"), "the prune must leave a symlinked entry alone");
+    assert.equal(workDirsNamed(linked.stderr).includes(".io-agent-evil"), false);
+
+    const sentinel = join(dirname(dir), `.io-agent-outside-${basename(dir)}`);
+    mkdirSync(sentinel);
+    try {
+      const escaping = prune("../..");
+      assert.equal(escaping.status, 0);
+      assert.equal(existsSync(join(dir, ".io-agent-qm-2")), false, "a keep name that matches nothing keeps nothing");
+      assert.ok(existsSync(sentinel), "the prune must never reach outside the repo root");
+      assert.equal(readFileSync(join(dir, "outside", "precious.txt"), "utf8"), "do not follow\n");
+    } finally {
+      rmSync(sentinel, { recursive: true, force: true });
+    }
+
+    for (const guard of ["IO_FACTORY_SHIP_ONLY_ENVELOPE", "IO_FACTORY_HANDOFF_ONLY_ARGS"]) {
+      seedWorkDirs(".io-agent-qm-1", ".io-agent-qm-2");
+      for (const name of [".io-agent-qm-1", ".io-agent-qm-2"]) {
+        writeFileSync(join(dir, name, "ledger.jsonl"), "{}\n");
+        writeFileSync(join(dir, name, "converge-envelope.json"), "{}\n");
+      }
+      const guarded = prune("", { [guard]: "/tmp/local-only.json" });
+      assert.equal(guarded.status, 0);
+      assert.equal(guarded.stdout, "");
+      assert.equal(guarded.stderr, "", `${guard} must make the prune a no-op`);
+      for (const name of [".io-agent-qm-1", ".io-agent-qm-2"]) {
+        assert.equal(
+          readFileSync(join(dir, name, "ledger.jsonl"), "utf8"),
+          "{}\n",
+          `${guard} lost ${name}/ledger.jsonl`,
+        );
+        assert.equal(
+          readFileSync(join(dir, name, "converge-envelope.json"), "utf8"),
+          "{}\n",
+          `${guard} lost ${name}/converge-envelope.json`,
+        );
+      }
+    }
+  });
+});
+
+test("the wrapper prunes foreign work dirs after the checkout and before the tool preflight and repo setup", () => {
+  const call = WRAP.indexOf('remove_foreign_work_dirs "$KEEP_WORK_DIR"');
+  assert.ok(call > 0, "the prologue does not call remove_foreign_work_dirs");
+  assert.ok(call > WRAP.indexOf('cd "$REPO"'), "the prune must run after the clone-or-reuse");
+  assert.ok(call < WRAP.indexOf("tools/factory/tools.sh"), "the prune must run before the sandbox tool preflight");
+  assert.ok(call < WRAP.indexOf("IO_REPO_SETUP_CMD"), "the prune must run before the repo setup command");
+
+  traceWrapperBoot(
+    {},
+    (booted, _trace, repo) => {
+      assert.equal(booted.status, 2);
+      assert.ok(existsSync(join(repo, ".io-agent-qm-63")), "the run's own work dir must survive a ticket-argv boot");
+      assert.equal(existsSync(join(repo, ".io-agent-qm-1")), false);
+      assert.deepEqual(prunedLines(booted.stderr).map(workDirsNamed), [[".io-agent-qm-1"]]);
+    },
+    {
+      argv: ["QM-63"],
+      seed: (repo) => {
+        mkdirSync(join(repo, ".io-agent-qm-63"));
+        mkdirSync(join(repo, ".io-agent-qm-1"));
+      },
+    },
+  );
+
+  traceWrapperBoot(
+    {},
+    (booted, _trace, repo) => {
+      assert.equal(booted.status, 2);
+      assert.ok(existsSync(join(repo, ".io-agent-qm-63")), "IO_WORK_DIR must win over the ticket-derived keep name");
+      assert.equal(existsSync(join(repo, ".io-agent-qm-99")), false);
+    },
+    {
+      argv: ["QM-99"],
+      seed: (repo) => {
+        mkdirSync(join(repo, ".io-agent-qm-63"));
+        mkdirSync(join(repo, ".io-agent-qm-99"));
+        return { IO_WORK_DIR: `${join(repo, ".io-agent-qm-63")}/` };
+      },
+    },
+  );
+
+  traceWrapperBoot(
+    {},
+    (booted, _trace, repo) => {
+      assert.equal(booted.status, 2);
+      assert.equal(
+        existsSync(join(repo, ".io-agent-prompt-abc123")),
+        false,
+        "a run with no ticket and no IO_WORK_DIR has no work dir yet, so every foreign one goes",
+      );
+    },
+    { seed: (repo) => void mkdirSync(join(repo, ".io-agent-prompt-abc123")) },
+  );
+
+  traceWrapperBoot(
+    { IO_REPO_SETUP_CMD: `printf 'setup\\n' >> "$TRACE"; mkdir -p .io-agent-setup-marker` },
+    (booted, _trace, repo) => {
+      assert.equal(booted.status, 2);
+      assert.equal(existsSync(join(repo, ".io-agent-qm-1")), false);
+      assert.ok(
+        existsSync(join(repo, ".io-agent-setup-marker")),
+        "the prune ran after the repo setup command and deleted what it created",
+      );
+    },
+    { seed: (repo) => void mkdirSync(join(repo, ".io-agent-qm-1")) },
+  );
 });
