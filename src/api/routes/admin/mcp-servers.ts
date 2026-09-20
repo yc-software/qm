@@ -4,6 +4,7 @@
 // HTTP destination every scope's agents can call, so it is governed like a
 // model-provider credential, not like a personal connector.
 
+import { isValidCredentialSlug } from "../../../credentials/keychain.ts";
 import { isValidMcpServerId, type McpServer, type McpServerAuthMode } from "../../../mcp/mcp-server-store.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
@@ -83,6 +84,21 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   if (credentialScope !== "shared" && credentialScope !== "per-user") {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "credentialScope must be shared or per-user" });
   }
+  const serviceCredential = b.serviceCredential ?? existing?.serviceCredential;
+  if (
+    serviceCredential !== undefined &&
+    (typeof serviceCredential !== "string" ||
+      !isValidCredentialSlug(serviceCredential) ||
+      credentialScope !== "shared" ||
+      auth === "none" ||
+      b.bearerToken ||
+      b.clientSecret)
+  ) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "serviceCredential requires shared bearer or client-credentials auth without inline secrets",
+    });
+  }
   const credentialHost = b.credentialHost ?? existing?.credentialHost;
   const credentialAccountType = b.credentialAccountType ?? existing?.credentialAccountType ?? "default";
   if (!["default", "personal", "company"].includes(credentialAccountType)) {
@@ -117,14 +133,20 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     url,
     auth,
     credentialScope,
+    ...(serviceCredential ? { serviceCredential } : {}),
     ...(credentialScope === "per-user" ? { credentialHost, credentialAccountType } : {}),
-    ...(auth === "bearer"
+    ...(!serviceCredential && auth === "bearer"
       ? { bearerToken: typeof b.bearerToken === "string" && b.bearerToken ? b.bearerToken : existing?.bearerToken }
       : {}),
     ...(auth === "client-credentials"
       ? {
           clientId: typeof b.clientId === "string" && b.clientId ? b.clientId : existing?.clientId,
-          clientSecret: typeof b.clientSecret === "string" && b.clientSecret ? b.clientSecret : existing?.clientSecret,
+          ...(!serviceCredential
+            ? {
+                clientSecret:
+                  typeof b.clientSecret === "string" && b.clientSecret ? b.clientSecret : existing?.clientSecret,
+              }
+            : {}),
         }
       : {}),
     readOnly: b.readOnly !== false,
@@ -132,10 +154,10 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     updatedAt: Date.now(),
     updatedBy: authorized.id,
   };
-  if (auth === "bearer" && !server.bearerToken) {
+  if (auth === "bearer" && !serviceCredential && !server.bearerToken) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "bearer auth requires bearerToken" });
   }
-  if (auth === "client-credentials" && (!server.clientId || !server.clientSecret)) {
+  if (auth === "client-credentials" && (!server.clientId || (!serviceCredential && !server.clientSecret))) {
     return sendJson(ctx.res, 400, {
       error: "bad_request",
       message: "client-credentials auth requires clientId and clientSecret",

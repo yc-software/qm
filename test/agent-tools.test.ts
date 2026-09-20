@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { harnessToolOptions } from "../src/harness/harness-shared.ts";
+import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { Check } from "typebox/value";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
@@ -3352,4 +3354,29 @@ test("quarantined mail remains pending for release and mailbox failures preserve
     { path: "a.txt" },
   );
   assert.ok(JSON.stringify(third).includes("data"));
+});
+
+test("bridged harness MCP tools come from the authorized turn, never a global catalog", () => {
+  const descriptor = {
+    name: "test_read",
+    serverId: "test",
+    remoteName: "read",
+    description: "Test",
+    inputSchema: { type: "object", properties: {} },
+    readOnly: true,
+  };
+  const tc = fakeToolContext();
+  const turn = { tools: tc } as HarnessTurnInput;
+  const plumbing = { mcpTools: () => [descriptor] };
+  assert.deepEqual(harnessToolOptions(plumbing).mcpTools?.(), []);
+  assert.deepEqual(harnessToolOptions(plumbing, turn).mcpTools?.(), []);
+  tc.mcpToolDefs = () => [descriptor];
+  assert.deepEqual(harnessToolOptions(plumbing, turn).mcpTools?.(), [descriptor]);
+  assert.ok(createAgentTools({ current: tc }, harnessToolOptions(plumbing, turn)).some((t) => t.name === "test_read"));
+});
+
+test("one-shot harness utilities expose no MCP tools without a tool context", () => {
+  const turn = { tools: {} } as HarnessTurnInput;
+  assert.deepEqual(harnessToolOptions({}, turn).mcpTools?.(), []);
+  assert.deepEqual(harnessToolOptions({}).mcpTools?.(), []);
 });

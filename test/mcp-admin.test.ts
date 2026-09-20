@@ -86,6 +86,19 @@ test("MCP admin validates and preserves credential scope, without returning secr
   assert.equal((await store.get("crm"))?.credentialScope, "shared");
   assert.equal((await store.get("crm"))?.credentialHost, undefined);
   assert.equal((await store.get("crm"))?.credentialAccountType, undefined);
+  for (const serviceCredential of ["", "invalid slug", 42]) {
+    assert.equal((await put({ auth: "bearer", serviceCredential })).status, 400);
+  }
+  assert.equal((await put({ auth: "none", serviceCredential: "test-mcp" })).status, 400);
+  assert.equal((await put({ auth: "bearer", serviceCredential: "test-mcp", bearerToken: "duplicate" })).status, 400);
+  assert.equal((await put({ auth: "bearer", serviceCredential: "test-mcp" })).status, 200);
+  assert.equal((await store.get("crm"))?.serviceCredential, "test-mcp");
+  assert.equal((await store.get("crm"))?.bearerToken, undefined);
+  assert.equal((await put({ auth: "bearer" })).status, 200);
+  assert.equal((await store.get("crm"))?.serviceCredential, "test-mcp");
+  assert.equal((await put({ auth: "client-credentials", clientId: "synthetic-client" })).status, 200);
+  assert.equal((await store.get("crm"))?.clientSecret, undefined);
+  assert.equal((await put({ auth: "client-credentials", clientSecret: "duplicate" })).status, 400);
 });
 
 test("production wiring never uses operator fallback tokens for per-user MCP calls", async (t) => {

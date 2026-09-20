@@ -1194,10 +1194,12 @@ export function buildApp(
   const keychain: Keychain | undefined = keychainKeyMaterial ? credentialStore : undefined;
   const mcpToolService = createMcpToolService({
     servers: mcpServers,
+    acl,
+    serviceCreds: credentialStore,
+    orgScopeId: scopeId("org", config.orgId),
     audit: auditLog,
     ...(keychain ? { userTokens: keychain } : {}),
   });
-  const mcpTools = () => mcpToolService.toolDefs();
   const browserSessionStore: BrowserSessionStore | undefined = keychainKeyMaterial
     ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })
     : undefined;
@@ -1299,7 +1301,6 @@ export function buildApp(
         resolveBaseModelId: () => orgBaseModelId() ?? defaultForHarness("pi"),
         resolveProviderKeys: resolveModelProviderKeys,
         signals: runSignals,
-        mcpTools,
       }),
     ],
     [
@@ -1308,7 +1309,6 @@ export function buildApp(
         ...openCodeHarnessConfigOptions(config),
         signals: runSignals,
         tasks,
-        mcpTools,
         resolveCustomProviders: async () => {
           const enabled = await customProviders.enabled();
           return Promise.all(
@@ -1341,7 +1341,6 @@ export function buildApp(
           : {}),
         signals: runSignals,
         tasks,
-        mcpTools,
       }),
     ],
     [
@@ -1358,7 +1357,6 @@ export function buildApp(
           : {}),
         signals: runSignals,
         tasks,
-        mcpTools,
       }),
     ],
     ["mock", createMockHarness()],
