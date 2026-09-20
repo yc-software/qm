@@ -625,7 +625,6 @@ export function buildApp(
     directorySyncProtected: config.emailAuthPrincipals,
     externalMembers: artifactMap<ExternalMember>("external_members"),
   });
-  void identity.hydrate();
   const leaderLease: LeaderLease = pgArtifactMap
     ? createPostgresLeaderLease(pgArtifactMap.pool)
     : createNoopLeaderLease();
@@ -664,7 +663,6 @@ export function buildApp(
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  void configStore.hydrate?.();
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills"),
     ...(config.skillSigningSecret ? { signingSecret: config.skillSigningSecret } : {}),
@@ -2526,16 +2524,22 @@ export function buildApp(
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await Promise.all(workers.map((w) => w.releaseInFlight()));
       await drain.stop();
-      runs.close?.();
-      void runSignals.close?.();
-      void sessionStateBus.close?.();
-      void ledgerEventBus.close?.();
-      void runActivity.close?.();
+      const release = async (label: string, close: () => Promise<void>): Promise<void> => {
+        await close().catch(swallowAs(`wiring: ${label}`, undefined));
+      };
+      await release("metrics flush", () => metrics.flush());
+      await release("metrics close", () => metrics.close?.() ?? Promise.resolve());
+      await release("sessions close", () => sessions.close?.() ?? Promise.resolve());
+      await release("runs close", () => runs.close?.() ?? Promise.resolve());
+      await release("run signals close", () => runSignals.close?.() ?? Promise.resolve());
+      await release("session state bus close", () => sessionStateBus.close?.() ?? Promise.resolve());
+      await release("ledger event bus close", () => ledgerEventBus.close?.() ?? Promise.resolve());
+      await release("run activity close", () => runActivity.close?.() ?? Promise.resolve());
       stopStreamSync();
-      void runStreamEvents.close?.();
-      await harness.turns.close?.();
-      await tasks.close?.();
-      await flyTunnel?.stop();
+      await release("run stream events close", () => runStreamEvents.close?.() ?? Promise.resolve());
+      await release("harness close", () => harness.turns.close?.() ?? Promise.resolve());
+      await release("tasks close", () => tasks.close?.() ?? Promise.resolve());
+      await release("fly tunnel stop", () => flyTunnel?.stop() ?? Promise.resolve());
     },
   };
 
