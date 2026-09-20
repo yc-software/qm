@@ -39,7 +39,9 @@ Apply also gives the loop a cron that fires it every five minutes, so tickets ar
 without anyone asking. Applying again reuses that cron. Fire it early from the Loops page, or
 through `POST /v1/loops/:id/fire`. Three consecutive failed fires quarantine the loop, which on a
 five-minute cron is fifteen minutes: put the three credentials in the keychain before Apply, and
-re-enable a quarantined loop from the Loops page.
+re-enable a quarantined loop from the Loops page. A fire that lands while a run is still working
+claims nothing and records `deferred: <ticket> is still in progress` — the factory works one
+ticket at a time, and the queued tickets are picked up by the first fire after the run ends.
 
 ## What a run does
 

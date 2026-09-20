@@ -555,6 +555,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     await applyGovernor(loopId, summary);
     const note = [
       `enqueued ${summary.enqueued}, worked ${summary.worked}`,
+      ...(summary.throttled ? [`deferred: ${summary.throttled}`] : []),
       ...(summary.ready.length ? [`${summary.ready.length} held for review`] : []),
       ...(summary.shipped.length ? [`${summary.shipped.length} shipped`] : []),
       ...(summary.parked.length ? [`${summary.parked.length} parked`] : []),

@@ -3,6 +3,7 @@ import type { LoopItemLedger } from "./item-ledger.ts";
 import { unresolvedOutput, type CaptureOutputInput, type LoopOutputStore } from "./output-store.ts";
 import type { LoopStore } from "./loop-store.ts";
 import { isRunnable } from "./loop-store.ts";
+import { isFactoryLoop } from "./factory/effects.ts";
 import { decideShip, outputCandidate, undeclaredShipActions } from "./ship-gate.ts";
 import type { SuccessVerdict } from "./success-evaluation.ts";
 import type { ShipGrant } from "../types.ts";
@@ -98,7 +99,11 @@ export async function runLoopFire(
     summary.failures.push(`intake: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  const queued = await stores.items.queued(loop.id, loop.caps?.maxItemsPerFire);
+  const inFlight = isFactoryLoop(loop)
+    ? (await stores.items.byLoop(loop.id)).find((item) => item.status === "in_progress")
+    : undefined;
+  if (inFlight) summary.throttled = `${inFlight.sourceKey} is still in progress`;
+  const queued = inFlight ? [] : await stores.items.queued(loop.id, loop.caps?.maxItemsPerFire);
   const batch = loop.throttle ? queued.slice(0, Math.max(1, Math.floor(queued.length / 2))) : queued;
   for (const queued of batch) {
     const item = await stores.items.claim(queued.id);

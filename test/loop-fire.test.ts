@@ -345,11 +345,13 @@ test("review saturation pings once and recovers after outputs drain", async () =
     caps: { maxOpenOutputs: 1 },
     destination: { type: "slack", target: "C1", audienceScopeId: base.ownerScopeId },
   });
-  await s.fire.fire(loop.id, "f1");
+  const first = await s.fire.fire(loop.id, "f1");
+  assert.doesNotMatch(first.note ?? "", /deferred/);
   assert.equal((await s.loops.get(loop.id))?.health, "degraded");
   assert.equal(s.deliveries.sent.length, 1);
   assert.match(s.deliveries.sent[0]!.text, /waiting for review/);
-  await s.fire.fire(loop.id, "saturated");
+  const saturated = await s.fire.fire(loop.id, "saturated");
+  assert.equal(saturated.note, "enqueued 0, worked 0; deferred: 1 outputs waiting for review");
   assert.equal(s.deliveries.sent.length, 1);
   const output = (await s.outputs.awaitingReview(loop.id))[0]!;
   await s.fire.shipOutput(loop.id, output.id, "reviewer");
@@ -920,6 +922,21 @@ test("factory surface: a repeated fire key is silent and re-runs neither intake 
   assert.equal(fake.fetch.calls.length, calls);
   assert.equal(fake.sandbox.ops.length, ops);
   assert.equal((await s.items.byLoop(loop.id)).length, 1);
+});
+
+test("factory surface: a fire lands mid-run, claims nothing, and says which ticket blocks it", async () => {
+  const fake = factoryFake();
+  const s = service(FACTORY_NO_TURNS, { factory: fake.deps });
+  const loop = await makeFactoryLoop(s.loops);
+  const { item } = await s.items.enqueue({ loopId: loop.id, sourceKey: FACTORY_TICKET });
+  await s.items.claim(item.id);
+
+  const result = await s.fire.fire(loop.id, "f1");
+
+  assert.equal(result.status, "silent");
+  assert.equal(result.note, `enqueued 0, worked 0; deferred: ${FACTORY_TICKET} is still in progress`);
+  assert.deepEqual(fake.sandbox.ops, []);
+  assert.equal((await s.items.get(item.id))?.status, "in_progress");
 });
 
 test("factory surface: a fire without the factory dep fails and runs nothing", async () => {

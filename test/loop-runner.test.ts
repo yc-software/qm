@@ -5,6 +5,7 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { fireNeedsAttention, runLoopFire, type LoopRunnerEffects, type LoopStores } from "../src/loops/runner.ts";
+import { FACTORY_LOOP_SURFACE } from "../src/loops/factory/effects.ts";
 import { scopeId, type Loop } from "../src/types.ts";
 
 const base = {
@@ -423,4 +424,71 @@ test("a quiet fire that needs nobody says so", async () => {
   const loop = await loopIn(s, { shipActions: [{ action: "open_pr", gate: "auto" }] });
   const summary = await runLoopFire(loop, s, effects(s));
   assert.equal(fireNeedsAttention(summary), false);
+});
+
+test("a factory fire claims nothing while one of its items is still in progress", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { surface: FACTORY_LOOP_SURFACE });
+  const { item: inFlight } = await s.items.enqueue({ loopId: loop.id, sourceKey: "QM-60" });
+  await s.items.claim(inFlight.id);
+  const { item: waiting } = await s.items.enqueue({ loopId: loop.id, sourceKey: "QM-61" });
+  let worked = 0;
+  const summary = await runLoopFire(
+    loop,
+    s,
+    effects(s, {
+      enumerate: async () => [],
+      work: async () => {
+        worked += 1;
+        return { runId: "run-1" };
+      },
+    }),
+  );
+  assert.equal(worked, 0);
+  assert.equal(summary.worked, 0);
+  assert.match(summary.throttled ?? "", /QM-60 is still in progress/);
+  assert.equal((await s.items.get(waiting.id))?.status, "queued");
+  assert.equal(fireNeedsAttention(summary), false);
+});
+
+test("a deferred factory fire still enqueues intake and drains once the run ends", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { surface: FACTORY_LOOP_SURFACE });
+  const { item: inFlight } = await s.items.enqueue({ loopId: loop.id, sourceKey: "QM-60" });
+  await s.items.claim(inFlight.id);
+  await s.items.enqueue({ loopId: loop.id, sourceKey: "QM-61" });
+  const worked: string[] = [];
+  const track: Partial<LoopRunnerEffects> = {
+    work: async ({ item }) => {
+      worked.push(item.sourceKey);
+      return { runId: "run-1" };
+    },
+  };
+
+  const deferred = await runLoopFire(
+    loop,
+    s,
+    effects(s, { ...track, enumerate: async () => [{ sourceKey: "QM-63" }] }),
+  );
+  assert.equal(deferred.enqueued, 1);
+  assert.deepEqual(worked, []);
+
+  await s.items.recordAction(inFlight.id, { kind: "dismiss", outcome: "dismissed" });
+  assert.equal((await s.items.get(inFlight.id))?.status, "skipped");
+
+  const drained = await runLoopFire(loop, s, effects(s, { ...track, enumerate: async () => [] }));
+  assert.deepEqual(worked.sort(), ["QM-61", "QM-63"]);
+  assert.equal(drained.worked, 2);
+  assert.equal(drained.throttled, undefined);
+});
+
+test("a non-factory loop still works items in parallel with one in progress", async () => {
+  const s = stores();
+  const loop = await loopIn(s);
+  const { item: inFlight } = await s.items.enqueue({ loopId: loop.id, sourceKey: "SENTRY-1" });
+  await s.items.claim(inFlight.id);
+  await s.items.enqueue({ loopId: loop.id, sourceKey: "SENTRY-2" });
+  const summary = await runLoopFire(loop, s, effects(s, { enumerate: async () => [] }));
+  assert.equal(summary.worked, 1);
+  assert.equal(summary.throttled, undefined);
 });
