@@ -712,6 +712,14 @@ emit_ai_spend_usage() {
   done
 }
 
+io_sync_fs() {
+  command -v sync >/dev/null 2>&1 || return 0
+  local runner=(sync)
+  command -v timeout >/dev/null 2>&1 && runner=(timeout 60 sync)
+  "${runner[@]}" >/dev/null 2>&1
+  return 0
+}
+
 # Stream the workflow's verification trail into this task's CloudWatch log in (near) real time,
 # DETERMINISTICALLY: poll the trail file(s) the workflow already writes and print appended bytes
 # to this wrapper's own stdout — which IS the task log. Replaces the agent-side IO_TASK_LOG
@@ -752,6 +760,7 @@ start_trail_tailer() {
           eval "$offvar=\$sz"
         fi
       done
+      io_sync_fs
       sleep 10 & wait $! || true
     done
   ) &
@@ -2371,6 +2380,7 @@ wait_for_claude_exit
 CLAUDE_EXIT=$?
 stop_trail_tailer
 stop_heartbeat
+io_sync_fs
 # Surface the full headless run to CloudWatch for debugging, but scrub secret-shaped tokens
 # (Slack xox*/Bearer, Linear lin_api_) at this single chokepoint — so even if a sub-agent ever
 # violated its "never echo the token" instruction, it can't leak into the durable log sink.

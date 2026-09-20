@@ -1343,3 +1343,169 @@ test("the wrapper prunes foreign work dirs after the checkout and before the too
     { seed: (repo) => void mkdirSync(join(repo, ".io-agent-qm-1")) },
   );
 });
+
+const FLUSH_SLICES = ["io_sync_fs", "start_trail_tailer", "stop_trail_tailer", "scrub_stream"];
+
+function realBinary(name: string): string {
+  const found = spawnSync("bash", ["-c", `command -v ${name}`], { encoding: "utf8", env: PATH_ONLY });
+  assert.equal(found.status, 0, `${name} must exist to exercise the wrapper's flush`);
+  return found.stdout.trim();
+}
+
+function markerLines(marker: string): string[] {
+  return readFileSync(marker, "utf8").split("\n").filter(Boolean);
+}
+
+type FlushCase = (dir: string, run: Run, marker: string, env: Record<string, string>) => void;
+
+function withTailerFlush(syncBehaviour: string, body: FlushCase): void {
+  withHarness(FLUSH_SLICES, (dir, run) => {
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    const marker = join(dir, "marker");
+    const quoted = JSON.stringify(marker);
+    const realSleep = JSON.stringify(realBinary("sleep"));
+    writeFileSync(marker, "");
+    stubTool(bin, "sync", `printf 'sync\\n' >> ${quoted}\n${syncBehaviour}`);
+    stubTool(
+      bin,
+      "sleep",
+      `[ "$1" = 10 ] && { printf 'sleep\\n' >> ${quoted}; exec ${realSleep} 0.2; }\nexec ${realSleep} "$@"`,
+    );
+    stubTool(bin, "timeout", `shift\nexec ${JSON.stringify(realBinary("timeout"))} 1 "$@"`);
+    body(dir, run, marker, { PATH: `${bin}:${PATH_ONLY.PATH}`, MARKER: marker });
+  });
+}
+
+function seedTrail(dir: string): void {
+  mkdirSync(join(dir, ".io-agent-x"));
+  writeFileSync(join(dir, ".io-agent-x/verification-trail.md"), "seed\n");
+}
+
+const AWAIT_FIRST_FLUSH = `until grep -q '^sync$' "$MARKER"; do sleep 0.1; done`;
+const APPEND_AND_AWAIT_TWO_MORE_FLUSHES = [
+  `printf 'appended\\n' >> .io-agent-x/verification-trail.md`,
+  `n=$(grep -c '^sync$' "$MARKER")`,
+  `until [ "$(grep -c '^sync$' "$MARKER")" -ge $((n + 2)) ]; do sleep 0.1; done`,
+].join("\n");
+
+function assertOnlyTrailLines(stdout: string): void {
+  for (const line of stdout.split("\n").filter(Boolean)) {
+    assert.ok(line.startsWith("[trail"), `the flush must add no stdout line of its own, saw ${JSON.stringify(line)}`);
+  }
+}
+
+function assertOnlyArmedLine(stderr: string): void {
+  assert.deepEqual(
+    stderr
+      .split("\n")
+      .filter(Boolean)
+      .filter((line) => !line.startsWith("[io-coding-agent-js] trail streaming armed")),
+    [],
+    "the flush must add no stderr line of its own",
+  );
+}
+
+test("the trail tailer flushes the filesystem on every poll", () => {
+  assert.ok(
+    sliceFunction("start_trail_tailer").includes("\n      done\n      io_sync_fs\n      sleep 10 & wait $! || true\n"),
+    "the flush must sit in the poll loop, between the drain loop and the poll sleep",
+  );
+  assert.ok(
+    sliceFunction("io_sync_fs").includes("command -v sync >/dev/null 2>&1 || return 0"),
+    "io_sync_fs must leave a sandbox without sync unaffected",
+  );
+
+  withTailerFlush("", (_dir, run, marker, env) => {
+    const result = run(
+      `set -uo pipefail\nstart_trail_tailer\nuntil [ "$(grep -c '^sync$' "$MARKER")" -ge 2 ]; do sleep 0.1; done\nstop_trail_tailer`,
+      env,
+    );
+    assert.equal(result.status, 0, "a poll that streams nothing must not abort under set -uo pipefail");
+    assert.ok(
+      markerLines(marker).filter((line) => line === "sync").length >= 2,
+      "a run whose trail never grows must still be flushed on every poll, not once at arm time",
+    );
+    assert.equal(result.stdout, "", "the flush must add no stdout line of its own");
+    assertOnlyArmedLine(result.stderr);
+  });
+
+  withTailerFlush("", (dir, run, marker, env) => {
+    seedTrail(dir);
+    const result = run(
+      [`start_trail_tailer`, AWAIT_FIRST_FLUSH, APPEND_AND_AWAIT_TWO_MORE_FLUSHES, `stop_trail_tailer`].join("\n"),
+      env,
+    );
+    assert.equal(result.status, 0);
+    const lines = markerLines(marker);
+    assert.deepEqual(
+      lines,
+      lines.map((_line, index) => (index % 2 === 0 ? "sync" : "sleep")),
+      "every poll must flush before it sleeps",
+    );
+    assert.ok(result.stdout.includes("[trail] appended"), "the poll must still stream trail growth");
+    assertOnlyTrailLines(result.stdout);
+    assert.ok(
+      result.stdout.lastIndexOf("[trail] ") < result.stdout.indexOf("[trail:final] "),
+      "stop_trail_tailer must still return only after the last tailer byte is written",
+    );
+  });
+
+  withTailerFlush(`echo "sync: boom" >&2\nexit 1`, (dir, run, _marker, env) => {
+    seedTrail(dir);
+    const result = run(
+      [`start_trail_tailer`, AWAIT_FIRST_FLUSH, APPEND_AND_AWAIT_TWO_MORE_FLUSHES, `stop_trail_tailer`].join("\n"),
+      env,
+    );
+    assert.equal(result.status, 0, "a failing sync must not change the wrapper's exit code");
+    assert.ok(result.stdout.includes("[trail] appended"), "a failing sync must not stop the trail stream");
+    assertOnlyTrailLines(result.stdout);
+    assertOnlyArmedLine(result.stderr);
+  });
+
+  withTailerFlush(`exec ${JSON.stringify(realBinary("sleep"))} 300`, (dir, run, marker, env) => {
+    seedTrail(dir);
+    const result = run(`start_trail_tailer\n${AWAIT_FIRST_FLUSH}\nstop_trail_tailer`, env);
+    assert.equal(result.status, 0, "a wedged sync must stay bounded so the teardown still returns");
+    assert.ok(markerLines(marker).includes("sync"), "the bounded runner must still reach sync");
+  });
+
+  withHarness(["io_sync_fs"], (dir, run) => {
+    const bin = join(dir, "no-sync");
+    mkdirSync(bin);
+    const result = run(`( PATH=${JSON.stringify(bin)}; io_sync_fs ); echo "rc=$?"`, {});
+    assert.equal(result.stdout, "rc=0\n", "a sandbox without sync must be unaffected and silent");
+    assert.equal(result.stderr, "");
+  });
+
+  withHarness(["io_sync_fs"], (dir, run) => {
+    const bin = join(dir, "no-timeout");
+    mkdirSync(bin);
+    const marker = join(dir, "marker");
+    writeFileSync(marker, "");
+    stubTool(bin, "sync", `printf 'sync\\n' >> ${JSON.stringify(marker)}`);
+    const result = run(`( PATH=${JSON.stringify(bin)}; io_sync_fs ); echo "rc=$?"`, {});
+    assert.equal(result.stdout, "rc=0\n", "a sandbox without timeout must still flush, silently");
+    assert.equal(result.stderr, "");
+    assert.deepEqual(markerLines(marker), ["sync"]);
+  });
+});
+
+test("the wrapper flushes exactly twice: in the tailer poll and after the tailer stops, before the Ship handoff", () => {
+  const seam = WRAP.indexOf("\nstop_trail_tailer\nstop_heartbeat\nio_sync_fs\n");
+  assert.ok(seam > 0, "the pre-Ship teardown must flush after stop_trail_tailer and stop_heartbeat");
+  assert.ok(seam < WRAP.indexOf('scrub_stream < "$OUT" > "$SCRUBBED"'), "the handoff flush must precede the scrub");
+  assert.ok(
+    seam < WRAP.indexOf('DISK_ENVELOPE_JSON="$(io_read_converge_envelope || true)"'),
+    "the handoff flush must precede the envelope read",
+  );
+  assert.ok(
+    seam < WRAP.indexOf('converge_loop "$CONVERGE_MR"'),
+    "the handoff flush must precede the convergence bursts",
+  );
+  assert.equal(
+    count(WRAP, /^ *io_sync_fs$/gm),
+    2,
+    "the wrapper flushes at the poll and the Ship handoff, nowhere else",
+  );
+});
