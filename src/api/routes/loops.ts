@@ -2,7 +2,7 @@ import type { Loop, LoopState } from "../../types.ts";
 import { parseScopeId, scopeId, type ScopeId } from "../../types.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import type { LoopStore, CreateLoopInput, LoopPatch } from "../../loops/loop-store.ts";
-import { DECISION_LEASE_MS, type LoopItemLedger } from "../../loops/item-ledger.ts";
+import { DECISION_LEASE_MS, type LoopItemLedger, type LoopQueueStats } from "../../loops/item-ledger.ts";
 import type { LoopOutputStore } from "../../loops/output-store.ts";
 import type { ShipGrantStore } from "../../loops/ship-grant-store.ts";
 import type { LoopFireService } from "../../loops/loop-fire.ts";
@@ -282,12 +282,13 @@ async function listLoops(ctx: ApiCtx): Promise<void> {
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
   const acting = actingPrincipal(ctx);
   if (!acting) return;
-  const all = await deps.store.list();
-  const visible: Loop[] = [];
-  for (const loop of all) {
-    if (await canAdministerLoop(ctx, loop, acting)) visible.push(loop);
+  const now = Date.now();
+  const loops: Array<Loop & { queue: LoopQueueStats }> = [];
+  for (const loop of await deps.store.list()) {
+    if (await canAdministerLoop(ctx, loop, acting))
+      loops.push({ ...loop, queue: await deps.items.stats(loop.id, now) });
   }
-  return sendJson(ctx.res, 200, { loops: visible });
+  return sendJson(ctx.res, 200, { loops });
 }
 
 async function getLoop(ctx: ApiCtx): Promise<void> {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loopRoutes, type LoopServiceDeps } from "../src/api/routes/loops.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
-import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
+import { createLoopItemLedger, type LoopQueueStats } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { decideShip } from "../src/loops/ship-gate.ts";
@@ -317,6 +317,32 @@ test("only the owner may read, patch, or delete a personal loop", async () => {
   assert.equal((await call(deps, "DELETE", `/v1/loops/${id}`, undefined, { actor: "mallory" })).status, 403);
   const list = await call(deps, "GET", "/v1/loops", undefined, { actor: "mallory" });
   assert.deepEqual((list.body as { loops: unknown[] }).loops, []);
+});
+
+test("the loops list carries each loop's queue counts alongside the whole loop record", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const deps = services();
+  const busy = ((await call(deps, "POST", "/v1/loops", CREATE)).body as { loop: Loop }).loop;
+  const idle = ((await call(deps, "POST", "/v1/loops", { ...CREATE, name: "Idle" })).body as { loop: Loop }).loop;
+  const first = await deps.items.enqueue({ loopId: busy.id, sourceKey: "s-1" });
+  await deps.items.enqueue({ loopId: busy.id, sourceKey: "s-2" });
+  assert.ok(await deps.items.claim(first.item.id));
+
+  const list = await call(deps, "GET", "/v1/loops");
+  assert.equal(list.status, 200);
+  const entries = (list.body as { loops: Array<Loop & { queue: LoopQueueStats }> }).loops;
+  const { queue, ...record } = entries.find((entry) => entry.id === busy.id)!;
+  assert.equal(queue.queued, 1);
+  assert.equal(queue.inProgress, 1);
+  assert.equal(queue.ready, 0);
+  assert.equal(queue.failed, 0);
+  assert.deepEqual(record, busy);
+
+  const idleEntry = entries.find((entry) => entry.id === idle.id)!;
+  assert.deepEqual(idleEntry.queue, { queued: 0, inProgress: 0, ready: 0, failed: 0 });
+
+  const detail = await call(deps, "GET", `/v1/loops/${busy.id}`);
+  assert.deepEqual(queue, (detail.body as { vitals: { queue: LoopQueueStats } }).vitals.queue);
 });
 
 test("pausing a loop pauses its child cron; re-enabling resumes it", async () => {

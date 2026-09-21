@@ -21,6 +21,7 @@ interface LoopView {
   cronId?: string;
   lastFiredAt?: number;
   consecutiveFailedFires?: number;
+  queue?: { queued: number; inProgress: number };
 }
 
 interface LoopItemView {
@@ -344,12 +345,20 @@ function detailTpl(detail: LoopDetail): TemplateResult {
   `;
 }
 
+function queueLabel(queue: { queued: number; inProgress: number }): string {
+  const parts: string[] = [];
+  if (queue.inProgress > 0) parts.push(`${queue.inProgress} working`);
+  if (queue.queued > 0) parts.push(`${queue.queued} queued`);
+  return parts.length > 0 ? parts.join(" · ") : "queue empty";
+}
+
 function loopRow(loop: LoopView): TemplateResult {
   return html`
     <button class="list-row loop-row" type="button" @click=${() => openLoop(loop.id)}>
       <span class="loop-row-name">${loop.name}</span>
       ${healthBadge(loop)}
       <span class="loop-row-meta">last fire ${ago(loop.lastFiredAt)}</span>
+      ${loop.queue ? html`<span class="loop-row-meta">${queueLabel(loop.queue)}</span>` : nothing}
     </button>
   `;
 }
