@@ -33,6 +33,40 @@ export function renderInboxSyncTask(loopId: string): string {
 5. Found nothing new and changed nothing? Finish silently. Only raise your voice on a real fault (a connector that errors repeatedly) — and then only briefly.`;
 }
 
+export async function ensureDefaultInboxLoops(store: LoopStore, owner: string): Promise<Loop[]> {
+  const loops: Loop[] = [];
+  for (const [source, name] of [
+    ["gmail", "Email"],
+    ["slack", "Slack"],
+  ]) {
+    const existing = (await store.list()).find(
+      (loop) => loop.ownerScopeId === scopeId("personal", owner) && loop.surface === `inbox:${source}`,
+    );
+    if (existing) {
+      loops.push(existing);
+      continue;
+    }
+    const { loop } = await store.create({
+      owner,
+      createdBy: owner,
+      ownerScopeId: scopeId("personal", owner),
+      name: name!,
+      surface: `inbox:${source}`,
+      sources: [source!],
+      purpose: `Messages in ${name} waiting on your reply.`,
+      playbook: renderSourceInboxTask("$LOOP_ID", source!),
+      successCondition: `Every ${name} conversation needing a reply has a draft for review.`,
+      shipActions: [{ action: "send", gate: "hold" }],
+    });
+    loops.push(loop);
+  }
+  return loops;
+}
+
+export function renderSourceInboxTask(loopId: string, source: string): string {
+  return `Source restriction: scan only ${source}. Never read or ingest another source. Keep a separate watermark for this Loop.\n${renderInboxSyncTask(loopId)}`;
+}
+
 function isInboxLoop(loop: Loop): boolean {
   return loop.surface === INBOX_LOOP_SURFACE;
 }

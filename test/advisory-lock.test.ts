@@ -349,3 +349,21 @@ test("pg contended polling releases connections for unrelated keys", { skip, tim
     await pg.close();
   }
 });
+
+test("pg multi-key locks reuse one session for nested held keys and release the set", { skip }, async () => {
+  const pg = createPgPool(URL!);
+  const other = createPgPool(URL!);
+  const lock = createPostgresAdvisoryLock(pg);
+  const contender = createPostgresAdvisoryLock(other);
+  try {
+    const result = await lock.tryWithLocks!(["inbox:one", "inbox:two"], async () => {
+      assert.equal(await contender.tryWithLock!("inbox:two", async () => "unexpected"), null);
+      return lock.withLock("inbox:one", async () => lock.withLock("inbox:two", async () => 42));
+    });
+    assert.equal(result, 42);
+    assert.equal(await contender.tryWithLocks!(["inbox:one", "inbox:two"], async () => true), true);
+  } finally {
+    await pg.close();
+    await other.close();
+  }
+});

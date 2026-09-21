@@ -1,4 +1,5 @@
 import type { BackgroundOwnershipStore } from "../runs/background-ownership.ts";
+import type { LoopIngressService } from "../loops/ingress.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
 import type { ManagedSlack } from "../surfaces/slack-managed.ts";
 import type { BrokerSessionStore } from "../auth/broker-sessions.ts";
@@ -177,6 +178,7 @@ export interface ServerDeps {
   deployAppsLoginPath?: "/auth/login" | "/auth/trusted/login";
   scheduler?: Scheduler;
   webhookReceiver?: WebhookReceiver;
+  loopIngress?: LoopIngressService;
   identity?: IdentityService;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;

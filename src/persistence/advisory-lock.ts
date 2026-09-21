@@ -5,14 +5,35 @@ import { sleep } from "../util/async.ts";
 export interface AdvisoryLock {
   withLock<T>(key: string, fn: () => Promise<T>): Promise<T>;
   withSharedLock?<T>(key: string, fn: () => Promise<T>): Promise<T>;
+  tryWithLocks?<T>(keys: string[], fn: () => Promise<T>): Promise<T | null>;
   tryWithLock?<T>(key: string, fn: () => Promise<T>): Promise<T | null>;
+}
+
+function withMultiLocks(lock: AdvisoryLock): AdvisoryLock {
+  const multi = new AsyncLocalStorage<{ keys: Set<string>; active: boolean }>();
+  return {
+    ...lock,
+    withLock: (key, fn) =>
+      multi.getStore()?.active && multi.getStore()?.keys.has(key) ? fn() : lock.withLock(key, fn),
+    async tryWithLocks<T>(keys: string[], fn: () => Promise<T>): Promise<T | null> {
+      const unique = [...new Set(keys)].sort();
+      const scope = { keys: new Set(unique), active: true };
+      const acquire = (index: number): Promise<T | null> =>
+        index === unique.length ? multi.run(scope, fn) : lock.tryWithLock!(unique[index]!, () => acquire(index + 1));
+      try {
+        return await acquire(0);
+      } finally {
+        scope.active = false;
+      }
+    },
+  };
 }
 
 const DEFAULT_ADVISORY_LOCK_TIMEOUT_MS = 5 * 60_000;
 const DEFAULT_ADVISORY_LOCK_POLL_MS = 300;
 
 export function createNoopAdvisoryLock(): AdvisoryLock {
-  return {
+  return withMultiLocks({
     async withLock<T>(_key: string, fn: () => Promise<T>): Promise<T> {
       return fn();
     },
@@ -22,7 +43,7 @@ export function createNoopAdvisoryLock(): AdvisoryLock {
     async tryWithLock<T>(_key: string, fn: () => Promise<T>): Promise<T | null> {
       return fn();
     },
-  };
+  });
 }
 
 export function createMemoryAdvisoryLock(): AdvisoryLock {
@@ -48,14 +69,14 @@ export function createMemoryAdvisoryLock(): AdvisoryLock {
       if (!state.pending) states.delete(key);
     }
   };
-  return {
+  return withMultiLocks({
     withLock: (key, fn) => run(key, fn, false),
     withSharedLock: (key, fn) => run(key, fn, true),
     async tryWithLock(key, fn) {
       if (states.has(key)) return null;
       return run(key, fn, false);
     },
-  };
+  });
 }
 
 export function createPostgresAdvisoryLock(
@@ -116,9 +137,9 @@ export function createPostgresAdvisoryLock(
       await sleep(pollMs);
     }
   };
-  return {
+  return withMultiLocks({
     withLock: <T>(key: string, fn: () => Promise<T>) => run(key, fn, false, true) as Promise<T>,
     withSharedLock: <T>(key: string, fn: () => Promise<T>) => run(key, fn, true, true) as Promise<T>,
     tryWithLock: <T>(key: string, fn: () => Promise<T>) => run(key, fn, false, false),
-  };
+  });
 }

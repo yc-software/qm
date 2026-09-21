@@ -61,7 +61,7 @@ function lastCallTo(pathname: string): Call | undefined {
 
 test("GET /api/inbox resolves the signed-in person's inbox loop, never someone else's", async () => {
   await fetch(`${base}/api/inbox`, { headers });
-  const call = lastCallTo("/v1/loops/inbox");
+  const call = lastCallTo("/v1/inbox");
   assert.ok(call, "expected a relayed core call");
   assert.equal(call.method, "GET");
   assert.equal(coreQuery(call.url, "principalId"), "alice");

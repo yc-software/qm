@@ -70,6 +70,15 @@ export function isLoopsUser(principalId: string, configuredUsers = process.env.L
     .includes(normalizedPrincipalId);
 }
 
+async function hasInboxLoopPreview(user: string): Promise<boolean> {
+  try {
+    const response = await coreFetch("GET", `/v1/inbox/access?principalId=${encodeURIComponent(user)}`, "", 2_000);
+    return response.status === 200 && JSON.parse(response.text).enabled === true;
+  } catch {
+    return false;
+  }
+}
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = join(ROOT, "dist-web");
 
@@ -574,8 +583,7 @@ function runInboxFeed(): Promise<void> {
     (data) => {
       const ev = data as { owner?: string; loopId?: string; itemId?: string; op?: string };
       if (!ev.owner || !ev.loopId || !ev.itemId) return;
-      for (const res of deliveryClients.get(ev.owner) ?? [])
-        sseEvent(res, "inbox_item", { loopId: ev.loopId, itemId: ev.itemId, op: ev.op ?? "" });
+      for (const clients of deliveryClients.values()) for (const res of clients) sseEvent(res, "inbox_resync", {});
     },
     () => {
       for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "inbox_resync", {});
@@ -1257,8 +1265,10 @@ const apiRoutes: readonly WebRoute[] = [
         connections?: { provider: string }[];
       };
       const permissions = allPermissions.filter((permission) => permission !== "loops" && permission !== "inbox");
-      if (isLoopsUser(user)) permissions.push("loops");
-      if (isInboxUser(user)) permissions.push("inbox");
+      if (await hasInboxLoopPreview(user)) {
+        if (isLoopsUser(user)) permissions.push("loops");
+        if (isInboxUser(user)) permissions.push("inbox");
+      }
       return json(res, 200, {
         user,
         org: ORG,
@@ -1537,7 +1547,12 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/inbox",
     handle: async (c) => {
       const { res, user } = c;
-      return relayCore(res, "GET", `/v1/loops/inbox?principalId=${encodeURIComponent(user)}`);
+      const qs = new URLSearchParams({ principalId: user });
+      for (const key of ["cursor", "loopId", "view", "itemId"]) {
+        const value = c.url.searchParams.get(key);
+        if (value) qs.set(key, value);
+      }
+      return relayCore(res, "GET", `/v1/inbox?${qs}`);
     },
   },
   {
@@ -1548,6 +1563,12 @@ const apiRoutes: readonly WebRoute[] = [
       res.setHeader("Cache-Control", "no-store");
       return relayCore(res, "POST", "/v1/loops/inbox/sent-chat", await readBody(req));
     },
+  },
+  {
+    method: "POST",
+    path: "/api/inbox/selection",
+    handle: async (c) =>
+      relayCore(c.res, "PUT", `/v1/inbox?principalId=${encodeURIComponent(c.user)}`, await readBody(c.req)),
   },
   {
     method: "POST",
@@ -2664,6 +2685,38 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "GET",
+    path: "/api/loops/:id/ingestion",
+    handle: async ({ res, user, params }) =>
+      relayCore(
+        res,
+        "GET",
+        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion?principalId=${encodeURIComponent(user)}`,
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/loops/:id/ingestion",
+    handle: async ({ req, res, user, params }) =>
+      relayCore(
+        res,
+        "POST",
+        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion?principalId=${encodeURIComponent(user)}`,
+        await readBody(req),
+      ),
+  },
+  {
+    method: "PATCH",
+    path: "/api/loops/:id/ingestion/:sourceId",
+    handle: async ({ req, res, user, params }) =>
+      relayCore(
+        res,
+        "PATCH",
+        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion/${encodeURIComponent(params.sourceId!)}?principalId=${encodeURIComponent(user)}`,
+        await readBody(req),
+      ),
+  },
+  {
     method: "POST",
     path: "/api/loops/:id/fire",
     handle: async (c) => {
@@ -3060,8 +3113,13 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   if (path === "/me" || path.startsWith("/api/")) {
     const user = cookieUser(req);
     if (!user) return unauthorized(res, req);
+    const inboxPath = path === "/api/inbox" || path.startsWith("/api/inbox/");
     const loopsPath = path === "/api/loops" || path.startsWith("/api/loops/");
-    const ledgerPath = /^\/api\/loops\/[^/]+\/items(\/|$)/.test(path);
+    if ((inboxPath || loopsPath) && !(await hasInboxLoopPreview(user)))
+      return json(res, 403, { error: "feature_disabled" });
+    if (inboxPath && !isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+    const ledgerPath =
+      /^\/api\/loops\/[^/]+\/items(\/|$)/.test(path) || /^\/api\/loops\/[^/]+\/outputs\/[^/]+\/decide$/.test(path);
     if (loopsPath && !isLoopsUser(user) && !(ledgerPath && isInboxUser(user))) {
       return json(res, 403, { error: "forbidden" });
     }

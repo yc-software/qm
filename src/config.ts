@@ -135,6 +135,7 @@ export interface Config {
   secretsPrefix: string;
   apiBaseUrl?: string;
   publicUrl?: string;
+  gmailPubSub?: { topic: string; audience: string; serviceAccount: string };
   publicWebUrl?: string;
   flyAppName?: string;
   slack?: SlackPluginConfig;
@@ -1488,6 +1489,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     layerEnv: { ...env },
     ...(publicApiUrl ? { apiBaseUrl: publicApiUrl } : {}),
     ...(publicUrl ? { publicUrl } : {}),
+    ...(env.GMAIL_PUBSUB_TOPIC && env.GMAIL_PUBSUB_AUDIENCE && env.GMAIL_PUBSUB_SERVICE_ACCOUNT
+      ? {
+          gmailPubSub: {
+            topic: env.GMAIL_PUBSUB_TOPIC,
+            audience: env.GMAIL_PUBSUB_AUDIENCE,
+            serviceAccount: env.GMAIL_PUBSUB_SERVICE_ACCOUNT,
+          },
+        }
+      : {}),
     ...(env.PUBLIC_WEB_URL ? { publicWebUrl: env.PUBLIC_WEB_URL } : {}),
     ...(env.FLY_APP_NAME ? { flyAppName: env.FLY_APP_NAME } : {}),
     ...(slack ? { slack } : {}),

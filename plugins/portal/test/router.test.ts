@@ -677,3 +677,23 @@ test("background ownership forwards both credentials only on its exact control r
     assert.equal(response.status, 404);
   }
 });
+
+test("Loop ingress forwards signed events and Google identity without a portal session", async () => {
+  const response = await fetch(`${base}/v1/loop-ingress/gmail`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: "Bearer google-id-token",
+      "x-slack-signature": "v0=signature",
+      "x-slack-request-timestamp": "123",
+    },
+    body: JSON.stringify({ message: { data: "test" } }),
+  });
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as { cookie: string | null; headers: Record<string, string> };
+  assert.equal(body.cookie, null);
+  assert.equal(body.headers.authorization, "Bearer google-id-token");
+  assert.equal(body.headers["x-slack-signature"], "v0=signature");
+  assert.equal((await fetch(`${base}/v1/loop-ingress/gmail`)).status, 404);
+  assert.equal((await fetch(`${base}/v1/loop-ingress/gmail/extra`, { method: "POST" })).status, 404);
+});

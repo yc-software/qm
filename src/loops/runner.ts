@@ -101,7 +101,7 @@ export async function runLoopFire(
   const queued = await stores.items.queued(loop.id, loop.caps?.maxItemsPerFire);
   const batch = loop.throttle ? queued.slice(0, Math.max(1, Math.floor(queued.length / 2))) : queued;
   for (const queued of batch) {
-    const item = await stores.items.claim(queued.id);
+    const item = await stores.items.claim(queued.id, undefined, loop.id);
     if (!item) continue;
     const claimToken = item.claimToken!;
     summary.worked += 1;
@@ -153,8 +153,9 @@ export async function runLoopFire(
       }
 
       if (captured.length === 0) {
-        await stores.items.markShipped(item.id, claimToken);
-        summary.shipped.push(item.id);
+        if ((await stores.items.get(item.id))?.proposal) {
+          if (await stores.items.markReady(item.id, [], claimToken)) summary.ready.push(item.id);
+        } else if (await stores.items.markShipped(item.id, claimToken)) summary.shipped.push(item.id);
         continue;
       }
 

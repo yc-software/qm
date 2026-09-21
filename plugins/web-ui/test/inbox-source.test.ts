@@ -114,13 +114,11 @@ test("drafts persist on blur and send uses the current edit", () => {
   assert.match(inbox, /postAction\(item, status === "dismissed" \? "dismiss" : "reopen"\)/);
 });
 
-test("the inbox reads the loop's ledger, not a bespoke inbox endpoint", () => {
-  assert.doesNotMatch(inbox, /\/api\/inbox\/items/, "the bespoke item routes are gone");
-  assert.match(inbox, /api<\{ items: LedgerItem\[\] \}>\(`\/api\/loops\/\$\{encodeURIComponent\(loopId\)\}\/items`\)/);
-  assert.match(inbox, /inboxState\.loopId = found\.loop\?\.id \?\? null;/);
-  assert.match(inbox, /if \(entry\.state === "actioned"\) return "sent";/);
-  assert.match(inbox, /return entry\.actionKind === "replied" \? "replied" : "dismissed";/);
-  assert.match(inbox, /const payload = entry\.sourcePayload;/, "source fields are read out of the opaque payload");
+test("the inbox reads a paginated combined feed and retains original item references", () => {
+  assert.match(inbox, /api<Feed>\(`\/api\/inbox\?\$\{qs\}`\)/);
+  assert.match(inbox, /feedWindows/);
+  assert.match(inbox, /loopId: entry\.loopId/);
+  assert.match(inbox, /loadDeepLink/);
 });
 
 test("localhost can overlay private inbox seed data without checking it into source", () => {

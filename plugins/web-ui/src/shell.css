@@ -9062,6 +9062,78 @@ h3.ambient-field-label {
   background: color-mix(in srgb, var(--accent) 7%, transparent);
   font-size: 12.5px;
 }
+.inbox-setup {
+  margin: 12px 10px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--foreground) 2%, transparent);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.inbox-page .inbox-setup {
+  margin-inline: 0;
+}
+.inbox-setup-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+}
+.inbox-setup-row + .inbox-setup-row {
+  border-top: 1px solid var(--border);
+}
+.inbox-setup-icon {
+  display: flex;
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+}
+.inbox-setup-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  line-height: 1.35;
+}
+.inbox-setup-title {
+  font-size: 13px;
+  font-weight: 500;
+}
+.inbox-setup-description {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.inbox-setup-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.inbox-setup-action:hover:not(:disabled) {
+  background: var(--secondary);
+  border-color: var(--muted-foreground);
+}
+.inbox-setup-action:focus-visible {
+  outline: 2px solid var(--ring, var(--foreground));
+  outline-offset: 2px;
+}
+.inbox-setup-action:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
 .inbox-scroll {
   flex: 1;
   min-height: 0;
@@ -12163,4 +12235,120 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   .composer-wrap .composer-attach {
     transform: none;
   }
+}
+.inbox-chips {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  min-width: 0;
+  padding-bottom: 4px;
+}
+.inbox-chip {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.inbox-loop-picker {
+  margin: 12px 0;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  max-width: 520px;
+}
+.inbox-loop-picker p {
+  color: var(--muted-foreground);
+}
+.inbox-chip-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 8px;
+  flex-shrink: 0;
+}
+.inbox-loop-picker label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  cursor: pointer;
+}
+.inbox-loop-picker label span:last-child {
+  margin-left: auto;
+  color: var(--muted);
+}
+.inbox-generic-review {
+  padding: 24px;
+  max-width: 900px;
+}
+.inbox-generic-review .loop-output {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 20px;
+}
+.inbox-generic-review .loop-output h2 {
+  font-size: 16px;
+  margin: 0;
+}
+.inbox-generic-review .loop-output-decide {
+  flex-wrap: wrap;
+}
+
+.loop-ingestion {
+  margin: 24px 0;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.loop-ingestion-heading,
+.loop-ingestion-source-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.loop-ingestion-heading h2 {
+  margin: 0;
+  font-size: 15px;
+}
+.loop-ingestion-heading > span,
+.loop-ingestion-source-head > span,
+.loop-ingestion p {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.loop-ingestion-source-head .btn {
+  margin-left: auto;
+}
+.loop-ingestion-source,
+.loop-ingestion-secret {
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+.loop-ingestion label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 12px;
+}
+.loop-ingestion input,
+.loop-ingestion select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+}
+.loop-ingestion-add {
+  max-width: 320px;
+  margin: 12px 0;
+}
+.loop-ingestion-fields {
+  max-width: 520px;
+  margin-bottom: 12px;
 }

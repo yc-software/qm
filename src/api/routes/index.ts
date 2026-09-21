@@ -1,6 +1,7 @@
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { backgroundWorkRoutes } from "./background-work.ts";
 import { composioRoutes } from "./composio.ts";
+import { loopIngressRoutes, loopIngressRawRoutes } from "./loop-ingress.ts";
 import { sendJson } from "../http.ts";
 import { type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { connectorRawRoutes, connectorRoutes } from "./connectors.ts";
@@ -34,6 +35,7 @@ import { deploymentLayerRoutes } from "./deployment-layer.ts";
 import { egressAuditRoutes } from "./egress-audit.ts";
 import { slackEventRawRoutes } from "./slack-events.ts";
 import { authBrokerRoutes } from "./auth-broker.ts";
+import { inboxRoutes } from "./inbox.ts";
 import { loopItemRoutes } from "./loop-items.ts";
 import { searchRoutes } from "./search.ts";
 import { userModelAuthRoutes } from "./user-model-auth.ts";
@@ -54,6 +56,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   ...sessionStateRawRoutes,
   ...loopItemEventsRawRoutes,
   ...webhookRawRoutes,
+  ...loopIngressRawRoutes,
 ];
 
 export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
@@ -79,12 +82,14 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...loopRoutes,
   ...reachRoutes,
   ...webhookRoutes,
+  ...loopIngressRoutes,
   ...directoryRoutes,
   ...contextRoutes,
   ...pinRoutes,
   ...surfaceCacheRoutes,
   ...environmentRoutes,
   ...emojiRoutes,
+  ...inboxRoutes,
   ...loopItemRoutes,
   ...deploymentRoutes,
   ...egressAuditRoutes,

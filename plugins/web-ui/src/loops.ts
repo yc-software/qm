@@ -19,6 +19,7 @@ interface LoopView {
   healthReason?: string;
   owner: string;
   cronId?: string;
+  sources?: string[];
   lastFiredAt?: number;
   consecutiveFailedFires?: number;
 }
@@ -55,6 +56,23 @@ interface LoopDetail {
   vitals: { queue: { queued: number; inProgress: number }; openOutputs: number };
 }
 
+interface IngestionSource {
+  id: string;
+  kind: "webhook" | "slack" | "gmail";
+  enabled: boolean;
+  url: string;
+  channels?: string[];
+  gmail?: { email: string; expiresAt: number };
+  lastReceivedAt?: number;
+  lastError?: string;
+}
+let ingestion: { sources: IngestionSource[]; gmailAvailable: boolean } | null = null;
+let ingestionKind: IngestionSource["kind"] | "" = "";
+let ingestionSecret = "";
+let ingestionTeam = "";
+let ingestionChannels = "";
+let createdSecret = "";
+
 let loopList: LoopView[] = [];
 let loopsHost: HTMLElement | null = null;
 let loopsLoading = false;
@@ -67,6 +85,10 @@ let returnDrafts = new Map<string, string>();
 
 export function resetActiveLoop(): void {
   activeLoopId = null;
+  ingestion = null;
+  ingestionKind = "";
+  createdSecret = "";
+  ingestionSecret = "";
   activeDetail = null;
   playbookDraft = null;
   returnDrafts = new Map();
@@ -104,7 +126,12 @@ async function refreshLoops(): Promise<void> {
 
 async function refreshDetail(id: string): Promise<void> {
   try {
-    activeDetail = await api<LoopDetail>(`/api/loops/${encodeURIComponent(id)}`);
+    const [detail, sources] = await Promise.all([
+      api<LoopDetail>(`/api/loops/${encodeURIComponent(id)}`),
+      api<NonNullable<typeof ingestion>>(`/api/loops/${encodeURIComponent(id)}/ingestion`),
+    ]);
+    activeDetail = detail;
+    ingestion = sources;
     loopsNotice = "";
   } catch (e) {
     loopsNotice = errMessage(e);
@@ -116,19 +143,25 @@ async function mutate(fn: () => Promise<unknown>): Promise<void> {
   if (loopBusy) return;
   loopBusy = true;
   paint();
+  let failure = "";
   try {
     await fn();
     loopsNotice = "";
   } catch (e) {
-    loopsNotice = errMessage(e);
+    failure = errMessage(e);
   } finally {
     loopBusy = false;
     if (activeLoopId) await refreshDetail(activeLoopId);
     else await refreshLoops();
+    if (failure) {
+      loopsNotice = failure;
+      paint();
+    }
   }
 }
 
-function openLoop(id: string): void {
+export function openLoop(id: string): void {
+  resetActiveLoop();
   activeLoopId = id;
   activeDetail = null;
   playbookDraft = null;
@@ -231,6 +264,143 @@ function itemRow(item: LoopItemView): TemplateResult {
   `;
 }
 
+async function addIngestion(loop: LoopView): Promise<void> {
+  await mutate(async () => {
+    const result = await api<{ secret?: string }>(`/api/loops/${encodeURIComponent(loop.id)}/ingestion`, {
+      method: "POST",
+      body: JSON.stringify({
+        kind: ingestionKind,
+        ...(ingestionKind === "slack"
+          ? {
+              secret: ingestionSecret,
+              teamId: ingestionTeam.trim(),
+              channels: ingestionChannels.split(/[\s,]+/).filter(Boolean),
+            }
+          : {}),
+      }),
+    });
+    createdSecret = result.secret ?? "";
+    ingestionSecret = "";
+    ingestionKind = "";
+    await refreshDetail(loop.id);
+  });
+}
+
+function ingestionTpl(loop: LoopView): TemplateResult {
+  const names = { webhook: "Signed webhook", slack: "Slack events", gmail: "Gmail Pub/Sub" };
+  return html`<section class="loop-ingestion">
+    <div class="loop-ingestion-heading">
+      <h2>Ingestion</h2>
+      <span>${loop.cronId ? "Scheduled sync enabled" : "No scheduled sync"}</span>
+    </div>
+    <p>Choose how new work reaches this Loop. Event sources can run alongside a schedule.</p>
+    ${ingestion?.sources.map(
+      (source) =>
+        html`<div class="loop-ingestion-source">
+          <div class="loop-ingestion-source-head">
+            <strong>${names[source.kind]}</strong><span>${source.enabled ? "Listening" : "Disabled"}</span
+            ><button
+              class="btn compact"
+              ?disabled=${loopBusy}
+              @click=${() =>
+                mutate(async () => {
+                  await api(`/api/loops/${encodeURIComponent(loop.id)}/ingestion/${encodeURIComponent(source.id)}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ enabled: !source.enabled }),
+                  });
+                  await refreshDetail(loop.id);
+                })}
+            >
+              ${source.enabled ? "Disable" : "Enable"}
+            </button>
+          </div>
+          <label>Endpoint<input readonly .value=${source.url} aria-label=${`${names[source.kind]} endpoint`} /></label>
+          ${source.gmail ? html`<p>${source.gmail.email} · watch renews automatically</p>` : nothing}
+          ${source.channels?.length ? html`<p>Channels: ${source.channels.join(", ")}</p>` : nothing}
+          <p>Last event: ${ago(source.lastReceivedAt)}${loop.state !== "enabled" ? " · Processing paused" : ""}</p>
+          ${source.lastError ? html`<p class="error-banner">${source.lastError}</p>` : nothing}
+        </div>`,
+    )}
+    ${
+      createdSecret
+        ? html`<div class="loop-ingestion-secret">
+            <label
+              >Signing secret — save it now; it is only shown once<input
+                readonly
+                .value=${createdSecret}
+                aria-label="Webhook signing secret"
+            /></label>
+            <p>Sign the exact JSON body with HMAC-SHA256 and send its hex digest in X-Signature.</p>
+            <button
+              class="btn compact"
+              @click=${() => {
+                createdSecret = "";
+                paint();
+              }}
+            >
+              Done
+            </button>
+          </div>`
+        : nothing
+    }
+    <div class="loop-ingestion-add">
+      <select
+        aria-label="Ingestion source"
+        .value=${ingestionKind}
+        @change=${(event: Event) => {
+          ingestionKind = (event.target as HTMLSelectElement).value as typeof ingestionKind;
+          ingestionSecret = "";
+          paint();
+        }}
+      >
+        <option value="">Add event source…</option>
+        ${Object.entries(names)
+          .filter(
+            ([kind]) =>
+              !ingestion?.sources.some((source) => source.kind === kind) &&
+              (!loop.sources?.length ? true : kind !== "webhook" && loop.sources.includes(kind)),
+          )
+          .map(([kind, name]) => html`<option value=${kind}>${name}</option>`)}
+      </select>
+    </div>
+    ${
+      ingestionKind === "slack"
+        ? html`<div class="loop-ingestion-fields">
+            <label
+              >Workspace ID<input
+                placeholder="T0123456789"
+                .value=${ingestionTeam}
+                @input=${(event: Event) => {
+                  ingestionTeam = (event.target as HTMLInputElement).value;
+                }} /></label
+            ><label
+              >Channel IDs<input
+                placeholder="C0123456789, C9876543210"
+                .value=${ingestionChannels}
+                @input=${(event: Event) => {
+                  ingestionChannels = (event.target as HTMLInputElement).value;
+                }} /></label
+            ><label
+              >Slack signing secret<input
+                type="password"
+                autocomplete="off"
+                .value=${ingestionSecret}
+                @input=${(event: Event) => {
+                  ingestionSecret = (event.target as HTMLInputElement).value;
+                }}
+            /></label>
+            <p>
+              Use the endpoint as your Slack app’s Events API request URL. Only human messages from these channels are
+              accepted.
+            </p>
+          </div>`
+        : nothing
+    }
+    ${ingestionKind === "gmail" ? html`<p>${ingestion?.gmailAvailable ? "Uses your connected personal Gmail account. New Inbox messages become Loop work items." : "An administrator must configure the Google Cloud Pub/Sub topic, audience, and push service account before Gmail can be enabled."}</p>` : nothing}
+    ${ingestionKind ? html`<button class="btn compact" ?disabled=${loopBusy || (ingestionKind === "gmail" && !ingestion?.gmailAvailable)} @click=${() => void addIngestion(loop)}>${loopBusy ? "Connecting…" : `Enable ${names[ingestionKind]}`}</button>` : nothing}
+  </section>`;
+}
+
 function detailTpl(detail: LoopDetail): TemplateResult {
   const { loop, items, outputs } = detail;
   const autopilot = loop.shipActions.length > 0 && loop.shipActions.every((policy) => policy.gate === "auto");
@@ -302,7 +472,7 @@ function detailTpl(detail: LoopDetail): TemplateResult {
         ? unconfirmed.map((o) => reviewRow(loop, o, "Confirm shipped"))
         : html`<p class="list-empty">Nothing needs confirmation.</p>`
     }
-
+    ${ingestionTpl(loop)}
     <h2 class="loop-section-title">Playbook <span class="loop-count">v${loop.playbookVersion}</span></h2>
     <textarea
       class="loop-playbook"

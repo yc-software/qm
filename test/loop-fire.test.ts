@@ -848,3 +848,31 @@ test("inbox sync exceptions count once and recover on a successful retry", async
   assert.equal((await s.fire.fire(loop.id, "quarantined")).status, "silent");
   assert.equal(s.turns.length, 2);
 });
+
+test("event-only Email work skips scanning and holds its draft instead of marking it shipped", async () => {
+  const w = service((req) => {
+    if (stage(req) === "intake") throw new Error("Event work must not enumerate");
+    if (stage(req) === "work") {
+      assert.match(req.text ?? "", /sourcePayload/);
+      assert.match(req.text ?? "", /Hello from email/);
+      return '```json\n{"proposal":{"to":["sender@example.com"],"body":"Thanks, I will review it."},"outputs":[]}\n```';
+    }
+    return '```json\n{"outcome":"met","reason":"Draft ready for review"}\n```';
+  });
+  const loop = await makeLoop(w.loops, { sources: ["gmail"], shipActions: [{ action: "send", gate: "hold" }] });
+  await w.items.ingest([
+    {
+      loopId: loop.id,
+      dedupeKey: "thread1",
+      source: "gmail",
+      sourceAt: 1000,
+      sourcePayload: { source: "gmail", snippet: "Hello from email", gmail: { threadId: "thread1" } },
+    },
+  ]);
+  const result = await w.fire.fire(loop.id, "push:1", undefined, { enumerate: false });
+  const [item] = await w.items.byLoop(loop.id);
+  assert.equal(item?.status, "ready");
+  assert.equal(item?.proposal?.data.body, "Thanks, I will review it.");
+  assert.deepEqual(result.summary?.shipped, []);
+  assert.deepEqual(result.summary?.ready, [item?.id]);
+});

@@ -1080,8 +1080,18 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     ]);
   }
 
-  if (method === "POST" && /^\/v1\/webhooks\/incoming\/[^/]+$/.test(pathname)) {
-    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, FORWARD_WEBHOOK_HEADERS);
+  if (
+    method === "POST" &&
+    (/^\/v1\/webhooks\/incoming\/[^/]+$/.test(pathname) || /^\/v1\/loop-ingress\/[^/]+$/.test(pathname))
+  ) {
+    return proxyToUpstream(
+      req,
+      res,
+      { baseUrl: CORE, path: pathname, search: url.search },
+      pathname.startsWith("/v1/loop-ingress/")
+        ? [...FORWARD_WEBHOOK_HEADERS, "authorization"]
+        : FORWARD_WEBHOOK_HEADERS,
+    );
   }
 
   const consentBounce = (): void => {

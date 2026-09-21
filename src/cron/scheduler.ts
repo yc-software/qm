@@ -69,6 +69,7 @@ export interface Scheduler {
 
 export interface SchedulerDeps {
   admittedWork?: AdmittedWork;
+  lock?: import("../persistence/advisory-lock.ts").AdvisoryLock;
   crons: CronStore;
   deliveries: DeliveryStore;
   idempotency: IdempotencyStore;
@@ -200,6 +201,25 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const leaderLease = deps.leaderLease ?? createNoopLeaderLease();
 
   async function fire(cron: Cron, t: number, fireKey: string, scheduledAt?: number): Promise<FireResult> {
+    const run = async (): Promise<FireResult> => {
+      const current = await deps.crons.get(cron.id);
+      if (!current || current.archived || !current.enabled) {
+        await deps.crons.recordFire(cron.id, {
+          fireKey,
+          threadRef: cronFireThreadRef(cron.id, fireKey),
+          firedAt: t,
+          endedAt: now(),
+          status: "silent",
+          note: "Cron is no longer enabled",
+        });
+        return { authzFailed: true };
+      }
+      return fireEnabled(current, t, fireKey, scheduledAt);
+    };
+    return deps.lock ? deps.lock.withLock(`cron-lifecycle:${cron.id}`, run) : run();
+  }
+
+  async function fireEnabled(cron: Cron, t: number, fireKey: string, scheduledAt?: number): Promise<FireResult> {
     const threadRef = cronFireThreadRef(cron.id, fireKey);
     const runningEntry: CronFireLogEntry = {
       fireKey,

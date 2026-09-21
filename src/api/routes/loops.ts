@@ -1,5 +1,6 @@
 import { boundLoopCron } from "../../loops/authority.ts";
 import { unattendedGrantRefusal } from "../../cron/authority.ts";
+import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { Loop, LoopState } from "../../types.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
@@ -20,6 +21,7 @@ import { isObj, resolveCapabilityDestination } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 export interface LoopServiceDeps {
+  lock?: AdvisoryLock;
   store: LoopStore;
   items: LoopItemLedger;
   outputs: LoopOutputStore;
@@ -62,7 +64,7 @@ function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): boolean {
   return false;
 }
 
-async function canAdministerLoop(ctx: ApiCtx, loop: Loop, acting: ActingPrincipal): Promise<boolean> {
+export async function canAdministerLoop(ctx: ApiCtx, loop: Loop, acting: ActingPrincipal): Promise<boolean> {
   const { app } = ctx;
   if (await app.membershipControlsScope(loop.ownerScopeId)) {
     return app.managesScope(acting.actorId, loop.ownerScopeId);
@@ -455,6 +457,13 @@ async function fireLoopNow(ctx: ApiCtx): Promise<void> {
 }
 
 async function decideOutput(ctx: ApiCtx): Promise<void> {
+  const lock = loopDeps(ctx)?.lock;
+  if (lock && !ctx.capability)
+    return lock.withLock(`loop-lifecycle:${ctx.params.id ?? ""}`, () => decideOutputLocked(ctx));
+  return decideOutputLocked(ctx);
+}
+
+async function decideOutputLocked(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
