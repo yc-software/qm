@@ -1116,3 +1116,40 @@ test("documents uploaded during a turn survive a runtime handoff without aliasin
   assert.equal(result.status, "ok", result.reason);
   assert.equal(segments, 2);
 });
+
+for (const surfaceTools of [false, true]) {
+  test(`automatic memory is injected once, then only updates (${surfaceTools ? "spine" : "DM"})`, async () => {
+    const base = createMockHarness();
+    const seen: HarnessTurnInput[] = [];
+    const harness: Harness = {
+      ...base,
+      turns: {
+        ...base.turns,
+        runTurn: async (turn) => {
+          seen.push(turn);
+          await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+          await turn.emit({ type: "assistant", payload: { text: "ok" }, scopeLabel: turn.scopeLabel });
+          return { reply: "ok" };
+        },
+      },
+    };
+    const { orchestrator, memory, sessions } = buildOrchestrator({ harness });
+    const personal = scopeId("personal", actor.id);
+    await memory.replace(personal, "# Memory\n- ALPHA_MARKER\n- BETA_MARKER");
+    const input = slackDm("memory-once", "hello", { surfaceTools });
+    const first = await orchestrator.handleTurn(input);
+    assert.equal(first.status, "ok");
+    assert.match(seen[0]!.environment!, /ALPHA_MARKER/);
+    await orchestrator.handleTurn({ ...input, text: "next" });
+    assert.doesNotMatch(seen[1]!.environment ?? "", /ALPHA_MARKER|BETA_MARKER|What you remember/);
+    await memory.replace(personal, "# Memory\n- ALPHA_MARKER\n- GAMMA_MARKER");
+    await orchestrator.handleTurn({ ...input, text: "third" });
+    assert.doesNotMatch(seen[2]!.environment!, /ALPHA_MARKER/);
+    assert.match(seen[2]!.environment!, /GAMMA_MARKER/);
+    assert.match(seen[2]!.environment!, /withdrawn[\s\S]*BETA_MARKER/);
+    const entries = await sessions.getEntries(first.sessionId!);
+    const users = entries.filter((entry) => entry.type === "user");
+    assert.match(JSON.stringify(users[0]!.payload), /memoryRecall/);
+    assert.doesNotMatch(JSON.stringify(users[1]!.payload), /ALPHA_MARKER|BETA_MARKER/);
+  });
+}
