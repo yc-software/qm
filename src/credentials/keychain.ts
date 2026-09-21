@@ -5,7 +5,7 @@ import { CAPABILITY_CURL_AUTH, keychainUseCommand } from "../api/contract.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
-import { personKey, samePerson } from "../directory/person.ts";
+import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
@@ -471,7 +471,7 @@ function toMeta(rec: KeychainCredential): KeychainCredentialMeta {
 }
 
 function byOwners(ownerIds: string[]): { field: "ownerId"; anyOfFold: string[] } {
-  return { field: "ownerId", anyOfFold: ownerIds.map((id) => personKey(id)) };
+  return { field: "ownerId", anyOfFold: ownerIds.flatMap((id) => personIds(id)) };
 }
 
 function bucketByOwner<C extends { ownerId: string }, T>(
@@ -846,12 +846,13 @@ export function createKeychain(deps: {
         .map((f) => f.envKey)
         .sort()
         .join(",")}`;
-    const id = credId(input.ownerId, service, slot);
+    const ownerId = canonicalPerson(input.ownerId);
+    const id = credId(ownerId, service, slot);
     const buildRec = (prior?: KeychainCredential | null): KeychainCredential => {
       const carriedCapturePaths = input.capturePaths ?? prior?.capturePaths;
       return {
         id,
-        ownerId: input.ownerId,
+        ownerId,
         orgId: configOrgId(),
         service,
         kind,
