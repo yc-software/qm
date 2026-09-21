@@ -3525,11 +3525,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           spine.surfaceOutboundCount === 0 &&
           spine.staySilentReason === undefined &&
           !result.silent &&
-          !(result.runtimeHandoff && result.stopped)
+          !result.stopped
         ) {
           await latchCoverage();
-          const primaryStopped = !!result.stopped;
-          const primaryStoppedTapeComplete = !!result.stoppedTapeComplete;
           // The model already wrote a reply as plain assistant text — deliver that text
           // directly instead of nudging it to re-post (a nudge here re-sends near-identical
           // text, which surfaces that render assistant entries show twice).
@@ -3595,13 +3593,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               nudgeTape?.mode !== "serve" && inbound.images.length ? { images: inbound.images } : {},
               { history: nudgeHistory, ...(nudgeTape ? { tape: nudgeTape } : {}) },
             );
-            if (primaryStopped && !result.stopped)
-              result = {
-                ...result,
-                stopped: true,
-                ...(primaryStoppedTapeComplete ? { stoppedTapeComplete: true as const } : {}),
-              };
-            if (spine.surfaceOutboundCount === 0 && spine.staySilentReason === undefined && !result.silent) {
+            if (
+              spine.surfaceOutboundCount === 0 &&
+              spine.staySilentReason === undefined &&
+              !result.silent &&
+              !result.stopped
+            ) {
               const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
               if (fallback && defaultDestination && deps.deliveries) {
                 try {

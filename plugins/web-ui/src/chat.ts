@@ -27,6 +27,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { ref } from "lit/directives/ref.js";
 import {
   Activity,
+  Ban,
   BookOpen,
   Search,
   Brain,
@@ -1352,7 +1353,7 @@ export function createChatSurface(
     if (activePendingApprovals().length) return "Needs your approval";
     if (agent.state.isStreaming || chatState.resolvingApprovals.size > 0) {
       const work = chatState.liveWork ?? { status: "thinking", activity: [] };
-      if (runSlot.stopGeneration === runSlot.generation) return "Stopping…";
+      if (runSlot.stopGeneration === runSlot.generation) return "Stop requested";
       if (currentTextPhase(work)?.phase === "final_answer") return "Responding…";
       const summary = liveWorkSummary(work);
       if (!summary) return "Thinking…";
@@ -1869,6 +1870,7 @@ export function createChatSurface(
   }
 
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
+    const animating = isStreaming && runSlot.stopGeneration !== runSlot.generation;
     const parts: TemplateResult[] = [];
     for (const [chunkIndex, chunk] of message.content.entries()) {
       if (chunk.type === "text") {
@@ -1899,8 +1901,8 @@ export function createChatSurface(
           const body = links.length ? stripConnectorLinks(shown, links) : shown;
           if (body.trim())
             parts.push(
-              html`<div class="streaming-text ${isStreaming ? "live-stream" : ""}" dir="auto">
-                ${markdown(body, isStreaming, streamingFinal ? ((message as AssistantWork).streamingBaseline ?? "").slice(phase.streamOffset) : ((message as AssistantWork).streamingBaseline ?? ""))}
+              html`<div class="streaming-text ${animating ? "live-stream" : ""}" dir="auto">
+                ${markdown(body, animating, streamingFinal ? ((message as AssistantWork).streamingBaseline ?? "").slice(phase.streamOffset) : ((message as AssistantWork).streamingBaseline ?? ""))}
               </div>`,
             );
           for (const link of links) parts.push(connectorWidget(link));
@@ -1909,7 +1911,7 @@ export function createChatSurface(
       if (chunk.type === "thinking" && chunk.thinking.trim()) {
         parts.push(
           html`<details class="thinking">
-            <summary>${sheenLabel("Thinking", isStreaming)}</summary>
+            <summary>${sheenLabel("Thinking", animating)}</summary>
             ${markdown(chunk.thinking)}
           </details>`,
         );
@@ -2253,11 +2255,12 @@ export function createChatSurface(
 
   function liveWorkStatus(agent: Agent): TemplateResult | typeof nothing {
     if (!agent.state.isStreaming && chatState.resolvingApprovals.size === 0) return nothing;
+    if (runSlot.stopGeneration === runSlot.generation)
+      return html`<div class="stopped-note" role="status">${icon(Ban, 13)}<span>Stop requested</span></div>`;
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
     if (work.status !== "thinking" && work.status !== "working") return nothing;
     if (currentTextPhase(work)?.phase === "final_answer" || shouldShowWork(work, "")) return nothing;
-    const stopping = runSlot.stopGeneration === runSlot.generation;
-    const summary = stopping ? null : liveWorkSummary(work);
+    const summary = liveWorkSummary(work);
     const expandable = Boolean(summary?.detail);
     const expanded = expandable && liveWorkExpanded;
     let title = "";
@@ -2274,7 +2277,7 @@ export function createChatSurface(
         >
           ${summary ? html`<span class="tool-icon">${icon(summary.icon, 15)}</span>` : nothing}
           <span class="live-work-label"
-            >${summary ? summary.label : sheenLabel(stopping ? "Stopping…" : `Thinking${usedToolsSuffix(work)}`, true)}</span
+            >${summary ? summary.label : sheenLabel(`Thinking${usedToolsSuffix(work)}`, true)}</span
           >
           ${summary?.detail ? html`<span class="live-work-detail">${summary.detail}</span>` : nothing}
           ${expandable ? html`<span class="live-work-toggle">${icon(ChevronRight, 14)}</span>` : nothing}
@@ -2377,8 +2380,9 @@ export function createChatSurface(
       return false;
     });
     const tail = active ? streamingTextTail(text, work.activity) : "";
-    const stopping = active && runSlot.stopGeneration === runSlot.generation;
-    let label = stopping ? "Stopping…" : workLabel(work);
+    const stopping = isStreaming && runSlot.stopGeneration === runSlot.generation;
+    const animating = active && !stopping;
+    let label = stopping ? "Stop requested" : workLabel(work);
     if (stopped) label = `You stopped after ${goalElapsedLabel(0, workSeconds(work) * 1000)}`;
     let fold =
       timeline.length || tail.trim() || work.pendingApprovals?.length
@@ -2387,7 +2391,7 @@ export function createChatSurface(
             ?open=${active || !!work.pendingApprovals?.length}
           >
             <summary class=${stopped ? "stopped-head" : "work-head"}>
-              ${sheenLabel(label, active)}<span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+              ${sheenLabel(label, animating)}<span class="activity-chevron">${icon(ChevronRight, 14)}</span>
             </summary>
             ${stopped ? nothing : html`<div class="work-divider"></div>`}
             <div class="work-rows">
@@ -2409,7 +2413,7 @@ export function createChatSurface(
                   </details>`;
                 },
               )}
-              ${tail.trim() ? html`<div class="work-said streaming-text live-stream">${markdown(tail, true, streamingTextTail(baseline, work.activity))}</div>` : nothing}
+              ${tail.trim() ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}">${markdown(tail, animating, streamingTextTail(baseline, work.activity))}</div>` : nothing}
             </div>
           </details>`
         : nothing;

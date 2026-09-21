@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { Conversation } from "../src/conv-types.ts";
-import type { PendingApproval } from "../src/core-bridge.ts";
+import type { AssistantWork, PendingApproval } from "../src/core-bridge.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -72,6 +72,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
   let decision = deferred<Response>();
   let continuation = deferredRun();
   const handoff = deferred<void>();
+  let stopAck = deferred<Response>();
   let refreshGate: ReturnType<typeof deferred<void>> | undefined;
   let submitted = false;
   const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
@@ -105,7 +106,8 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
     if (path === "/api/runs/q1") return Response.json({ status: "done", result: { status: "ok", reply: "done" } });
     if (path === "/api/turn") return Response.json({ runId: "q1" });
     if (path === "/api/runs/q1/withdraw") return Response.json({ withdrawn: true });
-    if (path === "/api/runs/r1/signal") return Response.json({ accepted: true });
+    if (path === "/api/runs/r1/signal")
+      return JSON.parse(String(init?.body)).kind === "abort" ? stopAck.promise : Response.json({ accepted: true });
     if (path.endsWith("/approvals")) return Response.json({ approvals: pending });
     if (path.startsWith("/api/sessions/s1")) {
       if (submitted) await handoff.promise;
@@ -191,6 +193,91 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
         scopeId: row.scopeId,
       });
       assert.equal(chat.state.agent!.state.isStreaming, true);
+    });
+
+    await t.test("Stop restores Send and queues during a stalled acknowledgment, then recovers for retry", async () => {
+      const streaming = chat.state.agent!.state.streamingMessage as AssistantWork;
+      const originalContent = streaming.content;
+      const originalWork = streaming.work;
+      streaming.content = [
+        { type: "text", text: "Investigating the command" },
+        { type: "thinking", thinking: "Checking the output" },
+      ];
+      streaming.work = {
+        status: "working",
+        activity: [
+          {
+            seq: 1,
+            parentSeq: null,
+            type: "tool_call",
+            createdAt: Date.now(),
+            payload: { tool: "exec", command: "sleep 5" },
+          },
+        ],
+      };
+      chat.drawActiveChat();
+      assert.ok(host.querySelector(".thinking-sheen"));
+      assert.ok(host.querySelector(".live-stream"));
+      const input = host.querySelector<HTMLTextAreaElement>("textarea")!;
+      input.value = "my next instruction";
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      host.querySelector<HTMLButtonElement>('[aria-label="Stop"]')!.click();
+      assert.equal(host.querySelector('[aria-label="Stop"]'), null);
+      assert.equal(host.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.disabled, false);
+      assert.match(host.querySelector('[role="status"]')?.textContent ?? "", /Stop requested/);
+      assert.equal(host.querySelector(".live-work-status"), null);
+      assert.equal(host.querySelector(".thinking-sheen"), null);
+      assert.equal(host.querySelector(".live-stream"), null);
+      assert.match(host.querySelector(".work-head")?.textContent ?? "", /Stop requested/);
+      streaming.work.activity.push({
+        seq: 2,
+        parentSeq: null,
+        type: "text_start",
+        createdAt: Date.now(),
+        payload: { phase: "final_answer", streamOffset: 0 },
+      });
+      chat.drawActiveChat();
+      assert.equal(
+        host.querySelector<HTMLElement & { content: string; isStreaming: boolean }>(
+          ".assistant-body > .streaming-text qm-markdown",
+        )?.content,
+        "Investigating the command",
+      );
+      assert.ok(
+        [...host.querySelectorAll<HTMLElement & { isStreaming: boolean }>("qm-markdown")].every(
+          (element) => !element.isStreaming,
+        ),
+      );
+      assert.equal(host.querySelector(".thinking-sheen"), null);
+      assert.equal(host.querySelector(".live-stream"), null);
+      await until(() => document.activeElement === input);
+      assert.equal(input.value, "my next instruction");
+      assert.equal(chat.state.agent!.state.isStreaming, true);
+      const queuedBefore = requests.filter((r) => r.path === "/api/turn").length;
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      await until(() => requests.filter((r) => r.path === "/api/turn").length === queuedBefore + 1);
+      await until(() => !!host.querySelector(".queued-steer"));
+      assert.equal(host.querySelector<HTMLButtonElement>(".queued-steer")?.disabled, true);
+      assert.equal(chat.state.agent!.state.isStreaming, true);
+      assert.equal(chat.isStopping(), true);
+      stopAck.resolve(Response.json({ error: "unavailable" }, { status: 503 }));
+      await until(() => !!host.querySelector('[aria-label="Stop"]'));
+      assert.match(chat.composer.state.error, /Could not request stop/);
+      assert.equal(host.querySelector<HTMLButtonElement>('[aria-label="Stop"]')?.disabled, false);
+      stopAck = deferred<Response>();
+      host.querySelector<HTMLButtonElement>('[aria-label="Stop"]')!.click();
+      assert.equal(chat.composer.state.error, "");
+      assert.equal(host.querySelector('[aria-label="Stop"]'), null);
+      stopAck.resolve(Response.json({ accepted: true }));
+      await until(
+        () => requests.filter((r) => r.path === "/api/runs/r1/signal" && r.body?.kind === "abort").length === 2,
+      );
+      assert.equal(chat.isStopping(), true);
+      assert.equal(chat.state.agent!.state.isStreaming, true);
+      streaming.content = originalContent;
+      streaming.work = originalWork;
+      input.value = "";
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     });
 
     await t.test("a subsequent pause still requires and accepts another decision", async () => {

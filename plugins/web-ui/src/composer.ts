@@ -729,7 +729,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   function sendControls(agent: Agent): TemplateResult {
-    if (!agent.state.isStreaming) {
+    if (!agent.state.isStreaming || ctx.chat.isStopping()) {
       return html`<button
         class="send-btn"
         type="submit"
@@ -741,14 +741,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       </button>`;
     }
     return html`
-      <button
-        class="stop-btn"
-        type="button"
-        aria-label="Stop"
-        ${tip("Stop")}
-        ?disabled=${ctx.chat.isStopping()}
-        @click=${() => stopStreaming(agent)}
-      >
+      <button class="stop-btn" type="button" aria-label="Stop" ${tip("Stop")} @click=${() => stopStreaming(agent)}>
         ${icon(Square, 16)}
       </button>
       <button
@@ -769,7 +762,10 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       queued.push({ runId: queuedEdit.runId, text: queuedEdit.original });
     if (!queued.length) return nothing;
     const steerable =
-      agent.state.isStreaming && ctx.chat.hasLiveRun() && harnessSupportsSteer(currentModelOption()?.harnessId ?? "");
+      agent.state.isStreaming &&
+      !ctx.chat.isStopping() &&
+      ctx.chat.hasLiveRun() &&
+      harnessSupportsSteer(currentModelOption()?.harnessId ?? "");
     const steerTip = (): string => {
       if (steerable) return "Steer the running task with this instead of waiting";
       return "Nothing running can take this. It will go out as its own turn";
@@ -1817,7 +1813,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     return (
       Boolean(composerState.draft.trim() || composerState.attachments.length) &&
       !composerState.processingFiles &&
-      !ctx.chat.isStopping() &&
       getRuntimeConfig(scopeKey()) !== null &&
       ctx.chat.state.resolvingApprovals.size === 0 &&
       !ctx.chat.hasUnresolvedApproval()
@@ -1887,6 +1882,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       composerState.error = "Could not request stop. Try again.";
       ctx.chat.drawActiveChat(agent);
     });
+    focusComposerEnd();
   }
 
   let failedQueueSend: { threadRef: string; text: string; filesKey: string; idempotencyKey: string } | null = null;
