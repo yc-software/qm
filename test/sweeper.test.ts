@@ -118,3 +118,84 @@ test("createSweeper unrefs its timer so it never keeps the process alive", () =>
   }
   assert.deepEqual(calls, ["unref"], "the interval was unref()'d on start");
 });
+
+test("createSweeper drops ticks while a pass is in flight and banks no catch-up burst", async () => {
+  let started = 0;
+  let finished = 0;
+  let maxInFlight = 0;
+  let release!: () => void;
+  const stall = new Promise<void>((r) => {
+    release = r;
+  });
+  const s = createSweeper(async () => {
+    started += 1;
+    maxInFlight = Math.max(maxInFlight, started - finished);
+    if (started === 1) await stall;
+    finished += 1;
+  }, 10);
+  s.start();
+  await sleep(60);
+  assert.equal(started, 1, "ticks arriving during a slow pass are dropped, not queued");
+  assert.equal(maxInFlight, 1);
+  release();
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.equal(started, 1, "settling the slow pass does not drain a backlog of missed ticks");
+  await sleep(35);
+  s.stop();
+  const after = started;
+  assert.ok(after >= 2, `expected ticking to resume after the slow pass settled, got ${after}`);
+  assert.equal(finished, after);
+  assert.equal(maxInFlight, 1);
+  await sleep(30);
+  assert.equal(started, after, "no ticks after stop");
+});
+
+test("createSweeper keeps blocking overlapping passes across stop and restart", async () => {
+  let started = 0;
+  let release!: () => void;
+  const stall = new Promise<void>((r) => {
+    release = r;
+  });
+  const s = createSweeper(async () => {
+    started += 1;
+    if (started === 1) await stall;
+  }, 10);
+  s.start();
+  await sleep(25);
+  assert.equal(started, 1);
+  s.stop();
+  s.start();
+  await sleep(35);
+  assert.equal(started, 1, "restarting begins no second pass while the first is unsettled");
+  release();
+  await sleep(35);
+  s.stop();
+  assert.ok(started >= 2, `expected ticking to resume after the held pass settled, got ${started}`);
+});
+
+test("createSweeper guards each sweeper separately, so one stalled pass never silences another", async () => {
+  let stalledTicks = 0;
+  let fastTicks = 0;
+  let release!: () => void;
+  const stall = new Promise<void>((r) => {
+    release = r;
+  });
+  const stalled = createSweeper(async () => {
+    stalledTicks += 1;
+    await stall;
+  }, 10);
+  const fast = createSweeper(() => {
+    fastTicks += 1;
+  }, 10);
+  stalled.start();
+  fast.start();
+  try {
+    await sleep(45);
+    assert.equal(stalledTicks, 1, "the stalled sweeper holds its own guard for the whole stall");
+    assert.ok(fastTicks >= 2, `expected the other sweeper to keep its rate, got ${fastTicks}`);
+  } finally {
+    stalled.stop();
+    fast.stop();
+    release();
+  }
+});

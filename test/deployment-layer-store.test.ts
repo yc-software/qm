@@ -11,9 +11,12 @@ import { emptyDeploymentLayer, resolvedDeploymentLayer } from "../src/deployment
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
 import { scopeId } from "../src/types.ts";
-import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createMemoryAdvisoryLock, type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { computeBundleHash, createSkillBundleStore } from "../src/skills/skill-bundle-store.ts";
+import { SKILL_MATERIALIZATION_LOCK } from "../src/skills/skill-collision.ts";
+import { createSweeper } from "../src/util/sweeper.ts";
+import { sleep } from "../src/util/async.ts";
 
 const tool = (advertise: string): DeploymentLayerBundle["tools"][number] => ({
   path: "tools/acme/tool.json",
@@ -1088,4 +1091,51 @@ test("a bundle may carry the files a tool declares under install.files, and noth
     ),
     /tool path must be tools\/<id>\/tool\.json: tools\/acme\/notes\.txt/,
   );
+});
+
+test("the refresh sweeper leaves one hydrate outstanding while the fleet lock is held", async () => {
+  const advisoryLock = createMemoryAdvisoryLock();
+  const backing = createMemoryMap<StoredDeploymentLayer>();
+  const skills = createSkillStore({ signingSecret: "layer-test" });
+  const org = scopeId("org", "default-org");
+  const seed = createDeploymentLayerStore({
+    backing,
+    runtime: emptyDeploymentLayer(),
+    skills,
+    scopeId: org,
+    advisoryLock,
+  });
+  await seed.put({ contract: 1, tools: [tool("acme CLI")], skills: [] }, "operator");
+
+  const runtime = emptyDeploymentLayer();
+  const store = createDeploymentLayerStore({ backing, runtime, skills, scopeId: org, advisoryLock });
+  let hydrates = 0;
+  let pending: Promise<unknown> = Promise.resolve();
+  const sweeper = createSweeper(
+    () => {
+      hydrates += 1;
+      pending = store.hydrate();
+      return pending;
+    },
+    10,
+    { label: "deployment layer refresh" },
+  );
+
+  let release!: () => void;
+  const held = advisoryLock.withLock(
+    SKILL_MATERIALIZATION_LOCK,
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  sweeper.start();
+  await sleep(120);
+  assert.equal(hydrates, 1, "ticks during the lock stall queue no further hydrates");
+  assert.deepEqual(runtime.advertisedTools, [], "the blocked hydrate has not applied yet");
+  release();
+  await held;
+  await pending;
+  sweeper.stop();
+  assert.deepEqual(runtime.advertisedTools, ["acme CLI"], "the single queued hydrate reconciles once the lock frees");
 });

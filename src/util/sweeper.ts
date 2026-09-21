@@ -12,10 +12,18 @@ export function createSweeper(
 ): Sweeper {
   const label = opts.label ?? "sweeper";
   let timer: ReturnType<typeof setInterval> | null = null;
+  let inFlight = false;
   const sweep = (): void => {
+    if (inFlight) return;
+    inFlight = true;
     try {
-      void Promise.resolve(fn()).catch(swallowAs(`${label}: sweep failed`, undefined));
+      void Promise.resolve(fn())
+        .catch(swallowAs(`${label}: sweep failed`, undefined))
+        .finally(() => {
+          inFlight = false;
+        });
     } catch (e) {
+      inFlight = false;
       swallow(`${label}: sweep failed`, e);
     }
   };
