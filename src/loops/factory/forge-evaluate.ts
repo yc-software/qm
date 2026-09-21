@@ -1,5 +1,6 @@
 import type { SuccessCheckResult, SuccessVerdict } from "../success-evaluation.ts";
 import { sleep as defaultSleep } from "../../util/async.ts";
+import { swallowAs } from "../../util/errors.ts";
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_GRAPHQL = "https://api.github.com/graphql";
@@ -8,6 +9,8 @@ const PAGE_SIZE = 100;
 const PAGE = `per_page=${PAGE_SIZE}`;
 const GITHUB_MERGEABLE_STATES = new Set(["clean", "unstable", "has_hooks"]);
 const GITHUB_GREEN_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
+const GITHUB_ACTIONS_SLUG = "github-actions";
+const RETRIED = " (retried once)";
 const BUGBOT_LOGIN_PREFIX = "cursor";
 // CI registers and finishes minutes after Ship; judging a pending check would send the item back to work for nothing.
 const CI_SETTLE_MS = 30 * 60_000;
@@ -56,6 +59,8 @@ const arr = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 
 const str = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 
+const num = (value: unknown): number | undefined => (typeof value === "number" ? value : undefined);
+
 const gql = (value: string): string => JSON.stringify(value);
 
 const failed = (detail: string): Error => new Error(`forge_evaluate_failed: ${detail}`);
@@ -89,6 +94,12 @@ async function readJson(input: ForgeEvaluateInput, url: string, init: RequestIni
 const forgeGet = (input: ForgeEvaluateInput, path: string): Promise<unknown> =>
   readJson(input, `${forgeBase(input)}${path}`, { method: "GET", headers: forgeHeaders(input) });
 
+const forgePost = async (input: ForgeEvaluateInput, path: string): Promise<void> => {
+  const doFetch = input.fetch ?? globalThis.fetch;
+  const response = await doFetch(`${forgeBase(input)}${path}`, { method: "POST", headers: forgeHeaders(input) });
+  if (response.status < 200 || response.status > 299) throw failed(String(response.status));
+};
+
 const githubGraphql = (input: ForgeEvaluateInput, query: string): Promise<unknown> =>
   readJson(input, GITHUB_GRAPHQL, {
     method: "POST",
@@ -99,6 +110,25 @@ const githubGraphql = (input: ForgeEvaluateInput, query: string): Promise<unknow
 const notesOf = (discussions: unknown[]): Record<string, unknown>[] =>
   discussions.flatMap((discussion) => arr(obj(discussion).notes).map(obj));
 
+const matchedWorkflowRuns = (
+  offending: Record<string, unknown>[],
+  workflowRuns: Record<string, unknown>[],
+): Map<number, Record<string, unknown>> | undefined => {
+  const matched = new Map<number, Record<string, unknown>>();
+  for (const run of offending) {
+    const suiteId = num(obj(run.check_suite).id);
+    const owner = obj(
+      suiteId === undefined
+        ? undefined
+        : workflowRuns.find((candidate) => num(candidate.check_suite_id) === suiteId),
+    );
+    const id = num(owner.id);
+    if (id === undefined) return undefined;
+    matched.set(id, owner);
+  }
+  return matched;
+};
+
 const unresolvedDetail = (count: number): CheckOutcome =>
   count === 0 ? { passed: true } : { passed: false, detail: `${count} unresolved` };
 
@@ -108,6 +138,9 @@ export async function evaluateFactoryForge(input: ForgeEvaluateInput): Promise<S
   // Re-read after every CI poll: mergeability is computed from the same checks, so the pre-wait snapshot is stale.
   let request = obj(await forgeGet(input, requestPath));
   const headSha = (github ? str(obj(request.head).sha) : str(request.sha)) ?? "";
+
+  let ciRetried: string | undefined;
+  const rerunTriggered = new Set<number>();
 
   let discussions: unknown[] | undefined;
   const readDiscussions = async (): Promise<unknown[]> => {
@@ -136,6 +169,38 @@ export async function evaluateFactoryForge(input: ForgeEvaluateInput): Promise<S
     }
   };
 
+  const ciRetryReading = async (offending: Record<string, unknown>[]): Promise<CiReading> => {
+    const name = str(offending[0]?.name) ?? "unnamed check run";
+    const stillRed: CiReading = { passed: false, detail: name };
+    if (offending.some((run) => str(obj(run.app).slug) !== GITHUB_ACTIONS_SLUG)) return stillRed;
+    const payload = await forgeGet(input, `/actions/runs?head_sha=${headSha}&${PAGE}`).catch(
+      swallowAs("factory ci runs", undefined),
+    );
+    if (payload === undefined) return stillRed;
+    const matched = matchedWorkflowRuns(offending, arr(obj(payload).workflow_runs).map(obj));
+    if (matched === undefined) return stillRed;
+    const triggered = [...matched].filter(([id]) => rerunTriggered.has(id));
+    if (triggered.length > 0)
+      return triggered.some(([, run]) => str(run.status) !== "completed")
+        ? { pending: `unsettled: ${name}${RETRIED}` }
+        : { passed: false, detail: `${name}${RETRIED}` };
+    if ([...matched.values()].some((run) => (num(run.run_attempt) ?? 1) > 1))
+      return { passed: false, detail: `${name}${RETRIED}` };
+    const attempts: boolean[] = [];
+    for (const id of matched.keys()) {
+      attempts.push(
+        await forgePost(input, `/actions/runs/${id}/rerun-failed-jobs`).then(
+          () => true,
+          swallowAs("factory ci rerun", false),
+        ),
+      );
+    }
+    if (attempts.includes(false)) return stillRed;
+    for (const id of matched.keys()) rerunTriggered.add(id);
+    ciRetried = name;
+    return { pending: `unsettled: ${name}${RETRIED}` };
+  };
+
   const githubChecks = async (): Promise<CiReading> => {
     const payload = obj(await forgeGet(input, `/commits/${headSha}/check-runs?${PAGE}`));
     const runs = arr(payload.check_runs).map(obj);
@@ -143,10 +208,13 @@ export async function evaluateFactoryForge(input: ForgeEvaluateInput): Promise<S
     // A full page may hide runs on the next one, so the check fails closed rather than trusting the visible runs.
     if (runs.length >= PAGE_SIZE) return { passed: false, detail: "check runs exceed one page" };
     const running = runs.find((run) => run.status !== "completed");
-    if (running !== undefined) return { pending: `unsettled: ${str(running.name) ?? "unnamed check run"}` };
-    const offending = runs.find((run) => !GITHUB_GREEN_CONCLUSIONS.has(str(run.conclusion) ?? ""));
-    if (offending === undefined) return { passed: true };
-    return { passed: false, detail: str(offending.name) ?? "unnamed check run" };
+    if (running !== undefined)
+      return {
+        pending: `unsettled: ${str(running.name) ?? "unnamed check run"}${ciRetried === undefined ? "" : RETRIED}`,
+      };
+    const offending = runs.filter((run) => !GITHUB_GREEN_CONCLUSIONS.has(str(run.conclusion) ?? ""));
+    if (offending.length === 0) return { passed: true };
+    return await ciRetryReading(offending);
   };
 
   // GitLab merged-result pipelines run on a temporary merge commit, so the MR's head_pipeline is the
@@ -227,5 +295,10 @@ export async function evaluateFactoryForge(input: ForgeEvaluateInput): Promise<S
       return { outcome: "continue", reason, checks, judged: false };
     }
   }
-  return { outcome: "met", reason: "converged", checks, judged: false };
+  return {
+    outcome: "met",
+    reason: ciRetried === undefined ? "converged" : `converged (ci retried once: ${ciRetried})`,
+    checks,
+    judged: false,
+  };
 }

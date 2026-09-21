@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { evaluateFactoryForge, FORGE_CHECKS, type ForgeEvaluateInput } from "../src/loops/factory/forge-evaluate.ts";
 
@@ -584,4 +584,243 @@ test("a forge failure throws forge_evaluate_failed without the token or the proj
   const gitlabError = await rejection(evaluateFactoryForge(gitlabInput(gitlabDenied.fetchImpl)));
   assert.equal(gitlabError.message, "forge_evaluate_failed: 403");
   assert.equal(gitlabError.message.includes(TOKEN), false);
+});
+
+const RUN_ID = 35568616284;
+const SUITE_ID = 96296468747;
+const OTHER_RUN_ID = 35568616285;
+const OTHER_SUITE_ID = 96296468748;
+
+const GH_ACTIONS = {
+  runs: `GET ${GH_REPO}/actions/runs?head_sha=${HEAD}&per_page=100`,
+  rerun: `POST ${GH_REPO}/actions/runs/${RUN_ID}/rerun-failed-jobs`,
+  rerunOther: `POST ${GH_REPO}/actions/runs/${OTHER_RUN_ID}/rerun-failed-jobs`,
+};
+
+const RED_NAME = "Core tests (2/5)";
+
+const redCheckRun = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  name: RED_NAME,
+  status: "completed",
+  conclusion: "failure",
+  app: { id: 15368, slug: "github-actions" },
+  check_suite: { id: SUITE_ID },
+  details_url: `https://github.com/acme/app/actions/runs/${RUN_ID}/job/106237050879`,
+  ...over,
+});
+
+const workflowRun = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id: RUN_ID,
+  name: "CI/CD",
+  event: "push",
+  status: "completed",
+  conclusion: "failure",
+  run_attempt: 1,
+  check_suite_id: SUITE_ID,
+  ...over,
+});
+
+const unrelatedRun = workflowRun({ id: OTHER_RUN_ID, name: "PgBouncer compatibility", check_suite_id: OTHER_SUITE_ID });
+
+const rerunsOf = (calls: Recorded[]): string[] => keysOf(calls).filter((key) => key.endsWith("/rerun-failed-jobs"));
+
+const tickingSleep = (t: TestContext): ((ms: number) => Promise<void>) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  return async (ms: number): Promise<void> => {
+    t.mock.timers.tick(ms);
+  };
+};
+
+const actionsRoutes = (workflowRuns: unknown[], over: Record<string, Route> = {}): Record<string, Route> => ({
+  [GH.checkRuns]: { body: { check_runs: [redCheckRun()] } },
+  [GH_ACTIONS.runs]: { body: { total_count: workflowRuns.length, workflow_runs: workflowRuns } },
+  [GH_ACTIONS.rerun]: { status: 201 },
+  ...over,
+});
+
+test("a first GitHub Actions failure is re-run once and the item keeps waiting instead of returning to work", async () => {
+  const fetched = fakeFetch(githubRoutes(actionsRoutes([workflowRun(), unrelatedRun])));
+  const checks = sequencedFetch(fetched.fetchImpl, (url) => url.includes("/check-runs"), [
+    { check_runs: [{ name: "test", status: "completed", conclusion: "success" }, redCheckRun()] },
+    {
+      check_runs: [
+        { name: "test", status: "completed", conclusion: "success" },
+        redCheckRun({ status: "in_progress", conclusion: null }),
+      ],
+    },
+    {
+      check_runs: [
+        { name: "test", status: "completed", conclusion: "success" },
+        redCheckRun({ conclusion: "success" }),
+      ],
+    },
+  ]);
+  const { sleep, slept } = recordingSleep();
+
+  const verdict = await evaluateFactoryForge(githubInput(checks.fetchImpl, { ciPollMs: 7, ciSettleMs: 60_000, sleep }));
+
+  assert.equal(verdict.outcome, "met");
+  assert.equal(verdict.reason, `converged (ci retried once: ${RED_NAME})`);
+  assert.deepEqual(
+    verdict.checks.map((check) => check.passed),
+    FORGE_CHECKS.map(() => true),
+  );
+  assert.deepEqual(slept, [7, 7]);
+  assert.deepEqual(rerunsOf(fetched.calls), [GH_ACTIONS.rerun]);
+  const post = fetched.calls.find((call) => call.url.endsWith("/rerun-failed-jobs"));
+  assert.equal(post?.headers.authorization, `Bearer ${TOKEN}`);
+  assert.equal(post?.headers.accept, "application/vnd.github+json");
+  assert.equal(post?.body, undefined);
+});
+
+test("a head whose workflow run already ran twice returns to work with no second re-run", async () => {
+  const fetched = fakeFetch(githubRoutes(actionsRoutes([workflowRun({ run_attempt: 2 })])));
+
+  const verdict = await evaluateFactoryForge(githubInput(fetched.fetchImpl, { ciSettleMs: 0 }));
+
+  assert.equal(verdict.outcome, "continue");
+  assert.equal(verdict.reason, `check failed: ci_green_on_head — ${RED_NAME} (retried once)`);
+  assert.deepEqual(
+    verdict.checks.map((check) => check.command),
+    ["exact_head", "ci_green_on_head"],
+  );
+  assert.deepEqual(keysOf(fetched.calls), [GH.pr, GH.branch, GH.checkRuns, GH_ACTIONS.runs]);
+});
+
+test("red check runs that are not all re-runnable GitHub Actions runs keep today's verdict", async () => {
+  const cases: { label: string; routes: Record<string, Route>; reads: string[] }[] = [
+    {
+      label: "a non-Actions app",
+      routes: { [GH.checkRuns]: { body: { check_runs: [redCheckRun({ app: { slug: "cursor" } })] } } },
+      reads: [GH.pr, GH.branch, GH.checkRuns],
+    },
+    {
+      label: "one Actions offender next to a non-Actions one",
+      routes: {
+        [GH.checkRuns]: {
+          body: { check_runs: [redCheckRun(), { name: "legacy", status: "completed", conclusion: "failure" }] },
+        },
+      },
+      reads: [GH.pr, GH.branch, GH.checkRuns],
+    },
+    {
+      label: "no workflow run owning the check suite",
+      routes: actionsRoutes([unrelatedRun]),
+      reads: [GH.pr, GH.branch, GH.checkRuns, GH_ACTIONS.runs],
+    },
+  ];
+
+  for (const scenario of cases) {
+    const fetched = fakeFetch(githubRoutes(scenario.routes));
+
+    const verdict = await evaluateFactoryForge(githubInput(fetched.fetchImpl, { ciSettleMs: 0 }));
+
+    assert.equal(verdict.outcome, "continue", scenario.label);
+    assert.equal(verdict.reason, `check failed: ci_green_on_head — ${RED_NAME}`, scenario.label);
+    assert.deepEqual(keysOf(fetched.calls), scenario.reads, scenario.label);
+  }
+});
+
+test("a forge that refuses the re-run degrades to today's verdict instead of throwing", async () => {
+  const cases: { label: string; routes: Record<string, Route>; posts: number }[] = [
+    {
+      label: "403 on the rerun",
+      routes: actionsRoutes([workflowRun()], { [GH_ACTIONS.rerun]: { status: 403 } }),
+      posts: 1,
+    },
+    {
+      label: "403 on the runs read",
+      routes: actionsRoutes([workflowRun()], { [GH_ACTIONS.runs]: { status: 403 } }),
+      posts: 0,
+    },
+  ];
+
+  for (const scenario of cases) {
+    const fetched = fakeFetch(githubRoutes(scenario.routes));
+
+    const verdict = await evaluateFactoryForge(githubInput(fetched.fetchImpl, { ciSettleMs: 0 }));
+
+    assert.equal(verdict.outcome, "continue", scenario.label);
+    assert.equal(verdict.reason, `check failed: ci_green_on_head — ${RED_NAME}`, scenario.label);
+    assert.equal(rerunsOf(fetched.calls).length, scenario.posts, scenario.label);
+  }
+});
+
+test("a workflow run still reporting the pre-rerun state cannot buy a second re-run", async (t) => {
+  const fetched = fakeFetch(githubRoutes(actionsRoutes([workflowRun()])));
+  const sleep = tickingSleep(t);
+
+  const verdict = await evaluateFactoryForge(
+    githubInput(fetched.fetchImpl, { ciPollMs: 7, ciSettleMs: 60_000, sleep }),
+  );
+
+  assert.equal(verdict.outcome, "continue");
+  assert.equal(verdict.reason, `check failed: ci_green_on_head — ${RED_NAME} (retried once)`);
+  assert.deepEqual(rerunsOf(fetched.calls), [GH_ACTIONS.rerun]);
+});
+
+test("a stale red check run keeps the item waiting while the re-run it triggered is queued", async (t) => {
+  const fetched = fakeFetch(githubRoutes(actionsRoutes([workflowRun()])));
+  const runs = sequencedFetch(fetched.fetchImpl, (url) => url.includes("/actions/runs?"), [
+    { total_count: 1, workflow_runs: [workflowRun()] },
+    { total_count: 1, workflow_runs: [workflowRun({ run_attempt: 2, status: "queued", conclusion: null })] },
+  ]);
+  const checks = sequencedFetch(runs.fetchImpl, (url) => url.includes("/check-runs"), [
+    { check_runs: [redCheckRun()] },
+    { check_runs: [redCheckRun()] },
+    { check_runs: [redCheckRun({ conclusion: "success" })] },
+  ]);
+  const sleep = tickingSleep(t);
+
+  const verdict = await evaluateFactoryForge(githubInput(checks.fetchImpl, { ciPollMs: 7, ciSettleMs: 60_000, sleep }));
+
+  assert.equal(verdict.outcome, "met");
+  assert.equal(verdict.reason, `converged (ci retried once: ${RED_NAME})`);
+  assert.deepEqual(rerunsOf(fetched.calls), [GH_ACTIONS.rerun]);
+});
+
+test("a settle window that expires while the re-run is in flight keeps the retry in the guidance", async (t) => {
+  const fetched = fakeFetch(githubRoutes(actionsRoutes([workflowRun()])));
+  const checks = sequencedFetch(fetched.fetchImpl, (url) => url.includes("/check-runs"), [
+    { check_runs: [redCheckRun()] },
+    { check_runs: [redCheckRun({ status: "in_progress", conclusion: null })] },
+  ]);
+  const sleep = tickingSleep(t);
+
+  const verdict = await evaluateFactoryForge(githubInput(checks.fetchImpl, { ciPollMs: 7, ciSettleMs: 7, sleep }));
+
+  assert.equal(verdict.outcome, "continue");
+  assert.equal(verdict.reason, `check failed: ci_green_on_head — unsettled: ${RED_NAME} (retried once)`);
+  assert.equal(checks.reads(), 2);
+  assert.deepEqual(rerunsOf(fetched.calls), [GH_ACTIONS.rerun]);
+});
+
+test("each distinct workflow run owning a red check is re-run exactly once", async () => {
+  const shared = fakeFetch(
+    githubRoutes(
+      actionsRoutes([workflowRun(), unrelatedRun], {
+        [GH.checkRuns]: { body: { check_runs: [redCheckRun(), redCheckRun({ name: "Core tests (3/5)" })] } },
+      }),
+    ),
+  );
+  const sharedVerdict = await evaluateFactoryForge(githubInput(shared.fetchImpl, { ciSettleMs: 0 }));
+
+  assert.equal(sharedVerdict.reason, `check failed: ci_green_on_head — unsettled: ${RED_NAME} (retried once)`);
+  assert.deepEqual(rerunsOf(shared.calls), [GH_ACTIONS.rerun]);
+
+  const split = fakeFetch(
+    githubRoutes(
+      actionsRoutes([workflowRun(), unrelatedRun], {
+        [GH.checkRuns]: {
+          body: {
+            check_runs: [redCheckRun(), redCheckRun({ name: "PgBouncer", check_suite: { id: OTHER_SUITE_ID } })],
+          },
+        },
+        [GH_ACTIONS.rerunOther]: { status: 201 },
+      }),
+    ),
+  );
+  await evaluateFactoryForge(githubInput(split.fetchImpl, { ciSettleMs: 0 }));
+
+  assert.deepEqual(rerunsOf(split.calls), [GH_ACTIONS.rerun, GH_ACTIONS.rerunOther]);
 });

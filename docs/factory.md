@@ -12,7 +12,7 @@ Three org-scoped service credentials in the keychain. The slugs are fixed.
 | Slug                | Holds                | Scope it needs                                                     |
 | ------------------- | -------------------- | ------------------------------------------------------------------ |
 | `factory-linear`    | A Linear API key     | Read and write issues, comments, and states on the configured team |
-| `factory-github`    | A GitHub token       | Push and pull requests on the publish project                      |
+| `factory-github`    | A GitHub token       | Push, pull requests, and Actions re-runs on the publish project    |
 | `factory-anthropic` | An Anthropic API key | Model calls made by `claude` inside the sandbox                    |
 
 A missing or disabled credential fails the fire before any sandbox work, naming the slug.
