@@ -354,12 +354,12 @@ function ingestionTpl(loop: LoopView): TemplateResult {
         },
         options: html`<option value="">Add event source…</option>
           ${Object.entries(names)
-          .filter(
-            ([kind]) =>
-              !ingestion?.sources.some((source) => source.kind === kind) &&
-              (!loop.sources?.length ? true : kind !== "webhook" && loop.sources.includes(kind)),
-          )
-          .map(([kind, name]) => html`<option value=${kind}>${name}</option>`)}`,
+            .filter(
+              ([kind]) =>
+                !ingestion?.sources.some((source) => source.kind === kind) &&
+                (!loop.sources?.length ? true : kind !== "webhook" && loop.sources.includes(kind)),
+            )
+            .map(([kind, name]) => html`<option value=${kind}>${name}</option>`)}`,
       })}
     </div>
     ${
