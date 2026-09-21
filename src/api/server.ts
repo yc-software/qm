@@ -36,6 +36,8 @@ import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
+import { currentTenant } from "../tenancy/context.ts";
+import { TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
 
 const safeDecode = (s: string): string => {
   try {
@@ -192,7 +194,9 @@ async function gate(
     void isPublicRoute;
   } else if (capToken) {
     const capSecret = deps.capabilitySecret ?? secret;
-    capability = capSecret ? await verifyCapabilityToken(capToken, capSecret) : null;
+    capability = capSecret
+      ? await verifyCapabilityToken(capToken, capSecret, Date.now(), deps.tenantId, deps.requireTenantBinding)
+      : null;
     if (!capability) {
       sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
       return null;
@@ -265,6 +269,8 @@ async function gate(
       canonicalPayload(method, pathname + url.search, raw),
       method !== "GET",
       allowUnsignedSourceAuth,
+      deps.tenantId,
+      deps.requireTenantBinding,
     ))
   ) {
     return null;
@@ -295,7 +301,10 @@ async function gate(
     const psecret = deps.portalIdentitySecret ?? secret;
     const rawToken = req.headers[PORTAL_IDENTITY_HEADER];
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
-    actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
+    actor =
+      token && psecret
+        ? await verifyPortalIdentity(token, psecret, Date.now(), deps.tenantId, deps.requireTenantBinding)
+        : null;
     if (actor && deps.identity) {
       await deps.identity.refresh();
       if (deps.identity.classify(actor.p).type !== "internal") actor = null;
@@ -360,7 +369,7 @@ function paramsSchema(path: string): object {
   };
 }
 
-function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstance; routing: RequestListener } {
+function buildFastify(wiring: Wiring): { fastify: FastifyInstance; routing: RequestListener } {
   const matchRoutes = apiRoutes.filter(
     (route): route is Route<ApiCtx> & { match: (m: string, p: string) => boolean } => !("path" in route),
   );
@@ -391,12 +400,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
     }
   };
 
-  let routing!: RequestListener;
   const fastify = Fastify({
-    serverFactory: (handler) => {
-      routing = handler as RequestListener;
-      return server;
-    },
     logger: false,
     exposeHeadRoutes: false,
     routerOptions: { maxParamLength: 100_000 },
@@ -468,13 +472,15 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
 
   fastify.setNotFoundHandler(fallback);
 
-  return { fastify, routing };
+  return { fastify, routing: (req, res) => fastify.routing(req, res) };
 }
 
 type ServerOptions = Omit<ServerDeps, "control">;
 
-function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boolean): Server {
-  const requirePortalIdentity = Boolean(deps.requireSignedPortalIdentity || deps.production);
+function buildRequestListener(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boolean): RequestListener {
+  const requirePortalIdentity = Boolean(
+    deps.requireSignedPortalIdentity || deps.production || deps.requireTenantBinding,
+  );
   const auth = deps.signingSecret
     ? createSourceAuth({
         signingSecret: deps.signingSecret,
@@ -490,7 +496,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     allowUnsignedSourceAuth,
   };
   const requestNames = new WeakMap<IncomingMessage, string>();
-  const server = createHttpServer((req, res) => {
+  const listener: RequestListener = (req, res) => {
     const finishTiming = req.url === "/healthz" ? undefined : startTiming("http.server", `${req.method ?? "GET"} /*`);
     if (finishTiming)
       res.once("close", () =>
@@ -503,17 +509,22 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     req.on("error", () => res.destroy());
     res.on("error", () => res.destroy());
     void front(req, res).catch((err: unknown) => respondError(req, res, err));
-  });
-  const { fastify, routing } = buildFastify(wiring, server);
+  };
+  const { fastify, routing } = buildFastify(wiring);
   const ready = Promise.resolve(fastify.ready());
   ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", errMessage(err)));
-  server.requestTimeout = 0;
-  server.headersTimeout = 10_000;
-  server.keepAliveTimeout = 5_000;
-  server.maxConnections = 1024;
-
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
     armBodyDeadline(req, 30_000);
+    const tenantId = req.headers[TENANT_HEADER];
+    if (
+      tenantId !== undefined &&
+      (typeof tenantId !== "string" ||
+        !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(tenantId) ||
+        (deps.tenantId !== undefined && tenantId !== deps.tenantId))
+    ) {
+      sendJson(res, 401, { error: "unauthorized", message: "request tenant does not match this runtime" });
+      return;
+    }
     const base = baseCtx(req, res, wiring);
     if (await proxyDeploymentSubdomain(base)) {
       requestNames.set(req, "/deployment-proxy/*");
@@ -544,22 +555,34 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     await ready;
     routing(req, res);
   }
-  return server;
+  return listener;
 }
 
-export function createServer(app: App, deps: ServerOptions = {}): Server {
+export function createRequestListener(app: App, deps: ServerOptions = {}): RequestListener {
+  const tenant = currentTenant();
+  if (tenant && deps.tenantId !== undefined && deps.tenantId !== tenant.id) {
+    throw new Error("Configured tenant does not match the runtime context");
+  }
+  deps = {
+    ...deps,
+    tenantId: deps.tenantId ?? tenant?.id,
+    requireTenantBinding: deps.requireTenantBinding ?? tenant?.pooled,
+  };
+  if (deps.requireTenantBinding && (!deps.tenantId || deps.allowUnauthenticatedCore)) {
+    throw new Error("Tenant binding requires a tenant ID and authenticated core ingress");
+  }
   if (!deps.signingSecret && deps.allowUnauthenticatedCore) {
     console.warn(
       "[server] ALLOW_UNAUTHENTICATED_CORE=1 — HTTP ingress is UNAUTHENTICATED (intentionally isolated deployments only).",
     );
-    return buildServer(app, deps, true);
+    return buildRequestListener(app, deps, true);
   }
   if (!isStrongSigningSecret(deps.signingSecret)) {
     throw new Error(
       `CORE_SIGNING_SECRET must be at least ${MIN_SIGNING_SECRET_LENGTH} characters; tests that intentionally need unsigned source auth must use createInsecureTestServer`,
     );
   }
-  if (deps.requireSignedPortalIdentity || deps.production) {
+  if (deps.requireSignedPortalIdentity || deps.production || deps.requireTenantBinding) {
     const shared = (name: string, value: string | undefined): string | null => {
       if (!value) return `${name} is not set (it would fall back to CORE_SIGNING_SECRET)`;
       return value === deps.signingSecret ? `${name} must differ from CORE_SIGNING_SECRET` : null;
@@ -575,10 +598,24 @@ export function createServer(app: App, deps: ServerOptions = {}): Server {
         `signed portal identity is required but ${problem}. Provision distinct secrets or enforcement is bypassable.`,
       );
   }
-  return buildServer(app, deps, false);
+  return buildRequestListener(app, deps, false);
+}
+
+function httpServer(listener: RequestListener): Server {
+  const server = createHttpServer(listener);
+  server.requestTimeout = 0;
+  server.headersTimeout = 10_000;
+  server.keepAliveTimeout = 5_000;
+  server.maxConnections = 1024;
+  return server;
+}
+
+export function createServer(app: App, deps: ServerOptions = {}): Server {
+  return httpServer(createRequestListener(app, deps));
 }
 
 export function createInsecureTestServer(app: App, deps: ServerOptions = {}): Server {
   if (deps.signingSecret) throw new Error("createInsecureTestServer must not receive a signing secret");
-  return buildServer(app, deps, true);
+  if (deps.requireTenantBinding) throw new Error("createInsecureTestServer cannot require tenant binding");
+  return httpServer(buildRequestListener(app, deps, true));
 }

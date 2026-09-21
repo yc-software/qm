@@ -55,7 +55,7 @@ export function createFlyTunnelManager(opts: {
   claims: DurableMap<FlyPeerClaim>;
   metadataUri: string;
   executable: string;
-  port: number;
+  port?: number;
 }) {
   let starting: Promise<number> | undefined;
   let tunnel: FlyPrivateTunnel | undefined;
@@ -106,7 +106,7 @@ export function createFlyTunnelManager(opts: {
       throw new Error("Fly tunnel manager is stopped");
     }
     sweeper.start();
-    return opts.port;
+    return tunnel.port;
   }
   return {
     monitor(): void {

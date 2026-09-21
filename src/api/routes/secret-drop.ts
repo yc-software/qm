@@ -72,7 +72,13 @@ async function dropLinkClaims(
   const capSecret = ctx.deps.capabilitySecret ?? ctx.secret;
   const token = ctx.url.searchParams.get("t");
   if (!capSecret || !token) return null;
-  const claims = await verifyCapabilityToken(token, capSecret);
+  const claims = await verifyCapabilityToken(
+    token,
+    capSecret,
+    Date.now(),
+    ctx.deps.tenantId,
+    ctx.deps.requireTenantBinding,
+  );
   if (
     !claims ||
     claims.aud !== SECRET_DROP_AUD ||

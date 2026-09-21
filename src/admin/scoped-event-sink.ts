@@ -114,6 +114,7 @@ export interface PostgresEventSink<E> {
   q: PgPool["q"];
   record(input: Omit<E, "ts">): void;
   flush(): Promise<void>;
+  close(): Promise<void>;
   list(opts?: object): Promise<E[]>;
   count(opts?: object): Promise<number>;
 }
@@ -150,7 +151,7 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
       );
     }
   }
-  const { q } = createPgPool(cfg.connectionString, [
+  const { q, close } = createPgPool(cfg.connectionString, [
     {
       id: scopedEventMigrationId(cfg.table, 1),
       statements: [createTable, ...(cfg.extraSchemaStatements ?? standardIndexes(cfg.table))],
@@ -199,6 +200,10 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
     },
     async flush() {
       await settleWrites();
+    },
+    async close() {
+      await settleWrites();
+      await close();
     },
     async list(input = {}) {
       await settleWrites();

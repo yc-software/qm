@@ -14,7 +14,9 @@ const COLUMNS: readonly EventColumn<keyof EgressAuditRecord & string>[] = [
   ["principal_id", "principalId", "TEXT", "string"],
 ];
 
-export function createPostgresEgressAuditSink(connectionString: string): EgressAuditSink {
+export function createPostgresEgressAuditSink(
+  connectionString: string,
+): EgressAuditSink & { flush(): Promise<void>; close(): Promise<void> } {
   return createPostgresEventSink<EgressAuditRecord>({
     connectionString,
     table: "egress_events",

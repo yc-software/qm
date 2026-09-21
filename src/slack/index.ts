@@ -33,6 +33,8 @@ import { createHttpEventsReceiver } from "./http-events.ts";
 import { parseChannelPage, parseLogLevel } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { AuthTestResponse } from "@slack/web-api";
+import { currentTenant } from "../tenancy/context.ts";
+import { assertSlackEventIdentity, createSlackConnectionOwnership } from "./connection-ownership.ts";
 const { App } = bolt;
 
 export type { SlackCoreClient };
@@ -44,6 +46,7 @@ export async function startSlackPlugin(
   core: SlackCoreClient,
 ): Promise<{ stop(): Promise<void> }> {
   const EVENTS_MODE = cfg.eventsMode ?? "socket";
+  const tenant = currentTenant();
   if (!cfg.botToken) {
     throw new Error("Slack plugin needs botToken (SLACK_BOT_TOKEN, xoxb-…)");
   }
@@ -172,6 +175,14 @@ export async function startSlackPlugin(
     logLevel: parseLogLevel(cfg.logLevel),
     clientOptions: { ...CLIENT_OPTIONS },
   });
+  let appId = "";
+  if (tenant?.pooled) {
+    const processEvent = app.processEvent.bind(app);
+    app.processEvent = async (event) => {
+      assertSlackEventIdentity(event.body, { teamId: ids.ownTeamId, appId });
+      await processEvent(event);
+    };
+  }
   const replaySweeper = staging
     ? createSweeper(
         () =>
@@ -373,8 +384,15 @@ export async function startSlackPlugin(
     webUiPublicUrl: cfg.webUiPublicUrl,
   });
 
+  const ownership = tenant ? createSlackConnectionOwnership() : undefined;
+  const stopApp = async (): Promise<void> => {
+    await app.stop();
+    ownership?.release();
+  };
   let auth: AuthTestResponse;
   try {
+    ownership?.reserve("bot token", BOT_TOKEN);
+    if (EVENTS_MODE === "socket" && !cfg.receiverFactory) ownership?.reserve("app token", APP_TOKEN!);
     auth = await app.client.auth.test();
     ids.ownTeamId = auth.team_id ?? "";
     ids.botUserId = auth.user_id ?? "";
@@ -383,6 +401,13 @@ export async function startSlackPlugin(
     ids.ownWorkspaceUrl = typeof auth.url === "string" ? auth.url.replace(/\/+$/, "") : "";
     if (!ids.ownTeamId || !ids.botUserId) {
       throw new Error("auth.test returned no team_id/user_id — refusing to start (cannot classify members safely)");
+    }
+    ownership?.reserve("bot identity", JSON.stringify([ids.ownTeamId, ids.botUserId]));
+    if (tenant?.pooled) {
+      appId = typeof auth.app_id === "string" ? auth.app_id : "";
+      if (!appId && ids.ownBotId) appId = (await app.client.bots.info({ bot: ids.ownBotId })).bot?.app_id ?? "";
+      if (!appId) throw new Error("Slack bot identity returned no app_id");
+      if (EVENTS_MODE === "socket" && !cfg.receiverFactory) ownership!.reserve("socket app", appId);
     }
     if (!cfg.identityEmail) {
       ids.identityMode = await directory.resolveAutoIdentityMode(app.client);
@@ -399,10 +424,10 @@ export async function startSlackPlugin(
     stopped = true;
     await devIntrospection?.close().catch(swallowAs("slack: dev-introspection close on failed start", undefined));
     try {
-      await app.stop();
+      await stopApp();
     } catch (cleanupError) {
       throw new SlackPluginStartCleanupError(err, cleanupError, async () => {
-        await app.stop();
+        await stopApp();
       });
     }
     throw err;
@@ -490,7 +515,7 @@ export async function startSlackPlugin(
     async stop(): Promise<void> {
       if (stopped) {
         await replaySweeper?.stop();
-        await app.stop();
+        await stopApp();
         return;
       }
       stopped = true;
@@ -501,7 +526,7 @@ export async function startSlackPlugin(
       unsubscribeDeliveries();
       unsubscribeContextRequests();
       try {
-        await app.stop();
+        await stopApp();
       } finally {
         await devIntrospection?.close();
       }

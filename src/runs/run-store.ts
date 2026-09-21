@@ -85,7 +85,9 @@ export interface RunStore {
   pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;
 
-  onTerminal(listener: (run: Run) => void): void;
+  onTerminal(listener: (run: Run) => void | Promise<void>): void;
+
+  drainTerminal(): Promise<void>;
 
   get(runId: string): Promise<Run | null>;
 

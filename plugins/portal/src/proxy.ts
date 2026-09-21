@@ -1,6 +1,8 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { signedHeaders } from "../../chassis/src/core-client.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { CORE_TENANT_ID } from "../../chassis/src/env.ts";
+import { TENANT_HEADER } from "../../chassis/src/source-auth-sign.ts";
 
 const IDENTITY_TTL_MS = 60_000;
 
@@ -65,7 +67,7 @@ function relay(
       port: target.port,
       method: req.method,
       path: target.path,
-      headers: target.headers,
+      headers: { ...target.headers, ...(CORE_TENANT_ID ? { [TENANT_HEADER]: CORE_TENANT_ID } : {}) },
     },
     (upRes) => {
       const out: Record<string, string | string[]> = {};
@@ -249,6 +251,7 @@ export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBa
     "x-agent-capability",
     PORTAL_IDENTITY_HEADER,
     "x-qm-app-host",
+    TENANT_HEADER,
     "forwarded",
     "x-forwarded-host",
     "x-forwarded-proto",

@@ -1,3 +1,4 @@
+import { tenantState } from "../tenancy/context.ts";
 import { gatewayModelCatalog, gatewayModelsVersion, isGatewayModelId, resolveGatewayModel } from "./gateway-models.ts";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -184,27 +185,32 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
   { id: "claude-opus-4-6", name: "Claude Opus 4.6", fastMode: false, webui: false, base: false },
 ];
 
-let overlays = new Map<string, ModelOverlay>();
-let unavailableOverlays = new Map<string, string>();
-let overlayVersion = 0;
-let overlaySnapshot = JSON.stringify([[], [], []]);
+const MODEL_REGISTRY_STATE = Symbol("model-registry");
+const modelRegistryState = () =>
+  tenantState(MODEL_REGISTRY_STATE, () => ({
+    overlays: new Map<string, ModelOverlay>(),
+    unavailableOverlays: new Map<string, string>(),
+    overlayVersion: 0,
+    overlaySnapshot: JSON.stringify([[], [], []]),
+    openRouterModels: new Map<string, PiModel>(),
+  }));
 
 export function modelOverlayVersion(): number {
-  return overlayVersion + gatewayModelsVersion();
+  return modelRegistryState().overlayVersion + gatewayModelsVersion();
 }
 
 export function isOverlayModel(id: string): boolean {
-  return overlays.has(id);
+  return modelRegistryState().overlays.has(id);
 }
 
 export function modelOfferedInWebui(id: string): boolean {
-  return overlays.get(id)?.webui ?? true;
+  return modelRegistryState().overlays.get(id)?.webui ?? true;
 }
 
 export function modelUnavailableReason(id: string): string | undefined {
   if (isGatewayModelId(id) && !resolveGatewayModel(id))
     return "Gateway model is unavailable; select another model or retry after discovery recovers";
-  return unavailableOverlays.get(id);
+  return modelRegistryState().unavailableOverlays.get(id);
 }
 
 export function modelIdReserved(id: string): boolean {
@@ -213,9 +219,9 @@ export function modelIdReserved(id: string): boolean {
     id.startsWith(CODEX_SUBSCRIPTION_PREFIX) ||
     REGISTRY_BY_ID.has(id) ||
     Boolean(builtinModel(id)) ||
-    overlays.has(id) ||
-    unavailableOverlays.has(id) ||
-    OPENROUTER_CATALOG_MODELS.has(id)
+    modelRegistryState().overlays.has(id) ||
+    modelRegistryState().unavailableOverlays.has(id) ||
+    modelRegistryState().openRouterModels.has(id)
   );
 }
 
@@ -225,7 +231,7 @@ export function validateModelOverlay(value: unknown): ModelOverlay {
     REGISTRY_BY_ID.has(spec.id) ||
     builtinModel(spec.id) ||
     isCustomModelId(spec.id) ||
-    OPENROUTER_CATALOG_MODELS.has(spec.id)
+    modelRegistryState().openRouterModels.has(spec.id)
   )
     throw new Error("model id is already registered");
   const template = resolveBuiltinModel(spec.template);
@@ -259,7 +265,7 @@ export function setModelOverlays(
           id,
           "Builtin template is unavailable or has a different provider; ask an administrator to repair this model",
         );
-      } else if (isCustomModelId(id) || OPENROUTER_CATALOG_MODELS.has(id)) {
+      } else if (isCustomModelId(id) || modelRegistryState().openRouterModels.has(id)) {
         unavailable.set(id, "Model id conflicts with another provider; ask an administrator to repair this model");
       } else if (verificationFailures.has(id)) unavailable.set(id, verificationFailures.get(id)!);
       else next.set(id, spec);
@@ -268,23 +274,23 @@ export function setModelOverlays(
     }
   }
   const snapshot = JSON.stringify([[...next], [...unavailable], deleted]);
-  if (snapshot === overlaySnapshot) return;
-  overlays = next;
-  unavailableOverlays = unavailable;
-  overlaySnapshot = snapshot;
-  overlayVersion += 1;
+  if (snapshot === modelRegistryState().overlaySnapshot) return;
+  modelRegistryState().overlays = next;
+  modelRegistryState().unavailableOverlays = unavailable;
+  modelRegistryState().overlaySnapshot = snapshot;
+  modelRegistryState().overlayVersion += 1;
 }
 
 export function selectableBaseModels(includeAliased = false): ReadonlyArray<{ id: string; name: string }> {
   return [
     ...gatewayModelCatalog(includeAliased),
     ...SELECTABLE_BASE_MODELS.filter(({ id }) => resolveModel(id)),
-    ...[...overlays.values()].filter((m) => m.base).map(({ id, name }) => ({ id, name })),
+    ...[...modelRegistryState().overlays.values()].filter((m) => m.base).map(({ id, name }) => ({ id, name })),
   ];
 }
 
 export function overlayModelCatalog(): Array<{ id: string; name: string; provider: string }> {
-  return [...overlays.values()]
+  return [...modelRegistryState().overlays.values()]
     .filter((m) => m.base || m.webui)
     .map(({ id, name, provider }) => ({ id, name, provider }));
 }
@@ -293,22 +299,26 @@ export function defaultWebuiModelIds(): readonly string[] {
   return [
     ...DEFAULT_WEBUI_MODEL_IDS,
     ...gatewayModelCatalog(true).map((m) => m.id),
-    ...[...overlays.values()].filter((m) => m.webui).map((m) => m.id),
+    ...[...modelRegistryState().overlays.values()].filter((m) => m.webui).map((m) => m.id),
   ];
 }
 
 export function fastModeModelIds(): readonly string[] {
   return [
     ...FAST_MODE_MODEL_IDS.filter(modelSupportsFastMode),
-    ...[...overlays.values()].filter((m) => modelSupportsFastMode(m.id)).map((m) => m.id),
+    ...[...modelRegistryState().overlays.values()].filter((m) => modelSupportsFastMode(m.id)).map((m) => m.id),
   ];
 }
 
 const REGISTRY_BY_ID = new Map(MODEL_REGISTRY.map((m) => [m.id, m]));
-const OPENROUTER_CATALOG_MODELS = new Map<string, PiModel>();
 
 export function modelDisplayName(id: string): string {
-  return overlays.get(id)?.name ?? REGISTRY_BY_ID.get(id)?.name ?? OPENROUTER_CATALOG_MODELS.get(id)?.name ?? id;
+  return (
+    modelRegistryState().overlays.get(id)?.name ??
+    REGISTRY_BY_ID.get(id)?.name ??
+    modelRegistryState().openRouterModels.get(id)?.name ??
+    id
+  );
 }
 
 export const DEFAULT_WEBUI_MODEL_IDS: readonly string[] = MODEL_REGISTRY.filter((m) => m.webui).map((m) => m.id);
@@ -367,7 +377,7 @@ export function registerOpenRouterCatalogModel(definition: OpenRouterCatalogMode
     },
   });
   model.input = [...definition.input];
-  OPENROUTER_CATALOG_MODELS.set(model.id, model);
+  modelRegistryState().openRouterModels.set(model.id, model);
   return model;
 }
 
@@ -399,14 +409,14 @@ export function resolveBuiltinModel(id: string): PiModel | undefined {
 
 function resolveBaseModel(id: string): PiModel | undefined {
   if (isGatewayModelId(id)) return resolveGatewayModel(id);
-  if (unavailableOverlays.has(id)) return undefined;
+  if (modelRegistryState().unavailableOverlays.has(id)) return undefined;
   const builtin = resolveBuiltinModel(id);
   if (builtin) return builtin;
-  const overlay = overlays.get(id);
+  const overlay = modelRegistryState().overlays.get(id);
   if (overlay) {
     return modelFromOverlay(overlay, false);
   }
-  return (resolveCustomModel(id) as unknown as PiModel | undefined) ?? OPENROUTER_CATALOG_MODELS.get(id);
+  return (resolveCustomModel(id) as unknown as PiModel | undefined) ?? modelRegistryState().openRouterModels.get(id);
 }
 
 export function modelFromOverlay(spec: ModelOverlay, useOrgEndpoints = true): PiModel | undefined {
@@ -429,8 +439,9 @@ export function resolveModel(id: string, useOrgEndpoints = true): PiModel | unde
 }
 
 export function auxiliaryModelForProvider(provider: string): string | undefined {
-  return [...MODEL_REGISTRY, ...overlays.values()].find((m) => m.auxiliary && resolveModel(m.id)?.provider === provider)
-    ?.id;
+  return [...MODEL_REGISTRY, ...modelRegistryState().overlays.values()].find(
+    (m) => m.auxiliary && resolveModel(m.id)?.provider === provider,
+  )?.id;
 }
 
 export function auxiliaryModelFor(baseModelId: string): string {
@@ -453,8 +464,8 @@ export function contextTokenBudgetForModel(id: string): number | undefined {
 
 export function modelSupportedByHarness(id: string | undefined, harness: string): boolean {
   if (id && isGatewayModelId(id)) return (harness === "pi" || harness === "mock") && Boolean(resolveGatewayModel(id));
-  if (!id || unavailableOverlays.has(id)) return false;
-  if (overlays.has(id)) return harness === "pi" || harness === "mock";
+  if (!id || modelRegistryState().unavailableOverlays.has(id)) return false;
+  if (modelRegistryState().overlays.has(id)) return harness === "pi" || harness === "mock";
   if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id))
     return harness === "pi" || harness === "opencode" || harness === "mock";
   if (harness === "pi" || harness === "opencode" || harness === "mock") return Boolean(resolveModel(id));
@@ -540,8 +551,8 @@ export function getRequiredModel(id: string, useOrgEndpoints = true): PiModel {
 
 export function modelSupportsFastMode(modelId: string | undefined): boolean {
   if (!modelId) return false;
-  if (unavailableOverlays.has(modelId)) return false;
-  return overlays.get(modelId)?.fastMode ?? REGISTRY_BY_ID.get(modelId)?.fastMode ?? false;
+  if (modelRegistryState().unavailableOverlays.has(modelId)) return false;
+  return modelRegistryState().overlays.get(modelId)?.fastMode ?? REGISTRY_BY_ID.get(modelId)?.fastMode ?? false;
 }
 
 export const FAST_MODE_MODEL_IDS: readonly string[] = MODEL_REGISTRY.filter((m) => m.fastMode).map((m) => m.id);

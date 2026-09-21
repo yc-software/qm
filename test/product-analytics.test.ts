@@ -119,7 +119,7 @@ test("terminal listener reports only exhausted failures and accepted completions
   });
   const { runs } = createMemoryRunStore();
   runs.onTerminal((run) => {
-    void analytics.responseFinished(run);
+    return analytics.responseFinished(run);
   });
   const request = (await humanRun()).request;
   const { run } = await runs.enqueue({ sessionId: "thread", request, maxAttempts: 2 });

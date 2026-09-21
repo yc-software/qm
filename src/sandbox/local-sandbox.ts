@@ -1,3 +1,4 @@
+import { currentTenant } from "../tenancy/context.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { orgId as configOrgId } from "../config.ts";
 import { arch } from "node:os";
@@ -84,6 +85,8 @@ export const localNetworkName = (containerName: string): string =>
 const localScratchName = (key: string): string => `qm-scratch-${localSlug(key)}`;
 
 function localSlug(id: string): string {
+  const tenant = currentTenant();
+  if (tenant?.pooled) id = `${tenant.id}:${id}`;
   const cleaned = id
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")

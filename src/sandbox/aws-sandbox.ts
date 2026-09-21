@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { DeleteObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { orgId as configOrgId } from "../config.ts";
 import type { WorkspaceLayer } from "../types.ts";
@@ -219,7 +220,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         suspendedDurationSeconds: opts.suspendedDurationSeconds ?? 3600,
       },
       maximumDurationInSeconds,
-      clientToken: `${scope ?? "scratch"}-${Date.now()}`,
+      clientToken: randomUUID(),
     });
     try {
       if (scope)

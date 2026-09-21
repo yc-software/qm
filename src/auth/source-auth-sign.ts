@@ -1,12 +1,7 @@
-import { createHmac } from "node:crypto";
+import { signedRequestHeaders as signHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { currentTenant } from "../tenancy/context.ts";
 
-export function canonicalPayload(method: string, pathWithQuery: string, body: string): string {
-  return `${method}\n${pathWithQuery}\n${body}`;
-}
-
-export function signRequest(secret: string, timestampSec: number, canonical: string): string {
-  return `v0=${createHmac("sha256", secret).update(`v0:${timestampSec}:${canonical}`).digest("hex")}`;
-}
+export { canonicalPayload, signRequest } from "../../plugins/chassis/src/source-auth-sign.ts";
 
 export function signedRequestHeaders(
   secret: string | undefined,
@@ -16,7 +11,6 @@ export function signedRequestHeaders(
   base: Record<string, string> = {},
   nowSec: number = Math.floor(Date.now() / 1000),
 ): Record<string, string> {
-  if (!secret) return { ...base };
-  const canonical = canonicalPayload(method, pathWithQuery, body);
-  return { ...base, "x-timestamp": String(nowSec), "x-signature": signRequest(secret, nowSec, canonical) };
+  const tenant = currentTenant();
+  return signHeaders(secret, method, pathWithQuery, body, base, nowSec, tenant?.pooled ? tenant.id : undefined);
 }

@@ -1,3 +1,4 @@
+import { createTenantContext, runWithTenant } from "../src/tenancy/context.ts";
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -313,4 +314,24 @@ test("containerized core joins each sandbox network and reaches the daemon by co
   assert.ok(seen.includes(`http://${h.id}:8080/health`));
   await sb.teardown(h, { destroy: true });
   assert.equal(fake.connections.has(`${localNetworkName(h.id)}|qm-test-core`), false);
+});
+
+test("pooled tenants sharing Docker cannot reuse the same scratch container", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const handles = await Promise.all(
+    ["company-a", "company-b"].map((id) =>
+      runWithTenant(createTenantContext({ id, env: {}, pooled: true }), async () => {
+        const sandbox = makeSandbox(fake);
+        const handle = await sandbox.provision(rw("personal:same@example.com"), { scratch: { key: "same-key" } });
+        assert.equal(fake.containers.get(handle.id)!.labels["qm.org"], id);
+        return { sandbox, handle };
+      }),
+    ),
+  );
+  try {
+    assert.notEqual(handles[0]!.handle.id, handles[1]!.handle.id);
+    assert.equal(fake.runCount, 2);
+  } finally {
+    await Promise.all(handles.map(({ sandbox, handle }) => sandbox.teardown(handle, { destroy: true })));
+  }
 });

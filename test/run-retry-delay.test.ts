@@ -5,6 +5,11 @@ import type { Pool } from "pg";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import type { Orchestrator } from "../src/core/orchestrator.ts";
+import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
+import { createWorkCapacity } from "../src/runs/work-capacity.ts";
+import { createWorker, type Worker } from "../src/runs/worker.ts";
+import { withTimeout } from "../src/util/async.ts";
 
 const request: OrchestratorInput = {
   actor: { id: "retry-test", type: "internal" },
@@ -128,6 +133,98 @@ test(
       await runtime.close();
       await pool.end();
       await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+      await admin.end();
+    }
+  },
+);
+
+test(
+  "postgres: a locked tenant cannot retain shared work capacity and recovers after its table unlocks",
+  { skip: !process.env.DATABASE_URL, timeout: 20_000 },
+  async (t) => {
+    const pg = (await import("pg")).default;
+    const admin = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+    const suffix = randomUUID().replaceAll("-", "");
+    const names = [`capacity_blocked_${suffix}`, `capacity_healthy_${suffix}`];
+    const created: string[] = [];
+    const runtimes: ReturnType<typeof createPostgresRunStore>[] = [];
+    const workers: Worker[] = [];
+    let holder: import("pg").PoolClient | undefined;
+    let lockPool: Pool | undefined;
+    const warnings: string[] = [];
+    t.mock.method(console, "warn", (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    });
+    try {
+      for (const name of names) {
+        await admin.query(`CREATE DATABASE ${name}`);
+        created.push(name);
+        const url = new URL(process.env.DATABASE_URL!);
+        url.pathname = `/${name}`;
+        runtimes.push(createPostgresRunStore(url.toString()));
+        if (!lockPool) lockPool = new pg.Pool({ connectionString: url.toString() });
+      }
+      const blocked = runtimes[0]!;
+      const healthy = runtimes[1]!;
+      const blockedRun = (await blocked.runs.enqueue({ sessionId: "same", request })).run;
+      const healthyRun = (await healthy.runs.enqueue({ sessionId: "same", request })).run;
+      holder = await lockPool!.connect();
+      await holder.query("BEGIN");
+      await holder.query("LOCK TABLE runs IN ACCESS EXCLUSIVE MODE");
+      await Promise.all(
+        [
+          blocked.runs.claim("probe", 10_000),
+          blocked.runs.claimById(blockedRun.id, "probe", 10_000),
+          blocked.runs.claimForSession("same", "probe", 10_000),
+        ].map((claim) => assert.rejects(claim, { code: "57014" })),
+      );
+      const capacity = createWorkCapacity(1);
+      const blockedClaimStarted = Promise.withResolvers<void>();
+      const healthyStarted = Promise.withResolvers<void>();
+      const recovered = Promise.withResolvers<void>();
+      const claim = blocked.runs.claim.bind(blocked.runs);
+      t.mock.method(blocked.runs, "claim", (...args: Parameters<typeof claim>) => {
+        blockedClaimStarted.resolve();
+        return claim(...args);
+      });
+      workers.push(
+        ...runtimes.map((runtime, index) =>
+          createWorker({
+            capacity: createWorkCapacity(1, capacity),
+            runs: runtime.runs,
+            sessions: createMemorySessionStore(),
+            leaseTtlMs: 10_000,
+            pollMs: 250,
+            orchestrator: {
+              async handleTurn() {
+                if (index === 0) recovered.resolve();
+                else healthyStarted.resolve();
+                return { status: "ok", reply: "done" };
+              },
+            } as unknown as Orchestrator,
+          }),
+        ),
+      );
+      const startedAt = performance.now();
+      workers[0]!.start();
+      await blockedClaimStarted.promise;
+      workers[1]!.start();
+      await withTimeout(() => healthyStarted.promise, 5_000, "healthy tenant run");
+      const elapsed = performance.now() - startedAt;
+      assert.ok(elapsed >= 1_000 && elapsed < 5_000);
+      assert.equal(warnings.filter((line) => line.includes("worker: claim failed")).length, 1);
+      await holder.query("ROLLBACK");
+      await withTimeout(() => recovered.promise, 5_000, "blocked tenant recovery");
+      await Promise.all([blocked.runs.waitFor(blockedRun.id, 5_000), healthy.runs.waitFor(healthyRun.id, 5_000)]);
+      assert.equal((await blocked.runs.get(blockedRun.id))?.attempts, 1);
+      assert.equal((await healthy.runs.get(healthyRun.id))?.attempts, 1);
+    } finally {
+      await holder?.query("ROLLBACK");
+      holder?.release();
+      await Promise.all(workers.map((worker) => worker.stop()));
+      await Promise.all(runtimes.map((runtime) => runtime.close()));
+      await lockPool?.end();
+      for (const name of created) await admin.query(`DROP DATABASE ${name}`);
       await admin.end();
     }
   },

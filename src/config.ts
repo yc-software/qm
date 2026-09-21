@@ -1,3 +1,4 @@
+import { currentTenant, tenantEnv } from "./tenancy/context.ts";
 import { isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseScopeId } from "./types.ts";
 import type { SandboxScopeDefaults } from "./sandbox/sandbox-routing.ts";
@@ -842,7 +843,7 @@ function flyDeployEnv(env: NodeJS.ProcessEnv): FlyDeployEnv {
 const DEFAULT_ORG_ID = "default-org";
 
 export function orgId(): string {
-  return process.env.ORG_ID ?? DEFAULT_ORG_ID;
+  return currentTenant()?.id ?? tenantEnv().ORG_ID ?? DEFAULT_ORG_ID;
 }
 
 export function orgScope(): string {
@@ -1083,7 +1084,7 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
   return declared;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+export function loadConfig(env: NodeJS.ProcessEnv = tenantEnv()): Config {
   if (env.BACKGROUND_DEPLOYMENT_ID !== undefined) {
     if (!env.BACKGROUND_DEPLOYMENT_ID.trim() || env.BACKGROUND_DEPLOYMENT_ID.length > 256)
       throw new Error("BACKGROUND_DEPLOYMENT_ID must be nonempty and at most 256 characters");

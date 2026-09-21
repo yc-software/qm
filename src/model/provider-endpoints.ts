@@ -1,3 +1,4 @@
+import { tenantState } from "../tenancy/context.ts";
 import { isGatewayModelId } from "./gateway-models.ts";
 /**
  * Provider endpoint overrides.
@@ -62,16 +63,20 @@ export function providerBaseUrlsFromEnv(env: NodeJS.ProcessEnv): ProviderBaseUrl
   return urls;
 }
 
-let configured: ProviderBaseUrls = {};
+const PROVIDER_ENDPOINT_STATE = Symbol("provider-endpoints");
+const providerEndpointState = () =>
+  tenantState(PROVIDER_ENDPOINT_STATE, () => ({ configured: {} as ProviderBaseUrls }));
 
 /** Called once by wiring with the config-parsed overrides. */
 export function setProviderBaseUrls(urls: ProviderBaseUrls): void {
-  configured = { ...urls };
+  providerEndpointState().configured = { ...urls };
 }
 
 /** The override for a provider, if one is configured. */
 export function providerBaseUrl(provider: string): string | undefined {
-  return (PROVIDER_IDS as readonly string[]).includes(provider) ? configured[provider as ProviderId] : undefined;
+  return (PROVIDER_IDS as readonly string[]).includes(provider)
+    ? providerEndpointState().configured[provider as ProviderId]
+    : undefined;
 }
 
 export function modelGatewayRequest<T extends { id: string; baseUrl: string; api?: string }>(

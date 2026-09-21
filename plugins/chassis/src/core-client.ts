@@ -12,8 +12,17 @@ export function signedHeaders(
   pathWithQuery: string,
   rawBody = "",
   signatureTail = rawBody,
+  tenantId?: string,
 ): Record<string, string> {
-  return signedRequestHeaders(secret, method, pathWithQuery, signatureTail, { "content-type": "application/json" });
+  return signedRequestHeaders(
+    secret,
+    method,
+    pathWithQuery,
+    signatureTail,
+    { "content-type": "application/json" },
+    undefined,
+    tenantId,
+  );
 }
 
 export function withSourceAuthNonce(pathWithQuery: string, secret: string | undefined): string {
@@ -26,6 +35,7 @@ export function withSourceAuthNonce(pathWithQuery: string, secret: string | unde
 export async function fetchCoreText(input: {
   origin: string;
   secret?: string;
+  tenantId?: string;
   method: HttpMethod;
   path: string;
   body?: string;
@@ -46,7 +56,10 @@ export async function fetchCoreText(input: {
     try {
       const response = await fetch(`${input.origin}${path}`, {
         method: input.method,
-        headers: { ...input.headers, ...signedHeaders(input.secret, input.method, path, input.body) },
+        headers: {
+          ...input.headers,
+          ...signedHeaders(input.secret, input.method, path, input.body, input.body, input.tenantId),
+        },
         ...(input.body ? { body: input.body } : {}),
         signal,
         redirect: "manual",

@@ -76,7 +76,9 @@ function responseHeaders(headers: Record<string, string> | undefined): Record<st
 function capabilityFrom(ctx: BaseCtx): Promise<CapabilityClaims | null> {
   const token = headerValue(ctx.req, CAPABILITY_HEADER);
   const capSecret = ctx.deps.capabilitySecret ?? ctx.secret;
-  return token && capSecret ? verifyCapabilityToken(token, capSecret) : Promise.resolve(null);
+  return token && capSecret
+    ? verifyCapabilityToken(token, capSecret, Date.now(), ctx.deps.tenantId, ctx.deps.requireTenantBinding)
+    : Promise.resolve(null);
 }
 
 function recordDenied(ctx: BaseCtx, claims: CapabilityClaims | null, slug: string, host: string, code: string): void {

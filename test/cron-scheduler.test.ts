@@ -937,7 +937,6 @@ test("a scopeFloor cron whose only members are non-internal fails closed", async
 });
 
 test("a failing cron fire is logged, not swallowed", async (t) => {
-  t.mock.timers.enable({ apis: ["setInterval"] });
   const logged: string[] = [];
   t.mock.method(console, "error", (...args: unknown[]) => {
     logged.push(args.map(String).join(" "));
@@ -959,12 +958,8 @@ test("a failing cron fire is logged, not swallowed", async (t) => {
     createdBy: "U1",
     ownerScopeId: scopeId("channel", "C1"),
   });
-  scheduler.start(1000);
-  t.mock.timers.tick(1000);
-  for (let i = 0; i < 50 && !logged.some((l) => l.includes("[failed] scheduler: fire:")); i++) {
-    await new Promise((r) => setImmediate(r));
-  }
-  scheduler.stop();
+  await scheduler.tick();
+  await scheduler.stop();
   assert.ok(
     logged.some((l) => l.includes("[failed] scheduler: fire:") && l.includes("boom")),
     "the fire error must reach the log",
@@ -1025,8 +1020,11 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
 });
 
 test("queue mode: while the queue runs, the interval scheduler's leader lease is held as a guard", async (t) => {
-  t.mock.timers.enable({ apis: ["setInterval"] });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let clock = performance.now();
+  t.mock.method(performance, "now", () => clock);
   const heldKeys: string[] = [];
+  let holding = 0;
   const scheduler = createScheduler({
     crons: createCronStore(),
     deliveries: createDeliveryStore(),
@@ -1036,7 +1034,12 @@ test("queue mode: while the queue runs, the interval scheduler's leader lease is
     leaderLease: {
       async hold<T>(key: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
         heldKeys.push(key);
-        return fn(new Promise<void>(() => {}));
+        holding++;
+        try {
+          return await fn(new Promise<void>(() => {}));
+        } finally {
+          holding--;
+        }
       },
     },
     jobQueue: { async start() {}, async enqueueFire() {}, healthy: () => queueHealthy, async stop() {} },
@@ -1052,10 +1055,12 @@ test("queue mode: while the queue runs, the interval scheduler's leader lease is
 
   queueHealthy = false;
   heldKeys.length = 0;
+  clock += 5000;
   t.mock.timers.tick(5000);
   for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r));
   assert.deepEqual(heldKeys, [], "an unhealthy queue holds nothing");
-  scheduler.stop();
+  assert.equal(holding, 0);
+  await scheduler.stop();
 });
 
 test("queue mode: an authz-failed fire disables the cron but gives the slot back (parity with the interval path)", async () => {

@@ -138,17 +138,18 @@ export function wireRunResultDeliveries(
   adminUrlFor?: AdminUrlFor,
   sessions?: TurnFailureSessions,
 ): void {
-  runs.onTerminal((run) => {
-    if (sessions) {
-      void recordRunFailureEntry(sessions, run).catch(
-        reportFailureAs("delivery: record turn_failure entry", undefined, `run=${run.id}`),
-      );
-    }
-    void (async () => {
+  runs.onTerminal(async (run) => {
+    const failureEntry = sessions
+      ? recordRunFailureEntry(sessions, run).catch(
+          reportFailureAs("delivery: record turn_failure entry", undefined, `run=${run.id}`),
+        )
+      : undefined;
+    const recoveryDelivery = (async () => {
       const taskList = tasks ? await tasks.list({ originRunId: run.id }) : [];
       const delivery = runResultDelivery(run, taskList, adminUrlFor);
       if (!delivery) return;
       await deliveries.enqueue(delivery);
     })().catch(reportFailureAs("delivery: enqueue recovery delivery", undefined, `run=${run.id}`));
+    await Promise.all([failureEntry, recoveryDelivery]);
   });
 }

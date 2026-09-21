@@ -76,6 +76,8 @@ export interface ServerDeps {
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   production?: boolean;
   allowUnauthenticatedCore?: boolean;
+  tenantId?: string;
+  requireTenantBinding?: boolean;
   signingSecret?: string;
   capabilitySecret?: string;
   portalIdentitySecret?: string;

@@ -1,3 +1,4 @@
+import { tenantState } from "../tenancy/context.ts";
 /**
  * Custom model providers.
  *
@@ -62,7 +63,10 @@ export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
     if (!m.id?.trim() || m.id.length > 200) throw new Error("every model needs an id (<=200 chars)");
     if (m.name !== undefined && (typeof m.name !== "string" || m.name.length > 200))
       throw new Error(`model "${m.id}": name must be a string of 200 chars or fewer`);
-    if (modelIdReserved(m.id) || (registry.has(m.id) && registry.get(m.id)?.provider !== spec.id))
+    if (
+      modelIdReserved(m.id) ||
+      (customProviderState().registry.has(m.id) && customProviderState().registry.get(m.id)?.provider !== spec.id)
+    )
       throw new Error(`model id "${m.id}" is already registered`);
     if (seen.has(m.id)) throw new Error(`duplicate model id "${m.id}"`);
     seen.add(m.id);
@@ -127,9 +131,13 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
   };
 }
 
-let registry = new Map<string, CustomRuntimeModel>();
-let providers: CustomProviderSpec[] = [];
-let version = 0;
+const CUSTOM_PROVIDER_STATE = Symbol("custom-providers");
+const customProviderState = () =>
+  tenantState(CUSTOM_PROVIDER_STATE, () => ({
+    registry: new Map<string, CustomRuntimeModel>(),
+    providers: [] as CustomProviderSpec[],
+    version: 0,
+  }));
 
 /**
  * Called by wiring at boot and again after every admin write, with the
@@ -139,33 +147,33 @@ let version = 0;
  */
 export function setCustomProviders(specs: CustomProviderSpec[]): void {
   const snapshot = JSON.stringify(specs);
-  if (snapshot === JSON.stringify(providers)) return;
+  if (snapshot === JSON.stringify(customProviderState().providers)) return;
   const next = new Map<string, CustomRuntimeModel>();
   for (const spec of specs) {
     for (const m of spec.models) {
       next.set(m.id, toRuntimeModel(spec, m));
     }
   }
-  registry = next;
-  providers = specs.map((s) => ({ ...s, models: [...s.models] }));
-  version += 1;
+  customProviderState().registry = next;
+  customProviderState().providers = specs.map((s) => ({ ...s, models: [...s.models] }));
+  customProviderState().version += 1;
 }
 
 /** Bumps on every registry change — lets callers cache derived artifacts. */
 export function customProvidersVersion(): number {
-  return version;
+  return customProviderState().version;
 }
 
 export function resolveCustomModel(id: string): CustomRuntimeModel | undefined {
-  return registry.get(id);
+  return customProviderState().registry.get(id);
 }
 
 export function isCustomModelId(id: string): boolean {
-  return registry.has(id);
+  return customProviderState().registry.has(id);
 }
 
 export function customModelCatalog(): Array<{ id: string; name: string; provider: string }> {
-  return [...registry.values()].map((m) => ({ id: m.id, name: m.name, provider: m.provider }));
+  return [...customProviderState().registry.values()].map((m) => ({ id: m.id, name: m.name, provider: m.provider }));
 }
 
 /**
@@ -176,10 +184,10 @@ export function customModelCatalog(): Array<{ id: string; name: string; provider
  * providers the ModelsStore knows).
  */
 export function customModelsJson(): { providers: Record<string, unknown> } | undefined {
-  if (providers.length === 0) return undefined;
+  if (customProviderState().providers.length === 0) return undefined;
   return {
     providers: Object.fromEntries(
-      providers.map((spec) => [
+      customProviderState().providers.map((spec) => [
         spec.id,
         {
           name: spec.name,

@@ -1,3 +1,4 @@
+import { tenantEnv } from "../tenancy/context.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
@@ -162,7 +163,7 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
       dnsLookup(host, { all: true, verbatim: true }).then((results) => results.map((result) => result.address)));
 
   function gitEnv(cwd: string, auth: GitAuth | undefined, config: Array<[string, string]>): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = { ...globalThis.process.env };
+    const env: NodeJS.ProcessEnv = { ...tenantEnv() };
     for (const k of Object.keys(env)) if (/^(GIT_|SSH_)/.test(k)) delete env[k];
     env.HOME = cwd;
     env.GIT_TERMINAL_PROMPT = "0";

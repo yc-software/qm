@@ -13,6 +13,7 @@ mock.module("../src/deploy/fly-private-tunnel.ts", {
       launches++;
       live = true;
       return {
+        port: 31_000 + launches,
         isAlive: () => live,
         stop: async () => {
           live = false;
@@ -44,13 +45,12 @@ test("concurrent requests share startup and restart a confirmed dead tunnel once
     claims: createMemoryMap<FlyPeerClaim>(),
     metadataUri: "http://169.254.170.2/v4/test",
     executable: "wireproxy",
-    port: 18096,
   });
   try {
-    assert.deepEqual(await Promise.all(Array.from({ length: 8 }, () => manager.ensure())), Array(8).fill(18096));
+    assert.deepEqual(await Promise.all(Array.from({ length: 8 }, () => manager.ensure())), Array(8).fill(31_001));
     assert.equal(launches, 1);
     live = false;
-    await Promise.all(Array.from({ length: 8 }, () => manager.ensure()));
+    assert.deepEqual(await Promise.all(Array.from({ length: 8 }, () => manager.ensure())), Array(8).fill(31_002));
     assert.equal(launches, 2);
     assert.equal(stopCalls, 1);
     await manager.stop();
@@ -93,7 +93,6 @@ test("monitor records stopped predecessors before any app request or tunnel star
     claims,
     metadataUri: "http://169.254.170.2/v4/test",
     executable: "wireproxy",
-    port: 18096,
   });
   try {
     manager.monitor();

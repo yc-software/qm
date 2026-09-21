@@ -4,6 +4,7 @@ import { createDockerDeployProvider, dockerDaemonFailure } from "../src/deploy/d
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import type { DockerExec } from "../src/sandbox/docker-exec.ts";
 import { scopeId } from "../src/types.ts";
+import { createTenantContext, runWithTenant } from "../src/tenancy/context.ts";
 
 test("Docker deployments use isolated networks and remove them on destroy", async () => {
   const calls: string[][] = [];
@@ -11,7 +12,7 @@ test("Docker deployments use isolated networks and remove them on destroy", asyn
     calls.push(args);
     return {
       code: args[1] === "inspect" ? 1 : 0,
-      stdout: "",
+      stdout: args[0] === "port" ? "127.0.0.1:49152\n" : "",
       stderr: args[1] === "inspect" ? "No such network" : "",
     };
   };
@@ -41,6 +42,9 @@ test("Docker deployments use isolated networks and remove them on destroy", asyn
   assert.ok(calls.some((args) => args.join(" ").includes(`--name ${firstName} --network ${firstName}-net`)));
   assert.ok(calls.some((args) => args.join(" ").includes(`--name ${secondName} --network ${secondName}-net`)));
   assert.ok(calls.some((args) => args.join(" ") === `network rm ${firstName}-net`));
+  assert.ok(
+    calls.filter((args) => args[0] === "run").every((args) => args[args.indexOf("-p") + 1] === "127.0.0.1::8080"),
+  );
 });
 
 test("Docker provider migrates running deployments off the legacy shared network", async () => {
@@ -70,6 +74,7 @@ test("Docker provider migrates running deployments off the legacy shared network
         stderr: "",
       };
     }
+    if (args[0] === "port") return { code: 0, stdout: "127.0.0.1:9200\n", stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
   };
   const store = createDeployStore();
@@ -109,6 +114,7 @@ test("an unrelated legacy migration failure does not block a new deployment", as
     }
     if (args[0] === "inspect") return { code: 1, stdout: "", stderr: "daemon unavailable" };
     if (args[0] === "network" && args[1] === "inspect") return { code: 1, stdout: "", stderr: "missing" };
+    if (args[0] === "port") return { code: 0, stdout: "127.0.0.1:49152\n", stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
   };
   const store = createDeployStore();
@@ -121,6 +127,74 @@ test("an unrelated legacy migration failure does not block a new deployment", as
   const provider = createDockerDeployProvider({ dockerExec });
 
   await assert.doesNotReject(provider.apply(deployment, deployment.versions[0]!));
+});
+
+test("tenant Docker deployments use distinct names and Docker-assigned ports after restarts", async () => {
+  const calls: string[][] = [];
+  const assignments = new Map<string, number>();
+  let nextPort = 49152;
+  const dockerExec: DockerExec = async (args) => {
+    calls.push(args);
+    if (args[0] === "run") assignments.set(args[args.indexOf("--name") + 1]!, nextPort++);
+    if (args[0] === "port") {
+      const port = assignments.get(args[1]!);
+      return { code: port ? 0 : 1, stdout: port ? `127.0.0.1:${port}\n` : "", stderr: port ? "" : "No such container" };
+    }
+    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify({ [`${args.at(-1)}-net`]: {} }), stderr: "" };
+    if (args[0] === "rm") assignments.delete(args.at(-1)!);
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const store = createDeployStore();
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/app",
+  });
+  const first = createTenantContext({ id: "first", env: {}, pooled: true });
+  const second = createTenantContext({ id: "second", env: {}, pooled: true });
+  const providerA = runWithTenant(first, () => createDockerDeployProvider({ dockerExec }));
+  const providerB = runWithTenant(second, () => createDockerDeployProvider({ dockerExec }));
+  const endpoints = await Promise.all([
+    providerA.apply(deployment, deployment.versions[0]!),
+    providerB.apply(deployment, deployment.versions[0]!),
+  ]);
+  assert.deepEqual(endpoints.map((value) => value.port).sort(), [49152, 49153]);
+  const names = [...assignments.keys()];
+  assert.equal(names.length, 2);
+  assert.notEqual(names[0], names[1]);
+  assert.ok(names.every((name) => name !== `agent-deploy-${deployment.id.slice(0, 12)}`));
+  assert.equal(
+    new Set(calls.filter((args) => args[0] === "run").map((args) => args[args.indexOf("--network") + 1])).size,
+    2,
+  );
+  const restarted = runWithTenant(first, () => createDockerDeployProvider({ dockerExec }));
+  const stale = { ...deployment, endpoint: { host: "127.0.0.1", port: endpoints[1]!.port } };
+  assert.deepEqual(await restarted.resolveEndpoint!(stale, deployment.versions[0]!), endpoints[0]);
+  await providerA.destroy(deployment);
+  assert.equal(assignments.size, 1);
+  assert.deepEqual(await providerB.resolveEndpoint!(deployment, deployment.versions[0]!), endpoints[1]);
+});
+
+test("Docker port discovery rejects invalid bindings and cleans up failed deployments", async () => {
+  const deployment = await createDeployStore().create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/app",
+  });
+  for (const binding of ["", "127.0.0.1:0", "127.0.0.1:65536", "0.0.0.0:49152", "127.0.0.1:49152\n127.0.0.1:49153"]) {
+    const calls: string[][] = [];
+    const provider = createDockerDeployProvider({
+      dockerExec: async (args) => {
+        calls.push(args);
+        return { code: 0, stdout: args[0] === "port" ? binding : "", stderr: "" };
+      },
+    });
+    await assert.rejects(provider.apply(deployment, deployment.versions[0]!), /docker port/);
+    assert.deepEqual(calls.at(-2), ["rm", "-f", `agent-deploy-${deployment.id.slice(0, 12)}`]);
+    assert.deepEqual(calls.at(-1), ["network", "rm", `agent-deploy-${deployment.id.slice(0, 12)}-net`]);
+  }
 });
 
 test("a transient target inspection failure does not report the deployment missing", async () => {

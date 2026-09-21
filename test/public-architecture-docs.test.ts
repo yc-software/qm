@@ -5,7 +5,7 @@ import { DEFAULT_AGENT_MODEL_ID } from "../src/model/pi-models.ts";
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const readme = read("README.md");
-const index = read("src/index.ts");
+const tenantRuntime = read("src/tenancy/runtime.ts");
 const server = read("src/api/server.ts");
 const agentTools = read("src/harness/agent-tools.ts");
 const adminUi = read("plugins/admin/public/index.html");
@@ -34,7 +34,7 @@ test(".env.example does not pin a base model that drifts from the shipped defaul
 });
 
 test("README describes the shipped Slack topology", () => {
-  assert.match(index, /startSlackPlugin\(desired, built\.slackCore\)/);
+  assert.match(tenantRuntime, /startPlugin:.*startSlackPlugin\(.*built\.slackCore\)/);
   assert.match(readme, /Slack is an optional in-process plugin that core starts\s+and supervises/);
   assert.doesNotMatch(readme, /nothing in the core knows about Slack/);
 });

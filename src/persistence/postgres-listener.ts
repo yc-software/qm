@@ -1,5 +1,6 @@
 import { createPgPool, type PoolClient } from "./pg-pool.ts";
 import { swallow } from "../util/errors.ts";
+import { currentTenant, runWithTenant } from "../tenancy/context.ts";
 
 type Subscription = { channel: string; receive: (payload: string) => void; resync: () => void };
 const listeners = new Map<string, ReturnType<typeof createListener>>();
@@ -133,5 +134,10 @@ export function subscribePostgresChannel(
     listener = createListener(connectionString);
     listeners.set(connectionString, listener);
   }
-  return listener.subscribe({ channel, receive, resync });
+  const tenant = currentTenant();
+  return listener.subscribe({
+    channel,
+    receive: tenant ? (payload) => runWithTenant(tenant, () => receive(payload)) : receive,
+    resync: tenant ? () => runWithTenant(tenant, resync) : resync,
+  });
 }
