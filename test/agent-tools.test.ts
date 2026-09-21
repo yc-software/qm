@@ -3353,3 +3353,49 @@ test("quarantined mail remains pending for release and mailbox failures preserve
   );
   assert.ok(JSON.stringify(third).includes("data"));
 });
+
+test("conversation coordinators cannot execute commands through any command tool", async () => {
+  for (const sandboxResources of [false, true]) {
+    for (const options of [{ surfaceTools: true, delegateWork: true }, { delegateWork: true }]) {
+      const ref: ToolContextRef = { current: fakeToolContext() };
+      const tools = createAgentTools(ref, {
+        ...options,
+        sandboxResources,
+        credentialExecServices: [{ service: "aws", binary: "aws" }],
+      });
+      for (const name of ["execute", "background", "credential_exec"])
+        assert.ok(!tools.some((tool) => tool.name === name));
+      const sandbox = tools.find((tool) => tool.name === "sandbox")!;
+      assert.match(
+        textOut(await call(sandbox, { action: "exec", command: "echo forbidden" })),
+        /unsupported sandbox action/,
+      );
+      assert.match(
+        textOut(await call(sandbox, { action: "start_process", command: "echo forbidden" })),
+        /unsupported sandbox action/,
+      );
+      assert.ok(tools.some((tool) => tool.name === "session"));
+    }
+  }
+  assert.ok(
+    createAgentTools({ current: fakeToolContext() }, { delegateWork: false }).some((tool) => tool.name === "execute"),
+  );
+});
+
+test("conversation coordinator mailbox checks never block on children", async () => {
+  const waits: number[] = [];
+  const tc = fakeToolContext();
+  tc.sessionSyscalls = {
+    receive: async (timeout = 0) => {
+      waits.push(timeout);
+      return [];
+    },
+    open: async () => ({ ok: false, message: "unused" }),
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async () => ({ ok: false, message: "unused" }),
+  };
+  const session = createAgentTools({ current: tc }, { delegateWork: true }).find((tool) => tool.name === "session")!;
+  await call(session, { action: "wait", timeoutMs: 60000 });
+  assert.ok(waits.length > 0);
+  assert.ok(waits.every((timeout) => timeout === 0));
+});

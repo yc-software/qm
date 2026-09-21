@@ -6,6 +6,7 @@ import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { sleep } from "../src/util/async.ts";
 
 // Full application/tool/materializer path, with deterministic model commands and
 // the repo's host-backed Sprites transport. This does not test VM isolation.
@@ -98,6 +99,82 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
     await b.turn("!read shared/open-personal-U1/notes.txt", true, "U1", { origin: { kind: "automation" } }),
     /no file/,
   );
+});
+
+test("sharing e2e: delegated live sharing requires the current pilot flag and current sharing permission", async (t) => {
+  const b = await fixture(t, { apiBaseUrl: "https://core.example.com", signingSecret: "test-ingress-secret" });
+  await b.workspace.write("personal:U1", "notes.txt", "DELEGATED_PERSONAL_FILE");
+  await b.turn("inspect my personal notes", true);
+  const parent = await b.runs.latestForThread("C1:shared-test");
+  assert.ok(parent);
+  const parentSession = await b.sessions.getByThread(parent.sessionId);
+  assert.ok(parentSession);
+  const child = await b.sessions.getOrCreateByThread(
+    "agent:main:subagent:sharing-gate",
+    "channel",
+    parentSession.scopeId,
+  );
+  await b.sessions.setParentSession(child.id, parentSession.id);
+  await b.sessions.setSpawnMeta(child.id, {
+    actor: parent.request.actor,
+    conversation: parent.request.conversation,
+    surface: parent.request.surface ?? "test",
+  });
+  for (const person of parent.request.conversation.audience) await b.sessions.addParticipant(child.id, person.id);
+  let token: string | undefined;
+  const provision = b.sandbox.provision.bind(b.sandbox);
+  b.sandbox.provision = async (layers, opts) => {
+    token = opts?.env?.AGENT_API_TOKEN;
+    return provision(layers, opts);
+  };
+  b.runtime.startBackground();
+  const childTurn = async (text: string, expectedStatus: "ok" | "refused" = "ok") => {
+    const { run } = await b.runs.enqueue({
+      sessionId: child.threadRef,
+      request: {
+        ...parent.request,
+        conversation: { ...parent.request.conversation, threadRef: child.threadRef },
+        origin: { kind: "automation", screenData: text },
+        delegatingRunId: parent.id,
+        sessionSenderId: parentSession.id,
+        text,
+      },
+    });
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const current = await b.runs.get(run.id);
+      assert.ok(current);
+      if (current.status === "done" || current.status === "failed") {
+        assert.equal(current.result?.status, expectedStatus, JSON.stringify(current));
+        return current.result.reply ?? current.result.reason ?? "";
+      }
+      assert.ok(Date.now() < deadline, "delegated turn did not finish");
+      await sleep(25);
+    }
+  };
+  const read = "!read shared/open-personal-U1/notes.txt";
+  assert.match(await childTurn(read), /no file/);
+  await b.featureFlags.setEnabled("responsive_spine", "personal:U1", true, "U1");
+  assert.equal(await childTurn(read), "DELEGATED_PERSONAL_FILE");
+  assert.equal(await childTurn("!run echo delegated"), "delegated");
+  assert.ok(token);
+  const delegatedClaims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
+  assert.equal(delegatedClaims?.liveAuthor, true);
+  assert.notEqual(delegatedClaims?.liveActor, true);
+  assert.equal(delegatedClaims?.triggered, true);
+  await b.config.setSharingPosture("personal:U1", "isolated");
+  assert.match(await childTurn(read), /no file/);
+  await b.config.clearSharingPosture("personal:U1");
+  await b.featureFlags.setEnabled("responsive_spine", "personal:U1", false, "U1");
+  assert.match(await childTurn(read), /no file/);
+  assert.equal(await childTurn("!run echo unprivileged"), "unprivileged");
+  assert.ok(token);
+  const unprivilegedClaims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
+  assert.notEqual(unprivilegedClaims?.liveAuthor, true);
+  assert.notEqual(unprivilegedClaims?.liveActor, true);
+  await b.featureFlags.setEnabled("responsive_spine", "personal:U1", true, "U1");
+  await b.remove("U1");
+  assert.match(await childTurn(read, "refused"), /access is no longer current/);
 });
 
 test("sharing e2e: room file and memory access is revoked on the next DM turn", async (t) => {
