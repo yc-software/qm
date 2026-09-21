@@ -3490,7 +3490,7 @@ export async function awsSetBackgroundWork(
   if (!workloads.includes("core")) throw new CliError("background work requires the core workload");
   const candidate = candidatePath ? releaseCandidate(config, candidatePath) : undefined;
   assertAwsCallerAccount(aws);
-  return withAwsLease(aws, async () => {
+  const confirmed = await withAwsLease(aws, async () => {
     const current = currentDeploymentManifest(aws);
     if (!current) throw new CliError("background work requires a recorded deployment");
     const states = describedServices(config, workloads);
@@ -3624,6 +3624,7 @@ export async function awsSetBackgroundWork(
     }
   });
   ok(`background work ${enabled ? "enabled" : "disabled"}`);
+  return confirmed;
 }
 
 function envValues(configDir: string, path: string | undefined): Map<string, string> {
