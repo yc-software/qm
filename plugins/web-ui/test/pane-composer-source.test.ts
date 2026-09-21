@@ -58,7 +58,10 @@ test("narrow short panes hide runtime labels, not the accessible picker", () => 
   assert.match(narrow, /\.loadout-button \.menu-suffix \{\s*display: none;/);
   assert.match(narrow, /\.loadout-button \{[^}]*width: 34px;/);
   assert.doesNotMatch(narrow, /\.loadout-(?:button|control) \{[^}]*display: none;/);
-  assert.match(composer, /aria-label=\$\{`Model:/);
+  assert.match(
+    readFileSync(new URL("../src/model-picker.ts", import.meta.url), "utf8"),
+    /aria-label=\$\{choice \? `Model:/,
+  );
 });
 
 test("the smallest short panes leave text space even with stop controls", () => {

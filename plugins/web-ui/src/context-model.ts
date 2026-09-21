@@ -2,14 +2,24 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { RuntimeConfig } from "./core-bridge";
 import { getRuntimeConfig, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
 import {
-  EFFORT_LEVELS,
-  effortLabel,
+  defaultEffortForModel,
+  harnessSupportsFastMode,
   harnessSupportsEffort,
   runtimeModelOptions,
   type EffortLevel,
   type ModelOption,
 } from "./model-options";
-import { fieldSelect } from "./ui";
+import { createModelPicker } from "./model-picker";
+import {
+  loadLoadout,
+  saveLoadout,
+  reconcileLoadout,
+  upsertLoadout,
+  effortLevelsForHarness,
+  compatibleHarnessOptions,
+  type LoadoutEntry,
+} from "./composer-loadout";
+import { modelSupportsFastMode } from "./pi-models";
 import { errMessage } from "../../chassis/src/errors";
 
 const INHERIT = "";
@@ -20,18 +30,24 @@ export const contextModelState = {
   saving: false,
   pending: null as string | null,
   pendingEffort: null as string | null,
+  pendingFast: null as boolean | null,
   get config(): RuntimeConfig | null {
     return getRuntimeConfig(contextModelState.scope);
   },
   notice: "",
-  noticeKind: "" as "" | "saved" | "error",
+  noticeKind: "" as "" | "error",
 };
 
+let picker: ReturnType<typeof createModelPicker<void>> | undefined;
+let pickerState = { openMenu: null as string | null, menuQuery: "", effortLevel: "auto" as EffortLevel };
 let loadSeq = 0;
 let unsubscribeRuntime: (() => void) | undefined;
 let redraw: () => void = () => {};
 
 export function resetContextModel(): void {
+  picker?.dispose();
+  picker = undefined;
+  pickerState = { openMenu: null, menuQuery: "", effortLevel: "auto" };
   loadSeq += 1;
   unsubscribeRuntime?.();
   unsubscribeRuntime = undefined;
@@ -40,6 +56,7 @@ export function resetContextModel(): void {
   contextModelState.saving = false;
   contextModelState.pending = null;
   contextModelState.pendingEffort = null;
+  contextModelState.pendingFast = null;
   contextModelState.notice = "";
   contextModelState.noticeKind = "";
 }
@@ -86,45 +103,46 @@ function selectedValue(config: RuntimeConfig): string {
 
 function effortLevelsFor(harnessId: string): Array<{ value: EffortLevel; label: string }> {
   if (!harnessSupportsEffort(harnessId)) return [];
-  return EFFORT_LEVELS.filter(({ value }) => {
-    if (value === "ultracode") return harnessId === "pi";
-    if (value === "max") return harnessId !== "codex";
-    return true;
-  });
+  return effortLevelsForHarness(harnessId);
 }
 
 function selectedEffort(config: RuntimeConfig): string {
-  return config.scopeOverride?.effortLevel ?? "auto";
+  return (
+    config.effective.effortLevel ??
+    defaultEffortForModel(
+      optionsFor(config).find((option) => option.value === `${config.effective.harnessId}:${config.effective.modelId}`)
+        ?.model,
+    )
+  );
 }
 
-async function choose(scope: string, value: string, effort?: string): Promise<void> {
+async function choose(scope: string, value: string, effort?: string, fast = false): Promise<void> {
   if (contextModelState.saving) return;
   const seq = loadSeq;
+  const restoreFocus = document.activeElement?.closest(".context-model .loadout-control") !== null;
   contextModelState.saving = true;
   contextModelState.pending = value;
   contextModelState.pendingEffort = effort ?? null;
+  contextModelState.pendingFast = fast;
+  picker?.resetSection();
   contextModelState.notice = "";
   contextModelState.noticeKind = "";
   redraw();
   try {
     const sep = value.indexOf(":");
     const harnessId = value.slice(0, sep);
-    const config = await saveRuntimeConfig(
+    await saveRuntimeConfig(
       scope,
       value === INHERIT
         ? { inherit: true }
         : {
             harnessId,
             modelId: value.slice(sep + 1),
+            fastMode: fast && harnessSupportsFastMode(harnessId) && modelSupportsFastMode(scope, value.slice(sep + 1)),
             ...(effort && effortLevelsFor(harnessId).some((o) => o.value === effort) ? { effortLevel: effort } : {}),
           },
     );
     if (seq !== loadSeq) return;
-    const effortNote = config.scopeOverride?.effortLevel
-      ? ` · ${effortLabel(config.scopeOverride.effortLevel as EffortLevel)} effort`
-      : "";
-    contextModelState.notice = `Saved. New conversations here run on ${labelForRuntime(config, config.effective)}${effortNote}.`;
-    contextModelState.noticeKind = "saved";
   } catch (e) {
     if (seq !== loadSeq) return;
     contextModelState.notice = errMessage(e, "Couldn't change the model. Try again.");
@@ -134,9 +152,69 @@ async function choose(scope: string, value: string, effort?: string): Promise<vo
       contextModelState.saving = false;
       contextModelState.pending = null;
       contextModelState.pendingEffort = null;
+      contextModelState.pendingFast = null;
       redraw();
+      if (restoreFocus)
+        requestAnimationFrame(() => {
+          if (seq === loadSeq && document.activeElement === document.body)
+            document.querySelector<HTMLButtonElement>(".context-model .loadout-button")?.focus();
+        });
     }
   }
+}
+
+function activeEntry(config: RuntimeConfig): LoadoutEntry {
+  return {
+    value: contextModelState.pending || `${config.effective.harnessId}:${config.effective.modelId}`,
+    effort: (contextModelState.pendingEffort ?? selectedEffort(config)) as EffortLevel,
+    fast: contextModelState.pendingFast ?? config.effective.fastMode === true,
+  };
+}
+
+function contextPicker(scopeId: string) {
+  const current = () => activeEntry(contextModelState.config!);
+  const options = () => optionsFor(contextModelState.config!);
+  const apply = (entry: LoadoutEntry) => {
+    if (contextModelState.saving) return;
+    const option = options().find((option) => option.value === entry.value);
+    if (!option) return;
+    const normalized = {
+      ...entry,
+      effort: effortLevelsForHarness(option.harnessId).some((level) => level.value === entry.effort)
+        ? entry.effort
+        : ("auto" as EffortLevel),
+      fast: entry.fast && harnessSupportsFastMode(option.harnessId) && modelSupportsFastMode(scopeId, option.model.id),
+    };
+    void choose(scopeId, normalized.value, normalized.effort, normalized.fast);
+  };
+  return createModelPicker<void>({
+    host: () => document.querySelector<HTMLElement>(".context-model"),
+    redraw,
+    scopeKey: () => scopeId,
+    state: pickerState,
+    entries: () => reconcileLoadout(loadLoadout(), options(), current()),
+    activeEntry: current,
+    saveEntries: saveLoadout,
+    apply,
+    add: (option) => {
+      const entry = { value: option.value, effort: defaultEffortForModel(option.model), fast: false };
+      saveLoadout(upsertLoadout(reconcileLoadout(loadLoadout(), options(), current()), entry));
+      pickerState.menuQuery = "";
+      apply(entry);
+    },
+    selectEffort: (effort) => apply({ ...current(), effort }),
+    selectHarness: (harnessId) => {
+      const selected = options().find((option) => option.value === current().value);
+      const target =
+        selected &&
+        compatibleHarnessOptions(options(), selected.model.id).find((option) => option.harnessId === harnessId);
+      if (target) apply({ ...current(), value: target.value });
+    },
+    toggleFastMode: () => apply({ ...current(), fast: !current().fast }),
+    effectiveFastMode: () => current().fast,
+    changeDefault: () => choose(scopeId, INHERIT),
+    showDefaultAction: false,
+  });
 }
 
 export function contextModelSection(scopeId: string): TemplateResult | typeof nothing {
@@ -153,80 +231,18 @@ export function contextModelSection(scopeId: string): TemplateResult | typeof no
       <span class="context-model-status error" aria-live="polite">${contextModelState.notice}</span>
     </section>`;
   const options = optionsFor(config);
-  const multiHarness = new Set(options.map((o) => o.harnessId)).size > 1;
-  const selected = contextModelState.pending ?? selectedValue(config);
-  const stalePin = selected !== INHERIT && !options.some((o) => o.value === selected);
-  const isSlack = scopeId.startsWith("channel:");
-  const pinnedHarness = selected === INHERIT ? null : selected.slice(0, selected.indexOf(":"));
-  const effort = contextModelState.pendingEffort ?? selectedEffort(config);
-  const effortOptions = pinnedHarness ? effortLevelsFor(pinnedHarness) : [];
-  const showEffort = pinnedHarness !== null && harnessSupportsEffort(pinnedHarness);
+  const active = activeEntry(config);
+  const option = options.find((option) => option.value === active.value);
+  const stalePin = config.scopeOverride && !options.some((option) => option.value === selectedValue(config));
+  pickerState.effortLevel = active.effort;
+  picker ??= contextPicker(scopeId);
+  picker.place();
   return html`
     <section class="context-panel context-model" aria-labelledby="context-model-title">
-      <div class="context-panel-heading">
-        <div>
-          <h2 class="context-panel-title" id="context-model-title">Model</h2>
-          <p class="context-panel-copy">The model every conversation here starts on.</p>
-        </div>
-      </div>
-      ${fieldSelect({
-        id: "context-model-select",
-        className: "context-model-select",
-        focusKey: "context-model",
-        ariaLabel: "Default model for this project",
-        disabled: contextModelState.saving,
-        value: selected,
-        onChange: (value) => {
-          const nextHarness = value.slice(0, value.indexOf(":"));
-          const carry =
-            value !== INHERIT && effortLevelsFor(nextHarness).some((o) => o.value === effort) ? effort : undefined;
-          void choose(scopeId, value, carry);
-        },
-        options: [
-          html`<option value=${INHERIT} ?selected=${selected === INHERIT}>
-            Org default (${labelForRuntime(config, config.orgDefault)})
-          </option>`,
-          ...options.map(
-            (o) =>
-              html`<option value=${o.value} ?selected=${o.value === selected}>${optionLabel(o, multiHarness)}</option>`,
-          ),
-          ...(stalePin
-            ? [
-                html`<option value=${selected} selected>
-                  ${labelForRuntime(config, config.scopeOverride!)} (no longer offered)
-                </option>`,
-              ]
-            : []),
-        ],
-      })}
-      ${
-        showEffort
-          ? html`<label class="context-model-effort">
-              <span class="context-model-effort-label">Default effort</span>
-              ${fieldSelect({
-                id: "context-effort-select",
-                className: "context-effort-select",
-                focusKey: "context-effort",
-                ariaLabel: "Default effort level for this project",
-                disabled: contextModelState.saving,
-                value: effort,
-                compact: true,
-                onChange: (value) => void choose(scopeId, selected, value),
-                options: effortOptions.map(
-                  (o) => html`<option value=${o.value} ?selected=${o.value === effort}>${o.label}</option>`,
-                ),
-              })}
-            </label>`
-          : nothing
-      }
-      <p class="context-model-hint">
-        ${
-          selected === INHERIT
-            ? "Following the org default. It changes when the org's does."
-            : "Pinned for this project. Anyone in a chat can still pick a different model for that conversation."
-        }
-        ${isSlack ? " The pinned Slack header (when enabled below) names this model." : ""}
-      </p>
+      <h2 class="context-panel-title" id="context-model-title">Model</h2>
+      ${stalePin ? html`<span class="context-model-status">${labelForRuntime(config, config.scopeOverride!)} (no longer offered)</span>` : nothing}
+      ${!option && !stalePin ? html`<span class="context-model-status">${labelForRuntime(config, config.effective)} (no longer offered)</span>` : nothing}
+      ${picker.render(undefined, option, contextModelState.saving)}
       ${
         contextModelState.notice
           ? html`<span
