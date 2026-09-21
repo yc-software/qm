@@ -12,7 +12,7 @@ import {
   actingPrincipal,
   type LoopServiceDeps,
 } from "./loops.ts";
-import { parseScopeId } from "../../types.ts";
+import { scopeId, parseScopeId } from "../../types.ts";
 import { isLedgerState, ledgerItemView, ledgerState, sortLedgerItems } from "../../loops/ledger-view.ts";
 import { loopItemId, type IngestEntryInput } from "../../loops/item-ledger.ts";
 import { addressList } from "../../loops/sources/adapter.ts";
@@ -417,7 +417,7 @@ function syncTaskVersionOf(cron: Cron | null): number | null {
   return m ? Number(m[1]) : null;
 }
 
-function cronSummary(cron: Cron | null): {
+export function cronSummary(cron: Cron | null): {
   id: string;
   enabled: boolean;
   schedule: Cron["schedule"];
@@ -452,6 +452,8 @@ async function getInboxLoop(ctx: ApiCtx): Promise<void> {
 export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   const owner = ctx.actor?.p;
   if (!owner) return sendJson(ctx.res, 403, { error: "forbidden" });
+  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", owner))))
+    return sendJson(ctx.res, 403, { error: "feature_disabled" });
   const deps = loopDeps(ctx);
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found" });
   const body = isObj(ctx.body) ? ctx.body : {};
@@ -514,6 +516,8 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
   const acting = actingPrincipal(ctx);
   if (!acting) return;
+  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", acting.actorId))))
+    return sendJson(ctx.res, 403, { error: "feature_disabled" });
   const body = isObj(ctx.body) ? ctx.body : {};
   const everyMs =
     typeof body.everyMs === "number" && Number.isFinite(body.everyMs)

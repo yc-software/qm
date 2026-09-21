@@ -2,7 +2,6 @@ import {
   ensureSentMail,
   openSentEmail,
   openSentEmailById,
-  isSentMailEmpty,
   isSentMailLoading,
   loadSentMail,
   resetSentMail,
@@ -149,7 +148,7 @@ const DEFAULT_VIEWS: InboxView[] = [
 ];
 
 function isInboxViewId(value: string | null): value is string {
-  return value !== null && inboxViews().some((view) => view.id === value);
+  return value !== null && [...DEFAULT_VIEWS, ...inboxViews()].some((view) => view.id === value);
 }
 
 function inboxViewIdForSegment(segment: string | null): string | null {
@@ -356,7 +355,8 @@ function resolvedStatus(entry: LedgerItem): InboxItem["status"] {
 
 export function toInboxItem(entry: LedgerItem): InboxItem {
   const payload = entry.sourcePayload;
-  const source: InboxSource = entry.source === "gmail" || entry.source === "slack" ? entry.source : "generic";
+  const sourceId = entry.source ?? payload.source;
+  const source: InboxSource = sourceId === "gmail" || sourceId === "slack" ? sourceId : "generic";
   const draft = draftOf(entry);
   const resolved = resolvedStatus(entry);
   const reactions = Array.isArray(payload.reactions) ? (payload.reactions as string[]) : undefined;
@@ -481,6 +481,8 @@ export async function refreshInbox(
       const entry = inboxState.items.find((item) => item.id === openId);
       if (entry) void loadDetail(entry.id, entry.loopId);
     }
+    const localItems = await fetchLocalInboxItems();
+    if (localItems.length) inboxState.items = localItems;
     inboxState.loaded = true;
     inboxState.error = null;
     inboxState.fetchedAt = Date.now();
@@ -1118,6 +1120,9 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
 
 export function chatTpl(item: InboxItem): TemplateResult {
   const busy = chatting.has(item.id);
+  let suggestions = DRAFT_SUGGESTIONS;
+  if (item.sentChat) suggestions = ["Summarize this email", "What should I follow up on?"];
+  else if (item.source === "generic") suggestions = ["Explain the proposal", "What needs my input?"];
   const pending = chatDrafts.get(item.id) ?? "";
   const submit = (el: HTMLTextAreaElement): void => {
     if (busy) return;
@@ -1134,12 +1139,7 @@ export function chatTpl(item: InboxItem): TemplateResult {
           ? html`<div class="inbox-chat-empty">
               <h2 class="inbox-chat-cta">${item.sentChat ? "Ask about this email" : "What should I change?"}</h2>
               <div class="inbox-chat-suggestions">
-                ${(item.sentChat
-                  ? ["Summarize this email", "What should I follow up on?"]
-                  : item.source === "generic"
-                    ? ["Explain the proposal", "What needs my input?"]
-                    : DRAFT_SUGGESTIONS
-                ).map(
+                ${suggestions.map(
                   (prompt) =>
                     html`<button
                       class="inbox-chat-suggestion"

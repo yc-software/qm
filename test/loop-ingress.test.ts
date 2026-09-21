@@ -423,3 +423,19 @@ test("model work does not hold the intake lock needed by its HTTP callbacks", as
   await ingress.process(source.id);
   assert.equal(acquired, true);
 });
+
+test("revoking rollout blocks new deliveries and processing already queued work", async () => {
+  const w = await world();
+  const source = await w.ingress.create(w.loop, { kind: "webhook" });
+  const req = request("webhook", source.secret!, { title: "queued" });
+  await w.ingress.receive(source.id, req);
+  const denied = createLoopIngress({ ...w.deps, enabledFor: async () => false });
+  assert.equal((await denied.receive(source.id, req)).status, 404);
+  await denied.process(source.id);
+  await denied.maintain();
+  assert.equal(w.fires.length, 0);
+  assert.equal((await w.items.byLoop(w.loop.id)).length, 0);
+  await assert.rejects(denied.create(w.loop, { kind: "webhook" }), /not enabled/);
+  await denied.setEnabled(w.loop.id, source.id, false);
+  await assert.rejects(denied.setEnabled(w.loop.id, source.id, true), /not enabled/);
+});

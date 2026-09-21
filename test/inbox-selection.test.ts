@@ -1,3 +1,4 @@
+import { boundLoopCron } from "../src/loops/authority.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { inboxRoutes } from "../src/api/routes/inbox.ts";
@@ -13,7 +14,7 @@ import type { ApiCtx } from "../src/api/routes/route.ts";
 import { ensureDefaultInboxLoops, ensureInboxLoop } from "../src/loops/inbox-loop.ts";
 import { migrateInbox } from "../src/loops/inbox-migration.ts";
 
-function world() {
+function world(enabled = true) {
   const deps = {
     store: createLoopStore(),
     items: createLoopItemLedger(),
@@ -34,7 +35,7 @@ function world() {
         url: new URL(`http://local/v1/inbox?${query}`),
         actor: { p: actor },
         capability: null,
-        deps: { loops: deps, uiState, featureFlags: { enabled: async () => true } },
+        deps: { loops: deps, uiState, featureFlags: { enabled: async () => enabled } },
         app: {
           samePerson: async (a: string, b: string) => a === b,
           membershipControlsScope: async () => false,
@@ -181,6 +182,7 @@ test("migration preserves human edits, item and output IDs, dedupe and paused au
   assert.equal((await w.deps.items.byLoop(moved.loopId)).length, 1);
   assert.equal((await w.deps.items.get(item!.id))!.proposal!.data.body, "My words");
   assert.ok((await w.deps.crons.list()).every((entry) => !entry.enabled));
+  for (const loop of defaults) assert.ok(await boundLoopCron((await w.deps.store.get(loop.id))!, w.deps.crons));
 });
 
 test("moving records refuses collisions and a cached worker cannot claim a moved item", async () => {
@@ -194,4 +196,42 @@ test("moving records refuses collisions and a cached worker cannot claim a moved
   await w.deps.items.ingest([{ loopId: legacy.id, dedupeKey: "collision", source: "gmail", sourcePayload: {} }]);
   await w.deps.items.ingest([{ loopId: target!.id, dedupeKey: "collision", source: "gmail", sourcePayload: {} }]);
   await assert.rejects(w.deps.items.moveSource(legacy.id, target!.id, "gmail"), /conflicting/);
+});
+
+test("disabled rollout cannot create defaults, migrate legacy Inbox, or update selection", async () => {
+  const w = world(false);
+  const legacy = await ensureInboxLoop(w.deps.store, "alice");
+  for (const method of ["GET", "PUT"]) assert.equal((await w.call(method, { loopIds: [] })).status, 403);
+  assert.equal((await w.deps.store.list()).length, 1);
+  assert.equal((await w.deps.store.get(legacy.id))?.state, "enabled");
+});
+
+test("Sent chat items stay out of Inbox counts and handled history remains readable", async () => {
+  const w = world();
+  const [loop] = await ensureDefaultInboxLoops(w.deps.store, "alice");
+  await w.deps.items.ingest([
+    {
+      loopId: loop!.id,
+      dedupeKey: "sent",
+      source: "gmail",
+      sourcePayload: { sentChat: true },
+      proposal: { by: "human", data: { body: "" } },
+    },
+    {
+      loopId: loop!.id,
+      dedupeKey: "dismissed",
+      source: "gmail",
+      sourcePayload: { title: "Handled" },
+      proposal: { by: "agent", data: { body: "draft" } },
+    },
+  ]);
+  const item = (await w.deps.items.byLoop(loop!.id)).find((entry) => entry.sourceKey === "dismissed")!;
+  await w.deps.items.recordAction(item.id, { kind: "dismiss", outcome: "dismissed" });
+  assert.equal((await w.call()).data.total, 0);
+  assert.deepEqual((await w.call()).data.items, []);
+  const handled = await w.call("GET", null, "view=handled");
+  assert.deepEqual(
+    handled.data.items.map((entry: any) => entry.id),
+    [item.id],
+  );
 });

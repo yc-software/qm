@@ -237,6 +237,8 @@ export function createLoopIngress(deps: LoopIngressDeps) {
       return deps.lock.withLock(`loop-ingress:${id}`, async () => {
         const source = await deps.sources.get(id);
         if (!source || source.loopId !== loopId) throw new Error("No such ingestion source");
+        if (enabled && !(await deps.enabledFor(source.owner)))
+          throw new Error("Event ingestion is not enabled for this owner");
         if (enabled && source.kind === "gmail") {
           if (!deps.gmailClient) throw new Error("Gmail Pub/Sub is not configured");
           const watch = await deps.gmailClient.watch(source.owner);

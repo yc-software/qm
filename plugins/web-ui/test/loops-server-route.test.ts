@@ -10,6 +10,7 @@ let autopilotBody: unknown;
 const core = createServer((req: IncomingMessage, res) => {
   const path = new URL(req.url ?? "/", "http://core").pathname;
   res.setHeader("content-type", "application/json");
+  if (path === "/v1/inbox/access") return void res.end(JSON.stringify({ enabled: true }));
   if (req.method === "POST" && path === "/v1/session-cap") {
     return void res.end(JSON.stringify({ token: "loops-test-cap" }));
   }

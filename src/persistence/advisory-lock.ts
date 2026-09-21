@@ -10,16 +10,34 @@ export interface AdvisoryLock {
 }
 
 function withMultiLocks(lock: AdvisoryLock): AdvisoryLock {
-  const multi = new AsyncLocalStorage<{ keys: Set<string>; active: boolean }>();
+  const multi = new AsyncLocalStorage<{ keys: Set<string>; active: boolean; pending: Set<Promise<unknown>> }>();
   return {
     ...lock,
-    withLock: (key, fn) =>
-      multi.getStore()?.active && multi.getStore()?.keys.has(key) ? fn() : lock.withLock(key, fn),
+    withLock: (key, fn) => {
+      const scope = multi.getStore();
+      if (!scope?.active || !scope.keys.has(key)) return lock.withLock(key, fn);
+      const work = Promise.resolve().then(fn);
+      scope.pending.add(work);
+      void work.then(
+        () => scope.pending.delete(work),
+        () => scope.pending.delete(work),
+      );
+      return work;
+    },
     async tryWithLocks<T>(keys: string[], fn: () => Promise<T>): Promise<T | null> {
       const unique = [...new Set(keys)].sort();
-      const scope = { keys: new Set(unique), active: true };
+      const scope = { keys: new Set(unique), active: true, pending: new Set<Promise<unknown>>() };
       const acquire = (index: number): Promise<T | null> =>
-        index === unique.length ? multi.run(scope, fn) : lock.tryWithLock!(unique[index]!, () => acquire(index + 1));
+        index === unique.length
+          ? multi.run(scope, async () => {
+              try {
+                return await fn();
+              } finally {
+                while (scope.pending.size) await Promise.allSettled([...scope.pending]);
+                scope.active = false;
+              }
+            })
+          : lock.tryWithLock!(unique[index]!, () => acquire(index + 1));
       try {
         return await acquire(0);
       } finally {

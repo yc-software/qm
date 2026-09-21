@@ -5,6 +5,7 @@ import { ledgerItemView } from "../../loops/ledger-view.ts";
 import { uiStateId } from "../../surfaces/ui-state.ts";
 import { sendJson } from "../http.ts";
 import { actingPrincipal, canAdministerLoop, loopDeps } from "./loops.ts";
+import { cronSummary } from "./loop-items.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -68,18 +69,14 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   const counts = new Map<string, number>();
   for (const item of attention.filter((entry) => entry.inboxPreview?.probablyResolved !== true))
     counts.set(item.loopId, (counts.get(item.loopId) ?? 0) + 1);
-  let feed = (
-    sent
-      ? summaries.filter(
-          (item) =>
-            item.actionKind === "send" &&
-            item.status === "shipped" &&
-            (item.source === "gmail" || item.source === "slack"),
-        )
-      : handled
-        ? summaries.filter((item) => item.status === "shipped" || item.status === "dismissed")
-        : attention
-  )
+  let candidates = attention;
+  if (sent)
+    candidates = summaries.filter(
+      (item) =>
+        item.actionKind === "send" && item.status === "shipped" && (item.source === "gmail" || item.source === "slack"),
+    );
+  else if (handled) candidates = summaries.filter((item) => item.status === "shipped" || item.status === "skipped");
+  let feed = candidates
     .filter((item) => !filter || item.loopId === filter)
     .sort((a, b) => {
       if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
@@ -110,18 +107,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
         count: counts.get(loop.id) ?? 0,
         state: loop.state,
         cronId: loop.cronId,
-        syncCron: loop.cronId
-          ? await deps.crons?.get(loop.cronId).then((cron) =>
-              cron
-                ? {
-                    id: cron.id,
-                    enabled: cron.enabled,
-                    lastFiredAt: cron.lastFiredAt,
-                    lastStatus: cron.lastStatus,
-                  }
-                : null,
-            )
-          : null,
+        syncCron: loop.cronId ? cronSummary((await deps.crons?.get(loop.cronId)) ?? null) : null,
         ingestionActive: (await ctx.deps.loopIngress?.list(loop.id))?.some((source) => source.enabled) ?? false,
         source: loop.surface?.startsWith("inbox:") ? loop.sources?.[0] : undefined,
       })),

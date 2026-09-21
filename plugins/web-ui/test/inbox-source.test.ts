@@ -66,7 +66,7 @@ test("the address keeps naming the open item, even after switchView writes the b
     /syncInboxUrl\(openSentEmail\?\.id \?\? fullSurface\.selectedId\);/,
     "every draw re-states the URL from the selection it just rendered",
   );
-  assert.match(inbox, /void openSentEmailById\(sentId, drawAll\);/, "unknown inbox ids resolve through sent mail");
+  assert.match(inbox, /await openSentEmailById\(id, drawAll\);/, "unknown inbox ids resolve through sent mail");
   assert.match(
     shell,
     /const next = deepLinkPath\(UI_BASE, appState\.currentView, sessionId, contextsState\.selected\);/,
@@ -128,8 +128,8 @@ test("localhost can overlay private inbox seed data without checking it into sou
     /if \(!\["localhost", "127\.0\.0\.1", "\[::1\]"\]\.includes\(location\.hostname\)\) return \[\];/,
   );
   assert.match(inbox, /const localItems = await fetchLocalInboxItems\(\);/);
-  assert.match(inbox, /inboxState\.items = localItems\.length/);
-  assert.match(inbox, /if \(!inboxState\.items\.length && inboxState\.loopId\) inboxState\.items = await fetchItems/);
+  assert.match(inbox, /if \(localItems\.length\) inboxState\.items = localItems/);
+  assert.match(inbox, /api<Feed>\(`\/api\/inbox\?\$\{qs\}`\)/);
 });
 
 test("each item carries a follow-up chat with the agent", () => {

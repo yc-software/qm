@@ -6,6 +6,12 @@ Events are acknowledged only after durable receipt. The worker transfers them to
 
 Source updates invalidate old held drafts before processing the new conversation. Human edits remain in the item thread. A shipping output or an output awaiting confirmation must settle before that conversation refreshes. Existing ship gates remain authoritative; Email and Slack reply proposals stay held for human review.
 
+## Preview rollout
+
+The durable `inbox_loops` feature flag defaults off. Enable it only for the intended `personal:<principal>` scopes in Admin → Feature flags. Existing Web UI `INBOX_USERS` and `LOOPS_USERS` allowlists still apply. Both the UI permissions and server routes enforce the flag; Inbox migration starts only for enabled people. Event receipt and background processing also check the source owner's flag. Revocation retains queued work without accepting or processing more events.
+
+Slack receipt recovery covers events already persisted by QM. There is no Slack history reconciliation yet. Enable Slack's Delayed Events option for extended delivery retries; Gmail has history reconciliation as described below.
+
 ## Signed webhooks
 
 Choose **Signed webhook** on a Loop without a source restriction. Save the signing secret shown once. POST a JSON object to the displayed endpoint with `X-Signature` containing the hexadecimal HMAC-SHA256 of the exact request body. The optional `title` property is used as the work summary. The entire JSON object is untrusted input to the Loop playbook. Payloads are limited to 64 KB.

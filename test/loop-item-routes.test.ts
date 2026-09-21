@@ -141,6 +141,7 @@ async function call(
     params: found.params,
     capability: over.capability === undefined ? CAP : over.capability,
     deps: {
+      featureFlags: { enabled: async () => true },
       loops: w.loops,
       sessions: {
         getByThread: async (threadRef: string) =>

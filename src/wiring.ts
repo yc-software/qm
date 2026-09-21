@@ -2294,8 +2294,8 @@ export function buildApp(
       : {}),
     sweepAsks: async (now) => {
       if (!ingressMaintenance)
-        ingressMaintenance = loopIngress
-          .maintain()
+        ingressMaintenance = admittedWork
+          .run(() => loopIngress.maintain())
           .catch(swallowAs("Loop ingress maintenance", undefined))
           .finally(() => {
             ingressMaintenance = undefined;
