@@ -87,14 +87,64 @@ async function memberOfSharedScope(
 
 export type CanReadScope = (principalId: string, targetScope: ScopeId) => Promise<boolean>;
 export type CanWriteScope = (principalId: string, targetScope: ScopeId) => Promise<boolean>;
-export type IsCurrentSharedScopeMember = (principalId: string, scope: ScopeId) => Promise<boolean>;
+/**
+ * The roster the transport verified for the current turn: the speaker plus the
+ * room's members as the Slack plugin fetched them from Slack moments ago. Only
+ * consulted when the directory store has no roster of its own for the room.
+ */
+export interface LiveRoster {
+  actorId: string;
+  members: ReadonlyArray<{ id: string; type?: string }>;
+}
+
+export type IsCurrentSharedScopeMember = (principalId: string, scope: ScopeId, live?: LiveRoster) => Promise<boolean>;
 
 export function createIsCurrentSharedScopeMember(deps: ScopeMembershipDeps): IsCurrentSharedScopeMember {
-  return async function isCurrentSharedScopeMember(principalId, scope) {
+  return async function isCurrentSharedScopeMember(principalId, scope, live) {
     if (!principalId) return false;
     const { kind, ref } = parseScopeId(scope);
-    return (kind === "channel" || kind === "group") && currentSharedScopeMember(deps, kind, ref, principalId);
+    if (kind !== "channel" && kind !== "group") return false;
+    if (await currentSharedScopeMember(deps, kind, ref, principalId)) return true;
+    return liveRosterCoversStoreLag(deps, kind, ref, principalId, live);
   };
+}
+
+/**
+ * The directory store learns about a room from the Slack plugin's background
+ * directory sync. On the first message in a brand-new group DM (or a channel
+ * the bot was just added to) the store has no roster for the room yet, so the
+ * stored check says "not a member" and Open sharing silently degrades for that
+ * one turn: no carried memory, no live-speaker keychain. The plugin fetched the
+ * room's roster from Slack for this very turn and verified the speaker is in
+ * it, so when the store knows nothing about the room, that roster stands in.
+ *
+ * Narrow on purpose: only the speaker, only a complete all-internal roster,
+ * never for managed groups, and never when the store already has a roster for
+ * the room (a stored "no" is a revocation and must win).
+ */
+async function liveRosterCoversStoreLag(
+  deps: ScopeMembershipDeps,
+  kind: "channel" | "group",
+  ref: string,
+  principalId: string,
+  live: LiveRoster | undefined,
+): Promise<boolean> {
+  if (!live || !samePerson(principalId, live.actorId)) return false;
+  if (!activePrincipal(deps, principalId)) return false;
+  if (!live.members.length || !live.members.every((m) => m.type === "internal")) return false;
+  if (!live.members.some((m) => samePerson(m.id, principalId))) return false;
+  if (kind === "group" && deps.managedGroups?.recognizes(ref)) return false;
+  // Tri-state: a true/false answer means the store has a roster for this room and its word stands.
+  return (await sharedScopeMembership(deps, kind, ref, principalId)) === undefined;
+}
+
+/** Forward the turn's verified roster only for lookups about the turn's own scope. */
+export function withLiveRoster(
+  stored: IsCurrentSharedScopeMember | undefined,
+  turn: { scopeId: ScopeId; roster: LiveRoster | undefined },
+): IsCurrentSharedScopeMember {
+  return async (principalId, scope, live) =>
+    (await stored?.(principalId, scope, live ?? (scope === turn.scopeId ? turn.roster : undefined))) === true;
 }
 
 export type CurrentScopeMembers = (scope: ScopeId) => Promise<Principal[] | undefined>;
