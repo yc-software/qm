@@ -518,3 +518,73 @@ test("every sprites fetch rides one HTTP/1.1 dispatcher, so a bad request fails 
   assert.ok(optionsKey, "undici Agent must expose its options");
   assert.equal(dispatcher[optionsKey]?.allowH2, false);
 });
+
+const NOT_READY_BODY = "Process not ready after 30.003s (max wait: 30s). Process running: false";
+
+function interceptExec(failBody: string): {
+  fetchImpl: typeof fetch;
+  attempts: Array<{ cmd: string[]; body: string }>;
+  arm(count: number | "always"): void;
+} {
+  const attempts: Array<{ cmd: string[]; body: string }> = [];
+  let remaining: number | "always" = 0;
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input.toString());
+    if (!url.pathname.endsWith("/exec")) return fake.fetchImpl(input, init);
+    attempts.push({ cmd: url.searchParams.getAll("cmd"), body: init?.body ? String(init.body) : "" });
+    if (remaining === "always") return new Response(failBody, { status: 503 });
+    if (remaining > 0) {
+      remaining -= 1;
+      return new Response(failBody, { status: 503 });
+    }
+    return fake.fetchImpl(input, init);
+  };
+  return {
+    fetchImpl,
+    attempts,
+    arm: (count) => {
+      remaining = count;
+    },
+  };
+}
+
+test("an exec against a waking sprite is re-sent unchanged and the second response is the answer", async () => {
+  const intercept = interceptExec(NOT_READY_BODY);
+  const s = make({ fetchImpl: intercept.fetchImpl });
+  const h = await s.provision(layers);
+  intercept.attempts.length = 0;
+  intercept.arm(1);
+
+  const r = await s.run(h, "echo ok");
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout.trim(), "ok");
+  assert.equal(intercept.attempts.length, 2);
+  assert.deepEqual(intercept.attempts[0], intercept.attempts[1], "the retry re-sends the same argv and stdin");
+});
+
+test("a sprite that never wakes surfaces the provider's message once the retry budget is spent", async () => {
+  const intercept = interceptExec(NOT_READY_BODY);
+  const s = make({ fetchImpl: intercept.fetchImpl });
+  const h = await s.provision(layers);
+  intercept.attempts.length = 0;
+  intercept.arm("always");
+
+  await assert.rejects(s.run(h, "echo ok"), /http 503 .*Process not ready/s);
+  assert.equal(intercept.attempts.length, 3);
+});
+
+test("a 503 that isn't the not-ready signal fails on the first response", async () => {
+  for (const body of [
+    "Process not ready after 30.003s (max wait: 30s). Process running: true",
+    "upstream capacity exhausted",
+  ]) {
+    const intercept = interceptExec(body);
+    const s = make({ fetchImpl: intercept.fetchImpl });
+    const h = await s.provision(layers);
+    intercept.attempts.length = 0;
+    intercept.arm("always");
+
+    await assert.rejects(s.run(h, "echo ok"), (e: Error) => e.message.includes(`http 503 ${body}`));
+    assert.equal(intercept.attempts.length, 1, body);
+  }
+});

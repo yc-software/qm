@@ -39,6 +39,9 @@ const PRESSURE_RECORD_FULL60 = 75;
 const PRESSURE_CLEAR_FULL60 = 40;
 const FORCED_RESTART_ATTEMPTS = 3;
 const FORCED_RESTART_RETRY_MS = 5_000;
+const WAKE_EXEC_ATTEMPTS = 3;
+const WAKE_EXEC_RETRY_MS = 10_000;
+const WAKE_EXEC_BODY = /process not ready after[\s\S]*process running: false/i;
 
 function parsePressure(ioFull10Raw: string, ioFull60Raw: string, load1Raw: string): ExecPressure | undefined {
   const ioFull10 = Number.parseFloat(ioFull10Raw);
@@ -96,13 +99,20 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     const qs = new URLSearchParams();
     if (body) qs.append("stdin", "true");
     for (const a of argv) qs.append("cmd", a);
-    const res = await fetchImpl(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}/exec?${qs}`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${opts.token ?? ""}`, "content-type": "application/octet-stream" },
-      ...(body ? { body: Buffer.from(body) } : {}),
-      signal: AbortSignal.timeout(timeoutSec * 1000 + EXIT_GRACE_MS),
-    } as RequestInit);
-    if (!res.ok) throw new Error(`sprites exec ${name}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
+    let res: Response;
+    for (let attempt = 1; ; attempt++) {
+      res = await fetchImpl(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}/exec?${qs}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${opts.token ?? ""}`, "content-type": "application/octet-stream" },
+        ...(body ? { body: Buffer.from(body) } : {}),
+        signal: AbortSignal.timeout(timeoutSec * 1000 + EXIT_GRACE_MS),
+      } as RequestInit);
+      if (res.ok) break;
+      const text = await res.text();
+      if (attempt >= WAKE_EXEC_ATTEMPTS || !WAKE_EXEC_BODY.test(text))
+        throw new Error(`sprites exec ${name}: http ${res.status} ${text.slice(0, 200)}`);
+      await sleep(WAKE_EXEC_RETRY_MS);
+    }
     const raw = Buffer.from(await res.arrayBuffer());
     let rc = 0;
     const out: Buffer[] = [];
