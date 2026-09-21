@@ -84,17 +84,11 @@ for (const evidence of ["none", "attachment", "slack-link", "markdown-link", "ur
     qa.getPermalink = async () => "https://example.test/message";
     const ctx = new Ctx({ qa, botUserId: "BOT", runId: "attachment" } as Env, scenario, 1);
     const filename = `${ctx.marker()}.txt`;
-    const payload =
-      evidence === "attachment"
-        ? { files: [{ name: filename }] }
-        : {
-            text:
-              evidence === "slack-link"
-                ? `<https://example.test/download|${filename}>`
-                : evidence === "markdown-link"
-                  ? `[${filename}](https://example.test/download)`
-                  : `https://example.test/${filename}`,
-          };
+    const payload: Partial<SlackMessage> = {};
+    if (evidence === "attachment") payload.files = [{ name: filename }];
+    else if (evidence === "slack-link") payload.text = `<https://example.test/download|${filename}>`;
+    else if (evidence === "markdown-link") payload.text = `[${filename}](https://example.test/download)`;
+    else payload.text = `https://example.test/${filename}`;
     qa.replies = async () => [
       { ts: "2", user: "BOT", text: `I'll create ${filename} now.` },
       ...(evidence !== "none" && Date.now() >= 110_000 ? [{ ts: "3", user: "BOT", ...payload }] : []),
