@@ -1767,7 +1767,9 @@ export function buildApp(
   const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox"));
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
-    enabled: (actorId) => featureFlags.enabled("persistent_subagents", scopeId("personal", actorId)),
+    enabled: async (actorId) =>
+      (await featureFlags.enabled("persistent_subagents", scopeId("personal", actorId))) ||
+      (await featureFlags.enabled("responsive_spine", scopeId("personal", actorId))),
     sessions,
     runs,
     signals: runSignals,
@@ -2112,7 +2114,14 @@ export function buildApp(
   const returnSessionRun = (run: Run) =>
     advisoryLock.withLock("session-tree-admission", async () => {
       await deliverSubagentMail(
-        { sessions, runs, maxAttempts, mailbox: sessionMailbox, prepareRequest: prepareSessionRequest },
+        {
+          sessions,
+          runs,
+          maxAttempts,
+          mailbox: sessionMailbox,
+          prepareRequest: prepareSessionRequest,
+          delegationEnabled: (actorId) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId)),
+        },
         run,
       );
       await runs.markReturned(run.id);

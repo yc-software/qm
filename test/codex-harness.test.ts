@@ -68,7 +68,7 @@ test("Codex replay keeps paired tool ids within the provider's 64-character limi
   assert.equal(codexReplayCallId("short-id"), "short-id");
 });
 
-function fakeCodexBinary(dir: string, commentary = false): string {
+function fakeCodexBinary(dir: string, commentary = false, coordinator = false): string {
   const path = join(dir, "fake-codex");
   writeFileSync(
     path,
@@ -87,6 +87,9 @@ rl.on("line", (line) => {
         process.env.CORE_SIGNING_SECRET || process.env.DATABASE_URL || process.env.HOME !== msg.params.cwd ||
         !process.env.CODEX_HOME?.startsWith(msg.params.cwd)) {
       return send({ id: msg.id, error: { code: -1, message: "unsafe or missing adapter settings" } });
+    }
+    if (${coordinator} && (msg.params.config?.features?.multi_agent !== false || msg.params.dynamicTools.some(tool => ["execute", "background", "credential_exec"].includes(tool.name)))) {
+      return send({ id: msg.id, error: { code: -1, message: "coordinator exposes command or native delegation tools" } });
     }
     return send({ id: msg.id, result: { thread: { id: "thread-1" }, model: "fake-model" } });
   }
@@ -1931,4 +1934,28 @@ test("Codex steers extracted documents into the active turn without copying cont
   assert.doesNotMatch(JSON.stringify(tape), /STEER-PRIVATE-492/);
   assert.doesNotMatch(readFileSync(capture, "utf8"), /OUTSIDE-BUDGET-492/);
   assert.match(readFileSync(capture, "utf8"), /truncated to fit/);
+});
+
+test("Codex coordinators expose neither command tools nor native subagents", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-coordinator-"));
+  const harness = createCodexHarness({ binaryPath: fakeCodexBinary(dir, false, true), env: testHarnessEnv(dir) });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  let seq = 0;
+  const scope = "personal:U1" as ScopeId;
+  const result = await harness.turns.runTurn({
+    session: { id: "coordinator" } as Session,
+    input: "hello",
+    systemPrompt: "coordinate",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    delegateWork: true,
+    recordModelCall: () => {},
+    emit: async (entry) => ({ ...entry, sessionId: "coordinator", seq: ++seq, createdAt: Date.now() }) as SessionEntry,
+  });
+  assert.equal(result.reply, "hello");
 });

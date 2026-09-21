@@ -1,3 +1,4 @@
+import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
 import {
   MAX_DOCUMENT_BYTES,
   documentText,
@@ -553,7 +554,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const liveTurn = humanTurn && allInternal;
       const authoredDetection =
         input.origin.kind === "ambient" && input.origin.live === true && conversation.kind !== "dm";
-      const liveAuthorTurn = (humanTurn || authoredDetection) && allInternal;
+      const delegationEnabled =
+        (await deps.featureFlags?.enabled("responsive_spine", `personal:${actor.id}` as ScopeId)) === true;
+      const delegatedOrigin =
+        delegationEnabled && deps.runs
+          ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
+          : undefined;
+      const liveAuthorTurn = (humanTurn || authoredDetection || delegatedOrigin !== undefined) && allInternal;
       const messageTs = input.origin.kind === "human" ? input.origin.messageTs : undefined;
       const entryTs =
         input.origin.kind === "human" || input.origin.kind === "ambient" ? input.origin.entryTs : undefined;
@@ -1036,7 +1043,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         actor,
         audience: conversation.audience,
         acl: deps.acl,
-        origin: input.origin,
+        origin: delegatedOrigin ?? input.origin,
         trustedLiveHuman: liveAuthorTurn,
         targetScope: scopeId,
         config: deps.config,
@@ -1082,7 +1089,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           slack: isSlack,
         };
       }
+      const delegateWork = requiresDelegation(input, delegationEnabled);
       let modeFrame = applyPromptVars(frameMd, frameVars);
+      if (delegateWork)
+        modeFrame +=
+          "\n\nKeep this conversation responsive. You cannot execute commands yourself. Delegate all substantial work (research, coding, computation, or multi-step investigations) with session open, providing a complete task, relevant context, and authorization. Handle quick answers, status requests, and coordination yourself. Do not substitute other tools for command execution or do substantial work inline. After dispatching, end this turn promptly; child completion durably wakes you to collect and report the result. Do not wait or poll for children. Relay new user instructions to the appropriate child with session followup_task. Describe progress and results naturally without explaining the delegation machinery.";
       if (modeName === "mode-conversation" && input.proactiveOpener) {
         modeFrame += "\nNo one has written yet; open the conversation yourself per the onboarding note below.";
       }
@@ -2466,7 +2477,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
           ...(deps.sessionSyscalls &&
-          (await deps.featureFlags?.enabled("persistent_subagents", `personal:${actor.id}` as ScopeId)) === true
+          (delegationEnabled ||
+            (await deps.featureFlags?.enabled("persistent_subagents", `personal:${actor.id}` as ScopeId)) === true)
             ? {
                 sessionSyscalls: deps.sessionSyscalls.forTurn({
                   session,
@@ -3224,6 +3236,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
             surfaceName,
+            delegateWork,
             ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
             ...(isPollFire ? { pollFire: true } : {}),
             ...(effectiveTurnWallClockMs !== undefined

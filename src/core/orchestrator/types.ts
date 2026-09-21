@@ -88,6 +88,7 @@ export interface OrchestratorInput extends Omit<
   modelAccount?: ModelAccount;
   surface?: string;
   privateSessionMessage?: true;
+  delegatingRunId?: string;
   sessionMessageDepth?: number;
   actor: Principal;
   conversation: Conversation;

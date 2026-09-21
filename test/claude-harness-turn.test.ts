@@ -11,11 +11,20 @@ type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => Asy
 
 const toolHandlers = new Map<string, (args: unknown) => Promise<unknown>>();
 
+let capturedOptions: Record<string, unknown> = {};
+
 let currentScript: Script = async function* () {};
 
 mock.module("@anthropic-ai/claude-agent-sdk", {
   namedExports: {
-    query: ({ prompt }: { prompt: AsyncIterable<{ message: { content: unknown } }> }) => {
+    query: ({
+      prompt,
+      options,
+    }: {
+      prompt: AsyncIterable<{ message: { content: unknown } }>;
+      options: Record<string, unknown>;
+    }) => {
+      capturedOptions = options;
       const generator = currentScript(prompt);
       return {
         async initializationResult() {
@@ -619,4 +628,19 @@ test("Claude includes steered native and fallback documents without capturing th
   assert.ok(sent.includes("DOCX-QUARTZ-731"));
   assert.ok(!JSON.stringify(tape).includes(pdf));
   assert.ok(!JSON.stringify(tape).includes("DOCX-QUARTZ-731"));
+});
+
+test("Claude coordinators expose neither command tools nor native subagents", async () => {
+  currentScript = async function* () {
+    yield resultMessage("ready");
+  };
+  const harness = createClaudeHarness({});
+  const { turn } = harnessTurn({ readOnly: false, delegateWork: true });
+  await harness.turns.runTurn(turn);
+  assert.deepEqual(capturedOptions.tools, []);
+  assert.equal(capturedOptions.agents, undefined);
+  const allowed = capturedOptions.allowedTools as string[];
+  for (const name of ["Agent", "mcp__qm__execute", "mcp__qm__background", "mcp__qm__credential_exec"])
+    assert.ok(!allowed.includes(name));
+  await harness.turns.close?.();
 });

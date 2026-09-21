@@ -68,6 +68,10 @@ export interface Conversation {
 export type SessionType = "dm" | "channel" | "group";
 
 export interface SpawnMeta {
+  surfaceTools?: boolean;
+  deliveryCandidates?: TurnRequest["deliveryCandidates"];
+  origin?: TurnOrigin;
+  unattendedGrants?: string[];
   openFingerprint?: string;
   scopeVersion?: string;
   sessionParticipantIds?: readonly string[];
