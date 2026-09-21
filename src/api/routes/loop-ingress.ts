@@ -82,7 +82,7 @@ async function receive(ctx: BaseCtx) {
 }
 
 export const loopIngressRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/loops/:id/ingestion", auth: "either", handle: list },
+  { method: "GET", path: "/v1/loops/:id/ingestion", auth: "source", handle: list },
   { method: "POST", path: "/v1/loops/:id/ingestion", auth: "source", handle: change },
   { method: "PATCH", path: "/v1/loops/:id/ingestion/:sourceId", auth: "source", handle: change },
 ];

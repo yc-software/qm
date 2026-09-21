@@ -140,7 +140,7 @@ async function access(ctx: ApiCtx): Promise<void> {
 }
 
 export const inboxRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/inbox", auth: "either", handle: inbox },
+  { method: "GET", path: "/v1/inbox", auth: "source", handle: inbox },
   { method: "GET", path: "/v1/inbox/access", auth: "source", handle: access },
   { method: "PUT", path: "/v1/inbox", auth: "source", handle: inbox },
 ];

@@ -2,7 +2,7 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import { CheckCircle2, CornerUpLeft, Pause, Play, Zap } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { icon } from "./ui";
+import { fieldSelect, icon } from "./ui";
 import { listBackLink, listPageTpl } from "./list-page";
 import { appState, can } from "./shell";
 
@@ -344,24 +344,23 @@ function ingestionTpl(loop: LoopView): TemplateResult {
         : nothing
     }
     <div class="loop-ingestion-add">
-      <select
-        aria-label="Ingestion source"
-        .value=${ingestionKind}
-        @change=${(event: Event) => {
-          ingestionKind = (event.target as HTMLSelectElement).value as typeof ingestionKind;
+      ${fieldSelect({
+        ariaLabel: "Ingestion source",
+        value: ingestionKind,
+        onChange: (value) => {
+          ingestionKind = value as typeof ingestionKind;
           ingestionSecret = "";
           paint();
-        }}
-      >
-        <option value="">Add event source…</option>
-        ${Object.entries(names)
+        },
+        options: html`<option value="">Add event source…</option>
+          ${Object.entries(names)
           .filter(
             ([kind]) =>
               !ingestion?.sources.some((source) => source.kind === kind) &&
               (!loop.sources?.length ? true : kind !== "webhook" && loop.sources.includes(kind)),
           )
-          .map(([kind, name]) => html`<option value=${kind}>${name}</option>`)}
-      </select>
+          .map(([kind, name]) => html`<option value=${kind}>${name}</option>`)}`,
+      })}
     </div>
     ${
       ingestionKind === "slack"
