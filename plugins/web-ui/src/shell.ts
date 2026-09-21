@@ -503,7 +503,6 @@ export function mountShell(): void {
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize sidebar"
-          ${tip("Drag to resize · double-click to reset")}
           @pointerdown=${startSidebarResize}
           @dblclick=${resetSidebarWidth}
         ></div>

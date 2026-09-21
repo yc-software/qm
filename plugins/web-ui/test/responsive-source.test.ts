@@ -65,6 +65,14 @@ test("the sidebar's quick actions share the navrow treatment", () => {
   assert.doesNotMatch(css, /split-new-session/);
 });
 
+test("the sidebar resize handle stays accessible without a hover tooltip", () => {
+  assert.match(
+    shell,
+    /class="sidebar-resize-handle"[\s\S]{0,200}aria-label="Resize sidebar"[\s\S]{0,200}@pointerdown=\$\{startSidebarResize\}[\s\S]{0,100}@dblclick=\$\{resetSidebarWidth\}/,
+  );
+  assert.doesNotMatch(shell, /Drag to resize/);
+});
+
 test("the quick nav is home, search, browse; create sits under the divider", () => {
   assert.match(
     shell,
