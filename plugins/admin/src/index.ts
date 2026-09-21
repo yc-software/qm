@@ -502,7 +502,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return forward(req, res, principal, "GET", `/v1/admin/${rest}${url.search}`);
   }
 
-  if (method === "GET" && (pathname === "/design-system" || pathname === "/design-system/")) {
+  if (method === "GET" && ["/design-system", "/design-system/", "/design", "/design/"].includes(pathname)) {
     const viewer = cookiePrincipal(req);
     if (!viewer || !principalInAllowlist(viewer, process.env.INBOX_USERS)) {
       return json(res, 404, { error: "not_found" });

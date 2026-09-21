@@ -99,19 +99,21 @@ test("the brand icon is a CSS variable the org can point at its own image", () =
 });
 
 test("design system routes embed the shared component library and retain the script CSP", async () => {
-  const response = await fetch(base + "/design-system", { headers: { cookie: "admin=U-admin" } });
-  assert.equal(response.status, 200);
-  const html = await response.text();
-  const css = readFileSync(new URL("../public/admin-components.css", import.meta.url), "utf8");
-  assert.ok(html.includes("<style data-admin-components>" + css + "</style>"));
-  const script = html.match(/<script>([\s\S]*?)<\/script>/i)?.[1];
-  assert.ok(script);
-  const hash = createHash("sha256").update(script).digest("base64");
-  assert.ok(response.headers.get("content-security-policy")?.includes("sha256-" + hash));
+  for (const path of ["/design-system", "/design"]) {
+    const response = await fetch(base + path, { headers: { cookie: "admin=U-admin" } });
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    const css = readFileSync(new URL("../public/admin-components.css", import.meta.url), "utf8");
+    assert.ok(html.includes("<style data-admin-components>" + css + "</style>"));
+    const script = html.match(/<script>([\s\S]*?)<\/script>/i)?.[1];
+    assert.ok(script);
+    const hash = createHash("sha256").update(script).digest("base64");
+    assert.ok(response.headers.get("content-security-policy")?.includes("sha256-" + hash));
+  }
 });
 
 test("design system routes use the inbox allowlist", async () => {
-  for (const path of ["/design-system", "/design-system/"]) {
+  for (const path of ["/design-system", "/design-system/", "/design", "/design/"]) {
     const denied = await fetch(base + path, { headers: { cookie: "admin=U-rando" } });
     assert.equal(denied.status, 404);
     assert.deepEqual(await denied.json(), { error: "not_found" });
