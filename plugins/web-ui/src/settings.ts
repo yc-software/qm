@@ -402,7 +402,9 @@ function settingsPane(): TemplateResult {
     <div class="settings-group">
       ${aiAccountsRow()} ${themeRow()} ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${aboutRow()}
       ${accountRow()}
-      <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
+      <div class="settings-row settings-slack-account">
+        <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
+      </div>
     </div>
   `;
 }

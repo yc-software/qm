@@ -1082,6 +1082,13 @@ a.chat-row-open {
 .settings-row:last-child {
   border-bottom: 0;
 }
+.settings-slack-account qm-slack-account {
+  width: 100%;
+}
+.settings-slack-account .slack-connected,
+.settings-slack-account .welcome-slack {
+  margin-bottom: 0;
+}
 .settings-row-copy {
   flex: 1 1 260px;
   min-width: 0;

@@ -94,7 +94,7 @@ export class SlackAccount extends LitElement {
       const response = await fetch(withBase("/api/composio/slack/authorize"), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ state, returnTo: withBase("/?view=settings") }),
+        body: JSON.stringify({ state, returnTo: `${location.pathname}${location.search}` }),
         signal: AbortSignal.timeout(30_000),
       });
       const result = await response.json();

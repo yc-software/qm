@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { harness } from "./deep-link-boot-fixture.ts";
 
-export function slackReturnTest(outcome: "success" | "expired" | "cancelled" | "wrong-account") {
+export function slackReturnTest(outcome: "success" | "expired" | "cancelled" | "wrong-account", session = false) {
   test(`Slack callback survives real router boot: ${outcome}`, async () => {
     const h = await harness({
-      path: `/?view=settings&slackReturn=qa-slack-nonce${outcome === "cancelled" ? "&error=access_denied" : ""}`,
+      welcome: session,
+      path: `${session ? "/s/sess-deep?" : "/settings?"}slackReturn=qa-slack-nonce${outcome === "cancelled" ? "&error=access_denied" : ""}`,
       slackReturn: outcome,
     });
     try {
@@ -20,6 +21,10 @@ export function slackReturnTest(outcome: "success" | "expired" | "cancelled" | "
       for (let i = 0; i < 100 && !expected.test(h.mainText()); i++)
         await new Promise((resolve) => setTimeout(resolve, 5));
       assert.match(h.mainText(), expected);
+      if (session) {
+        assert.equal(location.pathname, "/s/sess-deep");
+        assert.equal(h.visibleConversation().state.sessionId, "sess-deep");
+      }
       assert.equal(
         h.requests.some((p) => p.includes("/api/composio/slack/complete")),
         outcome === "success",
