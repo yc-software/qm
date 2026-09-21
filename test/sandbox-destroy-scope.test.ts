@@ -16,7 +16,7 @@ import { createAgent37Sandbox } from "../src/sandbox/agent37-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 
 import { installFakeSmolmachines } from "./support/fake-smolmachines.ts";
-import { installFakeAgent37 } from "./support/fake-agent37.ts";
+import { FAKE_AGENT37_API_KEY, installFakeAgent37 } from "./support/fake-agent37.ts";
 
 const workspace = () => createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "destroy-scope-")));
 
@@ -68,11 +68,21 @@ for (const [name, create, resource] of [
     let exists = true;
     const sandbox = create(workspace(), {
       token: "test",
+      apiKey: FAKE_AGENT37_API_KEY,
       fetchImpl: async (input, init) => {
         const path = new URL(String(input)).pathname;
         calls.push(`${init?.method} ${path}`);
         if (init?.method === "GET") {
-          const rows = exists ? [{ id: "existing", name: sandboxScopeName("qm", "scope"), status: "stopped" }] : [];
+          const rows = exists
+            ? [
+                {
+                  id: "existing",
+                  name: sandboxScopeName("qm", "scope"),
+                  status: "stopped",
+                  metadata: { "qm-prefix": "qm", "qm-scope": "scope" },
+                },
+              ]
+            : [];
           return Response.json(resource === "instances" ? { data: rows } : rows);
         }
         return new Response(null, { status });
@@ -119,7 +129,7 @@ for (const [name, create, install] of [
   test(`${name} stale adapter deletes another adapter's replacement for the same scope`, async () => {
     const fake = install();
     try {
-      const options = { token: "test-token", fetchImpl: fake.fetchImpl };
+      const options = { token: "test-token", apiKey: FAKE_AGENT37_API_KEY, fetchImpl: fake.fetchImpl };
       const a = create(workspace(), options);
       const b = create(workspace(), options);
       const layers = [{ scopeId: "replaced", mountPath: "", mode: "rw" as const }];
