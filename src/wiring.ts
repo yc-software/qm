@@ -2113,7 +2113,7 @@ export function buildApp(
   let lastSignalPrune = 0;
   const returnSessionRun = (run: Run) =>
     advisoryLock.withLock("session-tree-admission", async () => {
-      await deliverSubagentMail(
+      const settled = await deliverSubagentMail(
         {
           sessions,
           runs,
@@ -2124,7 +2124,7 @@ export function buildApp(
         },
         run,
       );
-      await runs.markReturned(run.id);
+      if (settled) await runs.markReturned(run.id);
     });
   runs.onTerminal((run) => {
     if (run.sessionId.startsWith("agent:main:subagent:"))

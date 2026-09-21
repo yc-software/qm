@@ -769,17 +769,18 @@ export interface SubagentMailDeps {
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
   sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
-  runs: Pick<RunStore, "enqueue"> & Partial<Pick<RunStore, "latestForThread" | "get">>;
+  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> &
+    Partial<Pick<RunStore, "latestForThread" | "get">>;
   maxAttempts: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }
 
-export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Promise<void> {
-  if (!isSubagentThreadRef(run.sessionId) || run.request.privateSessionMessage) return;
+export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Promise<boolean> {
+  if (!isSubagentThreadRef(run.sessionId) || run.request.privateSessionMessage) return true;
   const child = await deps.sessions.getByThread(run.sessionId);
-  if (!child?.parentSessionId || !child.spawnMeta) return;
+  if (!child?.parentSessionId || !child.spawnMeta) return true;
   const parent = await deps.sessions.get(child.parentSessionId);
-  if (!parent) return;
+  if (!parent) return true;
   if (parent.threadRef.startsWith("swarm:")) throw new Error("subagent returns cannot enter swarm workers");
   const latestParent = await deps.runs.latestForThread?.(parent.threadRef, { excludePrivateMessages: true });
   if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
@@ -882,11 +883,20 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
       (await deps.delegationEnabled?.(prepared.actor.id)) === true,
     )
   ) {
+    const dedupKey = `subagent-return:${run.id}`;
+    const existing = await deps.runs.getByDedupKey(dedupKey);
+    const unread = (await deps.mailbox.pending(parent.id)).some((message) => message.id === `subagent-mail-${run.id}`);
+    if (!unread) {
+      if (existing?.status === "pending") await deps.runs.withdraw(existing.id, { unstartedOnly: true });
+      return true;
+    }
+    if (existing && (existing.status === "done" || existing.status === "failed")) return true;
+    if ((await deps.runs.inFlightForThread(parent.threadRef)).length) return false;
     const wake =
       "A delegated task finished. Check internal messages with session wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
     await deps.runs.enqueue({
       sessionId: parent.threadRef,
-      dedupKey: `subagent-return:${run.id}`,
+      dedupKey,
       request: {
         ...prepared,
         surfaceTools: true,
@@ -902,5 +912,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
       },
       maxAttempts: deps.maxAttempts,
     });
+    return false;
   }
+  return true;
 }
