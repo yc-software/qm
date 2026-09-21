@@ -1,3 +1,4 @@
+import { LOOP_ICONS, loopIcon } from "./loop-icon";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { CheckCircle2, CornerUpLeft, Pause, Play, Zap } from "lucide";
 import { api } from "./core-bridge";
@@ -9,6 +10,7 @@ import { appState, can } from "./shell";
 interface LoopView {
   id: string;
   name: string;
+  icon?: string;
   purpose?: string;
   playbook: string;
   playbookVersion: number;
@@ -80,11 +82,13 @@ let loopsNotice = "";
 let activeLoopId: string | null = null;
 let activeDetail: LoopDetail | null = null;
 let loopBusy = false;
+let iconPickerOpen = false;
 let playbookDraft: string | null = null;
 let returnDrafts = new Map<string, string>();
 
 export function resetActiveLoop(): void {
   activeLoopId = null;
+  iconPickerOpen = false;
   ingestion = null;
   ingestionKind = "";
   createdSecret = "";
@@ -158,6 +162,16 @@ async function mutate(fn: () => Promise<unknown>): Promise<void> {
       paint();
     }
   }
+}
+
+async function setLoopIcon(loop: LoopView, value: string | null): Promise<void> {
+  await mutate(async () => {
+    await api(`/api/loops/${encodeURIComponent(loop.id)}`, { method: "PATCH", body: JSON.stringify({ icon: value }) });
+    iconPickerOpen = false;
+    const { refreshInbox } = await import("./inbox");
+    await refreshInbox({ silent: true });
+  });
+  loopsHost?.querySelector<HTMLElement>(".loop-icon-picker summary")?.focus();
 }
 
 export function openLoop(id: string): void {
@@ -413,7 +427,39 @@ function detailTpl(detail: LoopDetail): TemplateResult {
       void refreshLoops();
     })}
     <div class="list-page-head">
-      <h1 class="pane-title">${loop.name}</h1>
+      <div class="loop-title">
+        <details
+          class="loop-icon-picker"
+          .open=${iconPickerOpen}
+          @toggle=${(event: Event) => {
+            iconPickerOpen = (event.currentTarget as HTMLDetailsElement).open;
+          }}
+          @keydown=${(event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+              iconPickerOpen = false;
+              (event.currentTarget as HTMLDetailsElement).open = false;
+              (event.currentTarget as HTMLElement).querySelector("summary")?.focus();
+            }
+          }}
+        >
+          <summary aria-label=${`Change icon for ${loop.name}`} title="Change icon">${loopIcon(loop, 24)}</summary>
+          <div class="loop-icon-popover" role="group" aria-label="Loop icon">
+            <span class="loop-icon-heading">Choose an icon</span>
+            <div class="loop-icon-grid">
+              ${LOOP_ICONS.map((choice) => html`<button type="button" aria-label=${choice.label} title=${choice.label} aria-pressed=${loop.icon === choice.id ? "true" : "false"} ?disabled=${loopBusy} @click=${() => void setLoopIcon(loop, choice.id)}>${loopIcon({ icon: choice.id }, 20)}</button>`)}
+            </div>
+            <button
+              class="loop-icon-default"
+              type="button"
+              ?disabled=${loopBusy || !loop.icon}
+              @click=${() => void setLoopIcon(loop, null)}
+            >
+              ${loopIcon({ sources: loop.sources })}<span>Use default</span>
+            </button>
+          </div>
+        </details>
+        <h1 class="pane-title">${loop.name}</h1>
+      </div>
       <div class="list-page-actions">
         ${healthBadge(loop)}
         <button class="btn" type="button" ?disabled=${loopBusy} @click=${() => fireNow(loop)}>
@@ -516,7 +562,7 @@ function detailTpl(detail: LoopDetail): TemplateResult {
 function loopRow(loop: LoopView): TemplateResult {
   return html`
     <button class="list-row loop-row" type="button" @click=${() => openLoop(loop.id)}>
-      <span class="loop-row-name">${loop.name}</span>
+      ${loopIcon(loop, 18)}<span class="loop-row-name">${loop.name}</span>
       ${healthBadge(loop)}
       <span class="loop-row-meta">last fire ${ago(loop.lastFiredAt)}</span>
     </button>

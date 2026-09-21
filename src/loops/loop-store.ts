@@ -20,6 +20,7 @@ import { hashId } from "../util/crypto.ts";
 
 export interface CreateLoopInput extends CreateTriggerInput {
   name: string;
+  icon?: string | null;
   surface?: string;
   sources?: string[];
   playbook: string;
@@ -36,6 +37,7 @@ export interface CreateLoopInput extends CreateTriggerInput {
 
 export interface LoopPatch {
   name?: string;
+  icon?: string | null;
   purpose?: string;
   successCondition?: string;
   successChecks?: string[];
@@ -76,6 +78,18 @@ const RUNNABLE_STATES: ReadonlySet<LoopState> = new Set<LoopState>(["enabled"]);
 
 export function isRunnable(loop: Loop): boolean {
   return RUNNABLE_STATES.has(loop.state);
+}
+
+export function validLoopIcon(value: unknown): value is string | null {
+  return (
+    value === null || (typeof value === "string" && value.length <= 48 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(value))
+  );
+}
+
+function normalizeIcon(value: string | null): string | undefined {
+  if (!validLoopIcon(value))
+    throw new Error("icon must be a lowercase icon name of at most 48 characters, or null for the default");
+  return value ?? undefined;
 }
 
 function normalizeName(name: string): string {
@@ -131,6 +145,7 @@ export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop
         ...buildTriggerBase(input, contentId, now),
         ...stateFields("enabled"),
         name,
+        ...(input.icon !== undefined ? { icon: normalizeIcon(input.icon) } : {}),
         playbook: input.playbook,
         playbookVersion: 1,
         playbookHistory: [{ version: 1, at: now, by: input.createdBy }],
@@ -164,6 +179,7 @@ export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop
         if (patch.restore !== undefined) return patch.restore;
         const fields: Partial<Loop> = {};
         let policyChanged = false;
+        if (patch.icon !== undefined) fields.icon = normalizeIcon(patch.icon);
         if (patch.name !== undefined) fields.name = normalizeName(patch.name);
         if (patch.purpose !== undefined) fields.purpose = patch.purpose;
         if (patch.successCondition !== undefined) fields.successCondition = patch.successCondition;

@@ -348,6 +348,7 @@ interface LoopPlaybookRevision {
 
 export interface Loop extends TriggerBase {
   name: string;
+  icon?: string;
   purpose?: string;
   surface?: string;
   sources?: string[];

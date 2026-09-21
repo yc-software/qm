@@ -787,3 +787,38 @@ test("a legacy inbox sync cron cannot be re-enabled through an autonomous Loop p
   assert.equal((await call(deps, "PATCH", `/v1/loops/${loop.id}`, { state: "enabled" })).status, 200);
   assert.equal((await deps.crons!.get(cron.id))?.enabled, true);
 });
+
+test("loop icons can be set and reset by their owner, reject invalid input and retain authorization", async () => {
+  const deps = services();
+  const created = await call(deps, "POST", "/v1/loops", {
+    name: "Icons",
+    icon: "bug",
+    playbook: "Review",
+    successCondition: "Done",
+    shipActions: [],
+  });
+  assert.equal(created.status, 200);
+  const loop = (created.body as { loop: Loop }).loop;
+  assert.equal(loop.icon, "bug");
+  for (const icon of ["rocket", null]) {
+    const result = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { icon });
+    assert.equal(result.status, 200);
+    assert.equal((result.body as { loop: Loop }).loop.icon, icon ?? undefined);
+  }
+  for (const icon of ["", "<svg>", "x".repeat(49), 7, {}]) {
+    assert.equal((await call(deps, "PATCH", `/v1/loops/${loop.id}`, { icon })).status, 400);
+    assert.equal(
+      (
+        await call(deps, "POST", "/v1/loops", {
+          name: "Invalid",
+          icon,
+          playbook: "Review",
+          successCondition: "Done",
+          shipActions: [],
+        })
+      ).status,
+      400,
+    );
+  }
+  assert.equal((await call(deps, "PATCH", `/v1/loops/${loop.id}`, { icon: "shield" }, "mallory")).status, 403);
+});

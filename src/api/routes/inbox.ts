@@ -105,6 +105,8 @@ async function inbox(ctx: ApiCtx): Promise<void> {
       selected.map(async (loop) => ({
         id: loop.id,
         name: loop.name,
+        icon: loop.icon,
+        sources: loop.sources,
         count: counts.get(loop.id) ?? 0,
         state: loop.state,
         cronId: loop.cronId,
@@ -113,7 +115,14 @@ async function inbox(ctx: ApiCtx): Promise<void> {
         source: loop.surface?.startsWith("inbox:") ? loop.sources?.[0] : undefined,
       })),
     ),
-    available: available.map((loop) => ({ id: loop.id, name: loop.name, selected: selectedIds.includes(loop.id) })),
+    available: available.map((loop) => ({
+      id: loop.id,
+      name: loop.name,
+      icon: loop.icon,
+      sources: loop.sources,
+      source: loop.surface?.startsWith("inbox:") ? loop.sources?.[0] : undefined,
+      selected: selectedIds.includes(loop.id),
+    })),
     migrationPending: !migrated,
     total: [...counts.values()].reduce((sum, count) => sum + count, 0),
     items: page.map((item) =>

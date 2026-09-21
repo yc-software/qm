@@ -165,3 +165,18 @@ test("queue stats report depth and the age of the oldest waiting item", async ()
   assert.equal(stats.queued, 2);
   assert.equal(stats.oldestQueuedAgeMs, 60_000);
 });
+
+test("loop icons persist and reset without changing identity or automation policy", async () => {
+  const store = createLoopStore();
+  const { loop } = await store.create({ ...base, icon: "bug" });
+  assert.equal((await store.get(loop.id))!.icon, "bug");
+  await store.update(loop.id, { icon: "rocket" });
+  const edited = (await store.get(loop.id))!;
+  assert.equal(edited.icon, "rocket");
+  assert.equal(edited.policyVersion, loop.policyVersion);
+  assert.equal(edited.playbookVersion, loop.playbookVersion);
+  assert.equal(edited.state, loop.state);
+  await store.update(loop.id, { icon: null });
+  assert.equal((await store.get(loop.id))!.icon, undefined);
+  assert.equal((await store.create(base)).loop.id, loop.id);
+});

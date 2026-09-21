@@ -12364,3 +12364,89 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   max-width: 520px;
   margin-bottom: 12px;
 }
+
+.loop-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: inherit;
+  vertical-align: middle;
+}
+.loop-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.loop-icon-picker {
+  position: relative;
+  flex: 0 0 auto;
+}
+.loop-icon-picker > summary {
+  display: flex;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+.loop-icon-picker > summary::-webkit-details-marker {
+  display: none;
+}
+.loop-icon-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 20;
+  width: 236px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--popover);
+  box-shadow: 0 12px 36px #0004;
+}
+.loop-icon-heading {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.loop-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.loop-icon-grid button {
+  display: grid;
+  place-items: center;
+  height: 44px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.loop-icon-grid button:hover,
+.loop-icon-grid button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--border);
+}
+.loop-icon-default {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 12px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.loop-icon-default:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

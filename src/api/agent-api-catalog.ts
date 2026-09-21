@@ -246,7 +246,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/loops",
         summary:
-          'create a loop — body {name, playbook, successCondition, shipActions: [{action, gate: "hold"|"auto"}], schedule?, destinationKey?, caps?, governor?: {maxConsecutiveFailedFires?, maxReturnRate?, returnRateMinDecisions?, maxQueueAgeMs?, maxQueueDepth?, staleFireMs?}, successChecks?, purpose?}; a schedule creates a bound child cron that fires the loop; setting an escalation destination requires a live human',
+          'create a loop — body {name, icon?, playbook, successCondition, shipActions: [{action, gate: "hold"|"auto"}], schedule?, destinationKey?, caps?, governor?: {maxConsecutiveFailedFires?, maxReturnRate?, returnRateMinDecisions?, maxQueueAgeMs?, maxQueueDepth?, staleFireMs?}, successChecks?, purpose?}; a schedule creates a bound child cron that fires the loop; setting an escalation destination requires a live human',
       },
       {
         method: "DELETE",
@@ -258,7 +258,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET|PATCH|DELETE",
         path: "/v1/loops/:id",
         summary:
-          "inspect a loop (items, held outputs, vitals), edit it (playbook edits are versioned; destinationKey sets escalation delivery and null clears it; state: enabled|paused clears or sets the pause; clearing quarantine or changing destination requires a live human), or delete it and its child cron",
+          "inspect a loop (items, held outputs, vitals), edit it (icon sets a named icon such as bug, rocket, mail, or slack; null restores the default; playbook edits are versioned; destinationKey sets escalation delivery and null clears it; state: enabled|paused clears or sets the pause; clearing quarantine or changing destination requires a live human), or delete it and its child cron",
       },
       { method: "POST", path: "/v1/loops/:id/fire", summary: "fire a loop now (intake → work → judge → hold/ship)" },
       {

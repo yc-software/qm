@@ -77,6 +77,8 @@ test("selection reuses original items, counts items, omits heavy fields, and enf
     createdBy: "alice",
     ownerScopeId: "personal:alice",
     name: "QM error repairs",
+    icon: "bug",
+    sources: ["gmail"],
     playbook: "Repair",
     successCondition: "Fixed",
   });
@@ -101,6 +103,10 @@ test("selection reuses original items, counts items, omits heavy fields, and enf
     });
   const selected = await w.call("PUT", { loopIds: [loop.id] });
   assert.equal(selected.data.total, 1);
+  assert.equal(selected.data.selected[0].icon, "bug");
+  assert.deepEqual(selected.data.selected[0].sources, ["gmail"]);
+  assert.deepEqual(selected.data.available.find((entry: any) => entry.id === loop.id).sources, ["gmail"]);
+  assert.equal(selected.data.available.find((entry: any) => entry.id === loop.id).icon, "bug");
   assert.equal(selected.data.items[0].id, item!.id);
   assert.equal(selected.data.items[0].proposal, undefined);
   const detail = await w.call("GET", null, `itemId=${item!.id}`);
