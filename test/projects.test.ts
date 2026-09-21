@@ -1069,6 +1069,74 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   assert.ok(!(await built.app.listSessions("chan-pal")).some((s) => s.scopeId === scope));
 });
 
+test("channel-derived project members can turn a project session like manually added members", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-channel-turn-")) }));
+  await built.app.upsertDirectory([
+    { principalId: "owner", displayName: "Owner", type: "internal" },
+    { principalId: "chan-pal", displayName: "Channel Pal", type: "internal" },
+    { principalId: "outsider", displayName: "Outsider", type: "internal" },
+  ]);
+  await built.app.upsertChannels(
+    [{ channelId: "C-ENG", name: "eng", isPrivate: false }],
+    [
+      { channelId: "C-ENG", principalId: "owner" },
+      { channelId: "C-ENG", principalId: "chan-pal" },
+    ],
+  );
+  const project = await built.app.createProject("owner", "Channel Turn");
+  assert.ok(project);
+  const linked = await built.app.setProjectSlackChannel(project.id, "owner", "#eng");
+  assert.equal(linked.status, "ok");
+  const groupRef = projectGroupRef(project.id);
+  // chan-pal never joined via addMember: they are only a member through the linked channel roster.
+  assert.ok(!(await built.projects.get(project.id))!.memberIds.includes("chan-pal"));
+  assert.equal(await built.projects.membership(groupRef, "chan-pal"), true);
+
+  const conversation = { kind: "group" as const, channelRef: groupRef, threadRef: "web:owner:chan-turn", audience: [] };
+
+  const ownerTurn = await built.app.turn({
+    surface: "web",
+    actor: { externalId: "owner" },
+    conversation,
+    text: "hi from owner",
+  });
+  assert.equal(ownerTurn.status, "ok");
+
+  // Root-cause regression: turn() must honor the same canonical roster as ProjectStore.members(),
+  // not just the manually-added memberIds, so a legitimate channel-inherited member isn't refused.
+  const chanPalTurn = await built.app.turn({
+    surface: "web",
+    actor: { externalId: "chan-pal" },
+    conversation,
+    text: "hi from chan-pal",
+  });
+  assert.equal(chanPalTurn.status, "ok");
+
+  const outsiderTurn = await built.app.turn({
+    surface: "web",
+    actor: { externalId: "outsider" },
+    conversation,
+    text: "hi from outsider",
+  });
+  assert.equal(outsiderTurn.status, "refused");
+  assert.match(outsiderTurn.reason ?? "", /not a member of that context/);
+
+  // leaving the linked channel revokes turn access, same as it already revokes plain membership.
+  await built.app.upsertChannels(
+    [{ channelId: "C-ENG", name: "eng", isPrivate: false }],
+    [{ channelId: "C-ENG", principalId: "owner" }],
+  );
+  assert.equal(await built.projects.membership(groupRef, "chan-pal"), false);
+  const revokedTurn = await built.app.turn({
+    surface: "web",
+    actor: { externalId: "chan-pal" },
+    conversation,
+    text: "should be refused now",
+  });
+  assert.equal(revokedTurn.status, "refused");
+  assert.match(revokedTurn.reason ?? "", /not a member of that context/);
+});
+
 test("a project can add a signed-in principal on a deployment whose directory is never populated", async () => {
   const built = buildApp(
     testConfig({
