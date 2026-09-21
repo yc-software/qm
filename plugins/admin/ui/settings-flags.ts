@@ -135,6 +135,7 @@ function template() {
           >
             <option value="command_scoped_credentials">Command-scoped credentials</option>
             <option value="persistent_subagents">Persistent subagents</option>
+            <option value="inbox_loops">Inbox Loops</option>
           </select></label
         >
         <div>
