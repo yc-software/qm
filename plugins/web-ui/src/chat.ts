@@ -2256,7 +2256,7 @@ export function createChatSurface(
   function liveWorkStatus(agent: Agent): TemplateResult | typeof nothing {
     if (!agent.state.isStreaming && chatState.resolvingApprovals.size === 0) return nothing;
     if (runSlot.stopGeneration === runSlot.generation)
-      return html`<div class="stopped-note" role="status">${icon(Ban, 13)}<span>Stop requested</span></div>`;
+      return html`<div class="stopped-head" role="status">${icon(Ban, 13)}<span>Stop requested</span></div>`;
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
     if (work.status !== "thinking" && work.status !== "working") return nothing;
     if (currentTextPhase(work)?.phase === "final_answer" || shouldShowWork(work, "")) return nothing;
