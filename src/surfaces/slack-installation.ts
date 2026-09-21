@@ -1,5 +1,6 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
+import type { SlackInstallationBus } from "./slack-installation-events.ts";
 
 interface ActiveSlackInstallation {
   orgId: string;
@@ -43,8 +44,14 @@ interface SlackInstallationStatus {
   version?: string;
 }
 
+interface SlackInstallationState {
+  managed: boolean;
+  installation: SlackInstallation | null;
+}
+
 export interface SlackInstallationStore {
   get(): Promise<SlackInstallation | null>;
+  state(): Promise<SlackInstallationState>;
   status(): Promise<SlackInstallationStatus>;
   set(input: {
     botToken: string;
@@ -60,8 +67,21 @@ export function createSlackInstallationStore(
   orgId: string,
   map: DurableMap<StoredSlackInstallation>,
   keyMaterial: Buffer | string,
+  bus: SlackInstallationBus,
 ): SlackInstallationStore {
   const key = deriveConnectorKey(keyMaterial, "slack-installation");
+  const toInstallation = (record: StoredSlackInstallation | null): SlackInstallation | null =>
+    record && !record.disabled
+      ? {
+          botToken: decryptSecret(record.botTokenEnc, key),
+          appToken: decryptSecret(record.appTokenEnc, key),
+          ...(record.teamId ? { teamId: record.teamId } : {}),
+          ...(record.teamName ? { teamName: record.teamName } : {}),
+          updatedAt: record.updatedAt,
+          updatedBy: record.updatedBy,
+          version: record.version,
+        }
+      : null;
   const publicStatus = (record: StoredSlackInstallation | null): SlackInstallationStatus =>
     record && !record.disabled
       ? {
@@ -76,17 +96,11 @@ export function createSlackInstallationStore(
       : { configured: false, managed: record !== null };
   return {
     async get() {
+      return toInstallation(await map.get(orgId));
+    },
+    async state() {
       const record = await map.get(orgId);
-      if (!record || record.disabled) return null;
-      return {
-        botToken: decryptSecret(record.botTokenEnc, key),
-        appToken: decryptSecret(record.appTokenEnc, key),
-        ...(record.teamId ? { teamId: record.teamId } : {}),
-        ...(record.teamName ? { teamName: record.teamName } : {}),
-        updatedAt: record.updatedAt,
-        updatedBy: record.updatedBy,
-        version: record.version,
-      };
+      return { managed: record !== null, installation: toInstallation(record) };
     },
     async status() {
       return publicStatus(await map.get(orgId));
@@ -105,17 +119,14 @@ export function createSlackInstallationStore(
         version: `${updatedAt}:${crypto.randomUUID()}`,
       };
       await map.put(orgId, record);
+      bus.emit({ version: record.version });
       return publicStatus(record);
     },
     async delete(updatedBy) {
       const updatedAt = Date.now();
-      await map.put(orgId, {
-        orgId,
-        disabled: true,
-        updatedAt,
-        updatedBy,
-        version: `${updatedAt}:${crypto.randomUUID()}`,
-      });
+      const version = `${updatedAt}:${crypto.randomUUID()}`;
+      await map.put(orgId, { orgId, disabled: true, updatedAt, updatedBy, version });
+      bus.emit({ version });
     },
   };
 }

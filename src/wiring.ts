@@ -363,6 +363,11 @@ import { createPostgresMetricsSink } from "./admin/postgres-metrics-sink.ts";
 import { errMessage, swallowAs } from "./util/errors.ts";
 import { sleep } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
+import {
+  createMemorySlackInstallationBus,
+  createPostgresSlackInstallationBus,
+  type SlackInstallationBus,
+} from "./surfaces/slack-installation-events.ts";
 
 export interface Runtime {
   start(): void;
@@ -410,6 +415,7 @@ export interface BuiltApp {
   tasks: TaskStore;
   sessionStateBus: SessionStateBus;
   ledgerEventBus: LedgerEventBus;
+  slackInstallationBus: SlackInstallationBus;
   surfaceCache: SurfaceCache;
   runtime: Runtime;
   config: ScopedConfigStore;
@@ -613,10 +619,14 @@ export function buildApp(
   });
   const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
   const connectorStatusCache = createConnectorStatusCache(artifactMap<ConnectorStatusRecord>("connector_status"));
+  const slackInstallationBus: SlackInstallationBus = config.databaseUrl
+    ? createPostgresSlackInstallationBus(config.databaseUrl)
+    : createMemorySlackInstallationBus();
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
     artifactMap("slack_installation"),
     config.connectorSecretKey ?? randomBytes(32),
+    slackInstallationBus,
   );
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
@@ -2074,6 +2084,7 @@ export function buildApp(
       void runSignals.close?.();
       void sessionStateBus.close?.();
       void ledgerEventBus.close?.();
+      void slackInstallationBus.close?.();
       void runActivity.close?.();
       await harness.turns.close?.();
       await tasks.close?.();
@@ -2095,6 +2106,7 @@ export function buildApp(
     tasks,
     sessionStateBus,
     ledgerEventBus,
+    slackInstallationBus,
     surfaceCache,
     runtime,
     config: configStore,

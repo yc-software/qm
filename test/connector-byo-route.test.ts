@@ -155,6 +155,36 @@ test("admin stores validated Slack tokens without ever returning them", async ()
   }
 });
 
+test("saving and removing the Slack installation publishes each new version to the runtime bus", async () => {
+  const srv = start();
+  try {
+    const published: string[] = [];
+    srv.built.slackInstallationBus.subscribe((event) => published.push(event.version));
+
+    const put = await fetch(`${srv.base}/v1/admin/slack-installation`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ botToken: "xoxb-super-secret", appToken: "xapp-super-secret" }),
+    });
+    assert.equal(put.status, 200);
+    const stored = await srv.built.slackInstallation.state();
+    assert.deepEqual(
+      published,
+      [stored.installation?.version],
+      "a reconciler learns the saved version without polling",
+    );
+
+    assert.equal(
+      (await fetch(`${srv.base}/v1/admin/slack-installation`, { method: "DELETE", headers: ADMIN })).status,
+      200,
+    );
+    assert.equal(published.length, 2);
+    assert.notEqual(published[1], published[0], "the uninstall carries its own version so reconcilers reload");
+  } finally {
+    await srv.close();
+  }
+});
+
 test("admin rejects Slack bot and Socket Mode tokens from different apps", async () => {
   const srv = start("A-OTHER");
   try {

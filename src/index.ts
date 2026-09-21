@@ -72,20 +72,20 @@ if (config.backgroundWorkEnabled) {
 
 const slackRuntime = createSlackRuntimeReconciler({
   load: async () => {
-    const status = await built.slackInstallation.status();
-    const stored = await built.slackInstallation.get();
-    if (stored) {
+    const { managed, installation } = await built.slackInstallation.state();
+    if (installation) {
       const dynamic = slackPluginConfigFromEnv({
         ...process.env,
-        SLACK_BOT_TOKEN: stored.botToken,
-        SLACK_APP_TOKEN: stored.appToken,
+        SLACK_BOT_TOKEN: installation.botToken,
+        SLACK_APP_TOKEN: installation.appToken,
       });
-      return dynamic ? { version: stored.version, config: dynamic } : null;
+      return dynamic ? { version: installation.version, config: dynamic } : null;
     }
-    if (status.managed) return null;
+    if (managed) return null;
     if (slackConfig) return { version: "environment", config: slackConfig };
     return null;
   },
+  changes: built.slackInstallationBus,
   startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
   onError: (error) => console.error(`[qm] slack plugin reconciliation failed: ${errMessage(error)}`),
 });
