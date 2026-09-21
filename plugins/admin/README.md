@@ -50,7 +50,8 @@ The admin tabs render through the Lit modules in `ui/`, with `ui/admin.ts` as th
 The shared admin controller retains routing, API calls, and change-review dialogs. Successful saves commit the submitted snapshot, preserving newer edits made while a request was in flight. Scope and render generations prevent stale requests from replacing a newer page. Related settings refresh independently so changing one section cannot discard neighboring drafts. Run `npm test` and `npm run typecheck` from this directory after changing the UI.
 
 Env: `CORE_API_URL` (default `http://localhost:8080`), `CORE_ORG_ID` (default `acme`),
-`PORT` (default `8090`) and `CORE_SIGNING_SECRET` (required outside isolated development). The
+`PORT` (default `8090`), `CORE_SIGNING_SECRET` (required outside isolated development), and
+`INBOX_USERS` (the same comma-separated principal allowlist used by Inbox and Calendar). The
 portal also supplies a short-lived `x-portal-identity` token, which this surface forwards to core.
 There is **no** `ADMIN_PRINCIPALS` — admin identity + role + scope live solely in the core's
 durable, mutable `admin_grants` store, and this surface derives admin status from it via

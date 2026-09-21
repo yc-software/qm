@@ -2712,7 +2712,10 @@ test("AWS optional-secret activation restores prior tasks when a later service r
     "web-ui": state.services["acme-web-ui"].taskDefinition,
   };
   const arns = Object.fromEntries(
-    required.map((secret) => [secret.name, "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf"]),
+    [...required.map((secret) => secret.name), "INBOX_USERS"].map((name) => [
+      name,
+      "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf",
+    ]),
   );
   for (const workload of ["core", "web-ui"] as const) {
     const repository = secretsConfig.aws!.services[workload]!.ecrRepository;
