@@ -33,7 +33,7 @@ function withMultiLocks(lock: AdvisoryLock): AdvisoryLock {
               try {
                 return await fn();
               } finally {
-                while (scope.pending.size) await Promise.allSettled([...scope.pending]);
+                while (scope.pending.size) await Promise.allSettled(scope.pending);
                 scope.active = false;
               }
             })

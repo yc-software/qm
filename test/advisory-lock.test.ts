@@ -9,7 +9,11 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { createPostgresAdvisoryLock, createNoopAdvisoryLock, createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import {
+  createPostgresAdvisoryLock,
+  createNoopAdvisoryLock,
+  createMemoryAdvisoryLock,
+} from "../src/persistence/advisory-lock.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the advisory-lock tests";

@@ -9,8 +9,6 @@ const INBOX_LOOP_SURFACE = "inbox";
 
 export const INBOX_SYNC_TASK_VERSION = 4;
 
-export const INBOX_SYNC_CRON_TITLE = "Inbox sync";
-
 export const INBOX_SYNC_DEFAULT_EVERY_MS = 15 * 60 * 1000;
 
 export const INBOX_LEDGER_MAX_ITEMS = 500;
