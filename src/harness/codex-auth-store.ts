@@ -81,6 +81,10 @@ export function childCodexAuthFromDerived(derived: {
 }): JsonObject | null {
   const auth: JsonObject = {
     auth_mode: "chatgpt",
+    // Codex only reads `tokens` when `last_refresh` is present (get_token_data in
+    // codex-rs/login/src/auth/manager.rs). Without it the app-server sends requests
+    // with no bearer, gets 401, and tries to refresh with the empty refresh token.
+    last_refresh: new Date().toISOString(),
     tokens: {
       access_token: derived.accessToken,
       refresh_token: "",
