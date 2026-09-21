@@ -11,6 +11,7 @@ export interface BackgroundControllerDeps {
   drained(): Promise<void>;
   onError(error: unknown): void;
   validityMs?: number;
+  startupTimeoutMs?: number;
   pollMs?: number;
 }
 
@@ -121,9 +122,15 @@ export function createBackgroundController(deps: BackgroundControllerDeps) {
             return;
           }
           starting = true;
+          const startupDeadline = setTimeout(() => {
+            fence();
+            deps.onError(new Error("Background startup timed out; waiting for activation cleanup before retrying"));
+          }, deps.startupTimeoutMs ?? 120_000);
+          startupDeadline.unref?.();
           try {
             await deps.start(activation.signal);
           } finally {
+            clearTimeout(startupDeadline);
             starting = false;
           }
           if (activation.signal.aborted || !running) await release();

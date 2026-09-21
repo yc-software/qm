@@ -208,7 +208,7 @@ test("activation is not ready until startup completes and expiry fences a late s
   await controller.stop();
 });
 
-for (const outcome of ["complete", "transition", "read-failure", "read-stall", "stop"] as const) {
+for (const outcome of ["complete", "transition", "read-failure", "read-stall", "stop", "startup-timeout"] as const) {
   test(`pending startup renews verified ownership and fences on ${outcome}`, async (t) => {
     t.mock.timers.enable({ apis: ["Date", "setTimeout", "setInterval"] });
     const { store } = await setup();
@@ -257,6 +257,7 @@ for (const outcome of ["complete", "transition", "read-failure", "read-stall", "
       onError: (error) => errors.push(error),
       pollMs: 10,
       validityMs: 100,
+      startupTimeoutMs: 500,
     });
     controller.start();
     await started.promise;
@@ -271,13 +272,27 @@ for (const outcome of ["complete", "transition", "read-failure", "read-stall", "
     assert.equal(starts, 1);
     assert.equal(stops, 0);
     if (outcome === "transition") {
-      await store.transition({ expectedGeneration: 0, requestId: "switch", desiredDeploymentId: null, bootstrapTaskArns: ["task:a"] });
+      await store.transition({
+        expectedGeneration: 0,
+        requestId: "switch",
+        desiredDeploymentId: null,
+        bootstrapTaskArns: ["task:a"],
+      });
     }
     if (outcome === "read-failure") readMode = "fail";
     if (outcome === "read-stall" || outcome === "stop") readMode = "stall";
     t.mock.timers.tick(10);
     await flush();
     const stopping = outcome === "stop" ? controller.stop() : undefined;
+    if (outcome === "startup-timeout") {
+      for (let tick = 0; tick < 30; tick++) {
+        t.mock.timers.tick(10);
+        await flush();
+      }
+      assert.equal(starts, 1);
+      assert.equal(stops, 0);
+      assert.equal((await store.get()).members[0]?.ready, false);
+    }
     if (outcome === "read-stall" || outcome === "stop") {
       t.mock.timers.tick(110);
       await flush();
@@ -295,7 +310,7 @@ for (const outcome of ["complete", "transition", "read-failure", "read-stall", "
     assert.equal((await store.get()).members[0]?.ready, outcome === "complete");
     assert.equal(starts, 1);
     assert.equal(maxReads, 1);
-    assert.equal(errors.length, outcome === "read-failure" ? 1 : 0);
+    assert.equal(errors.length, outcome === "read-failure" || outcome === "startup-timeout" ? 1 : 0);
     await controller.stop();
     await controller.drained();
     assert.equal(stops, 1);
