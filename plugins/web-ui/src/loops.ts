@@ -1,4 +1,4 @@
-import { LOOP_ICONS, loopIcon } from "./loop-icon";
+import { LOOP_ICONS, loopIcon, readLoopIcon } from "./loop-icon";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { CheckCircle2, CornerUpLeft, Pause, Play, Zap } from "lucide";
 import { api } from "./core-bridge";
@@ -164,9 +164,10 @@ async function mutate(fn: () => Promise<unknown>): Promise<void> {
   }
 }
 
-async function setLoopIcon(loop: LoopView, value: string | null): Promise<void> {
+async function setLoopIcon(loop: LoopView, value: string | null | File): Promise<void> {
   await mutate(async () => {
-    await api(`/api/loops/${encodeURIComponent(loop.id)}`, { method: "PATCH", body: JSON.stringify({ icon: value }) });
+    const icon = value instanceof File ? await readLoopIcon(value) : value;
+    await api(`/api/loops/${encodeURIComponent(loop.id)}`, { method: "PATCH", body: JSON.stringify({ icon }) });
     iconPickerOpen = false;
     const { refreshInbox } = await import("./inbox");
     await refreshInbox({ silent: true });
@@ -448,6 +449,22 @@ function detailTpl(detail: LoopDetail): TemplateResult {
             <div class="loop-icon-grid">
               ${LOOP_ICONS.map((choice) => html`<button type="button" aria-label=${choice.label} title=${choice.label} aria-pressed=${loop.icon === choice.id ? "true" : "false"} ?disabled=${loopBusy} @click=${() => void setLoopIcon(loop, choice.id)}>${loopIcon({ icon: choice.id }, 20)}</button>`)}
             </div>
+            <label class="loop-icon-upload">
+              <span>${loopBusy ? "Saving…" : "Upload image"}</span>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                aria-label="Upload loop icon"
+                ?disabled=${loopBusy}
+                @change=${(event: Event) => {
+                  const input = event.currentTarget as HTMLInputElement;
+                  const file = input.files?.[0];
+                  input.value = "";
+                  if (file) void setLoopIcon(loop, file);
+                }}
+              />
+            </label>
+            <span class="loop-icon-hint">Images up to 2 MB, including SVG</span>
             <button
               class="loop-icon-default"
               type="button"

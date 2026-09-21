@@ -1,4 +1,4 @@
-import { validLoopIcon } from "../../loops/loop-store.ts";
+import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
 import { unattendedGrantRefusal } from "../../cron/authority.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
@@ -185,7 +185,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
   if (b.icon !== undefined && !validLoopIcon(b.icon))
     return sendJson(ctx.res, 400, {
       error: "bad_request",
-      message: "icon must be a lowercase icon name of at most 48 characters, or null for the default",
+      message: LOOP_ICON_ERROR,
     });
   if (typeof b.name !== "string" || !b.name.trim())
     return sendJson(ctx.res, 400, { error: "bad_request", message: "name required" });
@@ -341,7 +341,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
   if (b.icon !== undefined && !validLoopIcon(b.icon))
     return sendJson(ctx.res, 400, {
       error: "bad_request",
-      message: "icon must be a lowercase icon name of at most 48 characters, or null for the default",
+      message: LOOP_ICON_ERROR,
     });
   const patch: LoopPatch = {};
   if (typeof b.playbook === "string" && b.playbook.trim()) {

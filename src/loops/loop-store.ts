@@ -80,15 +80,26 @@ export function isRunnable(loop: Loop): boolean {
   return RUNNABLE_STATES.has(loop.state);
 }
 
+export const LOOP_ICON_ERROR =
+  "icon must be a lowercase icon name, a PNG data URL up to 64 KiB and 128×128 pixels, or null for the default";
+
 export function validLoopIcon(value: unknown): value is string | null {
-  return (
-    value === null || (typeof value === "string" && value.length <= 48 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(value))
-  );
+  if (value === null) return true;
+  if (typeof value !== "string") return false;
+  if (value.length <= 48 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(value)) return true;
+  if (value.length > 65_536 || !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
+  const encoded = value.slice("data:image/png;base64,".length);
+  const bytes = Buffer.from(encoded, "base64");
+  if (bytes.toString("base64") !== encoded || bytes.length < 33) return false;
+  if (!bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return false;
+  if (bytes.readUInt32BE(8) !== 13 || bytes.toString("ascii", 12, 16) !== "IHDR") return false;
+  const width = bytes.readUInt32BE(16);
+  const height = bytes.readUInt32BE(20);
+  return width > 0 && height > 0 && width <= 128 && height <= 128;
 }
 
 function normalizeIcon(value: string | null): string | undefined {
-  if (!validLoopIcon(value))
-    throw new Error("icon must be a lowercase icon name of at most 48 characters, or null for the default");
+  if (!validLoopIcon(value)) throw new Error(LOOP_ICON_ERROR);
   return value ?? undefined;
 }
 

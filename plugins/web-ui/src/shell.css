@@ -12431,7 +12431,8 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   background: var(--accent);
   border-color: var(--border);
 }
-.loop-icon-default {
+.loop-icon-default,
+.loop-icon-upload {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -12448,4 +12449,34 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .loop-icon-default:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.loop-icon img {
+  display: block;
+  object-fit: contain;
+}
+.loop-icon-upload {
+  position: relative;
+}
+.loop-icon-upload input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.loop-icon-upload:focus-within {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.loop-icon-upload:has(input:disabled) {
+  opacity: 0.45;
+  cursor: default;
+}
+.loop-icon-hint {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.5;
 }

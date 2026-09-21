@@ -800,7 +800,11 @@ test("loop icons can be set and reset by their owner, reject invalid input and r
   assert.equal(created.status, 200);
   const loop = (created.body as { loop: Loop }).loop;
   assert.equal(loop.icon, "bug");
-  for (const icon of ["rocket", null]) {
+  for (const icon of [
+    "rocket",
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
+    null,
+  ]) {
     const result = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { icon });
     assert.equal(result.status, 200);
     assert.equal((result.body as { loop: Loop }).loop.icon, icon ?? undefined);

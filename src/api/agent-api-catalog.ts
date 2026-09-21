@@ -258,7 +258,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET|PATCH|DELETE",
         path: "/v1/loops/:id",
         summary:
-          "inspect a loop (items, held outputs, vitals), edit it (icon sets a named icon such as bug, rocket, mail, or slack; null restores the default; playbook edits are versioned; destinationKey sets escalation delivery and null clears it; state: enabled|paused clears or sets the pause; clearing quarantine or changing destination requires a live human), or delete it and its child cron",
+          "inspect a loop (items, held outputs, vitals), edit it (icon sets a named icon such as bug or slack, or an uploaded PNG data URL up to 64 KiB and 128×128 pixels; null restores the default; playbook edits are versioned; destinationKey sets escalation delivery and null clears it; state: enabled|paused clears or sets the pause; clearing quarantine or changing destination requires a live human), or delete it and its child cron",
       },
       { method: "POST", path: "/v1/loops/:id/fire", summary: "fire a loop now (intake → work → judge → hold/ship)" },
       {
