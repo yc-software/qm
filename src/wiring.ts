@@ -2219,6 +2219,7 @@ export function buildApp(
         fireDropResolution({ deliveries, idempotency, identity, run: (req) => app.turn(req), directory }, drop)
     : undefined;
   const loopFire: LoopFireService = createLoopFireService({
+    admittedWork,
     crons,
     samePerson: (a, b) => app.samePerson(a, b),
     loops: loopStore,

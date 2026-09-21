@@ -1,3 +1,5 @@
+import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
+import { renderInboxSyncTask } from "./inbox-loop.ts";
 import { cronTriggerAuthority } from "../cron/authority.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
@@ -30,6 +32,7 @@ import { ledgerState } from "./ledger-view.ts";
 import { adapterForItem } from "./sources/index.ts";
 
 export interface LoopFireDeps {
+  admittedWork?: AdmittedWork;
   loops: LoopStore;
   crons?: Pick<CronStore, "get">;
   samePerson?: (a: string, b: string) => Promise<boolean>;
@@ -364,6 +367,7 @@ function shipPrompt(loop: Loop, output: LoopOutput, note?: string): string {
 }
 
 export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
+  const admitted = <T>(work: () => Promise<T>): Promise<T> => deps.admittedWork?.run(work) ?? work();
   async function stageTurn(
     loop: Loop,
     fireKey: string,
@@ -461,6 +465,16 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function fire(loopId: string, fireKey: string, cronId?: string): Promise<LoopFireResult> {
+    try {
+      const work = () => fireAdmitted(loopId, fireKey, cronId);
+      return await admitted(work);
+    } catch (error) {
+      if (error instanceof WorkAdmissionClosed) return { status: "refused", note: error.message };
+      throw error;
+    }
+  }
+
+  async function fireAdmitted(loopId: string, fireKey: string, cronId?: string): Promise<LoopFireResult> {
     const loop = await deps.loops.get(loopId);
     if (!loop) return { status: "failed", note: "loop not found" };
     try {
@@ -472,6 +486,20 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       return { status: "silent", note: "duplicate fire key" };
     }
     const threadRef = loopFireThreadRef(loopId, fireKey);
+    if (loop.surface === "inbox") {
+      if (!isRunnable(loop)) return { status: "silent", note: "loop is not runnable" };
+      let failure: string | undefined;
+      try {
+        const outcome = await stageTurn(loop, `${fireKey}:sync`, threadRef, renderInboxSyncTask(loop.id));
+        if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
+        failure = stageFailure("inbox sync", outcome)?.error.message;
+      } catch (error) {
+        failure = errMessage(error);
+      }
+      await deps.loops.recordFireOutcome(loopId, failure !== undefined);
+      await applyGovernor(loopId);
+      return failure !== undefined ? { status: "failed", note: failure } : { status: "silent" };
+    }
     const maxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
     const grants = await deps.grants.byLoop(loopId);
     const workReplies = new Map<string, string>();
@@ -720,5 +748,12 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     return itemTurn(loop, item, itemActionPrompt(loop, item, kind, args), fireKey, actorId);
   }
 
-  return { fire, shipOutput, returnOutput, sweepStale, followUp, itemAction };
+  return {
+    fire,
+    shipOutput: (...args) => admitted(() => shipOutput(...args)),
+    returnOutput,
+    sweepStale,
+    followUp: (...args) => admitted(() => followUp(...args)),
+    itemAction: (...args) => admitted(() => itemAction(...args)),
+  };
 }

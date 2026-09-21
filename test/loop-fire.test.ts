@@ -1,3 +1,5 @@
+import { createAdmittedWork } from "../src/util/admitted-work.ts";
+import { renderInboxSyncTask } from "../src/loops/inbox-loop.ts";
 import { createCronStore, type CreateCronInput } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import assert from "node:assert/strict";
@@ -36,6 +38,7 @@ type Responder = (req: TurnRequest) => string | Promise<string>;
 function service(
   respond: Responder,
   overrides?: {
+    admittedWork?: ReturnType<typeof createAdmittedWork>;
     grants?: ReturnType<typeof createShipGrantStore>;
     samePerson?: (a: string, b: string) => Promise<boolean>;
   },
@@ -49,6 +52,7 @@ function service(
   const turns: TurnRequest[] = [];
   const idempotency = createIdempotencyStore();
   const fire = createLoopFireService({
+    admittedWork: overrides?.admittedWork,
     crons,
     samePerson: overrides?.samePerson,
     loops,
@@ -60,8 +64,11 @@ function service(
       idempotency,
       identity: fakeIdentity() as never,
       run: async (req): Promise<TurnResult> => {
-        turns.push(req);
-        return { status: "ok", reply: await respond(req), sessionId: `s${turns.length}` };
+        const run = async (): Promise<TurnResult> => {
+          turns.push(req);
+          return { status: "ok", reply: await respond(req), sessionId: `s${turns.length}` };
+        };
+        return overrides?.admittedWork ? overrides.admittedWork.run(run) : run();
       },
     },
   });
@@ -668,7 +675,9 @@ test("legacy inbox sync cron is not a grant source for inbox event turns", async
   const s = service(HAPPY);
   const loop = await makeLoop(s.loops, { surface: "inbox" });
   const cron = await bindCron(s, loop, { loopId: undefined, unattendedGrants: ["admin.sessions.read"] });
-  assert.equal((await s.fire.fire(loop.id, "slack-event")).status, "ok");
+  assert.equal((await s.fire.fire(loop.id, "slack-event")).status, "silent");
+  assert.equal(s.turns.length, 1);
+  assert.equal(s.turns[0]?.text, renderInboxSyncTask(loop.id));
   assert.ok(s.turns.every((turn) => turn.unattendedGrants === undefined));
   assert.equal((await s.fire.fire(loop.id, "invalid-delegation", cron.id)).status, "failed");
 });
@@ -729,4 +738,113 @@ test("privileged item turns recognize the owner's verified directory alias", asy
   const refused = await s.fire.itemAction(loop, item, "custom", {}, "other@example.test");
   assert.equal(refused.ok, false);
   assert.equal(s.turns.length, before);
+});
+
+test("an admitted loop drains all stages after ownership closes", async () => {
+  const admission = createAdmittedWork();
+  let finishIntake!: () => void;
+  let enteredIntake!: () => void;
+  const started = new Promise<void>((resolve) => {
+    enteredIntake = resolve;
+  });
+  const release = new Promise<void>((resolve) => {
+    finishIntake = resolve;
+  });
+  const s = service(
+    async (req) => {
+      if (stage(req) === "intake") {
+        enteredIntake();
+        await release;
+      }
+      return HAPPY(req);
+    },
+    { admittedWork: admission },
+  );
+  const loop = await makeLoop(s.loops);
+  const running = s.fire.fire(loop.id, "handover");
+  await started;
+  admission.pause();
+  let drained = false;
+  const drain = admission.drained().then(() => {
+    drained = true;
+  });
+  await Promise.resolve();
+  assert.equal(drained, false);
+  const refused = await s.fire.fire(loop.id, "after-handover");
+  assert.equal(refused.status, "refused");
+  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires ?? 0, 0);
+  finishIntake();
+  assert.equal((await running).status, "ok");
+  await drain;
+  assert.deepEqual(s.turns.map(stage), ["intake", "work", "judge"]);
+  assert.equal((await s.outputs.awaitingReview(loop.id)).length, 1);
+  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 0);
+});
+
+test("inbox fires repair an existing shell without creating generic intake records", async () => {
+  const s = service(async (req) => {
+    assert.equal(req.text, renderInboxSyncTask(loop.id));
+    await s.items.ingest([
+      {
+        loopId: loop.id,
+        dedupeKey: "channel:123",
+        source: "slack",
+        sourceAt: 123,
+        sourcePayload: {
+          title: "#support",
+          from: "Alex",
+          snippet: "Can you help?",
+          slack: { channelId: "channel", ts: "123" },
+        },
+        proposal: { by: "agent", data: { body: "Yes, I will take a look." } },
+      },
+    ]);
+    return "Synced";
+  });
+  const loop = await makeLoop(s.loops, { surface: "inbox" });
+  await s.items.enqueue({ loopId: loop.id, sourceKey: "channel:123", sourceSummary: "support request" });
+  assert.equal((await s.fire.fire(loop.id, "sync-one")).status, "silent");
+  assert.equal((await s.fire.fire(loop.id, "sync-one")).status, "silent");
+  assert.equal(s.turns.length, 1);
+  const rows = await s.items.byLoop(loop.id);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.status, "ready");
+  assert.equal(rows[0]?.sourcePayload?.title, "#support");
+  assert.equal(rows[0]?.proposal?.data.body, "Yes, I will take a look.");
+  assert.equal((await s.outputs.byLoop(loop.id)).length, 0);
+});
+
+test("closed admission leaves item follow-ups and ship attempts untouched", async () => {
+  const admission = createAdmittedWork();
+  const s = service(HAPPY, { admittedWork: admission });
+  const loop = await makeLoop(s.loops);
+  await s.fire.fire(loop.id, "first");
+  const item = (await s.items.byLoop(loop.id))[0];
+  const output = (await s.outputs.awaitingReview(loop.id))[0];
+  assert.ok(item);
+  assert.ok(output);
+  admission.pause();
+  await assert.rejects(s.fire.followUp(loop, item, "Please revise", loop.owner), /not accepting synchronous work/);
+  await assert.rejects(s.fire.shipOutput(loop.id, output.id, loop.owner), /not accepting synchronous work/);
+  await assert.rejects(s.fire.itemAction(loop, item, "revise", {}, loop.owner), /not accepting synchronous work/);
+  assert.deepEqual(await s.items.get(item.id), item);
+  assert.deepEqual(await s.outputs.get(output.id), output);
+});
+
+test("inbox sync exceptions count once and recover on a successful retry", async () => {
+  let fail = true;
+  const s = service(() => {
+    if (fail) throw new Error("connector unavailable");
+    return "Synced";
+  });
+  const loop = await makeLoop(s.loops, { surface: "inbox" });
+  assert.equal((await s.fire.fire(loop.id, "broken")).status, "failed");
+  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 1);
+  assert.equal((await s.items.byLoop(loop.id)).length, 0);
+  fail = false;
+  assert.equal((await s.fire.fire(loop.id, "recovery")).status, "silent");
+  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 0);
+  await s.loops.setState(loop.id, "quarantined");
+  assert.equal((await s.fire.fire(loop.id, "quarantined")).status, "silent");
+  assert.equal(s.turns.length, 2);
 });
