@@ -180,6 +180,7 @@ export interface HarnessDetectResult {
 }
 
 export interface HarnessCompactInput {
+  cancel?: AbortSignal;
   session: Session;
   history: SessionEntry[];
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;

@@ -874,27 +874,32 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           if (result.stopped) throw new Error("Compaction was interrupted before completion");
           return result;
         });
-        return summarizeHistory(input.history, model, async (_model, context, options) => {
-          const text = await summarize(
-            context.systemPrompt ?? "",
-            context.messages.map((message) => contentText(message.content)).join("\n\n"),
-            options?.signal,
-            { recordModelCall: input.recordModelCall },
-            model.id,
-          );
-          const stream = createAssistantMessageEventStream();
-          stream.end({
-            role: "assistant",
-            content: [{ type: "text", text: text ?? "" }],
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: zeroUsage(),
-            stopReason: "stop",
-            timestamp: Date.now(),
-          });
-          return stream;
-        });
+        return summarizeHistory(
+          input.history,
+          model,
+          async (_model, context, options) => {
+            const text = await summarize(
+              context.systemPrompt ?? "",
+              context.messages.map((message) => contentText(message.content)).join("\n\n"),
+              options?.signal,
+              { recordModelCall: input.recordModelCall },
+              model.id,
+            );
+            const stream = createAssistantMessageEventStream();
+            stream.end({
+              role: "assistant",
+              content: [{ type: "text", text: text ?? "" }],
+              api: model.api,
+              provider: model.provider,
+              model: model.id,
+              usage: zeroUsage(),
+              stopReason: "stop",
+              timestamp: Date.now(),
+            });
+            return stream;
+          },
+          { signal: input.cancel },
+        );
       },
 
       contextTokenBudget(scopeLabel, model) {

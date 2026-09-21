@@ -13,14 +13,17 @@ import {
   validateCompactSummary,
   compactionThroughSeq,
   estimateEntryTokens,
+  estimateHistoryTokens,
   forModelContext,
   overBudgetFraction,
   planCompaction,
   recentEntryCountWithinBudget,
 } from "../../harness/context-compaction.ts";
+import { countTokens } from "../../util/tokens.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import { errMessage } from "../../util/errors.ts";
 import { createKeyedQueue } from "../../util/async.ts";
+import { NonRetryableTurnError } from "../turn-error.ts";
 import type { OrchestratorDeps } from "./types.ts";
 
 const MAX_CONTEXT_TOKENS = 120_000;
@@ -42,6 +45,7 @@ export interface CompactionContext {
     orgScopeId: string;
     actorId: string;
     model?: string;
+    cancel?: AbortSignal;
   }): Promise<SessionEntry[]>;
   scheduleBackgroundCompaction(input: {
     sessionId: string;
@@ -49,6 +53,7 @@ export interface CompactionContext {
     orgScopeId: string;
     actorId: string;
     model?: string;
+    cancel?: AbortSignal;
     includeSecurityTainted?: boolean;
   }): void;
 }
@@ -79,6 +84,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     orgScopeId: string;
     actorId: string;
     model?: string;
+    cancel?: AbortSignal;
   }): Promise<Summarized | null> {
     if (isManagedGroupScope(input.scopeId)) return null;
     if (!deps.harness.models.compactHistory) return null;
@@ -92,11 +98,13 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     const raw = await deps.harness.models.compactHistory({
       session: input.session,
       history: plan.toSummarize,
+      cancel: input.cancel,
       recordModelCall: (rec) => {
         deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: summaryLabel, ...rec });
         void deps.budget?.record(input.actorId, estimateCostUsd(rec.inputTokens));
       },
     });
+    input.cancel?.throwIfAborted();
     const text = validateCompactSummary(raw);
     return {
       text,
@@ -153,14 +161,24 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     orgScopeId: string;
     actorId: string;
     model?: string;
+    cancel?: AbortSignal;
   }): Promise<SessionEntry[] | null> {
     const summarized = await summarizeForCompaction(input);
     if (!summarized) return null;
-    const summary = await writeCompaction({ ...input, summarized });
     const recent = input.visibleHistory.filter(
       (entry) => entry.seq > summarized.throughSeq && !contextSummaryPayload(entry),
     );
-    return boundRecent([summary, ...recent], tokenBudgetFor(input.scopeId, input.model));
+    const rebuiltTokens =
+      estimateHistoryTokens(recent) +
+      countTokens(createContextSummaryPayload(summarized.throughSeq, summarized.text).text);
+    if (rebuiltTokens > tokenBudgetFor(input.scopeId, input.model)) {
+      throw new NonRetryableTurnError(
+        "Conversation summary and recent messages still exceed the context budget. Your history is preserved; shorten the latest input before retrying.",
+      );
+    }
+    input.cancel?.throwIfAborted();
+    const summary = await writeCompaction({ ...input, summarized });
+    return [summary, ...recent];
   }
 
   async function compactContextIfNeeded(input: {
@@ -171,13 +189,19 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     orgScopeId: string;
     actorId: string;
     model?: string;
+    cancel?: AbortSignal;
   }): Promise<SessionEntry[]> {
     const maxContextTokens = tokenBudgetFor(input.scopeId, input.model);
     if (!overBudgetFraction(input.visibleHistory, maxContextTokens, COMPACT_HARD_FRACTION)) {
       return input.visibleHistory;
     }
+    if (isManagedGroupScope(input.scopeId)) return boundRecent(input.visibleHistory, maxContextTokens);
     const rebuilt = await applyCompaction(input);
-    return rebuilt ?? boundRecent(input.visibleHistory, maxContextTokens);
+    if (rebuilt) return rebuilt;
+    if (!overBudgetFraction(input.visibleHistory, maxContextTokens, 1)) return input.visibleHistory;
+    throw new NonRetryableTurnError(
+      "Conversation summarization is unavailable and the context budget is full. Your history is preserved.",
+    );
   }
 
   const WRITE_LEASE_WAIT_MS = 60_000;
@@ -191,12 +215,12 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     orgScopeId: string;
     actorId: string;
     model?: string;
+    cancel?: AbortSignal;
     includeSecurityTainted?: boolean;
   }): void {
     if (compactionPending.has(input.sessionId)) return;
     compactionPending.add(input.sessionId);
     void backgroundCompaction(input.sessionId, async () => {
-      compactionPending.delete(input.sessionId);
       let lease: Lease | null = null;
       try {
         const session = await deps.sessions.get(input.sessionId);
@@ -208,6 +232,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         const snapshotSeq = entries.at(-1)?.seq ?? -1;
         const summarized = await summarizeForCompaction({
           session,
+          cancel: input.cancel,
           visibleHistory: history,
           scopeId: input.scopeId,
           orgScopeId: input.orgScopeId,
@@ -219,6 +244,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         if (!lease) return;
         const since = await deps.sessions.getEntries(input.sessionId, { sinceSeq: snapshotSeq + 1 });
         if (!since.some((entry) => !!contextSummaryPayload(entry))) {
+          input.cancel?.throwIfAborted();
           await writeCompaction({ session, lease, summarized });
         }
       } catch (e) {
@@ -233,6 +259,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
           e,
         );
       } finally {
+        compactionPending.delete(input.sessionId);
         if (lease) await deps.sessions.releaseLease(lease);
       }
     }).catch((e) => {

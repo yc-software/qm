@@ -90,7 +90,7 @@ for (const stopReason of ["length", "aborted", "error", "toolUse"] as const) {
   test(`compaction rejects ${stopReason} even when partial text exists`, async () => {
     await assert.rejects(
       summarizeHistory([], model, () => response("partial summary", stopReason)),
-      /did not complete/,
+      /did not complete|Summarization failed/,
     );
   });
 }
@@ -148,4 +148,87 @@ test("Astra compaction serializes a supported reasoning effort through the provi
   assert.ok(request, "compaction must reach the provider's HTTP transport");
   assert.equal(request.model, "gpt-6-astra");
   assert.equal(request.reasoning?.effort, "low");
+});
+
+for (const errorMessage of [
+  "503 service unavailable",
+  "connection lost",
+  "Anthropic stream ended before message_stop",
+]) {
+  test(`compaction retries transient result: ${errorMessage}`, async () => {
+    let attempts = 0;
+    const result = await summarizeHistory(
+      [],
+      model,
+      () => {
+        attempts++;
+        if (attempts === 3) return response();
+        const stream = createAssistantMessageEventStream();
+        stream.end({
+          role: "assistant",
+          content: [],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: zeroUsage(),
+          stopReason: "error",
+          errorMessage,
+          timestamp: 0,
+        });
+        return stream;
+      },
+      { retry: { enabled: true, maxRetries: 3, baseDelayMs: 0 } },
+    );
+    assert.equal(result, summary);
+    assert.equal(attempts, 3);
+  });
+}
+
+for (const errorMessage of [
+  "request violates Anthropic's usage policy",
+  "Provider returned error: request violates Anthropic usage policy",
+])
+  test(`compaction refusal is terminal and rejects partial text: ${errorMessage}`, async () => {
+    let attempts = 0;
+    await assert.rejects(
+      summarizeHistory(
+        [],
+        model,
+        () => {
+          attempts++;
+          const stream = createAssistantMessageEventStream();
+          stream.end({
+            role: "assistant",
+            content: [{ type: "text", text: summary }],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: zeroUsage(),
+            stopReason: "error",
+            errorMessage,
+            timestamp: 0,
+          });
+          return stream;
+        },
+        { retry: { enabled: true, maxRetries: 3, baseDelayMs: 0 } },
+      ),
+      { name: "NonRetryableTurnError" },
+    );
+    assert.equal(attempts, 1);
+  });
+
+test("compaction cancellation after a successful response still rejects the summary", async () => {
+  const controller = new AbortController();
+  await assert.rejects(
+    summarizeHistory(
+      [],
+      model,
+      () => {
+        controller.abort();
+        return response();
+      },
+      { signal: controller.signal },
+    ),
+    /aborted/i,
+  );
 });

@@ -1,3 +1,6 @@
+import { NonRetryableTurnError } from "../src/core/turn-error.ts";
+import { createCompaction } from "../src/core/orchestrator/compaction.ts";
+import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -52,7 +55,7 @@ const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor
 const PERSONAL = scopeId("personal", "U1");
 const TEAM = scopeId("team", "eng");
 
-function spyHarness(opts: { withSummarizer?: boolean } = {}) {
+function spyHarness(opts: { withSummarizer?: boolean; compactResponse?: string } = {}) {
   const base = createMockHarness();
   const compactCalls: HarnessCompactInput[] = [];
   const resetCalls: string[] = [];
@@ -71,7 +74,7 @@ function spyHarness(opts: { withSummarizer?: boolean } = {}) {
   } else {
     harness.models.compactHistory = async (input: HarnessCompactInput) => {
       compactCalls.push(input);
-      return base.models.compactHistory!(input);
+      return opts.compactResponse ?? base.models.compactHistory!(input);
     };
   }
   return { harness, compactCalls, resetCalls };
@@ -192,12 +195,12 @@ async function waitForLeaseRelease(sessions: SessionStore, sessionId: string, de
 }
 
 test("overflow over the injected token budget summarizes: compactHistory runs over the oldest entries, a summary is appended, the session resets, the rebuilt context is bounded", async () => {
-  const { harness, compactCalls, resetCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("msg 4", "msg 5"));
+  const { harness, compactCalls, resetCalls } = spyHarness({ compactResponse: "summary" });
+  const { orch, sessions } = buildOrchestrator(harness, 1_000);
 
   const sid = await seed(
     sessions,
-    msgTexts(6).map((text) => ({ payload: { text } })),
+    msgTexts(6).map((text) => ({ payload: { text: text + "context detail ".repeat(300) } })),
   );
 
   const res = await orch.handleTurn(turn("!histcount"));
@@ -221,7 +224,7 @@ test("overflow over the injected token budget summarizes: compactHistory runs ov
 
 test("the background pass labels the lease it takes, so a turn it locks out can name what beat it", async () => {
   const { harness } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("msg 4", "msg 5"));
+  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(6))));
   const holders: Array<string | undefined> = [];
   const acquire = sessions.acquireLease.bind(sessions);
   sessions.acquireLease = async (sessionId, holder) => {
@@ -246,10 +249,10 @@ test("the background pass labels the lease it takes, so a turn it locks out can 
 });
 
 test("token overflow triggers compaction with only a few huge entries", async () => {
-  const { harness, compactCalls, resetCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 50);
+  const { harness, compactCalls, resetCalls } = spyHarness({ compactResponse: "summary" });
+  const { orch, sessions } = buildOrchestrator(harness, 1_000);
 
-  const big = "many different tokens here ".repeat(25);
+  const big = "context detail ".repeat(300);
   const sid = await seed(
     sessions,
     Array.from({ length: 4 }, (_, i) => ({ payload: { text: `${big} ${i}` } })),
@@ -295,7 +298,7 @@ test("a prior summary that still fits is reused, not regenerated", async () => {
   assert.equal(res.reply, "history:2", "reuse returns [summary, recent raw…]");
 });
 
-test("with no harness summarizer, overflow falls back to a plain slice — no summary entry written", async () => {
+test("with no harness summarizer, overflow preserves history and fails without slicing", async () => {
   const { harness, compactCalls, resetCalls } = spyHarness({ withSummarizer: false });
   assert.equal(harness.models.compactHistory, undefined, "fixture: summarizer is absent");
   const { orch, sessions } = buildOrchestrator(harness, tokensOf("msg 2", "msg 3", "msg 4", "msg 5"));
@@ -305,30 +308,29 @@ test("with no harness summarizer, overflow falls back to a plain slice — no su
     msgTexts(6).map((text) => ({ payload: { text } })),
   );
 
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
+  await assert.rejects(orch.handleTurn(turn("!histcount")), { name: "NonRetryableTurnError" });
 
   assert.equal(compactCalls.length, 0, "no summarizer → compactHistory never called");
   assert.deepEqual(resetCalls, [], "no summarizer → no session reset");
   const summaries = await summaryEntries(sessions, sid);
   assert.equal(summaries.length, 0, "fallback must NOT write a summary entry");
-  assert.equal(res.reply, "history:4", "fallback returns the newest entries that fit the token budget");
+  assert.deepEqual(
+    (await sessions.getEntries(sid)).slice(0, 6).map((e) => (e.payload as { text: string }).text),
+    msgTexts(6),
+  );
 });
 
 test("a tool_call at the summarize/keep boundary whose result is KEPT is not summarized as interrupted", async () => {
-  const { harness, compactCalls } = spyHarness();
-  const callPayload = { tool: "execute", command: "bash refresh.sh", callId: "c1" };
-  const resultPayload = { tool: "execute", callId: "c1", result: "wrote inv=89", isError: false };
-  const { orch, sessions } = buildOrchestrator(
-    harness,
-    budgetKeepingOnlyNewest(JSON.stringify(callPayload), JSON.stringify(resultPayload)),
-  );
+  const { harness, compactCalls } = spyHarness({ compactResponse: "summary" });
+  const callPayload = { tool: "execute", command: "command detail ".repeat(200), callId: "c1" };
+  const resultPayload = { tool: "execute", callId: "c1", result: "result detail ".repeat(200), isError: false };
+  const { orch, sessions } = buildOrchestrator(harness, 1_000);
 
   const sid = await seed(sessions, [
-    { payload: { text: "msg 0" } },
-    { payload: { text: "msg 1" } },
-    { payload: { text: "msg 2" } },
-    { payload: { text: "msg 3" } },
+    { payload: { text: "context detail ".repeat(300) + "msg 0" } },
+    { payload: { text: "context detail ".repeat(300) + "msg 1" } },
+    { payload: { text: "context detail ".repeat(300) + "msg 2" } },
+    { payload: { text: "context detail ".repeat(300) + "msg 3" } },
     { type: "tool_call", payload: callPayload },
     { type: "tool_result", payload: resultPayload },
   ]);
@@ -348,15 +350,15 @@ test("a tool_call at the summarize/keep boundary whose result is KEPT is not sum
 
 test("a genuinely interrupted tool_call (no result anywhere) IS marked interrupted in the summary", async () => {
   const { harness } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("msg 4", "msg 5"));
+  const { orch, sessions } = buildOrchestrator(harness, 10_000);
 
   const sid = await seed(sessions, [
     { type: "tool_call", payload: { tool: "execute", command: "bash refresh.sh", callId: "c1" } },
     { payload: { text: "(system note: the platform restarted mid-turn...)" } },
-    { payload: { text: "msg 2" } },
-    { payload: { text: "msg 3" } },
-    { payload: { text: "msg 4" } },
-    { payload: { text: "msg 5" } },
+    { payload: { text: "context detail ".repeat(3000) + "msg 2" } },
+    { payload: { text: "context detail ".repeat(3000) + "msg 3" } },
+    { payload: { text: "context detail ".repeat(3000) + "msg 4" } },
+    { payload: { text: "context detail ".repeat(3000) + "msg 5" } },
   ]);
 
   const res = await orch.handleTurn(turn("!histcount"));
@@ -372,16 +374,16 @@ test("a genuinely interrupted tool_call (no result anywhere) IS marked interrupt
 });
 
 test("a summary uses the session scope regardless of the source entry scopes", async () => {
-  const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("team 4", "recent 5"));
+  const { harness, compactCalls } = spyHarness({ compactResponse: "summary" });
+  const { orch, sessions } = buildOrchestrator(harness, 1_000);
 
   const sid = await seed(sessions, [
-    { payload: { text: "team 0" }, scopeLabel: TEAM },
-    { payload: { text: "team 1" }, scopeLabel: TEAM },
-    { payload: { text: "team 2" }, scopeLabel: TEAM },
-    { payload: { text: "team 3" }, scopeLabel: TEAM },
-    { payload: { text: "team 4" }, scopeLabel: TEAM },
-    { payload: { text: "recent 5" } },
+    { payload: { text: "context detail ".repeat(300) + "team 0" }, scopeLabel: TEAM },
+    { payload: { text: "context detail ".repeat(300) + "team 1" }, scopeLabel: TEAM },
+    { payload: { text: "context detail ".repeat(300) + "team 2" }, scopeLabel: TEAM },
+    { payload: { text: "context detail ".repeat(300) + "team 3" }, scopeLabel: TEAM },
+    { payload: { text: "context detail ".repeat(300) + "team 4" }, scopeLabel: TEAM },
+    { payload: { text: "context detail ".repeat(300) + "recent 5" } },
   ]);
 
   const res = await orch.handleTurn(turn("!histcount"));
@@ -565,11 +567,11 @@ test("a model-overridden session's background pass sizes against the override's 
 });
 
 test("a rapid follow-up that outran the background pass AND is over the HARD limit blocks and compacts inline", async () => {
-  const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, Math.floor(tokensOf(...msgTexts(8)) * COMPACT_HARD_FRACTION));
+  const { harness, compactCalls } = spyHarness({ compactResponse: "summary" });
+  const { orch, sessions } = buildOrchestrator(harness, 1_000);
   await seed(
     sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
+    msgTexts(8).map((text) => ({ payload: { text: text + "context detail ".repeat(300) } })),
   );
 
   const res = await orch.handleTurn(spineTurn("!histcount"));
@@ -802,13 +804,23 @@ test("under-HARD turn: the harness sees the boundary-filtered context, not stack
 });
 
 test("over-HARD turn with a summarizer: the rebuilt context honors the boundary", async () => {
-  const base = spyHarness();
+  const base = spyHarness({ compactResponse: "summary" });
   const { wrapped, seen } = captureHarness(base.harness);
-  const { orch, sessions } = buildOrchestrator(
-    wrapped,
-    Math.floor(tokensOf("recap B", "new 0", "new 1") * COMPACT_HARD_FRACTION),
+  const { orch, sessions } = buildOrchestrator(wrapped, 1_000);
+  await seed(
+    sessions,
+    stackedLog().map((e) =>
+      e.type === "system"
+        ? e
+        : {
+            ...e,
+            payload: {
+              ...(e.payload as Record<string, unknown>),
+              text: "context detail ".repeat(300) + (e.payload as { text?: string }).text,
+            },
+          },
+    ),
   );
-  await seed(sessions, stackedLog());
 
   const res = await orch.handleTurn(turn("!histcount"));
   assert.equal(res.status, "ok");
@@ -816,20 +828,14 @@ test("over-HARD turn with a summarizer: the rebuilt context honors the boundary"
   assertSummaryBoundary(seen[0]!, "over-hard");
 });
 
-test("over-HARD turn with NO summarizer (boundRecent fallback): the boundary still holds and the summary survives the slice", async () => {
+test("over-HARD turn with no summarizer fails before invoking the assistant", async () => {
   const base = spyHarness({ withSummarizer: false });
   const { wrapped, seen } = captureHarness(base.harness);
   const { orch, sessions } = buildOrchestrator(wrapped, budgetKeepingOnlyNewest("recap B", "new 1"));
   await seed(sessions, stackedLog());
 
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
-  assert.equal(seen.length, 1);
-  assertSummaryBoundary(seen[0]!, "boundRecent fallback");
-  assert.ok(
-    seen[0]!.some((e) => contextSummaryPayload(e)),
-    "the bounding slice must keep the latest summary",
-  );
+  await assert.rejects(orch.handleTurn(turn("!histcount")), { name: "NonRetryableTurnError" });
+  assert.equal(seen.length, 0);
 });
 
 test("the context window start never regresses as the log grows", () => {
@@ -964,6 +970,47 @@ test("the background pass waits out a turn that holds the lock rather than throw
   await sessions.releaseLease(held!);
   assert.equal((await waitForSummary(sessions, sid)).length, 1, "the summary lands once the turn is done");
   assert.equal(compactCalls.length, 1, "and the model was called exactly once for it");
+});
+
+test("background cancellation while waiting for a lease cannot persist its summary", async () => {
+  const sessions = createMemorySessionStore();
+  const sid = await seed(
+    sessions,
+    msgTexts(8).map((text) => ({ payload: { text } })),
+  );
+  const { lease: held } = await sessions.acquireLease(sid, "turn");
+  assert.ok(held);
+  const controller = new AbortController();
+  const waiting = Promise.withResolvers<void>();
+  const finished = Promise.withResolvers<void>();
+  const acquire = sessions.acquireLease.bind(sessions);
+  sessions.acquireLease = async (...args) => {
+    if (args[1] === "compaction") waiting.resolve();
+    return acquire(...args);
+  };
+  const release = sessions.releaseLease.bind(sessions);
+  sessions.releaseLease = async (lease) => {
+    await release(lease);
+    if (lease !== held) finished.resolve();
+  };
+  const compaction = createCompaction({
+    sessions,
+    maxContextTokens: budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))),
+    harness: { models: { compactHistory: async () => "summary" } },
+  } as unknown as OrchestratorDeps);
+  compaction.scheduleBackgroundCompaction({
+    sessionId: sid,
+    scopeId: PERSONAL,
+    orgScopeId: ORG,
+    actorId: actor.id,
+    cancel: controller.signal,
+  });
+  await waiting.promise;
+  controller.abort();
+  await sessions.releaseLease(held);
+  await finished.promise;
+  assert.equal((await summaryEntries(sessions, sid)).length, 0);
+  assert.equal((await sessions.getEntries(sid)).length, 8);
 });
 
 test("a turn landing mid-summarization does not disturb the fold: it covers a prefix, the turn's entries stay", async () => {
@@ -1156,4 +1203,48 @@ test("a retry restores a committed runtime decision after reset crashes, without
   await assert.rejects(() => orch.handleTurn(input), /worker died/);
   await orch.handleTurn({ ...input, attempt: 2 });
   assert.equal(calls, 2);
+});
+
+test("foreground summary failure preserves the initiating request and does not schedule another summary", async () => {
+  const { harness } = spyHarness();
+  let attempts = 0;
+  harness.models.compactHistory = async () => {
+    attempts++;
+    throw new NonRetryableTurnError("summary refused");
+  };
+  const { wrapped, seen } = captureHarness(harness);
+  const { orch, sessions } = buildOrchestrator(wrapped, 1_000);
+  const sid = await seed(
+    sessions,
+    msgTexts(6).map((text) => ({ payload: { text: text + "context detail ".repeat(300) } })),
+  );
+  const before = await sessions.getEntries(sid);
+  await assert.rejects(orch.handleTurn(turn("Preserve this request for retry")), /summary refused/);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(attempts, 1);
+  assert.equal(seen.length, 0);
+  const after = await sessions.getEntries(sid);
+  assert.deepEqual(after.slice(0, before.length), before);
+  assert.ok(
+    after.some(
+      (entry) =>
+        entry.type === "user" && (entry.payload as { text?: string }).text === "Preserve this request for retry",
+    ),
+  );
+  assert.equal((await summaryEntries(sessions, sid)).length, 0);
+});
+
+test("a valid summary cannot hide an oversized unsummarized recent message", async () => {
+  const { harness } = spyHarness({ compactResponse: "valid summary" });
+  const { wrapped, seen } = captureHarness(harness);
+  const { orch, sessions } = buildOrchestrator(wrapped, 1_000);
+  const sid = await seed(sessions, [
+    { payload: { text: "Earlier constraint: do not deploy" } },
+    { payload: { text: "recent content ".repeat(2_000) } },
+  ]);
+  const before = await sessions.getEntries(sid);
+  await assert.rejects(orch.handleTurn(turn("Continue")), /still exceed the context budget/);
+  assert.equal(seen.length, 0);
+  assert.equal((await summaryEntries(sessions, sid)).length, 0);
+  assert.deepEqual((await sessions.getEntries(sid)).slice(0, before.length), before);
 });
