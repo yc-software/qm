@@ -6037,8 +6037,20 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
     await assert.rejects(awsSetBackgroundWork(single, dir, false), /different deployment/);
     assert.equal(mutations.length, beforeWrongPause);
     ownership.desiredDeploymentId = manifest.backgroundDeploymentId;
-    await awsSetBackgroundWork(single, dir, false);
-    await awsSetBackgroundWork(single, dir, true);
+    const beforeCompensation = mutations.length;
+    for (const expected of [
+      { generation: ownership.generation - 1, lastRequestId: ownership.lastRequestId },
+      { generation: ownership.generation, lastRequestId: "different-request" },
+    ]) {
+      await assert.rejects(awsSetBackgroundWork(single, dir, false, undefined, expected), /changed since promotion/);
+    }
+    assert.equal(mutations.length, beforeCompensation);
+    await awsSetBackgroundWork(single, dir, false, undefined, {
+      generation: ownership.generation,
+      lastRequestId: ownership.lastRequestId,
+    });
+    const confirmed = await awsSetBackgroundWork(single, dir, true);
+    assert.equal(confirmed?.generation, 3);
     assert.equal(ownership.generation, 3);
     assert.equal(mutations.length, 4);
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs update-service|register-task-definition|run-task/);
