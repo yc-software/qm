@@ -533,7 +533,7 @@ a.chat-row-open {
   box-sizing: border-box;
   text-align: left;
 
-  padding: 5px 5px 5px 11px;
+  padding: 5px calc(5px + var(--session-status-space, 0px)) 5px 11px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -545,7 +545,7 @@ a.chat-row-open {
 .session-row:hover .session,
 .session-row:focus-within .session,
 .session-row.menu-open .session {
-  padding-right: 90px;
+  padding-right: calc(90px + var(--session-status-space, 0px));
 }
 .session:hover {
   background: var(--conversation-hover);
@@ -607,6 +607,28 @@ a.chat-row-open {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.session-row:has(.session-status) {
+  --session-status-space: 22px;
+}
+.session-menu > .session-status {
+  justify-content: center;
+  width: 20px;
+}
+.split-pane-title > .session-status {
+  margin-inline-start: auto;
+}
+.split-pane-title:has(> .session-status) .split-tab-actions {
+  right: 22px;
 }
 
 .working-mark {
@@ -5738,7 +5760,7 @@ a.connector-widget:focus-visible {
   .session-row:hover .session,
   .session-row:focus-within .session,
   .session-row.menu-open .session {
-    padding-right: 136px;
+    padding-right: calc(136px + var(--session-status-space, 0px));
   }
   .session-menu {
     right: 0;
@@ -10649,7 +10671,7 @@ h3.ambient-field-label {
   .session-row:hover .session,
   .session-row:focus-within .session,
   .session-row.menu-open .session {
-    padding-right: 48px;
+    padding-right: calc(48px + var(--session-status-space, 0px));
   }
   .user-pill {
     min-height: 44px;

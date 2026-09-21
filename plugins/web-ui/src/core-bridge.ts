@@ -125,6 +125,7 @@ export interface DeliveredFile {
 }
 
 export interface CoreSession {
+  status?: { emoji: string; text: string } | null;
   id: string;
   type: "dm" | "channel" | "group";
   scopeId: string;
@@ -1422,7 +1423,7 @@ export async function pollRun(
 export interface SessionStateEvent {
   threadRef: string;
   sessionId?: string;
-  state: "working" | "awaiting_approval" | "idle";
+  state: "working" | "awaiting_approval" | "idle" | "metadata";
   at: number;
 }
 
