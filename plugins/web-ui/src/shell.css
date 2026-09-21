@@ -12404,7 +12404,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--popover);
-  box-shadow: 0 12px 36px #0004;
 }
 .loop-icon-heading {
   display: block;
