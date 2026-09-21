@@ -609,7 +609,10 @@ export function createChatSurface(
     const agent = chatState.agent;
     if (!agent || agent.state.isStreaming || !chatState.threadRef || !chatState.normalStreamFn || !chatState.onWork)
       return;
-    void resumeTrackedRun(agent, chatState.threadRef, chatState.normalStreamFn, chatState.onWork);
+    const threadRef = chatState.threadRef;
+    void resumeTrackedRun(agent, threadRef, chatState.normalStreamFn, chatState.onWork).then((attached) => {
+      if (!attached) onDelivery(threadRef);
+    });
   }
 
   function syncLocation(): void {
