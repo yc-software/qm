@@ -242,9 +242,8 @@ export function createLoopItemLedger(
     async moveSource(from, to, source) {
       const targets = await forLoop(to);
       for (const item of await forLoop(from)) {
-        if (item.source !== source) continue;
-        if (targets.some((target) => target.sourceKey === item.sourceKey && target.id !== item.id))
-          throw new Error("Inbox migration found conflicting source records");
+        if ((item.source ?? item.sourcePayload?.source) !== source) continue;
+        if (targets.some((target) => target.sourceKey === item.sourceKey && target.id !== item.id)) continue;
         await update(item.id, (current) => {
           if (
             current.loopId !== from ||
@@ -252,7 +251,13 @@ export function createLoopItemLedger(
             (current.decisionToken && (current.decisionAt ?? 0) + DECISION_LEASE_MS > Date.now())
           )
             return current;
-          return { ...current, loopId: to, previousLoopId: from, inboxPreview: inboxPreview(current.sourcePayload) };
+          return {
+            ...current,
+            source,
+            loopId: to,
+            previousLoopId: from,
+            inboxPreview: inboxPreview(current.sourcePayload),
+          };
         });
       }
     },

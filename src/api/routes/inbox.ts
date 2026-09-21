@@ -29,6 +29,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   });
   const available: Loop[] = [];
   for (const loop of await deps.store.list()) {
+    if (loop.id === legacy?.id && migrated && legacyItems.length === 0) continue;
     if (await canAdministerLoop(ctx, loop, acting)) available.push(loop);
   }
   let ids = Array.isArray(pref.value) ? pref.value.filter((value): value is string => typeof value === "string") : [];
