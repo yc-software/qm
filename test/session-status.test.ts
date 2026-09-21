@@ -9,8 +9,7 @@ import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 test("status accepts compound emoji and rejects multiple emoji, shortcodes, and empty text", () => {
   for (const emoji of ["✅", "🚀", "👩🏽‍💻", "🇺🇸", "1️⃣"]) assert.ok(isSessionStatus({ emoji, text: "Ready" }));
   for (const emoji of ["", "a", ":rocket:", "🚀✅"]) assert.equal(isSessionStatus({ emoji, text: "Ready" }), false);
-  for (const text of ["Ready\ud800", "Ready\udc00"])
-    assert.equal(isSessionStatus({ emoji: "✅", text }), false);
+  for (const text of ["Ready\ud800", "Ready\udc00"]) assert.equal(isSessionStatus({ emoji: "✅", text }), false);
   assert.equal(isSessionStatus(undefined), false);
   assert.ok(isSessionStatus(null));
 });
