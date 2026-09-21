@@ -1050,6 +1050,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         files: deps.files,
         skills: deps.skills,
         auditLog: deps.auditLog,
+        recallQuery: input.text,
+        automatedTurn,
       });
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
       resolution.grantedHandles = context.listFiles();

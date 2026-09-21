@@ -23,21 +23,46 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   files: FileArtifactStore;
   skills?: SkillStore;
   auditLog?: AuditLog;
+  recallQuery?: string;
+  automatedTurn?: boolean;
 };
 
 interface MemoryReaderInput {
   memory: MemoryService;
   scopes: readonly ScopeId[];
   actorId: string;
+  conversationScopeId?: ScopeId;
+  recallQuery?: string;
+  automatedTurn?: boolean;
   onRead?: (scope: ScopeId) => void;
 }
 
-export function contextMemory({ memory, scopes, actorId, onRead }: MemoryReaderInput) {
+export function contextMemory({
+  memory,
+  scopes,
+  actorId,
+  conversationScopeId,
+  recallQuery,
+  automatedTurn,
+  onRead,
+}: MemoryReaderInput) {
   return {
     async recall(): Promise<string> {
       const sections: string[] = [];
       for (const scope of scopes) {
-        const body = (await memory.read(scope)).trim();
+        // recall (not read): the routed service fans out across every matching
+        // provider route, while read only ever returns the first managing
+        // route — the built-in notebook — so external memory providers were
+        // never consulted on a turn (#1452).
+        const body = (
+          await memory.recall(scope, {
+            query: recallQuery,
+            actorId,
+            conversationScopeId,
+            maxChars: 6_000,
+            ...(automatedTurn ? { autonomous: true } : {}),
+          })
+        ).trim();
         onRead?.(scope);
         if (body) sections.push(`### ${scope}\n${body}`);
       }
@@ -94,6 +119,9 @@ export async function resolveTurnContext(input: ContextInput) {
     memory: input.memory,
     scopes: read,
     actorId: input.actor.id,
+    conversationScopeId: input.targetScope,
+    recallQuery: input.recallQuery,
+    automatedTurn: input.automatedTurn,
     onRead: (scope) => recordRead(scope, "memory"),
   });
   const handles = [
