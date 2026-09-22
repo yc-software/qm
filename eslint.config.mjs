@@ -20,6 +20,14 @@ export default tseslint.config(
   js.configs.recommended,
   tseslint.configs.recommended,
   {
+    files: ["desktop/preload.cjs"],
+    rules: { "@typescript-eslint/no-require-imports": "off" },
+  },
+  {
+    files: ["desktop/setup.js"],
+    languageOptions: { globals: globals.browser },
+  },
+  {
     files: ["**/*.js", "**/*.mjs", "**/*.cjs"],
     languageOptions: { globals: globals.node },
   },

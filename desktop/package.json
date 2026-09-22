@@ -1,0 +1,17 @@
+{
+  "name": "qm-desktop",
+  "productName": "QM",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.mjs",
+    "package": "electron-packager . QM --protocol=qm-desktop --protocol-name=QM --app-bundle-id=com.qm.desktop --out=dist --overwrite --ignore='^/(dist|test|README.md)'"
+  },
+  "devDependencies": {
+    "electron": "44.4.3",
+    "@electron/packager": "20.3.0"
+  }
+}

@@ -1,3 +1,4 @@
+import { desktopChallenge, mintDesktopLogin, openDesktopLogin } from "./desktop-login.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
@@ -988,6 +989,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (pathname === "/auth/login" && method === "GET") return authLogin(req, res, url);
   if (pathname === "/auth/callback" && method === "GET") return authCallback(req, res, url);
   if (pathname.startsWith("/auth/trusted/") && method === "GET") return trustedAuth(req, res, url);
+  if (pathname === "/auth/desktop" || pathname === "/auth/desktop/redeem") return desktopLogin(req, res, url);
   if (pathname === "/auth/invite") return inviteLogin(req, res);
   if (pathname === "/auth/admin-login") return adminLogin(req, res);
   if (pathname === "/auth/logout" && method === "POST") {
@@ -1320,6 +1322,97 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     ...(PORTAL_IDENTITY_SECRET ? { identitySecret: PORTAL_IDENTITY_SECRET } : {}),
     authenticatedPrincipal,
   });
+}
+
+async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  res.setHeader("cache-control", "no-store");
+  if (!SESSION_SECRET || SESSION_SECRET.trim().length < 32 || !CORE_SIGNING_SECRET) {
+    return json(res, 503, { error: "not_configured" });
+  }
+  if (url.pathname.endsWith("/redeem")) {
+    if (req.method !== "POST") return json(res, 405, { error: "method_not_allowed" });
+    if ((req.headers.origin !== undefined || req.headers["sec-fetch-site"] !== undefined) && !sameOriginRequest(req))
+      return json(res, 403, { error: "forbidden" });
+    let body: URLSearchParams;
+    try {
+      body = new URLSearchParams(await readBody(req, 12288));
+    } catch (error) {
+      if (error instanceof PayloadTooLargeError) return json(res, 413, { error: "payload_too_large" });
+      throw error;
+    }
+    const claims = openDesktopLogin(
+      body.get("code") ?? "",
+      body.get("verifier") ?? "",
+      body.get("state") ?? "",
+      SESSION_SECRET,
+      ORIGIN,
+      ORG,
+      SESSION_MAX_TTL_S,
+    );
+    if (!claims) return json(res, 400, { error: "invalid_desktop_login" });
+    try {
+      if (
+        !(await claimOnce(
+          coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"),
+          `desktop-login:${claims.jti}`,
+          claims.expiresAtMs,
+        ))
+      ) {
+        return json(res, 400, { error: "desktop_login_already_used" });
+      }
+    } catch (error) {
+      if (error instanceof ClaimStoreUnavailableError) return json(res, 503, { error: "temporarily_unavailable" });
+      throw error;
+    }
+    setSession(res, [
+      ...sessionCookieSet(seal(claims.session, sessionKey), claims.session.sub),
+      clearCookie("portal_impersonate", "/", SECURE_COOKIES),
+    ]);
+    return json(res, 200, { ok: true });
+  }
+  if (req.method !== "GET" && req.method !== "POST") return json(res, 405, { error: "method_not_allowed" });
+  const challenge = url.searchParams.get("challenge") ?? "";
+  const state = url.searchParams.get("state") ?? "";
+  if (!desktopChallenge(challenge) || !desktopChallenge(state))
+    return json(res, 400, { error: "invalid_desktop_request" });
+  if (req.method === "POST" && !sameOriginRequest(req)) return json(res, 403, { error: "forbidden" });
+  const session = currentSession(req);
+  if (!session || session.anon) {
+    res.writeHead(303, {
+      location: `/auth/login?returnTo=${encodeURIComponent(`${url.pathname}${url.search}`)}`,
+      "cache-control": "no-store",
+    });
+    return void res.end();
+  }
+  if (req.method === "GET") {
+    return sendHtml(
+      res,
+      200,
+      cardPage({
+        title: "Open QM Desktop",
+        heading: "Sign in to QM Desktop",
+        icon: LOCK_ICON,
+        msg: `Continue as ${session.sub}.`,
+        actions: `<form method="post" action="${escapeHtml(`${url.pathname}${url.search}`)}"><button class="btn primary" type="submit">Open QM Desktop</button></form>`,
+        help: "Only continue if you just started sign-in in the QM desktop app on this computer.",
+      }),
+    );
+  }
+  const callback = new URL("qm-desktop://auth/callback");
+  callback.searchParams.set("code", mintDesktopLogin(session, SESSION_SECRET, ORIGIN, challenge, state));
+  callback.searchParams.set("state", state);
+  return sendHtml(
+    res,
+    200,
+    cardPage({
+      title: "Ready to open QM",
+      heading: "Your desktop sign-in is ready",
+      icon: LOCK_ICON,
+      msg: "Return to the app to finish signing in.",
+      actions: `<a class="btn primary" href="${escapeHtml(callback.href)}">Open QM Desktop</a>`,
+      help: "This link expires in two minutes and works only for the app that requested it.",
+    }),
+  );
 }
 
 async function inviteLogin(req: IncomingMessage, res: ServerResponse): Promise<void> {

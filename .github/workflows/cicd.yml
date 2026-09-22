@@ -25,6 +25,8 @@ jobs:
         run: |
           npm ci
           npm run typecheck
+      - name: Desktop sign-in tests
+        run: node --test desktop/test/*.test.mjs
 
   core-tests:
     name: Core tests (${{ matrix.shard }}/5)
