@@ -4,22 +4,29 @@ import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
-import { loadAdministrable, loopDeps, actingPrincipal, type LoopServiceDeps } from "./loops.ts";
-import { parseScopeId } from "../../types.ts";
+import {
+  requireLoopAuthority,
+  canAdministerLoop,
+  loadAdministrable,
+  loopDeps,
+  actingPrincipal,
+  type LoopServiceDeps,
+} from "./loops.ts";
+import { scopeId, parseScopeId } from "../../types.ts";
 import { isLedgerState, ledgerItemView, ledgerState, sortLedgerItems } from "../../loops/ledger-view.ts";
 import { loopItemId, type IngestEntryInput } from "../../loops/item-ledger.ts";
 import { addressList } from "../../loops/sources/adapter.ts";
 import { adapterForItem, sourceAdapter } from "../../loops/sources/index.ts";
 import {
-  ensureInboxLoop,
+  ensureDefaultInboxLoops,
+  renderSourceInboxTask,
   findInboxLoop,
   INBOX_LEDGER_MAX_ITEMS,
   INBOX_LEDGER_RETENTION_MS,
-  INBOX_SYNC_CRON_TITLE,
   INBOX_SYNC_DEFAULT_EVERY_MS,
   INBOX_SYNC_TASK_VERSION,
-  renderInboxSyncTask,
 } from "../../loops/inbox-loop.ts";
+import { migrateInbox } from "../../loops/inbox-migration.ts";
 import { principalDestination } from "../../reach/reach.ts";
 
 const MAX_ITEMS_PER_INGEST = 50;
@@ -115,6 +122,11 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
   const { deps, loop } = loaded;
+  if (loop.surface === "inbox" && loop.state !== "enabled")
+    return sendJson(ctx.res, 409, {
+      error: "migration_pending",
+      message: "This Inbox producer has been retired or paused for migration.",
+    });
   if (!ctx.capability) {
     return sendJson(ctx.res, 403, { error: "forbidden", message: "ledger items are ingested by the agent" });
   }
@@ -149,6 +161,11 @@ async function loadItem(
   if (!loaded) return null;
   if (!readableItems(ctx, loaded.loop)) return null;
   const item = await loaded.deps.items.get(ctx.params.itemId ?? "");
+  if (item && item.loopId !== loaded.loop.id && item.previousLoopId === loaded.loop.id) {
+    const target = await loaded.deps.store.get(item.loopId);
+    if (target && (await canAdministerLoop(ctx, target, loaded.acting)))
+      return { deps: loaded.deps, loop: target, item, actorId: loaded.acting.actorId };
+  }
   if (!item || item.loopId !== loaded.loop.id) {
     sendJson(ctx.res, 404, { error: "not_found", message: "no such ledger item" });
     return null;
@@ -217,7 +234,10 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
 async function getItem(ctx: ApiCtx): Promise<void> {
   const loaded = await loadItem(ctx);
   if (!loaded) return;
-  sendJson(ctx.res, 200, { item: ledgerItemView(loaded.item) });
+  sendJson(ctx.res, 200, {
+    item: ledgerItemView(loaded.item),
+    outputs: (await loaded.deps.outputs.byItem(loaded.item.id)).filter((output) => output.loopId === loaded.loop.id),
+  });
 }
 
 function sameProposalData(item: LoopItem, data: LoopSourcePayload): boolean {
@@ -297,6 +317,9 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 200, { item: ledgerItemView(next) });
   }
 
+  if (kind === "send" && item.status !== "ready") {
+    return sendJson(ctx.res, 409, { error: "not_ready", message: "This item needs a fresh draft before sending" });
+  }
   if (ledgerState(item) === "actioned") {
     return sendJson(ctx.res, 409, { error: "already_actioned", message: "this item was already actioned" });
   }
@@ -352,7 +375,8 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   }
 
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
-  const turn = await deps.fire.itemAction(loop, item, kind, args);
+  if (!(await requireLoopAuthority(ctx, deps, loop))) return;
+  const turn = await deps.fire.itemAction(loop, item, kind, args, loaded.actorId);
   if (!turn.ok) {
     return sendJson(ctx.res, 502, { error: "action_failed", message: turn.userNote ?? "the agent turn did not run" });
   }
@@ -369,6 +393,7 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
   const loaded = await loadItem(ctx);
   if (!loaded) return;
   const { deps, loop, item } = loaded;
+  if (!(await requireLoopAuthority(ctx, deps, loop))) return;
   const body = isObj(ctx.body) ? ctx.body : {};
   const message = typeof body.message === "string" ? body.message.trim() : "";
   if (!message) return sendJson(ctx.res, 400, { error: "bad_request", message: "message required" });
@@ -388,11 +413,11 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
 }
 
 function syncTaskVersionOf(cron: Cron | null): number | null {
-  const m = /^Inbox sync v(\d+)\./.exec(cron?.action ?? "");
+  const m = /Inbox sync v(\d+)\./.exec(cron?.action ?? "");
   return m ? Number(m[1]) : null;
 }
 
-function cronSummary(cron: Cron | null): {
+export function cronSummary(cron: Cron | null): {
   id: string;
   enabled: boolean;
   schedule: Cron["schedule"];
@@ -416,7 +441,10 @@ async function getInboxLoop(ctx: ApiCtx): Promise<void> {
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
   const acting = actingPrincipal(ctx);
   if (!acting) return;
-  const loop = await findInboxLoop(deps.store, acting.actorId);
+  const loop =
+    (await deps.store.list()).find(
+      (candidate) => candidate.owner === acting.actorId && candidate.surface === "inbox:gmail",
+    ) ?? (await findInboxLoop(deps.store, acting.actorId));
   const cron = loop?.cronId ? await ctx.app.getCron(loop.cronId) : null;
   sendJson(ctx.res, 200, { loop, syncCron: cronSummary(cron) });
 }
@@ -424,6 +452,8 @@ async function getInboxLoop(ctx: ApiCtx): Promise<void> {
 export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   const owner = ctx.actor?.p;
   if (!owner) return sendJson(ctx.res, 403, { error: "forbidden" });
+  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", owner))))
+    return sendJson(ctx.res, 403, { error: "feature_disabled" });
   const deps = loopDeps(ctx);
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found" });
   const body = isObj(ctx.body) ? ctx.body : {};
@@ -456,10 +486,11 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
     },
     sentChat: true,
   } as LoopSourcePayload;
-  const loop = await ensureInboxLoop(deps.store, owner);
+  const defaults = await ensureDefaultInboxLoops(deps.store, owner);
+  const loop = defaults.find((entry) => entry.sources?.includes("gmail"))!;
   const dedupeKey = accountType === "default" ? `sent-chat:${threadId}` : `sent-chat:${accountType}:${threadId}`;
-  const id = loopItemId(loop.id, dedupeKey);
-  let item = await deps.items.get(id);
+  let item = (await deps.items.byLoop(loop.id)).find((entry) => entry.sourceKey === dedupeKey);
+  const id = item?.id ?? loopItemId(loop.id, dedupeKey);
   if (!item) {
     await deps.items.ingest([
       {
@@ -471,7 +502,7 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
         sourcePayload: payload,
       },
     ]);
-    item = await deps.items.get(id);
+    item = (await deps.items.get(id)) ?? undefined;
   }
   if (!item) return sendJson(ctx.res, 500, { error: "chat_unavailable" });
   item = (await deps.items.annotate(id, payload, { summary: text("subject", 300) })) ?? item;
@@ -485,6 +516,8 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
   const acting = actingPrincipal(ctx);
   if (!acting) return;
+  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", acting.actorId))))
+    return sendJson(ctx.res, 403, { error: "feature_disabled" });
   const body = isObj(ctx.body) ? ctx.body : {};
   const everyMs =
     typeof body.everyMs === "number" && Number.isFinite(body.everyMs)
@@ -493,38 +526,72 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
   const enable = body.enabled !== false;
   const owner = acting.actorId;
   try {
-    const loop = await ensureInboxLoop(deps.store, owner);
-    const existing = loop.cronId ? await ctx.app.getCron(loop.cronId) : null;
-    if (existing) {
-      if (!enable) {
-        await ctx.app.setCronEnabled(existing.id, false);
-      } else {
-        if (syncTaskVersionOf(existing) !== INBOX_SYNC_TASK_VERSION) {
-          await ctx.app.updateCron(existing.id, {
-            action: renderInboxSyncTask(loop.id),
-            title: INBOX_SYNC_CRON_TITLE,
+    const defaults = await ensureDefaultInboxLoops(deps.store, owner);
+    const legacy = await findInboxLoop(deps.store, owner);
+    if (legacy && (!ctx.deps.uiState || !(await migrateInbox(deps, ctx.deps.uiState, legacy, defaults))))
+      return sendJson(ctx.res, 409, {
+        error: "migration_pending",
+        message: "The existing Inbox is still being migrated. Sync remains paused.",
+      });
+    const requested = typeof body.loopId === "string" ? body.loopId : null;
+    const targets = defaults.filter((loop) => !requested || loop.id === requested);
+    if (!targets.length) return sendJson(ctx.res, 404, { error: "not_found" });
+    const results: Array<{ loop: Loop | null; syncCron: ReturnType<typeof cronSummary> }> = [];
+    for (const loop of targets) {
+      const sync = async () => {
+        const current = (await deps.store.get(loop.id)) ?? loop;
+        const source = current.sources![0]!;
+        let cron = current.cronId ? await ctx.app.getCron(current.cronId) : null;
+        if (!cron && enable) {
+          cron = await ctx.app.createCron({
+            loopId: loop.id,
+            runAs: current.runAs,
+            ownerScopeId: loop.ownerScopeId,
+            owner,
+            createdBy: owner,
+            destination: principalDestination(owner, owner),
+            schedule: { everyMs },
+            title: `${loop.name} sync`,
+            action: renderSourceInboxTask(loop.id, source),
           });
+          await deps.store.update(loop.id, { cronId: cron.id });
         }
-        if (!existing.enabled) await ctx.app.setCronEnabled(existing.id, true);
-      }
-      return sendJson(ctx.res, 200, { loop, syncCron: cronSummary(await ctx.app.getCron(existing.id)) });
+        if (cron) {
+          if (enable && syncTaskVersionOf(cron) !== INBOX_SYNC_TASK_VERSION)
+            await ctx.app.updateCron(cron.id, {
+              action: renderSourceInboxTask(loop.id, source),
+              title: `${loop.name} sync`,
+            });
+          await ctx.app.setCronEnabled(cron.id, enable);
+          if (enable && current.state === "paused") await deps.store.setState(loop.id, "enabled");
+        }
+        results.push({
+          loop: await deps.store.get(loop.id),
+          syncCron: cronSummary(cron ? await ctx.app.getCron(cron.id) : null),
+        });
+      };
+      if (deps.lock) await deps.lock.withLock(`loop-lifecycle:${loop.id}`, sync);
+      else await sync();
     }
-    if (!enable) return sendJson(ctx.res, 200, { loop, syncCron: null });
-    const destination = principalDestination(owner, owner);
-    const cron = await ctx.app.createCron({
-      ownerScopeId: destination.audienceScopeId ?? `personal:${owner}`,
-      owner,
-      createdBy: owner,
-      destination,
-      schedule: { everyMs },
-      title: INBOX_SYNC_CRON_TITLE,
-      action: renderInboxSyncTask(loop.id),
-    });
-    const updated = (await deps.store.update(loop.id, { cronId: cron.id })) ?? loop;
-    sendJson(ctx.res, 200, { loop: updated, syncCron: cronSummary(cron) });
+    sendJson(ctx.res, 200, { ...results[0], loops: results });
   } catch (err) {
     sendJson(ctx.res, 400, { error: "bad_request", message: errMessage(err) });
   }
+}
+
+function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: ApiCtx) => Promise<void> {
+  return (ctx) => {
+    const lock = loopDeps(ctx)?.lock;
+    return lock && !ctx.capability
+      ? lock.withLock(`loop-lifecycle:${ctx.params.id ?? ""}`, async () => {
+          const loaded = await loadItem(ctx);
+          if (!loaded) return;
+          return loaded.loop.id === ctx.params.id
+            ? handler(ctx)
+            : lock.withLock(`loop-lifecycle:${loaded.loop.id}`, () => handler(ctx));
+        })
+      : handler(ctx);
+  };
 }
 
 export const loopItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
@@ -535,6 +602,16 @@ export const loopItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/loops/:id/items", auth: "either", handle: ingestItems },
   { method: "GET", path: "/v1/loops/:id/items/:itemId", auth: "either", handle: getItem },
   { method: "GET", path: "/v1/loops/:id/items/:itemId/image", auth: "source", handle: serveItemImage },
-  { method: "POST", path: "/v1/loops/:id/items/:itemId/action", auth: "either", handle: actOnItem },
-  { method: "POST", path: "/v1/loops/:id/items/:itemId/followup", auth: "either", handle: followUpOnItem },
+  {
+    method: "POST",
+    path: "/v1/loops/:id/items/:itemId/action",
+    auth: "either",
+    handle: serializeItemAction(actOnItem),
+  },
+  {
+    method: "POST",
+    path: "/v1/loops/:id/items/:itemId/followup",
+    auth: "either",
+    handle: serializeItemAction(followUpOnItem),
+  },
 ];

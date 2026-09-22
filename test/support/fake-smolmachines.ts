@@ -18,6 +18,11 @@ interface FakeMachine {
   home: string;
 }
 
+export interface InjectedFailure {
+  headers?: Record<string, string>;
+  match?: (call: { method: string; path: string }) => boolean;
+}
+
 export interface FakeSmolmachines {
   fetchImpl: typeof fetch;
   calls: SmolCall[];
@@ -25,6 +30,7 @@ export interface FakeSmolmachines {
   names(): string[];
   machine(name: string): { state: string; ephemeral: boolean; resources?: Record<string, number> } | null;
   stop(name: string): void;
+  failNext(status: number, opts?: InjectedFailure): void;
   execScripts(): string[];
   reset(): void;
   cleanup(): void;
@@ -38,6 +44,7 @@ export function installFakeSmolmachines(): FakeSmolmachines {
   const execScripts: string[] = [];
   const calls: SmolCall[] = [];
   let nextId = 1;
+  const injected: Array<InjectedFailure & { status: number }> = [];
 
   const byName = (name: string): FakeMachine | undefined => [...machines.values()].find((m) => m.name === name);
 
@@ -115,6 +122,11 @@ export function installFakeSmolmachines(): FakeSmolmachines {
     const url = new URL(typeof input === "string" ? input : input.toString());
     const method = init?.method ?? "GET";
     calls.push({ method, path: url.pathname });
+    const at = injected.findIndex((f) => !f.match || f.match({ method, path: url.pathname }));
+    if (at >= 0) {
+      const [next] = injected.splice(at, 1);
+      return new Response(`injected ${next!.status}`, { status: next!.status, headers: next!.headers ?? {} });
+    }
     if (url.pathname === "/v1/machines" && method === "GET") {
       return Response.json([...machines.values()].map(info));
     }
@@ -191,12 +203,16 @@ export function installFakeSmolmachines(): FakeSmolmachines {
       const m = byName(name);
       if (m) m.state = "stopped";
     },
+    failNext: (status, opts = {}) => {
+      injected.push({ status, ...opts });
+    },
     execScripts: () => [...execScripts],
     reset: () => {
       for (const m of machines.values()) rmSync(m.home, { recursive: true, force: true });
       machines.clear();
       execScripts.length = 0;
       calls.length = 0;
+      injected.length = 0;
     },
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };

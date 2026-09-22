@@ -13,6 +13,7 @@ import { dirname, extname, join, normalize } from "node:path";
 import { randomBytes } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import {
+  fetchCoreText,
   signedHeaders,
   withSourceAuthNonce,
   CAPABILITY_HEADER,
@@ -31,6 +32,7 @@ import {
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
+import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 
 import {
   CORE_API_URL as CORE,
@@ -54,15 +56,8 @@ const ALLOW = (process.env.WEB_UI_PRINCIPALS ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
-const INBOX_USERS = new Set(
-  (process.env.INBOX_USERS ?? "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean),
-);
-
-export function isInboxUser(principalId: string): boolean {
-  return INBOX_USERS.has("all") || INBOX_USERS.has(principalId.trim().toLowerCase());
+export function isInboxUser(principalId: string, configuredUsers = process.env.INBOX_USERS): boolean {
+  return principalInAllowlist(principalId, configuredUsers);
 }
 
 export function isLoopsUser(principalId: string, configuredUsers = process.env.LOOPS_USERS): boolean {
@@ -73,6 +68,15 @@ export function isLoopsUser(principalId: string, configuredUsers = process.env.L
     .map((entry) => entry.trim().toLowerCase())
     .filter(Boolean)
     .includes(normalizedPrincipalId);
+}
+
+async function hasInboxLoopPreview(user: string): Promise<boolean> {
+  try {
+    const response = await coreFetch("GET", `/v1/inbox/access?principalId=${encodeURIComponent(user)}`, "", 2_000);
+    return response.status === 200 && JSON.parse(response.text).enabled === true;
+  } catch {
+    return false;
+  }
 }
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -579,8 +583,7 @@ function runInboxFeed(): Promise<void> {
     (data) => {
       const ev = data as { owner?: string; loopId?: string; itemId?: string; op?: string };
       if (!ev.owner || !ev.loopId || !ev.itemId) return;
-      for (const res of deliveryClients.get(ev.owner) ?? [])
-        sseEvent(res, "inbox_item", { loopId: ev.loopId, itemId: ev.itemId, op: ev.op ?? "" });
+      for (const clients of deliveryClients.values()) for (const res of clients) sseEvent(res, "inbox_resync", {});
     },
     () => {
       for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "inbox_resync", {});
@@ -594,19 +597,16 @@ async function coreFetch(
   rawBody = "",
   timeoutMs?: number,
 ): Promise<{ status: number; text: string }> {
-  const signedPath = withSourceAuthNonce(pathWithQuery, CORE_SIGNING_SECRET);
   const portalTok = portalTokenStore.getStore();
-  const r = await fetch(`${CORE}${signedPath}`, {
+  return fetchCoreText({
+    origin: CORE,
+    secret: CORE_SIGNING_SECRET,
     method,
-    headers: {
-      ...signedHeaders(CORE_SIGNING_SECRET, method, signedPath, rawBody),
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-    },
-    ...(rawBody ? { body: rawBody } : {}),
-    ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
-    redirect: "manual",
+    path: pathWithQuery,
+    body: rawBody,
+    headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
   });
-  return { status: r.status, text: await r.text() };
 }
 
 async function coreFetchCap(
@@ -1196,6 +1196,32 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
 
+  { method: "GET", path: "/api/composio/slack", handle: (c) => relayCore(c.res, "GET", "/v1/composio/slack") },
+  {
+    method: "POST",
+    path: "/api/composio/slack/authorize",
+    handle: async (c) => {
+      const body = await readJson<{ returnTo?: unknown; state?: unknown }>(c.req, c.res, false);
+      if (!body) return;
+      const callback = composioCallbackUrl(PUBLIC_URL, body.returnTo, body.state);
+      if (!callback) return json(c.res, 400, { error: "invalid_return_url" });
+      const url = new URL(callback);
+      url.searchParams.delete("composioReturn");
+      url.searchParams.set("slackReturn", String(body.state));
+      c.res.setHeader("Cache-Control", "no-store");
+      return relayCore(c.res, "POST", "/v1/composio/slack/authorize", JSON.stringify({ callbackUrl: url.href }));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/composio/slack/complete",
+    handle: async (c) => {
+      const body = await readJson<{ ticket?: unknown }>(c.req, c.res, false);
+      if (!body) return;
+      c.res.setHeader("Cache-Control", "no-store");
+      return relayCore(c.res, "POST", "/v1/composio/slack/complete", JSON.stringify({ ticket: body.ticket }));
+    },
+  },
   {
     method: "GET",
     path: "/api/composio/toolkits",
@@ -1265,8 +1291,10 @@ const apiRoutes: readonly WebRoute[] = [
         connections?: { provider: string }[];
       };
       const permissions = allPermissions.filter((permission) => permission !== "loops" && permission !== "inbox");
-      if (isLoopsUser(user)) permissions.push("loops");
-      if (isInboxUser(user)) permissions.push("inbox");
+      if (await hasInboxLoopPreview(user)) {
+        if (isLoopsUser(user)) permissions.push("loops");
+        if (isInboxUser(user)) permissions.push("inbox");
+      }
       return json(res, 200, {
         user,
         org: ORG,
@@ -1545,7 +1573,12 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/inbox",
     handle: async (c) => {
       const { res, user } = c;
-      return relayCore(res, "GET", `/v1/loops/inbox?principalId=${encodeURIComponent(user)}`);
+      const qs = new URLSearchParams({ principalId: user });
+      for (const key of ["cursor", "loopId", "view", "itemId"]) {
+        const value = c.url.searchParams.get(key);
+        if (value) qs.set(key, value);
+      }
+      return relayCore(res, "GET", `/v1/inbox?${qs}`);
     },
   },
   {
@@ -1556,6 +1589,12 @@ const apiRoutes: readonly WebRoute[] = [
       res.setHeader("Cache-Control", "no-store");
       return relayCore(res, "POST", "/v1/loops/inbox/sent-chat", await readBody(req));
     },
+  },
+  {
+    method: "POST",
+    path: "/api/inbox/selection",
+    handle: async (c) =>
+      relayCore(c.res, "PUT", `/v1/inbox?principalId=${encodeURIComponent(c.user)}`, await readBody(c.req)),
   },
   {
     method: "POST",
@@ -1881,7 +1920,28 @@ const apiRoutes: readonly WebRoute[] = [
         const v = url.searchParams.get(p);
         if (v !== null) qs.set(p, v);
       }
-      return relayCore(res, "GET", `/v1/sessions/${encodeURIComponent(id)}?${qs.toString()}`);
+      const cancel = new AbortController();
+      const onClose = () => cancel.abort();
+      res.once("close", onClose);
+      try {
+        const portalTok = portalTokenStore.getStore();
+        return relay(
+          res,
+          await fetchCoreText({
+            origin: CORE,
+            secret: CORE_SIGNING_SECRET,
+            method: "GET",
+            path: `/v1/sessions/${encodeURIComponent(id)}?${qs.toString()}`,
+            headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+            signal: AbortSignal.any([cancel.signal, AbortSignal.timeout(30_000)]),
+            retrySafeRead: true,
+          }),
+        );
+      } catch (error) {
+        if (!cancel.signal.aborted) throw error;
+      } finally {
+        res.off("close", onClose);
+      }
     },
   },
   {
@@ -2651,6 +2711,38 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "GET",
+    path: "/api/loops/:id/ingestion",
+    handle: async ({ res, user, params }) =>
+      relayCore(
+        res,
+        "GET",
+        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion?principalId=${encodeURIComponent(user)}`,
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/loops/:id/ingestion",
+    handle: async ({ req, res, user, params }) =>
+      relayCore(
+        res,
+        "POST",
+        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion?principalId=${encodeURIComponent(user)}`,
+        await readBody(req),
+      ),
+  },
+  {
+    method: "PATCH",
+    path: "/api/loops/:id/ingestion/:sourceId",
+    handle: async ({ req, res, user, params }) =>
+      relayCore(
+        res,
+        "PATCH",
+        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion/${encodeURIComponent(params.sourceId!)}?principalId=${encodeURIComponent(user)}`,
+        await readBody(req),
+      ),
+  },
+  {
     method: "POST",
     path: "/api/loops/:id/fire",
     handle: async (c) => {
@@ -3047,8 +3139,13 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   if (path === "/me" || path.startsWith("/api/")) {
     const user = cookieUser(req);
     if (!user) return unauthorized(res, req);
+    const inboxPath = path === "/api/inbox" || path.startsWith("/api/inbox/");
     const loopsPath = path === "/api/loops" || path.startsWith("/api/loops/");
-    const ledgerPath = /^\/api\/loops\/[^/]+\/items(\/|$)/.test(path);
+    if ((inboxPath || loopsPath) && !(await hasInboxLoopPreview(user)))
+      return json(res, 403, { error: "feature_disabled" });
+    if (inboxPath && !isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+    const ledgerPath =
+      /^\/api\/loops\/[^/]+\/items(\/|$)/.test(path) || /^\/api\/loops\/[^/]+\/outputs\/[^/]+\/decide$/.test(path);
     if (loopsPath && !isLoopsUser(user) && !(ledgerPath && isInboxUser(user))) {
       return json(res, 403, { error: "forbidden" });
     }

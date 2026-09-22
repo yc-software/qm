@@ -337,6 +337,18 @@ test("PORTAL_IDENTITY_SECRET reaches every service that signs or verifies a port
   );
 });
 
+test("INBOX_USERS is one optional secret shared by web-ui and admin", () => {
+  const config = makeConfig({ services: ["core", "web-ui", "admin"] });
+  const allowlist = secretByName(config, "INBOX_USERS");
+  assert.equal(allowlist.required, false);
+  assert.deepEqual(allowlist.services, ["admin", "web-ui"]);
+  assert.deepEqual([...secretDestinations(allowlist).keys()], ["web-ui"]);
+  assert.deepEqual(runtimeSecretNames("web-ui", allowlist), ["INBOX_USERS"]);
+  assert.deepEqual(runtimeSecretNames("admin", allowlist), ["INBOX_USERS"]);
+  assert.match(renderEnvExample(config), /Inbox, Calendar, and Design System\. \(admin, web-ui\)/);
+  assert.match(renderEnvExample(config), /^# INBOX_USERS=\s{2}# optional$/m);
+});
+
 test("the invitation-email pair reaches core as optional secrets on every topology", () => {
   for (const name of ["RESEND_API_KEY", "AUTH_EMAIL_FROM"]) {
     const alone = secretByName(makeConfig(), name);

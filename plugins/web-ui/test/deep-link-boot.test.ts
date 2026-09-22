@@ -228,3 +228,17 @@ test("a failed connection refresh removes previously verified badges", async () 
     await h.close();
   }
 });
+
+test("a message link loads older history and highlights the addressed row", async () => {
+  const h = await harness({ path: "/s/sess-deep?seq=10", messageLink: true });
+  try {
+    await h.boot();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(h.requests.some((p) => p.includes("beforeSeq=80")));
+    assert.ok(document.querySelector('[data-entry-seqs="10"]'));
+    assert.equal(document.querySelector(".linked-message")?.getAttribute("data-entry-seqs"), "10");
+    assert.equal(document.querySelector(".linked-message")?.getAttribute("data-scrolled"), "true");
+  } finally {
+    await h.close();
+  }
+});

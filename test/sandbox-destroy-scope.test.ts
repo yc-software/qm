@@ -47,7 +47,7 @@ test("Sprites scope deletion sends only DELETE, retries provider errors, and acc
     token: "test",
     fetchImpl: async (input, init) => {
       calls.push(`${init?.method} ${new URL(String(input)).pathname}`);
-      return new Response(null, { status });
+      return new Response(null, { status, headers: { "retry-after": "0" } });
     },
   });
   await assert.rejects(sandbox.destroyScope!("scope"), /503/);
@@ -55,7 +55,7 @@ test("Sprites scope deletion sends only DELETE, retries provider errors, and acc
   await sandbox.destroyScope!("scope");
   status = 404;
   await sandbox.destroyScope!("scope");
-  assert.deepEqual(calls, Array(3).fill(`DELETE /v1/sprites/${sandboxScopeName("qm", "scope")}`));
+  assert.deepEqual(calls, Array(6).fill(`DELETE /v1/sprites/${sandboxScopeName("qm", "scope")}`));
 });
 
 for (const [name, create, resource] of [
@@ -75,7 +75,7 @@ for (const [name, create, resource] of [
           const rows = exists ? [{ id: "existing", name: sandboxScopeName("qm", "scope"), status: "stopped" }] : [];
           return Response.json(resource === "instances" ? { data: rows } : rows);
         }
-        return new Response(null, { status });
+        return new Response(null, { status, headers: { "retry-after": "0" } });
       },
     });
     await assert.rejects(sandbox.destroyScope!("scope"), /503/);
@@ -85,7 +85,7 @@ for (const [name, create, resource] of [
     await sandbox.destroyScope!("scope");
     assert.deepEqual(calls, [
       `GET /v1/${resource}`,
-      `DELETE /v1/${resource}/existing`,
+      ...Array(4).fill(`DELETE /v1/${resource}/existing`),
       `GET /v1/${resource}`,
       `DELETE /v1/${resource}/existing`,
       `GET /v1/${resource}`,

@@ -207,3 +207,112 @@ test("activation is not ready until startup completes and expiry fences a late s
   assert.equal((await store.get()).members[0]?.ready, false);
   await controller.stop();
 });
+
+for (const outcome of ["complete", "transition", "read-failure", "read-stall", "stop", "startup-timeout"] as const) {
+  test(`pending startup renews verified ownership and fences on ${outcome}`, async (t) => {
+    t.mock.timers.enable({ apis: ["Date", "setTimeout", "setInterval"] });
+    const { store } = await setup();
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const read = Promise.withResolvers<void>();
+    let readMode = "normal";
+    let signal: AbortSignal | undefined;
+    let starts = 0;
+    let starting = false;
+    let stops = 0;
+    let reads = 0;
+    let maxReads = 0;
+    const errors: unknown[] = [];
+    const controller = createBackgroundController({
+      store: {
+        ...store,
+        get: async () => {
+          reads++;
+          maxReads = Math.max(maxReads, reads);
+          try {
+            if (readMode === "fail") throw new Error("offline");
+            if (readMode === "stall") await read.promise;
+            return await store.get();
+          } finally {
+            reads--;
+          }
+        },
+      },
+      identity: { instanceId: "a", deploymentId: "a", taskArn: "task:a" },
+      legacyEnabled: true,
+      start: async (value) => {
+        starts++;
+        starting = true;
+        signal = value;
+        started.resolve();
+        await finish.promise;
+        starting = false;
+      },
+      fence() {},
+      relinquish: async () => {
+        assert.equal(starting, false);
+        stops++;
+      },
+      drained: async () => {},
+      onError: (error) => errors.push(error),
+      pollMs: 10,
+      validityMs: 100,
+      startupTimeoutMs: 500,
+    });
+    controller.start();
+    await started.promise;
+    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    for (let tick = 0; tick < 30; tick++) {
+      t.mock.timers.tick(10);
+      await flush();
+      assert.equal(controller.canClaim(), true);
+      assert.equal(signal?.aborted, false);
+      assert.equal((await store.get()).members[0]?.ready, false);
+    }
+    assert.equal(starts, 1);
+    assert.equal(stops, 0);
+    if (outcome === "transition") {
+      await store.transition({
+        expectedGeneration: 0,
+        requestId: "switch",
+        desiredDeploymentId: null,
+        bootstrapTaskArns: ["task:a"],
+      });
+    }
+    if (outcome === "read-failure") readMode = "fail";
+    if (outcome === "read-stall" || outcome === "stop") readMode = "stall";
+    t.mock.timers.tick(10);
+    await flush();
+    const stopping = outcome === "stop" ? controller.stop() : undefined;
+    if (outcome === "startup-timeout") {
+      for (let tick = 0; tick < 30; tick++) {
+        t.mock.timers.tick(10);
+        await flush();
+      }
+      assert.equal(starts, 1);
+      assert.equal(stops, 0);
+      assert.equal((await store.get()).members[0]?.ready, false);
+    }
+    if (outcome === "read-stall" || outcome === "stop") {
+      t.mock.timers.tick(110);
+      await flush();
+      assert.equal(signal?.aborted, true);
+      readMode = "normal";
+      read.resolve();
+      await flush();
+    }
+    assert.equal(controller.canClaim(), outcome === "complete");
+    assert.equal(signal?.aborted, outcome !== "complete");
+    const reconciled = controller.reconcile();
+    finish.resolve();
+    await reconciled;
+    await stopping;
+    assert.equal((await store.get()).members[0]?.ready, outcome === "complete");
+    assert.equal(starts, 1);
+    assert.equal(maxReads, 1);
+    assert.equal(errors.length, outcome === "read-failure" || outcome === "startup-timeout" ? 1 : 0);
+    await controller.stop();
+    await controller.drained();
+    assert.equal(stops, 1);
+  });
+}

@@ -36,13 +36,13 @@ test("MCP provider passes query, actor, and explicit writes through configured t
       sourceArg: "source",
     },
   });
-  assert.equal(await memory.recall("org:yc", { query: "launch", actorId: "u1", maxChars: 2000 }), "result");
-  assert.equal(await memory.capture("org:yc", ["decision"], 10, "u1", { mode: "explicit", actorId: "u1" }), 1);
+  assert.equal(await memory.recall("org:acme", { query: "launch", actorId: "u1", maxChars: 2000 }), "result");
+  assert.equal(await memory.capture("org:acme", ["decision"], 10, "u1", { mode: "explicit", actorId: "u1" }), 1);
   assert.deepEqual(calls, [
-    { tool: "search_knowledge", args: { query: "launch", acting_user: "u1", namespace: "org:yc", max_chars: 2000 } },
+    { tool: "search_knowledge", args: { query: "launch", acting_user: "u1", namespace: "org:acme", max_chars: 2000 } },
     {
       tool: "write_knowledge",
-      args: { content: "decision", captured_at: 10, source: "explicit", acting_user: "u1", namespace: "org:yc" },
+      args: { content: "decision", captured_at: 10, source: "explicit", acting_user: "u1", namespace: "org:acme" },
     },
   ]);
 });
@@ -52,7 +52,7 @@ test("MCP recall is locally bounded and times out", async () => {
   const bounded = createMcpMemoryProvider({
     read: { client: client(calls, "abcdefgh"), tool: "read", timeoutMs: 100 },
   });
-  assert.equal(await bounded.recall("org:yc", { maxChars: 4 }), "abcd");
+  assert.equal(await bounded.recall("org:acme", { maxChars: 4 }), "abcd");
 
   const hanging: McpClient = {
     base: "http://knowledge.internal",
@@ -65,5 +65,5 @@ test("MCP recall is locally bounded and times out", async () => {
     },
   };
   const timed = createMcpMemoryProvider({ read: { client: hanging, tool: "read", timeoutMs: 10 } });
-  await assert.rejects(timed.recall("org:yc"), /timed out after 10ms/);
+  await assert.rejects(timed.recall("org:acme"), /timed out after 10ms/);
 });

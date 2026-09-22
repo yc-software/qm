@@ -173,7 +173,11 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         .filter(
           (run) =>
             isTerminal(run.status) &&
-            !returned.has(run.id) &&
+            (!returned.has(run.id) ||
+              (() => {
+                const wake = runs.get(byKey.get(`subagent-return:${run.id}`) ?? "");
+                return wake?.status === "pending" && wake.attempts === 0 && wake.turnUserSeq === null;
+              })()) &&
             run.id > afterId &&
             run.sessionId.startsWith("agent:main:subagent:"),
         )
@@ -219,9 +223,10 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       return true;
     },
 
-    async withdraw(runId) {
+    async withdraw(runId, opts) {
       const run = runs.get(runId);
       if (!run || run.status !== "pending") return false;
+      if (opts?.unstartedOnly && (run.attempts !== 0 || run.turnUserSeq !== null)) return false;
       runs.delete(runId);
       retryAfter.delete(runId);
       if (run.dedupKey) byKey.delete(run.dedupKey);

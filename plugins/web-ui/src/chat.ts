@@ -1,3 +1,5 @@
+import { formatMessageTime } from "./message-time.ts";
+import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "./app-edit";
 import { isConnectionReturn } from "./connection-return";
 import "./onboarding-welcome";
@@ -27,6 +29,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { ref } from "lit/directives/ref.js";
 import {
   Activity,
+  Ban,
   BookOpen,
   Search,
   Brain,
@@ -41,6 +44,7 @@ import {
   FileText,
   Files,
   GitFork,
+  Link2,
   Maximize2,
   MessageSquare,
   Paperclip,
@@ -122,7 +126,7 @@ import {
 } from "./timeline";
 import "./slack-setup";
 import { connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
-import { deepLinkPath, UI_BASE } from "./deep-link";
+import { deepLinkPath, sessionLink, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
@@ -135,7 +139,16 @@ import {
   harnessSupportsEffort,
   harnessSupportsFastMode,
 } from "./model-options";
-import { browserRenderableImage, chipBadge, copyText, formatBytes, icon, relTime, waveLoader } from "./ui";
+import {
+  attachmentGallery,
+  browserRenderableImage,
+  chipBadge,
+  copyText,
+  formatBytes,
+  icon,
+  relTime,
+  waveLoader,
+} from "./ui";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
@@ -177,6 +190,7 @@ installMarkdownSanitizer();
 
 const detachedAgents = new WeakSet<Agent>();
 interface SettledRowKey {
+  day: string;
   index: number;
   activity: WorkBlock["activity"] | undefined;
   status: WorkBlock["status"] | undefined;
@@ -1352,7 +1366,7 @@ export function createChatSurface(
     if (activePendingApprovals().length) return "Needs your approval";
     if (agent.state.isStreaming || chatState.resolvingApprovals.size > 0) {
       const work = chatState.liveWork ?? { status: "thinking", activity: [] };
-      if (runSlot.stopGeneration === runSlot.generation) return "Stopping…";
+      if (runSlot.stopGeneration === runSlot.generation) return "Stop requested";
       if (currentTextPhase(work)?.phase === "final_answer") return "Responding…";
       const summary = liveWorkSummary(work);
       if (!summary) return "Thinking…";
@@ -1423,6 +1437,8 @@ export function createChatSurface(
             </div>
           </section>
           <div class="chat-bottom-dock">
+            ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${backgroundActivityStrip()}
+            ${ctx.composer.composerForm(agent)}
             ${
               emptyChat &&
               !editingApp &&
@@ -1443,8 +1459,6 @@ export function createChatSurface(
                   )
                 : nothing
             }
-            ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${backgroundActivityStrip()}
-            ${ctx.composer.composerForm(agent)}
           </div>
         </div>
       `,
@@ -1478,6 +1492,7 @@ export function createChatSurface(
         ? chatState.forkSession.forkedFrom
         : undefined;
     return sessionTopbarTpl({
+      status: session?.status,
       sessionId: chatState.sessionId ?? session?.id,
       crumb,
       title,
@@ -1560,9 +1575,11 @@ export function createChatSurface(
     const speakerLabel = speakerLabelFor(message);
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
+    const day = new Date().toDateString();
     const hit = settledRowCache.get(message as object);
     if (
       hit &&
+      hit.day === day &&
       hit.index === index &&
       hit.activity === work?.activity &&
       hit.status === work?.status &&
@@ -1581,6 +1598,7 @@ export function createChatSurface(
     }
     const tpl = chatMessage(message, index, isStreaming);
     settledRowCache.set(message as object, {
+      day,
       index,
       activity: work?.activity,
       status: work?.status,
@@ -1607,7 +1625,11 @@ export function createChatSurface(
       const mail = (message as { subagentMail?: SubagentMailRef }).subagentMail;
       if (mail) {
         return html`
-          <article class="message-row subagent-mail-row" data-index=${index}>
+          <article
+            class="message-row subagent-mail-row"
+            data-index=${index}
+            data-entry-seqs=${messageEntrySeqs(message).join(" ")}
+          >
             ${subagentChip(mail.title, mail.sessionId)}
             <span class="subagent-mail-note">${SUBAGENT_MAIL_NOTES[mail.kind] ?? mail.kind.replace(/_/g, " ")}</span>
           </article>
@@ -1621,16 +1643,23 @@ export function createChatSurface(
       const deleted = Boolean((message as { deleted?: boolean }).deleted);
       const edited = !deleted && Boolean((message as { edited?: boolean }).edited);
       return html`
-        <article class="message-row user-row ${steered ? "steered-row" : ""}" data-index=${index}>
+        <article
+          class="message-row user-row ${steered ? "steered-row" : ""}"
+          data-index=${index}
+          data-entry-seqs=${messageEntrySeqs(message).join(" ")}
+        >
           ${steered ? html`<div class="steer-label">↪ steered the running task</div>` : nothing}
           ${speaker ? html`<div class="speaker-label">${speaker}</div>` : nothing}
-          <div class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}">
+          ${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}
+          <div
+            class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}"
+            ?hidden=${!messageText(message).trim() && !edited && !deleted}
+          >
             <div class="pin-content">
               ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
               ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
             </div>
             <button class="pin-toggle" type="button" hidden aria-expanded="false">Show more</button>
-            ${attachments.length ? html`<div class="message-files">${attachments.map(userAttachmentBadge)}</div>` : nothing}
           </div>
           ${
             sendFailure
@@ -1657,7 +1686,11 @@ export function createChatSurface(
         };
         label = labels[decision.scope ?? "once"] ?? "Approved";
       }
-      return html`<article class="message-row system-note-row" data-index=${index}>
+      return html`<article
+        class="message-row system-note-row"
+        data-index=${index}
+        data-entry-seqs=${messageEntrySeqs(message).join(" ")}
+      >
         <div class="system-note">${label}: <code>${decision.command}</code></div>
       </article>`;
     }
@@ -1665,7 +1698,11 @@ export function createChatSurface(
       const note = message as unknown as HistorySystemNote;
       const who = note.speaker ?? "The user";
       return html`
-        <article class="message-row system-note-row" data-index=${index}>
+        <article
+          class="message-row system-note-row"
+          data-index=${index}
+          data-entry-seqs=${messageEntrySeqs(message).join(" ")}
+        >
           <div class="system-note">
             ${
               note.action === "deleted"
@@ -1704,7 +1741,11 @@ export function createChatSurface(
         msg.content.some((chunk) => chunk.type === "thinking" && chunk.thinking.trim());
       if (!hasVisibleContent && msg.stopReason !== "error" && msg.stopReason !== "aborted") return nothing;
       return html`
-        <article class="message-row assistant-row ${isStreaming ? "streaming" : ""}" data-index=${index}>
+        <article
+          class="message-row assistant-row ${isStreaming ? "streaming" : ""}"
+          data-index=${index}
+          data-entry-seqs=${messageEntrySeqs(message).join(" ")}
+        >
           <div class="assistant-body">
             ${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
             ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
@@ -1733,7 +1774,7 @@ export function createChatSurface(
     const forkable = Boolean(index >= 0 && chatState.threadRef && chatState.sessionId && chatState.agent);
     return html`
       <div class="message-meta">
-        ${ts !== undefined ? html`<span class="message-time">${formatClock(ts)}</span>` : nothing}
+        ${ts !== undefined ? html`<span class="message-time">${formatMessageTime(ts)}</span>` : nothing}
         ${
           text
             ? html`<button
@@ -1744,6 +1785,19 @@ export function createChatSurface(
                 @click=${(e: Event) => void copyText(text, e.currentTarget as HTMLButtonElement)}
               >
                 ${icon(Copy, 13)}${icon(Check, 13)}
+              </button>`
+            : nothing
+        }
+        ${
+          chatState.sessionId && messageEntrySeqs(message).length
+            ? html`<button
+                class="msg-copy"
+                type="button"
+                ${tip("Copy message link")}
+                aria-label="Copy message link"
+                @click=${(e: Event) => void copyText(sessionLink(location.origin, UI_BASE, chatState.sessionId!, messageEntrySeqs(message)[0]), e.currentTarget as HTMLButtonElement)}
+              >
+                ${icon(Link2, 13)}${icon(Check, 13)}
               </button>`
             : nothing
         }
@@ -1800,14 +1854,6 @@ export function createChatSurface(
     } catch (err) {
       ctx.composer.state.error = errMessage(err, "Could not fork the conversation.");
       drawActiveChat();
-    }
-  }
-
-  function formatClock(ms: number): string {
-    try {
-      return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    } catch {
-      return "";
     }
   }
 
@@ -1869,6 +1915,7 @@ export function createChatSurface(
   }
 
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
+    const animating = isStreaming && runSlot.stopGeneration !== runSlot.generation;
     const parts: TemplateResult[] = [];
     for (const [chunkIndex, chunk] of message.content.entries()) {
       if (chunk.type === "text") {
@@ -1886,7 +1933,7 @@ export function createChatSurface(
                 .me=${appState.me}
                 .base=${withBase("")}
                 .adminBase=${ADMIN_BASE}
-                .widget=${part.type === "slack" ? "slack" : "apps"}
+                .widget=${part.type === "setup" ? "apps" : part.type}
                 .returnKey=${`reply:${message.timestamp}:${chunkIndex}:${partIndex}`}
                 .setupOnly=${true}
                 .animateWelcome=${false}
@@ -1899,8 +1946,8 @@ export function createChatSurface(
           const body = links.length ? stripConnectorLinks(shown, links) : shown;
           if (body.trim())
             parts.push(
-              html`<div class="streaming-text ${isStreaming ? "live-stream" : ""}" dir="auto">
-                ${markdown(body, isStreaming, streamingFinal ? ((message as AssistantWork).streamingBaseline ?? "").slice(phase.streamOffset) : ((message as AssistantWork).streamingBaseline ?? ""))}
+              html`<div class="streaming-text ${animating ? "live-stream" : ""}" dir="auto">
+                ${markdown(body, animating, streamingFinal ? ((message as AssistantWork).streamingBaseline ?? "").slice(phase.streamOffset) : ((message as AssistantWork).streamingBaseline ?? ""))}
               </div>`,
             );
           for (const link of links) parts.push(connectorWidget(link));
@@ -1909,7 +1956,7 @@ export function createChatSurface(
       if (chunk.type === "thinking" && chunk.thinking.trim()) {
         parts.push(
           html`<details class="thinking">
-            <summary>${sheenLabel("Thinking", isStreaming)}</summary>
+            <summary>${sheenLabel("Thinking", animating)}</summary>
             ${markdown(chunk.thinking)}
           </details>`,
         );
@@ -2253,11 +2300,12 @@ export function createChatSurface(
 
   function liveWorkStatus(agent: Agent): TemplateResult | typeof nothing {
     if (!agent.state.isStreaming && chatState.resolvingApprovals.size === 0) return nothing;
+    if (runSlot.stopGeneration === runSlot.generation)
+      return html`<div class="stopped-head" role="status">${icon(Ban, 13)}<span>Stop requested</span></div>`;
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
     if (work.status !== "thinking" && work.status !== "working") return nothing;
     if (currentTextPhase(work)?.phase === "final_answer" || shouldShowWork(work, "")) return nothing;
-    const stopping = runSlot.stopGeneration === runSlot.generation;
-    const summary = stopping ? null : liveWorkSummary(work);
+    const summary = liveWorkSummary(work);
     const expandable = Boolean(summary?.detail);
     const expanded = expandable && liveWorkExpanded;
     let title = "";
@@ -2274,7 +2322,7 @@ export function createChatSurface(
         >
           ${summary ? html`<span class="tool-icon">${icon(summary.icon, 15)}</span>` : nothing}
           <span class="live-work-label"
-            >${summary ? summary.label : sheenLabel(stopping ? "Stopping…" : `Thinking${usedToolsSuffix(work)}`, true)}</span
+            >${summary ? summary.label : sheenLabel(`Thinking${usedToolsSuffix(work)}`, true)}</span
           >
           ${summary?.detail ? html`<span class="live-work-detail">${summary.detail}</span>` : nothing}
           ${expandable ? html`<span class="live-work-toggle">${icon(ChevronRight, 14)}</span>` : nothing}
@@ -2377,8 +2425,9 @@ export function createChatSurface(
       return false;
     });
     const tail = active ? streamingTextTail(text, work.activity) : "";
-    const stopping = active && runSlot.stopGeneration === runSlot.generation;
-    let label = stopping ? "Stopping…" : workLabel(work);
+    const stopping = isStreaming && runSlot.stopGeneration === runSlot.generation;
+    const animating = active && !stopping;
+    let label = stopping ? "Stop requested" : workLabel(work);
     if (stopped) label = `You stopped after ${goalElapsedLabel(0, workSeconds(work) * 1000)}`;
     let fold =
       timeline.length || tail.trim() || work.pendingApprovals?.length
@@ -2387,7 +2436,7 @@ export function createChatSurface(
             ?open=${active || !!work.pendingApprovals?.length}
           >
             <summary class=${stopped ? "stopped-head" : "work-head"}>
-              ${sheenLabel(label, active)}<span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+              ${sheenLabel(label, animating)}<span class="activity-chevron">${icon(ChevronRight, 14)}</span>
             </summary>
             ${stopped ? nothing : html`<div class="work-divider"></div>`}
             <div class="work-rows">
@@ -2409,7 +2458,7 @@ export function createChatSurface(
                   </details>`;
                 },
               )}
-              ${tail.trim() ? html`<div class="work-said streaming-text live-stream">${markdown(tail, true, streamingTextTail(baseline, work.activity))}</div>` : nothing}
+              ${tail.trim() ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}">${markdown(tail, animating, streamingTextTail(baseline, work.activity))}</div>` : nothing}
             </div>
           </details>`
         : nothing;
@@ -2489,6 +2538,7 @@ export function createChatSurface(
   const TOOL_META: Record<string, { icon: IconNode; active: string; done: string; attempted: string }> = {
     execute: { icon: Terminal, active: "Running command", done: "Ran command", attempted: "Tried command" },
     read: { icon: BookOpen, active: "Reading file", done: "Read file", attempted: "Tried reading file" },
+    skill: { icon: BookOpen, active: "Loading skill", done: "Loaded skill", attempted: "Tried loading skill" },
     write: { icon: Pencil, active: "Writing file", done: "Wrote file", attempted: "Tried writing file" },
     publish: { icon: Rocket, active: "Publishing", done: "Published", attempted: "Tried publishing" },
     recall: { icon: Brain, active: "Searching memory", done: "Searched memory", attempted: "Tried searching memory" },
@@ -2562,6 +2612,8 @@ export function createChatSurface(
         return call.command ? firstLine(call.command) : "";
       case "read":
         return call.path ?? result.path ?? "";
+      case "skill":
+        return `${call.name ?? result.name ?? ""}/${call.path ?? result.path ?? "SKILL.md"}`;
       case "write": {
         const path = call.path ?? result.path ?? "";
         const bytes = result.bytes ?? call.bytes;
@@ -2820,8 +2872,13 @@ export function createChatSurface(
     if (a.mimeType?.startsWith("image/")) {
       const dataUrl =
         a.content && (a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`);
-      const download = !artifactHref || !browserRenderableImage(a.mimeType);
-      return chipBadge(FileImage, a.fileName, a.size, artifactHref ?? dataUrl ?? undefined, download);
+      const href = artifactHref ?? localContentUrl(a) ?? dataUrl;
+      if (href && browserRenderableImage(a.mimeType)) {
+        return html`<a class="file-image" href=${href} target="_blank" rel="noreferrer" ${tip(a.fileName)}
+          ><img src=${href} alt=${a.fileName} loading="lazy"
+        /></a>`;
+      }
+      return chipBadge(FileImage, a.fileName, a.size, href || undefined, true);
     }
     if (inlineHtmlName(a.fileName, a.mimeType)) {
       let src = artifactHref;
@@ -2886,6 +2943,22 @@ export function createChatSurface(
     mountReadOnly,
     mountLoadingPane,
     scrollToBottom,
+    revealEntry: (seq: number) => {
+      if (chatState.inheritedMessages.some((message) => messageEntrySeqs(message).includes(seq))) {
+        chatState.inheritedExpanded = true;
+        if (readonlyRedraw) readonlyRedraw();
+        else drawActiveChat();
+      }
+      const host = chatState.host ?? ctx.container()?.querySelector<HTMLElement>(".custom-chat");
+      transcriptViewport.cancelFollow();
+      const found = host ? highlightMessage(host, seq) : false;
+      if (!found) {
+        ctx.composer.state.error = "The linked message is unavailable or isn't visible in this conversation.";
+        if (readonlyRedraw) readonlyRedraw();
+        else drawActiveChat();
+      }
+      return found;
+    },
     drawActiveChat,
     setTranscriptWindow,
     setPins,

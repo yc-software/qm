@@ -3,13 +3,7 @@ import { upsertSeedSkill, type UpsertOutcome } from "./seed.ts";
 import { safeSkillFilePath, type SkillFile, type SkillManifest, type SkillStore } from "./skill-store.ts";
 import type { SkillPack } from "./skill-pack-store.ts";
 import type { ScopeId } from "../types.ts";
-import {
-  skillRecordPaths,
-  bundleFilePaths,
-  detectPathCollisions,
-  materializationControlPathCollisions,
-  SkillPackCollisionError,
-} from "./skill-collision.ts";
+import { skillRecordPaths, bundleFilePaths, detectPathCollisions, SkillPackCollisionError } from "./skill-collision.ts";
 
 export interface RepoFile {
   path: string;
@@ -248,8 +242,6 @@ export async function importPack(
 
   const incomingSkillPaths = toWrite.flatMap((w) => skillRecordPaths(w.manifest.name, w.manifest.files));
   const incomingBundlePaths = bundleFilePaths(ctx.bundleFiles ?? []);
-  const controlCollisions = materializationControlPathCollisions(incomingBundlePaths);
-  if (controlCollisions.length) throw new SkillPackCollisionError(controlCollisions);
   if (ctx.claimedPaths) {
     const incoming = [...incomingSkillPaths, ...incomingBundlePaths];
     const collisions = detectPathCollisions(incoming, ctx.claimedPaths);

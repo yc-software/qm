@@ -6,7 +6,7 @@ import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
 
-test("stopping blocks send and queue through render, input, keyboard, and form without blocking drafting", async (t) => {
+test("stopping returns Send immediately and queues every submit path without interrupting the live run", async (t) => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><div id="composer"></div>', {
     url: "http://localhost/",
     pretendToBeVisual: true,
@@ -122,38 +122,40 @@ test("stopping blocks send and queue through render, input, keyboard, and form w
     assert.equal(button(".send-btn").disabled, false);
     button(".stop-btn").click();
     assert.equal(stops, 1);
-    assert.equal(button(".stop-btn").disabled, true);
-    button(".stop-btn").click();
-    assert.equal(stops, 1, "stop cannot be clicked twice");
-    await t.test("queue stays disabled after rendering and input", () => {
-      assert.equal(button(".send-btn").disabled, true);
-      type("Edited while stopping");
-      assert.equal(composer!.state.draft, "Edited while stopping");
-      assert.equal(host.querySelector<HTMLTextAreaElement>("textarea")!.disabled, false);
-      assert.equal(button(".send-btn").disabled, true);
-    });
-    for (const streaming of [true, false]) {
-      agentState.isStreaming = streaming;
-      composer!.state.draft = "Keep this draft";
-      draw();
-      await t.test(`${streaming ? "queue" : "send"} remains blocked for input and every submit path`, async () => {
-        type("Edited while stopping");
-        const disabled = button(".send-btn").disabled;
-        for (const modifiers of [{}, { ctrlKey: true }, { metaKey: true }]) {
+    assert.equal(host.querySelector(".stop-btn"), null);
+    assert.equal(button(".send-btn").getAttribute("aria-label"), "Send");
+    assert.equal(button(".send-btn").disabled, false);
+    assert.equal(composer!.state.draft, "Keep this draft");
+    assert.equal(agentState.isStreaming, true);
+    for (const submit of ["enter", "ctrl-enter", "meta-enter", "form"]) {
+      await t.test(`${submit} queues while stopping`, async () => {
+        type(`Next instruction via ${submit}`);
+        assert.equal(button(".send-btn").disabled, false);
+        assert.equal(host.querySelector<HTMLTextAreaElement>("textarea")!.disabled, false);
+        const before = requests.length;
+        if (submit === "form") {
           host
-            .querySelector("textarea")!
-            .dispatchEvent(
-              new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...modifiers }),
-            );
+            .querySelector("form")!
+            .dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
+        } else {
+          host.querySelector("textarea")!.dispatchEvent(
+            new dom.window.KeyboardEvent("keydown", {
+              key: "Enter",
+              bubbles: true,
+              cancelable: true,
+              ctrlKey: submit === "ctrl-enter",
+              metaKey: submit === "meta-enter",
+            }),
+          );
         }
-        host.querySelector("form")!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
         await new Promise((resolve) => setTimeout(resolve, 20));
-        const actual = { disabled, draft: composer!.state.draft, prompts, requests: requests.length };
-        console.log("stopping probe", streaming, actual);
-        assert.deepEqual(actual, { disabled: true, draft: "Edited while stopping", prompts: 0, requests: 0 });
+        assert.deepEqual(requests.slice(before), ["/api/turn"]);
+        assert.equal(prompts, 0);
+        assert.equal(composer!.state.draft, "");
+        assert.equal(agentState.isStreaming, true);
+        assert.equal(stopping, true);
       });
     }
-    composer!.state.draft = "";
     const attachment = {
       id: "test-file",
       type: "document" as const,
@@ -164,12 +166,11 @@ test("stopping blocks send and queue through render, input, keyboard, and form w
     };
     composer!.state.attachments = [attachment];
     draw();
-    assert.equal(button(".send-btn").disabled, true, "attachment-only send remains blocked");
-    host.querySelector("form")!.dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
-    assert.deepEqual(composer!.state.attachments, [attachment], "stopping preserves attachments");
-    assert.equal(requests.length, 0);
+    assert.equal(button(".send-btn").disabled, false, "attachments can be queued while stopping");
+    assert.deepEqual(composer!.state.attachments, [attachment]);
     composer!.state.attachments = [];
     stopping = false;
+    agentState.isStreaming = false;
     composer!.state.draft = "Resume sending";
     draw();
     assert.equal(button(".send-btn").disabled, false, "sending recovers after stop completes");
@@ -182,7 +183,7 @@ test("stopping blocks send and queue through render, input, keyboard, and form w
     assert.equal(button(".send-btn").disabled, false);
     host.querySelector("form")!.dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
     await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(requests, ["/api/turn"], "normal queue submission still works");
+    assert.deepEqual(requests, Array(5).fill("/api/turn"), "normal queue submission still works");
     composer!.state.draft = "Preparing attachment";
     composer!.state.processingFiles = true;
     draw();
@@ -198,7 +199,6 @@ test("stopping blocks send and queue through render, input, keyboard, and form w
   }
 });
 
-// Match the same visual affordance as disabled Send, including the cursor.
 test("disabled Stop shares Send's muted styling", () => {
   const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
   assert.match(css, /\.send-btn:disabled,\s*\.stop-btn:disabled\s*\{[^}]*opacity: 0\.35;[^}]*cursor: not-allowed;/);

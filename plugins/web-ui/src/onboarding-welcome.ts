@@ -13,6 +13,7 @@ import { mountConnectionPicker, type ConnectionService } from "./connection-pick
 import type { Me } from "./shell-state";
 import "./onboarding-welcome.css";
 import "./onboarding-slack";
+import "./slack-account";
 import {
   connectionPreviewEnabled,
   previewParameters,
@@ -46,13 +47,15 @@ export class OnboardingWelcome extends LitElement {
     connectionOutcome: { state: true },
     connections: { state: true },
     connectionError: { state: true },
+    workspaceConnected: { state: true },
+    workspaceError: { state: true },
   };
   declare me: Me | null;
   declare onMoreIdeas: (() => void) | undefined;
   declare ideasDisabled: boolean;
   declare animateWelcome: boolean;
   declare setupOnly: boolean;
-  declare widget: "all" | "apps" | "slack";
+  declare widget: "all" | "apps" | "slack" | "slack-account";
   declare returnKey: string;
   declare base: string;
   declare adminBase: string;
@@ -62,13 +65,17 @@ export class OnboardingWelcome extends LitElement {
   declare authorizationError: string;
   private connections: Array<{ id: string; toolkit: string }> = [];
   private connectionError = "";
+  private workspaceConnected: boolean | null = null;
+  private workspaceError = false;
   private realReturn: ConnectionAttempt | null = null;
   private connectionsController?: AbortController;
   private restoreScrollTop: number | null = null;
   private returnError = "";
   private returnAccount = "";
   private refreshConnections = () => {
-    if (!this.preview && this.widget !== "slack" && !document.hidden) void this.loadConnections();
+    if (!document.hidden) void this.refreshWorkspace();
+    if (!this.preview && !["slack", "slack-account"].includes(this.widget) && !document.hidden)
+      void this.loadConnections();
   };
   private preview = connectionPreviewEnabled();
   private consent: PreviewAttempt | null = null;
@@ -101,10 +108,28 @@ export class OnboardingWelcome extends LitElement {
   private previewUser(): string {
     return `${this.me?.org}:${this.me?.user}`;
   }
+  private async refreshWorkspace(): Promise<void> {
+    if (this.widget === "apps" || (this.widget !== "slack-account" && this.me?.permissions?.includes("admin"))) return;
+    try {
+      const response = await fetch(`${this.base}api/composio/slack`, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!response.ok) throw Error("Slack status unavailable");
+      this.workspaceConnected = (await response.json()).workspaceInstalled === true;
+      this.workspaceError = false;
+    } catch {
+      this.workspaceConnected = null;
+      this.workspaceError = true;
+    }
+  }
   protected firstUpdated(): void {
+    void this.refreshWorkspace();
     const params = previewParameters();
     const returnUrl =
-      !this.preview && this.widget !== "slack" ? takeConnectionReturn(this.previewUser(), this.returnKey) : null;
+      !this.preview && !["slack", "slack-account"].includes(this.widget)
+        ? takeConnectionReturn(this.previewUser(), this.returnKey)
+        : null;
     const realParams = returnUrl?.url.searchParams;
     const returning = !this.preview && isConnectionReturn();
     if (realParams) {
@@ -122,10 +147,10 @@ export class OnboardingWelcome extends LitElement {
       for (const key of ["composioReturn", "status", "error", "connectedAccountId"]) clean.searchParams.delete(key);
       history.replaceState(history.state, "", clean);
     }
-    if (!this.preview && this.widget !== "slack") {
+    if (!this.preview) {
       window.addEventListener("focus", this.refreshConnections);
       document.addEventListener("visibilitychange", this.refreshConnections);
-      void this.loadConnections();
+      if (!["slack", "slack-account"].includes(this.widget)) void this.loadConnections();
     }
     if (this.preview) {
       const visible = new URL(location.href);
@@ -170,7 +195,7 @@ export class OnboardingWelcome extends LitElement {
     ) {
       this.classList.add("welcome-rolling");
     }
-    if (this.widget !== "slack") void this.loadCatalog();
+    if (!["slack", "slack-account"].includes(this.widget)) void this.loadCatalog();
   }
   private drawPicker(): void {
     const target = this.querySelector<HTMLElement>(".welcome-picker");
@@ -256,9 +281,9 @@ export class OnboardingWelcome extends LitElement {
         });
         const result = await response.json();
         if (!response.ok)
-          throw new Error(result.message ?? "Composio is not available. Ask your administrator to check its setup.");
+          throw new Error(result.message ?? "App connections are unavailable right now. Please try again.");
         for (const item of result.items as Array<{ id: string; name: string; description: string }>) {
-          if (!services.some((service) => service.id === item.id))
+          if (item.id !== "slack" && !services.some((service) => service.id === item.id))
             services.push({ ...item, popularity: 100000 - services.length });
         }
         cursor = typeof result.nextCursor === "string" ? result.nextCursor : "";
@@ -426,24 +451,43 @@ export class OnboardingWelcome extends LitElement {
               }`
       }
       ${
-        this.widget !== "apps" && this.me?.permissions?.includes("admin")
+        !["apps", "slack-account"].includes(this.widget) && this.me?.permissions?.includes("admin")
           ? html`<qm-onboarding-slack
               class="welcome-beat"
               style=${`--welcome-delay:${cohort ? 3050 : 900}ms`}
               .adminBase=${this.adminBase}
+              @slack-installation-status=${(event: CustomEvent<{ connected: boolean }>) => {
+                this.workspaceConnected = event.detail.connected;
+              }}
             ></qm-onboarding-slack>`
           : nothing
       }
+      ${this.widget === "slack-account" && this.workspaceError ? html`<p role="status">Could not check Slack setup. <button class="btn" @click=${() => void this.refreshWorkspace()}>Try again</button></p>` : nothing}
+      ${this.widget === "slack-account" && this.workspaceConnected === false ? html`<p role="status">QM needs to be added to your company’s Slack workspace before you can link your account. Ask an administrator to finish setup.</p>` : nothing}
+      <div class="welcome-beat" style=${`--welcome-delay:${cohort ? 3250 : 1100}ms`}>
+        ${this.workspaceConnected && this.widget !== "apps" && (["slack", "slack-account"].includes(this.widget) || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()}></qm-slack-account>` : nothing}
+      </div>
       ${
-        this.widget === "slack"
+        ["slack", "slack-account"].includes(this.widget)
           ? nothing
-          : html`<div class="welcome-beat" style=${`--welcome-delay:${cohort ? 3300 : 1100}ms`}>
+          : html`<div class="welcome-beat" style=${`--welcome-delay:${cohort ? 3450 : 1300}ms`}>
               ${this.loading ? html`<div class="welcome-load" role="status">Loading your available apps…</div>` : nothing}
               ${
                 this.error
                   ? html`<div class="welcome-load">
+                      <strong>Connect your apps</strong>
                       <p role="status">${this.error}</p>
-                      <button type="button" class="btn" @click=${() => void this.loadCatalog()}>Try again</button>
+                      <button
+                        type="button"
+                        class="btn"
+                        @click=${() => {
+                          void this.loadCatalog();
+                          void this.loadConnections();
+                          void this.refreshWorkspace();
+                        }}
+                      >
+                        Try again
+                      </button>
                     </div>`
                   : nothing
               }
@@ -461,7 +505,7 @@ export class OnboardingWelcome extends LitElement {
                     </div>`
                   : nothing
               }
-              ${this.connectionError ? html`<div class="welcome-connection-status" role="status">${this.connectionError} <button class="btn" @click=${() => void this.loadConnections()}>Check again</button></div>` : nothing}
+              ${this.connectionError && !this.error && !this.loading ? html`<div class="welcome-connection-status" role="status">${this.connectionError} <button class="btn" @click=${() => void this.loadConnections()}>Check again</button></div>` : nothing}
               ${!this.preview && this.connectionOutcome === "failed" ? html`<button class="btn" @click=${() => void this.loadConnections()}>Check again</button>` : nothing}
               <div class="welcome-picker" ?inert=${Boolean(this.authorizing)}></div>
               ${

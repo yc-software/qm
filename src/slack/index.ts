@@ -1,7 +1,8 @@
+import { registerKeychainApprovalActions } from "./keychain-approvals.ts";
 import { SlackPluginStartCleanupError } from "../surfaces/slack-runtime.ts";
 import { createSlackRateLimitNotice } from "./rate-limit-notice.ts";
 import { createSlackHistoryReader } from "./history.ts";
-import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { createEnvelopeStaging } from "./envelope-staging.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import bolt from "@slack/bolt";
@@ -252,6 +253,7 @@ export async function startSlackPlugin(
     ...(cfg.recentMessages ? { recentMessages: cfg.recentMessages } : {}),
   });
   const approvals = createApprovals({ core, flow, directory, threads, ids });
+  registerKeychainApprovalActions(app, { core, directory, webUiPublicUrl: cfg.webUiPublicUrl });
   const ensureHeader = createSurfaceHeaderEnsurer({
     headerFacts: (scope) => core.surfaceHeaderFacts(scope as Parameters<typeof core.surfaceHeaderFacts>[0]),
     channelPinEnabled: (scope) =>
@@ -290,7 +292,7 @@ export async function startSlackPlugin(
             }
           }
         } catch (err) {
-          console.error("[slack] channel header default sweep failed:", errMessage(err));
+          reportFailure("slack: channel header default sweep", err);
         }
       })();
     });

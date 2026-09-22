@@ -66,6 +66,8 @@ function start() {
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,
+    files: built.files,
+    directory: built.directory,
     memory: built.memory,
     auditLog: built.auditLog,
   });
@@ -106,7 +108,7 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
   }
 });
 
-test("/v1/admin/users/:principalId: per-user detail — stats, conversations, personal-scope artifacts; non-admin denied; audited", async () => {
+test("/v1/admin/users/:principalId: per-user detail counts personal conversations without loading org history or artifacts; non-admin denied; audited", async (t) => {
   const s = start();
   try {
     const dm: TurnRequest = {
@@ -117,20 +119,25 @@ test("/v1/admin/users/:principalId: per-user detail — stats, conversations, pe
     };
     assert.equal((await s.built.app.turn(dm)).status, "ok");
 
+    await s.built.app.turn({ ...dm, actor: { externalId: "U2" }, conversation: { kind: "dm", threadRef: "dm:U2:t1" } });
+    await s.built.app.turn({ ...dm, conversation: { kind: "channel", channelRef: "C1", threadRef: "channel:C1:t1" } });
+    const fail = () => {
+      throw new Error("User detail must not load org history or artifact lists");
+    };
+    t.mock.method(s.built.sessions, "listParticipants", fail);
+    t.mock.method(s.built.sessions, "attributedTurns", fail);
+    t.mock.method(s.built.sessions, "scopeSessionSummaries", fail);
+    t.mock.method(s.built.files, "listOwnedByScopes", fail);
+    t.mock.method(s.built.app, "listCrons", fail);
+    t.mock.method(s.built.app, "listDeployments", fail);
+
     const r = await fetch(`${s.base}/v1/admin/users/U1`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
     assert.equal(r.status, 200);
     const d: any = await r.json();
     assert.equal(d.principalId, "U1");
     assert.equal(d.scopeId, "personal:U1");
     assert.equal(d.stats.sessions, 1);
-    assert.equal(d.stats.turns, 1);
-    assert.equal(typeof d.stats.lastSeenAt, "number");
-    assert.equal(d.conversations.length, 1, "the DM appears as a conversation");
-    assert.equal(d.conversations[0].scopeId, "personal:U1");
-    assert.equal(d.conversations[0].userTurns, 1);
-    assert.deepEqual(d.files, []);
-    assert.deepEqual(d.crons, []);
-    assert.deepEqual(d.deployments, []);
+    for (const key of ["conversations", "files", "crons", "deployments"]) assert.equal(key in d, false);
 
     const denied = await fetch(`${s.base}/v1/admin/users/U1`, { headers: { "x-admin-actor": "user-uma@default-org" } });
     assert.equal(denied.status, 403);
@@ -213,7 +220,7 @@ test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions +
 
     d = await detail();
     assert.equal(d.stats.sessions, 0, "session wiped → user looks brand-new");
-    assert.deepEqual(d.conversations, []);
+    assert.equal("conversations" in d, false);
     assert.equal(d.onboarding, "not_started", "onboarding marker cleared");
 
     assert.ok((await s.built.auditLog.events()).some((e) => e.action === "user.reset"));
@@ -233,7 +240,7 @@ test("/v1/admin/users/:principalId: a grant-holder with no sessions still resolv
     assert.equal(d.principalId, "admin-alice");
     assert.equal(d.admin.isAdmin, true);
     assert.equal(d.stats.sessions, 0);
-    assert.deepEqual(d.conversations, []);
+    assert.equal("conversations" in d, false);
   } finally {
     await s.close();
   }
@@ -318,3 +325,60 @@ test("/v1/admin/users: a freshly promoted user shows as admin in the roster", as
     await s.close();
   }
 });
+
+test("user detail resolves mixed-case email links to the canonical personal scope", async (t) => {
+  const s = start();
+  try {
+    const stats = await s.built.sessions.scopeSessionStats("personal:alice@example.com", false, "conversation");
+    t.mock.method(s.built.sessions, "scopeSessionStats", async (scope: string) => {
+      assert.equal(scope, "personal:alice@example.com");
+      return { ...stats, total: 3 };
+    });
+    const response = await fetch(`${s.base}/v1/admin/users/Alice%40example.com`, {
+      headers: { "x-admin-actor": "admin-alice@default-org" },
+    });
+    assert.equal(response.status, 200);
+    const data = (await response.json()) as any;
+    assert.equal(data.principalId, "alice@example.com");
+    assert.equal(data.scopeId, "personal:alice@example.com");
+    assert.equal(data.stats.sessions, 3);
+  } finally {
+    await s.close();
+  }
+});
+
+for (const canonicalPrincipal of ["alice@example.com", "Alice@example.com"]) {
+  test(`mixed-case user mutations target canonical scope ${canonicalPrincipal}`, async () => {
+    const s = start();
+    try {
+      if (canonicalPrincipal === "Alice@example.com")
+        await s.built.directory.replace([{ principalId: canonicalPrincipal, displayName: "Alice", type: "internal" }]);
+      const scope = "personal:" + canonicalPrincipal;
+      const session = await s.built.sessions.getOrCreateByThread("dm:case-test", "dm", scope);
+      await s.built.sessions.addParticipant(session.id, canonicalPrincipal);
+      const other = await s.built.sessions.getOrCreateByThread("channel:case-test", "channel", "channel:C1");
+      await s.built.sessions.addParticipant(other.id, canonicalPrincipal);
+      const base = `${s.base}/v1/admin/users/ALICE%40example.com`;
+      const headers = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
+      const detail = async () => (await (await fetch(base, { headers })).json()) as any;
+      const update = await fetch(base + "/onboarding", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ status: "completed" }),
+      });
+      assert.equal(update.status, 200);
+      assert.equal(((await update.json()) as any).scopeId, scope);
+      assert.equal((await detail()).onboarding, "completed");
+      const reset = await fetch(base + "/reset", { method: "POST", headers });
+      assert.equal(reset.status, 200);
+      assert.equal(((await reset.json()) as any).deletedSessions, 1);
+      assert.equal((await detail()).onboarding, "not_started");
+      assert.equal((await detail()).stats.sessions, 0);
+      assert.equal(await s.built.sessions.get(session.id), null);
+      assert.ok(await s.built.sessions.get(other.id));
+      assert.equal(await s.built.memory.read("personal:ALICE@example.com"), "");
+    } finally {
+      await s.close();
+    }
+  });
+}

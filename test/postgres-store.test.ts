@@ -2553,3 +2553,67 @@ test("pg personal conversation counts tolerate legacy null characters", { skip }
     await raw.end();
   }
 });
+
+test("pg session status survives restart, is shared, and clears", { skip }, async () => {
+  const first = createPostgresSessionStore(URL!);
+  const session = await first.getOrCreateByThread("session-status", "dm", scopeId("personal", "U1"));
+  await first.addParticipant(session.id, "U1");
+  await first.addParticipant(session.id, "U2");
+  const status = { emoji: "🚀", text: "Live in production" };
+  await first.updateStatus(session.id, status);
+  const restarted = createPostgresSessionStore(URL!);
+  assert.deepEqual((await restarted.get(session.id))?.status, status);
+  assert.deepEqual((await restarted.getForParticipant(session.id, "U2"))?.status, status);
+  await restarted.updateStatus(session.id, null);
+  assert.equal((await first.get(session.id))?.status ?? null, null);
+});
+
+test(
+  "pg legacy completion wakeups remain discoverable after return and restart until withdrawn",
+  { skip },
+  async () => {
+    const first = createPostgresRunStore(URL!);
+    const { run } = await first.runs.enqueue({
+      sessionId: `agent:main:subagent:${randomUUID()}`,
+      request: turn("child"),
+    });
+    const claimed = await first.runs.claimById(run.id, "child", 30_000);
+    await first.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+    const { run: wake } = await first.runs.enqueue({
+      sessionId: `parent-${randomUUID()}`,
+      dedupKey: `subagent-return:${run.id}`,
+      request: turn("completion"),
+    });
+    await first.runs.markReturned(run.id);
+    await first.close();
+    const second = createPostgresRunStore(URL!);
+    try {
+      assert.ok((await second.runs.pendingReturns(1000)).some((pending) => pending.id === run.id));
+      assert.ok(!(await second.runs.pendingReturns(1000, run.id)).some((pending) => pending.id === run.id));
+      assert.equal(await second.runs.withdraw(wake.id), true);
+      assert.ok(!(await second.runs.pendingReturns(1000)).some((pending) => pending.id === run.id));
+    } finally {
+      await second.close();
+    }
+  },
+);
+
+test("pg unstarted withdrawal preserves claimed and released turns atomically", { skip }, async () => {
+  const store = createPostgresRunStore(URL!);
+  try {
+    const { run } = await store.runs.enqueue({ sessionId: `wake-retry-${randomUUID()}`, request: turn("completion") });
+    const claimed = await store.runs.claimById(run.id, "worker", 30_000);
+    assert.equal(await store.runs.withdraw(run.id, { unstartedOnly: true }), false);
+    await store.runs.releaseLease(run.id, claimed!.leaseToken!);
+    assert.equal(await store.runs.withdraw(run.id, { unstartedOnly: true }), false);
+    assert.equal((await store.runs.get(run.id))!.status, "pending");
+    const { run: fresh } = await store.runs.enqueue({
+      sessionId: `wake-fresh-${randomUUID()}`,
+      request: turn("completion"),
+    });
+    assert.equal(await store.runs.withdraw(fresh.id, { unstartedOnly: true }), true);
+    assert.equal(await store.runs.get(fresh.id), null);
+  } finally {
+    await store.close();
+  }
+});

@@ -3,7 +3,7 @@ import type { WorkBlock } from "./core-bridge.ts";
 
 export type ActivityCategory = "read" | "search" | "execute" | "other";
 
-export function compactPath(path: string): string {
+function compactPath(path: string): string {
   const parts = path.replace(/\/$/, "").split("/");
   return parts.at(-1) === "SKILL.md" ? parts.slice(-2).join("/") : parts.at(-1) || path;
 }
@@ -31,6 +31,10 @@ export function activityDescription(
 } {
   const tool = toolCategory({ ...result, ...call });
   if (tool === "read") return { category: "read", target: compactPath(call.path ?? result.path ?? "") };
+  if (tool === "skill") {
+    const name = call.name ?? result.name ?? "";
+    return { category: "read", target: `${name}/${compactPath(call.path ?? result.path ?? "SKILL.md")}` };
+  }
   if (tool !== "execute") return { category: "other", target: "" };
   const command = call.command ?? "";
   const words = shellWords(command);

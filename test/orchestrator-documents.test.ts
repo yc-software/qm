@@ -8,8 +8,8 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 
-function freshApp() {
-  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "document-turn-")) }));
+function freshApp(maxContextTokens?: number) {
+  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "document-turn-")), maxContextTokens }));
 }
 
 test("document uploads survive follow-up turns and stay isolated to their conversation", async () => {
@@ -41,7 +41,7 @@ test("document uploads survive follow-up turns and stay isolated to their conver
   assert.doesNotMatch(JSON.stringify(otherRequests), /notes.txt/);
 });
 
-test("documents remain available after conversation compaction", async () => {
+test("compaction stops automatic document replay while preserving the original file", async () => {
   const built = freshApp();
   const blob = await built.blobTransfer.put(Buffer.from("QUARTZ-731"));
   const request = {
@@ -55,6 +55,11 @@ test("documents remain available after conversation compaction", async () => {
     attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
   });
   const entries = await built.sessions.getEntries(first.sessionId!);
+  const attachment = (
+    entries.find((entry) => entry.type === "user")!.payload as {
+      attachments: Array<{ artifactId: string }>;
+    }
+  ).attachments[0]!;
   const { lease } = await built.sessions.acquireLease(first.sessionId!, "compaction");
   assert.ok(lease);
   await built.sessions.append(lease, {
@@ -66,7 +71,66 @@ test("documents remain available after conversation compaction", async () => {
   const result = await built.app.turn({ ...request, text: "what was in the document?" });
   assert.equal(result.status, "ok");
   const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
-  assert.match(JSON.stringify(calls.at(-1)?.promptEnvelope), /"documents":\[\{"name":"notes.txt"/);
+  assert.doesNotMatch(JSON.stringify(calls.at(-1)?.promptEnvelope), /"documents":/);
+  const artifact = await built.files.get(attachment.artifactId);
+  assert.equal(artifact?.enabled, true);
+  const opened = await built.files.open(attachment.artifactId);
+  assert.ok(opened);
+  const chunks = [];
+  for await (const chunk of opened.stream) chunks.push(Buffer.from(chunk));
+  assert.equal(Buffer.concat(chunks).toString(), "QUARTZ-731");
+  const original = await built.sessions.getEntry(first.sessionId!, entries[0]!.seq);
+  assert.deepEqual(original, entries[0]);
+});
+
+test("compaction during a turn stops document replay immediately", async () => {
+  const built = freshApp(2000);
+  const blob = await built.blobTransfer.put(Buffer.from("QUARTZ-731"));
+  const request = {
+    surface: "test" as const,
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm" as const, threadRef: "dm:U1:compacted-docs" },
+  };
+  const first = await built.app.turn({
+    ...request,
+    text: "summarize",
+    attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+  });
+  const entries = await built.sessions.getEntries(first.sessionId!);
+  const attachment = (
+    entries.find((entry) => entry.type === "user")!.payload as {
+      attachments: Array<{ artifactId: string }>;
+    }
+  ).attachments[0]!;
+  const { lease } = await built.sessions.acquireLease(first.sessionId!, "compaction");
+  assert.ok(lease);
+  for (let i = 0; i < 8; i++) {
+    await built.sessions.append(lease, {
+      type: i % 2 === 0 ? "user" : "assistant",
+      payload: { text: "Synthetic conversation context. ".repeat(100) },
+      scopeLabel: entries[0]!.scopeLabel,
+    });
+  }
+  await built.sessions.releaseLease(lease);
+  const result = await built.app.turn({ ...request, text: "what was in the document?" });
+  assert.equal(result.status, "ok");
+  const compacted = await built.sessions.getEntries(first.sessionId!);
+  assert.ok(
+    compacted.some(
+      (entry) => entry.type === "system" && (entry.payload as { kind?: string }).kind === "context_summary",
+    ),
+  );
+  const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
+  assert.doesNotMatch(JSON.stringify(calls.at(-1)?.promptEnvelope), /"documents":/);
+  const artifact = await built.files.get(attachment.artifactId);
+  assert.equal(artifact?.enabled, true);
+  const opened = await built.files.open(attachment.artifactId);
+  assert.ok(opened);
+  const chunks = [];
+  for await (const chunk of opened.stream) chunks.push(Buffer.from(chunk));
+  assert.equal(Buffer.concat(chunks).toString(), "QUARTZ-731");
+  const original = await built.sessions.getEntry(first.sessionId!, entries[0]!.seq);
+  assert.deepEqual(original, entries[0]);
 });
 
 for (const extension of ["docx", "pdf"]) {

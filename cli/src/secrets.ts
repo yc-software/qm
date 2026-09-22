@@ -304,11 +304,23 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: MINT_LOCALLY,
   },
   {
+    name: "INBOX_USERS",
+    service: "web-ui",
+    required: false,
+    description: "Comma-separated principals allowed to access Inbox, Calendar, and Design System.",
+  },
+  {
     name: "CORE_SIGNING_SECRET",
     service: "admin",
     required: true,
     description: "HMAC key shared by core and surface plugins.",
     generate: MINT_LOCALLY,
+  },
+  {
+    name: "INBOX_USERS",
+    service: "admin",
+    required: false,
+    description: "Comma-separated principals allowed to access Inbox, Calendar, and Design System.",
   },
   {
     name: "OIDC_CLIENT_ID",

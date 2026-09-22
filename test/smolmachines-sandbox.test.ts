@@ -225,3 +225,24 @@ test("read and write refuse parent path segments before any provider request", a
     [],
   );
 });
+
+test("control-plane 429 and 5xx are retried with Retry-After honored; exhausted retries name the request id", async () => {
+  fake.failNext(429, { headers: { "retry-after": "0" } });
+  fake.failNext(503);
+  const h = await sandbox.provision(layers);
+  assert.equal(h.coldStart, true);
+  const listing = fake.calls.filter((c) => c.method === "GET" && c.path === "/v1/machines");
+  assert.equal(listing.length, 3, "the machine listing was retried after the 429 and the 503");
+
+  const other = make();
+  for (let i = 1; i <= 4; i++) fake.failNext(429, { headers: { "retry-after": "0", "x-request-id": `req-${i}` } });
+  await assert.rejects(other.provision(layers), /smolmachines GET \/v1\/machines: http 429 .*\[request id req-4\]/);
+});
+
+test("exec is never retried and its failure names the request id", async () => {
+  const h = await sandbox.provision(layers);
+  const before = fake.calls.filter((c) => c.path.endsWith("/exec")).length;
+  fake.failNext(502, { headers: { "x-request-id": "req-exec" }, match: (c) => c.path.endsWith("/exec") });
+  await assert.rejects(sandbox.run(h, "echo hi"), /smolmachines exec .*: http 502 .*\[request id req-exec\]/);
+  assert.equal(fake.calls.filter((c) => c.path.endsWith("/exec")).length, before + 1);
+});

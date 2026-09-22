@@ -5,7 +5,6 @@ import {
   activityGroupSummary,
   activityGroups,
   activityLabel,
-  compactPath,
   thinkingPresentation,
   sessionPresentation,
 } from "../src/activity-presentation.ts";
@@ -42,7 +41,14 @@ test("simple shell reads and searches get semantic labels, compound commands sta
   );
   assert.equal(activityLabel(row("sed -n '1,120p' src/main.ts"), "complete"), "main.ts");
   assert.equal(activityLabel(row("rg --files src"), "complete"), "Searched for files in src");
-  assert.equal(compactPath("skill://publish/SKILL.md"), "publish/SKILL.md");
+  assert.deepEqual(activityDescription({ tool: "skill", name: "publish" }), {
+    category: "read",
+    target: "publish/SKILL.md",
+  });
+  assert.deepEqual(activityDescription({ tool: "skill", name: "publish", path: "templates/x.md" }), {
+    category: "read",
+    target: "publish/x.md",
+  });
 });
 
 test("status labels never report missing or failed results as successful", () => {

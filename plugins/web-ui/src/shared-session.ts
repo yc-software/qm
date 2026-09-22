@@ -1,12 +1,12 @@
 import "./shell.css";
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import { html, render } from "lit";
-import { Lock, ArrowUpRight, Check, Copy, File, FileImage } from "lucide";
+import { Lock, ArrowUpRight, Check, Copy, File } from "lucide";
 import { createTranscriptViewport } from "./transcript-viewport";
 import { decorateTextCodeBlocks } from "./text-code";
 import { markdown } from "./message-markdown";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
-import { brandName, brandMark, chipBadge, icon, copyText } from "./ui";
+import { brandName, brandMark, attachmentGallery, chipBadge, icon, copyText } from "./ui";
 
 interface SharedTranscript {
   createdAt: number;
@@ -16,6 +16,10 @@ interface SharedTranscript {
     text: string;
     attachments?: Array<{ id: string; name: string; mimetype: string; sizeBytes: number }>;
   }>;
+}
+
+function sharedInlineImage(mimeType: string): boolean {
+  return /^image\/(png|jpeg|gif|webp|avif)$/.test(mimeType);
 }
 
 installMarkdownSanitizer({ shared: true });
@@ -41,46 +45,39 @@ render(
         <div class="message-stack">
           ${
             transcript
-              ? transcript.messages.map(
-                  (message) => html`
+              ? transcript.messages.map((message) => {
+                  const files = attachmentGallery(
+                    message.attachments ?? [],
+                    (file) => sharedInlineImage(file.mimetype),
+                    (file) => {
+                      const href = `${location.pathname}/files/${encodeURIComponent(file.id)}`;
+                      const inlineImage = sharedInlineImage(file.mimetype);
+                      if (inlineImage) {
+                        return html`<a class="file-image" href=${`${href}?inline=1`} target="_blank" rel="noreferrer"
+                          ><img src=${`${href}?inline=1`} alt=${file.name} loading="lazy"
+                        /></a>`;
+                      }
+                      return chipBadge(File, file.name, file.sizeBytes, href, true);
+                    },
+                  );
+                  return html`
                     <article class=${`message-row ${message.role}-row`}>
-                      <div class=${message.role === "user" ? "message-bubble user-bubble" : "assistant-body"}>
+                      ${message.role === "user" ? files : ""}
+                      <div
+                        class=${message.role === "user" ? "message-bubble user-bubble" : "assistant-body"}
+                        ?hidden=${message.role === "user" && !message.text.trim()}
+                      >
                         <div class=${message.role === "user" ? "pin-content" : "shared-message-content"}>
                           ${markdown(message.text)}
                         </div>
                         ${message.role === "user" ? html`<button class="pin-toggle" type="button" hidden aria-expanded="false">Show more</button>` : ""}
-                        ${
-                          message.attachments?.length
-                            ? html`<div class="message-files">
-                                ${message.attachments.map((file) => {
-                                  const href = `${location.pathname}/files/${encodeURIComponent(file.id)}`;
-                                  const inlineImage = /^image\/(png|jpeg|gif|webp|avif)$/.test(file.mimetype);
-                                  if (inlineImage && message.role !== "user") {
-                                    return html`<a
-                                      class="file-image"
-                                      href=${href}
-                                      download=${file.name}
-                                      rel="noreferrer"
-                                      ><img src=${`${href}?inline=1`} alt=${file.name} loading="lazy"
-                                    /></a>`;
-                                  }
-                                  return chipBadge(
-                                    inlineImage ? FileImage : File,
-                                    file.name,
-                                    file.sizeBytes,
-                                    inlineImage ? `${href}?inline=1` : href,
-                                    !inlineImage,
-                                  );
-                                })}
-                              </div>`
-                            : ""
-                        }
+                        ${message.role === "assistant" ? files : ""}
                         ${message.role === "assistant" ? html`<div class="message-meta"><button class="msg-copy" aria-label="Copy message" title="Copy" @click=${(e: Event) => void copyText(message.text, e.currentTarget as HTMLButtonElement)}>${icon(Copy, 13)}${icon(Check, 13)}</button></div>` : ""}
                       </div>
                       ${message.role === "user" ? html`<div class="message-meta"><button class="msg-copy" aria-label="Copy message" title="Copy" @click=${(e: Event) => void copyText(message.text, e.currentTarget as HTMLButtonElement)}>${icon(Copy, 13)}${icon(Check, 13)}</button></div>` : ""}
                     </article>
-                  `,
-                )
+                  `;
+                })
               : html`<div class="empty-state">
                   <h2>This link is unavailable</h2>
                   <p>The conversation is unavailable or you may not have access.</p>

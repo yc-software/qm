@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 export interface PortalIdentity {
   p: string;
+  authenticatedAs?: string;
   n?: string;
   imp?: string;
   exp: number;
@@ -30,6 +31,8 @@ export function verifyPortalIdentity(token: string, secret: string, nowMs: numbe
     return null;
   }
   if (!claims || typeof claims.p !== "string" || !claims.p || typeof claims.exp !== "number") return null;
+  if (claims.authenticatedAs !== undefined && (typeof claims.authenticatedAs !== "string" || !claims.authenticatedAs))
+    return null;
   if (nowMs > claims.exp) return null;
   return claims;
 }
