@@ -1,3 +1,4 @@
+import { createDeploymentCredentials } from "./deploy-credentials";
 import { openDeploymentPermissions } from "./deploy-permissions";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
@@ -52,6 +53,7 @@ let deployQuery = "";
 let deployTab: DeploymentTab = "yours";
 let deployPageHost: HTMLElement | null = null;
 let activeDeploy: DeploymentView | null = null;
+let deployCredentials: ReturnType<typeof createDeploymentCredentials> | null = null;
 let visibleVersionCount = 10;
 let editingDeploy: { id: string; field: "displayName" | "name" } | null = null;
 let deployDraft = "";
@@ -173,6 +175,7 @@ function deploymentRow(d: DeploymentView): TemplateResult {
 function drawDeploysPage(): void {
   if (appState.currentView !== "deploys" || !appState.mainEl) return;
   activeDeploy = null;
+  deployCredentials = null;
   if (!deployPageHost || deployPageHost.parentElement !== appState.mainEl) {
     deployPageHost = document.createElement("div");
     deployPageHost.className = "pane deploys-page";
@@ -236,6 +239,7 @@ export function openDeployById(id: string): void {
 }
 
 async function openDeploy(d: DeploymentView): Promise<void> {
+  deployCredentials = null;
   visibleVersionCount = 10;
   editingDeploy = null;
   deployDraft = "";
@@ -247,6 +251,27 @@ async function openDeploy(d: DeploymentView): Promise<void> {
     const response = await api<{ deployment?: DeploymentView }>(`/api/deployments/${encodeURIComponent(d.id)}`);
     if (appState.currentView !== "deploys" || activeDeploy?.id !== d.id) return;
     activeDeploy = response.deployment ?? d;
+    const viewer = appState.me?.user;
+    if (
+      viewer &&
+      !appState.me?.impersonatedBy &&
+      activeDeploy.createdBy === viewer &&
+      activeDeploy.ownerScopeId === `personal:${viewer}` &&
+      activeDeploy.status !== "archived"
+    ) {
+      const credentials = createDeploymentCredentials({
+        id: d.id,
+        title: deploymentTitle(activeDeploy),
+        request: api,
+        changed: () => {
+          if (activeDeploy) drawDeployDetail(activeDeploy);
+        },
+        isCurrent: () =>
+          appState.currentView === "deploys" && activeDeploy?.id === d.id && deployCredentials === credentials,
+      });
+      deployCredentials = credentials;
+      void credentials.load();
+    }
     drawDeployDetail(activeDeploy);
   } catch (error) {
     if (activeDeploy?.id !== d.id) return;
@@ -266,7 +291,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
   const editingSlug = editingDeploy?.id === d.id && editingDeploy.field === "name";
   render(
     html`
-      <div class="resource-detail deploy-detail">
+      <div class="resource-detail deploy-detail" .inert=${deployCredentials?.isDialogOpen() ?? false}>
         ${listBackLink("Apps", returnToDeploysList)}
         <div class="resource-heading deploy-detail-heading">
           <div>
@@ -329,7 +354,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
               </section>`
             : nothing
         }
-
+        ${deployCredentials?.section() ?? nothing}
         <section class="deploy-detail-section">
           <h3>Version history</h3>
           ${
@@ -367,7 +392,8 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
           }
         </section>
       </div>
-      ${archiveCandidate ? archiveDialog(archiveCandidate) : nothing} ${deployToast ? undoToast(deployToast) : nothing}
+      ${deployCredentials?.dialog() ?? nothing} ${archiveCandidate ? archiveDialog(archiveCandidate) : nothing}
+      ${deployToast ? undoToast(deployToast) : nothing}
     `,
     host,
   );
@@ -375,6 +401,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
 }
 
 function returnToDeploysList(): void {
+  deployCredentials = null;
   editingDeploy = null;
   deployDraft = "";
   deployNotices = withoutDeploymentDetailNotice(deployNotices);

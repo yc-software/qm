@@ -53,6 +53,14 @@ export function parseCredentialBindings(input: unknown): DeploymentCredentialBin
   return parsed.data;
 }
 
+export function credentialBindingUnavailableReason(credential: KeychainCredentialMeta): string | undefined {
+  if (credential.managed || credential.refresh) return "Managed OAuth credentials are not supported for apps.";
+  if (credential.kind !== "env") return "Only saved API keys are supported; file logins are not supported.";
+  if (credential.expiresAt !== undefined && credential.expiresAt <= Date.now()) return "This credential has expired.";
+  if (!(credential.fields?.length || credential.envKey)) return "This credential has no usable fields.";
+  return undefined;
+}
+
 export function validateCredentialBinding(
   binding: DeploymentCredentialBinding,
   credential: KeychainCredentialMeta | null,
@@ -61,14 +69,8 @@ export function validateCredentialBinding(
   if (!samePerson(binding.ownerId, ownerId) || !credential || !samePerson(credential.ownerId, ownerId)) {
     throw new KeychainError(403, "every credential must belong to the app owner");
   }
-  if (
-    credential.kind !== "env" ||
-    credential.managed ||
-    credential.refresh ||
-    (credential.expiresAt !== undefined && credential.expiresAt <= Date.now())
-  ) {
-    throw new KeychainError(400, "credential is expired or unsupported; only unmanaged env credentials are supported");
-  }
+  const unavailable = credentialBindingUnavailableReason(credential);
+  if (unavailable) throw new KeychainError(400, unavailable);
   if (credential.host !== undefined && credential.host.toLowerCase() !== binding.host) {
     throw new KeychainError(400, "binding host must match the credential host");
   }

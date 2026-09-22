@@ -1,3 +1,5 @@
+import { mintPortalIdentity, type PortalIdentity } from "../src/auth/portal-identity.ts";
+import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as httpServer, type Server } from "node:http";
@@ -141,6 +143,26 @@ async function fixture() {
       headers: { "x-agent-capability": cap, "content-type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+  const native = async (
+    body?: unknown,
+    actor: Partial<PortalIdentity> | null = {},
+    headers: Record<string, string> = {},
+  ) => {
+    const method = body === undefined ? "GET" : "POST";
+    const path = withSourceAuthNonce(`/v1/deployments/${deployment.id}/credentials`, SECRET);
+    const raw = body === undefined ? "" : JSON.stringify(body);
+    return fetch(`${base}${path}`, {
+      method,
+      headers: {
+        ...signedHeaders(SECRET, method, path, raw),
+        ...(actor
+          ? { "x-portal-identity": await mintPortalIdentity({ p: OWNER, exp: Date.now() + 60_000, ...actor }, SECRET) }
+          : {}),
+        ...headers,
+      },
+      ...(raw ? { body: raw } : {}),
+    });
+  };
   const bindings = (cap: string, value?: unknown) => call(`/v1/deployments/${deployment.id}/credentials`, cap, value);
   const broker = (cap = appToken, body: Record<string, unknown> = {}) =>
     call("/v1/credentials/broker", cap, {
@@ -149,6 +171,7 @@ async function fixture() {
       ...body,
     });
   return {
+    native,
     records,
     backing,
     deployStore,
@@ -551,4 +574,163 @@ test("linked credential owners follow the keychain identity model and unlinking 
   assert.equal((await f.broker()).status, 404);
   assert.equal((await f.bindings(token, { credentialBindings: [binding] })).status, 403);
   assert.equal(f.upstreamCalls.length, 1);
+});
+
+test("native credential UI requires signed real owner, never delegated, app or automation authority", async (t) => {
+  const f = await fixture();
+  t.after(f.close);
+  const mutation = { action: "connect", binding: f.binding, expectedRevision: null };
+  for (const actor of [null, { p: OTHER }, { imp: OTHER }, { authenticatedAs: OTHER }, { exp: 1 }]) {
+    for (const body of [undefined, mutation])
+      assert.equal((await f.native(body, actor)).status, 403, JSON.stringify(actor));
+  }
+  for (const body of [undefined, mutation]) {
+    assert.equal((await f.native(body, {}, { "x-signature": "" })).status, 401);
+    assert.equal((await f.native(body, {}, { "x-portal-identity": "forged" })).status, 403);
+    for (const over of [
+      { triggered: true },
+      { liveActor: false },
+      { deployment: f.deployment.id },
+      { actorId: OTHER },
+    ]) {
+      assert.equal((await f.native(body, {}, { "x-agent-capability": await f.token(over) })).status, 403);
+    }
+  }
+  assert.equal((await f.native({ ...mutation, principalId: OWNER })).status, 400);
+  assert.equal((await f.native({ credentialBindings: [f.binding], expectedRevision: null })).status, 400);
+  assert.equal((await f.native({ ...mutation, expectedRevision: undefined })).status, 400);
+  for (const patch of [
+    { createdBy: OTHER },
+    { ownerScopeId: personalScope(OTHER) },
+    { ownerScopeId: "channel:sample" },
+    { status: "archived" as const },
+  ]) {
+    const before = (await f.backing.get(f.deployment.id))!;
+    await f.backing.merge(f.deployment.id, patch);
+    assert.equal((await f.native()).status, 403);
+    assert.equal((await f.native(mutation)).status, 403);
+    await f.backing.merge(f.deployment.id, before);
+  }
+  await f.identity.deactivate(OWNER);
+  assert.equal((await f.native()).status, 403);
+  assert.equal((await f.native(mutation)).status, 403);
+});
+
+test("native metadata is an explicit safe owner projection with unsupported choices visible", async (t) => {
+  const f = await fixture();
+  t.after(f.close);
+  await f.records.merge(f.credential.id, {
+    accountLabel: "Sample account",
+    fingerprint: "private-fingerprint",
+    origin: "private-origin",
+  });
+  const expired = await f.keychain.save({ ownerId: OWNER, service: "expired", secret: "fake-expired", expiresAt: 1 });
+  const file = await f.keychain.save({
+    ownerId: OWNER,
+    service: "file-login",
+    files: [{ path: ".sample/config", contentBase64: "ZmFrZQ==" }],
+  });
+  const oauth = await f.keychain.save({ ownerId: OWNER, service: "oauth-login", secret: "fake-oauth" });
+  await f.records.merge(oauth.id, { managed: "connector", refresh: { refreshTokenEnc: "private-refresh" } });
+  const other = await f.keychain.save({ ownerId: OTHER, service: "other-owner", secret: "fake-other" });
+  const response = await f.native();
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  const raw = await response.text();
+  assert.doesNotMatch(raw, /private-|fake-|secretEnc|fingerprint|origin|capturePaths|refreshToken|contentBase64/);
+  const data = JSON.parse(raw);
+  assert.equal(data.revision, null);
+  assert.deepEqual(data.credentialBindings, []);
+  assert.deepEqual(
+    data.credentials.find((c: { id: string }) => c.id === f.credential.id),
+    {
+      id: f.credential.id,
+      ownerId: OWNER,
+      service: "paired-provider",
+      accountLabel: "Sample account",
+      kind: "env",
+      host: "api.example.com",
+      fields: ["TOKEN_ID", "TOKEN_SECRET"],
+    },
+  );
+  assert.equal(data.credentials.length, 4);
+  assert.equal(
+    data.credentials.some((c: { id: string }) => c.id === other.id),
+    false,
+  );
+  for (const credential of [expired, file, oauth])
+    assert.ok(data.credentials.find((c: { id: string }) => c.id === credential.id).disabledReason);
+  assert.equal(
+    (await f.keychain.listByOwner(OWNER)).some((c) => c.id === oauth.id),
+    false,
+  );
+  assert.deepEqual(await (await f.bindings(await f.token())).json(), { credentialBindings: [] });
+});
+
+test("native connect/revoke uses loaded revisions, preserves unrelated broken bindings, and revokes existing app tokens", async (t) => {
+  const f = await fixture();
+  t.after(f.close);
+  const second = await f.keychain.save({ ownerId: OWNER, service: "second", secret: "fake-second" });
+  const secondBinding = {
+    ...f.binding,
+    credentialId: second.id,
+    headers: [{ name: "Authorization", scheme: "Bearer" }],
+  };
+  const snapshot = async () =>
+    (await (await f.native()).json()) as { revision: string | null; credentialBindings: DeploymentCredentialBinding[] };
+  const initial = await snapshot();
+  assert.equal(
+    (await f.native({ action: "connect", binding: f.binding, expectedRevision: initial.revision })).status,
+    200,
+  );
+  const first = await snapshot();
+  assert.ok(first.revision);
+  assert.equal((await f.broker()).status, 200);
+  assert.equal(
+    (await f.native({ action: "connect", binding: secondBinding, expectedRevision: initial.revision })).status,
+    409,
+  );
+  assert.equal(
+    (await f.native({ action: "connect", binding: f.binding, expectedRevision: first.revision })).status,
+    409,
+  );
+  assert.equal(
+    (await f.native({ action: "connect", binding: secondBinding, expectedRevision: first.revision })).status,
+    200,
+  );
+  const both = await snapshot();
+  await f.records.merge(second.id, { expiresAt: 1 });
+  assert.equal(
+    (await f.native({ action: "revoke", credentialId: f.credential.id, expectedRevision: both.revision })).status,
+    200,
+  );
+  const revoked = await snapshot();
+  assert.deepEqual(revoked.credentialBindings, [secondBinding]);
+  assert.equal((await f.broker()).status, 404);
+  assert.equal(
+    (await f.native({ action: "connect", binding: f.binding, expectedRevision: both.revision })).status,
+    409,
+  );
+  await f.records.delete(second.id);
+  assert.deepEqual((await snapshot()).credentialBindings, [secondBinding]);
+  assert.equal(
+    (await f.native({ action: "revoke", credentialId: second.id, expectedRevision: revoked.revision })).status,
+    200,
+  );
+  assert.deepEqual((await snapshot()).credentialBindings, []);
+  assert.equal((await f.deployStore.get(f.deployment.id))!.currentVersion, f.deployment.currentVersion);
+  assert.deepEqual(await f.keychain.listGrants({}), []);
+});
+
+test("native credential CAS rejects a concurrent revoke after initial revision validation", async (t) => {
+  const f = await fixture();
+  t.after(f.close);
+  const getCredential = f.keychain.getCredential.bind(f.keychain);
+  f.keychain.getCredential = async (id) => {
+    const before = (await f.deployStore.get(f.deployment.id))!;
+    await f.deployStore.setCredentialBindings(f.deployment.id, [], before);
+    return getCredential(id);
+  };
+  assert.equal((await f.native({ action: "connect", binding: f.binding, expectedRevision: null })).status, 409);
+  assert.deepEqual((await f.deployStore.get(f.deployment.id))!.credentialBindings, []);
 });

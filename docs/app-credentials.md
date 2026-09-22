@@ -7,8 +7,34 @@ credentials are unsupported. Personal scope grants do not authorize apps.
 
 App users can see data returned by the provider. App managers control the code that
 uses the credential. Explain these consequences and obtain the owner's explicit
-approval before recording a binding. Approval must come from the owner in their own
-live personal conversation; triggered turns and app tokens cannot grant access.
+approval before recording a binding. Approval must come from the signed-in owner in the native Apps UI or from their own
+live personal conversation. Impersonated users, shared managers, triggered turns,
+and app tokens cannot grant access.
+
+## Apps UI
+
+Open **Apps → Manage → Credentials** on an app you originally published and still
+own in your personal home. **Connect saved key** lists your saved key metadata,
+including disabled expired keys, file logins, and managed OAuth credentials with
+reasons. No secret values are sent to the browser. Select a key, an exact host,
+methods (GET by default), path prefixes, and authentication headers. A saved host
+cannot be changed. **Authentication headers** supports named fields and multiple
+headers as well as the default bearer token. Confirm the viewer/manager warning
+before connecting.
+
+**Revoke** removes only that connection, without changing other bindings, deleting
+the saved key, or redeploying the app. Missing and expired keys remain revocable.
+These app bindings are separate from conversation keychain grants.
+
+The native UI uses the existing source-signed portal actor, not a fabricated live
+conversation capability. Native `GET /v1/deployments/:id/credentials` returns
+`{credentialBindings, revision, credentials}` with an explicit safe metadata
+projection. `revision` is `null` before any binding change. Native POST accepts
+`{action: "connect", binding, expectedRevision}` or
+`{action: "revoke", credentialId, expectedRevision}` and returns `{ok: true}`.
+Duplicate connections must be revoked before their permissions can be changed.
+A stale revision returns 409; reload and review the current state before approving
+again. Both the browser bridge and core return `Cache-Control: no-store`.
 
 ## Grant and inspect
 

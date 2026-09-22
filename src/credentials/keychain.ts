@@ -382,7 +382,7 @@ interface GrantListFilter {
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
   listAllMetadata(): Promise<KeychainCredentialMeta[]>;
-  listByOwner(ownerId: string): Promise<KeychainCredentialMeta[]>;
+  listByOwner(ownerId: string, options?: { includeManaged?: boolean }): Promise<KeychainCredentialMeta[]>;
   listByOwners(ownerIds: string[]): Promise<Map<string, KeychainCredentialMeta[]>>;
   setCapturePaths(
     ownerId: string,
@@ -1028,9 +1028,9 @@ export function createKeychain(deps: {
       return (await deps.creds.select({ omit: ["secretEnc"] })).filter((c) => !c.managed && c.kind !== "broker");
     },
 
-    async listByOwner(ownerId) {
+    async listByOwner(ownerId, options) {
       return (await deps.creds.select({ omit: ["secretEnc"], where: byOwners([ownerId]) })).filter(
-        (c) => samePerson(c.ownerId, ownerId) && !c.managed && c.kind !== "broker",
+        (c) => samePerson(c.ownerId, ownerId) && (options?.includeManaged || !c.managed) && c.kind !== "broker",
       );
     },
 

@@ -12493,3 +12493,84 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   outline-offset: 6px;
   border-radius: 8px;
 }
+
+.deploy-credentials-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.deploy-credentials .btn {
+  white-space: nowrap;
+}
+.deploy-credential-routing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.deploy-credential-dialog {
+  width: min(560px, 100%);
+}
+.deploy-credential-fields {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.deploy-credential-fields > label,
+.deploy-credential-header > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+  font-size: 13px;
+}
+.deploy-credential-fields input:not([type="checkbox"]),
+.deploy-credential-fields select,
+.deploy-credential-fields textarea {
+  min-width: 0;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+}
+.deploy-credential-fields input:read-only {
+  color: var(--muted-foreground);
+}
+.deploy-credential-methods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 0;
+  border: 0;
+  font-size: 12px;
+}
+.deploy-credential-methods label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.deploy-credential-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: end;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.deploy-credential-fields > .deploy-credential-confirm {
+  flex-direction: row;
+  align-items: start;
+  gap: 8px;
+  line-height: 1.5;
+}
+.deploy-credential-confirm input {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+.deploy-credential-dialog .actions .btn {
+  white-space: nowrap;
+}

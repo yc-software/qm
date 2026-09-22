@@ -2191,6 +2191,35 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
+    path: "/api/deployments/:id/credentials",
+    handle: ({ res, params }) => {
+      res.setHeader("cache-control", "no-store");
+      return relayCore(res, "GET", `/v1/deployments/${encodeURIComponent(params.id!)}/credentials`);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/deployments/:id/credentials",
+    handle: async ({ req, res, params }) => {
+      res.setHeader("cache-control", "no-store");
+      const site = req.headers["sec-fetch-site"];
+      if (
+        (site !== undefined && site !== "same-origin") ||
+        !/^application\/json(?:;|$)/i.test(String(req.headers["content-type"] ?? ""))
+      )
+        return json(res, 403, { error: "forbidden", message: "same-origin JSON request required" });
+      const body = await readJson<Record<string, unknown>>(req, res, false);
+      if (!body) return;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/deployments/${encodeURIComponent(params.id!)}/credentials`,
+        JSON.stringify(body),
+      );
+    },
+  },
+  {
+    method: "GET",
     path: "/api/deployments/:id/share",
     handle: async ({ res, params }) => relayCap(res, "GET", `/v1/deployments/${encodeURIComponent(params.id!)}/share`),
   },

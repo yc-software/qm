@@ -1,3 +1,4 @@
+import { mintPortalIdentity, verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
@@ -17,6 +18,8 @@ interface Call {
   url: string;
   body: Record<string, unknown>;
   capability?: string;
+  actor?: string;
+  signature?: string;
 }
 
 const calls: Call[] = [];
@@ -41,6 +44,8 @@ const core = createServer((req: IncomingMessage, res) => {
         url: req.url ?? "",
         body,
         capability: req.headers["x-agent-capability"] as string | undefined,
+        actor: req.headers["x-portal-identity"] as string | undefined,
+        signature: req.headers["x-signature"] as string | undefined,
       });
     }
     res.writeHead(200, { "content-type": "application/json" });
@@ -119,4 +124,56 @@ test("deployment sharing uses the signed-in capability and drops caller identity
   assert.equal(requests.length, 2);
   assert.ok(requests.every((call) => call.capability === "signed-in-user-capability"));
   assert.deepEqual(requests[1]?.body, { scope: "personal:bob", access: "view" });
+});
+
+test("credential bridge relays signed portal actor without minting a conversation capability", async () => {
+  const before = calls.length;
+  const actor = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, process.env.CORE_SIGNING_SECRET!);
+  const signed = { ...headers, "x-portal-identity": actor, "sec-fetch-site": "same-origin" };
+  const listing = await fetch(`${base}/api/deployments/d1/credentials`, { headers: signed });
+  assert.equal(listing.status, 200);
+  assert.equal(listing.headers.get("cache-control"), "no-store");
+  const body = { action: "revoke", credentialId: "sample-id", expectedRevision: "sample-revision" };
+  assert.equal(
+    (
+      await fetch(`${base}/api/deployments/d1/credentials`, {
+        method: "POST",
+        headers: signed,
+        body: JSON.stringify(body),
+      })
+    ).status,
+    200,
+  );
+  const requests = calls.slice(before);
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.ok(isNoncedCoreCall(request.url, "/v1/deployments/d1/credentials"));
+    assert.ok(request.signature);
+    assert.equal(request.capability, undefined);
+    assert.equal(verifyPortalIdentity(request.actor!, process.env.CORE_SIGNING_SECRET!, Date.now())?.p, "alice");
+  }
+  assert.deepEqual(requests[1]!.body, body);
+});
+
+test("credential bridge rejects cross-site and form mutations before forwarding", async () => {
+  const before = calls.length;
+  const cases: Record<string, string>[] = [
+    { "sec-fetch-site": "cross-site" },
+    { "sec-fetch-site": "same-site" },
+    { "content-type": "text/plain" },
+    { "content-type": "application/x-www-form-urlencoded" },
+  ];
+  for (const extra of cases) {
+    assert.equal(
+      (
+        await fetch(`${base}/api/deployments/d1/credentials`, {
+          method: "POST",
+          headers: { ...headers, ...extra },
+          body: "{}",
+        })
+      ).status,
+      403,
+    );
+  }
+  assert.equal(calls.length, before);
 });

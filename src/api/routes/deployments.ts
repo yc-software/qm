@@ -1,8 +1,10 @@
 import {
   parseCredentialBindings,
+  credentialBindingUnavailableReason,
   validateCredentialBinding,
   ownsPersonalDeployment,
 } from "../../deploy/credential-bindings.ts";
+import { samePerson } from "../../directory/person.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
@@ -1527,37 +1529,102 @@ export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 
 async function deploymentCredentials(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, capability, params, method, body } = ctx;
-  if (
-    !capability ||
-    capability.deployment ||
-    capability.triggered ||
-    capability.liveActor !== true ||
-    capability.scopeId !== `personal:${capability.actorId}`
-  ) {
-    return sendJson(res, 403, {
-      error: "forbidden",
-      message: "credential bindings require the live owner in their personal conversation",
-    });
+  const native = !capability;
+  let ownerId: string;
+  if (capability) {
+    if (
+      capability.deployment ||
+      capability.triggered ||
+      capability.liveActor !== true ||
+      capability.scopeId !== `personal:${capability.actorId}`
+    ) {
+      return sendJson(res, 403, {
+        error: "forbidden",
+        message: "credential bindings require the live owner in their personal conversation",
+      });
+    }
+    const speaker = await verifiedConversationSpeaker(ctx, capability.actorId);
+    if ("error" in speaker) return sendJson(res, 403, { error: "forbidden", message: speaker.error });
+    ownerId = capability.actorId;
+  } else {
+    const actor = ctx.actor;
+    if (
+      !ctx.secret ||
+      !actor ||
+      actor.imp !== undefined ||
+      (actor.authenticatedAs !== undefined && !samePerson(actor.authenticatedAs, actor.p))
+    ) {
+      return sendJson(res, 403, { error: "forbidden", message: "sign in as the app owner to manage credentials" });
+    }
+    ownerId = actor.p;
   }
-  const speaker = await verifiedConversationSpeaker(ctx, capability.actorId);
-  if ("error" in speaker) return sendJson(res, 403, { error: "forbidden", message: speaker.error });
   const deployment = await app.getDeployment(params.id!);
   if (!deployment || deployment.id !== params.id!) return sendJson(res, 404, { error: "not_found" });
-  if (!ownsPersonalDeployment(deployment, capability.actorId) || deployment.status === "archived") {
+  if (!ownsPersonalDeployment(deployment, ownerId) || deployment.status === "archived") {
     return sendJson(res, 403, {
       error: "forbidden",
       message: "only the publisher owning this personal app home can bind credentials",
     });
   }
-  if (method === "GET") return sendJson(res, 200, { credentialBindings: deployment.credentialBindings ?? [] });
+  res.setHeader("cache-control", "no-store");
+  if (method === "GET") {
+    if (!native) return sendJson(res, 200, { credentialBindings: deployment.credentialBindings ?? [] });
+    if (!deps.keychain) return sendJson(res, 503, { error: "unavailable" });
+    const credentials = (await deps.keychain.listByOwner(ownerId, { includeManaged: true })).map((credential) => ({
+      id: credential.id,
+      ownerId: credential.ownerId,
+      service: credential.service,
+      accountLabel: credential.accountLabel,
+      kind: credential.kind,
+      host: credential.host,
+      fields: credential.fields?.map((field) => field.envKey) ?? (credential.envKey ? [credential.envKey] : []),
+      disabledReason: credentialBindingUnavailableReason(credential),
+    }));
+    return sendJson(res, 200, {
+      credentialBindings: deployment.credentialBindings ?? [],
+      revision: deployment.credentialBindingRevision ?? null,
+      credentials,
+    });
+  }
   if (!deps.keychain || !deps.deployStore) return sendJson(res, 503, { error: "unavailable" });
   try {
-    if (!isObj(body) || Object.keys(body).some((key) => key !== "credentialBindings")) {
-      throw new KeychainError(400, "expected { credentialBindings: [...] }");
-    }
-    const bindings = parseCredentialBindings(body.credentialBindings);
-    for (const binding of bindings) {
-      validateCredentialBinding(binding, await deps.keychain.getCredential(binding.credentialId), capability.actorId);
+    let bindings;
+    if (native) {
+      if (!isObj(body) || !(body.expectedRevision === null || typeof body.expectedRevision === "string"))
+        throw new KeychainError(400, "expectedRevision is required; reload credentials before making changes");
+      if (body.expectedRevision !== (deployment.credentialBindingRevision ?? null))
+        throw new KeychainError(409, "The app or its credentials changed. Reload and review before trying again.");
+      if (
+        body.action === "connect" &&
+        Object.keys(body).every((key) => ["action", "binding", "expectedRevision"].includes(key))
+      ) {
+        const binding = parseCredentialBindings([body.binding])[0]!;
+        if (deployment.credentialBindings?.some((current) => current.credentialId === binding.credentialId))
+          throw new KeychainError(
+            409,
+            "This credential is already connected. Revoke it before changing its permissions.",
+          );
+        validateCredentialBinding(binding, await deps.keychain.getCredential(binding.credentialId), ownerId);
+        bindings = parseCredentialBindings([...(deployment.credentialBindings ?? []), binding]);
+      } else if (
+        body.action === "revoke" &&
+        typeof body.credentialId === "string" &&
+        Object.keys(body).every((key) => ["action", "credentialId", "expectedRevision"].includes(key))
+      ) {
+        bindings = (deployment.credentialBindings ?? []).filter(
+          (binding) => binding.credentialId !== body.credentialId,
+        );
+      } else {
+        throw new KeychainError(400, "expected a connect or revoke action");
+      }
+    } else {
+      if (!isObj(body) || Object.keys(body).some((key) => key !== "credentialBindings")) {
+        throw new KeychainError(400, "expected { credentialBindings: [...] }");
+      }
+      bindings = parseCredentialBindings(body.credentialBindings);
+      for (const binding of bindings) {
+        validateCredentialBinding(binding, await deps.keychain.getCredential(binding.credentialId), ownerId);
+      }
     }
     if (!(await deps.deployStore.setCredentialBindings(deployment.id, bindings, deployment))) {
       return sendJson(res, 409, {
@@ -1566,13 +1633,13 @@ async function deploymentCredentials(ctx: ApiCtx): Promise<void> {
       });
     }
     audit(deps, {
-      principalId: capability.actorId,
+      principalId: ownerId,
       action: "deployment.credentials.replace",
       resource: deployment.id,
-      scopeLabel: capability.scopeId,
+      scopeLabel: `personal:${ownerId}`,
       detail: bindings.map((b) => b.credentialId).join(","),
     });
-    return sendJson(res, 200, { credentialBindings: bindings });
+    return sendJson(res, 200, native ? { ok: true } : { credentialBindings: bindings });
   } catch (error) {
     if (!(error instanceof KeychainError)) throw error;
     return sendJson(res, error.status, { error: "invalid_bindings", message: error.message });
