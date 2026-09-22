@@ -145,6 +145,7 @@ jobs:
         run: |
           npm ci
           npm ci --prefix plugins/web-ui
+          npm ci --prefix desktop --ignore-scripts
       - name: Formatting
         run: npm run format:check
       - name: Lint whole repo, incl. plugins
