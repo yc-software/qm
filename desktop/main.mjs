@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createLogin, loginCallback } from "./login.mjs";
-import { instanceUrl, externalUrl } from "./url.mjs";
+import { instanceUrl, externalUrl, browserLoginUrl } from "./url.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const setupUrl = pathToFileURL(path.join(directory, "setup.html")).href;
@@ -63,6 +63,7 @@ function showSetup() {
   setupWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   setupWindow.on("closed", () => {
     setupWindow = undefined;
+    if (pendingLogin) mainWindow?.destroy();
   });
   setupWindow.loadURL(setupUrl);
 }
@@ -72,14 +73,17 @@ function instanceSession(url) {
 }
 
 async function beginBrowserSignIn(url) {
-  pendingLogin = createLogin(url);
+  pendingLogin?.controller.abort();
+  const attempt = { ...createLogin(url), controller: new AbortController() };
+  pendingLogin = attempt;
   loginStatus = "Finish signing in in your browser. This window will open your workspace when you're done.";
   mainWindow?.hide();
   showSetup();
   setupWindow.webContents.send("qm:login-status", loginStatus);
   try {
-    await shell.openExternal(pendingLogin.url);
+    await shell.openExternal(attempt.url);
   } catch {
+    if (pendingLogin !== attempt) return;
     pendingLogin = undefined;
     loginStatus = "Could not open your browser. Try connecting again.";
     setupWindow?.webContents.send("qm:login-status", loginStatus);
@@ -87,10 +91,11 @@ async function beginBrowserSignIn(url) {
 }
 
 async function finishBrowserSignIn(url) {
+  if (pendingLogin?.redeeming) return;
   const code = loginCallback(url, pendingLogin);
   if (!code) return;
   const attempt = pendingLogin;
-  pendingLogin = undefined;
+  attempt.redeeming = true;
   try {
     const response = await instanceSession(attempt.instance).fetch(
       new URL("/auth/desktop/redeem", attempt.instance).href,
@@ -100,15 +105,20 @@ async function finishBrowserSignIn(url) {
         credentials: "include",
         headers: { "content-type": "application/x-www-form-urlencoded", origin: new URL(attempt.instance).origin },
         body: new URLSearchParams({ code, verifier: attempt.verifier, state: attempt.state }).toString(),
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.any([attempt.controller.signal, AbortSignal.timeout(15_000)]),
       },
     );
+    if (pendingLogin !== attempt) return;
     if (!response.ok) throw new Error("Sign-in could not be completed. Please connect again to get a fresh link.");
     await instanceSession(attempt.instance).cookies.flushStore();
+    if (pendingLogin !== attempt) return;
+    pendingLogin = undefined;
     loginStatus = "";
     void showInstance(attempt.instance);
     setupWindow?.close();
   } catch {
+    if (pendingLogin !== attempt) return;
+    pendingLogin = undefined;
     loginStatus = "Sign-in could not be completed. Please connect again to get a fresh link.";
     showSetup();
     setupWindow.webContents.send("qm:login-status", loginStatus);
@@ -116,7 +126,9 @@ async function finishBrowserSignIn(url) {
 }
 
 async function showInstance(url) {
+  pendingLogin?.controller.abort();
   pendingLogin = undefined;
+  if (browserLoginUrl(url, new URL(url).origin)) url = new URL("/", url).href;
   if (mainWindow) mainWindow.destroy();
   const window = new BrowserWindow({
     title: "QM",
@@ -141,7 +153,7 @@ async function showInstance(url) {
   const navigate = (event, destination) => {
     if (event.isMainFrame === false) return;
     const destinationUrl = new URL(destination);
-    if (destinationUrl.origin === origin && /^\/auth\/(login|trusted\/login)(?:\/|$)/.test(destinationUrl.pathname)) {
+    if (browserLoginUrl(destination, origin)) {
       event.preventDefault();
       handedOff = true;
       void beginBrowserSignIn(url);
@@ -155,7 +167,10 @@ async function showInstance(url) {
   window.webContents.on("will-redirect", navigate);
   window.webContents.on("will-attach-webview", (event) => event.preventDefault());
   window.webContents.setWindowOpenHandler(({ url: destination }) => {
-    if (new URL(destination).origin === origin) {
+    if (browserLoginUrl(destination, origin)) {
+      handedOff = true;
+      void beginBrowserSignIn(url);
+    } else if (new URL(destination).origin === origin) {
       window.loadURL(destination).catch((error) => {
         if (error.code !== "ERR_ABORTED") dialog.showErrorBox("Could not open page", error.message);
       });
@@ -250,7 +265,9 @@ async function start() {
     ]),
   );
   app.on("activate", () => {
-    if (mainWindow) mainWindow.show();
+    if (setupWindow) setupWindow.show();
+    else if (pendingLogin) showSetup();
+    else if (mainWindow) mainWindow.show();
     else if (target) void showInstance(target);
     else showSetup();
   });

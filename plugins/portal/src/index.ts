@@ -929,7 +929,7 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
   return session;
 }
 
-function renewSessionCookie(req: IncomingMessage, res: ServerResponse): void {
+function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionClaims | null {
   const session = openSession(
     readCookie(req.headers.cookie, "portal_session"),
     sessionKey,
@@ -937,9 +937,9 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): void {
     ORG,
     SESSION_MAX_TTL_S,
   );
-  if (!session) return;
+  if (!session) return null;
   const now = Math.floor(Date.now() / 1000);
-  if (now - session.iat < SESSION_RENEW_AFTER_S) return;
+  if (now - session.iat < SESSION_RENEW_AFTER_S) return session;
   const authenticatedAt = session.auth ?? session.iat;
   const renewed: SessionClaims = {
     ...session,
@@ -948,6 +948,7 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): void {
     exp: Math.min(now + SESSION_TTL_S, authenticatedAt + SESSION_MAX_TTL_S),
   };
   setSession(res, sessionCookieSet(seal(renewed, sessionKey), renewed.sub));
+  return renewed;
 }
 
 const server = createServer((req, res) => {
@@ -1056,8 +1057,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     );
   }
 
-  let session = currentSession(req);
-  if (session) renewSessionCookie(req, res);
+  let session = renewSessionCookie(req, res) ?? currentSession(req);
   const authenticatedPrincipal = session?.sub;
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
     const canonical = await canonicalPrincipal(session.sub);
@@ -1376,7 +1376,7 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
   if (!desktopChallenge(challenge) || !desktopChallenge(state))
     return json(res, 400, { error: "invalid_desktop_request" });
   if (req.method === "POST" && !sameOriginRequest(req)) return json(res, 403, { error: "forbidden" });
-  const session = currentSession(req);
+  const session = renewSessionCookie(req, res) ?? currentSession(req);
   if (!session || session.anon) {
     res.writeHead(303, {
       location: `/auth/login?returnTo=${encodeURIComponent(`${url.pathname}${url.search}`)}`,

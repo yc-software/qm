@@ -16,3 +16,8 @@ export function externalUrl(value) {
     return false;
   }
 }
+
+export function browserLoginUrl(value, origin) {
+  const url = new URL(value);
+  return url.origin === origin && /^\/auth\/(login|trusted\/login)(?:\/|$)/.test(url.pathname);
+}

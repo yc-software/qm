@@ -19,7 +19,7 @@ Packaging writes a native app for the current platform into `desktop/dist/`, reg
 
 ## Browser sign-in
 
-When sign-in is needed, the app opens `/auth/desktop` in your default browser. Sign in there as usual, confirm your account, and choose **Open QM Desktop**. The browser returns a two-minute, single-use code bound to the app's proof key and random state. The app redeems it over the instance connection and stores the session in its isolated persistent cookie partition. Closing the app or starting another connection invalidates the pending attempt. The portal must include the desktop sign-in routes; older deployments need an update.
+When sign-in is needed, the app opens `/auth/desktop` in your default browser. Sign in there as usual, confirm your account, and choose **Open QM Desktop**. The browser returns a two-minute, single-use code bound to the app's proof key and random state. The app redeems it over the instance connection and stores the session in its isolated persistent cookie partition. Closing the app or starting another connection cancels unfinished sign-in requests; it does not sign out sessions whose cookie exchange already completed. The portal must include the desktop sign-in routes; older deployments need an update.
 
 The portal preserves the browser session's identity, original authentication time, and expiration. Redemption uses the existing durable core claim store to prevent replay across portal instances and deployments. The desktop proof key exists only for the disposable, in-progress sign-in attempt and is never sent to the browser. Passwords and identity-provider cookies stay in your browser.
 

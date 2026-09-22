@@ -66,8 +66,8 @@ test.after(() => {
 });
 const requestPath = `/auth/desktop?challenge=${challenge}&state=${state}`;
 
-async function issue() {
-  const response = await fetch(`${base}${requestPath}`, { method: "POST", headers: { origin, cookie } });
+async function issue(sessionCookie = cookie) {
+  const response = await fetch(`${base}${requestPath}`, { method: "POST", headers: { origin, cookie: sessionCookie } });
   assert.equal(response.status, 200);
   const html = await response.text();
   const match = html.match(/href="(qm-desktop:[^"]+)"/);
@@ -155,4 +155,26 @@ test("codes are bounded by signature, audience, organization, state, and browser
   assert.equal(verify(code, origin, browser.org, Date.now(), randomBytes(32).toString("base64url")), null);
   const old = mintDesktopLogin({ ...browser, auth: now - 86401 }, secret, origin, challenge, state);
   assert.equal(verify(old), null);
+});
+
+test("desktop handoff renews a browser session near expiry without resetting its original authentication", async () => {
+  const testNow = Math.floor(Date.now() / 1000);
+  const oldBrowser = { ...browser, auth: testNow - 900_000, iat: testNow - 604_770, exp: testNow + 30 };
+  const oldCookie = `portal_session=${seal(oldBrowser, deriveKey(secret, "portal.session.v1"))}`;
+  const page = await fetch(`${base}${requestPath}`, { headers: { cookie: oldCookie } });
+  assert.equal(page.status, 200);
+  assert.ok(page.headers.getSetCookie().some((value) => value.startsWith("portal_session=")));
+  const code = await issue(oldCookie);
+  const effective = openDesktopLogin(
+    code,
+    verifier,
+    state,
+    secret,
+    origin,
+    browser.org,
+    2_592_000,
+    (testNow + 31) * 1000,
+  );
+  assert.equal(effective?.session.auth, oldBrowser.auth);
+  assert.ok(effective && effective.session.exp >= testNow + 604_800);
 });

@@ -7,7 +7,7 @@
   "main": "main.mjs",
   "scripts": {
     "start": "electron .",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --experimental-test-module-mocks --test test/*.test.mjs",
     "package": "electron-packager . QM --protocol=qm-desktop --protocol-name=QM --app-bundle-id=com.qm.desktop --out=dist --overwrite --ignore='^/(dist|test|README.md)'"
   },
   "devDependencies": {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { instanceUrl, externalUrl } from "../url.mjs";
+import { instanceUrl, externalUrl, browserLoginUrl } from "../url.mjs";
 
 test("accepts secure deployments and explicit loopback development URLs", () => {
   for (const url of [
@@ -38,4 +38,17 @@ test("external links cannot launch local files or arbitrary protocol handlers", 
     "invalid",
   ])
     assert.equal(externalUrl(url), false);
+});
+
+test("browser sign-in only intercepts exact same-origin auth route families", () => {
+  const origin = "https://qm.example.com";
+  for (const route of ["/auth/login", "/auth/login?returnTo=/", "/auth/trusted/login", "/auth/trusted/login/start"])
+    assert.equal(browserLoginUrl(origin + route, origin), true);
+  for (const value of [
+    "https://other.example/auth/login",
+    origin + "/auth/login-lookalike",
+    origin + "/auth/trusted/login-other",
+    origin + "/chat",
+  ])
+    assert.equal(browserLoginUrl(value, origin), false);
 });
