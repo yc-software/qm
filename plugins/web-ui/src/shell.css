@@ -1195,6 +1195,7 @@ a.chat-row-open {
   container: chat / inline-size;
 }
 .custom-chat-shell {
+  --chat-font-size: 15px;
   flex: 1;
   min-height: 0;
   min-width: 0;
@@ -1663,7 +1664,7 @@ a.chat-row-open {
   padding-bottom: 24px;
 }
 .welcome-greeting .assistant-body {
-  font-size: 15px;
+  font-size: var(--chat-font-size);
   line-height: 1.55;
 }
 .welcome-greeting h1 {
@@ -1897,7 +1898,7 @@ button.subagent-chip:hover {
 .assistant-body {
   min-width: 0;
   color: var(--foreground);
-  font-size: 15px;
+  font-size: var(--chat-font-size);
   line-height: 1.65;
 }
 .assistant-body :is(markdown-block, qm-markdown),
@@ -2007,7 +2008,7 @@ qm-markdown .tok-in {
   max-width: min(72%, 620px);
   padding: 10px 14px;
   border-radius: 18px;
-  font-size: 15px;
+  font-size: var(--chat-font-size);
   line-height: 1.55;
 }
 .user-bubble {
@@ -2414,7 +2415,7 @@ qm-markdown .tok-in {
   border-left: 2px solid var(--border);
   padding-left: 10px;
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: calc(var(--chat-font-size) - 2px);
 }
 .thinking summary {
   cursor: pointer;
@@ -2422,7 +2423,7 @@ qm-markdown .tok-in {
 }
 .work-said {
   color: var(--foreground);
-  font-size: 15px;
+  font-size: var(--chat-font-size);
   line-height: 1.6;
   margin: 10px 0;
 }
@@ -2431,7 +2432,7 @@ qm-markdown .tok-in {
 }
 .work-message {
   color: color-mix(in srgb, var(--muted-foreground) 85%, var(--foreground));
-  font-size: 14px;
+  font-size: calc(var(--chat-font-size) - 1px);
   line-height: 1.6;
 }
 .sheen-label {
@@ -2495,7 +2496,7 @@ qm-markdown .tok-in {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 15px;
+  font-size: var(--chat-font-size);
   line-height: 1.4;
   font-weight: 400;
   color: var(--muted-foreground);
@@ -2530,7 +2531,7 @@ qm-markdown .tok-in {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  font-size: 14px;
+  font-size: calc(var(--chat-font-size) - 1px);
   line-height: 1.35;
   color: var(--muted-foreground);
 }
@@ -2571,7 +2572,7 @@ qm-markdown .tok-in {
   list-style: none;
   cursor: default;
   color: var(--muted-foreground);
-  font-size: 14px;
+  font-size: calc(var(--chat-font-size) - 1px);
   line-height: 1.35;
 }
 .thinking-summary::-webkit-details-marker {
@@ -2589,7 +2590,7 @@ qm-markdown .tok-in {
   padding-left: 10px;
   border-left: 2px solid var(--border);
   color: var(--muted-foreground);
-  font-size: 14px;
+  font-size: calc(var(--chat-font-size) - 1px);
   line-height: 1.55;
 }
 .thinking-title {
@@ -2651,7 +2652,7 @@ qm-markdown .tok-in {
   min-width: 0;
 }
 .approval-title {
-  font-size: 14px;
+  font-size: calc(var(--chat-font-size) - 1px);
   font-weight: 600;
   color: var(--foreground);
 }
@@ -3204,7 +3205,7 @@ qm-markdown .tok-in {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: var(--composer-font-size, 15px);
+  font-size: var(--chat-font-size);
   line-height: 1.4;
   cursor: pointer;
   border-radius: 6px;
@@ -3269,8 +3270,8 @@ qm-markdown .tok-in {
   transform: rotate(90deg);
 }
 
-.assistant-body :is(markdown-block, qm-markdown) :not(pre) > code,
-.user-bubble :is(markdown-block, qm-markdown) :not(pre) > code {
+.assistant-body :is(markdown-block, qm-markdown).markdown-content :not(pre) > code,
+.user-bubble :is(markdown-block, qm-markdown).markdown-content :not(pre) > code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.92em;
   padding: 1px 5px;
@@ -3288,7 +3289,7 @@ qm-markdown .tok-in {
 .assistant-body :is(markdown-block, qm-markdown) pre code,
 .user-bubble :is(markdown-block, qm-markdown) pre code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 15px;
+  font-size: var(--chat-font-size);
   line-height: 1.55;
   background: none;
   padding: 0;
@@ -4496,7 +4497,7 @@ qm-markdown .tok-in {
   margin-bottom: 12px;
   border-bottom: 1px solid var(--border);
   color: var(--muted-foreground);
-  font-size: 14px;
+  font-size: calc(var(--chat-font-size) - 1px);
   line-height: 1.5;
   list-style: none;
 }
@@ -8401,10 +8402,8 @@ h3.ambient-field-label {
   font-size: 12px;
 }
 
-.split-canvas:not(.single-pane) .split-pane-chat .assistant-body,
-.split-canvas:not(.single-pane) .split-pane-chat .message-bubble,
-.split-canvas:not(.single-pane) .split-pane-chat .message-stack {
-  font-size: 12px;
+.split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell {
+  --chat-font-size: 12px;
 }
 
 .split-canvas:not(.single-pane) .split-pane-chat .chat-cta {
@@ -11982,9 +11981,11 @@ body.app-edit-embed .main {
 .app-edit-chat {
   grid-template-rows: minmax(0, 1fr) auto;
 }
+body.app-edit-embed .custom-chat-shell {
+  --chat-font-size: 13px;
+}
 body.app-edit-embed .assistant-body,
 body.app-edit-embed .user-bubble {
-  font-size: 13px;
   line-height: 1.6;
 }
 body.app-edit-embed .message-stack {
@@ -12260,11 +12261,11 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 }
 
 :is(markdown-block, qm-markdown).markdown-content table {
-  font-size: 13px;
+  font-size: calc(var(--chat-font-size) - 2px);
   line-height: 1.65;
 }
 .activity-group > .work-head {
-  font-size: 14px;
+  font-size: calc(var(--chat-font-size) - 1px);
 }
 .stopped-work[open] > .stopped-head > .activity-chevron {
   transform: rotate(90deg);
