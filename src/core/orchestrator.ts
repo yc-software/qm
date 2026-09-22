@@ -8,7 +8,7 @@ import {
   loadDocumentInputs,
 } from "./document-inputs.ts";
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
-import { createCanWriteScope, withLiveRoster } from "../resolution/scope-membership.ts";
+import { createCanWriteScope, withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import { shq } from "../util/shell.ts";
@@ -684,14 +684,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const resolution = await deps.resolution.resolve(conversation, actor);
       const scopeId = deps.resolution.scopeFor(conversation, actor);
-      // The directory store can lag the Slack roster on the first message in a new
-      // group DM; the plugin's verified roster for this turn covers that gap.
-      const isCurrentSharedScopeMember = withLiveRoster(deps.isCurrentSharedScopeMember, {
+      const isCurrentSharedScopeMember = withLiveTurnMembership(deps.isCurrentSharedScopeMember, {
+        actorId: actor.id,
         scopeId,
-        roster:
-          liveAuthorTurn && conversation.publishMembers
-            ? { actorId: actor.id, members: conversation.publishMembers }
-            : undefined,
+        verified: liveAuthorTurn && conversation.kind !== "dm",
       });
       let participantHistorySeqs: Set<number> | undefined;
       let participantHistoryMaxSeq = -1;

@@ -71,11 +71,6 @@ export interface DirectoryStore {
   groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
   listGroupsFor(principalId: string): Promise<string[]>;
   conversationMembers(kind: "channel" | "group", id: string): Promise<DirectoryMember[] | undefined>;
-  /**
-   * Whether the store holds a roster for this room. True means the room is listed and its member list
-   * has been synced, so a membership verdict about it is authoritative. False means the store has not
-   * heard of the room yet (or knows it only by id) and has nothing to say about who is in it.
-   */
   conversationRosterKnown(kind: "channel" | "group", id: string): Promise<boolean>;
   listChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
   setWorkspaceUrl(url: string): Promise<void>;
