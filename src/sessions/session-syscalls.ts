@@ -281,7 +281,7 @@ export function renderSubagentMail(input: {
     `<wake reason="subagent" name="${xmlAttrEscape(input.title)}" sessionId="${input.sessionId}" kind="${input.kind}" at="${new Date().toISOString()}">`,
     `  <why>Your subagent session "${xmlEscape(input.title)}" ${why[input.kind]}.</why>`,
     `  <content>${xmlEscape(input.body)}</content>`,
-    `  <instructions>If the person who asked for this work is waiting on it, relay what matters in your own words. Otherwise act on it internally without acknowledging it. Never repeat a result already reported or send a no-action-needed update. The subagent's full transcript is in its own session; use the session tool to read it or send it another task.</instructions>`,
+    `  <instructions>If the person who asked for this work is waiting on it, relay what matters in your own words. Otherwise act on it internally without acknowledging it. Never repeat a result already reported or send a no-action-needed update. The subagent's full transcript is in its own session; use the sessions tool to read it or send it another task.</instructions>`,
     "</wake>",
   ].join("\n");
 }
@@ -918,7 +918,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     if (existing && (existing.status === "done" || existing.status === "failed")) return true;
     if ((await deps.runs.inFlightForThread(parent.threadRef)).length) return false;
     const wake =
-      "A delegated task finished. Check internal messages with session wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
+      "A delegated task finished. Check internal messages with sessions wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
     await deps.runs.enqueue({
       sessionId: parent.threadRef,
       dedupKey,

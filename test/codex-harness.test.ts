@@ -2053,3 +2053,55 @@ test("Codex coordinators expose neither command tools nor native subagents", asy
   });
   assert.equal(result.reply, "hello");
 });
+
+test("Codex denies a child apps move request before executing the shared tool", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-child-resource-"));
+  const binary = join(dir, "codex-test");
+  writeFileSync(
+    binary,
+    `#!${process.execPath}
+const readline = require('node:readline');
+const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') send({id:msg.id,result:{}});
+  if (msg.method === 'thread/start') send({id:msg.id,result:{thread:{id:'parent'}}});
+  if (msg.method === 'turn/start') {
+    send({id:msg.id,result:{turn:{id:'turn',status:'inProgress',items:[]}}});
+    send({method:'item/started',params:{threadId:'parent',turnId:'turn',item:{type:'collabAgentToolCall',id:'spawn',tool:'spawnAgent',status:'inProgress',senderThreadId:'parent',receiverThreadIds:['child'],agentsStates:{child:{status:'running'}}}}});
+    send({id:'child-call',method:'item/tool/call',params:{threadId:'child',callId:'move',tool:'apps',arguments:{action:'move',id:'app',toScope:'personal:bob'}}});
+  }
+  if (msg.id === 'child-call') {
+    const denied = JSON.stringify(msg).includes('child requested unavailable tool apps');
+    send({method:'turn/completed',params:{threadId:'parent',turn:{id:'turn',status:'completed',items:[{type:'agentMessage',id:'answer',text:denied?'denied':'NOT DENIED',phase:'final_answer'}]}}});
+  }
+});
+`,
+  );
+  chmodSync(binary, 0o755);
+  let shared = false;
+  const harness = createCodexHarness({ binaryPath: binary, env: testHarnessEnv(dir), turnWallClockMs: 10000 });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const scope = "personal:test" as ScopeId;
+  const result = await harness.turns.runTurn({
+    session: { id: "child-resource" } as Session,
+    input: "delegate",
+    systemPrompt: "test",
+    history: [],
+    tools: {
+      async shareArtifact() {
+        shared = true;
+        throw new Error("must not execute");
+      },
+    } as unknown as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    emit: async (entry) => ({ ...entry, sessionId: "child-resource", seq: 1, createdAt: Date.now() }) as SessionEntry,
+    recordModelCall: () => {},
+  });
+  assert.equal(result.reply, "denied");
+  assert.equal(shared, false);
+});

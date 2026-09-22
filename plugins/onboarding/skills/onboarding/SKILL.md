@@ -75,7 +75,7 @@ form, never into chat.
 ### Personal connections
 
 Check the live credential inventory first. When an authorized Composio credential is available,
-load the composio skill with the skill tool, discover available apps, and use its consent flow for the
+load the composio skill with the skills tool, discover available apps, and use its consent flow for the
 user's choices. Reuse their connected accounts after checking identity and permissions;
 a project key is not proof that a personal account is connected. Do not ask them to
 create OAuth apps for connections this source already provides. Do not infer that Composio is unavailable from an empty direct OAuth list
@@ -147,7 +147,7 @@ menu. Use:
 - a cron `message` for a literal reminder or `action` for a task that re-reads current data;
 - a scheduled follow-up when you promise to check back;
 - a webhook for an external trigger;
-- `publish` for a tool or dashboard worth opening.
+- `apps` action `publish` for a tool or dashboard worth opening.
 
 Confirm exact behavior and timing before creating anything. List existing crons first and
 patch a match instead of creating a duplicate. Build and exercise an app locally before

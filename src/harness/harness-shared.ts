@@ -109,6 +109,17 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
   };
 }
 
+export function nativeChildToolAllowed(name: string, args?: unknown): boolean {
+  if (!["execute", "files", "apps", "memory", "history", "background"].includes(name)) return false;
+  if (args === undefined || (name !== "apps" && name !== "files")) return true;
+  const action = args && typeof args === "object" ? (args as Record<string, unknown>).action : undefined;
+  if (name === "apps") return action === "publish";
+  if (action === "read" || action === "write") return true;
+  return (
+    action === "share" && typeof (args as Record<string, unknown>).path === "string" && !("id" in (args as object))
+  );
+}
+
 export function bridgedTools(ref: ToolContextRef, options: AgentToolsOptions): BridgedTool[] {
   return createAgentTools(ref, options) as unknown as BridgedTool[];
 }

@@ -163,7 +163,7 @@ export function sessionPresentation(
     interrupt?: boolean;
   };
   const result = (row.result?.payload ?? {}) as ToolPayload & { title?: string; sessionId?: string };
-  if ((call.tool ?? result.tool) !== "session") return null;
+  if (toolCategory({ ...result, ...call }) !== "session") return null;
   const action = call.interrupt === true ? "interrupt" : (call.action ?? result.action ?? "");
   const actions: Record<string, [string, string, string]> = {
     open: ["Created", "Creating", "create"],

@@ -24,6 +24,7 @@ import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnRes
 import { coreToolOptions, type ToolContextRef } from "./agent-tools.ts";
 import {
   bridgedTools,
+  nativeChildToolAllowed,
   bridgedToolText,
   harnessToolContext,
   harnessToolOptions,
@@ -165,10 +166,8 @@ export function codexProviderFailure(message: string): Error {
   const safe = redactCodexDiagnostics(message);
   return codexNonRetryable(safe) ? new NonRetryableTurnError(safe) : new Error(safe);
 }
-const CODEX_CHILD_TOOL_NAMES = new Set(["execute", "read", "write", "publish", "memory", "history", "background"]);
-
-export function codexChildToolAllowed(name: string): boolean {
-  return CODEX_CHILD_TOOL_NAMES.has(name);
+export function codexChildToolAllowed(name: string, args?: unknown): boolean {
+  return nativeChildToolAllowed(name, args);
 }
 
 function usageNumber(value: unknown, ...names: string[]): number {
@@ -570,7 +569,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         if (!state || state.server !== server) throw new Error("inactive Codex thread");
         const name = String(p.tool ?? "");
         const callId = String(p.callId ?? "");
-        if (threadId !== state.threadId && !codexChildToolAllowed(name))
+        if (threadId !== state.threadId && !codexChildToolAllowed(name, p.arguments ?? {}))
           throw new Error(`Codex child requested unavailable tool ${name}`);
         const tool = state.tools.get(name);
         if (!tool) throw new Error(`Codex requested unavailable tool ${name}`);

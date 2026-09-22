@@ -7,7 +7,7 @@ import { Type, type TSchema } from "typebox";
 import { Check, Clone } from "typebox/value";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import type { CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
-import type { ToolContext, PublishInput, PublishAudienceDescriptor, ShareDirective } from "../tools/primitives.ts";
+import type { ToolContext, PublishInput, PublishAudienceDescriptor } from "../tools/primitives.ts";
 import type { GapWork } from "../sessions/session-store.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
 import { classifyScopeLabel } from "../classify/scope-classifier.ts";
@@ -43,7 +43,7 @@ function describePublishAudience(a: PublishAudienceDescriptor | undefined): stri
       : `${n} ${n === 1 ? "person" : "people"} you've shared it with`;
     return `Owned by you; reachable by ${who} (from any surface they sign in to).${note}`;
   }
-  return `Owned by you; owner-only (only you can reach it — pass \`share\` to widen).${note}`;
+  return `Owned by you; owner-only (only you can reach it — use apps action share to widen).${note}`;
 }
 
 export interface ToolContextRef {
@@ -346,7 +346,7 @@ export function coreToolOptions(config: Config): CoreToolOptions {
   };
 }
 
-const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime", "session"]);
+const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime", "sessions"]);
 
 export function pauseStampAfterToolCall(
   ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff">,
@@ -445,7 +445,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }
       let persistedSummary = summary;
       const tool = String(summary.tool ?? "");
-      const provenance = screenAs?.provenance ?? toolResultProvenance(originalTool);
+      const provenance =
+        screenAs?.provenance ??
+        toolResultProvenance(originalTool, typeof summary.action === "string" ? summary.action : undefined);
       const screenExempt =
         isPolicyNotice(summary) ||
         coreAuthored ||
@@ -725,7 +727,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const SCOPED_EPHEMERAL_ERROR =
     '[error] the scoped computer is always durable today — re-run with durable:true (or omit `durable`), or use scope:"scratch" for a run that leaves no trace.';
   const FILE_SEND_GUIDANCE =
-    "The read/write/publish tools use the default sandbox; execute and background can target sandbox_id. To send a file, write it to a workspace path and name that path to whichever tool sends: the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
+    "The files and apps tools use the default sandbox; execute and background can target sandbox_id. To send a file, write it to a workspace path and name that path to whichever tool sends: the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
   const DURABLE_PARAM_DESC =
     "Retain working state for later turns within provider recovery limits? Scoped retains working state; scratch and owner are invocation-only. Publish durable code to git and artifacts to Files.";
 
@@ -987,7 +989,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "skill",
     label: "skill",
     description:
-      "Load a skill from the Skills index before relying on it. Returns its SKILL.md instructions (or the relative file named by `path`) straight from the published source, without starting a sandbox. When the skill ships scripts or supporting files, this call also syncs them into a directory that lives for this turn and reports it; run and read them there with execute and read, in this turn.",
+      "Load a skill from the Skills index before relying on it. Returns its SKILL.md instructions (or the relative file named by `path`) straight from the published source, without starting a sandbox. When the skill ships scripts or supporting files, this call also syncs them into a directory that lives for this turn and reports it; run and read them there with execute and files action read, in this turn.",
     parameters: Type.Object({
       name: Type.String({ description: "Skill name exactly as listed in the Skills index." }),
       path: Type.Optional(
@@ -1005,7 +1007,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
       const p = params as { name: string; path?: string; sandbox_id?: string };
-      await recordCall(callId, { tool: "skill", name: p.name, ...(p.path ? { path: p.path } : {}) });
+      await recordCall(callId, { tool: "skills", action: "read", name: p.name, ...(p.path ? { path: p.path } : {}) });
       const signal = ref.abortSignal;
       signal?.throwIfAborted();
       const { content, sourceScopeId, dir, packDir } = await tc.skill(p.name, {
@@ -1023,7 +1025,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       return recordResult(
         callId,
         {
-          tool: "skill",
+          tool: "skills",
+          action: "read",
           name: p.name,
           ...(p.path ? { path: p.path } : {}),
           found: content !== null,
@@ -1047,7 +1050,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      await recordCall(callId, { tool: "read", path: params.path });
+      await recordCall(callId, { tool: "files", action: "read", path: params.path });
       const signal = ref.abortSignal;
       signal?.throwIfAborted();
       const { content, sourceScopeId, shared } = await tc.read(params.path, signal);
@@ -1055,7 +1058,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       return recordResult(
         callId,
         {
-          tool: "read",
+          tool: "files",
+          action: "read",
           path: params.path,
           found: content !== null,
           ...(content !== null ? { bytes: content.length, sourceScopeId } : {}),
@@ -1074,68 +1078,27 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "write",
     label: "write",
     description:
-      "Write a file to the writable workspace scope (durable across sessions) and/or share it. " +
-      "Pass `data` to save contents. Pass `share` to grant other people access to that file — " +
-      "Google-Docs style: the file keeps living in your workspace, the grant just lets others " +
-      "reach it. To share a file that already exists (e.g. one you made with `execute`), call " +
-      "write with just its `path` and `share` (no `data`). Each share is { scope, permission }: " +
-      '`scope` is "org" (everyone in your org), a person (personal:<userId>), a channel ' +
-      "(channel:<id>), or a team (team:<id>); `permission` is read (view, default) or write " +
-      "(view + manage). A grant to a PERSON follows them — it's visible wherever you two are " +
-      "together (your DMs and any room whose members are all entitled to it); to make a file " +
-      "visible to a whole channel/team or everyone, share that scope. Recipients see shared " +
-      "files under ./shared/.",
+      "Save file contents in the writable workspace scope, durable across sessions. Use files action share to grant access separately.",
     parameters: Type.Object({
       path: Type.String({ description: "Relative path within the workspace." }),
-      data: Type.Optional(
-        Type.String({ description: "File contents. Omit to only (re)share a file that already exists at `path`." }),
-      ),
-      share: Type.Optional(
-        Type.Array(
-          Type.Object({
-            scope: Type.String({
-              description: 'Who to share with: "org", personal:<userId>, channel:<id>, or team:<id>.',
-            }),
-            permission: Type.Optional(
-              Type.Union([Type.Literal("read"), Type.Literal("write")], {
-                description: "read = view (default), write = view + manage.",
-              }),
-            ),
-          }),
-          { description: "Grant other scopes access to this file (Google-Docs-style ACL grants)." },
-        ),
-      ),
+      data: Type.String({ description: "File contents, including an empty string to empty the file." }),
     }),
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      const bytes = params.data?.length;
-      await recordCall(callId, {
-        tool: "write",
-        path: params.path,
-        ...(bytes !== undefined ? { bytes } : {}),
-        ...(params.share ? { share: params.share } : {}),
-      });
+      await recordCall(callId, { tool: "files", action: "write", path: params.path, bytes: params.data.length });
       try {
-        const r = await tc.write(params.path, params.data, params.share as ShareDirective[] | undefined);
-        const parts: string[] = [];
-        if (params.data !== undefined) parts.push(`wrote ${params.path} (${params.data.length} bytes)`);
-        for (const g of r.shared) parts.push(`shared ${params.path} with ${g.scope} (${g.permission})`);
+        await tc.write(params.path, params.data);
         return recordResult(
           callId,
-          {
-            tool: "write",
-            path: params.path,
-            ...(bytes !== undefined ? { bytes } : {}),
-            ...(r.shared.length ? { shared: r.shared } : {}),
-          },
-          text(parts.join("; ") || `nothing to do for ${params.path}`),
+          { tool: "files", action: "write", path: params.path, bytes: params.data.length },
+          text(`wrote ${params.path} (${params.data.length} bytes)`),
         );
       } catch (e) {
         const msg = errMessage(e);
         return recordResult(
           callId,
-          { tool: "write", path: params.path, error: msg },
+          { tool: "files", action: "write", path: params.path, error: msg },
           text(`[write failed] ${msg}`),
           true,
         );
@@ -1149,8 +1112,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     description:
       "Publish a directory from the workspace as a durable, scope-bound internal web app " +
       "(it keeps running after the turn ends and gets a stable link). The app must listen on " +
-      "the PORT env var. By default only the owner's scope can reach it; `share` grants others " +
-      "access (read = reach, write = manage). Share the full absolute URL returned by publish so it works in Slack and other surfaces. Use `name` for a friendly, stable link /d/<name>/; " +
+      "the PORT env var. Set audience to [] to suppress default audience grants, or supply publication-time grants. Use apps action share for subsequent grants. Share the full absolute URL returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, stable link /d/<name>/; " +
       "`renameFrom` to rename; `rollbackTo` to flip back to an earlier version. Egress is open, " +
       "so bake data in or have the app fetch it. When the runtime sets $DATA_DIR, state the app " +
       "writes there survives restarts and redeploys; keep durable state there. For a database use " +
@@ -1161,6 +1123,18 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "warm (no idle cold starts) — use it only when someone actually needs instant loads, and " +
       "`alwaysOn: false` to turn it back off.",
     parameters: Type.Object({
+      audience: Type.Optional(
+        Type.Array(
+          Type.Object({
+            scope: Type.String({ description: "Scope ID or org." }),
+            permission: Type.Union([Type.Literal("read"), Type.Literal("write")]),
+          }),
+          {
+            description:
+              "Publication-time access grants. Omit to use the conversation's default audience; [] suppresses default grants for owner-only publication. Existing explicit grants survive. Use apps action share for subsequent grants.",
+          },
+        ),
+      ),
       dir: Type.Optional(Type.String({ description: "Workspace directory to publish (default: the whole tree)." })),
       entrypoint: Type.Optional(
         Type.String({ description: 'Command the container runs, relative to the app root, e.g. "node server.js".' }),
@@ -1186,22 +1160,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "true keeps the app always warm — it is never put to sleep for being idle, so there are no cold starts. false returns it to the default sleep-when-idle behavior. Omitted = leave the current setting alone.",
         }),
       ),
-      share: Type.Optional(
-        Type.Array(
-          Type.Object({
-            scope: Type.String({ description: "Scope id to share with, e.g. personal:<id> or org:<id>." }),
-            permission: Type.Union([Type.Literal("read"), Type.Literal("write")]),
-          }),
-          { description: "Grant other scopes access (read = reach, write = manage)." },
-        ),
-      ),
     }),
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      await recordCall(callId, { tool: "publish", dir: params.dir, entrypoint: params.entrypoint, name: params.name });
+      await recordCall(callId, {
+        tool: "apps",
+        action: "publish",
+        dir: params.dir,
+        entrypoint: params.entrypoint,
+        name: params.name,
+      });
       try {
-        const r = await tc.publish(params as PublishInput);
+        const r = await tc.publish({ ...params, share: params.audience } as PublishInput);
         const reach = describePublishAudience(r.audience);
         const alwaysOnNote = r.alwaysOn ? "\nAlways-on: the app is kept warm — no idle cold starts." : "";
         const dataNote = r.dataDir
@@ -1210,7 +1181,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         return recordResult(
           callId,
           {
-            tool: "publish",
+            tool: "apps",
+            action: "publish",
             id: r.id,
             name: r.name,
             version: r.version,
@@ -1222,7 +1194,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         );
       } catch (e) {
         const msg = errMessage(e);
-        return recordResult(callId, { tool: "publish", error: msg }, text(`[publish failed] ${msg}`), true);
+        return recordResult(
+          callId,
+          { tool: "apps", action: "publish", error: msg },
+          text(`[publish failed] ${msg}`),
+          true,
+        );
       }
     },
   });
@@ -1232,7 +1209,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     label: "memory",
     description:
       "Your durable memory of the person or team you work for — the ONE way to read or change it. " +
-      "It is NOT a file: never write it with `write` or shell commands (those land on your computer " +
+      "It is NOT a file: never write it with files action write or shell commands (those land on your computer " +
       "and are silently lost). It persists across every conversation and surface (continuity — " +
       "you're a colleague who remembers, not a fresh chat each time); this conversation can only " +
       "ever touch its OWN memory, no one else's, by design. " +
@@ -1444,8 +1421,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   });
 
   const sessionTool = defineTool({
-    name: "session",
-    label: "session",
+    name: "sessions",
+    label: "sessions",
     description:
       "Coordinate durable subagents using internal agent messages. `open` starts a child with a complete standalone task; children do not inherit your conversation. " +
       "`send_message` sends information to a parent, sibling, or other accessible session without starting a turn. Messages and child results arrive at tool boundaries or through `wait`. " +
@@ -1512,7 +1489,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         limit?: number;
       };
       await recordCall(callId, {
-        tool: "session",
+        tool: "sessions",
         action: p.action,
         ...(p.task ? { task: p.task } : {}),
         ...(p.name ? { name: p.name } : {}),
@@ -1523,7 +1500,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       if (!syscalls) {
         return recordResult(
           callId,
-          { tool: "session", action: p.action, error: "unavailable" },
+          { tool: "sessions", action: p.action, error: "unavailable" },
           text("[error] subagent sessions aren't available on this turn."),
           true,
         );
@@ -1532,7 +1509,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         await syscalls.receive?.(delegateWork ? 0 : (p.timeoutMs ?? 60_000));
         return recordCoreAuthoredResult(
           callId,
-          { tool: "session", action: "wait" },
+          { tool: "sessions", action: "wait" },
           text(
             delegateWork
               ? "Mailbox checked. End this turn if no immediate coordination remains; child completion will wake you."
@@ -1553,16 +1530,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         if (!result.ok) {
           return recordResult(
             callId,
-            { tool: "session", action: "open", error: result.message },
+            { tool: "sessions", action: "open", error: result.message },
             text(`[error] ${result.message}`),
             true,
           );
         }
         return recordResult(
           callId,
-          { tool: "session", action: "open", sessionId: result.sessionId, title: result.title },
+          { tool: "sessions", action: "open", sessionId: result.sessionId, title: result.title },
           text(
-            `Opened subagent "${result.title}" (sessionId ${result.sessionId}). It is working now. Its result will arrive as an internal message. ${delegateWork ? "End this turn promptly; completion will wake you to report the result." : "Continue independent work, then use session wait before your final answer if you need its result."} ${result.liveRunsRemaining} of its run slots remain.`,
+            `Opened subagent "${result.title}" (sessionId ${result.sessionId}). It is working now. Its result will arrive as an internal message. ${delegateWork ? "End this turn promptly; completion will wake you to report the result." : "Continue independent work, then use sessions wait before your final answer if you need its result."} ${result.liveRunsRemaining} of its run slots remain.`,
           ),
         );
       }
@@ -1577,7 +1554,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         if (!result.ok) {
           return recordResult(
             callId,
-            { tool: "session", action: p.action, error: result.message },
+            { tool: "sessions", action: p.action, error: result.message },
             text(`[error] ${result.message}`),
             true,
           );
@@ -1592,7 +1569,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         return recordResult(
           callId,
           {
-            tool: "session",
+            tool: "sessions",
             action: p.action,
             sessionId: result.sessionId,
             title: result.title,
@@ -1608,7 +1585,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       if (!result.ok) {
         return recordResult(
           callId,
-          { tool: "session", action: "read", error: result.message },
+          { tool: "sessions", action: "read", error: result.message },
           text(`[error] ${result.message}`),
           true,
         );
@@ -1619,13 +1596,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         );
         return recordResult(
           callId,
-          { tool: "session", action: "read", children: result.children.length },
+          { tool: "sessions", action: "read", children: result.children.length },
           text(lines.length ? lines.join("\n") : "[no subagent sessions opened from this conversation]"),
         );
       }
       return recordResult(
         callId,
-        { tool: "session", action: "read", sessionId: result.sessionId, title: result.title, status: result.status },
+        { tool: "sessions", action: "read", sessionId: result.sessionId, title: result.title, status: result.status },
         text(`"${result.title}" — ${result.status}\n${result.rendered}`),
       );
     },
@@ -2883,73 +2860,167 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
-  const share = defineTool({
+  const fileShare = defineTool({
     name: "share",
     label: "share",
     description:
-      "Share or move one of YOUR artifacts — a file, skill, deployment, or cron — to another context " +
-      "you belong to, the way a coworker forwards something they made. ONE verb for all four types.\n" +
-      "Default (move omitted/false) SHARES it: adds a grant so the target can reach it, while it keeps " +
-      "living in its current home with you as its creator (Google-Docs style). move:true MOVES it: " +
-      "changes its home scope to the target (the creator is unchanged); supported for skills and deployments — moving a deployment to a teammate makes THEM the owner (ownership transfer; existing shares survive).\n" +
-      '`toScope` is where it goes: "org" (everyone), a scope id (channel:<id>, team:<id>, personal:<id>), ' +
-      "or a teammate's NAME (core resolves it — you can't author a raw address). Sharing/moving into a " +
-      "context you're already in is frictionless. Ceding a skill to the whole org is the one gated " +
-      "step: only an org admin, in a turn they started themselves, can do it.\n" +
-      "Offer this instead of silently re-saving a file: \"I'll keep this in your DM and share it to " +
-      "#project-private.\" Only the owner can share or move; a grantee can't re-share.",
-    parameters: Type.Object({
-      type: Type.Union([Type.Literal("file"), Type.Literal("skill"), Type.Literal("deploy"), Type.Literal("cron")], {
-        description: "Which kind of artifact: file | skill | deploy | cron.",
-      }),
-      id: Type.String({ description: "The artifact's id (a deployment may also be named by its handle)." }),
-      toScope: Type.String({
-        description:
-          'Where to share/move it: "org", a scope id (channel:<id>, team:<id>, personal:<id>), or a teammate\'s name.',
-      }),
-      permission: Type.Optional(
-        Type.Union([Type.Literal("read"), Type.Literal("write")], {
-          description: "read = view/use (default), write = view + manage. Ignored for a move.",
-        }),
-      ),
-      move: Type.Optional(
-        Type.Boolean({
-          description:
-            "false (default) shares (adds a grant); true moves the home scope (skills only). A move never takes a permission.",
-        }),
-      ),
-    }),
+      "Grant access to an existing workspace file without changing its contents. The file stays in its current home; recipients see it under shared/.",
+    parameters: Type.Object(
+      {
+        path: Type.Optional(Type.String({ description: "Workspace file path; pair with scope." })),
+        id: Type.Optional(Type.String({ description: "Existing file artifact ID; pair with toScope." })),
+        toScope: Type.Optional(Type.String({ description: "Destination scope or teammate name for an artifact ID." })),
+        scope: Type.Optional(
+          Type.String({ description: 'Destination: "org", personal:<userId>, channel:<id>, or team:<id>.' }),
+        ),
+        permission: Type.Optional(
+          Type.Union([Type.Literal("read"), Type.Literal("write")], {
+            description: "read = view (default); write = view/manage.",
+          }),
+        ),
+      },
+      {
+        anyOf: [
+          { required: ["path", "scope"], properties: { id: false, toScope: false } },
+          { required: ["id", "toScope"], properties: { path: false, scope: false } },
+        ],
+      },
+    ),
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      await recordCall(callId, {
-        tool: "share",
-        type: params.type,
-        id: params.id,
-        ...(params.move ? { move: true } : {}),
-      });
-      const r = await tc.shareArtifact({
-        type: params.type,
-        id: params.id,
-        ...splitToScope(params.toScope),
-        ...(params.permission !== undefined ? { permission: params.permission } : {}),
-        ...(params.move !== undefined ? { move: params.move } : {}),
-      });
-      if (isUnavailable(r)) return unavailable(callId, "share");
-      if (!r.ok) {
-        const cand = r.candidates?.length
-          ? `\nCandidates: ${r.candidates.map((c) => `${c.label} (${c.id})`).join(", ")}`
-          : "";
-        return recordResult(callId, { tool: "share", error: r.code }, text(`[error] ${r.message}${cand}`), true);
+      if (params.id !== undefined && params.toScope !== undefined) {
+        if (!controlTools) return unavailable(callId, "files");
+        return sharingTool("file").execute(
+          callId,
+          { id: params.id, toScope: params.toScope, permission: params.permission },
+          undefined,
+          undefined,
+          undefined as never,
+        );
       }
-      const did = r.verb === "move" ? "Moved" : "Shared";
-      return recordResult(
-        callId,
-        { tool: "share", verb: r.verb, type: r.type, id: r.id, target: r.target.scope },
-        text(`${did} ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.`),
-      );
+      await recordCall(callId, { tool: "files", action: "share", ...params });
+      try {
+        const result = await tc.write(params.path!, undefined, [
+          { scope: params.scope!, permission: params.permission },
+        ]);
+        return recordResult(
+          callId,
+          { tool: "files", action: "share", path: params.path, shared: result.shared },
+          text(
+            result.shared.map((grant) => `shared ${params.path} with ${grant.scope} (${grant.permission})`).join("; "),
+          ),
+        );
+      } catch (e) {
+        return recordResult(
+          callId,
+          { tool: "files", action: "share", path: params.path, error: errMessage(e) },
+          text(`[share failed] ${errMessage(e)}`),
+          true,
+        );
+      }
     },
   });
+
+  function sharingTool(type: "file" | "skill" | "deploy" | "cron", move = false): ToolDefinition {
+    const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
+    const action = move ? "move" : "share";
+    return defineTool({
+      name: action,
+      label: action,
+      description: move
+        ? "Transfer the artifact to another context. Moving an app transfers ownership; existing shares survive. Moving a skill to the org requires an org admin in a user-started turn."
+        : "Grant access to an artifact you own while keeping it in its current home. Only the owner can share; grantees cannot reshare.",
+      parameters: Type.Object({
+        id: Type.String({ description: "Artifact ID; an app may also be named by its handle." }),
+        toScope: Type.String({
+          description: 'Destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name.',
+        }),
+        ...(!move
+          ? {
+              permission: Type.Optional(
+                Type.Union([Type.Literal("read"), Type.Literal("write")], {
+                  description: "read = view/use (default); write = view/manage.",
+                }),
+              ),
+            }
+          : {}),
+      }),
+      async execute(callId, args) {
+        const params = args as { id: string; toScope: string; permission?: "read" | "write" };
+        const tc = ref.current;
+        if (!tc) return text("[error] no active tool context");
+        const id = params.id;
+        await recordCall(callId, { tool, action, type, id });
+        const r = await tc.shareArtifact({
+          type,
+          id,
+          ...splitToScope(params.toScope),
+          ...(params.permission !== undefined ? { permission: params.permission } : {}),
+          ...(move ? { move: true } : {}),
+        });
+        if (isUnavailable(r)) return unavailable(callId, tool);
+        if (!r.ok) {
+          const candidates = r.candidates?.length
+            ? `\nCandidates: ${r.candidates.map((c) => `${c.label} (${c.id})`).join(", ")}`
+            : "";
+          return recordResult(callId, { tool, action, error: r.code }, text(`[error] ${r.message}${candidates}`), true);
+        }
+        return recordResult(
+          callId,
+          { tool, action, verb: r.verb, type: r.type, id: r.id, target: r.target.scope },
+          text(
+            `${r.verb === "move" ? "Moved" : "Shared"} ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.`,
+          ),
+        );
+      },
+    });
+  }
+
+  function resourceTool(name: string, actions: Record<string, ToolDefinition>): ToolDefinition {
+    const groups = [...new Set(Object.values(actions))].map((operation) => ({
+      operation,
+      actions: Object.keys(actions).filter((action) => actions[action] === operation),
+    }));
+    const variants = groups.map((group) => ({
+      ...group.operation.parameters,
+      ...Type.Object(
+        {
+          ...(group.operation.parameters as { properties: Record<string, TSchema> }).properties,
+          action: Type.Union(group.actions.map((action) => Type.Literal(action))),
+        },
+        { additionalProperties: false },
+      ),
+    }));
+    const properties: Record<string, TSchema> = {};
+    for (const variant of variants) {
+      for (const [key, schema] of Object.entries(variant.properties)) properties[key] = Type.Optional(schema);
+    }
+    properties.action = Type.Union(Object.keys(actions).map((action) => Type.Literal(action)));
+    return defineTool({
+      name,
+      label: name,
+      description: groups
+        .map(
+          ({ actions, operation }) =>
+            `${actions.join("/")}: ${operation.description} Required fields: ${((operation.parameters as { required?: string[] }).required ?? []).filter((key) => key !== "action").join(", ") || "none"}.`,
+        )
+        .join("\n\n"),
+      parameters: Type.Object(properties, { additionalProperties: false }),
+      async execute(callId, params, signal, onUpdate, ctx) {
+        const index = groups.findIndex((group) => group.actions.includes(String(params.action)));
+        if (index < 0 || !Check(variants[index]!, params)) {
+          return recordResult(
+            callId,
+            { tool: name, action: params.action, error: "invalid_arguments" },
+            text(`[error] Invalid arguments for ${name} action ${String(params.action)}.`),
+            true,
+          );
+        }
+        return actions[String(params.action)]!.execute(callId, params, signal, onUpdate, ctx);
+      },
+    });
+  }
 
   const surfaceName = opts?.surfaceName ?? "slack";
   const surfaceLabel = surfaceName === "slack" ? "Slack" : surfaceName;
@@ -3613,14 +3684,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   });
 
   const createGoal = defineTool({
-    name: "create_goal",
-    label: "create_goal",
+    name: "create",
+    label: "create",
     description:
       "Register a goal for this session — ONLY when the user explicitly asks for sustained, self-directed work " +
       '("grind on X for 30 minutes", "keep going until the tests are green", "work through this list"); never infer ' +
       "one from an ordinary request. Once registered the harness enforces it: trying to end a reply while the goal " +
       "is active (or while a work floor is unmet) is answered with a keep-going prompt, not a hard stop. Close it by " +
-      'verifiably completing it (update_goal "complete") or, after repeated genuine impasses, marking it blocked. ' +
+      'verifiably completing it (goal action update "complete") or, after repeated genuine impasses, marking it blocked. ' +
       "Fails if an unfinished goal exists.",
     parameters: Type.Object({
       objective: Type.String({
@@ -3649,13 +3720,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     }),
     async execute(callId, params) {
       const p = params as { objective: string; floor?: Record<string, number>; token_cap?: number };
-      await recordCall(callId, { tool: "create_goal", objective: p.objective });
+      await recordCall(callId, { tool: "goal", action: "create", objective: p.objective });
       if (ref.goal && (ref.goal.status === "active" || ref.goal.status === "paused")) {
         return recordCoreAuthoredResult(
           callId,
-          { tool: "create_goal", error: "goal_exists" },
+          { tool: "goal", action: "create", error: "goal_exists" },
           text(
-            "A goal is already registered (active or paused). Resume, complete, or block it with update_goal first — get_goal shows it.",
+            "A goal is already registered (active or paused). Resume, complete, or block it with goal action update first — goal action get shows it.",
           ),
           true,
         );
@@ -3669,39 +3740,44 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           source: "tool",
         });
       } catch (e) {
-        return recordCoreAuthoredResult(callId, { tool: "create_goal", error: "invalid" }, text(errMessage(e)), true);
+        return recordCoreAuthoredResult(
+          callId,
+          { tool: "goal", action: "create", error: "invalid" },
+          text(errMessage(e)),
+          true,
+        );
       }
       ref.goal = record;
       return recordCoreAuthoredResult(
         callId,
-        { tool: "create_goal", goal: record },
+        { tool: "goal", action: "create", goal: record },
         text(
           "Goal registered and now enforced: you can no longer end a reply while it is active. " +
-            "Complete it with update_goal only when the objective is verifiably met.",
+            "Complete it with goal action update only when the objective is verifiably met.",
         ),
       );
     },
   });
 
   const getGoal = defineTool({
-    name: "get_goal",
-    label: "get_goal",
+    name: "get",
+    label: "get",
     description: "Read this session's goal: objective, status, work floor, token cap and usage.",
     parameters: Type.Object({}),
     async execute(callId) {
-      await recordCall(callId, { tool: "get_goal" });
+      await recordCall(callId, { tool: "goal", action: "get" });
       const goal = ref.goal ?? null;
       return recordCoreAuthoredResult(
         callId,
-        { tool: "get_goal", goal },
+        { tool: "goal", action: "get", goal },
         text(goal ? goalReport(goal) : "No goal registered in this session."),
       );
     },
   });
 
   const updateGoal = defineTool({
-    name: "update_goal",
-    label: "update_goal",
+    name: "update",
+    label: "update",
     description:
       'Close, pause, or resume the goal. status "complete" ONLY when the objective is achieved and verified against ' +
       'current evidence. status "blocked" ONLY at a genuine impasse that has recurred across ' +
@@ -3721,12 +3797,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     }),
     async execute(callId, params) {
       const p = params as { status: "complete" | "blocked" | "paused" | "active"; note?: string };
-      await recordCall(callId, { tool: "update_goal", status: p.status, ...(p.note ? { note: p.note } : {}) });
+      await recordCall(callId, {
+        tool: "goal",
+        action: "update",
+        status: p.status,
+        ...(p.note ? { note: p.note } : {}),
+      });
       const goal = ref.goal;
       if (!goal || (goal.status !== "active" && goal.status !== "paused")) {
         return recordCoreAuthoredResult(
           callId,
-          { tool: "update_goal", error: "no_active_goal" },
+          { tool: "goal", action: "update", error: "no_active_goal" },
           text("No active or paused goal to update."),
           true,
         );
@@ -3735,7 +3816,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         if (goal.status !== "paused") {
           return recordCoreAuthoredResult(
             callId,
-            { tool: "update_goal", error: "not_paused" },
+            { tool: "goal", action: "update", error: "not_paused" },
             text("The goal is already active."),
             true,
           );
@@ -3744,7 +3825,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         goal.updatedAt = Date.now();
         return recordCoreAuthoredResult(
           callId,
-          { tool: "update_goal", goal },
+          { tool: "goal", action: "update", goal },
           text("Goal resumed. It is enforced again; keep working toward it."),
         );
       }
@@ -3753,15 +3834,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         goal.updatedAt = Date.now();
         return recordCoreAuthoredResult(
           callId,
-          { tool: "update_goal", goal },
-          text('Goal paused. Enforcement is off until it is resumed with update_goal status "active".'),
+          { tool: "goal", action: "update", goal },
+          text('Goal paused. Enforcement is off until it is resumed with goal action update status "active".'),
         );
       }
       if (goal.status === "paused") {
         return recordCoreAuthoredResult(
           callId,
-          { tool: "update_goal", error: "paused" },
-          text('The goal is paused. Resume it first (update_goal status "active") before closing it.'),
+          { tool: "goal", action: "update", error: "paused" },
+          text('The goal is paused. Resume it first (goal action update status "active") before closing it.'),
           true,
         );
       }
@@ -3770,7 +3851,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         if (!reason) {
           return recordCoreAuthoredResult(
             callId,
-            { tool: "update_goal", error: "blocked_needs_reason" },
+            { tool: "goal", action: "update", error: "blocked_needs_reason" },
             text("Blocking requires a note naming the exact impasse."),
             true,
           );
@@ -3785,7 +3866,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         if (goal.blockedStreak < GOAL_BLOCKED_MIN_ROUNDS) {
           return recordCoreAuthoredResult(
             callId,
-            { tool: "update_goal", error: "blocked_audit", streak: goal.blockedStreak },
+            { tool: "goal", action: "update", error: "blocked_audit", streak: goal.blockedStreak },
             text(
               `Blocked claim ${goal.blockedStreak}/${GOAL_BLOCKED_MIN_ROUNDS} recorded — not accepted yet. ` +
                 "Attack the impasse differently this round; if the SAME impasse recurs, claim blocked again next round.",
@@ -3797,7 +3878,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         goal.updatedAt = Date.now();
         return recordCoreAuthoredResult(
           callId,
-          { tool: "update_goal", goal },
+          { tool: "goal", action: "update", goal },
           text("Goal marked blocked. Tell the user the exact impasse and what would unblock it."),
         );
       }
@@ -3816,7 +3897,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       if (p.note) goal.completionNote = p.note;
       return recordCoreAuthoredResult(
         callId,
-        { tool: "update_goal", goal },
+        { tool: "goal", action: "update", goal },
         text(`Goal marked complete. Report the outcome (and evidence) to the user.${floorNote}`),
       );
     },
@@ -3915,22 +3996,37 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const tools = [
     ...(!opts?.sandboxResources && !delegateWork ? [execute] : []),
     ...(credentialExecServices.length && !delegateWork ? [credentialExec] : []),
-    skill,
-    read,
-    write,
-    publish,
+    resourceTool("skills", {
+      read: skill,
+      ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
+    }),
+    resourceTool("files", { read, write, share: fileShare }),
+    resourceTool("apps", {
+      publish,
+      ...(controlTools ? { share: sharingTool("deploy"), move: sharingTool("deploy", true) } : {}),
+    }),
     memory,
     history,
     ...(!opts?.sandboxResources && !delegateWork ? [background] : []),
     ...(opts?.sessionTools === false ? [] : [sessionTool]),
     sandbox,
     registerLogin,
-    ...(controlTools ? [cron, webhook, share] : []),
+    ...(controlTools
+      ? [
+          resourceTool("cron", {
+            ...Object.fromEntries(
+              (cron.parameters.properties.action as { anyOf: Array<{ const: string }> }).anyOf.map(
+                ({ const: action }) => [action, cron],
+              ),
+            ),
+            share: sharingTool("cron"),
+          }),
+          webhook,
+        ]
+      : []),
     ...(controlTools || surfaceTools ? [guidance] : []),
     ...(surfaceTools ? [surface, staySilent] : [attach, finishSilently]),
-    createGoal,
-    getGoal,
-    updateGoal,
+    resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }),
     runtime,
     ...mcpTools,
   ];
@@ -3963,10 +4059,16 @@ function withToolApprovalGate(
     ...tool,
     async execute(callId: string, params: unknown) {
       const gate = ref.toolApprovalGate;
-      const sandboxAction =
-        tool.name === "sandbox" && isObj(params) && typeof params.action === "string" ? params.action : undefined;
-      const approvalIdentity = tool.name === "sandbox" ? `sandbox:${sandboxAction ?? "invalid"}` : tool.name;
-      const commandLabel = tool.name === "sandbox" ? `sandbox ${sandboxAction ?? "invalid"}` : tool.name;
+      const resourceAction =
+        ["sandbox", "files", "apps", "skills", "goal", "cron"].includes(tool.name) &&
+        isObj(params) &&
+        typeof params.action === "string"
+          ? params.action
+          : undefined;
+      const approvalIdentity = ["sandbox", "files", "apps", "skills", "goal", "cron"].includes(tool.name)
+        ? `${tool.name}:${resourceAction ?? "invalid"}`
+        : tool.name;
+      const commandLabel = resourceAction ? `${tool.name} ${resourceAction}` : tool.name;
       if (gate && !gate(approvalIdentity)) {
         ref.pendingApprovals?.push({
           command: commandLabel,
@@ -3980,7 +4082,7 @@ function withToolApprovalGate(
         ref.pausedOnApproval = true;
         await rec.recordCall(callId, {
           tool: tool.name,
-          ...(tool.name === "sandbox" && isObj(params) ? { action: params.action } : {}),
+          ...(resourceAction ? { action: resourceAction } : {}),
           blocked: "needs_approval",
           reason: STRICT_TOOL_APPROVAL_REASON,
         });
@@ -3988,7 +4090,7 @@ function withToolApprovalGate(
           callId,
           {
             tool: tool.name,
-            ...(tool.name === "sandbox" && isObj(params) ? { action: params.action } : {}),
+            ...(resourceAction ? { action: resourceAction } : {}),
             blocked: "needs_approval",
             reason: STRICT_TOOL_APPROVAL_REASON,
           },

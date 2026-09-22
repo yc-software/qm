@@ -110,7 +110,7 @@ export function skillsIndex(resolved: SkillResolution[], provenanceScopes: reado
   });
   return [
     "## Skills",
-    "Load a skill with the skill tool before relying on it: skill({ name }) returns its instructions without starting a sandbox. When a skill ships scripts or supporting files, the same call syncs them into a directory that lives for this turn and names it; run and read them there.",
+    'Load a skill with the skills tool before relying on it: skills({ action: "read", name }) returns its instructions without starting a sandbox. When a skill ships scripts or supporting files, the same call syncs them into a directory that lives for this turn and names it; run and read them there.',
     ...lines,
   ].join("\n");
 }

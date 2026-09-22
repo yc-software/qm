@@ -1568,7 +1568,9 @@ export function createChatSurface(
     const cacheable =
       !isStreaming &&
       !(message as { subagentMail?: SubagentMailRef }).subagentMail &&
-      !work?.activity.some((activity) => (activity.payload as ToolPayload | null)?.tool === "session") &&
+      !work?.activity.some((activity) =>
+        ["session", "sessions"].includes((activity.payload as ToolPayload | null)?.tool ?? ""),
+      ) &&
       (!work || ((work.status === "complete" || work.status === "failed") && !work.pendingApprovals?.length));
     if (!cacheable) return chatMessage(message, index, isStreaming);
     const forkable = Boolean(chatState.threadRef && chatState.sessionId && chatState.agent);

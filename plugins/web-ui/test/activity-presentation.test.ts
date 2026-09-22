@@ -107,6 +107,8 @@ test("session actions identify their recipient and retain failure state", () => 
   tool.call!.payload = { tool: "session", action: "open", name: "worker" };
   tool.result!.payload = { title: "Named worker", sessionId: "id" };
   assert.equal(sessionPresentation(tool, "complete")?.target, "Named worker");
+  tool.call!.payload = { tool: "sessions", action: "open", name: "worker" };
+  assert.equal(sessionPresentation(tool, "complete")?.target, "Named worker");
 });
 
 test("activity grouping preserves speech boundaries and chronological item identity", () => {

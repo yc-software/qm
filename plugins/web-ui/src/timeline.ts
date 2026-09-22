@@ -60,6 +60,13 @@ function isTerminalWorkStatus(status: WorkBlock["status"]): boolean {
 export type ToolRowKind = "running" | "ok" | "failed" | "attempted" | "approval";
 
 export function toolCategory(payload: ToolPayload): string {
+  if (payload.tool === "files") {
+    if (payload.action === "read" || payload.action === "write") return payload.action;
+    return "share";
+  }
+  if (payload.tool === "skills") return payload.action === "read" ? "skill" : "share";
+  if (payload.tool === "apps") return payload.action === "publish" ? "publish" : "share";
+  if (payload.tool === "sessions") return "session";
   if (payload.tool !== "sandbox") return payload.tool ?? "unknown";
   if (payload.action === "exec") return "execute";
   if (

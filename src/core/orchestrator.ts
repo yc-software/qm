@@ -2875,7 +2875,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const sessionUsedTools = visibleHistory.some(
           (e) =>
             e.type === "tool_call" &&
-            !(e.payload !== null && typeof e.payload === "object" && "tool" in e.payload && e.payload.tool === "skill"),
+            !(
+              e.payload !== null &&
+              typeof e.payload === "object" &&
+              "tool" in e.payload &&
+              (e.payload.tool === "skill" ||
+                (e.payload.tool === "skills" && "action" in e.payload && e.payload.action === "read"))
+            ),
         );
         if (
           !strictReadOnly &&
