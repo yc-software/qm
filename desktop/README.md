@@ -23,6 +23,8 @@ When sign-in is needed, the app opens `/auth/desktop` in your default browser. S
 
 The portal preserves the browser session's identity, original authentication time, and expiration. Redemption uses the existing durable core claim store to prevent replay across portal instances and deployments. The desktop proof key exists only for the disposable, in-progress sign-in attempt and is never sent to the browser. Passwords and identity-provider cookies stay in your browser.
 
-Remote content is sandboxed with no Node.js or preload access. Off-origin links open in your browser. Microphone, camera, and notification permissions are disabled in this prototype.
+On macOS, the window controls sit inside the sidebar header. With a single session open, drag its title bar to move the window; tab dragging remains available in multi-pane layouts. Hold Command to reveal shortcuts for the first nine sessions in expanded sidebar groups, then press 1–9 to switch. Windows and Linux use Control. Collapsed groups and a hidden sidebar are excluded.
+
+Remote content is sandboxed with no Node.js access. An isolated desktop preload adds window styling and session shortcuts without exposing native APIs or IPC to the page. Off-origin links open in your browser. Microphone, camera, and notification permissions are disabled in this prototype.
 
 The welcome screen uses _Becalmed off Halfway Rock_ (Fitz Henry Lane, 1860), sourced from [Ève Bouffard’s QM brand board](https://www.evebouffard.com/qm-brand). [National Gallery of Art collection record](https://www.nga.gov/artworks/76213-becalmed-halfway-rock).

@@ -137,8 +137,10 @@ async function showInstance(url) {
     minWidth: 800,
     minHeight: 600,
     backgroundColor: "#f5f4f0",
+    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 20, y: 20 } } : {}),
     webPreferences: {
       session: instanceSession(url),
+      preload: path.join(directory, "workspace-preload.cjs"),
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,

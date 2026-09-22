@@ -11,7 +11,8 @@
     "package": "electron-packager . QM --protocol=qm-desktop --protocol-name=QM --app-bundle-id=com.qm.desktop --out=dist --overwrite --ignore='^/(dist|test|README.md)'"
   },
   "devDependencies": {
+    "@electron/packager": "20.3.0",
     "electron": "44.4.3",
-    "@electron/packager": "20.3.0"
+    "jsdom": "^29.1.1"
   }
 }

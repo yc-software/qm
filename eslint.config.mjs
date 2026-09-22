@@ -24,7 +24,7 @@ export default tseslint.config(
     rules: { "@typescript-eslint/no-require-imports": "off" },
   },
   {
-    files: ["desktop/setup.js"],
+    files: ["desktop/setup.js", "desktop/workspace-preload.cjs"],
     languageOptions: { globals: globals.browser },
   },
   {
