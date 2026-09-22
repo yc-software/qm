@@ -10,6 +10,7 @@ import {
   Box,
   Brain,
   Clock3,
+  ChevronDown,
   Cog,
   Expand,
   Files,
@@ -21,6 +22,7 @@ import {
   Rocket,
   Shrink,
   X,
+  type IconNode,
 } from "lucide";
 import {
   createDockview,
@@ -872,7 +874,7 @@ function paneCrumb(panel: IDockviewPanel): string | null {
   return scopeTitle(scope, context?.name ?? null);
 }
 
-const PANE_TOOLS: { tool: SessionTool; glyph: Parameters<typeof icon>[0]; label: string }[] = [
+const PANE_TOOLS: { tool: SessionTool; glyph: IconNode; label: string }[] = [
   { tool: "crons", glyph: Clock3, label: "Crons" },
   { tool: "apps", glyph: Rocket, label: "Apps" },
   { tool: "files", glyph: Files, label: "Files" },
@@ -1080,47 +1082,75 @@ function sessionParent(sessionId: string): CoreSession | undefined {
   return parentId ? sessionsState.list.find((row) => row.id === parentId) : undefined;
 }
 
-function sessionActions(sessionId: string, panelId: string): TemplateResult {
-  const cls = "split-group-session-action";
+type SessionAction = { label: string; aria?: string; glyph: Parameters<typeof icon>[0]; cls?: string; run: () => void };
+
+function sessionActionItems(sessionId: string, panelId: string): SessionAction[] {
   const parent = sessionParent(sessionId);
-  return html`${
-      parent
-        ? html`<button
-            type="button"
-            class="icon-btn subtle ${cls}"
-            aria-label=${`Back to parent: ${sessionTitle(parent)}`}
-            ${tip(`Back to ${sessionTitle(parent)}`)}
-            @click=${() => {
-              focusPane(panelId);
-              void openSession(parent);
-            }}
-          >
-            ${icon(ArrowUpLeft, 13)}
-          </button>`
-        : nothing
-    }<button
-      type="button"
-      class="icon-btn subtle ${cls} split-tab-share"
-      ${tip("Share conversation")}
-      aria-label="Share conversation"
-      @click=${() => {
+  const items: SessionAction[] = [];
+  if (parent) {
+    items.push({
+      label: `Back to ${sessionTitle(parent)}`,
+      aria: `Back to parent: ${sessionTitle(parent)}`,
+      glyph: ArrowUpLeft,
+      run: () => {
+        focusPane(panelId);
+        void openSession(parent);
+      },
+    });
+  }
+  items.push(
+    {
+      label: "Share conversation",
+      glyph: Link,
+      cls: "split-tab-share",
+      run: () => {
         void openSessionShare(sessionId);
-      }}
-    >
-      ${icon(Link, 13)}
-    </button>
-    <button
-      class="icon-btn subtle ${cls} split-tab-archive"
-      type="button"
-      title="Archive session"
-      aria-label="Archive session"
-      @click=${() => {
+      },
+    },
+    {
+      label: "Archive session",
+      glyph: Archive,
+      cls: "split-tab-archive",
+      run: () => {
         archiveSessionById(sessionId);
-      }}
-    >
-      ${icon(Archive, 13)}
-    </button>`;
+      },
+    },
+  );
+  return items;
 }
+
+function sessionActions(sessionId: string, panelId: string, cls: string): TemplateResult {
+  return html`${sessionActionItems(sessionId, panelId).map(
+    (a) =>
+      html`<button
+        type="button"
+        class=${["icon-btn", "subtle", cls, a.cls].filter(Boolean).join(" ")}
+        ${tip(a.label)}
+        aria-label=${a.aria ?? a.label}
+        @click=${a.run}
+      >
+        ${icon(a.glyph, 13)}
+      </button>`,
+  )}`;
+}
+
+let tabMenu: { panelId: string; anchor: HTMLElement } | null = null;
+
+function toggleTabMenu(panelId: string, anchor: HTMLElement): void {
+  tabMenu = tabMenu?.panelId === panelId ? null : { panelId, anchor };
+  for (const a of groupActions) a.draw();
+}
+
+const placeBelow =
+  (anchor: HTMLElement) =>
+  (el?: Element): void => {
+    if (!(el instanceof HTMLElement)) return;
+    const rect = anchor.getBoundingClientRect();
+    el.style.position = "fixed";
+    el.style.top = `${rect.bottom + 6}px`;
+    el.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - el.offsetWidth - 8))}px`;
+    el.style.right = "auto";
+  };
 
 class PaneTab implements ITabRenderer {
   readonly element: HTMLElement;
@@ -1211,6 +1241,25 @@ class PaneTab implements ITabRenderer {
         ${
           this.inStrip
             ? html`<span class="split-tab-actions">
+                ${
+                  sessionId
+                    ? html`<span class="split-tab-session" @click=${(e: Event) => e.stopPropagation()}
+                          >${sessionActions(sessionId, panel.id, "")}</span
+                        ><button
+                          class="icon-btn subtle split-tab-more"
+                          type="button"
+                          ${tip("Session actions")}
+                          aria-label="Session actions"
+                          aria-haspopup="menu"
+                          @click=${(e: Event) => {
+                            e.stopPropagation();
+                            toggleTabMenu(panel.id, e.currentTarget as HTMLElement);
+                          }}
+                        >
+                          ${icon(ChevronDown, 13)}
+                        </button>`
+                    : nothing
+                }
                 <button
                   class="icon-btn subtle split-tab-close"
                   type="button"
@@ -1296,10 +1345,11 @@ class GroupActions implements IHeaderActionsRenderer {
   }
 
   private readonly onDocClick = (e: Event): void => {
-    if (!this.menuOpen) return;
+    if (!this.menuOpen && !tabMenu) return;
     const tools = this.element.querySelector(".split-tools");
     if (tools && e.composedPath().includes(tools)) return;
     this.menuOpen = false;
+    tabMenu = null;
     this.draw();
   };
 
@@ -1421,6 +1471,34 @@ class GroupActions implements IHeaderActionsRenderer {
       >
         ${b.glyph}
       </button>`;
+    const menuPanel = tabMenu ? props.group.panels.find((p) => p.id === tabMenu?.panelId) : undefined;
+    const menuSession = menuPanel ? (panelParams(menuPanel).sessionId ?? paneSession(menuPanel)?.id) : undefined;
+    const tabMenuTpl =
+      tabMenu && menuPanel && menuSession
+        ? html`<div
+            class="session-menu-popover split-tools-menu split-tab-menu"
+            role="menu"
+            ${ref(placeBelow(tabMenu.anchor))}
+            @click=${(e: Event) => e.stopPropagation()}
+          >
+            ${sessionActionItems(menuSession, menuPanel.id).map(
+              (a) => html`
+                <button
+                  class="session-menu-option"
+                  type="button"
+                  role="menuitem"
+                  @click=${() => {
+                    tabMenu = null;
+                    this.draw();
+                    a.run();
+                  }}
+                >
+                  ${icon(a.glyph, 15)}<span>${a.label}</span>
+                </button>
+              `,
+            )}
+          </div>`
+        : nothing;
     render(
       html`${
           single
@@ -1447,6 +1525,7 @@ class GroupActions implements IHeaderActionsRenderer {
                   aria-haspopup="menu"
                   aria-expanded=${this.menuOpen ? "true" : "false"}
                   @click=${() => {
+                    tabMenu = null;
                     this.menuOpen = !this.menuOpen;
                     this.draw();
                   }}
@@ -1456,11 +1535,11 @@ class GroupActions implements IHeaderActionsRenderer {
                 ${menu}
               </span>`
         }
-        ${sessionId ? sessionActions(sessionId, panel!.id) : nothing}
+        ${sessionId ? sessionActions(sessionId, panel!.id, "split-group-session-action") : nothing}
         <span class="split-pane-actions-wide"
           >${single ? nothing : buttons.filter((b) => !b.cls).map(headerButton)}</span
         >
-        ${single ? nothing : buttons.filter((b) => b.cls).map(headerButton)}`,
+        ${single ? nothing : buttons.filter((b) => b.cls).map(headerButton)}${tabMenuTpl}`,
       this.element,
     );
   }

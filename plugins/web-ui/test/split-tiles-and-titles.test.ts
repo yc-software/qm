@@ -81,11 +81,25 @@ test("a pane title ellipsizes rather than being clipped or wrapped", () => {
   assert.match(css, /\.split-pane-title \{[^}]*min-width: 0;/);
 });
 
-test("tabs share the strip evenly down to a legible floor", () => {
+test("the active tab keeps a higher floor than its neighbours and runs down onto the body", () => {
   const multi = css.match(/:not\(\.dv-single-tab\) \.dv-tab \{[^}]*\}/)?.[0] ?? "";
-  assert.match(multi, /flex: 0 1 220px;/);
-  assert.match(multi, /min-width: 100px;/);
+  assert.match(multi, /flex: 0 1 160px;/);
+  assert.match(multi, /min-width: 72px;/);
   assert.match(multi, /max-width: 220px;/);
+  const active = css.match(/:not\(\.dv-single-tab\) \.dv-tab\.dv-active-tab \{[^}]*\}/)?.[0] ?? "";
+  assert.match(active, /flex: 0 1 260px;/);
+  assert.match(active, /min-width: 150px;/);
+  assert.match(active, /align-self: stretch;/);
+  assert.match(active, /padding-bottom: var\(--split-strip-pad\);/);
+  assert.match(active, /border-bottom-color: transparent;/);
+  const strip =
+    css.match(/^\.dockview-theme-qm \.dv-tabs-and-actions-container:not\(\.dv-single-tab\) \{[^}]*\}/m)?.[0] ?? "";
+  assert.match(strip, /padding-bottom: 0;/);
+  assert.match(strip, /border-bottom: 0;/);
+  assert.match(
+    strip,
+    /linear-gradient\(var\(--split-strip-line\), var\(--split-strip-line\)\) bottom \/ 100% 1px no-repeat/,
+  );
 });
 
 test("tab actions sit in the title's flow so the title truncates around them", () => {
