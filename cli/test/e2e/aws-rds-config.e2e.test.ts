@@ -7,7 +7,7 @@ import { rmDir, runCli, tmp } from "./harness.ts";
 
 function terraformExecutable(): string | undefined {
   const configured = process.env.QM_TEST_TERRAFORM;
-  const executable = configured || "terraform";
+  const executable = configured === undefined ? "terraform" : configured;
   const result = spawnSync(executable, ["version"], { stdio: "ignore" });
   return result.status === 0 ? executable : undefined;
 }
@@ -66,6 +66,7 @@ function terraform(dir: string, executable: string, args: string[]): string {
 }
 
 const terraformBin = terraformExecutable();
+const terraformRequested = process.env.QM_TEST_TERRAFORM !== undefined;
 
 test("AWS init and render validate RDS class config and preserve operator Terraform values", () => {
   const defaultDir = tmp("aws-rds-render-default");
@@ -108,8 +109,9 @@ test("AWS init and render validate RDS class config and preserve operator Terraf
 
 test(
   "AWS init renders validated RDS class config into a local Terraform resource plan",
-  { skip: !terraformBin },
+  { skip: !terraformRequested && !terraformBin ? "Terraform is unavailable" : false },
   () => {
+    assert.ok(terraformBin, `QM_TEST_TERRAFORM is not executable: ${process.env.QM_TEST_TERRAFORM}`);
     const defaultDir = tmp("aws-rds-default");
     const overrideDir = tmp("aws-rds-override");
     try {
@@ -137,8 +139,8 @@ test(
       writeTerraformTest(overrideDir, "db.t4g.micro", 7);
 
       for (const dir of [defaultDir, overrideDir]) {
-        terraform(dir, terraformBin!, ["init", "-backend=false"]);
-        const plan = terraform(dir, terraformBin!, ["test", "-verbose"]);
+        terraform(dir, terraformBin, ["init", "-backend=false"]);
+        const plan = terraform(dir, terraformBin, ["test", "-verbose"]);
         assert.match(plan, /Success!.*1 passed, 0 failed/s);
       }
 
@@ -150,7 +152,7 @@ test(
           'db_instance_class = "t4g.micro"',
         ),
       );
-      const invalidPlan = spawnSync(terraformBin!, [`-chdir=${join(overrideDir, "infra")}`, "test", "-verbose"], {
+      const invalidPlan = spawnSync(terraformBin, [`-chdir=${join(overrideDir, "infra")}`, "test", "-verbose"], {
         encoding: "utf8",
         timeout: 180_000,
       });
