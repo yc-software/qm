@@ -6,9 +6,10 @@ import { createTranscriptViewport } from "../src/transcript-viewport.ts";
 
 function fixture() {
   const dom = new JSDOM(
-    `<section class="chat-scroll"><div class="pinned-strip"></div><div class="message-stack"><article class="user-row" data-index="1"><div class="user-bubble"><div class="pin-content">Example prompt</div><button class="pin-toggle" hidden>Show more</button></div></article></div></section>`,
+    `<section class="chat-scroll"><div class="pinned-strip"></div><div class="message-stack"><article class="user-row" data-index="1"><div class="user-bubble"><div class="pin-content" style="line-height: 20px">Example prompt</div><button class="pin-toggle" hidden>Show more</button></div></article></div></section>`,
   );
   const scroller = dom.window.document.querySelector<HTMLElement>("section")!;
+  const stack = scroller.querySelector<HTMLElement>(".message-stack")!;
   const row = scroller.querySelector<HTMLElement>("article")!;
   const content = row.querySelector<HTMLElement>(".pin-content")!;
   const toggle = row.querySelector<HTMLButtonElement>("button")!;
@@ -32,16 +33,17 @@ function fixture() {
   });
   content.getBoundingClientRect = () => ({ height: content.clientHeight }) as DOMRect;
   scroller.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+  stack.getBoundingClientRect = () => ({ top: -scroller.scrollTop }) as DOMRect;
   row.getBoundingClientRect = () => ({ top: 0, height: content.clientHeight + 24 }) as DOMRect;
   const observed = new Set<Element>();
-  let resize = () => {};
+  let resize = (_entries: Array<{ target: Element }>) => {};
   const restore = ["ResizeObserver", "getComputedStyle"].map(
     (key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
   );
   Object.assign(globalThis, {
     getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
     ResizeObserver: class {
-      constructor(callback: () => void) {
+      constructor(callback: (entries: Array<{ target: Element }>) => void) {
         resize = callback;
       }
       observe(element: Element) {
@@ -64,17 +66,21 @@ function fixture() {
     toggle,
     observed,
     viewport,
+    scroll: (top: number) => {
+      scroller.scrollTop = top;
+      scroller.dispatchEvent(new dom.window.Event("scroll"));
+    },
     resize: (next: number) => {
       height = next;
-      resize();
+      resize([{ target: scroller }]);
     },
     setPins: (next: number) => {
       pinsHeight = next;
-      resize();
+      resize([{ target: scroller.querySelector(".pinned-strip")! }]);
     },
     grow: (next: number) => {
       fullHeight = next;
-      resize();
+      resize([{ target: content }]);
     },
     close: () => {
       viewport.dispose();
@@ -226,25 +232,21 @@ test("expanding a scrolled prompt stays sticky with a bounded scrollable body", 
   }
 });
 
-test("a stuck prompt condenses but keeps the transcript slot it had at rest", () => {
+test("a stuck prompt keeps the transcript slot it had at rest", () => {
   const f = fixture();
   try {
     const rest = f.row.style.getPropertyValue("--pin-rest-height");
     assert.equal(rest, "163.5px");
-    f.scroller.scrollTop = 500;
-    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    f.scroll(500);
     assert.equal(f.row.classList.contains("stuck"), true);
     f.row.getBoundingClientRect = () => ({ top: 0, height: 60 }) as DOMRect;
-    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    f.scroll(520);
     assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), rest);
     f.toggle.click();
     assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), rest);
     f.toggle.click();
-    f.scroller.scrollTop = 0;
-    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    f.scroll(0);
     assert.equal(f.row.classList.contains("stuck"), false);
-    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), rest);
-    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
     assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), rest);
     f.resize(300);
     assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "60px");
@@ -255,129 +257,97 @@ test("a stuck prompt condenses but keeps the transcript slot it had at rest", ()
   }
 });
 
-test("the rest height of the prompt body is re-measured on resize, never while the strip is settling", () => {
+test("the prompt condenses in step with the scroll, one pixel of height per pixel scrolled", () => {
   const f = fixture();
   try {
-    assert.equal(f.row.style.getPropertyValue("--pin-content-rest"), "139.5px");
-    let animations = 0;
-    (f.content as HTMLElement & { getAnimations: () => Animation[] }).getAnimations = () =>
-      Array.from({ length: animations }, () => null) as unknown as Animation[];
-    f.scroller.scrollTop = 500;
-    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
-    f.content.getBoundingClientRect = () => ({ height: 46 }) as DOMRect;
-    f.scroller.scrollTop = 0;
-    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
-    assert.equal(f.row.style.getPropertyValue("--pin-content-rest"), "139.5px");
-    animations = 1;
-    f.resize(280);
-    assert.equal(f.row.style.getPropertyValue("--pin-content-rest"), "139.5px");
-    animations = 0;
-    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
-    assert.equal(f.row.style.getPropertyValue("--pin-content-rest"), "46px");
-    f.viewport.dispose();
-    assert.equal(f.row.style.getPropertyValue("--pin-content-rest"), "");
-  } finally {
-    f.close();
-  }
-});
-
-test("sticking and releasing tween the prompt body between its two heights once motion is armed", () => {
-  const f = fixture();
-  const now = performance.now;
-  try {
-    const calls: Array<{ frames: Keyframe[]; options: KeyframeAnimationOptions }> = [];
-    let cancelled = 0;
-    (f.content as HTMLElement & { animate: unknown }).animate = (
-      frames: Keyframe[],
-      options: KeyframeAnimationOptions,
-    ) => {
-      calls.push({ frames, options });
-      return { cancel: () => cancelled++ } as unknown as Animation;
-    };
-    f.row.style.setProperty("--pin-motion", "180ms");
-    const clock = 5000;
-    performance.now = () => clock;
-    f.scroller.scrollTop = 500;
-    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "");
+    f.scroll(49.75);
     assert.equal(f.row.classList.contains("stuck"), true);
-    assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0].frames, [{ maxHeight: "139.5px" }, { maxHeight: "2lh" }]);
-    assert.equal(calls[0].options.duration, 180);
-    f.content.getBoundingClientRect = () => ({ height: 80 }) as DOMRect;
-    f.scroller.scrollTop = 0;
-    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
-    assert.equal(calls.length, 2);
-    assert.equal(cancelled, 1);
-    assert.deepEqual(calls[1].frames, [{ maxHeight: "80px" }, { maxHeight: "139.5px" }]);
-    f.row.style.setProperty("--pin-motion", "0s");
-    f.scroller.scrollTop = 500;
-    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
-    assert.equal(calls.length, 2);
-    assert.equal(cancelled, 2);
-    f.viewport.dispose();
-    assert.equal(cancelled, 2);
+    assert.equal(f.row.classList.contains("pin-condensed"), false);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "89.75px");
+    f.scroll(99.5);
+    assert.equal(f.row.classList.contains("pin-condensed"), true);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "40px");
+    f.scroll(900);
+    assert.equal(f.row.classList.contains("pin-condensed"), true);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "40px");
+    f.scroll(20);
+    assert.equal(f.row.classList.contains("pin-condensed"), false);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "119.5px");
+    f.scroll(0);
+    assert.equal(f.row.classList.contains("stuck"), false);
+    assert.equal(f.row.classList.contains("pin-condensed"), false);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "");
+    f.scroll(60);
+    f.toggle.click();
+    assert.equal(f.row.classList.contains("pin-condensed"), false);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "");
   } finally {
-    performance.now = now;
     f.close();
   }
 });
 
-test("motion is armed only once a prompt has been on screen for a moment", () => {
+test("the collapse is measured from the row's resting place, so it survives being opened mid-scroll", () => {
   const f = fixture();
-  const now = performance.now;
   try {
-    let clock = 1000;
-    performance.now = () => clock;
-    f.row.dataset.index = "9";
+    f.scroll(30);
+    f.row.dataset.index = "7";
     f.viewport.sync(f.scroller);
-    assert.equal(f.row.classList.contains("pin-motion"), false);
-    clock = 1200;
-    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
-    assert.equal(f.row.classList.contains("pin-motion"), false);
-    clock = 1300;
-    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
-    assert.equal(f.row.classList.contains("pin-motion"), true);
-    f.row.dataset.index = "10";
-    f.viewport.sync(f.scroller);
-    assert.equal(f.row.classList.contains("pin-motion"), false);
+    assert.equal(f.row.classList.contains("stuck"), true);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "109.5px");
+    f.scroll(70);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "69.5px");
   } finally {
-    performance.now = now;
     f.close();
   }
 });
 
-test("the condensed strip is a css contract on the stuck class, never on rest", () => {
+test("rest heights are re-measured for pane and content changes even while the strip is condensed", () => {
+  const f = fixture();
+  try {
+    f.scroll(500);
+    assert.equal(f.row.classList.contains("pin-condensed"), true);
+    f.grow(40);
+    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "64px");
+    assert.equal(f.row.classList.contains("pin-condensed"), true);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "40px");
+    f.grow(800);
+    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "163.5px");
+    f.scroll(0);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "");
+    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "163.5px");
+  } finally {
+    f.close();
+  }
+});
+
+test("the condensed strip is a css contract on the condensed class, with a scroll-driven height on stuck", () => {
   const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
   const condensed =
+    css.match(
+      /\.message-stack \.user-row\.pin-condensed:not\(\.pin-expanded\) \.user-bubble > \.pin-content \{[^}]*\}/,
+    )?.[0] ?? "";
+  assert.match(condensed, /-webkit-line-clamp: 2/);
+  const stuck =
     css.match(/\.message-stack \.user-row\.stuck:not\(\.pin-expanded\) \.user-bubble > \.pin-content \{[^}]*\}/)?.[0] ??
     "";
-  assert.match(condensed, /-webkit-line-clamp: 2/);
-  assert.doesNotMatch(condensed, /max-height/);
-  assert.match(css, /\.user-row:not\(:has\(~ \.user-row\)\) \{[^}]*min-height: var\(--pin-rest-height\)/);
-  assert.doesNotMatch(css, /\.user-row\.stuck:not\(\.pin-expanded\) \{\s*min-height/);
+  assert.match(stuck, /max-height: var\(--pin-content-max, none\)/);
+  assert.doesNotMatch(stuck, /line-clamp|transition/);
+  assert.match(css, /\.user-row\.stuck:not\(\.pin-expanded\) \{\s*min-height: var\(--pin-rest-height\)/);
+  assert.match(
+    css,
+    /\.user-row\.stuck:not\(\.pin-expanded\)\s+\.user-bubble\s+> \.pin-content:has\(code-block[^{]*\{\s*max-height: var\(--pin-content-max, 2lh\)/,
+  );
   const rest =
     css.match(
       /\.message-stack \.user-row:not\(:has\(~ \.user-row\)\):not\(\.pin-expanded\) \.user-bubble > \.pin-content \{[^}]*\}/,
     )?.[0] ?? "";
   assert.match(rest, /-webkit-line-clamp: 6/);
-  assert.doesNotMatch(rest, /max-height/);
-});
-
-test("the strip eases between its heights only when motion is armed, and not under reduced motion", () => {
-  const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-  const motion = css.match(/\.message-stack \.user-row\.pin-motion \.user-bubble > \.pin-content \{[^}]*\}/)?.[0] ?? "";
-  assert.match(motion, /transition: -webkit-line-clamp 0s var\(--pin-clamp-delay\) allow-discrete/);
-  assert.doesNotMatch(motion, /max-height/);
+  assert.doesNotMatch(rest, /max-height|transition/);
   assert.match(
     css,
-    /\.user-row\.pin-motion:where\(\.stuck:not\(\.pin-expanded\)\) \{\s*--pin-motion: 180ms;\s*--pin-clamp-delay: 180ms/,
+    /prefers-reduced-motion: reduce\) \{\s*\.message-stack\s+\.user-row\.stuck:not\(\.pin-expanded\)[^{]*\{\s*transition: none/,
   );
-  assert.match(
-    css,
-    /prefers-reduced-motion: reduce\) \{\s*\.message-stack \.user-row\.pin-motion \{\s*--pin-motion: 0s/,
-  );
-  const plain = css.replace(/\.pin-motion[^{]*\{[^}]*\}/g, "");
-  assert.doesNotMatch(plain.match(/\.pin-content \{[^}]*\}/g)?.join("") ?? "", /transition/);
 });
 
 test("expanded prompts reserve pins and chrome when panes resize or content grows", () => {
