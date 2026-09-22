@@ -88,6 +88,7 @@ const META = {
   service: "codex-chatgpt",
   kind: "file",
   fingerprint: "f",
+  revision: "synthetic-revision",
   createdAt: 0,
   updatedAt: 0,
 } as KeychainCredentialMeta;
@@ -248,4 +249,45 @@ test("installed Codex accepts child auth without a usable refresh token", () => 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("keychain Codex login disconnect during refresh does not return revoked material", async () => {
+  const { createKeychain } = await import("../src/credentials/keychain.ts");
+  const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
+  const { deriveConnectorKey } = await import("../src/connectors/connector-client-store.ts");
+  const keychain = createKeychain({
+    creds: createMemoryMap(),
+    grants: createMemoryMap(),
+    asks: createMemoryMap(),
+    key: deriveConnectorKey("codex-race-fixture"),
+  });
+  const credential = await keychain.save({
+    ownerId: "owner",
+    service: "codex",
+    files: credFiles(authJson("acct", STALE_EXP)),
+  });
+  let release!: () => void;
+  let entered!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const paused = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const store = keychainCodexAuthStore({
+    keychain,
+    credentialId: credential.id,
+    now: () => NOW,
+    fetchImpl: async () => {
+      entered();
+      await paused;
+      return Response.json({ access_token: accessToken("acct", FRESH_EXP), refresh_token: "rotated" });
+    },
+  });
+  const loading = store.load();
+  await ready;
+  await keychain.remove("owner", credential.id);
+  release();
+  assert.equal(await loading, null);
+  assert.equal(await keychain.getCredential(credential.id), null);
 });
