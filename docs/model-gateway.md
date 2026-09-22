@@ -18,21 +18,28 @@ LiteLLM group metadata may combine capabilities and maximum limits from multiple
 
 ## Browser agent
 
-When a model gateway is configured, the browse skill uses it for the inner browser
-agent as well. The organization browser-model override, or deployment base model,
-must be present in the gateway catalog or configured aliases. Kernel, Anchor and
-Browserbase still use their own credentials to create browser sessions.
+The browse skill follows the user's saved AI access and default model. Company
+access uses the configured model gateway; ChatGPT access uses the user's connected
+OpenAI account, including refreshed subscription access; Claude access supports
+API keys. Claude subscription access is unavailable for the inner browser agent
+and returns an actionable error. No account silently falls back to another.
+Kernel, Anchor and Browserbase still use their own credentials for browser sessions.
 
-Core gives internal, non-strict turns a one-hour capability bound to the selected
-browser model and conversation scope. The sandbox sends OpenAI-compatible,
-non-streaming chat completions to `/v1/browser-model/chat/completions` on core;
-core replaces the model alias and authenticates with the existing gateway key.
-That key stays on core, so private gateways need no public listener. Browser
-inference uses the same gateway key permissions and budgets as other model calls.
-The endpoint accepts up to 16 MiB for screenshot history, rejects provider overrides,
-and rechecks scope membership, strict posture and gateway model availability.
+Core gives internal, non-strict turns a one-hour capability bound to the account,
+model and conversation scope. The sandbox sends OpenAI-compatible, non-streaming
+chat completions to `/v1/browser-model/chat/completions`; core reloads the saved
+selection and credentials for each request. Changing the account or model requires
+a fresh turn. Credentials stay on core. Personal inference uses native provider
+transports, bypassing organization endpoint overrides, and converts structured
+browser responses and screenshots through the existing model runtime.
 
-The browse runner needs browser-use 0.12.9 with `ChatOpenAI.default_headers`
-support. It does not request direct provider credentials or fall back to them on
-gateway errors. Gateway budget exhaustion is returned as HTTP 429. A missing or
-retired model is unavailable until the organization selects an accessible model.
+Company browser inference uses the same gateway key permissions and budgets as
+other company model calls. The selected model must be in the gateway catalog or
+configured aliases. Private gateways need no public listener. The endpoint accepts
+up to 16 MiB for screenshot history, rejects provider overrides, and rechecks scope
+membership, strict posture and gateway availability. Gateway budget exhaustion is
+returned as HTTP 429; missing or retired models fail closed.
+
+The managed browse runner needs browser-use 0.12.9 with
+`ChatOpenAI.default_headers` support. It never requests separate browser model
+credentials or falls back to them on account or gateway errors.

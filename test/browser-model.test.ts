@@ -53,6 +53,7 @@ test("browser inference uses the company gateway with scoped model authorization
     scopeId: "personal:U1" as const,
     browserModel: model,
     aud: BROWSER_MODEL_AUD,
+    browserAccount: "company" as const,
     exp: Date.now() + 60_000,
   };
   const token = await mintCapabilityToken(claims, TEST_CAPABILITY_SECRET);
@@ -108,6 +109,18 @@ test("browser inference uses the company gateway with scoped model authorization
   await built.config.setSecurityPosture("personal:U1", "strict");
   assert.equal((await post(body)).status, 403);
   await built.config.setSecurityPosture("personal:U1", "auto");
+  await built.config.setPersonalModelAuth("U1", true, "openai");
+  assert.equal((await post(body)).status, 409);
+  await built.userModelCredentials.setOAuth("U1", "anthropic", {
+    accessToken: "subscription-test",
+    expiresAt: Date.now() + 3600_000,
+  });
+  await built.config.setPersonalModelAuth("U1", true, "anthropic");
+  const claudeToken = await mintCapabilityToken({ ...claims, browserAccount: "anthropic" }, TEST_CAPABILITY_SECRET);
+  const unsupported = await post(body, claudeToken);
+  assert.equal(unsupported.status, 422);
+  assert.match(await unsupported.text(), /Claude subscription/);
+  await built.config.setPersonalModelAuth("U1", false);
   delete routes[model];
   assert.equal((await post(body)).status, 503);
   assert.equal(calls.length, 3);
@@ -139,7 +152,7 @@ test("gateway deployment provisions a browser token without exposing the company
   });
   assert.equal(result.status, "ok");
   const env = captured?.env;
-  assert.equal(env?.BROWSE_LAB_MODEL_PROVIDER, "gateway");
+  assert.equal(env?.BROWSE_LAB_MODEL_PROVIDER, "managed");
   assert.equal(env?.BROWSE_LAB_BASE_URL, "https://core.example.test/v1/browser-model");
   assert.ok(!Object.values(env ?? {}).includes(key));
   const claims = await verifyCapabilityToken(env!.BROWSE_LAB_MODEL_TOKEN!, TEST_CAPABILITY_SECRET);
@@ -174,7 +187,7 @@ test("gateway browsing never selects a direct provider when callback signing or 
       conversation: { kind: "dm", threadRef: "dm:U1:missing" },
       text: "!run echo missing",
     });
-    assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "gateway");
+    assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed");
     assert.equal(captured?.env?.BROWSE_LAB_MODEL_TOKEN, undefined);
   }
 });
