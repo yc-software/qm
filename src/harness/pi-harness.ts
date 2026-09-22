@@ -1317,8 +1317,7 @@ export async function probeModel(
 ): Promise<void> {
   const runtime = await buildModelRuntime(keys, modelGateway);
   signal.throwIfAborted();
-  const fastHeader = fastMode && !modelGateway?.models[model.id];
-  const candidate = fastHeader ? withFastModeHeaders(model) : model;
+  const candidate = withRequestHeaders(model, !modelGateway?.models[model.id], fastMode);
   const response = await runtime
     .streamSimple(
       candidate,
@@ -1337,7 +1336,7 @@ export async function probeModel(
         maxTokens: Math.min(128, model.maxTokens),
         signal,
         maxRetryDelayMs: 1,
-        onPayload: (payload) => applyFastSpeed(payload, fastMode, model.api),
+        onPayload: (payload) => applyThinkingBinding(applyFastSpeed(payload, fastMode, model.api), candidate),
       },
     )
     .result();
@@ -1347,6 +1346,8 @@ export async function probeModel(
 }
 
 const FAST_MODE_BETA = "fast-mode-2026-02-01";
+const THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01";
+const THINKING_BINDING = { prefix_mismatch_behavior: "drop_block" } as const;
 
 export const FAST_COST_MULTIPLIER = 2;
 
@@ -1364,6 +1365,23 @@ export { modelSupportsFastMode } from "../model/pi-models.ts";
 
 export function wantsFastMode(fastMode: boolean | undefined, modelId: string | undefined): boolean {
   return fastMode === true && modelSupportsFastMode(modelId);
+}
+
+function thinkingBindingApplies(model: Pick<Model<Api>, "api" | "compat"> | undefined): boolean {
+  return (
+    model?.api === "anthropic-messages" &&
+    (model.compat as { forceAdaptiveThinking?: unknown } | undefined)?.forceAdaptiveThinking === true
+  );
+}
+
+export function applyThinkingBinding<T>(payload: T, model: { headers?: Record<string, string> } | undefined): T {
+  if (!payload || typeof payload !== "object") return payload;
+  if (!model?.headers?.["anthropic-beta"]?.split(",").includes(THINKING_BINDING_BETA)) return payload;
+  const thinking = (payload as { thinking?: { type?: unknown } }).thinking;
+  if (thinking?.type === "adaptive" || thinking?.type === "enabled") {
+    (payload as Record<string, unknown>).thinking = { ...thinking, block_binding: THINKING_BINDING };
+  }
+  return payload;
 }
 
 export function applyFastSpeed<T>(payload: T, fast: boolean | undefined, api?: string): T {
@@ -1444,12 +1462,13 @@ export function resolveConfiguredModelId(configured: string | undefined, default
   return DEFAULT_AGENT_MODEL_ID;
 }
 
-export function withFastModeHeaders(model: Model<Api>): Model<Api> {
+export function withRequestHeaders(model: Model<Api>, direct: boolean, fast: boolean): Model<Api> {
   const api = String((model as { api?: unknown }).api ?? "").toLowerCase();
-  if (api.startsWith("openai")) return model;
+  if (api.startsWith("openai") || !direct) return model;
+  const betas = [...(thinkingBindingApplies(model) ? [THINKING_BINDING_BETA] : []), ...(fast ? [FAST_MODE_BETA] : [])];
+  if (!betas.length) return model;
   const prior = model.headers?.["anthropic-beta"];
-  const beta = prior ? `${prior},${FAST_MODE_BETA}` : FAST_MODE_BETA;
-
+  const beta = [...(prior ? [prior] : []), ...betas].join(",");
   return { ...model, headers: { ...model.headers, "anthropic-beta": beta } };
 }
 
@@ -1647,6 +1666,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ref.pendingPrepareNextTurn = undefined;
           ref.pendingTransformContext = undefined;
           applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
+          applyThinkingBinding(payload, model as { headers?: Record<string, string> } | undefined);
           const result = prior ? await prior(payload, model) : payload;
           const capturedPayload = captureRequests ? sanitizeLlmPayload(result ?? payload, model) : undefined;
           let finalPayload = await withDocumentInputs(
@@ -1741,9 +1761,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         const baseModel = getRequiredModel(desiredModelId, !turn.providerKeys);
         const turnModelGateway = turn.providerKeys ? undefined : modelGateway;
         const wantFast = wantsFastMode(turn.runtime?.fastMode, desiredModelId);
-        const wantFastHeader = wantFast && !turnModelGateway?.models[desiredModelId];
         const { entry, compileMs } = await createTurnSession(
-          wantFastHeader ? withFastModeHeaders(baseModel) : baseModel,
+          withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
           turn.session.id,
           turn.systemPrompt,
           turn.history,
@@ -2175,8 +2194,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               `[pi] provider refusal — retrying on fallback model ${fromId} -> ${fallbackId} session=${turn.session.id}: ${refusal}`,
             );
             const wantFast = wantsFastMode(turn.runtime?.fastMode, fallbackId);
-            const wantFastHeader = wantFast && !turnModelGateway?.models[fallbackId];
-            await entry.agentSession.setModel(wantFastHeader ? withFastModeHeaders(fallback) : fallback);
+            await entry.agentSession.setModel(
+              withRequestHeaders(fallback, !turnModelGateway?.models[fallbackId], wantFast),
+            );
             entry.ref.fast = wantFast;
             applyTurnEffort(entry.agentSession, turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback));
             const state = entry.agentSession.agent.state;
