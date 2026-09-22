@@ -2069,6 +2069,94 @@ qm-markdown .tok-in {
   gap: 6px;
   margin-top: 9px;
 }
+.attachment-strip {
+  align-items: flex-start;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 2px;
+}
+.file-chip.composer-image {
+  position: relative;
+  display: block;
+  width: 80px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.composer-image > span {
+  display: none;
+}
+.composer-image:has(.composer-image-open[hidden]) > span {
+  display: block;
+  padding: 6px 28px 6px 0;
+}
+.composer-image-open {
+  width: 100%;
+  border: 0;
+  padding: 0;
+  cursor: zoom-in;
+  background: transparent;
+}
+.composer-image img {
+  display: block;
+  width: 100%;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 12px;
+}
+.composer-image-open[hidden] {
+  display: none;
+}
+.composer-image .chip-x {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--background);
+  color: var(--foreground);
+}
+.project-dialog.attachment-preview {
+  width: min(960px, calc(100vw - 32px));
+}
+.attachment-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.attachment-preview-head span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.attachment-preview-body {
+  overflow: auto;
+  max-height: 70dvh;
+}
+.attachment-preview-body button {
+  display: block;
+  margin: auto;
+  border: 0;
+  padding: 0;
+  background: var(--secondary);
+  cursor: zoom-in;
+}
+.attachment-preview-body img {
+  display: block;
+  max-width: 100%;
+  max-height: 70dvh;
+  object-fit: contain;
+}
+.attachment-preview-body .actual-size {
+  max-width: none;
+  cursor: zoom-out;
+}
+.attachment-preview-body .actual-size img {
+  max-width: none;
+  max-height: none;
+}
 .queued-strip,
 .chat-bottom-dock > .bg-activity {
   position: relative;
@@ -2176,7 +2264,7 @@ qm-markdown .tok-in {
   display: inline-block;
 
   max-width: min(320px, 100%);
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 8px;
   overflow: hidden;
   line-height: 0;
@@ -2189,6 +2277,41 @@ qm-markdown .tok-in {
   width: auto;
   height: auto;
   object-fit: contain;
+}
+.attachment-gallery {
+  flex-direction: column;
+  max-width: 100%;
+  gap: 10px;
+}
+.attachment-images,
+.attachment-documents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  max-width: 100%;
+}
+.user-row > .attachment-gallery {
+  align-items: flex-end;
+  margin: 0 0 8px;
+  pointer-events: auto;
+}
+.user-bubble[hidden] {
+  display: none;
+}
+.user-row > .attachment-gallery > * {
+  justify-content: flex-end;
+}
+.attachment-images > .file-image {
+  flex: none;
+}
+.user-row > .message-files .file-image {
+  width: 80px;
+  border-radius: 12px;
+}
+.user-row > .message-files .file-image img {
+  width: 100%;
+  height: 80px;
+  object-fit: cover;
 }
 .file-html-unfurl {
   display: flex;

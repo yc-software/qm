@@ -4,8 +4,9 @@ import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { createFileDragState } from "./file-drag";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import { FolderDropError, folderToZipFile, isFolderReadError, splitDropItems, type DropEntryLike } from "./folder-drop";
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
+import { repeat } from "lit/directives/repeat.js";
 import { ArrowUp, Box, CornerDownRight, FileText, Paperclip, Square, X } from "lucide";
 import {
   api,
@@ -28,7 +29,7 @@ import {
   type QueuedRun,
 } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { fieldSelect, icon } from "./ui";
+import { browserRenderableImage, fieldSelect, icon } from "./ui";
 import {
   defaultEffortForModel,
   defaultModelValue,
@@ -519,9 +520,29 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
           composerState.attachments.length
             ? html`
                 <div class="attachment-strip">
-                  ${composerState.attachments.map(
+                  ${repeat(
+                    composerState.attachments,
+                    (a) => a.id,
                     (a) => html`
-                      <span class="file-chip">
+                      <span class=${browserRenderableImage(a.mimeType) ? "file-chip composer-image" : "file-chip"}>
+                        ${
+                          browserRenderableImage(a.mimeType)
+                            ? html`<button
+                                type="button"
+                                class="composer-image-open"
+                                aria-label=${`Preview ${a.fileName}`}
+                                @click=${() => openImagePreview(a)}
+                              >
+                                <img
+                                  src=${a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`}
+                                  alt=${a.fileName}
+                                  @error=${(event: Event) => {
+                            (event.currentTarget as HTMLImageElement).parentElement!.hidden = true;
+                          }}
+                                />
+                              </button>`
+                            : nothing
+                        }
                         ${
                           pastedTextIds.has(a.id)
                             ? html`
@@ -536,7 +557,11 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                                   <span>${pasteChipLabel(a.extractedText?.length ?? 0)}</span>
                                 </button>
                               `
-                            : html`${icon(Paperclip, 14)}<span dir="auto">${a.fileName}</span>`
+                            : html`${browserRenderableImage(a.mimeType) ? nothing : icon(Paperclip, 14)}<span
+                                  dir="auto"
+                                  title=${a.fileName}
+                                  >${a.fileName}</span
+                                >`
                         }
                         <button
                           type="button"
@@ -1658,6 +1683,43 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   function pickFiles(): void {
     if (ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0) return;
     ctx.chat.state.host?.querySelector<HTMLInputElement>(".file-input")?.click();
+  }
+
+  function openImagePreview(attachment: Attachment): void {
+    const dialog = document.createElement("dialog");
+    dialog.className = "project-dialog attachment-preview";
+    dialog.setAttribute("aria-label", attachment.fileName);
+    dialog.addEventListener(
+      "close",
+      () => {
+        render(nothing, dialog);
+        dialog.remove();
+      },
+      { once: true },
+    );
+    document.body.append(dialog);
+    const src = attachment.content.startsWith("data:")
+      ? attachment.content
+      : `data:${attachment.mimeType};base64,${attachment.content}`;
+    render(
+      html`
+        <div class="attachment-preview-head">
+          <span dir="auto">${attachment.fileName}</span>
+          <button type="button" class="btn compact" @click=${() => dialog.close()}>Close</button>
+        </div>
+        <div class="attachment-preview-body">
+          <button
+            type="button"
+            aria-label="Toggle actual image size"
+            @click=${(event: Event) => (event.currentTarget as HTMLElement).classList.toggle("actual-size")}
+          >
+            <img src=${src} alt=${attachment.fileName} />
+          </button>
+        </div>
+      `,
+      dialog,
+    );
+    dialog.showModal();
   }
 
   function removeAttachment(id: string, agent: Agent): void {

@@ -138,7 +138,16 @@ import {
   harnessSupportsEffort,
   harnessSupportsFastMode,
 } from "./model-options";
-import { browserRenderableImage, chipBadge, copyText, formatBytes, icon, relTime, waveLoader } from "./ui";
+import {
+  attachmentGallery,
+  browserRenderableImage,
+  chipBadge,
+  copyText,
+  formatBytes,
+  icon,
+  relTime,
+  waveLoader,
+} from "./ui";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
@@ -1636,13 +1645,16 @@ export function createChatSurface(
         >
           ${steered ? html`<div class="steer-label">↪ steered the running task</div>` : nothing}
           ${speaker ? html`<div class="speaker-label">${speaker}</div>` : nothing}
-          <div class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}">
+          ${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}
+          <div
+            class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}"
+            ?hidden=${!messageText(message).trim() && !edited && !deleted}
+          >
             <div class="pin-content">
               ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
               ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
             </div>
             <button class="pin-toggle" type="button" hidden aria-expanded="false">Show more</button>
-            ${attachments.length ? html`<div class="message-files">${attachments.map(userAttachmentBadge)}</div>` : nothing}
           </div>
           ${
             sendFailure
@@ -2863,8 +2875,13 @@ export function createChatSurface(
     if (a.mimeType?.startsWith("image/")) {
       const dataUrl =
         a.content && (a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`);
-      const download = !artifactHref || !browserRenderableImage(a.mimeType);
-      return chipBadge(FileImage, a.fileName, a.size, artifactHref ?? dataUrl ?? undefined, download);
+      const href = artifactHref ?? localContentUrl(a) ?? dataUrl;
+      if (href && browserRenderableImage(a.mimeType)) {
+        return html`<a class="file-image" href=${href} target="_blank" rel="noreferrer" ${tip(a.fileName)}
+          ><img src=${href} alt=${a.fileName} loading="lazy"
+        /></a>`;
+      }
+      return chipBadge(FileImage, a.fileName, a.size, href || undefined, true);
     }
     if (inlineHtmlName(a.fileName, a.mimeType)) {
       let src = artifactHref;
