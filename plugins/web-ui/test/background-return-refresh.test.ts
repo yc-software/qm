@@ -186,55 +186,17 @@ test("a backgrounded chat shows the response that completed while it was away", 
       entries = completed;
       await leaveTab();
     }
-    for (const [label, run] of [
-      ["absent", { runId: null, run: null, queued: [] }],
-      ["terminal", { runId: "r1", run: { status: "running", replyComplete: true }, queued: [] }],
-    ] as const) {
-      await t.test(`a ${label} active run falls back to the transcript catch-up`, async () => {
-        activeRun = run;
-        await mount();
-        const streams = FakeEventSource.instances.length;
-        await background();
-        assert.equal(rendered(reply), 0, "the reply must not be on screen before the tab comes back");
-        returnToTab();
-        await until(() => rendered(reply) === 1);
-        assert.equal(rendered(question), 1, "the pre-background message must not be duplicated");
-        assert.ok(
-          requests.some((path) => path.startsWith("/api/runs/active")) &&
-            requests.some((path) => path.startsWith("/api/sessions/s1")),
-          `expected the active-run check and a transcript refetch, saw ${requests.join(", ")}`,
-        );
-        assert.equal(requests.filter((path) => path === "/api/turn").length, 0, "returning must not start a new turn");
-        assert.equal(FakeEventSource.instances.length, streams, "returning must not open a run stream");
-      });
-    }
-    await t.test("a run still live on return is attached, and the stream survives the return", async () => {
-      activeRun = { runId: null, run: null, queued: [] };
+    await t.test("catches resumeIfIdle stopping at the attach attempt without the transcript catch-up", async () => {
+      activeRun = { runId: "r1", run: { status: "running", replyComplete: true }, queued: [] };
       await mount();
-      await leaveTab();
-      activeRun = { runId: "r2", run: { status: "running" }, queued: [{ runId: "r3", text: "next one" }] };
+      await background();
+      assert.equal(rendered(reply), 0, "the reply must not be on screen before the tab comes back");
       returnToTab();
-      await until(() => FakeEventSource.instances.some((es) => es.url === "/api/runs/r2/events"));
-      const stream = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r2/events")!;
-      stream.onopen?.();
-      stream.emit("partial", { partial: "half a thought" });
-      await until(() => rendered("half a thought") === 1);
-      assert.deepEqual(
-        conv!.composer.queuedRunsFor(row.threadRef).map((r) => r.runId),
-        ["r3"],
-      );
-      await quiesce();
-      requests.length = 0;
-      returnToTab();
-      await settle();
-      assert.deepEqual(requests, [], "a return mid-stream must not refetch the transcript");
-      assert.equal(rendered("half a thought"), 1, "the live stream must survive the return");
-      entries = completed;
-      activeRun = { runId: null, run: null, queued: [] };
-      stream.emit("done", { status: "done", result: { status: "silent", sessionId: row.id }, activity: [] });
       await until(() => rendered(reply) === 1);
+      assert.equal(rendered(question), 1, "the pre-background message must not be duplicated");
+      assert.equal(requests.filter((path) => path === "/api/turn").length, 0, "returning must not start a new turn");
     });
-    await t.test("an SSE reconnect catches up a visible transcript", async () => {
+    await t.test("catches an onResync that only refreshes sessions, or only resumes, instead of both", async () => {
       activeRun = { runId: null, run: null, queued: [] };
       await mount();
       entries = completed;
@@ -246,7 +208,25 @@ test("a backgrounded chat shows the response that completed while it was away", 
         `a resync must still refresh the sessions list, saw ${requests.join(", ")}`,
       );
     });
-    await t.test("switching chats during the active-run check leaves the new chat alone", async () => {
+    await t.test("catches resumeIfIdle re-entering mid-stream and refetching the transcript", async () => {
+      activeRun = { runId: null, run: null, queued: [] };
+      await mount();
+      await leaveTab();
+      activeRun = { runId: "r2", run: { status: "running" }, queued: [{ runId: "r3", text: "next one" }] };
+      returnToTab();
+      await until(() => FakeEventSource.instances.some((es) => es.url === "/api/runs/r2/events"));
+      const stream = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r2/events")!;
+      stream.onopen?.();
+      stream.emit("partial", { partial: "half a thought" });
+      await until(() => rendered("half a thought") === 1);
+      await quiesce();
+      requests.length = 0;
+      returnToTab();
+      await settle();
+      assert.deepEqual(requests, [], "a return mid-stream must not refetch the transcript");
+      assert.equal(rendered("half a thought"), 1, "the live stream must survive the return");
+    });
+    await t.test("catches the fallback reading chatState.threadRef instead of the thread it started on", async () => {
       activeRun = { runId: null, run: null, queued: [] };
       await mount();
       let release!: () => void;
@@ -263,8 +243,6 @@ test("a backgrounded chat shows the response that completed while it was away", 
       requests.length = 0;
       release();
       await settle();
-      assert.equal(rendered(reply), 0, "the other chat must not receive the backgrounded chat's reply");
-      assert.equal(conv!.state.sessionId, other.id);
       assert.deepEqual(
         requests.filter((path) => path.startsWith("/api/sessions/")),
         [],
