@@ -15,3 +15,24 @@ For LiteLLM deployments, allow the two authenticated GET endpoints alongside inf
 The metadata endpoint returns `{"data": [...]}` with one object per model group. QM uses `model_group`, `mode`, `supports_function_calling`, `max_input_tokens`, `max_output_tokens`, `input_cost_per_token`, and `output_cost_per_token`. Optional fields include `providers`, `supports_vision`, `supports_reasoning`, `supports_adaptive_thinking`, `supported_openai_params`, `cache_read_input_token_cost`, and `cache_creation_input_token_cost`. Prices are per token and converted to per-million-token prices for QM. Missing cache prices use the input rate. Input capacity is used conservatively as the context budget; output capacity must be smaller.
 
 LiteLLM group metadata may combine capabilities and maximum limits from multiple deployments. It is a gateway contract, not a guarantee that every backing deployment has identical capabilities.
+
+## Browser agent
+
+When a model gateway is configured, the browse skill uses it for the inner browser
+agent as well. The organization browser-model override, or deployment base model,
+must be present in the gateway catalog or configured aliases. Kernel, Anchor and
+Browserbase still use their own credentials to create browser sessions.
+
+Core gives internal, non-strict turns a one-hour capability bound to the selected
+browser model and conversation scope. The sandbox sends OpenAI-compatible,
+non-streaming chat completions to `/v1/browser-model/chat/completions` on core;
+core replaces the model alias and authenticates with the existing gateway key.
+That key stays on core, so private gateways need no public listener. Browser
+inference uses the same gateway key permissions and budgets as other model calls.
+The endpoint accepts up to 16 MiB for screenshot history, rejects provider overrides,
+and rechecks scope membership, strict posture and gateway model availability.
+
+The browse runner needs browser-use 0.12.9 with `ChatOpenAI.default_headers`
+support. It does not request direct provider credentials or fall back to them on
+gateway errors. Gateway budget exhaustion is returned as HTTP 429. A missing or
+retired model is unavailable until the organization selects an accessible model.
