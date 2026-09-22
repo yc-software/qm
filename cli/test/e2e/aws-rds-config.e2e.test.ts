@@ -21,6 +21,11 @@ function configureClass(dir: string, value: string): void {
   );
 }
 
+function configureAwsCoordinates(dir: string): void {
+  const path = join(dir, "qm.config.jsonc");
+  writeFileSync(path, readFileSync(path, "utf8").replaceAll("000000000000", "123456789012"));
+}
+
 function configureTerraform(dir: string, retention?: number): void {
   const path = join(dir, "infra", "terraform.tfvars");
   const source = readFileSync(path, "utf8").replace(
@@ -71,9 +76,10 @@ test("AWS init and render validate RDS class config and preserve operator Terraf
       [defaultDir, "rds-render-default"],
       [overrideDir, "rds-render-override"],
       [invalidDir, "rds-render-invalid"],
-    ]) {
+    ] as const) {
       const initialized = runCli(["init", dir, "--org", org, "--target", "aws", "--model-provider", "anthropic"]);
       assert.equal(initialized.code, 0, initialized.out);
+      configureAwsCoordinates(dir);
     }
 
     configureTerraform(defaultDir);
@@ -110,9 +116,10 @@ test(
       for (const [dir, org] of [
         [defaultDir, "rds-default"],
         [overrideDir, "rds-override"],
-      ]) {
+      ] as const) {
         const initialized = runCli(["init", dir, "--org", org, "--target", "aws", "--model-provider", "anthropic"]);
         assert.equal(initialized.code, 0, initialized.out);
+        configureAwsCoordinates(dir);
       }
 
       configureTerraform(defaultDir);
