@@ -35,10 +35,6 @@ export function createTranscriptViewport() {
   let promptKey: string | undefined;
   let expanded = false;
   let lastTop = 0;
-  let lastBottom = 0;
-  let previousBottom = 0;
-  let bottomChangedAt = 0;
-  let inputBottom: number | null = null;
   let observer: ResizeObserver | null = null;
   let following = false;
   let frame: number | null = null;
@@ -49,12 +45,7 @@ export function createTranscriptViewport() {
     if (scroller) scroller.style.overflowAnchor = value ? "none" : "";
   }
 
-  function clearInput(): void {
-    inputBottom = null;
-  }
-
   function cancelFollow(): void {
-    clearInput();
     setFollowing(false);
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
@@ -125,15 +116,9 @@ export function createTranscriptViewport() {
     if (!scroller || contentUpdates.size > 0) return;
     const movingUp = scroller.scrollTop < lastTop;
     const atBottom = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 1;
-    const reachedPreviousBottom =
-      scroller.scrollTop > lastTop &&
-      (Math.abs(scroller.scrollTop - lastBottom) <= 1 ||
-        (inputBottom !== null && Math.abs(scroller.scrollTop - inputBottom) <= 1));
-    if ((atBottom && (following || !movingUp)) || reachedPreviousBottom) setFollowing(true);
+    if (atBottom && (following || !movingUp)) setFollowing(true);
     else if (movingUp) cancelFollow();
-    if (scroller.scrollTop !== lastTop) clearInput();
     lastTop = scroller.scrollTop;
-    measureBottom();
     syncSticky();
     if (movingUp) loadEarlier();
   }
@@ -146,19 +131,9 @@ export function createTranscriptViewport() {
     button.click();
   }
 
-  function measureBottom(): void {
-    if (!scroller) return;
-    const bottom = scroller.scrollHeight - scroller.clientHeight;
-    if (bottom === lastBottom) return;
-    previousBottom = lastBottom;
-    lastBottom = bottom;
-    bottomChangedAt = performance.now();
-  }
-
   function beforeRender(): void {
     if (!scroller || contentUpdates.size > 0) return;
     if (scroller.scrollTop !== lastTop) onScroll();
-    measureBottom();
   }
 
   function onContentUpdating(event: Event): void {
@@ -174,7 +149,6 @@ export function createTranscriptViewport() {
   function afterRender(): void {
     if (!scroller || !following || contentUpdates.size > 0) return;
     lastTop = scroller.scrollTop;
-    measureBottom();
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
     follow();
@@ -184,28 +158,15 @@ export function createTranscriptViewport() {
     if (!scroller) return;
     if (event.deltaY < 0) loadEarlier();
     if (event.deltaY < 0 && scroller.scrollTop > 0) cancelFollow();
-    if (event.deltaY > 0) {
-      clearInput();
-      inputBottom = scroller.scrollHeight - scroller.clientHeight;
-    }
-    if (
-      event.deltaY > 0 &&
-      event.timeStamp < bottomChangedAt &&
-      scroller.scrollTop > lastTop &&
-      Math.abs(scroller.scrollTop - previousBottom) <= 1
-    )
-      setFollowing(true);
   }
 
   function onKeyDown(event: KeyboardEvent): void {
-    clearInput();
     if (event.target !== scroller || event.key !== "End" || event.shiftKey || event.altKey) return;
     event.preventDefault();
     follow(true);
   }
 
   function dispose(): void {
-    clearInput();
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
     observer?.disconnect();
@@ -214,13 +175,12 @@ export function createTranscriptViewport() {
     scroller?.removeEventListener("scroll", onScroll);
     scroller?.removeEventListener("wheel", onWheel);
     scroller?.removeEventListener("click", onClick);
-    scroller?.removeEventListener("pointerdown", clearInput);
     scroller?.removeEventListener("keydown", onKeyDown);
     scroller?.style.removeProperty("--chat-sticky-top");
     scroller?.style.removeProperty("overflow-anchor");
     clearPrompt();
     scroller = pins = prompt = stack = content = null;
-    lastTop = lastBottom = previousBottom = bottomChangedAt = 0;
+    lastTop = 0;
     following = false;
     contentUpdates.clear();
   }
@@ -232,13 +192,11 @@ export function createTranscriptViewport() {
       dispose();
       scroller = element;
       lastTop = scroller?.scrollTop ?? 0;
-      lastBottom = previousBottom = scroller ? scroller.scrollHeight - scroller.clientHeight : 0;
       setFollowing(false);
       scroller?.addEventListener("qm-content-updating", onContentUpdating);
       scroller?.addEventListener("scroll", onScroll, { passive: true });
       scroller?.addEventListener("wheel", onWheel, { passive: true });
       scroller?.addEventListener("click", onClick);
-      scroller?.addEventListener("pointerdown", clearInput);
       scroller?.addEventListener("keydown", onKeyDown);
       if (typeof ResizeObserver !== "undefined") {
         observer = new ResizeObserver(() => {

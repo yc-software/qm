@@ -555,25 +555,29 @@ test("a pre-render check handles an upward scroll before its event", () => {
   }
 });
 
-test("a deferred scroll event recognizes the previous bottom after asynchronous content growth", () => {
+test("a downward scroll that reaches only the previous bottom does not resume following", () => {
   const f = fixture();
   try {
     f.scroll(700);
-    f.s.scrollTop = 800;
     f.grow();
-    f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.Event("scroll"));
+    f.scroll(800);
     f.viewport.follow();
     f.flush();
-    assert.equal(f.s.scrollTop, 900);
+    assert.equal(f.s.scrollTop, 800);
+    f.grow();
+    f.resize(30, 50);
+    f.flush();
+    assert.equal(f.s.scrollTop, 800);
   } finally {
     f.close();
   }
 });
 
-test("a measured resize invalidates the previous bottom for readers who have not moved", () => {
+test("a downward wheel gesture that lands short of the bottom is left alone", () => {
   const f = fixture();
   try {
     f.scroll(700);
+    f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.WheelEvent("wheel", { deltaY: 300 }));
     f.grow();
     f.resize(30, 50);
     f.scroll(800);
@@ -603,21 +607,7 @@ test("the changing streamed reply cannot become the browser's native scroll anch
   assert.match(css, /\.streaming-text\.live-stream \{\s*overflow-anchor: none;/);
 });
 
-test("a resize callback records a pending return before replacing the measured bottom", () => {
-  const f = fixture();
-  try {
-    f.scroll(700);
-    f.s.scrollTop = 800;
-    f.grow();
-    f.resize(30, 50);
-    f.flush();
-    assert.equal(f.s.scrollTop, 900);
-  } finally {
-    f.close();
-  }
-});
-
-test("asynchronous growth leaves a reader in place and advances the measured bottom", () => {
+test("asynchronous growth leaves a reader in place", () => {
   const f = fixture();
   try {
     f.scroll(600);
@@ -634,80 +624,20 @@ test("asynchronous growth leaves a reader in place and advances the measured bot
   }
 });
 
-test("a downward wheel preserves its bottom through multiple layouts before native scrolling", () => {
+test("reaching the real bottom by hand resumes following", () => {
   const f = fixture();
   try {
     f.scroll(700);
-    f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.WheelEvent("wheel", { deltaY: 300 }));
+    f.grow();
+    f.scroll(900);
     f.grow();
     f.resize(30, 50);
-    f.grow();
-    f.resize(30, 50);
-    f.scroll(800);
-    f.viewport.follow();
     f.flush();
     assert.equal(f.s.scrollTop, 1000);
   } finally {
     f.close();
   }
 });
-
-test("a compositor scroll can arrive before its delayed wheel event", () => {
-  const f = fixture();
-  try {
-    f.scroll(700);
-    const wheel = new f.s.ownerDocument.defaultView!.WheelEvent("wheel", { deltaY: 300 });
-    Object.defineProperty(wheel, "timeStamp", { value: 0 });
-    f.grow();
-    f.resize(30, 50);
-    f.s.scrollTop = 800;
-    f.s.dispatchEvent(wheel);
-    f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.Event("scroll"));
-    f.viewport.follow();
-    f.flush();
-    assert.equal(f.s.scrollTop, 900);
-  } finally {
-    f.close();
-  }
-});
-
-test("a fresh wheel after layout cannot resume at an obsolete bottom", () => {
-  const f = fixture();
-  try {
-    f.scroll(700);
-    f.grow();
-    f.resize(30, 50);
-    f.s.scrollTop = 800;
-    const wheel = new f.s.ownerDocument.defaultView!.WheelEvent("wheel", { deltaY: 100 });
-    Object.defineProperty(wheel, "timeStamp", { value: performance.now() + 1 });
-    f.s.dispatchEvent(wheel);
-    f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.Event("scroll"));
-    f.viewport.follow();
-    f.flush();
-    assert.equal(f.s.scrollTop, 800);
-  } finally {
-    f.close();
-  }
-});
-
-for (const type of ["pointerdown", "keydown"]) {
-  test(`${type} invalidates an unfinished wheel gesture`, () => {
-    const f = fixture();
-    try {
-      f.scroll(700);
-      f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.WheelEvent("wheel", { deltaY: 300 }));
-      f.grow();
-      f.resize(30, 50);
-      f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.Event(type, { bubbles: true }));
-      f.scroll(800);
-      f.viewport.follow();
-      f.flush();
-      assert.equal(f.s.scrollTop, 800);
-    } finally {
-      f.close();
-    }
-  });
-}
 
 test("closing live work preserves following through delayed final markdown layout", () => {
   const f = fixture();
