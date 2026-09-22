@@ -9,7 +9,7 @@ import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { FACTORY_LOOP_SURFACE, type FactoryEffectsDeps } from "../src/loops/factory/effects.ts";
 import { FACTORY_REQUIRED_TOOLS } from "../src/loops/factory/preflight.ts";
-import { FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG, FACTORY_SLACK_SLUG } from "../src/loops/factory/credentials.ts";
+import { FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
 import { FACTORY_WRAPPER } from "../src/loops/factory/process-work.ts";
 import type { FactoryConfig } from "../src/resolution/config-store.ts";
 import type { ServiceCredentialReader } from "../src/credentials/keychain.ts";
@@ -568,11 +568,9 @@ const HEAD_SHA = "1".repeat(40);
 const LINEAR_KEY = "lin_FAKE_KEY";
 const GITHUB_TOKEN = "ghp_FAKE_TOKEN";
 const ANTHROPIC_KEY = "sk-ant-FAKE_KEY";
-const SLACK_TOKEN = "xoxb-FAKE_SLACK_TOKEN";
 const SECRET_BY_SLUG: Record<string, string> = {
   [FACTORY_LINEAR_SLUG]: LINEAR_KEY,
   [FACTORY_GITHUB_SLUG]: GITHUB_TOKEN,
-  [FACTORY_SLACK_SLUG]: SLACK_TOKEN,
 };
 const WRAPPER_STDOUT = `working\nBRANCH:${FACTORY_BRANCH}\nMR:42\n`;
 const ALREADY_FIXED_STDOUT = "ALREADY_FIXED:true\nALREADY_FIXED_EVIDENCE:fixed by #40\n";
@@ -808,6 +806,7 @@ function factoryFake(
       credentials: over.credentials ?? factoryCredentials(),
       orgScopeId: scopeId("org", "acme"),
       loops,
+      slackInstallation: { get: async () => null },
       fetch: fetched.fetch,
       pausePollMs: 1,
       modelAuthEnv: async () => ({ ANTHROPIC_API_KEY: ANTHROPIC_KEY }),
@@ -1020,22 +1019,7 @@ test("factory surface: shipping an open_pr output undrafts the request and advan
   assert.match(sent[5]!.query, /issueAddLabel\(id: "issue-1", labelId: "label-ready"\)/);
 });
 
-test("factory surface: a configured slack channel with no factory-slack credential blocks the ship path", async () => {
-  const fake = factoryFake({ credentials: factoryCredentials([FACTORY_SLACK_SLUG]) });
-  const { s, loop, output, before } = await heldFactoryOutput(fake);
-  fake.setConfig({ ...FACTORY_CONFIG, slackChannel: "#factory-runs" });
-
-  await assert.rejects(
-    s.fire.shipOutput(loop.id, output.id, "josh"),
-    new RegExp(`factory_credentials_missing: ${FACTORY_SLACK_SLUG}`),
-  );
-
-  assert.equal((await s.outputs.get(output.id))?.state, "ready");
-  assert.equal((await s.items.get(output.itemId))?.status, "ready");
-  assert.deepEqual(traffic(fake.fetch.calls.slice(before)), []);
-});
-
-test("factory surface: a configured slack channel with the credential present leaves the ship path unchanged", async () => {
+test("factory surface: a configured slack channel with no Slack installation leaves the ship path unchanged", async () => {
   const fake = factoryFake();
   const { s, loop, output, before } = await heldFactoryOutput(fake);
   fake.setConfig({ ...FACTORY_CONFIG, slackChannel: "#factory-runs" });

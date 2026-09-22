@@ -7,11 +7,12 @@ import {
 import type { FactoryConfig, ScopedConfigStore } from "../../resolution/config-store.ts";
 import type { ServiceCredentialReader } from "../../credentials/keychain.ts";
 import type { Loop, LoopItem, ScopeId } from "../../types.ts";
+import type { SlackInstallationStore } from "../../surfaces/slack-installation.ts";
 import { isRunnable, type LoopStore } from "../loop-store.ts";
 import type { CapturedArtifact, LoopRunnerEffects } from "../runner.ts";
 import type { SuccessVerdict } from "../success-evaluation.ts";
 import { createSweeper } from "../../util/sweeper.ts";
-import { errMessage, swallow } from "../../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
 import { shq } from "../../util/shell.ts";
 import { pollProcess } from "../../sandbox/process-poll.ts";
 import { enumerateFactoryCandidates } from "./linear-intake.ts";
@@ -92,6 +93,7 @@ export interface FactoryEffectsDeps {
   credentials: ServiceCredentialReader;
   orgScopeId: ScopeId;
   loops: Pick<LoopStore, "get">;
+  slackInstallation: Pick<SlackInstallationStore, "get">;
   buildSha?: string;
   repoDir?: string;
   fetch?: typeof globalThis.fetch;
@@ -206,6 +208,15 @@ const factorySlackChannel = (config: FactoryConfig): string | undefined => {
   return channel ? channel : undefined;
 };
 
+async function factorySlackBotToken(deps: FactoryEffectsDeps, config: FactoryConfig): Promise<string | undefined> {
+  if (factorySlackChannel(config) === undefined) return undefined;
+  const installation = await deps.slackInstallation.get().catch(swallowAs("factory slack installation", null));
+  const botToken = installation?.botToken.trim();
+  if (botToken) return botToken;
+  swallow("factory slack", new Error("no installation for this org, pings skipped"));
+  return undefined;
+}
+
 async function openFactorySlackThread(input: {
   fetch?: typeof globalThis.fetch;
   botToken: string;
@@ -242,20 +253,19 @@ async function openFactorySlackThread(input: {
 export async function loadFactoryContext(deps: FactoryEffectsDeps): Promise<FactoryContext> {
   const config = deps.config.getFactoryConfig();
   if (!config) throw new Error("factory_config_missing");
-  const credentials = await readFactoryCredentials(deps.credentials, deps.orgScopeId, {
-    slack: factorySlackChannel(config) !== undefined,
-  });
+  const credentials = await readFactoryCredentials(deps.credentials, deps.orgScopeId);
   if (!credentials.ok) throw new Error(`factory_credentials_missing: ${credentials.missing.join(", ")}`);
   const modelAuth = modelAuthFrom(await deps.modelAuthEnv());
   if (modelAuthSecrets(modelAuth).length === 0) {
     throw new Error("model auth: core has no Anthropic credential configured");
   }
+  const slackBotToken = await factorySlackBotToken(deps, config);
   return {
     config,
     linearApiKey: credentials.linearApiKey,
     githubToken: credentials.githubToken,
     modelAuth,
-    ...(credentials.slackBotToken !== undefined ? { slackBotToken: credentials.slackBotToken } : {}),
+    ...(slackBotToken !== undefined ? { slackBotToken } : {}),
   };
 }
 
@@ -360,7 +370,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
       runs.set(runId, {
         result,
         config,
-        redact: redactor([linearApiKey, githubToken, ...modelAuthSecrets(modelAuth)]),
+        redact: redactor([linearApiKey, githubToken, ...modelAuthSecrets(modelAuth), slackBotToken ?? ""]),
       });
       return { runId };
     },
