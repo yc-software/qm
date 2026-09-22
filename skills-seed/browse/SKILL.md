@@ -57,10 +57,13 @@ becoming the default):
 - Your provider key — `KERNEL_API_KEY`, `ANCHOR_API_KEY`, or `BROWSERBASE_API_KEY`, the
   org key for creating the stealth browser.
 - The model credential that drives the inner browser agent. When
-  `BROWSE_LAB_MODEL_PROVIDER=gateway`, core supplies `BROWSE_LAB_MODEL_TOKEN` and
+  `BROWSE_LAB_MODEL_PROVIDER=managed`, core supplies `BROWSE_LAB_MODEL_TOKEN` and
   `BROWSE_LAB_BASE_URL` automatically. Use this route for all browser model calls;
   do not request a separate provider key or fall back to a direct provider if it fails.
-  This uses the deployment model gateway and its existing company budget.
+  This follows your saved AI access choice: company access uses the model gateway;
+  personal access uses your connected account. Claude subscription access is unsupported
+  for browsing; report that limitation and ask the person to change AI access rather
+  than silently using company access.
   Otherwise the key is named for the provider core resolved:
   `BROWSE_LAB_ANTHROPIC_KEY`, `BROWSE_LAB_OPENAI_KEY`, or `BROWSE_LAB_OPENROUTER_KEY`. Core sets
   `BROWSE_LAB_MODEL_PROVIDER` alongside it so the runner picks the matching client.
@@ -207,7 +210,7 @@ OPENAI_COMPATIBLE = {
     "openai": ("BROWSE_LAB_OPENAI_KEY", None),
     "openrouter": ("BROWSE_LAB_OPENROUTER_KEY", "https://openrouter.ai/api/v1"),
 }
-if PROVIDER == "gateway":
+if PROVIDER == "managed":
     from browser_use import ChatOpenAI
     def Chat(model):
         return ChatOpenAI(model=model, api_key="browser-model", frequency_penalty=None, temperature=None,

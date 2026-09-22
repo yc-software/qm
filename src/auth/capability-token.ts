@@ -27,6 +27,7 @@ type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; bl
 export interface CapabilityClaims {
   actorId: string;
   browserModel?: string;
+  browserAccount?: "company" | "personal" | "openai" | "anthropic";
   aud?: string;
   scopeId: ScopeId;
   scopeVersion?: string;
@@ -115,6 +116,11 @@ export async function verifyCapabilityToken(
   ) {
     return null;
   }
+  if (
+    claims.browserAccount !== undefined &&
+    !["company", "personal", "openai", "anthropic"].includes(claims.browserAccount)
+  )
+    return null;
   if (claims.browserModel !== undefined && (typeof claims.browserModel !== "string" || !claims.browserModel))
     return null;
   if (claims.timezone !== undefined && !isValidCapabilityTimezone(claims.timezone)) return null;

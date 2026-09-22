@@ -1,4 +1,5 @@
 import { isBackendCredential } from "../credentials/keychain.ts";
+import { resolveBrowserModel } from "../model/browser-model.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
 import {
@@ -1552,13 +1553,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           connectorEnv.BROWSE_LAB_MODEL_PROVIDER = browseChoice.provider;
         }
       }
-      const gatewayBrowseModel =
-        !strictReadOnly && allInternal && deps.browserModelGateway
-          ? (deps.config?.getBrowseModel(toScopeId("org", orgId())) ?? deps.resolveBaseModelId?.())
+      const browserSelection =
+        !strictReadOnly && allInternal
+          ? await resolveBrowserModel({
+              actorId: actor.id,
+              config: deps.config,
+              credentials: deps.userModelCredentials,
+              companyModel: deps.resolveBaseModelId?.(),
+            })
           : undefined;
-      if (!strictReadOnly && allInternal && deps.browserModelGateway) {
-        connectorEnv.BROWSE_LAB_MODEL_PROVIDER = "gateway";
-        if (gatewayBrowseModel) connectorEnv.BROWSE_LAB_MODEL = gatewayBrowseModel;
+      const managedBrowse = browserSelection && (deps.browserModelGateway || browserSelection.account !== "company");
+      if (managedBrowse) {
+        connectorEnv.BROWSE_LAB_MODEL_PROVIDER = "managed";
+        connectorEnv.BROWSE_LAB_MODEL = browserSelection.model ?? "unavailable";
       }
       let actorIsOrgAdmin = false;
       let orgMemoryWrite: ScopeId | undefined;
@@ -1630,13 +1637,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.capabilitySecret ?? deps.signingSecret,
           deps.capabilityTokenCompression,
         );
-        if (gatewayBrowseModel) {
+        if (managedBrowse) {
           connectorEnv.BROWSE_LAB_BASE_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}/v1/browser-model`;
           connectorEnv.BROWSE_LAB_MODEL_TOKEN = await mintCapabilityToken(
             {
               ...scopeAttestation,
               aud: BROWSER_MODEL_AUD,
-              browserModel: gatewayBrowseModel,
+              browserModel: browserSelection.model ?? "unavailable",
+              browserAccount: browserSelection.account,
               exp: Date.now() + CAPABILITY_TTL_MS,
             },
             deps.capabilitySecret ?? deps.signingSecret,
