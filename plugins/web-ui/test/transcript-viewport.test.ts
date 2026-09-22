@@ -933,3 +933,18 @@ test("the latest-prompt marker moves between rows and is restored after a templa
     f.close();
   }
 });
+
+test("an inline steer does not take the sticky prompt marker from the original request", () => {
+  const f = fixture();
+  try {
+    const work = f.s.ownerDocument.createElement("article");
+    work.className = "assistant-row";
+    work.innerHTML = '<div class="inline-steer"><article class="user-row steered-row" data-index="1"></article></div>';
+    f.prompt.after(work);
+    f.viewport.sync(f.s);
+    assert.equal(f.prompt.classList.contains("latest-prompt"), true);
+    assert.equal(work.querySelector(".steered-row")!.classList.contains("latest-prompt"), false);
+  } finally {
+    f.close();
+  }
+});

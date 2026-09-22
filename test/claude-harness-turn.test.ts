@@ -120,9 +120,9 @@ test("a steered turn persists every reply, not only the last result's", async ()
   const runId = "run-steer";
   currentScript = async function* (prompts) {
     const iterator = prompts[Symbol.asyncIterator]();
-    await iterator.next();
+    yield (await iterator.next()).value as unknown as FakeSdkMessage;
     await signals.send(runId, { kind: "steer", text: "now do the other three", ts: "123.456" });
-    await iterator.next();
+    yield (await iterator.next()).value as unknown as FakeSdkMessage;
     yield assistantMessage("msg_A", "The capital of France is Paris.", {
       input_tokens: 3,
       output_tokens: 8,
@@ -532,7 +532,9 @@ test("steering forwards prepared images and file paths while retaining the origi
     const iterator = prompts[Symbol.asyncIterator]();
     await iterator.next();
     await signals.send(runId, { kind: "steer", text: "check this", ts: "files.1", request });
-    injected = (await iterator.next()).value?.message.content;
+    const next = (await iterator.next()).value!;
+    injected = next.message.content;
+    yield next as unknown as FakeSdkMessage;
     yield resultMessage("saw the image");
     yield resultMessage("done");
   };
@@ -670,3 +672,65 @@ for (const surfaceTools of [false, true]) {
     assert.ok(entries.some((entry) => entry.type === "tool_result" && (entry.payload as { silent?: boolean }).silent));
   });
 }
+
+test("Claude emits repeated-text steers only at distinct native user echoes", async () => {
+  const signals = createMemoryRunSignalStore();
+  const tape: unknown[] = [];
+  const { turn, entries } = harnessTurn({
+    runId: "echo-intake",
+    input: "same text",
+    tape: async (row) => {
+      tape.push(row);
+    },
+  });
+  currentScript = async function* (prompts) {
+    const iterator = prompts[Symbol.asyncIterator]();
+    yield (await iterator.next()).value as unknown as FakeSdkMessage;
+    await signals.send("echo-intake", { kind: "steer", text: "same text", ts: "one" });
+    const first = (await iterator.next()).value as unknown as FakeSdkMessage;
+    await signals.send("echo-intake", { kind: "steer", text: "same text", ts: "two" });
+    const second = (await iterator.next()).value as unknown as FakeSdkMessage;
+    assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
+    assert.equal((await signals.pending("echo-intake")).length, 2);
+    yield first;
+    yield first;
+    assert.equal(entries.filter((entry) => entry.type === "user").length, 2);
+    yield {
+      ...second,
+      message: {
+        role: "user",
+        content: [
+          ...(first.message as { content: unknown[] }).content,
+          ...(second.message as { content: unknown[] }).content,
+        ],
+      },
+    };
+    yield resultMessage("first");
+    yield resultMessage("second");
+    yield resultMessage("third");
+  };
+  await createClaudeHarness({ signals }).turns.runTurn(turn);
+  assert.deepEqual(capturedOptions.extraArgs, { "replay-user-messages": null });
+  const users = entries.filter((entry) => entry.type === "user");
+  assert.deepEqual(
+    users.map((entry) => (entry.payload as { ts?: string }).ts),
+    [undefined, "one", "two"],
+  );
+  assert.equal((await signals.pending("echo-intake")).length, 0);
+  assert.equal(tape.filter((row) => (row as { meta?: { ts?: string } }).meta?.ts).length, 2);
+});
+
+test("Claude retains a queued message which the SDK never consumes", async () => {
+  const signals = createMemoryRunSignalStore();
+  const { turn, entries } = harnessTurn({ runId: "no-echo" });
+  currentScript = async function* (prompts) {
+    const iterator = prompts[Symbol.asyncIterator]();
+    yield (await iterator.next()).value as unknown as FakeSdkMessage;
+    await signals.send("no-echo", { kind: "steer", text: "not yet", ts: "pending" });
+    await iterator.next();
+    yield resultMessage("original reply");
+  };
+  await createClaudeHarness({ signals }).turns.runTurn(turn);
+  assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
+  assert.equal((await signals.pending("no-echo"))[0]?.signal.ts, "pending");
+});

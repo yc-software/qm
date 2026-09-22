@@ -65,6 +65,8 @@ import {
 import {
   continuableMessages,
   messagesWithStreaming,
+  userEntryMessage,
+  appendConsumedSteers,
   withBase,
   type SessionPin,
   activeRunForThread,
@@ -115,6 +117,7 @@ import {
 import {
   buildTimeline,
   messageWorkTimeline,
+  workTimelineSegments,
   streamingTextTail,
   currentTextPhase,
   postSpeechText,
@@ -280,6 +283,25 @@ export function createChatSurface(
     pinsExpanded: false,
     labelSpeakers: false,
   };
+
+  const inlineSteers = new Map<number, { message: AgentMessage; index: number }>();
+
+  function prepareMessageRows(messages: AgentMessage[]): void {
+    inlineSteers.clear();
+    for (const message of messages) {
+      for (const activity of (message as AssistantWork).work?.activity ?? []) {
+        if (activity.type !== "user") continue;
+        const user = userEntryMessage(activity);
+        if (!user?.steered) continue;
+        const index = messages.findIndex((candidate) => (candidate as { entrySeq?: number }).entrySeq === activity.seq);
+        inlineSteers.set(activity.seq, {
+          message: index >= 0 ? messages[index]! : (user as AgentMessage),
+          index: index < 0 ? -1 : index - (chatState.inheritedExpanded ? chatState.inheritedMessages.length : 0),
+        });
+      }
+    }
+    updateSpeakerLabels([...messages, ...[...inlineSteers.values()].map((steer) => steer.message)]);
+  }
 
   function updateSpeakerLabels(messages: AgentMessage[]): void {
     const names = new Set<string>();
@@ -830,6 +852,7 @@ export function createChatSurface(
   function observeLiveWork(agent: Agent): (work: WorkBlock) => void {
     return (work: WorkBlock) => {
       if (agent !== chatState.agent) return;
+      appendConsumedSteers(agent.state.messages, work);
       chatState.liveWork = work;
       syncWorkTicker();
       scheduleStreamDraw(agent);
@@ -1036,7 +1059,7 @@ export function createChatSurface(
     let approvals: PendingApproval[] = [];
     const draw = () => {
       const shownMessages = chatState.inheritedExpanded ? [...chatState.inheritedMessages, ...messages] : messages;
-      updateSpeakerLabels(shownMessages);
+      prepareMessageRows(shownMessages);
       render(
         html`
           <div class="custom-chat-shell">
@@ -1408,7 +1431,7 @@ export function createChatSurface(
     const messages = chatState.inheritedExpanded
       ? [...chatState.inheritedMessages, ...currentMessages]
       : currentMessages;
-    updateSpeakerLabels(messages);
+    prepareMessageRows(messages);
     const isNewUser = sessionsState.list.filter((s) => s.id).length === 0;
     const editingApp = appEditSlug(chatState.threadRef, appState.me?.user);
     const showWelcome =
@@ -1577,6 +1600,7 @@ export function createChatSurface(
     index: number,
     isStreaming: boolean,
   ): TemplateResult | typeof nothing {
+    if ((message as { steered?: boolean }).steered) return nothing;
     const msg = message as AssistantWork & {
       stopReason?: string;
       errorMessage?: string;
@@ -1638,10 +1662,16 @@ export function createChatSurface(
     return tpl;
   }
 
-  function chatMessage(message: AgentMessage, index: number, isStreaming = false): TemplateResult | typeof nothing {
+  function chatMessage(
+    message: AgentMessage,
+    index: number,
+    isStreaming = false,
+    inline = false,
+  ): TemplateResult | typeof nothing {
     const hidden = message as { opener?: boolean; resumeAnchor?: boolean };
     if (hidden.opener || hidden.resumeAnchor) return nothing;
     const role = (message as { role?: string }).role;
+    if (!inline && (message as { steered?: boolean }).steered) return nothing;
     if (role === "user" || role === "user-with-attachments") {
       const mail = (message as { subagentMail?: SubagentMailRef }).subagentMail;
       if (mail) {
@@ -1767,7 +1797,9 @@ export function createChatSurface(
         <article
           class="message-row assistant-row ${isStreaming ? "streaming" : ""}"
           data-index=${index}
-          data-entry-seqs=${messageEntrySeqs(message).join(" ")}
+          data-entry-seqs=${messageEntrySeqs(message)
+            .filter((seq) => !inlineSteers.has(seq))
+            .join(" ")}
         >
           <div class="assistant-body">
             ${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
@@ -2040,6 +2072,7 @@ export function createChatSurface(
     work: WorkBlock | null | undefined,
     text: string,
   ): boolean {
+    if (work?.activity.some((activity) => activity.type === "user")) return true;
     if ((message as AssistantWork & { approvalDecision?: "denied" }).approvalDecision === "denied") return false;
     if (text === "Denied." && work?.activity.some((a) => a.type === "tool_call" || a.type === "approval_request"))
       return false;
@@ -2442,70 +2475,86 @@ export function createChatSurface(
       isStreaming &&
       currentTextPhase(work)?.phase !== "final_answer" &&
       (work.status === "working" || work.status === "thinking");
-    const replies: string[] = [];
-    const timeline = messageWorkTimeline(work, active ? "" : text).filter((item) => {
-      const speech = item.kind === "tool" ? postSpeechText(item.row) : null;
-      if (speech === null) return true;
-      replies.push(speech);
-      return false;
-    });
-    const tail = active ? streamingTextTail(text, work.activity) : "";
-    const stopping = isStreaming && runSlot.stopGeneration === runSlot.generation;
-    const animating = active && !stopping;
-    let label = stopping ? "Stop requested" : workLabel(work);
-    if (stopped) label = `You stopped after ${goalElapsedLabel(0, workSeconds(work) * 1000)}`;
-    if (timeline.length === 1 && !tail.trim() && !stopped && !stopping && !work.stale && !work.pendingApprovals?.length)
-      return html`${renderTimelineItem(timeline[0]!, work)}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
-    let fold =
-      timeline.length || tail.trim() || work.pendingApprovals?.length
-        ? html`<details
-            class=${stopped ? "stopped-work" : `work work-fold work-${work.status}`}
-            ?open=${active || !!work.pendingApprovals?.length}
-          >
-            <summary class=${stopped ? "stopped-head" : "work-head"}>
-              ${sheenLabel(label, animating)}<span class="activity-chevron">${icon(ChevronRight, 14)}</span>
-            </summary>
-            ${stopped ? nothing : html`<div class="work-divider"></div>`}
-            <div class="work-rows">
-              ${guard(
-                [
-                  work,
-                  work.activity,
-                  work.status,
-                  work.stale,
-                  work.pendingApprovals,
-                  active,
-                  active ? "" : text,
-                  sessionsState.list,
-                ],
-                () =>
-                  repeat(
-                    activityGroups(timeline),
-                    (items) => timelineKey(items[0]!),
-                    (items) => {
-                      if (items.length === 1 || items[0]?.kind === "text") return renderTimelineItem(items[0]!, work);
-                      const summary = activityGroupSummary(items, work.status);
-                      const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
-                        summary.category
-                      ];
-                      return html`<details class="activity-group work-fold" ?open=${active || summary.attention}>
-                        <summary class="work-head">
-                          ${icon(groupIcon, 15)}<span>${summary.label}</span
-                          ><span class="activity-chevron">${icon(ChevronRight, 14)}</span>
-                        </summary>
-                        <div class="work-rows">
-                          ${repeat(items, timelineKey, (item) => renderTimelineItem(item, work))}
-                        </div>
-                      </details>`;
-                    },
-                  ),
-              )}
-              ${tail.trim() ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}">${markdown(tail, animating, streamingTextTail(baseline, work.activity))}</div>` : nothing}
-            </div>
-          </details>`
-        : nothing;
-    if (stopped && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
-    return html`${fold}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+    const segments = workTimelineSegments(messageWorkTimeline(work, active ? "" : text));
+    return html`${segments.map((segment, index) => {
+      const steer = segment[0];
+      if (steer?.kind === "steer") return renderTimelineItem(steer, work);
+      const last = index === segments.length - 1;
+      const replies: string[] = [];
+      const timeline = segment.filter((item) => {
+        const speech = item.kind === "tool" ? postSpeechText(item.row) : null;
+        if (speech === null) return true;
+        replies.push(speech);
+        return false;
+      });
+      const tail = active && last ? streamingTextTail(text, work.activity) : "";
+      const stopping = isStreaming && runSlot.stopGeneration === runSlot.generation;
+      const animating = active && last && !stopping;
+      let label = last ? workLabel(work) : "Worked";
+      if (stopping && last) label = "Stop requested";
+      if (stopped && last) label = `You stopped after ${goalElapsedLabel(0, workSeconds(work) * 1000)}`;
+      if (
+        timeline.length === 1 &&
+        !tail.trim() &&
+        !stopped &&
+        !stopping &&
+        !work.stale &&
+        !(last && work.pendingApprovals?.length)
+      )
+        return html`${renderTimelineItem(timeline[0]!, work)}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+      let fold =
+        timeline.length || tail.trim() || (last && (active || work.pendingApprovals?.length))
+          ? html`<details
+              class=${stopped ? "stopped-work" : `work work-fold work-${work.status}`}
+              ?open=${animating || !!(last && work.pendingApprovals?.length)}
+            >
+              <summary class=${stopped ? "stopped-head" : "work-head"}>
+                ${sheenLabel(label, animating)}<span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+              </summary>
+              ${stopped ? nothing : html`<div class="work-divider"></div>`}
+              <div class="work-rows">
+                ${guard(
+                  [
+                    work,
+                    work.activity,
+                    work.status,
+                    work.stale,
+                    work.pendingApprovals,
+                    active,
+                    active ? "" : text,
+                    sessionsState.list,
+                    index,
+                    last,
+                  ],
+                  () =>
+                    repeat(
+                      activityGroups(timeline),
+                      (items) => timelineKey(items[0]!),
+                      (items) => {
+                        if (items.length === 1 || items[0]?.kind === "text") return renderTimelineItem(items[0]!, work);
+                        const summary = activityGroupSummary(items, work.status);
+                        const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
+                          summary.category
+                        ];
+                        return html`<details class="activity-group work-fold" ?open=${animating || summary.attention}>
+                          <summary class="work-head">
+                            ${icon(groupIcon, 15)}<span>${summary.label}</span
+                            ><span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+                          </summary>
+                          <div class="work-rows">
+                            ${repeat(items, timelineKey, (item) => renderTimelineItem(item, work))}
+                          </div>
+                        </details>`;
+                      },
+                    ),
+                )}
+                ${tail.trim() ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}">${markdown(tail, animating, streamingTextTail(baseline, work.activity))}</div>` : nothing}
+              </div>
+            </details>`
+          : nothing;
+      if (stopped && last && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
+      return html`${fold}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+    })}`;
   }
 
   function approvalSummaryView(a: PendingApproval, expanded = false): TemplateResult {
@@ -2557,6 +2606,12 @@ export function createChatSurface(
   function renderTimelineItem(item: TimelineItem, work: WorkBlock): TemplateResult {
     const status = work.status;
     const stale = work.stale === true;
+    if (item.kind === "steer") {
+      const steer = inlineSteers.get(item.activity.seq);
+      return html`<div class="inline-steer">
+        ${steer ? chatMessage(steer.message, steer.index, false, true) : nothing}
+      </div>`;
+    }
     if (item.kind === "thinking") {
       const thought = thinkingPresentation((item.activity.payload as { thinking?: string }).thinking ?? "");
       return html`<details class="thinking-row">

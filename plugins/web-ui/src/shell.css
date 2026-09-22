@@ -1688,7 +1688,7 @@ a.chat-row-open {
   flex-direction: column;
   align-items: flex-end;
 }
-.message-stack .user-row.latest-prompt {
+.message-stack > .user-row.latest-prompt {
   position: sticky;
   top: var(--chat-sticky-top, 0px);
   z-index: 3;
@@ -1699,22 +1699,22 @@ a.chat-row-open {
   pointer-events: none;
 }
 
-.message-stack .user-row.sticky-disabled {
+.message-stack > .user-row.sticky-disabled {
   position: relative;
   top: auto;
 }
 
-.message-stack .user-row.latest-prompt > .user-bubble {
+.message-stack > .user-row.latest-prompt > .user-bubble {
   pointer-events: auto;
   transition: box-shadow 120ms ease;
 }
 
-.message-stack .user-row.stuck > .user-bubble {
+.message-stack > .user-row.stuck > .user-bubble {
   box-shadow: var(--chat-surface-shadow);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .message-stack .user-row > .user-bubble {
+  .message-stack > .user-row > .user-bubble {
     transition: none;
   }
 }
@@ -2022,19 +2022,19 @@ qm-markdown .tok-in {
 .user-bubble :is(markdown-block, qm-markdown) p {
   line-height: inherit;
 }
-.message-stack .user-row.latest-prompt:not(.pin-expanded) .user-bubble > .pin-content {
+.message-stack > .user-row.latest-prompt:not(.pin-expanded) .user-bubble > .pin-content {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 6;
   overflow: hidden;
 }
 .message-stack
-  .user-row.latest-prompt:not(.pin-expanded)
+  > .user-row.latest-prompt:not(.pin-expanded)
   .user-bubble
   > .pin-content:has(code-block, pre, table, img, svg, math, .katex-display, video, iframe) {
   max-height: 6lh;
 }
-.message-stack .user-row.pin-expanded .user-bubble > .pin-content {
+.message-stack > .user-row.pin-expanded .user-bubble > .pin-content {
   max-height: var(--pin-expanded-max);
   overflow: auto;
   overscroll-behavior: contain;
@@ -2066,7 +2066,7 @@ qm-markdown .tok-in {
   pointer-events: auto;
   cursor: pointer;
 }
-.message-stack .user-row.latest-prompt > .user-bubble > .pin-toggle:not([hidden]) {
+.message-stack > .user-row.latest-prompt > .user-bubble > .pin-toggle:not([hidden]) {
   display: flex;
   align-items: center;
   gap: 2px;
@@ -12850,4 +12850,22 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   margin-top: 6px;
   color: var(--muted-foreground);
   font-size: 11px;
+}
+
+.inline-steer {
+  margin-block: 16px;
+}
+
+.message-stack .inline-steer .user-row {
+  width: 100%;
+  position: relative;
+  top: auto;
+  z-index: auto;
+  margin: 0;
+  padding-top: 0;
+  pointer-events: auto;
+}
+
+.inline-steer .user-row .message-meta {
+  justify-content: flex-end;
 }

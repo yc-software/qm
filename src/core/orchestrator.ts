@@ -623,7 +623,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return result;
       };
       const mirrorRunActivity = async (appended: SessionEntry): Promise<void> => {
-        if (input.runId && deps.runActivity && ACTIVITY_ENTRY_TYPES.has(appended.type)) {
+        if (
+          input.runId &&
+          deps.runActivity &&
+          (ACTIVITY_ENTRY_TYPES.has(appended.type) ||
+            (appended.type === "user" && (appended.payload as { steered?: boolean })?.steered === true))
+        ) {
           await deps.runActivity
             .append(input.runId, {
               seq: appended.seq,
@@ -3319,7 +3324,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   payload.name = actor.displayName.trim();
                 if (input.displayText?.trim() && payload.text === input.text && typeof payload.display !== "string")
                   payload.display = input.displayText;
-                if (syntheticPrompt || continuation) payload.hidden = true;
+                if ((syntheticPrompt || continuation) && payload.steered !== true) payload.hidden = true;
                 return { ...tainted, payload };
               })();
               const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
@@ -3624,11 +3629,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (rec.kind !== "message" || rec.meta?.bareText === undefined) {
                 return withManagedRosterVersion(() => deps.sessions.appendTape(lease, rec));
               }
+              const recordedSteer = emittedEntries.find(
+                (entry) =>
+                  entry.seq === rec.entrySeq &&
+                  entry.type === "user" &&
+                  isObj(entry.payload) &&
+                  entry.payload.steered === true,
+              )?.payload;
               const meta = {
                 ...rec.meta,
                 ...swarmEntryProvenance,
                 ...(actor.displayName?.trim() ? { author: actor.displayName.trim() } : {}),
-                ...(syntheticPrompt || continuation ? { hidden: true } : {}),
+                ...((isObj(recordedSteer) && recordedSteer.hidden === true) ||
+                ((syntheticPrompt || continuation) && !recordedSteer)
+                  ? { hidden: true }
+                  : {}),
                 ...(input.displayText?.trim() && rec.meta.bareText === input.text
                   ? { display: input.displayText }
                   : {}),

@@ -305,7 +305,7 @@ export function createTranscriptViewport() {
       if (stack) observer?.observe(stack);
     }
     const nextPins = scroller?.querySelector<HTMLElement>(".pinned-strip") ?? null;
-    const prompts = stack?.querySelectorAll<HTMLElement>(".user-row");
+    const prompts = stack?.querySelectorAll<HTMLElement>(":scope > .user-row");
     const nextPrompt = prompts?.item(prompts.length - 1) ?? null;
     if (pins !== nextPins) {
       changed = true;

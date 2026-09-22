@@ -11,10 +11,11 @@ function source(file: string): string {
 }
 
 test("every harness still flags the mid-turn message it persists", () => {
+  assert.match(source("harness-shared.ts"), /steered: true/);
   for (const file of HARNESSES) {
     assert.match(
       source(file),
-      /steered: true/,
+      /recordSteerIntake/,
       `${file} no longer stamps steered:true — a requeued run will re-answer a turn this harness steered`,
     );
   }

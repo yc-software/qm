@@ -40,3 +40,15 @@ test("the cache key covers every mutable render input of a settled row", () => {
 test("prompt expansion is managed by the viewport without invalidating cached templates", () => {
   assert.doesNotMatch(chat, /expandedPrompt|togglePromptExpanded/);
 });
+
+test("canonical steering rows never enter the standalone cache during resume startup", () => {
+  const settled = chat.slice(chat.indexOf("function settledChatMessage"), chat.indexOf("function chatMessage"));
+  const suppression = settled.indexOf("if ((message as { steered?: boolean }).steered) return nothing;");
+  assert.ok(suppression >= 0);
+  assert.ok(suppression < settled.indexOf("settledRowCache.get"));
+});
+
+test("inline steering shows the user message without redundant steering chrome", () => {
+  assert.match(chat, /class="inline-steer"/);
+  assert.doesNotMatch(chat, /steer-label|steered the running task/);
+});

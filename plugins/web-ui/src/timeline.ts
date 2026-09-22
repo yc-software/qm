@@ -49,10 +49,20 @@ export interface ToolRowModel {
 }
 
 export type TimelineItem =
+  | { kind: "steer"; activity: ToolActivity }
   | { kind: "thinking"; activity: ToolActivity }
   | { kind: "text"; activity: ToolActivity }
   | { kind: "tool"; row: ToolRowModel }
   | { kind: "approval"; approval: PendingApproval };
+
+export function workTimelineSegments(items: TimelineItem[]): TimelineItem[][] {
+  const segments: TimelineItem[][] = [[]];
+  for (const item of items) {
+    if (item.kind === "steer") segments.push([item], []);
+    else segments.at(-1)!.push(item);
+  }
+  return segments;
+}
 
 function isTerminalWorkStatus(status: WorkBlock["status"]): boolean {
   return status === "complete" || status === "failed";
@@ -175,7 +185,14 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
   let open: ToolRowModel | null = null;
   for (const a of work.activity) {
     if (a.type === "text_start") continue;
-    if (a.type === "thinking") {
+    if (a.type === "user") {
+      if (
+        (a.payload as { steered?: boolean; hidden?: boolean } | null)?.steered &&
+        !(a.payload as { hidden?: boolean } | null)?.hidden
+      )
+        items.push({ kind: "steer", activity: a });
+      open = null;
+    } else if (a.type === "thinking") {
       items.push({ kind: "thinking", activity: a });
       open = null;
     } else if (a.type === "text") {

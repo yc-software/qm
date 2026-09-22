@@ -5,6 +5,8 @@ import { JSDOM } from "jsdom";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   attachPendingApprovals,
+  appendConsumedSteers,
+  forkCutSeq,
   continuableMessages,
   messagesWithStreaming,
   currentEarlierCount,
@@ -58,7 +60,7 @@ test("steering keeps the active turn together through hydration and tool complet
   assert.equal(resumed.popped.length, 1);
   assert.deepEqual(
     (resumed.popped[0] as AssistantWork).work?.activity.map((entry) => entry.seq),
-    [2, 3],
+    [2, 3, 4, 5],
   );
   const finished = entriesToMessages([
     ...entries,
@@ -72,7 +74,11 @@ test("steering keeps the active turn together through hydration and tool complet
   const work = (finished.at(-1) as AssistantWork).work!;
   assert.deepEqual(
     work.activity.map((entry) => entry.seq),
-    [2, 3, 6],
+    [2, 3, 4, 5, 6],
+  );
+  assert.deepEqual(
+    buildTimeline(work).map((item) => item.kind),
+    ["text", "tool", "steer", "steer"],
   );
   const tools = buildTimeline(work).filter((item) => item.kind === "tool");
   assert.equal(tools.length, 1);
@@ -103,7 +109,7 @@ test("steering preserves an in-flight post and does not promote its closing narr
   );
   assert.deepEqual(
     replies[1]!.work?.activity.map((entry) => entry.seq),
-    [6],
+    [5, 6],
   );
 });
 
@@ -1613,4 +1619,73 @@ test("finish_silently retains explicit posts and audit without a phantom closing
   assert.ok(
     replies.some((m) => m.work?.activity.some((a) => (a.payload as { tool?: string }).tool === "finish_silently")),
   );
+});
+
+test("steering retains intake identity, authors and attachments after history reload", () => {
+  const messages = entriesToMessages([
+    { type: "user", seq: 1, createdAt: 1, payload: { text: "start" } },
+    { type: "tool_call", seq: 2, createdAt: 2, payload: { tool: "read", callId: "a" } },
+    { type: "tool_result", seq: 3, createdAt: 3, payload: { tool: "read", callId: "a" } },
+    {
+      type: "user",
+      seq: 4,
+      createdAt: 4,
+      payload: {
+        text: "Use this instead",
+        steered: true,
+        name: "Alex",
+        ts: "input-1",
+        attachments: [{ name: "sample.png", mimetype: "image/png", artifactId: "image-1" }],
+      },
+    },
+    { type: "tool_call", seq: 5, createdAt: 5, payload: { tool: "read", callId: "b" } },
+    { type: "tool_result", seq: 6, createdAt: 6, payload: { tool: "read", callId: "b" } },
+    { type: "assistant", seq: 7, createdAt: 7, payload: { text: "Done" } },
+  ]);
+  const work = (messages.at(-1) as AssistantWork).work!;
+  const timeline = messageWorkTimeline(work, "Done");
+  assert.deepEqual(
+    timeline.map((item) => item.kind),
+    ["tool", "steer", "tool"],
+  );
+  assert.equal(timeline[1]?.kind === "steer" && timeline[1].activity.seq, 4);
+  const steer = messages[1] as unknown as {
+    entrySeq: number;
+    speaker: string;
+    attachments: Array<{ artifactId: string }>;
+  };
+  assert.equal(steer.entrySeq, 4);
+  assert.equal(steer.speaker, "Alex");
+  assert.equal(steer.attachments[0]?.artifactId, "image-1");
+});
+
+test("hidden steering never creates a history row or work marker", () => {
+  const messages = entriesToMessages([
+    { type: "user", seq: 1, createdAt: 1, payload: { text: "start" } },
+    { type: "user", seq: 2, createdAt: 2, payload: { text: "private instruction", steered: true, hidden: true } },
+    { type: "assistant", seq: 3, createdAt: 3, payload: { text: "Done" } },
+  ]);
+  assert.equal(messages.length, 2);
+  assert.equal((messages[1] as AssistantWork).work, undefined);
+});
+
+test("live consumed steers join canonical history once and survive stopped/error fork accounting", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", seq: 1, createdAt: 1, payload: { text: "start" } },
+    { type: "tool_call", seq: 2, createdAt: 2, payload: { tool: "execute", callId: "a" } },
+    { type: "user", seq: 3, createdAt: 3, payload: { text: "Change direction", steered: true } },
+    { type: "tool_result", seq: 4, createdAt: 4, payload: { tool: "execute", callId: "a" } },
+    { type: "assistant", seq: 5, createdAt: 5, payload: { text: "(stopped)", stopped: true } },
+  ];
+  const work = (entriesToMessages(entries).at(-1) as AssistantWork).work!;
+  for (const reason of ["aborted", "error"] as const) {
+    const live = entriesToMessages(entries.slice(0, 1));
+    appendConsumedSteers(live, work);
+    appendConsumedSteers(live, work);
+    assert.equal(live.length, 2);
+    assert.equal((live[1] as { entrySeq?: number }).entrySeq, 3);
+    live.push({ ...entriesToMessages(entries).at(-1)!, stopReason: reason } as AgentMessage);
+    assert.equal(forkCutSeq(entries, live.filter((message) => message.role === "user").length, false), undefined);
+    assert.equal(forkCutSeq(entries, 2, true), 3);
+  }
 });

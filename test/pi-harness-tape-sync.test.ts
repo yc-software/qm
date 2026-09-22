@@ -101,11 +101,41 @@ for (const variant of ["text", "images", "documents", "finished during preparati
       calls += 1;
       tapeRowsAtDispatch.push(sink.tape.filter((rec) => rec.kind === "message").length);
       requestMessages.push((JSON.parse(String(init?.body ?? "{}")) as { messages?: [] }).messages ?? []);
-      if (calls === 1) return gatedSse(textReplyEvents("first step"), steerQueued);
+      if (calls === 1) {
+        setTimeout(() => {
+          void signals.send("run-order", { kind: "steer", text: "actually, do it differently", ts: "1712.001" });
+          if (!finishDuringPreparation)
+            setTimeout(() => {
+              assert.equal(
+                sink.entries.filter((entry) => entry.type === "user").length,
+                1,
+                "enqueue is not model intake",
+              );
+              releaseFirstStep();
+            }, 100);
+        }, 30);
+        const events = textReplyEvents("first step");
+        if (variant === "text") {
+          for (const event of events) if (typeof event.index === "number") event.index = 1;
+          events.splice(
+            1,
+            0,
+            { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+            { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "before the steer" } },
+            { type: "content_block_stop", index: 0 },
+          );
+        }
+        return gatedSse(events, steerQueued);
+      }
       return sse(textReplyEvents("final reply"));
     }) as typeof globalThis.fetch;
     try {
       const turn = turnInput("tape-order", sink, { runId: "run-order" });
+      const emit = turn.emit;
+      turn.emit = async (entry) => {
+        if (entry.type === "thinking") await new Promise((resolve) => setTimeout(resolve, 100));
+        return emit(entry);
+      };
       if (withImages)
         turn.prepareSteer = async (text) => {
           if (finishDuringPreparation) {
@@ -120,15 +150,6 @@ for (const variant of ["text", "images", "documents", "finished during preparati
               : {}),
           };
         };
-      const emit = turn.emit;
-      turn.emit = async (entry) => {
-        const appended = await emit(entry);
-        if (entry.type === "user" && (entry.payload as { steered?: unknown }).steered === true) releaseFirstStep();
-        return appended;
-      };
-      setTimeout(() => {
-        void signals.send("run-order", { kind: "steer", text: "actually, do it differently", ts: "1712.001" });
-      }, 30);
       const result = await harness.turns.runTurn(turn);
       if (finishDuringPreparation) {
         assert.equal(result.reply, "first step");
@@ -164,6 +185,17 @@ for (const variant of ["text", "images", "documents", "finished during preparati
         assert.ok(JSON.stringify(requestMessages[1]).includes(documentBase64));
         assert.ok(!JSON.stringify(sink.tape).includes(documentBase64));
       }
+      const steeredEntry = sink.entries.find(
+        (entry) => entry.type === "user" && (entry.payload as { steered?: boolean }).steered,
+      );
+      assert.ok(steeredEntry);
+      if (variant === "text")
+        assert.ok(
+          steeredEntry.seq > sink.entries.find((entry) => entry.type === "thinking")!.seq,
+          "slow persistence of prior thinking must not cross the intake event",
+        );
+      assert.equal(messageRows[2]!.entrySeq, steeredEntry.seq);
+      assert.deepEqual(await signals.takePending("run-order"), [], "consumed steer is acknowledged");
       assert.equal(calls, 2);
       assert.equal(tapeRowsAtDispatch[0], 1, "the trigger user row is committed before the first dispatch");
       assert.equal(
@@ -385,3 +417,93 @@ test("Pi Responses captures exclude history and document text without changing r
     globalThis.fetch = realFetch;
   }
 });
+
+for (const stopBeforeIntake of [false, true]) {
+  test(`steering during a tool ${stopBeforeIntake ? "survives Stop without fabricated intake" : "lands after its result in live and replay order"}`, async () => {
+    const signals = createMemoryRunSignalStore();
+    const harness = createPiHarness({ apiKey: "sk-test", signals });
+    const store = createMemorySessionStore();
+    const session = await store.getOrCreateByThread("web:steer-tool", "dm", "personal:tester" as ScopeId);
+    const lease = (await store.acquireLease(session.id, "turn")).lease!;
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      if (++calls > 1) return sse(textReplyEvents("done"));
+      const events = textReplyEvents("");
+      events[1] = {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "read-memory", name: "memory", input: {} },
+      };
+      events[2] = {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: JSON.stringify({ action: "read" }) },
+      };
+      events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
+      return sse(events);
+    }) as typeof fetch;
+    const entries: SessionEntry[] = [];
+    try {
+      await harness.turns.runTurn(
+        turnInput(
+          session.id,
+          { entries: [], tape: [] },
+          {
+            session,
+            runId: "tool-steer",
+            tools: {
+              memoryRead: async () => {
+                await signals.send("tool-steer", { kind: "steer", text: "use the other file", ts: "tool.1" });
+                await new Promise((resolve) => setTimeout(resolve, 30));
+                assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
+                assert.equal((await signals.pending("tool-steer")).length, 1);
+                if (stopBeforeIntake) {
+                  await signals.send("tool-steer", { kind: "abort" });
+                  await new Promise((resolve) => setTimeout(resolve, 30));
+                }
+                return "saved facts";
+              },
+            } as HarnessTurnInput["tools"],
+            emit: async (entry) => {
+              const saved = await store.append(lease, entry);
+              entries.push(saved);
+              return saved;
+            },
+            tape: (row) => store.appendTape(lease, row),
+          },
+        ),
+      );
+      const tape = await store.getTape(session.id);
+      const steerRows = tape.filter((row) => row.meta?.ts === "tool.1");
+      const users = entries.filter((entry) => entry.type === "user");
+      if (stopBeforeIntake) {
+        assert.equal(users.length, 1);
+        assert.equal(steerRows.length, 0);
+        assert.equal((await signals.pending("tool-steer")).filter((row) => row.signal.kind === "steer").length, 1);
+        const before = calls;
+        await harness.turns.runTurn(turnInput(session.id, { entries: [], tape: [] }));
+        assert.equal(calls, before + 1, "cached Pi session must not redeliver the queued steer on its own");
+      } else {
+        assert.deepEqual(
+          entries.map((entry) => entry.type),
+          ["user", "tool_call", "tool_result", "user", "assistant"],
+        );
+        assert.equal(steerRows[0]?.entrySeq, users[1]?.seq);
+        assert.equal(steerRows[0]?.meta?.entryCreatedAt, users[1]?.createdAt);
+        const { projectTapeEntries } = await import("../src/harness/tape-projection.ts");
+        const replay = projectTapeEntries(session.id, tape);
+        assert.ok(replay);
+        assert.deepEqual(
+          replay.entries.map((entry) => [entry.seq, entry.type]),
+          entries.map((entry) => [entry.seq, entry.type]),
+        );
+        assert.equal((await signals.pending("tool-steer")).length, 0);
+      }
+    } finally {
+      globalThis.fetch = realFetch;
+      await store.releaseLease(lease);
+      await harness.turns.close?.();
+    }
+  });
+}
