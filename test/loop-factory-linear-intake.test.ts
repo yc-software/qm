@@ -88,7 +88,7 @@ test("returns Auto-Triage issues as candidates ordered by createdAt ascending", 
   assert.equal(fake.calls.length, 1);
 });
 
-test("posts one Linear query carrying the verbatim key, the team id, and the requested state", async () => {
+test("posts one Linear query carrying the key as a Bearer credential, the team id, and the requested state", async () => {
   const byDefault = fakeFetch([page([])]);
 
   assert.deepEqual(await intake(byDefault), []);
@@ -96,7 +96,7 @@ test("posts one Linear query carrying the verbatim key, the team id, and the req
   const call = callAt(byDefault, 0);
   assert.equal(call.url, LINEAR_GRAPHQL_URL);
   assert.equal(call.init?.method, "POST");
-  assert.equal(headerOf(call, "authorization"), API_KEY);
+  assert.equal(headerOf(call, "authorization"), `Bearer ${API_KEY}`);
   assert.equal(headerOf(call, "content-type"), "application/json");
   assert.deepEqual(requestBody(call).variables, { teamId: "QM", state: FACTORY_INTAKE_STATE });
   assert.equal(FACTORY_INTAKE_STATE, "Auto-Triage");

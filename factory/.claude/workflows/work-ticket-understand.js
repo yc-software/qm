@@ -318,7 +318,7 @@ function syncFactoryLabel(stateName) {
          ${LINEAR_KEY_LOAD}
       2. Resolve the issue UUID and its current label ids in ONE query (pass the key by
          variable; never inline it):
-         curl -s -X POST https://api.linear.app/graphql -H "Authorization: $KEY" -H "Content-Type: application/json" -d '{"query":"query { issue(id: \\"${ticketId}\\") { id labels { nodes { id } } } }"}' 2>/dev/null
+         curl -s -X POST https://api.linear.app/graphql -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{"query":"query { issue(id: \\"${ticketId}\\") { id labels { nodes { id } } } }"}' 2>/dev/null
          (take .data.issue.id and the labels node ids)
       3. Compute the new full label set from step 2's label ids. The factory label set is:
          ${Object.values(LINEAR_FACTORY_LABELS).join(', ')}
@@ -327,7 +327,7 @@ function syncFactoryLabel(stateName) {
          non-factory labels must all survive the swap.
       4. Apply the swap in ONE mutation (the stage labels are an exclusive group, so the
          full set must be replaced atomically; if step 2 failed, skip this mutation):
-         curl -s -X POST https://api.linear.app/graphql -H "Authorization: $KEY" -H "Content-Type: application/json" -d '{"query":"mutation { issueUpdate(id: \\"<uuid>\\", input: { labelIds: [<computed set, each id double-quote-escaped>] }) { success } }"}' 2>/dev/null
+         curl -s -X POST https://api.linear.app/graphql -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{"query":"mutation { issueUpdate(id: \\"<uuid>\\", input: { labelIds: [<computed set, each id double-quote-escaped>] }) { success } }"}' 2>/dev/null
          added = that mutation's success value, and removed = the same value (the atomic
          swap leaves no sibling). On any failure — including a failed step 2 — both are
          false. reason = "" on success; on failure, the response's first error message
@@ -501,32 +501,32 @@ async function moveLinearState(stateName, labelId, label, commentBody = null, du
     1. Load the key into a shell variable (do not print it):
        ${LINEAR_KEY_LOAD}
     2. Resolve the issue UUID and its team's workflow states (pass the key by variable; never inline it):
-       curl -s -X POST https://api.linear.app/graphql -H "Authorization: $KEY" -H "Content-Type: application/json" -d '{"query":"query { issue(id: \\"${ticketId}\\") { id team { states { nodes { id name } } } } }"}' 2>/dev/null
+       curl -s -X POST https://api.linear.app/graphql -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{"query":"query { issue(id: \\"${ticketId}\\") { id team { states { nodes { id name } } } } }"}' 2>/dev/null
        (take .data.issue.id as <uuid>, and .data.issue.team.states.nodes as the
        name-to-id mapping for the workflow state below)
 ${duplicateOf ? `    3. Resolve the ORIGINAL ticket's UUID (this ticket duplicates ${duplicateOf}):
-       curl -s -X POST https://api.linear.app/graphql -H "Authorization: $KEY" -H "Content-Type: application/json" -d '{"query":"query { issue(id: \\"${duplicateOf}\\") { id } }"}' 2>/dev/null
+       curl -s -X POST https://api.linear.app/graphql -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{"query":"query { issue(id: \\"${duplicateOf}\\") { id } }"}' 2>/dev/null
        (take .data.issue.id as the original's UUID; if this fails — data.issue null or an
        errors array — SKIP step 4 and use the fallback state in step ${stateStep})
     4. Create the duplicate relation — issueId is THIS ticket's UUID, relatedIssueId is the
        ORIGINAL's UUID (GraphQL variables via jq):
        pl=$(jq -n --arg id "<uuid>" --arg rid "<original-uuid>" '{query:"mutation($input: IssueRelationCreateInput!) { issueRelationCreate(input: $input) { success issueRelation { id type } } }", variables:{input:{issueId:$id, relatedIssueId:$rid, type:"duplicate"}}}')
-       curl -s -X POST https://api.linear.app/graphql -H "Authorization: $KEY" -H "Content-Type: application/json" --data "$pl" 2>/dev/null
+       curl -s -X POST https://api.linear.app/graphql -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" --data "$pl" 2>/dev/null
        An error response saying the relation "already exists" counts as SUCCESS (idempotent);
        any other error counts as a failed step — also use the fallback state in step ${stateStep}.
 ` : ''}${stateName ? `    ${stateStep}. Set the workflow state. Take <state-uuid> from the step 2 node whose
        name is EXACTLY "${stateName}"${duplicateOf ? `, but if step 3 or 4 failed, take it from the node named
        "${LINEAR_STATE_DONE}" instead so the issue is never left in Duplicate without its
        relation` : ''}. If no node carries that exact name, SKIP this step and report state_set false:
-       curl -s -X POST https://api.linear.app/graphql -H "Authorization: $KEY" -H "Content-Type: application/json" -d '{"query":"mutation { issueUpdate(id: \\"<uuid>\\", input: { stateId: \\"<state-uuid>\\" }) { success } }"}' 2>/dev/null
+       curl -s -X POST https://api.linear.app/graphql -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{"query":"mutation { issueUpdate(id: \\"<uuid>\\", input: { stateId: \\"<state-uuid>\\" }) { success } }"}' 2>/dev/null
 ` : ''}${labelId ? `    ${labelStep}. Add the label (idempotent — re-adding is a no-op):
-       curl -s -X POST https://api.linear.app/graphql -H "Authorization: $KEY" -H "Content-Type: application/json" -d '{"query":"mutation { issueAddLabel(id: \\"<uuid>\\", labelId: \\"${labelId}\\") { success } }"}' 2>/dev/null
+       curl -s -X POST https://api.linear.app/graphql -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{"query":"mutation { issueAddLabel(id: \\"<uuid>\\", labelId: \\"${labelId}\\") { success } }"}' 2>/dev/null
 ` : ''}${safeComment ? `    ${commentStep}. Post the comment (GraphQL variables via jq keep the body inert):
        BODY="${safeComment}"${safeFallbackComment ? `
        — but if step 3 or 4 failed (Done fallback), instead use:
        BODY="${safeFallbackComment}"` : ''}
        pl=$(jq -n --arg id "<uuid>" --arg body "$BODY" '{query:"mutation($id: String!, $body: String!) { commentCreate(input: { issueId: $id, body: $body }) { success } }", variables:{id:$id, body:$body}}')
-       curl -s -X POST https://api.linear.app/graphql -H "Authorization: $KEY" -H "Content-Type: application/json" --data "$pl" 2>/dev/null
+       curl -s -X POST https://api.linear.app/graphql -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" --data "$pl" 2>/dev/null
 ` : ''}    Report success (true if every step you ran succeeded), comment_posted (true ONLY if the
     comment step ran and its commentCreate response showed success:true; false otherwise),
     state_set (true ONLY if the workflow-state step ran and its issueUpdate response showed
@@ -632,7 +632,7 @@ response bodies.
 STEP 2 — Fetch the ticket via the Linear GraphQL API, passing the key by
 variable (never inline it):
 
-  curl -s -X POST https://api.linear.app/graphql -H "Authorization: $KEY" -H "Content-Type: application/json" -d '{"query":"query { issue(id: \\"${ticketId}\\") { identifier title description state { name } comments { nodes { body user { name } } } attachments { nodes { url } } } }"}' 2>/dev/null
+  curl -s -X POST https://api.linear.app/graphql -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{"query":"query { issue(id: \\"${ticketId}\\") { identifier title description state { name } comments { nodes { body user { name } } } attachments { nodes { url } } } }"}' 2>/dev/null
 
 The GraphQL issue(id:) field accepts the human identifier "${ticketId}".
 If the response has data.issue == null or an errors array (e.g. a 401 from a

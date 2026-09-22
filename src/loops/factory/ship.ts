@@ -100,7 +100,7 @@ async function linearGraphql(deps: ShipDeps, slug: string, query: string): Promi
   const doFetch = deps.fetch ?? globalThis.fetch;
   const response = await doFetch(LINEAR_GRAPHQL, {
     method: "POST",
-    headers: { Authorization: deps.linearApiKey, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${deps.linearApiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({ query }),
   });
   if (response.status < 200 || response.status > 299) throw new Error(`linear_${slug}_failed: ${response.status}`);

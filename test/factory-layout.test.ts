@@ -171,6 +171,45 @@ test("no file under factory/ carries a monorepo literal", () => {
   }
 });
 
+test("every Linear curl in both wrapper halves sends Authorization: Bearer $KEY, never the key raw", () => {
+  for (const [relative, text] of [
+    [BAS_REL, BAS],
+    [UND_REL, UND],
+  ] as const) {
+    const linearCurls = text
+      .split("\n")
+      .filter((line) => line.includes("curl") && line.includes("https://api.linear.app/graphql"));
+    assert.ok(linearCurls.length > 0, `factory/${relative} contacts the Linear API nowhere`);
+    for (const line of linearCurls)
+      assert.ok(
+        line.includes('-H "Authorization: Bearer $KEY"'),
+        `factory/${relative} sends a Linear request without a Bearer credential: ${line.trim()}`,
+      );
+  }
+  for (const [relative, text] of [
+    [WRAP_REL, WRAP],
+    [BAS_REL, BAS],
+    [ORCH_REL, ORCH],
+    [UND_REL, UND],
+  ] as const)
+    assert.equal(count(text, /Authorization: \$KEY/g), 0, `factory/${relative} still sends the Linear key raw`);
+});
+
+test("every agent block that loads the Linear key is shown the Bearer header before it improvises one", () => {
+  for (const [relative, text] of [
+    [BAS_REL, BAS],
+    [UND_REL, UND],
+  ] as const) {
+    const blocks = text.split("${LINEAR_KEY_LOAD}").slice(1);
+    assert.ok(blocks.length > 0, `factory/${relative} loads the Linear key nowhere`);
+    for (const [index, block] of blocks.entries())
+      assert.ok(
+        block.includes('-H "Authorization: Bearer $KEY"'),
+        `factory/${relative} hands the Linear key to agent block ${index + 1} without showing it the Bearer header`,
+      );
+  }
+});
+
 test("the conflict concierge workflow was not moved", () => {
   assert.equal(
     existsSync(join(factoryRoot, ".claude/workflows/work-ticket-resolve-conflict.js")),

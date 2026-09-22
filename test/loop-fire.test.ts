@@ -9,10 +9,8 @@ import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { FACTORY_LOOP_SURFACE, type FactoryEffectsDeps } from "../src/loops/factory/effects.ts";
 import { FACTORY_REQUIRED_TOOLS } from "../src/loops/factory/preflight.ts";
-import { FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
 import { FACTORY_WRAPPER } from "../src/loops/factory/process-work.ts";
 import type { FactoryConfig } from "../src/resolution/config-store.ts";
-import type { ServiceCredentialReader } from "../src/credentials/keychain.ts";
 import type { ReadProcessResult, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 
@@ -565,12 +563,13 @@ const LINEAR_URL = "https://api.linear.app/graphql";
 const GH_GRAPHQL = "https://api.github.com/graphql";
 const GH_REPO = "https://api.github.com/repos/acme/app";
 const HEAD_SHA = "1".repeat(40);
-const LINEAR_KEY = "lin_FAKE_KEY";
+const LINEAR_KEY = "lin_oauth_FAKE_TOKEN";
+const LINEAR_HOST = "api.linear.app";
+const GITHUB_HOST = "api.github.com";
 const GITHUB_TOKEN = "ghp_FAKE_TOKEN";
 const ANTHROPIC_KEY = "sk-ant-FAKE_KEY";
 const FACTORY_LOOP_OWNER = base.owner;
 const FACTORY_REVIEWER = "amy";
-const SECRET_BY_SLUG: Record<string, string> = { [FACTORY_LINEAR_SLUG]: LINEAR_KEY };
 const WRAPPER_STDOUT = `working\nBRANCH:${FACTORY_BRANCH}\nMR:42\n`;
 const ALREADY_FIXED_STDOUT = "ALREADY_FIXED:true\nALREADY_FIXED_EVIDENCE:fixed by #40\n";
 
@@ -755,23 +754,6 @@ function factoryFetch(
   };
 }
 
-function factoryCredentials(missing: string[] = []): ServiceCredentialReader {
-  return {
-    getServiceCredentialSecret: async (_scope, slug) =>
-      missing.includes(slug)
-        ? null
-        : {
-            slug,
-            name: slug,
-            secret: SECRET_BY_SLUG[slug] ?? "",
-            delivery: "broker",
-            host: "api.example.com",
-            deployments: false,
-            enabled: true,
-          },
-  };
-}
-
 interface FactoryFake {
   deps: (loops: ReturnType<typeof createLoopStore>) => FactoryEffectsDeps;
   sandbox: FactorySandbox;
@@ -783,6 +765,7 @@ interface FactoryFake {
 function factoryConnectorTokens(
   tokens: (string | null)[] = [GITHUB_TOKEN],
   grantedTo = FACTORY_LOOP_OWNER,
+  linearToken: string | null = LINEAR_KEY,
 ): {
   connectorTokens: FactoryEffectsDeps["connectorTokens"];
   principals: string[];
@@ -793,7 +776,8 @@ function factoryConnectorTokens(
     principals,
     connectorTokens: {
       connectorAccessToken: async (host, principalId, accountType) => {
-        if (host !== "api.github.com") return null;
+        if (host === LINEAR_HOST) return accountType === undefined && principalId === grantedTo ? linearToken : null;
+        if (host !== GITHUB_HOST) return null;
         principals.push(principalId);
         if (accountType !== undefined || principalId !== grantedTo) return null;
         const token = tokens[Math.min(resolved, tokens.length - 1)] ?? null;
@@ -807,7 +791,6 @@ function factoryConnectorTokens(
 function factoryFake(
   over: {
     config?: FactoryConfig | null;
-    credentials?: ServiceCredentialReader;
     connectorTokens?: FactoryEffectsDeps["connectorTokens"];
     sandbox?: FactorySandbox;
     fetch?: FactoryFetch;
@@ -827,8 +810,6 @@ function factoryFake(
     deps: (loops) => ({
       sandbox: sandbox.sandbox,
       config: { getFactoryConfig: () => config },
-      credentials: over.credentials ?? factoryCredentials(),
-      orgScopeId: scopeId("org", "acme"),
       loops,
       slackInstallation: { get: async () => null },
       connectorTokens: over.connectorTokens ?? factoryConnectorTokens().connectorTokens,
@@ -907,7 +888,7 @@ test("factory surface: a fire drives the factory effects and takes no agent turn
   const intake = fake.fetch.calls[0];
   assert.equal(intake?.url, LINEAR_URL);
   assert.match(intake?.body ?? "", /"teamId":"TEAM-1"/);
-  assert.equal(intake?.headers.get("Authorization"), LINEAR_KEY);
+  assert.equal(intake?.headers.get("Authorization"), `Bearer ${LINEAR_KEY}`);
   assert.deepEqual(fake.sandbox.ops.slice(0, 7), [
     "provision",
     "run",
@@ -970,13 +951,13 @@ test("factory surface: a fire without the factory dep fails and runs nothing", a
   assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, undefined);
 });
 
-test("factory surface: a missing config or credential fails the fire before the sandbox", async () => {
+test("factory surface: a missing config or connector grant fails the fire before the sandbox", async () => {
   const cases: [string, RegExp, Parameters<typeof factoryFake>[0]][] = [
     ["config", /factory_config_missing/, { config: null }],
     [
-      "credential",
-      /factory_credentials_missing: factory-linear/,
-      { credentials: factoryCredentials([FACTORY_LINEAR_SLUG]) },
+      "Linear connector",
+      /linear: the loop owner has not connected Linear/,
+      { connectorTokens: factoryConnectorTokens([GITHUB_TOKEN], FACTORY_LOOP_OWNER, null).connectorTokens },
     ],
     [
       "GitHub connector",
@@ -1049,6 +1030,18 @@ test("factory surface: shipping an open_pr output undrafts the request and advan
   assert.match(sent[5]!.query, /issueAddLabel\(id: "issue-1", labelId: "label-ready"\)/);
 });
 
+test("factory surface: shipping authenticates to Linear with the owner's Linear connector token, not the forge token", async () => {
+  const fake = factoryFake();
+  const { s, loop, output, before } = await heldFactoryOutput(fake);
+
+  await s.fire.shipOutput(loop.id, output.id, "josh");
+
+  const linearCalls = fake.fetch.calls.slice(before).filter((call) => call.url === LINEAR_URL);
+  assert.ok(linearCalls.length > 0, "the ship took no Linear request");
+  for (const call of linearCalls)
+    assert.equal(call.headers.get("Authorization"), `Bearer ${LINEAR_KEY}`, `${call.method} ${call.url}`);
+});
+
 test("factory surface: a configured slack channel with no Slack installation leaves the ship path unchanged", async () => {
   const fake = factoryFake();
   const { s, loop, output, before } = await heldFactoryOutput(fake);
@@ -1119,8 +1112,10 @@ test("factory surface: an owner who disconnects GitHub between work and ship fai
   let connected = true;
   const fake = factoryFake({
     connectorTokens: {
-      connectorAccessToken: async (host, _principalId, accountType) =>
-        host === "api.github.com" && accountType === undefined && connected ? GITHUB_TOKEN : null,
+      connectorAccessToken: async (host, _principalId, accountType) => {
+        if (host === LINEAR_HOST) return accountType === undefined ? LINEAR_KEY : null;
+        return host === GITHUB_HOST && accountType === undefined && connected ? GITHUB_TOKEN : null;
+      },
     },
   });
   const { s, loop, output, before } = await heldFactoryOutput(fake);

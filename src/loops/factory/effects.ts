@@ -5,7 +5,6 @@ import {
   type SandboxHandle,
 } from "../../sandbox/sandbox.ts";
 import type { FactoryConfig, ScopedConfigStore } from "../../resolution/config-store.ts";
-import type { ServiceCredentialReader } from "../../credentials/keychain.ts";
 import type { Loop, LoopItem, ScopeId } from "../../types.ts";
 import type { SlackInstallationStore } from "../../surfaces/slack-installation.ts";
 import { isRunnable, type LoopStore } from "../loop-store.ts";
@@ -17,7 +16,6 @@ import { shq } from "../../util/shell.ts";
 import { pollProcess } from "../../sandbox/process-poll.ts";
 import { enumerateFactoryCandidates } from "./linear-intake.ts";
 import { tokenFor, type ConnectorTokenSource } from "../sources/adapter.ts";
-import { readFactoryCredentials } from "./credentials.ts";
 import { preflightFactorySandbox, type PreflightResult } from "./preflight.ts";
 import {
   isFactoryTicketId,
@@ -38,6 +36,7 @@ const FACTORY_SOURCE_CLONE_URL = "https://github.com/yc-software/qm.git";
 const FACTORY_SOURCE_BOOTSTRAP_TIMEOUT_MS = 300_000;
 
 const GITHUB_CONNECTOR_HOST = "api.github.com";
+const LINEAR_CONNECTOR_HOST = "api.linear.app";
 
 const SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage";
 const SLACK_POST_TIMEOUT_MS = 10_000;
@@ -93,8 +92,6 @@ export const factoryForgeRef = (config: FactoryConfig, externalRef: string | und
 export interface FactoryEffectsDeps {
   sandbox: Sandbox;
   config: Pick<ScopedConfigStore, "getFactoryConfig">;
-  credentials: ServiceCredentialReader;
-  orgScopeId: ScopeId;
   loops: Pick<LoopStore, "get">;
   slackInstallation: Pick<SlackInstallationStore, "get">;
   connectorTokens: ConnectorTokenSource;
@@ -257,8 +254,8 @@ async function openFactorySlackThread(input: {
 export async function loadFactoryContext(deps: FactoryEffectsDeps, owner: string): Promise<FactoryContext> {
   const config = deps.config.getFactoryConfig();
   if (!config) throw new Error("factory_config_missing");
-  const credentials = await readFactoryCredentials(deps.credentials, deps.orgScopeId);
-  if (!credentials.ok) throw new Error(`factory_credentials_missing: ${credentials.missing.join(", ")}`);
+  const linearApiKey = (await tokenFor(deps.connectorTokens, LINEAR_CONNECTOR_HOST, owner))?.trim() ?? "";
+  if (linearApiKey === "") throw new Error("linear: the loop owner has not connected Linear");
   const modelAuth = modelAuthFrom(await deps.modelAuthEnv());
   if (modelAuthSecrets(modelAuth).length === 0) {
     throw new Error("model auth: core has no Anthropic credential configured");
@@ -268,7 +265,7 @@ export async function loadFactoryContext(deps: FactoryEffectsDeps, owner: string
   const slackBotToken = await factorySlackBotToken(deps, config);
   return {
     config,
-    linearApiKey: credentials.linearApiKey,
+    linearApiKey,
     githubToken,
     modelAuth,
     ...(slackBotToken !== undefined ? { slackBotToken } : {}),

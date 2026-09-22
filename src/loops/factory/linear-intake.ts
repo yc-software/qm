@@ -73,7 +73,7 @@ async function fetchIntakePage(
 ): Promise<IntakePage> {
   const res = await doFetch(LINEAR_GRAPHQL_URL, {
     method: "POST",
-    headers: { Authorization: input.apiKey, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${input.apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       query: FACTORY_INTAKE_QUERY,
       variables: { teamId: input.teamId, state, after },

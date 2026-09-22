@@ -28,6 +28,8 @@ const env = {
   NOTION_OAUTH_CLIENT_SECRET: "nsecret",
   GITHUB_OAUTH_CLIENT_ID: "ghid",
   GITHUB_OAUTH_CLIENT_SECRET: "ghsecret",
+  LINEAR_OAUTH_CLIENT_ID: "lid",
+  LINEAR_OAUTH_CLIENT_SECRET: "lsecret",
   X_OAUTH_CLIENT_ID: "xid",
   X_OAUTH_CLIENT_SECRET: "xsecret",
 } as NodeJS.ProcessEnv;
@@ -323,6 +325,27 @@ test("Notion exchanges via HTTP Basic + JSON body and does not refresh", async (
     () => makeRefresh({ resolveClient: resolve })("api.notion.com", { accessToken: "x", refreshToken: "rt" }),
     /do not refresh/,
   );
+});
+
+test("Linear renews its 24-hour access token with the standard refresh grant rather than demanding a reconnect", async () => {
+  const fetchImpl: FetchLike = async (u, init) => {
+    assert.equal(u, PROVIDERS.linear!.tokenUrl);
+    assert.match(init.body, /grant_type=refresh_token/);
+    assert.match(init.body, /refresh_token=rt-1/);
+    assert.match(init.body, /client_id=lid/);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "lin-next", expires_in: 86399, refresh_token: "rt-2", scope: "read write" }),
+    };
+  };
+  const fresh = await makeRefresh({ resolveClient: resolve, fetchImpl, now: () => 1_000 })("api.linear.app", {
+    accessToken: "lin-stale",
+    refreshToken: "rt-1",
+  });
+  assert.equal(fresh.accessToken, "lin-next");
+  assert.equal(fresh.refreshToken, "rt-2");
+  assert.equal(fresh.expiresAt, 1_000 + 86_399 * 1_000);
 });
 
 test("scopesFor: BYO client scopes override the provider default", async () => {

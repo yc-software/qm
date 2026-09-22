@@ -1180,7 +1180,7 @@ test("applying a factory config mints one factory loop owned by the acting admin
 
     const fired = await srv.built.loops.fire!.fire(loop.id, "apply-fire-1");
     assert.equal(fired.status, "failed");
-    assert.match(fired.note ?? "", /factory_credentials_missing: factory-linear/);
+    assert.match(fired.note ?? "", /linear: the loop owner has not connected Linear/);
   } finally {
     await srv.close();
   }
@@ -1205,7 +1205,7 @@ test("applying a factory config schedules the loop so it fires unattended, and r
     const fires = await srv.built.crons.listFires(cron.id);
     assert.equal(fires.total, 1);
     assert.equal(fires.runs[0]!.fireKey, `cron:${cron.id}:${due}`);
-    assert.match(fires.runs[0]!.note ?? "", /factory_credentials_missing/);
+    assert.match(fires.runs[0]!.note ?? "", /linear: the loop owner has not connected Linear/);
 
     assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
     assert.deepEqual(

@@ -10,7 +10,7 @@ import {
 } from "../src/loops/factory/ship.ts";
 
 const FORGE_TOKEN = "ght_FAKE";
-const LINEAR_KEY = "lin_api_FAKE";
+const LINEAR_KEY = "lin_oauth_FAKE";
 const TICKET = "QM-21";
 const LINEAR_URL = "https://api.linear.app/graphql";
 const GH_PULL = "https://api.github.com/repos/yc-software/qm-yc/pulls/7";
@@ -195,7 +195,7 @@ test("shipping a GitHub draft PR undrafts it, moves the ticket to In Review, and
 
   const linearCalls = calls.filter((call) => call.url === LINEAR_URL);
   assert.equal(linearCalls.length, 4);
-  for (const call of linearCalls) assert.equal(call.headers.authorization, LINEAR_KEY);
+  for (const call of linearCalls) assert.equal(call.headers.authorization, `Bearer ${LINEAR_KEY}`);
   assert.equal(linearCalls.filter((call) => /issue\(id: "QM-21"\)/.test(queryOf(call))).length, 1);
 });
 
@@ -616,7 +616,7 @@ test("an empty errors array is not a failure", async () => {
   ]);
 });
 
-test("a Linear personal API key is sent verbatim in Authorization, never as a Bearer token", async () => {
+test("the Linear connector token is sent as a Bearer credential, never verbatim in Authorization", async () => {
   const { fetchImpl, calls } = fakeFetch({
     "linear:issue": issueRead({ state: IN_REVIEW }),
     "linear:commentCreate": COMMENT_OK,
@@ -626,7 +626,7 @@ test("a Linear personal API key is sent verbatim in Authorization, never as a Be
   assert.equal(calls.length, 3);
   for (const call of calls) {
     assert.equal(call.url, LINEAR_URL);
-    assert.equal(call.headers.authorization, LINEAR_KEY);
+    assert.equal(call.headers.authorization, `Bearer ${LINEAR_KEY}`);
     assert.equal(call.headers["content-type"], "application/json");
   }
 });
