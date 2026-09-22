@@ -2041,6 +2041,29 @@ qm-markdown .tok-in {
   overflow: auto;
   overscroll-behavior: contain;
 }
+/* Once the prompt is pinned over the response it condenses to a two-line strip, like a collapsing
+   header: enough to remember what was asked, not enough to hide the answer. The row keeps its
+   resting height (--pin-rest-height, measured while unstuck) so the transcript below never jumps
+   when the bubble shrinks; the transparent remainder of the row lets clicks and reading through. */
+.message-stack .user-row.stuck:not(.pin-expanded) {
+  min-height: var(--pin-rest-height);
+}
+.message-stack .user-row.stuck:not(.pin-expanded) .user-bubble > .pin-content {
+  -webkit-line-clamp: 2;
+}
+.message-stack
+  .user-row.stuck:not(.pin-expanded)
+  .user-bubble
+  > .pin-content:has(code-block, pre, table, img, svg, math, .katex-display, video, iframe) {
+  max-height: 2lh;
+}
+.message-stack
+  .user-row.stuck:not(.pin-expanded)
+  .user-bubble
+  > .pin-content
+  :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
+  margin-block: 0;
+}
 .pin-toggle {
   display: none;
   width: fit-content;

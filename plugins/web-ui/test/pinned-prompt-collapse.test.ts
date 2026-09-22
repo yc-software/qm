@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { createTranscriptViewport } from "../src/transcript-viewport.ts";
 
@@ -223,6 +224,45 @@ test("expanding a scrolled prompt stays sticky with a bounded scrollable body", 
   } finally {
     f.close();
   }
+});
+
+test("a stuck prompt condenses but keeps the transcript slot it had at rest", () => {
+  const f = fixture();
+  try {
+    const rest = f.row.style.getPropertyValue("--pin-rest-height");
+    assert.equal(rest, "163.5px");
+    f.scroller.scrollTop = 500;
+    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    assert.equal(f.row.classList.contains("stuck"), true);
+    f.row.getBoundingClientRect = () => ({ top: 0, height: 60 }) as DOMRect;
+    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), rest);
+    f.toggle.click();
+    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), rest);
+    f.toggle.click();
+    f.scroller.scrollTop = 0;
+    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    assert.equal(f.row.classList.contains("stuck"), false);
+    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "60px");
+    f.viewport.dispose();
+    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "");
+  } finally {
+    f.close();
+  }
+});
+
+test("the condensed strip is a css contract on the stuck class, never on rest", () => {
+  const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
+  const condensed =
+    css.match(/\.message-stack \.user-row\.stuck:not\(\.pin-expanded\) \.user-bubble > \.pin-content \{[^}]*\}/)?.[0] ??
+    "";
+  assert.match(condensed, /-webkit-line-clamp: 2/);
+  assert.match(css, /\.user-row\.stuck:not\(\.pin-expanded\) \{\s*min-height: var\(--pin-rest-height\)/);
+  const rest =
+    css.match(
+      /\.message-stack \.user-row:not\(:has\(~ \.user-row\)\):not\(\.pin-expanded\) \.user-bubble > \.pin-content \{[^}]*\}/,
+    )?.[0] ?? "";
+  assert.match(rest, /-webkit-line-clamp: 6/);
 });
 
 test("expanded prompts reserve pins and chrome when panes resize or content grows", () => {

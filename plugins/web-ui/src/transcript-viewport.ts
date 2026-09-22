@@ -64,6 +64,7 @@ export function createTranscriptViewport() {
     if (content) content.scrollTop = 0;
     prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded");
     prompt?.style.removeProperty("--pin-expanded-max");
+    prompt?.style.removeProperty("--pin-rest-height");
     const toggle = prompt?.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) toggle.hidden = true;
     expanded = false;
@@ -102,7 +103,8 @@ export function createTranscriptViewport() {
     const style = getComputedStyle(scroller);
     const paddingTop = parseFloat(style.paddingTop) || 0;
     const paddingBottom = parseFloat(style.paddingBottom) || 0;
-    const promptMargin = prompt ? parseFloat(getComputedStyle(prompt).marginBottom) || 0 : 0;
+    const promptStyle = prompt ? getComputedStyle(prompt) : null;
+    const promptMargin = promptStyle ? parseFloat(promptStyle.marginBottom) || 0 : 0;
     if (prompt && content) {
       const chrome = prompt.getBoundingClientRect().height - content.getBoundingClientRect().height;
       const available = scroller.clientHeight - top - paddingTop - paddingBottom - promptMargin - chrome;
@@ -112,13 +114,22 @@ export function createTranscriptViewport() {
       !!prompt &&
       prompt.getBoundingClientRect().height + promptMargin + top + paddingTop + paddingBottom <= scroller.clientHeight;
     prompt?.classList.toggle("sticky-disabled", !canStick);
-    prompt?.classList.toggle(
-      "stuck",
+    const stuck =
+      !!prompt &&
       canStick &&
-        scroller.scrollTop > 0 &&
-        prompt.getBoundingClientRect().top <=
-          scroller.getBoundingClientRect().top + scroller.clientTop + paddingTop + top + 0.5,
-    );
+      scroller.scrollTop > 0 &&
+      prompt.getBoundingClientRect().top <=
+        scroller.getBoundingClientRect().top + scroller.clientTop + paddingTop + top + 0.5;
+    prompt?.classList.toggle("stuck", stuck);
+    // The stuck prompt condenses (see shell.css); remembering its collapsed resting height keeps
+    // the row's slot in the transcript constant so nothing below shifts when the bubble shrinks.
+    if (prompt && promptStyle && !stuck && !expanded) {
+      const inner =
+        prompt.getBoundingClientRect().height -
+        (parseFloat(promptStyle.paddingTop) || 0) -
+        (parseFloat(promptStyle.paddingBottom) || 0);
+      prompt.style.setProperty("--pin-rest-height", `${Math.max(0, inner)}px`);
+    }
   }
 
   function onScroll(): void {
