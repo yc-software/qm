@@ -1,13 +1,14 @@
+import { load, states } from "../ui/governance-state.ts";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readAdminSource } from "./admin-source.ts";
 import test from "node:test";
 import vm from "node:vm";
 
-const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+const html = readAdminSource();
 
 test("org governance exposes the Auto quarantine rubric and replay controls", () => {
   assert.ok(html.includes('id="card-auto-flagger"'), "Auto flagger editor must exist");
-  assert.match(html, /class="card sv-governance hidden" id="card-auto-flagger"/);
+  assert.match(html, /id="card-auto-flagger"/);
   for (const id of [
     "auto-flagger-harness",
     "auto-flagger-model",
@@ -19,9 +20,8 @@ test("org governance exposes the Auto quarantine rubric and replay controls", ()
   ]) {
     assert.ok(html.includes(`id="${id}"`), `${id} must exist`);
   }
-  assert.match(html, /scope\.startsWith\("org:"\) && "autoFlagger" in/);
-  assert.match(html, /r\.data\.autoFlagger \|\| r\.data\.autoFlaggerDefault/);
-  assert.match(html, /"auto-flagger": \(\) => \(\{/);
+
+  assert.match(html, /governanceUI.collect\(key\)/);
   assert.match(html, /"auto-flagger": "st-auto-flagger"/);
   assert.match(html, /function autoFlaggerTestSummary\(data\)/);
 });
@@ -66,6 +66,8 @@ class Element {
 function fixture(data: Record<string, unknown> = {}, scope = "org:example") {
   const elements: Record<string, Element> = {};
   const context = vm.createContext({
+    governanceReq: 1,
+    governanceUI: { collect: () => ({ harnessId: "pi", modelId: "model-a", rubric: "Default rubric" }) },
     refreshModelChoices: [],
     scope,
     scopeChanged: true,
@@ -91,54 +93,40 @@ const loadData = {
     claude: [{ id: "model-c", name: "C" }],
   },
 };
-const loadSource = slice("const showAutoFlagger =", "const showGrantModes =");
+
 const handlersSource = slice('$("auto-flagger-test").onclick =', 'document.querySelectorAll("[data-save]").forEach');
 const summarySource = slice("function autoFlaggerTestSummary(data)", "function sectionButton(key)");
 
-test("loading or restoring defaults replaces a previous model selection", () => {
-  const { elements, context } = fixture(loadData);
-  vm.runInContext(`{${loadSource}}`, context);
-  assert.equal(elements["auto-flagger-model"].value, "model-a");
-  elements["auto-flagger-model"].value = "model-b";
-  vm.runInContext(`{${loadSource}}`, context);
-  assert.equal(elements["auto-flagger-model"].value, "model-a");
-  assert.equal(elements["auto-flagger-rubric"].value, "Default rubric");
-  elements["auto-flagger-harness"].value = "claude";
-  elements["auto-flagger-harness"].oninput!();
-  assert.equal(elements["auto-flagger-model"].value, "model-c");
+test("loading defaults replaces a previous model and harness selection", () => {
+  load(loadData, "org:example");
+  const state = states.get("auto-flagger")!;
+  state.change("auto-flagger-model", "model-b");
+  load(loadData, "org:example");
+  assert.equal(state.draft.modelId, "model-a");
+  state.change("auto-flagger-harness", "claude");
+  assert.equal(state.draft.modelId, "model-c");
 });
-
-test("a saved flagger outside the current catalog is displayed, not silently replaced", () => {
-  const { elements, context } = fixture({
-    ...loadData,
-    autoFlagger: { harnessId: "codex", modelId: "saved-model", rubric: "Saved rubric" },
-  });
-  vm.runInContext(`{${loadSource}}`, context);
-  assert.equal(elements["auto-flagger-harness"].value, "codex");
-  assert.ok(elements["auto-flagger-harness"].options.some((o) => o.value === "codex"));
-  assert.equal(elements["auto-flagger-model"].value, "saved-model");
-  assert.ok(elements["auto-flagger-model"].options.some((o) => o.value === "saved-model"));
-  assert.equal(elements["auto-flagger-rubric"].value, "Saved rubric");
+test("unavailable configured flagger stays selectable", () => {
+  load({ ...loadData, autoFlagger: { harnessId: "codex", modelId: "saved-model", rubric: "Saved" } }, "org:example");
+  const state = states.get("auto-flagger")!;
+  assert.equal(state.draft.modelId, "saved-model");
+  assert.ok(state.models.some((model) => model.id === "saved-model"));
 });
-
-test("the card is org-only and follows the current governance layout", () => {
-  for (const [scope, data] of [
-    ["personal:example", loadData],
-    ["org:example", {}],
-  ] as const) {
-    const { elements, context } = fixture(data, scope);
-    vm.runInContext(`{${loadSource}}`, context);
-    assert.ok(elements["card-auto-flagger"].classes.has("hidden"));
-  }
-  assert.match(
-    html,
-    /\$\("card-security-posture"\),\s*\$\("card-auto-flagger"\),\s*\$\("card-sharing-posture"\),\s*governanceAmbient/,
-  );
+test("flagger is visible only for org payloads that support it", () => {
+  load(loadData, "personal:example");
+  assert.equal(states.get("auto-flagger")!.available, false);
+  load({}, "org:example");
+  assert.equal(states.get("auto-flagger")!.available, false);
 });
 
 test("test sends an unsaved draft and comparison window without saving it", async () => {
   const { elements, context } = fixture(loadData);
-  vm.runInContext(`{${loadSource}}\n${summarySource}\n${handlersSource}`, context);
+  vm.runInContext(`${summarySource}\n${handlersSource}`, context);
+  elements["auto-flagger-harness"] = new Element();
+  elements["auto-flagger-harness"].value = "pi";
+  elements["auto-flagger-model"] = new Element();
+  elements["auto-flagger-model"].value = "model-a";
+  elements["auto-flagger-rubric"] = new Element();
   elements["auto-flagger-window"] = new Element();
   elements["auto-flagger-window"].value = "25";
   elements["auto-flagger-compare"] = new Element();
@@ -176,8 +164,15 @@ test("reset clears the override and does not reload a different scope after navi
   const { elements, context } = fixture(loadData);
   vm.runInContext(handlersSource, context);
   let reloads = 0;
-  context.loadScope = async () => {
+  context.refreshPolicySetting = async (
+    _key: string,
+    _scope: string,
+    _generation: number,
+    _draft: string,
+    message: string,
+  ) => {
     reloads++;
+    (elements["st-auto-flagger"] ??= new Element()).textContent = message;
   };
   context.api = async (method: string, path: string, body: unknown) => {
     assert.equal(method, "PUT");

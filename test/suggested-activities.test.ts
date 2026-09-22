@@ -195,9 +195,9 @@ test("guidance updates managed task text while preserving user edits", async () 
   await f.service.get("alice", []);
   await f.settle();
   const id = (await f.crons.list())[0]!.id;
-  const updated = createSuggestedActivityService({ ...f.deps, context: "YC founder guidance" });
+  const updated = createSuggestedActivityService({ ...f.deps, context: "Acme team guidance" });
   await updated.maintain();
-  assert.match((await f.crons.get(id))!.action!, /YC founder guidance/);
+  assert.match((await f.crons.get(id))!.action!, /Acme team guidance/);
   await f.crons.update(id, { action: "My custom research task" });
   await createSuggestedActivityService({ ...f.deps, context: "Changed guidance" }).maintain();
   assert.equal((await f.crons.get(id))!.action, "My custom research task");

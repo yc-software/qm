@@ -94,8 +94,19 @@ async function backgroundWork(ctx: ApiCtx): Promise<void> {
       );
     }
     if (
-      !keys(body, ["expectedGeneration", "requestId", "desiredDeploymentId", "bootstrapTaskArns"]) ||
+      !keys(body, [
+        "expectedGeneration",
+        "requestId",
+        "desiredDeploymentId",
+        "bootstrapTaskArns",
+        "expectedLastRequestId",
+      ]) ||
       !(body.desiredDeploymentId === null || identity(body.desiredDeploymentId)) ||
+      !(
+        body.expectedLastRequestId === undefined ||
+        body.expectedLastRequestId === null ||
+        identity(body.expectedLastRequestId)
+      ) ||
       (body.bootstrapTaskArns !== undefined &&
         (!Array.isArray(body.bootstrapTaskArns) ||
           body.bootstrapTaskArns.length < 1 ||
@@ -110,6 +121,7 @@ async function backgroundWork(ctx: ApiCtx): Promise<void> {
         expectedGeneration: body.expectedGeneration,
         requestId: body.requestId,
         desiredDeploymentId: body.desiredDeploymentId,
+        ...(body.expectedLastRequestId !== undefined ? { expectedLastRequestId: body.expectedLastRequestId } : {}),
         ...(body.bootstrapTaskArns ? { bootstrapTaskArns: body.bootstrapTaskArns as string[] } : {}),
       }),
     );

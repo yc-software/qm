@@ -22,6 +22,7 @@ import {
 } from "../src/resolution/scope-membership.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { runNowSettled } from "./support/settle.ts";
 
 test("ProjectStore atomically maintains a managed-group roster", async () => {
   let at = 10;
@@ -1084,4 +1085,141 @@ test("a project can add a signed-in principal on a deployment whose directory is
 
   assert.equal(added.status, "ok");
   assert.ok(added.project!.memberIds.includes("rex@acme.com"));
+});
+
+test("Slack-linked project turns use the inherited channel roster", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-linked-roster-")) }));
+  await built.app.upsertDirectory([
+    { principalId: "owner", displayName: "Owner", type: "internal" },
+    { principalId: "chan-pal", displayName: "Channel Pal", type: "internal" },
+    { principalId: "chan-gone", displayName: "Channel Gone", type: "internal" },
+  ]);
+  const channels = [{ channelId: "C-ENG", name: "eng", isPrivate: false }];
+  await built.app.upsertChannels(channels, [
+    { channelId: "C-ENG", principalId: "owner" },
+    { channelId: "C-ENG", principalId: "chan-pal" },
+  ]);
+  const project = await built.app.createProject("owner", "Linked Roster");
+  assert.ok(project);
+  const groupRef = projectGroupRef(project.id);
+  const linked = await built.app.setProjectSlackChannel(project.id, "owner", "#eng");
+  assert.equal(linked.status, "ok");
+  assert.equal(await built.projects.membership(groupRef, "chan-pal"), true);
+
+  const turn = (actor: string, threadRef: string, text = "hello linked project") =>
+    built.app.turn({
+      surface: "web",
+      actor: { externalId: actor },
+      conversation: {
+        kind: "group",
+        channelRef: groupRef,
+        threadRef,
+        audience: [{ externalId: "outsider" }],
+      },
+      text,
+    });
+  const rosterOf = async (threadRef: string) => {
+    const run = (await built.runs.list()).findLast(
+      (candidate) => candidate.request.conversation.threadRef === threadRef,
+    );
+    assert.ok(run);
+    const session = await built.sessions.getByThread(threadRef);
+    assert.ok(session);
+    return {
+      participants: new Set(run.request.sessionParticipantIds),
+      audience: new Set(run.request.conversation.audience.map((member) => member.id)),
+      session: new Set(await built.sessions.participantsOf(session.id)),
+    };
+  };
+  const assertRoster = async (threadRef: string, expected: string[]) => {
+    const roster = await rosterOf(threadRef);
+    const wanted = new Set(expected);
+    assert.deepEqual(roster.participants, wanted);
+    assert.deepEqual(roster.audience, wanted);
+    assert.deepEqual(roster.session, wanted);
+  };
+
+  assert.equal((await turn("owner", "web:owner:linked")).status, "ok");
+  await assertRoster("web:owner:linked", ["owner", "chan-pal"]);
+  assert.equal((await turn("chan-pal", "web:chan-pal:linked")).status, "ok");
+  await assertRoster("web:chan-pal:linked", ["owner", "chan-pal"]);
+
+  const linkedMembers = [
+    { id: "owner", type: "internal" as const },
+    { id: "chan-pal", type: "internal" as const },
+  ];
+  const ownerCron = await built.app.createCron({
+    ownerScopeId: project.scopeId,
+    owner: "owner",
+    createdBy: "owner",
+    action: "linked roster work",
+    schedule: { everyMs: 60_000 },
+    runAs: "scopeShared",
+    members: linkedMembers,
+  });
+  const inheritedCron = await built.app.createCron({
+    ownerScopeId: project.scopeId,
+    owner: "chan-pal",
+    createdBy: "chan-pal",
+    action: "inherited member work",
+    schedule: { everyMs: 60_000 },
+    runAs: "scopeShared",
+    members: linkedMembers,
+  });
+  const cronRoster = async (cronId: string) => {
+    const fire = (await built.crons.listFires(cronId)).runs.at(-1);
+    assert.ok(fire);
+    const run = (await built.runs.list()).find(
+      (candidate) => candidate.request.conversation.threadRef === fire.threadRef,
+    );
+    assert.ok(run);
+    return { fire, participants: new Set(run.request.sessionParticipantIds) };
+  };
+  await runNowSettled(built.scheduler, ownerCron.id);
+  const linkedCron = await cronRoster(ownerCron.id);
+  assert.equal(linkedCron.fire.status, "ok");
+  assert.deepEqual(linkedCron.participants, new Set(["owner", "chan-pal"]));
+
+  await built.app.upsertChannels(channels, [{ channelId: "C-ENG", principalId: "owner" }]);
+  assert.equal(await built.projects.membership(groupRef, "chan-pal"), false);
+  assert.equal((await turn("chan-pal", "web:chan-pal:revoked")).status, "refused");
+  assert.equal((await turn("owner", "web:owner:after-revoke")).status, "ok");
+  await assertRoster("web:owner:after-revoke", ["owner"]);
+
+  await runNowSettled(built.scheduler, ownerCron.id);
+  const revokedOwnerCron = await cronRoster(ownerCron.id);
+  assert.equal(revokedOwnerCron.fire.status, "ok");
+  assert.deepEqual(revokedOwnerCron.participants, new Set(["owner"]));
+  await runNowSettled(built.scheduler, inheritedCron.id);
+  assert.equal((await built.crons.get(inheritedCron.id))?.enabled, false);
+
+  await built.app.upsertChannels(channels, [
+    { channelId: "C-ENG", principalId: "owner" },
+    { channelId: "C-ENG", principalId: "chan-gone" },
+  ]);
+  assert.equal(await built.projects.membership(groupRef, "chan-gone"), true);
+  const inactiveCron = await built.app.createCron({
+    ownerScopeId: project.scopeId,
+    owner: "chan-gone",
+    createdBy: "chan-gone",
+    action: "inactive member work",
+    schedule: { everyMs: 60_000 },
+    runAs: "scopeShared",
+    members: [
+      { id: "owner", type: "internal" },
+      { id: "chan-gone", type: "internal" },
+    ],
+  });
+  await built.identity.deactivate("chan-gone");
+  assert.equal(await built.projects.membership(groupRef, "chan-gone"), false);
+  assert.equal((await turn("chan-gone", "web:chan-gone:inactive")).status, "refused");
+  assert.equal((await turn("owner", "web:owner:after-inactive")).status, "ok");
+  await assertRoster("web:owner:after-inactive", ["owner"]);
+
+  await runNowSettled(built.scheduler, ownerCron.id);
+  const inactiveOwnerCron = await cronRoster(ownerCron.id);
+  assert.equal(inactiveOwnerCron.fire.status, "ok");
+  assert.deepEqual(inactiveOwnerCron.participants, new Set(["owner"]));
+  await runNowSettled(built.scheduler, inactiveCron.id);
+  assert.equal((await built.crons.get(inactiveCron.id))?.enabled, false);
 });

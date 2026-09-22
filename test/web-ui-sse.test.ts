@@ -121,7 +121,14 @@ test("SSE relays tool activity frames and folds them into the done frame", async
   assert.equal(typeof d.finishedAt, "number", "done frame carries finishedAt");
 });
 
-test("active run lookup returns the latest tracked run for the caller's web thread", async () => {
+test("active run lookup returns the latest tracked run for the caller's web thread", async (t) => {
+  const completion = Promise.withResolvers<void>();
+  const complete = built.runs.complete.bind(built.runs);
+  t.mock.method(built.runs, "complete", async (...args: Parameters<typeof complete>) => {
+    await completion.promise;
+    return complete(...args);
+  });
+  t.after(() => completion.resolve());
   const threadRef = `web:alice:${randomUUID()}`;
   const submit = (await (
     await fetch(
@@ -138,10 +145,7 @@ test("active run lookup returns the latest tracked run for the caller's web thre
   assert.equal(activeRes.status, 200);
   const active = (await activeRes.json()) as { runId?: string | null; run?: { status?: string } | null };
   assert.equal(active.runId, submit.runId);
-  assert.ok(
-    ["pending", "running", "done", "failed"].includes(active.run?.status ?? ""),
-    "active lookup returns a run snapshot",
-  );
+  assert.ok(["pending", "running"].includes(active.run?.status ?? ""), "active lookup returns a run snapshot");
 
   const otherUser = await fetch(
     `${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`,

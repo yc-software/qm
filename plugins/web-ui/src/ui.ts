@@ -331,6 +331,20 @@ const RENDERABLE_IMAGE_TYPES = new Set([
   "image/x-ms-bmp",
 ]);
 
+export function attachmentGallery<T>(
+  attachments: readonly T[],
+  isImage: (attachment: T) => boolean,
+  renderAttachment: (attachment: T) => TemplateResult,
+): TemplateResult | typeof nothing {
+  if (!attachments.length) return nothing;
+  const images = attachments.filter(isImage);
+  const documents = attachments.filter((attachment) => !isImage(attachment));
+  return html`<div class="message-files attachment-gallery">
+    ${images.length ? html`<div class="attachment-images">${images.map(renderAttachment)}</div>` : nothing}
+    ${documents.length ? html`<div class="attachment-documents">${documents.map(renderAttachment)}</div>` : nothing}
+  </div>`;
+}
+
 export function browserRenderableImage(mimeType?: string): boolean {
   return RENDERABLE_IMAGE_TYPES.has((mimeType ?? "").split(";")[0]!.trim().toLowerCase());
 }

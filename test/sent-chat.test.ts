@@ -9,13 +9,14 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 test("sent chats are durable, idempotent, and isolated to the signed-in owner", async () => {
   const store = createLoopStore();
   const items = createLoopItemLedger();
+  let previewEnabled = false;
   let status = 0;
   let response: { item: { id: string; loopId: string; state: string; thread: { text: string }[] } };
   const ctx = {
     actor: { p: "alice" },
     url: new URL("http://localhost/?principalId=bob"),
     body: { threadId: "sent-only-thread", subject: "No inbox match", from: "Alice", text: "The sent email body" },
-    deps: { loops: { store, items } },
+    deps: { loops: { store, items }, featureFlags: { enabled: async () => previewEnabled } },
     res: {
       setHeader() {},
       writeHead(code: number) {
@@ -26,6 +27,10 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
       },
     },
   } as unknown as ApiCtx;
+  await ensureSentChat(ctx);
+  assert.equal(status, 403);
+  assert.equal((await store.list()).length, 0);
+  previewEnabled = true;
   await ensureSentChat(ctx);
   assert.equal(status, 200);
   const original = response!.item;
@@ -82,7 +87,11 @@ test("a sent email draft saves and sends into the original Gmail thread exactly 
       rfcMessageId: "<original@example.com>",
       text: "Original sent message",
     },
-    deps: { loops: { store, items }, loopSourceTokens: { connectorAccessToken: async () => "test-token" } },
+    deps: {
+      loops: { store, items },
+      loopSourceTokens: { connectorAccessToken: async () => "test-token" },
+      featureFlags: { enabled: async () => true },
+    },
     app: {
       membershipControlsScope: async () => false,
       samePerson: async (a: string, b: string) => a === b,
@@ -157,7 +166,7 @@ test("sent chat preserves long quoted recipient headers and rejects oversized in
   const ctx = {
     actor: { p: "alice" },
     body: { threadId: "t", to, cc },
-    deps: { loops: { store, items } },
+    deps: { loops: { store, items }, featureFlags: { enabled: async () => true } },
     res: {
       setHeader() {},
       writeHead(code: number) {

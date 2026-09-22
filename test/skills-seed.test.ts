@@ -199,7 +199,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
     surface: "test",
     actor,
     conversation: { kind: "dm", threadRef: "dm:U1:seeded-skills-read" },
-    text: "!read skills/google-workspace/SKILL.md",
+    text: "!skill google-workspace",
   } as TurnRequest);
   assert.match(read.reply ?? "", /Google Workspace/);
   assert.match(read.reply ?? "", /VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM/);
@@ -209,7 +209,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
     surface: "test",
     actor,
     conversation: { kind: "dm", threadRef: "dm:U1:seeded-drive-read" },
-    text: "!read skills/google-drive-sheets/SKILL.md",
+    text: "!skill google-drive-sheets",
   } as TurnRequest);
   assert.match(drive.reply ?? "", /Google Drive \/ Docs \/ Sheets \/ Slides/);
   assert.match(drive.reply ?? "", /sheets\.googleapis\.com/);
@@ -254,7 +254,7 @@ test("a bundled skill round-trips seed → store → materialize, assets land be
   const { sandbox, files } = fakeSandbox();
   const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
   const resolved = await skills.resolve("tooled", [org]);
-  await materializeSkillTree(sandbox, handle, resolved);
+  await materializeSkillTree(sandbox, handle, "skills", resolved);
   assert.equal(files.get("skills/tooled/SKILL.md"), tooled.manifest.body);
   assert.equal(files.get("skills/tooled/scripts/hello.py"), "print('hi')\n");
   assert.equal(files.get("skills/tooled/references/notes.md"), "# notes\n");

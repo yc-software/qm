@@ -9,10 +9,12 @@ import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { ensureInboxLoop, INBOX_SYNC_TASK_VERSION, renderInboxSyncTask } from "../src/loops/inbox-loop.ts";
+import { ensureInboxLoop, INBOX_SYNC_TASK_VERSION, renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
 import type { Cron, Loop, LoopItem } from "../src/types.ts";
 import type { LedgerItemView } from "../src/loops/ledger-view.ts";
 import type { SlackUserClient } from "../src/loops/sources/adapter.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import { sleep } from "../src/util/async.ts";
 
 function fakeRes() {
@@ -139,6 +141,7 @@ async function call(
     params: found.params,
     capability: over.capability === undefined ? CAP : over.capability,
     deps: {
+      featureFlags: { enabled: async () => true },
       loops: w.loops,
       sessions: {
         getByThread: async (threadRef: string) =>
@@ -663,12 +666,12 @@ test("the inbox resolver reports no loop until sync is set up", async () => {
   assert.equal(created.status, 200);
   const body = created.body as { loop: Loop; syncCron: { id: string; taskVersion: number } };
   assert.equal(body.syncCron.taskVersion, INBOX_SYNC_TASK_VERSION);
-  assert.equal(body.loop.surface, "inbox");
+  assert.equal(body.loop.surface, "inbox:gmail");
   const stored = w.crons.get(body.syncCron.id)!;
   assert.equal(stored.ownerScopeId, "personal:josh");
   assert.equal(stored.owner, "josh");
   assert.equal((stored.destination as { target: string }).target, "josh");
-  assert.equal(stored.action, renderInboxSyncTask(body.loop.id));
+  assert.equal(stored.action, renderSourceInboxTask(body.loop.id, "gmail"));
   const after = await call(w, { method: "GET", path: "/v1/loops/inbox" });
   assert.equal((after.body as { loop: Loop }).loop.id, body.loop.id);
 });
@@ -684,7 +687,7 @@ test("sync-cron is created once, refreshes stale task text, and disables on requ
   assert.equal(after.id, syncCron.id);
   assert.equal(after.taskVersion, INBOX_SYNC_TASK_VERSION);
   assert.equal(after.enabled, true);
-  assert.equal(w.crons.size, 1);
+  assert.equal(w.crons.size, 2);
   const disabled = await call(w, { method: "POST", path: "/v1/loops/inbox/sync-cron", body: { enabled: false } });
   assert.equal((disabled.body as { syncCron: { enabled: boolean } }).syncCron.enabled, false);
 });
@@ -802,4 +805,25 @@ test("concurrent source sends share a durable decision claim", async () => {
   assert.deepEqual(outcomes.map((out) => out.status).sort(), [200, 409]);
   assert.equal(w.sent.length, 1);
   assert.equal((await w.loops.items.get(item.id))!.decisionToken, undefined);
+});
+
+test("legacy and canonical item URLs serialize a concurrent send", async () => {
+  const w = world();
+  w.loops.lock = createMemoryAdvisoryLock();
+  const { loop, item } = await seed(w);
+  const defaults = await ensureDefaultInboxLoops(w.loops.store, "josh");
+  const target = defaults.find((value) => value.sources?.includes("slack"))!;
+  await w.loops.items.moveSource(loop.id, target.id, "slack");
+  const results = await Promise.all(
+    [loop.id, target.id].map((id) =>
+      call(w, {
+        method: "POST",
+        path: `/v1/loops/${id}/items/${item.id}/action?principalId=josh`,
+        body: { kind: "send" },
+        capability: PORTAL,
+      }),
+    ),
+  );
+  assert.deepEqual(results.map((result) => result.status).sort(), [200, 409]);
+  assert.equal(w.sent.length, 1);
 });

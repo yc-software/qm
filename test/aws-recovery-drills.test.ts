@@ -53,7 +53,7 @@ test("blue/green drill preserves the deployed task contract and breaks only core
     revision: 1,
     status: "ACTIVE",
     registeredAt: "today",
-    family: "yc-core",
+    family: "acme-core",
     cpu: "2048",
     memory: "4096",
     networkMode: "awsvpc",
@@ -81,7 +81,7 @@ test("blue/green drill preserves the deployed task contract and breaks only core
   assert.equal(broken.taskDefinitionArn, undefined);
   assert.equal(broken.revision, undefined);
   assert.equal(broken.registeredAt, undefined);
-  assert.equal(broken.family, "yc-core");
+  assert.equal(broken.family, "acme-core");
   const containers = broken.containerDefinitions as Array<Record<string, unknown>>;
   assert.deepEqual(containers[0]!.healthCheck, {
     command: ["CMD-SHELL", "exit 1"],

@@ -1,3 +1,4 @@
+import { cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
 import {
@@ -22,7 +23,7 @@ import { recoverNextFireAt } from "./schedule.ts";
 import type { CronFireJob, CronJobQueue } from "./job-queue.ts";
 import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 
 const TICK_LEASE_KEY = "cron:scheduler:tick";
@@ -68,6 +69,7 @@ export interface Scheduler {
 
 export interface SchedulerDeps {
   admittedWork?: AdmittedWork;
+  lock?: import("../persistence/advisory-lock.ts").AdvisoryLock;
   crons: CronStore;
   deliveries: DeliveryStore;
   idempotency: IdempotencyStore;
@@ -85,7 +87,11 @@ export interface SchedulerDeps {
   jobQueue?: CronJobQueue;
   requireQueueStart?: boolean;
   sessions?: TriggerDeps["sessions"];
-  fireLoop?: (loopId: string, fireKey: string) => Promise<{ status?: TurnResult["status"]; note?: string }>;
+  fireLoop?: (
+    loopId: string,
+    fireKey: string,
+    cronId: string,
+  ) => Promise<{ status?: TurnResult["status"]; note?: string }>;
 }
 
 function truncate(s: string, maxChars: number): string {
@@ -195,6 +201,25 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const leaderLease = deps.leaderLease ?? createNoopLeaderLease();
 
   async function fire(cron: Cron, t: number, fireKey: string, scheduledAt?: number): Promise<FireResult> {
+    const run = async (): Promise<FireResult> => {
+      const current = await deps.crons.get(cron.id);
+      if (!current || current.archived || !current.enabled) {
+        await deps.crons.recordFire(cron.id, {
+          fireKey,
+          threadRef: cronFireThreadRef(cron.id, fireKey),
+          firedAt: t,
+          endedAt: now(),
+          status: "silent",
+          note: "Cron is no longer enabled",
+        });
+        return { authzFailed: true };
+      }
+      return fireEnabled(current, t, fireKey, scheduledAt);
+    };
+    return deps.lock ? deps.lock.withLock(`cron-lifecycle:${cron.id}`, run) : run();
+  }
+
+  async function fireEnabled(cron: Cron, t: number, fireKey: string, scheduledAt?: number): Promise<FireResult> {
     const threadRef = cronFireThreadRef(cron.id, fireKey);
     const runningEntry: CronFireLogEntry = {
       fireKey,
@@ -210,7 +235,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         result = { status: "failed", note: "loop service unavailable" };
       } else
         try {
-          result = await deps.fireLoop(cron.loopId, fireKey);
+          result = await deps.fireLoop(cron.loopId, fireKey, cron.id);
         } catch (e) {
           result = { status: "failed", note: errMessage(e) };
         }
@@ -240,8 +265,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ...(deps.sessions ? { sessions: deps.sessions } : {}),
         },
         {
-          owner: cron.owner,
-          ownerScopeId: cron.ownerScopeId,
+          ...cronTriggerAuthority(cron),
           input: renderCronFireInput(cron, mentionRoster),
           fireKey,
           threadRef,
@@ -252,9 +276,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           },
           ...(cron.message !== undefined ? { message: cron.message } : {}),
           ...(cron.destination ? { destination: cron.destination } : {}),
-          ...(cron.runAs ? { runAs: cron.runAs } : {}),
-          ...(cron.unattendedGrants ? { unattendedGrants: cron.unattendedGrants } : {}),
-          ...(cron.members ? { members: cron.members } : {}),
           ...(cron.recipientConsent ? { recipientConsent: cron.recipientConsent } : {}),
           recipientConsentRequired: cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined,
           deferWhenBusy: scheduledAt !== undefined && t - scheduledAt <= BUSY_DEFER_MAX_LATE_MS,
@@ -315,7 +336,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const swept = await deps.crons.sweepStrandedFires(t);
       if (swept > 0) console.warn(`[scheduler] closed ${swept} stranded running fire(s) as failed`);
     } catch (e) {
-      console.error("[scheduler] stranded-fire sweep failed:", errMessage(e));
+      reportFailure("scheduler: stranded-fire sweep", e);
     }
   };
 
@@ -327,7 +348,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const pruned = await deps.crons.pruneFires(t);
       if (pruned > 0) console.log(`[scheduler] pruned ${pruned} old cron fire row(s)`);
     } catch (e) {
-      console.error("[scheduler] cron fire GC failed:", errMessage(e));
+      reportFailure("scheduler: cron fire gc", e);
     }
   };
 
@@ -343,7 +364,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           await deps.crons.markAttempted(cron.id, t);
           batch.push(cron);
         } catch (e) {
-          console.error("[scheduler] attempt mark failed, holding this cron back:", errMessage(e));
+          reportFailure("scheduler: attempt mark (holding this cron back)", e);
         }
       }
       console.warn(`[scheduler] fan-out capped: firing ${batch.length}/${due.length} due crons this tick`);
@@ -354,7 +375,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         const { authzFailed, deferred } = await fire(cron, t, `cron:${cron.id}:${cron.scheduledAt}`, cron.scheduledAt);
         if (!authzFailed && !deferred) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
       } catch (e) {
-        console.error("[scheduler] fire failed:", errMessage(e));
+        reportFailure("scheduler: fire", e);
       }
     }
   };
@@ -367,13 +388,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         await fireDue(t, observed);
         await sweepStranded(t);
         await gcFires(t);
-        await deps.sweepAsks?.(t).catch((e: unknown) => console.error("[scheduler] ask sweep failed:", errMessage(e)));
+        await deps.sweepAsks?.(t).catch(reportFailureAs("scheduler: ask sweep", undefined));
       }),
     );
   };
 
   const makeSweeper = () =>
-    createSweeper(() => tick().catch((e: unknown) => console.error("[scheduler] tick failed:", errMessage(e))), 1000, {
+    createSweeper(() => tick().catch(reportFailureAs("scheduler: tick", undefined)), 1000, {
       label: "scheduler",
     });
 
@@ -429,7 +450,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         return;
       }
     } catch (e) {
-      console.error("[scheduler] fire failed:", errMessage(e));
+      reportFailure("scheduler: fire", e);
       await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
       return;
     }
@@ -445,11 +466,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         if (job) await deps.jobQueue!.enqueueFire(job);
       }
     } catch (e) {
-      console.error("[scheduler] tick failed:", errMessage(e));
+      reportFailure("scheduler: reconcile", e);
     }
     await sweepStranded(now());
     await gcFires(now());
-    await deps.sweepAsks?.(now()).catch((e: unknown) => console.error("[scheduler] ask sweep failed:", errMessage(e)));
+    await deps.sweepAsks?.(now()).catch(reportFailureAs("scheduler: ask sweep", undefined));
   }
 
   let stopSignal = Promise.withResolvers<void>();
@@ -511,7 +532,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           }
           const settled = withWork(() => fire(cron, t, fireKey)).then(
             () => undefined,
-            (e: unknown) => console.error("%s", `[scheduler] manual fire of cron ${cronId} failed:`, errMessage(e)),
+            reportFailureAs("scheduler: manual fire", undefined, `cron=${cronId}`),
           );
           pending.add(settled);
           void settled.finally(() => pending.delete(settled));
@@ -530,7 +551,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     },
     notifyChanged(cronId) {
       if (!deps.jobQueue) return;
-      void enqueueNext(cronId).catch((e: unknown) => console.error("[scheduler] cron enqueue failed:", errMessage(e)));
+      void enqueueNext(cronId).catch(reportFailureAs("scheduler: cron enqueue", undefined, `cron=${cronId}`));
     },
     start(intervalMs) {
       if (started || stopping || pausing || stopFailed) return;
@@ -556,7 +577,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           },
           (e: unknown) => {
             if (deps.requireQueueStart) throw e;
-            console.error("[scheduler] cron job queue failed to start; falling back to interval ticks:", errMessage(e));
+            reportFailure("scheduler: cron job queue start (falling back to interval ticks)", e);
             if (!stopped) sweeper.start(intervalMs);
           },
         );

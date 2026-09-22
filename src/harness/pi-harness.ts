@@ -13,6 +13,7 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import {
+  calculateCost,
   InMemoryCredentialStore,
   type Api,
   type Context,
@@ -21,6 +22,7 @@ import {
   type ModelsApiStreamOptions,
   type ModelsSimpleStreamOptions,
   type ProviderHeaders,
+  type Usage,
 } from "@earendil-works/pi-ai";
 import { baseModelProviders, CONFIG_DEFAULTS, type Config } from "../config.ts";
 
@@ -581,18 +583,13 @@ export function decomposeGapPhases(
   return phases;
 }
 
-interface PiUsageShape {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  totalTokens?: number;
-  cost?: { total?: number };
-}
-
-function piUsageToCallUsage(u: PiUsageShape | undefined): LlmCallUsage | null {
+export function piUsageToCallUsage(
+  u: Partial<Usage> | undefined,
+  model: Model<Api> | undefined,
+  fast: boolean | undefined,
+): LlmCallUsage | null {
   if (!u) return null;
-  return {
+  const row: LlmCallUsage = {
     input: u.input ?? 0,
     output: u.output ?? 0,
     cacheRead: u.cacheRead ?? 0,
@@ -600,6 +597,19 @@ function piUsageToCallUsage(u: PiUsageShape | undefined): LlmCallUsage | null {
     totalTokens: u.totalTokens ?? 0,
     costUsd: u.cost?.total ?? 0,
   };
+  if (!fast || !model?.cost) return row;
+  const priced: Usage = {
+    input: row.input,
+    output: row.output,
+    cacheRead: row.cacheRead,
+    cacheWrite: row.cacheWrite,
+    ...(typeof u.cacheWrite1h === "number" ? { cacheWrite1h: Math.min(u.cacheWrite1h, row.cacheWrite) } : {}),
+    totalTokens: row.totalTokens,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+  const card = fast ? ({ ...model, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } as Model<Api>) : model;
+  row.costUsd = calculateCost(card, priced).total;
+  return row;
 }
 
 function sumCacheUsage(
@@ -1434,19 +1444,13 @@ export function resolveConfiguredModelId(configured: string | undefined, default
   return DEFAULT_AGENT_MODEL_ID;
 }
 
-function withFastModeHeaders(model: Model<Api>): Model<Api> {
+export function withFastModeHeaders(model: Model<Api>): Model<Api> {
   const api = String((model as { api?: unknown }).api ?? "").toLowerCase();
-  if (api.startsWith("openai")) {
-    return { ...model, fastMode: true, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } as Model<Api>;
-  }
+  if (api.startsWith("openai")) return model;
   const prior = model.headers?.["anthropic-beta"];
   const beta = prior ? `${prior},${FAST_MODE_BETA}` : FAST_MODE_BETA;
 
-  return {
-    ...model,
-    headers: { ...model.headers, "anthropic-beta": beta },
-    cost: scaleCost(model.cost, FAST_COST_MULTIPLIER),
-  };
+  return { ...model, headers: { ...model.headers, "anthropic-beta": beta } };
 }
 
 export function applyTurnEffort(session: AgentSession, level?: string): void {
@@ -1519,6 +1523,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     tape?: HarnessTurnInput["tape"],
     turnProviderKeys?: ProviderKeys,
     sessionTools = false,
+    delegateWork = false,
   ): Promise<{ entry: TurnSession; compileMs: number }> {
     const compileStart = Date.now();
     let reconstructed: PiReplayMessage[] | null;
@@ -1572,6 +1577,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         settingsManager,
         customTools: createAgentTools(ref, {
           sessionTools,
+          delegateWork,
           scratchExec,
           ownerAuthExec,
           reachExec,
@@ -1754,6 +1760,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           turn.tape,
           turn.providerKeys,
           Boolean(turn.tools.sessionSyscalls),
+          turn.delegateWork,
         );
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
@@ -1929,20 +1936,18 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               turn.onDelta?.(event.assistantMessageEvent.delta);
             } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
               const end = Date.now();
-              const u = (event.message as { usage?: PiUsageShape }).usage;
-              meterGrindCall(
-                grindMeter,
-                piUsageToCallUsage(u),
-                (entry.agentSession.model as { id?: string } | undefined)?.id ?? effectiveModel,
-              );
+              const u = (event.message as { usage?: Partial<Usage> }).usage;
+              const stepModel = entry.agentSession.model;
+              const usage = piUsageToCallUsage(u, stepModel, entry.ref.fast);
+              meterGrindCall(grindMeter, usage, stepModel?.id ?? effectiveModel);
               const meteredGoal = entry.ref.goal;
               if (meteredGoal && (meteredGoal.status === "active" || meteredGoal.status === "complete"))
-                meterGoalCall(meteredGoal, piUsageToCallUsage(u));
+                meterGoalCall(meteredGoal, usage);
               callStats.push({
                 ttftMs: curStart !== undefined && curFirst !== undefined ? curFirst - curStart : null,
                 durationMs: curStart !== undefined ? end - curStart : null,
                 stepGapMs: stepGapMs(prevStepEnd, curStart),
-                usage: piUsageToCallUsage(u),
+                usage,
               });
               stepWindows.push({
                 ...(prevStepEnd !== undefined ? { gapStart: prevStepEnd } : {}),

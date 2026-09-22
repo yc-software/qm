@@ -11,6 +11,7 @@ export interface BackgroundControllerDeps {
   drained(): Promise<void>;
   onError(error: unknown): void;
   validityMs?: number;
+  startupTimeoutMs?: number;
   pollMs?: number;
 }
 
@@ -24,6 +25,8 @@ export function createBackgroundController(deps: BackgroundControllerDeps) {
   let watchdog: ReturnType<typeof setTimeout> | null = null;
   let poller: ReturnType<typeof setInterval> | null = null;
   let pending: Promise<void> | null = null;
+  let starting = false;
+  let refreshing: Promise<void> | null = null;
   let draining: Promise<void> = Promise.resolve();
   const validityMs = deps.validityMs ?? 10_000;
   const fence = (): void => {
@@ -54,8 +57,44 @@ export function createBackgroundController(deps: BackgroundControllerDeps) {
     watchdog = setTimeout(fence, validityMs);
     watchdog.unref?.();
   };
+  const refreshStartup = (): Promise<void> => {
+    if (!starting || !running || !activation || activation.signal.aborted) return Promise.resolve();
+    if (refreshing) return refreshing;
+    const currentActivation = activation;
+    const generation = admission;
+    refreshing = (async () => {
+      try {
+        const state = await deps.store.get();
+        if (!starting || !running || activation !== currentActivation || currentActivation?.signal.aborted) return;
+        const member = state.members.find((entry) => entry.instanceId === deps.identity.instanceId);
+        if (
+          state.generation !== generation ||
+          !member ||
+          member.retired ||
+          member.state !== "admitted" ||
+          member.generation !== generation ||
+          !(state.enabled ? state.desiredDeploymentId === deps.identity.deploymentId : deps.legacyEnabled)
+        ) {
+          fence();
+          return;
+        }
+        renew();
+      } catch (error) {
+        if (starting && activation === currentActivation) {
+          fence();
+          deps.onError(error);
+        }
+      }
+    })().finally(() => {
+      refreshing = null;
+    });
+    return refreshing;
+  };
   const reconcile = (): Promise<void> => {
-    if (pending) return pending;
+    if (pending) {
+      if (starting) void refreshStartup();
+      return pending;
+    }
     pending = (async () => {
       try {
         if (!registered) {
@@ -82,7 +121,18 @@ export function createBackgroundController(deps: BackgroundControllerDeps) {
             await release();
             return;
           }
-          await deps.start(activation.signal);
+          starting = true;
+          const startupDeadline = setTimeout(() => {
+            fence();
+            deps.onError(new Error("Background startup timed out; waiting for activation cleanup before retrying"));
+          }, deps.startupTimeoutMs ?? 120_000);
+          startupDeadline.unref?.();
+          try {
+            await deps.start(activation.signal);
+          } finally {
+            clearTimeout(startupDeadline);
+            starting = false;
+          }
           if (activation.signal.aborted || !running) await release();
           else await deps.store.markReady(deps.identity.instanceId, state.generation);
         } else {

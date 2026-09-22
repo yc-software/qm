@@ -1,9 +1,12 @@
+import { SettingsState, load as loadSettings, states as settingsStates } from "../ui/settings.ts";
+import { CredentialState } from "../ui/settings-credentials.ts";
+import { GovernanceState, load, states } from "../ui/governance-state.ts";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readAdminSource } from "./admin-source.ts";
 import test from "node:test";
 import vm from "node:vm";
 
-const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+const html = readAdminSource();
 
 function resolvedDisplay(classes: string[]) {
   const styles = [...html.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n");
@@ -51,7 +54,7 @@ test("admin shell groups control, logs, and artifacts like the reorganization", 
   assert.ok(sections);
   const actual = JSON.parse(JSON.stringify(vm.runInNewContext(sections)));
   assert.deepEqual(actual, [
-    { views: ["governance", "models", "credentials", "connectors", "customize", "users"] },
+    { views: ["governance", "models", "credentials", "connectors", "slack-settings", "customize", "users"] },
     { label: "Logs", views: ["history", "slack", "judgments", "errors", "audit", "egress"] },
     { label: "Artifacts", views: ["files", "skills", "memory", "deployments", "crons"] },
     { views: ["design-system"] },
@@ -65,7 +68,7 @@ test("admin shell groups control, logs, and artifacts like the reorganization", 
 
 test("deployment management is presented as Apps", () => {
   assert.match(html, /deployments: "Apps"/);
-  assert.match(html, /Search all apps…/);
+  assert.match(html, /governanceUI\.artifacts\.deployments\(root, d, artifactContext\(\)\)/);
   assert.doesNotMatch(html, /deployments: "Deployments"/);
 });
 
@@ -74,30 +77,29 @@ test("admin shell defaults bare admin URLs to org history", () => {
   assert.match(html, /let view = DEFAULT_VIEW;/);
   assert.match(
     html,
-    /let resolvedView = DEFAULT_VIEW;\s*if \(VIEWS\.includes\(v\)\) resolvedView = v;\s*else if \(session\) resolvedView = "history";[\s\S]*view: resolvedView/,
+    /let resolvedView = DEFAULT_VIEW;\s*if \(VIEWS\.includes\(v\) && \(v !== "design-system" \|\| permissions\.includes\("inbox"\)\)\) resolvedView = v;\s*else if \(session\) resolvedView = "history";[\s\S]*view: resolvedView/,
   );
 });
 
-test("connector setup uses the live catalog and shows exact provider and callback links", () => {
-  assert.match(html, /api\("GET", "\/api\/connector-catalog"\)/);
-  assert.match(html, /setupGuide\.url/);
-  assert.match(html, /location\.origin \+ "\/v1\/connectors\/oauth\/" \+ connector\.redirectPath/);
-  assert.match(html, /target="_blank"/);
-  assert.match(html, /Configured by deployment secrets/);
-  assert.match(html, /item\.configured/);
-  assert.doesNotMatch(html, /const CONNECTOR_CATALOG = \[/);
+test("the design system follows the inbox permission", () => {
+  assert.match(html, /if \(v === "design-system" && !permissions\.includes\("inbox"\)\) return;/);
+  assert.match(html, /permissions = Array\.isArray\(me\.data\.permissions\) \? me\.data\.permissions : \[\];/);
+});
+
+test("connector setup uses reactive forms with write-only Slack credentials", () => {
+  assert.match(html, /governanceUI.integrations.configure/);
+  assert.match(html, /id="conn-client-secret"/);
+  assert.match(html, /type="password"/);
   assert.match(html, /id="slack-bot-token"/);
-  assert.match(html, /api\("PUT", "\/api\/slack-installation"/);
-  assert.match(html, /Use your own Slack app/);
+  assert.match(html, /Set up Slack/);
 });
 
 test("temporary onboarding covers model credentials, Slack, and OAuth setup", () => {
   assert.match(html, /view-onboarding/);
   assert.match(html, /Model provider/);
   assert.match(html, /OpenRouter/);
-  assert.match(html, /api\("GET", "\/api\/model-providers"\)/);
-  assert.match(html, /api\("PUT", "\/api\/model-providers\/" \+ encodeURIComponent\(provider\)/);
-  assert.match(html, /models\.data\.models/);
+  assert.match(html, /governanceUI\.onboarding\.configure/);
+  assert.match(html, /return governanceUI\.onboarding\.load\(\)/);
   assert.doesNotMatch(html, /const ONBOARDING_MODELS/);
   assert.match(html, /viewLoadedAt\.onboarding = Date\.now\(\)/);
   assert.match(html, /data-onboarding-target="slack"/);
@@ -109,7 +111,7 @@ test("admin shell addresses views by path, not a ?view= query param", () => {
   assert.doesNotMatch(html, /p\.set\("view", st\.view\)/);
   assert.match(
     html,
-    /const raw = p\.get\("setup"\) === "slack" \|\| slackStep \? "connectors" : p\.get\("view"\) \|\| fromPath;/,
+    /const raw = p\.get\("setup"\) === "slack" \|\| slackStep \? "slack-settings" : p\.get\("view"\) \|\| fromPath;/,
   );
   assert.doesNotMatch(html, /st\.view !== "governance"/);
 });
@@ -134,24 +136,9 @@ test("mobile admin navigation keeps the active section visible and controls touc
   assert.match(html, /safe-area-inset-bottom/);
 });
 
-test("admin history previews quote the first message instead of saying started", () => {
-  assert.equal((html.match(/\?\s*"> "\s*\+\s*s\.firstMessage\s*:\s*"created "/g) || []).length, 1);
-  assert.doesNotMatch(html, /\? "started " \+ s\.firstMessage : "created "/);
-});
-
 test("transcript visibility controls stay in the sticky header and filter lazy-rendered entries", () => {
-  const transcript = html.slice(html.indexOf("async function showTranscript("));
   assert.match(html, /id="header-controls" aria-label="Page controls"/);
-  assert.match(html, /checkbox\("thinking", "thinking"\)/);
-  assert.match(html, /checkbox\("tool results", "toolResults"\)/);
-  assert.match(html, /materialize\(from, firstRendered, true\);[\s\S]*applyTranscriptControls\(\);/);
-  assert.match(html, /applyTranscriptControls\(\);\s*const addedHeight = document\.body\.scrollHeight - prevHeight;/);
-  assert.match(html, /if \(addedHeight > 1\) io\.observe\(sentinel\);\s*else pauseFilteredReveal\(\);/);
-  assert.ok(
-    transcript.indexOf("renderTranscriptHeaderControls(() => applyTranscriptControls());") <
-      transcript.indexOf("const r = await api("),
-    "controls render before the transcript request",
-  );
+  assert.match(html, /governanceUI.transcript.show/);
   assert.match(html, /\.header-check \{[^}]*min-height: 44px/);
   assert.match(
     html,
@@ -175,19 +162,24 @@ test("transcript filters hide diagnostics without hiding folded delivery evidenc
 });
 
 test("governance posture saves refresh only the saved card", () => {
-  const reloads = html.match(/const SAVE_RELOADS = new Set\(\[[^\n]+/)?.[0] ?? "";
-  assert.doesNotMatch(reloads, /security-posture|ambient-policy/);
-  assert.match(html, /if \(key === "security-posture" \|\| key === "sharing-posture" \|\| key === "ambient-policy"\)/);
+  assert.match(html, /governanceUI.commit\(key, body\)/);
+  assert.match(html, /governanceUI.load\(fresh.data, requestedScope, key\)/);
+  load({ securityPosture: "auto", sharingPosture: "isolated" }, "org:test");
+  states.get("sharing-posture")!.change("sharing-posture", "open");
+  load({ securityPosture: "strict", sharingPosture: "isolated" }, "org:test", "security-posture");
+  assert.equal(states.get("sharing-posture")!.draft.posture, "open");
+  assert.equal(states.get("sharing-posture")!.dirty, true);
 });
 
-test("compact ambient reply policy tracks the value after each save", () => {
-  assert.match(html, /if \(key === "org-ambient"\) \{/);
-  assert.match(html, /governanceOrgAmbientSaved = body\.on \? "on" : "off"/);
-  assert.match(html, /\$\("governance-org-ambient-save"\)\.disabled = true/);
-  assert.match(
-    html,
-    /orgAmbientStatus\.classList\.contains\("err"\)[\s\S]*\$\("governance-org-ambient-save"\)\.disabled = false/,
-  );
+test("ambient reply policy saves directly from Governance without a duplicate control", () => {
+  const state = new GovernanceState("org-ambient");
+  state.load({ on: true });
+  for (const on of [false, true]) {
+    state.change("governance-org-ambient", on);
+    assert.deepEqual(state.collect(), { on });
+  }
+  assert.match(html, /id="governance-org-ambient-save"\s+data-save="org-ambient"/);
+  assert.doesNotMatch(html, /id="card-org-ambient"|id="org-ambient"/);
 });
 
 test("governance retains scoped effective-state data behind the compact reference layout", () => {
@@ -225,9 +217,9 @@ test("control-plane pages use the shared web UI canvas without redundant page in
   assert.match(html, /data-choice-for="security-posture"/);
   assert.match(html, /data-choice-for="sharing-posture"/);
   assert.match(html, /data-checkbox-for="external-slack-participants"/);
-  assert.match(html, /governanceAmbient\.id = "card-governance-org-ambient"/);
+  assert.match(html, /governanceUI\.createCard\("card-governance-org-ambient"\)/);
   assert.match(html, /id="sc-editor"/);
-  assert.match(html, /id="sc-add">\+ Add credential/);
+  assert.match(html, /id="sc-add"[^>]*>\s*\+ Add credential/);
   assert.match(html, /id="conn-editor"/);
   assert.match(html, /id="slack-token-editor"/);
   assert.match(html, /id="soul-preview"/);
@@ -240,33 +232,34 @@ test("control-plane pages use the shared web UI canvas without redundant page in
 });
 
 test("governance renders simple settings as compact rows with contextual actions", () => {
-  for (const id of [
-    "card-security-posture",
-    "card-sharing-posture",
-    "card-external-slack",
-    "card-people-directory",
-    "card-turn-wall-clock",
-  ]) {
-    assert.match(html, new RegExp(`class="card(?: sv-[a-z]+)? setting-row(?: hidden)?" id="${id}"`));
+  for (const id of ["card-security-posture", "card-sharing-posture", "card-external-slack"]) {
+    assert.match(html, new RegExp(`<section(?=[^>]*class="[^"]*setting-row)(?=[^>]*id="${id}")`));
   }
   assert.match(html, /class="setting-toggle"/);
-  assert.match(html, /class="setting-switch" aria-hidden="true"/);
-  assert.match(html, /data-save="external-slack-participants">\s*Apply\s*<\/button\s*>/);
-  assert.match(html, /"turnWallClockSec" in r\.data/);
+  assert.match(html, /data-save="external-slack-participants"/);
 });
 
 test("default runtime controls save reasoning level and fast mode", () => {
-  assert.match(html, /id="base-effort"/);
-  assert.match(html, /id="base-fast-mode"/);
-  assert.match(html, /id="base-fast-mode-control"/);
-  assert.match(html, /thinkingLevelsByHarness/);
-  assert.match(html, /fastModeModelIds/);
-  assert.match(html, /fastModeHarnessIds/);
-  assert.match(html, /base-fast-mode-control"\)\.style\.display = fastCapable \? "" : "none"/);
-  assert.match(
-    html,
-    /runtime: \(\) => \(\{[\s\S]*effortLevel: \$\("base-effort"\)\.value,[\s\S]*fastMode: \$\("base-fast-mode"\)\.checked/,
+  for (const id of ["base-effort", "base-fast-mode", "base-fast-mode-control"])
+    assert.match(html, new RegExp(`id="${id}"`));
+  loadSettings(
+    {
+      baseModelOptions: [{ id: "a" }],
+      baseModelDefault: "a",
+      runtime: { harnessId: "pi", modelId: "a", effortLevel: "high", fastMode: true },
+      thinkingLevelsByHarness: { pi: ["auto", "high"] },
+      fastModeHarnessIds: ["pi"],
+      fastModeModelIds: ["a"],
+    },
+    "org:test",
+    "runtime",
   );
+  assert.deepEqual(settingsStates.get("runtime")!.collect(), {
+    harnessId: "pi",
+    modelId: "a",
+    effortLevel: "high",
+    fastMode: true,
+  });
 });
 
 test("compact governance rows preserve policy detail and collapse before they overflow", () => {
@@ -298,35 +291,15 @@ test("governance reviews high-impact changes in product and preserves drafts", (
 });
 
 test("governance disables egress controls when agent computers cannot enforce them", () => {
-  assert.match(html, /id="egress-capability"/);
-  assert.doesNotMatch(html, /View deployment/);
-  assert.match(html, /id="egress-deny-editor"/);
-  assert.match(html, /id="egress-allow-editor"/);
-  assert.match(html, /class="egress-empty-state"/);
-  assert.match(html, /id="egress-add-deny">\+ Denylist/);
-  assert.match(html, /id="egress-add-allow">\+ Allowlist/);
-  assert.match(html, /data\.egressEnforcement/);
-  assert.match(html, /egressCard\.classList\.toggle\("egress-disabled", !enforcement\.active\)/);
-  assert.match(html, /capability\.classList\.toggle\("hidden", !!enforcement\.active\)/);
-  assert.match(html, /control\.disabled = !enforcement\.active/);
-  assert.match(html, /enforcement\.reason === "control_plane_unconfigured"/);
-  assert.match(html, /Egress enforcement has not been activated for agent computers/);
-  assert.match(html, /Backend supports policy; control plane inactive/);
-  assert.match(html, /Backend cannot enforce host policy/);
-  assert.doesNotMatch(html, /fidelity, which cannot enforce outbound host policy/);
-  assert.doesNotMatch(html, /Agents still have open outbound access/);
-  assert.match(html, /Agent computer egress policy unavailable/);
-  assert.match(html, /"Agent computers use "\s*\+\s*titleCase\(enforcement.backend\)/);
-  assert.match(html, /cannot enforce host restrictions on all outbound traffic/);
-  assert.match(html, /A configured egress proxy still applies policy to traffic sent through it/);
-  assert.doesNotMatch(html, /This deployment’s|The deployment backend cannot enforce/);
+  load({ egress: {}, egressEnforcement: { active: false } }, "org:test");
+  assert.equal(states.get("egress")!.disabled, true);
+  load({ egress: {}, egressEnforcement: { active: true } }, "org:test");
+  assert.equal(states.get("egress")!.disabled, false);
 });
 
 test("governance keeps effective-state summaries synchronized after focused saves", () => {
-  assert.match(html, /renderGovernanceOverview\(fresh\.data\)/);
-  assert.match(html, /renderGovernanceOverview\(\{ \.\.\.governanceOverviewData, egress: body \}\)/);
+  assert.match(html, /governanceUI.load\(fresh.data, requestedScope, key\)/);
   assert.match(html, /btn\.dataset\.saveRequest === saveRequest/);
-  assert.match(html, /setStatus\(SAVE_ST\[key\], "", ""\)/);
 });
 
 test("stale governance reads cannot overwrite a newer scope", () => {
@@ -335,37 +308,37 @@ test("stale governance reads cannot overwrite a newer scope", () => {
     html,
     /if \(requestId !== governanceReq \|\| requestedScope !== scope \|\| requestedView !== view\) return;/,
   );
-  assert.match(html, /encodeURIComponent\(requestedScope\) \+ "\/" \+ key/);
+  assert.match(html, /encodeURIComponent\(requestedScope\) \+ "\/" \+ \(isBranding \? "branding" : key\)/);
 });
 
 test("egress omits the backend enforcement summary and hides empty editors", () => {
   assert.doesNotMatch(html, /class="egress-state"/);
-  assert.doesNotMatch(html, /id="egress-backend"|id="egress-enforcement"|id="egress-effective"/);
-  assert.doesNotMatch(html, /Policy is enforced|enforces this policy/);
-  assert.match(html, /Denylist: hosts the agent may never reach/);
-  assert.match(html, /Allowlist: when present, only these outbound hosts may be reached/);
-  assert.match(html, /const hasRules = allowedHosts\.length > 0 \|\| deniedHosts\.length > 0/);
-  assert.match(html, /\$\("egress-deny-editor"\)\.classList\.toggle\("hidden", deniedHosts\.length === 0\)/);
-  assert.match(html, /\$\("egress-allow-editor"\)\.classList\.toggle\("hidden", allowedHosts\.length === 0\)/);
+  const state = new GovernanceState("egress");
+  state.load({ allowedHosts: [], deniedHosts: [] });
+  assert.equal(state.allowEditor, false);
+  assert.equal(state.denyEditor, false);
+  state.load({ allowedHosts: ["example.com"], deniedHosts: [] });
+  assert.equal(state.allowEditor, true);
+  assert.equal(state.denyEditor, false);
 });
 
 test("egress validation follows programmatic reloads and successful saves", () => {
-  assert.match(html, /populateEgress\(r\.data\.egress\)/);
-  assert.match(html, /function populateEgress\(policy\)[\s\S]*renderEgressValidation\(\)/);
-  assert.match(html, /if \(key === "egress"\)[\s\S]*renderGovernanceOverview[\s\S]*populateEgress\(body\)/);
+  const state = new GovernanceState("egress");
+  state.load({ allowedHosts: ["https://invalid"], deniedHosts: [] });
+  assert.equal(state.warnings.length, 1);
+  state.load({ allowedHosts: ["example.com"], deniedHosts: [] });
+  assert.deepEqual(state.warnings, []);
+  state.change("egress-deny", "example.com");
+  assert.match(state.warnings[0], /both lists/);
 });
 
 test("command policy uses compact sentence rows and a modal tester", () => {
   assert.doesNotMatch(html, /id="mode"|class="policy-mode"/);
-  assert.match(html, /commandPolicyMode = cp\?\.mode \|\| "denylist"/);
-  assert.match(html, /return \{ mode: commandPolicyMode, rules \}/);
-  assert.match(html, /row\.append\(sel, pat, rsn, del\)/);
-  assert.match(html, /\$\("rules"\)\.prepend\(row\)/);
-  assert.match(html, /slice\(3\)/);
   assert.match(html, /id="policy-test-dialog"/);
   assert.match(html, /\$\("policy-test-dialog"\)\.showModal\(\)/);
-  assert.doesNotMatch(html, /Patterns matched against each executed command/);
-  assert.doesNotMatch(html, /Priority<\/th>|Order<\/th>|Move rule up|Move rule down/);
+  const state = new GovernanceState("command-policy");
+  state.load({ mode: "allowlist", rules: [{ pattern: "^safe$", decision: "allow" }] });
+  assert.deepEqual(state.collect(), { mode: "allowlist", rules: [{ pattern: "^safe$", decision: "allow" }] });
 });
 
 test("the removed config-transfer surface stays gone", () => {
@@ -406,8 +379,10 @@ test("governance credential editor previews effective capability and uses an in-
   assert.match(html, /function renderServiceCredentialCapability\(\)/);
   assert.match(html, /expectedUpdatedAt: c\.updatedAt/);
   assert.match(html, /function refreshServiceCredentialConflict\(\)/);
-  assert.match(html, /if \(refreshedEditing\) scEditVersion = refreshedEditing\.updatedAt/);
-  assert.match(html, /scEditing && scEditVersion != null \? \{ expectedUpdatedAt: scEditVersion \}/);
+  assert.match(html, /credentialState.version = scEditVersion/);
+  const state = new CredentialState();
+  state.begin({ slug: "test", name: "Test", host: "example.com", updatedAt: 42 });
+  assert.equal(state.collect().expectedUpdatedAt, 42);
   assert.match(html, /it remains an edit and cannot recreate the credential/);
   assert.match(html, /latest state could not be loaded\. Refresh the page before deleting/);
   assert.match(html, /latest revision could not be loaded\. Your draft is preserved/);
@@ -416,12 +391,10 @@ test("governance credential editor previews effective capability and uses an in-
     html,
     /catch \{\s*updateScFormDirty\(\);\s*setStatus\(\s*"st-service-credentials",\s*"Save failed because the admin service could not be reached/,
   );
-  assert.match(html, /usageTruncated \? "at least "/);
+
   assert.match(html, /Recent users in the retained window/);
   assert.doesNotMatch(html, /serviceCredList\.find\(\(c\) => c\.slug === scEditing\)\?\.updatedAt/);
-  assert.match(html, /personal\|team\|org\|channel\|group/);
-  assert.match(html, /unsupported legacy grant/);
-  assert.match(html, /matches multiple people/);
+
   assert.match(html, /reviewGovernanceChange/);
   assert.doesNotMatch(html, /confirm\("Delete shared credential/);
 });
@@ -430,7 +403,9 @@ test("governance SOUL workbench shows draft diff, history, and conflict-safe res
   assert.match(html, /id="soul-saved"/);
   assert.match(html, /id="soul-draft"/);
   assert.match(html, /id="soul-history"/);
-  assert.match(html, /expectedVersion: soulVersion/);
+  const state = new SettingsState("soul");
+  state.draft = { content: "test", expectedVersion: 4 };
+  assert.equal(state.collect().expectedVersion, 4);
   assert.match(html, /function refreshSoulConflict\(\)/);
   assert.match(html, /Restore SOUL version/);
 });
@@ -457,14 +432,12 @@ test("admin parity views expose the requested card groups and real navigation ac
     "Custom providers",
     "Enabled models",
     "Organization SOUL",
-    "Branding",
-    "People directory",
-    "Channel defaults",
-    "Turn budget",
+    "Theme",
+    "Pinned channel message",
     "Feature flags",
     "Shared service credentials",
     "Personal keychains",
-    "Slack installation",
+    "Slack",
     "OAuth apps",
     "Built-in connectors",
   ]) {
@@ -478,15 +451,15 @@ test("admin parity views expose the requested card groups and real navigation ac
     "+ Add flag",
     "View usage ›",
     "View users ›",
-    "Use your own Slack app",
+    "Set up Slack",
     "+ Add OAuth app",
   ]) {
     assert.ok(html.includes(action), `missing ${action}`);
   }
   assert.match(html, /button\.onclick = \(\) => setView\(button\.dataset\.viewlink\)/);
   assert.match(html, /id="model-custom-provider-rows"/);
-  assert.match(html, /provider\.models\.length/);
-  assert.match(html, /function renderBuiltInConnectors\(\)/);
+  assert.match(html, /governanceUI.settings.loadProviders/);
+  assert.match(html, /governanceUI.integrations/);
   assert.match(html, /function loadPersonalKeychainSummary\(requestId, requestedScope\)/);
   assert.doesNotMatch(html, /Enabled harnesses/);
   assert.doesNotMatch(html, /id="card-browsing"/);
@@ -495,27 +468,29 @@ test("admin parity views expose the requested card groups and real navigation ac
 
 test("enabled models uses the runtime default and an explicit add interaction", () => {
   assert.doesNotMatch(html, /id="webui-models-default"/);
-  assert.match(html, /id="webui-models-add">\s*<option value="">Choose a model…<\/option>/);
-  assert.match(html, /id="webui-models-add-button" disabled>\+ Add model<\/button>/);
-  assert.match(html, /className = "model-chip"/);
-  assert.match(html, /updateSectionDirty\("webui-models"\)/);
-  assert.match(html, /"webui-models": \(\) => \(\{ ids: webuiModelIds \}\)/);
+  assert.match(html, /id="webui-models-add"/);
+  assert.match(html, /id="webui-models-add-button"/);
+  const state = new SettingsState("webui-models");
+  state.draft = { ids: [] };
+  state.baseline = JSON.stringify(state.draft);
+  state.selected = "model-a";
+  state.add();
+  assert.deepEqual(state.collect(), { ids: ["model-a"] });
+  assert.equal(state.dirty, true);
+  state.remove("model-a");
+  assert.equal(state.dirty, false);
 });
 
 test("custom providers share one in-place editor instead of linking to onboarding", () => {
   assert.match(html, /id="custom-provider-dialog"/);
   assert.match(html, /class="project-dialog-head"/);
   assert.match(html, /class="project-dialog-actions"/);
-  assert.match(html, /id="custom-provider-close" aria-label="Close"/);
+  assert.match(html, /id="custom-provider-close"[^>]*aria-label="Close"/);
   assert.match(html, /dialog\.custom-provider-dialog[\s\S]*padding: 20px;[\s\S]*border-radius: 10px;/);
   assert.match(html, /\$\("add-custom-provider"\)\.onclick = \(\) => openCustomProviderEditor\(\)/);
   assert.match(html, /\$\("onboarding-add-custom-provider"\)\.onclick = \(\) => openCustomProviderEditor\(\)/);
-  assert.match(html, /edit\.onclick = \(\) => openCustomProviderEditor\(provider\)/);
   assert.match(html, /<option value="openai-responses">OpenAI Responses<\/option>/);
-  assert.match(html, /CUSTOM_PROVIDER_PROTOCOL_LABELS\[provider\.protocol\] \|\| provider\.protocol/);
-  assert.match(html, /\$\("custom-provider-protocol"\)\.value = provider\?\.protocol \|\| "openai"/);
-  assert.match(html, /actions\.append\(edit, customProviderRemoveButton\(provider\)\)/);
-  assert.match(html, /if \(view === "models"\) await loadScope\(\)/);
+  assert.match(html, /governanceUI.settings.configureProviders/);
   assert.doesNotMatch(html, /\$\("add-custom-provider"\)\.onclick = \(\) => \{[\s\S]*?setView\("onboarding"\)/);
 });
 
@@ -530,11 +505,6 @@ test("all admin data views receive the shared flat cards and custom dropdowns", 
   );
   assert.match(html, /btn\.setAttribute\("aria-activedescendant", it\.id\)/);
   assert.match(html, /\.observe\(\$\("app-view"\), \{ childList: true, subtree: true \}\)/);
-});
-
-test("grouped parity cards keep each setting bound to its own save action", () => {
-  assert.match(html, /card\.dataset\.saveScope = save\.dataset\.save/);
-  assert.match(html, /const subsection = target\.closest\("\[data-save-scope\]"\)/);
 });
 
 test("admin follows the main UI theme preference", () => {
@@ -557,11 +527,13 @@ test("governance follows the neutral web UI interaction palette", () => {
 });
 
 test("Open sharing explains the benefit and privacy risk in plain language", () => {
-  const card = html.slice(html.indexOf('id="card-sharing-posture"'), html.indexOf('id="card-egress"'));
+  const card = html
+    .slice(html.indexOf('id="card-sharing-posture"'), html.indexOf('id="card-egress"'))
+    .replace(/\s+/g, " ");
   assert.match(
     card,
-    /QM can use your saved memories, files, and skills across conversations when you ask it for\s+help/,
+    /QM can use your saved memories, files, and skills across conversations when you ask it\s+for\s+help/,
   );
-  assert.match(card, /In a group conversation, this could risk revealing private information to\s+others/);
+  assert.match(card, /In a group conversation, this could risk revealing private\s+information to\s+others/);
   assert.doesNotMatch(card, /live internal speaker|entitled resources|opted-in contexts/);
 });

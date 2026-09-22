@@ -111,6 +111,7 @@ export interface HarnessTurnInput {
   runtimeActorId?: string;
   readOnly?: boolean;
   surfaceTools?: boolean;
+  delegateWork?: boolean;
   surfaceName?: string;
   pollFire?: boolean;
   turnWallClockMs?: number;

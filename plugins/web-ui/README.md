@@ -28,6 +28,7 @@ no run bearer is exposed to browser code or placed in a URL. The active-run resu
 (`/api/runs/active`) is per-process best-effort with a durable core fallback for personal threads.
 
 ```
+npm install --prefix ../admin
 npm install
 npm run build
 npm run serve
@@ -114,9 +115,9 @@ or edit the cron; custom task text and schedules are preserved. The global disab
 flag pauses managed jobs. Background work must also be enabled.
 
 Set `SUGGESTED_ACTIVITIES_CONTEXT` on core for rollout guidance (up to 8,000
-characters). For a YC rollout, describe WaaS sourcing, investor CRM, deck review,
-office hours, and Bookface advice there; optionally provide fallback starters on web.
-Guidance updates propagate to unmodified managed tasks. Public QM has no YC context
+characters). Describe the organization’s workflows and available tools there;
+optionally provide fallback starters on web. Guidance updates propagate to
+unmodified managed tasks. Public QM has no organization-specific suggestion context
 by default. Suggestions are private to their owner; generated sessions use the
 same scoped access controls as other personal work.
 
@@ -269,7 +270,7 @@ Gmail, Google Calendar, Google Drive, and Google Sheets artwork comes from
 
 Set `WEB_UI_WELCOME_COHORT=F26` on the web surface to show the cohort welcome in a new user's empty chat. It replaces the automatic first agent turn for that deployment; ordinary chat starts when the user sends a message. The greeting uses the signed-in display name. The welcome remains above the messages in the earliest personal web conversation, including when reopened. It is selected from persisted session creation times. The champagne and soft flutter sequence replays on refresh only before the first message and respects reduced motion.
 
-The picker reads Composio's live catalog in usage order, omits apps that need no authorization, and searches the complete paginated catalog. Known services use local logos; remaining catalog logos use Composio's logo host. Selecting an app submits to the authenticated web surface and opens the provider's authorization link directly. Consent remains on the provider page. The Slack action opens the existing administrator setup page.
+The picker reads Composio's live catalog in usage order, omits apps that need no authorization, and searches the complete paginated catalog. Known services use local logos; remaining catalog logos use Composio's logo host. Selecting an app submits to the authenticated web surface and opens the provider's authorization link directly. Consent remains on the provider page. Slack is excluded from this picker. A dedicated Connect Slack card in onboarding and Settings authorizes the signed-in person’s Slack tools through Composio and links their verified Slack workspace identity to their existing web account. Installing the company bot remains a separate administrator action.
 
 The core bridge accepts a verified portal identity and uses either that person's own `COMPOSIO_API_KEY` keychain entry or an enabled org service credential granted to them. Secrets never enter the browser. The agent skill reads `/v1/composio/identity` to use the same organization/person identity as the picker. A company project key retains Composio's existing project-wide access boundary; the identity selects accounts and does not isolate them from other holders of that key.
 
@@ -338,6 +339,19 @@ and tracing are excluded. A final transport gate rejects unsanitized SDK failure
 and non-event envelopes. Requests omit cookies and referrers. The ingestion
 server can still see the network source IP. Delivery is best effort.
 
+### Browser performance timing
+
+Set `SENTRY_BROWSER_TRACES_SAMPLE_RATE` (0 to 1, default 0) alongside `SENTRY_BROWSER_DSN` to sample
+browser timings; `0.1` is a reasonable start. Each timing is sampled independently at that rate
+and carries its own random trace id. A page reports one `pageload` transaction (time to first
+byte, DOM content loaded, load, first and largest contentful paint, and a `page` tag drawn from
+the fixed list of application views) and one `http.client` transaction per same-origin request
+made through the web client's shared fetch helper, measured to response headers and named by a
+fixed `/api/<resource>` allowlist (`GET /api/sessions/*`) with the HTTP status. At most 200
+timings are sent per page. URLs, query strings, identifiers, and request or response content are
+never included; timings stop with error reporting on sign-out, authentication failure, and
+impersonation.
+
 ## Personal AI accounts
 
 Open **Settings → AI access**, or use the account label beside the model picker.
@@ -351,3 +365,5 @@ access failures do not retry on company credentials. Messages using a different
 account queue separately instead of steering an existing run; an explicit steer
 across accounts is refused. Organizations that already require individual accounts
 continue to require them.
+
+The standalone `::link-slack-account{}` directive offers personal Slack account linking in a web reply. It shows the account card or linked status, requires the company bot to be installed first, and does not include the app picker. `::add-to-slack{}` remains the company installation trigger.

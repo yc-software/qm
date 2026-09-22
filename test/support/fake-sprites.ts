@@ -17,6 +17,11 @@ export interface SpritesCall {
   script?: string;
 }
 
+export interface InjectedFailure {
+  headers?: Record<string, string>;
+  match?: (call: { method: string; path: string }) => boolean;
+}
+
 export interface FakeSprites {
   client: SpritesClientLike;
   fetchImpl: typeof fetch;
@@ -28,6 +33,7 @@ export interface FakeSprites {
   execScripts(): string[];
   stallAfterRun(name: string): void;
   fail502(name: string): void;
+  failNext(status: number, opts?: InjectedFailure): void;
   refuseRestart(name: string): void;
   refuseForcedRestart(name: string): void;
   setPressure(name: string, p: { full10: number; full60: number; load1: number }): void;
@@ -50,6 +56,7 @@ export function installFakeSprites(): FakeSprites {
   const refusedRestart = new Set<string>();
   const refusedForcedRestart = new Set<string>();
   const restarts: string[] = [];
+  const injected: Array<InjectedFailure & { status: number }> = [];
 
   const ensureDir = (name: string): string => {
     let s = sprites.get(name);
@@ -114,6 +121,11 @@ export function installFakeSprites(): FakeSprites {
     const url = new URL(typeof input === "string" ? input : input.toString());
     const method = init?.method ?? "GET";
     calls.push({ method, path: url.pathname });
+    const at = injected.findIndex((f) => !f.match || f.match({ method, path: url.pathname }));
+    if (at >= 0) {
+      const [next] = injected.splice(at, 1);
+      return new Response(`injected ${next!.status}`, { status: next!.status, headers: next!.headers ?? {} });
+    }
     const health = /^\/v1\/sprites\/([^/]+)\/check$/.exec(url.pathname);
     if (health) {
       const name = decodeURIComponent(health[1]!);
@@ -211,6 +223,9 @@ export function installFakeSprites(): FakeSprites {
     fail502: (name) => {
       gateway502.add(name);
     },
+    failNext: (status, opts = {}) => {
+      injected.push({ status, ...opts });
+    },
     refuseRestart: (name) => {
       refusedRestart.add(name);
     },
@@ -235,6 +250,7 @@ export function installFakeSprites(): FakeSprites {
       refusedRestart.clear();
       refusedForcedRestart.clear();
       restarts.length = 0;
+      injected.length = 0;
     },
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };

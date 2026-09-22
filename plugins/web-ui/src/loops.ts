@@ -1,14 +1,16 @@
+import { LOOP_ICONS, loopIcon, readLoopIcon } from "./loop-icon";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { CheckCircle2, CornerUpLeft, Pause, Play, Zap } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { icon } from "./ui";
+import { fieldSelect, icon } from "./ui";
 import { listBackLink, listPageTpl } from "./list-page";
 import { appState, can } from "./shell";
 
 interface LoopView {
   id: string;
   name: string;
+  icon?: string;
   purpose?: string;
   playbook: string;
   playbookVersion: number;
@@ -19,6 +21,7 @@ interface LoopView {
   healthReason?: string;
   owner: string;
   cronId?: string;
+  sources?: string[];
   lastFiredAt?: number;
   consecutiveFailedFires?: number;
 }
@@ -55,6 +58,23 @@ interface LoopDetail {
   vitals: { queue: { queued: number; inProgress: number }; openOutputs: number };
 }
 
+interface IngestionSource {
+  id: string;
+  kind: "webhook" | "slack" | "gmail";
+  enabled: boolean;
+  url: string;
+  channels?: string[];
+  gmail?: { email: string; expiresAt: number };
+  lastReceivedAt?: number;
+  lastError?: string;
+}
+let ingestion: { sources: IngestionSource[]; gmailAvailable: boolean } | null = null;
+let ingestionKind: IngestionSource["kind"] | "" = "";
+let ingestionSecret = "";
+let ingestionTeam = "";
+let ingestionChannels = "";
+let createdSecret = "";
+
 let loopList: LoopView[] = [];
 let loopsHost: HTMLElement | null = null;
 let loopsLoading = false;
@@ -62,11 +82,17 @@ let loopsNotice = "";
 let activeLoopId: string | null = null;
 let activeDetail: LoopDetail | null = null;
 let loopBusy = false;
+let iconPickerOpen = false;
 let playbookDraft: string | null = null;
 let returnDrafts = new Map<string, string>();
 
 export function resetActiveLoop(): void {
   activeLoopId = null;
+  iconPickerOpen = false;
+  ingestion = null;
+  ingestionKind = "";
+  createdSecret = "";
+  ingestionSecret = "";
   activeDetail = null;
   playbookDraft = null;
   returnDrafts = new Map();
@@ -104,7 +130,12 @@ async function refreshLoops(): Promise<void> {
 
 async function refreshDetail(id: string): Promise<void> {
   try {
-    activeDetail = await api<LoopDetail>(`/api/loops/${encodeURIComponent(id)}`);
+    const [detail, sources] = await Promise.all([
+      api<LoopDetail>(`/api/loops/${encodeURIComponent(id)}`),
+      api<NonNullable<typeof ingestion>>(`/api/loops/${encodeURIComponent(id)}/ingestion`),
+    ]);
+    activeDetail = detail;
+    ingestion = sources;
     loopsNotice = "";
   } catch (e) {
     loopsNotice = errMessage(e);
@@ -116,19 +147,36 @@ async function mutate(fn: () => Promise<unknown>): Promise<void> {
   if (loopBusy) return;
   loopBusy = true;
   paint();
+  let failure = "";
   try {
     await fn();
     loopsNotice = "";
   } catch (e) {
-    loopsNotice = errMessage(e);
+    failure = errMessage(e);
   } finally {
     loopBusy = false;
     if (activeLoopId) await refreshDetail(activeLoopId);
     else await refreshLoops();
+    if (failure) {
+      loopsNotice = failure;
+      paint();
+    }
   }
 }
 
-function openLoop(id: string): void {
+async function setLoopIcon(loop: LoopView, value: string | null | File): Promise<void> {
+  await mutate(async () => {
+    const icon = value instanceof File ? await readLoopIcon(value) : value;
+    await api(`/api/loops/${encodeURIComponent(loop.id)}`, { method: "PATCH", body: JSON.stringify({ icon }) });
+    iconPickerOpen = false;
+    const { refreshInbox } = await import("./inbox");
+    await refreshInbox({ silent: true });
+  });
+  loopsHost?.querySelector<HTMLElement>(".loop-icon-picker summary")?.focus();
+}
+
+export function openLoop(id: string): void {
+  resetActiveLoop();
   activeLoopId = id;
   activeDetail = null;
   playbookDraft = null;
@@ -231,6 +279,142 @@ function itemRow(item: LoopItemView): TemplateResult {
   `;
 }
 
+async function addIngestion(loop: LoopView): Promise<void> {
+  await mutate(async () => {
+    const result = await api<{ secret?: string }>(`/api/loops/${encodeURIComponent(loop.id)}/ingestion`, {
+      method: "POST",
+      body: JSON.stringify({
+        kind: ingestionKind,
+        ...(ingestionKind === "slack"
+          ? {
+              secret: ingestionSecret,
+              teamId: ingestionTeam.trim(),
+              channels: ingestionChannels.split(/[\s,]+/).filter(Boolean),
+            }
+          : {}),
+      }),
+    });
+    createdSecret = result.secret ?? "";
+    ingestionSecret = "";
+    ingestionKind = "";
+    await refreshDetail(loop.id);
+  });
+}
+
+function ingestionTpl(loop: LoopView): TemplateResult {
+  const names = { webhook: "Signed webhook", slack: "Slack events", gmail: "Gmail Pub/Sub" };
+  return html`<section class="loop-ingestion">
+    <div class="loop-ingestion-heading">
+      <h2>Ingestion</h2>
+      <span>${loop.cronId ? "Scheduled sync enabled" : "No scheduled sync"}</span>
+    </div>
+    <p>Choose how new work reaches this Loop. Event sources can run alongside a schedule.</p>
+    ${ingestion?.sources.map(
+      (source) =>
+        html`<div class="loop-ingestion-source">
+          <div class="loop-ingestion-source-head">
+            <strong>${names[source.kind]}</strong><span>${source.enabled ? "Listening" : "Disabled"}</span
+            ><button
+              class="btn compact"
+              ?disabled=${loopBusy}
+              @click=${() =>
+                mutate(async () => {
+                  await api(`/api/loops/${encodeURIComponent(loop.id)}/ingestion/${encodeURIComponent(source.id)}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ enabled: !source.enabled }),
+                  });
+                  await refreshDetail(loop.id);
+                })}
+            >
+              ${source.enabled ? "Disable" : "Enable"}
+            </button>
+          </div>
+          <label>Endpoint<input readonly .value=${source.url} aria-label=${`${names[source.kind]} endpoint`} /></label>
+          ${source.gmail ? html`<p>${source.gmail.email} · watch renews automatically</p>` : nothing}
+          ${source.channels?.length ? html`<p>Channels: ${source.channels.join(", ")}</p>` : nothing}
+          <p>Last event: ${ago(source.lastReceivedAt)}${loop.state !== "enabled" ? " · Processing paused" : ""}</p>
+          ${source.lastError ? html`<p class="error-banner">${source.lastError}</p>` : nothing}
+        </div>`,
+    )}
+    ${
+      createdSecret
+        ? html`<div class="loop-ingestion-secret">
+            <label
+              >Signing secret — save it now; it is only shown once<input
+                readonly
+                .value=${createdSecret}
+                aria-label="Webhook signing secret"
+            /></label>
+            <p>Sign the exact JSON body with HMAC-SHA256 and send its hex digest in X-Signature.</p>
+            <button
+              class="btn compact"
+              @click=${() => {
+                createdSecret = "";
+                paint();
+              }}
+            >
+              Done
+            </button>
+          </div>`
+        : nothing
+    }
+    <div class="loop-ingestion-add">
+      ${fieldSelect({
+        ariaLabel: "Ingestion source",
+        value: ingestionKind,
+        onChange: (value) => {
+          ingestionKind = value as typeof ingestionKind;
+          ingestionSecret = "";
+          paint();
+        },
+        options: html`<option value="">Add event source…</option>
+          ${Object.entries(names)
+            .filter(
+              ([kind]) =>
+                !ingestion?.sources.some((source) => source.kind === kind) &&
+                (!loop.sources?.length ? true : kind !== "webhook" && loop.sources.includes(kind)),
+            )
+            .map(([kind, name]) => html`<option value=${kind}>${name}</option>`)}`,
+      })}
+    </div>
+    ${
+      ingestionKind === "slack"
+        ? html`<div class="loop-ingestion-fields">
+            <label
+              >Workspace ID<input
+                placeholder="T0123456789"
+                .value=${ingestionTeam}
+                @input=${(event: Event) => {
+                  ingestionTeam = (event.target as HTMLInputElement).value;
+                }} /></label
+            ><label
+              >Channel IDs<input
+                placeholder="C0123456789, C9876543210"
+                .value=${ingestionChannels}
+                @input=${(event: Event) => {
+                  ingestionChannels = (event.target as HTMLInputElement).value;
+                }} /></label
+            ><label
+              >Slack signing secret<input
+                type="password"
+                autocomplete="off"
+                .value=${ingestionSecret}
+                @input=${(event: Event) => {
+                  ingestionSecret = (event.target as HTMLInputElement).value;
+                }}
+            /></label>
+            <p>
+              Use the endpoint as your Slack app’s Events API request URL. Only human messages from these channels are
+              accepted.
+            </p>
+          </div>`
+        : nothing
+    }
+    ${ingestionKind === "gmail" ? html`<p>${ingestion?.gmailAvailable ? "Uses your connected personal Gmail account. New Inbox messages become Loop work items." : "An administrator must configure the Google Cloud Pub/Sub topic, audience, and push service account before Gmail can be enabled."}</p>` : nothing}
+    ${ingestionKind ? html`<button class="btn compact" ?disabled=${loopBusy || (ingestionKind === "gmail" && !ingestion?.gmailAvailable)} @click=${() => void addIngestion(loop)}>${loopBusy ? "Connecting…" : `Enable ${names[ingestionKind]}`}</button>` : nothing}
+  </section>`;
+}
+
 function detailTpl(detail: LoopDetail): TemplateResult {
   const { loop, items, outputs } = detail;
   const autopilot = loop.shipActions.length > 0 && loop.shipActions.every((policy) => policy.gate === "auto");
@@ -244,7 +428,55 @@ function detailTpl(detail: LoopDetail): TemplateResult {
       void refreshLoops();
     })}
     <div class="list-page-head">
-      <h1 class="pane-title">${loop.name}</h1>
+      <div class="loop-title">
+        <details
+          class="loop-icon-picker"
+          .open=${iconPickerOpen}
+          @toggle=${(event: Event) => {
+            iconPickerOpen = (event.currentTarget as HTMLDetailsElement).open;
+          }}
+          @keydown=${(event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+              iconPickerOpen = false;
+              (event.currentTarget as HTMLDetailsElement).open = false;
+              (event.currentTarget as HTMLElement).querySelector("summary")?.focus();
+            }
+          }}
+        >
+          <summary aria-label=${`Change icon for ${loop.name}`} title="Change icon">${loopIcon(loop, 24)}</summary>
+          <div class="loop-icon-popover" role="group" aria-label="Loop icon">
+            <span class="loop-icon-heading">Choose an icon</span>
+            <div class="loop-icon-grid">
+              ${LOOP_ICONS.map((choice) => html`<button type="button" aria-label=${choice.label} title=${choice.label} aria-pressed=${loop.icon === choice.id ? "true" : "false"} ?disabled=${loopBusy} @click=${() => void setLoopIcon(loop, choice.id)}>${loopIcon({ icon: choice.id }, 20)}</button>`)}
+            </div>
+            <label class="loop-icon-upload">
+              <span>${loopBusy ? "Saving…" : "Upload image"}</span>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                aria-label="Upload loop icon"
+                ?disabled=${loopBusy}
+                @change=${(event: Event) => {
+                  const input = event.currentTarget as HTMLInputElement;
+                  const file = input.files?.[0];
+                  input.value = "";
+                  if (file) void setLoopIcon(loop, file);
+                }}
+              />
+            </label>
+            <span class="loop-icon-hint">Images up to 2 MB, including SVG</span>
+            <button
+              class="loop-icon-default"
+              type="button"
+              ?disabled=${loopBusy || !loop.icon}
+              @click=${() => void setLoopIcon(loop, null)}
+            >
+              ${loopIcon({ sources: loop.sources })}<span>Use default</span>
+            </button>
+          </div>
+        </details>
+        <h1 class="pane-title">${loop.name}</h1>
+      </div>
       <div class="list-page-actions">
         ${healthBadge(loop)}
         <button class="btn" type="button" ?disabled=${loopBusy} @click=${() => fireNow(loop)}>
@@ -302,7 +534,7 @@ function detailTpl(detail: LoopDetail): TemplateResult {
         ? unconfirmed.map((o) => reviewRow(loop, o, "Confirm shipped"))
         : html`<p class="list-empty">Nothing needs confirmation.</p>`
     }
-
+    ${ingestionTpl(loop)}
     <h2 class="loop-section-title">Playbook <span class="loop-count">v${loop.playbookVersion}</span></h2>
     <textarea
       class="loop-playbook"
@@ -347,7 +579,7 @@ function detailTpl(detail: LoopDetail): TemplateResult {
 function loopRow(loop: LoopView): TemplateResult {
   return html`
     <button class="list-row loop-row" type="button" @click=${() => openLoop(loop.id)}>
-      <span class="loop-row-name">${loop.name}</span>
+      ${loopIcon(loop, 18)}<span class="loop-row-name">${loop.name}</span>
       ${healthBadge(loop)}
       <span class="loop-row-meta">last fire ${ago(loop.lastFiredAt)}</span>
     </button>

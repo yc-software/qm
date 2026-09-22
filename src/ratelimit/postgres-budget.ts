@@ -1,7 +1,7 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import type { BudgetTracker } from "./budget.ts";
 import { DEFAULT_BUDGET_WINDOW_MS } from "./budget.ts";
-import { errMessage } from "../util/errors.ts";
+import { reportFailure } from "../util/errors.ts";
 
 export function createPostgresBudgetTracker(
   connectionString: string,
@@ -46,7 +46,7 @@ export function createPostgresBudgetTracker(
           );
         }
       } catch (err) {
-        console.error("[budget] failed to persist spend:", errMessage(err));
+        reportFailure("budget: persist spend", err);
       }
     },
   };

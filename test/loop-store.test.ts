@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createLoopStore, isRunnable } from "../src/loops/loop-store.ts";
+import { createLoopStore, isRunnable, validLoopIcon } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger, loopItemId } from "../src/loops/item-ledger.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -164,4 +164,49 @@ test("queue stats report depth and the age of the oldest waiting item", async ()
   const stats = await ledger.stats("L1", item.createdAt + 60_000);
   assert.equal(stats.queued, 2);
   assert.equal(stats.oldestQueuedAgeMs, 60_000);
+});
+
+test("loop icons persist and reset without changing identity or automation policy", async () => {
+  const store = createLoopStore();
+  const { loop } = await store.create({ ...base, icon: "bug" });
+  assert.equal((await store.get(loop.id))!.icon, "bug");
+  await store.update(loop.id, { icon: "rocket" });
+  const edited = (await store.get(loop.id))!;
+  assert.equal(edited.icon, "rocket");
+  assert.equal(edited.policyVersion, loop.policyVersion);
+  assert.equal(edited.playbookVersion, loop.playbookVersion);
+  assert.equal(edited.state, loop.state);
+  await store.update(loop.id, { icon: null });
+  assert.equal((await store.get(loop.id))!.icon, undefined);
+  assert.equal((await store.create(base)).loop.id, loop.id);
+});
+
+test("custom loop icons persist as bounded PNGs and reset to the source default", async () => {
+  const icon =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=";
+  assert.equal(validLoopIcon(icon), true);
+  const store = createLoopStore();
+  const { loop } = await store.create({ ...base, icon });
+  assert.equal((await store.get(loop.id))!.icon, icon);
+  await store.update(loop.id, { icon: "bug" });
+  await store.update(loop.id, { icon });
+  assert.equal((await store.get(loop.id))!.icon, icon);
+  assert.equal((await store.get(loop.id))!.playbookVersion, loop.playbookVersion);
+  await store.update(loop.id, { icon: null });
+  assert.equal((await store.get(loop.id))!.icon, undefined);
+  for (const value of [
+    "https://example.com/logo.png",
+    "data:image/svg+xml;base64,PHN2Zz4=",
+    "data:image/png;base64,YWJj",
+    icon + "=",
+    icon + "A".repeat(65_536),
+  ]) {
+    assert.equal(validLoopIcon(value), false);
+    await assert.rejects(store.update(loop.id, { icon: value }), /icon must/);
+  }
+  for (const dimension of [0, 129, 0xffffffff]) {
+    const bytes = Buffer.from(icon.slice("data:image/png;base64,".length), "base64");
+    bytes.writeUInt32BE(dimension, 16);
+    assert.equal(validLoopIcon(`data:image/png;base64,${bytes.toString("base64")}`), false);
+  }
 });

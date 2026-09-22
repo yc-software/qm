@@ -32,7 +32,7 @@ export type BackgroundWorkMutation = {
   expectedGeneration: number;
   requestId: string;
 } & (
-  | { desiredDeploymentId: string | null; bootstrapTaskArns?: string[] }
+  | { desiredDeploymentId: string | null; bootstrapTaskArns?: string[]; expectedLastRequestId?: string | null }
   | { terminatedMembers: Array<Pick<BackgroundWorkMember, "instanceId" | "taskArn" | "generation">> }
 );
 
@@ -136,25 +136,33 @@ export async function mutateBackgroundWork(
 ): Promise<BackgroundWorkStatus> {
   const body = JSON.stringify(mutation);
   let response: { status: number; body: string } | undefined;
-  try {
-    response = await transport("POST", body);
-  } catch {
-    response = undefined;
-  }
-  if (response?.status === 200) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const state = parseBackgroundWorkStatus(response.body, deploymentId);
-      if (mutationCommitted(state, mutation)) return state;
+      response = await transport("POST", body);
     } catch {
       response = undefined;
     }
+    if (response?.status === 200) {
+      try {
+        const state = parseBackgroundWorkStatus(response.body, deploymentId);
+        if (mutationCommitted(state, mutation)) return state;
+      } catch {
+        response = undefined;
+      }
+    }
+    let observed: BackgroundWorkStatus | undefined;
+    try {
+      observed = await readBackgroundWork(transport, deploymentId);
+    } catch {
+      observed = undefined;
+    }
+    if (observed && mutationCommitted(observed, mutation)) return observed;
+    if (observed && observed.generation !== mutation.expectedGeneration)
+      throw new CliError("background ownership changed concurrently; refusing to replace another ownership generation");
+    if (response && response.status >= 400 && response.status < 500 && response.status !== 429) break;
   }
-  const observed = await readBackgroundWork(transport, deploymentId);
-  if (mutationCommitted(observed, mutation)) return observed;
-  if (observed.generation !== mutation.expectedGeneration)
-    throw new CliError("background ownership changed concurrently; refusing to replace another ownership generation");
   throw new CliError(
-    `background ownership mutation is unconfirmed${response ? ` (HTTP ${response.status})` : ""}; retry the same request ID ${mutation.requestId} after reading ownership`,
+    `background ownership mutation is unconfirmed${response ? ` (HTTP ${response.status})` : ""}; retry the same request ID ${mutation.requestId} after reading ownership; automatic compensation is unsafe`,
   );
 }
 
@@ -168,7 +176,12 @@ export function backgroundWorkMutation(
 export async function awaitBackgroundWork(
   transport: BackgroundWorkTransport,
   deploymentId: string,
-  expected: { generation: number; desiredDeploymentId: string | null; taskArns: string[] },
+  expected: {
+    generation: number;
+    desiredDeploymentId: string | null;
+    taskArns: string[];
+    lastRequestId?: string | null;
+  },
   options: { timeoutMs: number; pollMs: number },
 ): Promise<BackgroundWorkStatus> {
   const deadline = Date.now() + options.timeoutMs;
@@ -177,7 +190,8 @@ export async function awaitBackgroundWork(
     if (
       !state.enabled ||
       state.generation !== expected.generation ||
-      state.desiredDeploymentId !== expected.desiredDeploymentId
+      state.desiredDeploymentId !== expected.desiredDeploymentId ||
+      (expected.lastRequestId !== undefined && state.lastRequestId !== expected.lastRequestId)
     ) {
       throw new CliError("background ownership changed while awaiting acknowledgment");
     }

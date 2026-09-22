@@ -23,6 +23,7 @@ export interface BackgroundTransition {
   expectedGeneration: number;
   requestId: string;
   desiredDeploymentId: string | null;
+  expectedLastRequestId?: string | null;
   bootstrapTaskArns?: string[];
 }
 
@@ -92,6 +93,7 @@ export function createBackgroundOwnershipStore(map: DurableMap<BackgroundOwnersh
         request.expectedGeneration,
         request.desiredDeploymentId,
         request.bootstrapTaskArns?.slice().sort() ?? null,
+        ...(request.expectedLastRequestId !== undefined ? [request.expectedLastRequestId] : []),
       ]);
       return update((state) => {
         if (state.lastRequestId === request.requestId) {
@@ -104,6 +106,8 @@ export function createBackgroundOwnershipStore(map: DurableMap<BackgroundOwnersh
           return;
         }
         expectGeneration(state, request.expectedGeneration);
+        if (request.expectedLastRequestId !== undefined && state.lastRequestId !== request.expectedLastRequestId)
+          throw new BackgroundOwnershipConflict("Background ownership request changed");
         if (!state.enabled) {
           const expected = request.bootstrapTaskArns;
           if (!expected?.length || new Set(expected).size !== expected.length)

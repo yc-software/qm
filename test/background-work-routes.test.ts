@@ -158,3 +158,31 @@ test("malformed or mixed mutations cannot change ownership", async () => {
     await srv.close();
   }
 });
+
+test("compensation request preconditions are enforced atomically through the authenticated route", async () => {
+  const srv = await fixture();
+  try {
+    const promotion = transition();
+    assert.equal((await srv.request("POST", promotion)).status, 200);
+    const compensation = {
+      expectedGeneration: 1,
+      expectedLastRequestId: promotion.requestId,
+      requestId: randomUUID(),
+      desiredDeploymentId: null,
+    };
+    const retirement = {
+      expectedGeneration: 1,
+      requestId: randomUUID(),
+      terminatedMembers: [{ instanceId: "instance-a", taskArn: "task-a", generation: 0 }],
+    };
+    assert.equal((await srv.request("POST", retirement)).status, 200);
+    assert.equal((await srv.request("POST", compensation)).status, 409);
+    assert.equal((await srv.request("POST", { ...compensation, expectedLastRequestId: 123 })).status, 400);
+    const current = { ...compensation, expectedLastRequestId: retirement.requestId };
+    assert.equal((await srv.request("POST", current)).status, 200);
+    assert.equal((await srv.request("POST", current)).status, 200);
+    assert.equal((await srv.store.get()).generation, 2);
+  } finally {
+    await srv.close();
+  }
+});

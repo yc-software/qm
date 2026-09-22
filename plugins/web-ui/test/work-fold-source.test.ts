@@ -8,7 +8,9 @@ const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 test("live and completed work share one chronological duration fold", () => {
   assert.match(chat, /class=\$\{stopped \? "stopped-work" : `work work-fold work-\$\{work.status\}`\}/);
   assert.match(chat, /messageWorkTimeline\(work, active \? "" : text\)/);
-  assert.match(chat, /let label = stopping \? "Stopping…" : workLabel\(work\)/);
+  assert.match(chat, /let label = stopping \? "Stop requested" : workLabel\(work\)/);
+  assert.match(chat, /const animating = active && !stopping;/);
+  assert.match(chat, /sheenLabel\(label, animating\)/);
   assert.match(chat, /\?open=\$\{active \|\| !!work.pendingApprovals\?\.length\}/);
   assert.doesNotMatch(chat, /function segmentSummaryLabel/);
 });

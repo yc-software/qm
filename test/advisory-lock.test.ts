@@ -9,7 +9,11 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { createPostgresAdvisoryLock, createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import {
+  createPostgresAdvisoryLock,
+  createNoopAdvisoryLock,
+  createMemoryAdvisoryLock,
+} from "../src/persistence/advisory-lock.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the advisory-lock tests";
@@ -348,4 +352,39 @@ test("pg contended polling releases connections for unrelated keys", { skip, tim
     await pool.end();
     await pg.close();
   }
+});
+
+test("pg multi-key locks reuse one session for nested held keys and release the set", { skip }, async () => {
+  const pg = createPgPool(URL!);
+  const other = createPgPool(URL!);
+  const lock = createPostgresAdvisoryLock(pg);
+  const contender = createPostgresAdvisoryLock(other);
+  try {
+    const result = await lock.tryWithLocks!(["inbox:one", "inbox:two"], async () => {
+      assert.equal(await contender.tryWithLock!("inbox:two", async () => "unexpected"), null);
+      return lock.withLock("inbox:one", async () => lock.withLock("inbox:two", async () => 42));
+    });
+    assert.equal(result, 42);
+    assert.equal(await contender.tryWithLocks!(["inbox:one", "inbox:two"], async () => true), true);
+  } finally {
+    await pg.close();
+    await other.close();
+  }
+});
+
+test("multi-key locks retain unawaited nested work until it finishes", async () => {
+  const lock = createMemoryAdvisoryLock();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const outer = lock.tryWithLocks!(["nested"], async () => {
+    void lock.withLock("nested", async () => {
+      entered.resolve();
+      await release.promise;
+    });
+  });
+  await entered.promise;
+  assert.equal(await lock.tryWithLock!("nested", async () => true), null);
+  release.resolve();
+  await outer;
+  assert.equal(await lock.tryWithLock!("nested", async () => true), true);
 });
