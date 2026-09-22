@@ -119,7 +119,7 @@ export function createTranscriptViewport() {
     const paddingBottom = parseFloat(style.paddingBottom) || 0;
     const promptStyle = prompt ? getComputedStyle(prompt) : null;
     const promptMargin = promptStyle ? parseFloat(promptStyle.marginBottom) || 0 : 0;
-    if (prompt && content && promptStyle && remeasure) measureRest(promptStyle);
+    if (prompt && content && promptStyle && remeasure && !expanded) measureRest(promptStyle);
     if (prompt && content) {
       const chrome = prompt.getBoundingClientRect().height - content.getBoundingClientRect().height;
       const available = scroller.clientHeight - top - paddingTop - paddingBottom - promptMargin - chrome;

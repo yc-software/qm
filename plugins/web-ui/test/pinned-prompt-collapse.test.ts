@@ -325,6 +325,42 @@ test("rest heights are re-measured for pane and content changes, condensed or no
   }
 });
 
+test("rest heights are never taken from an expanded prompt", () => {
+  const f = fixture();
+  try {
+    f.scroll(500);
+    f.toggle.click();
+    assert.equal(f.row.classList.contains("pin-expanded"), true);
+    f.resize(280);
+    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "163.5px");
+    f.toggle.click();
+    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "163.5px");
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "40px");
+    f.scroll(20);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "119.5px");
+  } finally {
+    f.close();
+  }
+});
+
+test("the disclosure rides the last visible line while clamped and drops to a row when expanded or over rich content", () => {
+  const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
+  const bubble = css.match(/\n\.user-bubble \{[^}]*\}/)?.[0] ?? "";
+  assert.match(bubble, /--bubble-bg: color-mix/);
+  assert.match(bubble, /position: relative/);
+  const toggle = css.match(/\n\.pin-toggle \{[^}]*\}/)?.[0] ?? "";
+  assert.match(toggle, /position: absolute/);
+  assert.match(toggle, /height: 1lh/);
+  assert.match(toggle, /background: linear-gradient\(to right, transparent, var\(--bubble-bg\)/);
+  assert.doesNotMatch(toggle, /font-size/);
+  const row =
+    css.match(
+      /\.user-row\.pin-expanded > \.user-bubble > \.pin-toggle,\s*\.message-stack\s+\.user-bubble\s+> \.pin-content:has\(code-block[^{]*~ \.pin-toggle \{[^}]*\}/,
+    )?.[0] ?? "";
+  assert.match(row, /position: static/);
+  assert.match(row, /margin: 6px 0 0 auto/);
+});
+
 test("the condensed strip is a css contract on the condensed class, with a scroll-driven height on stuck", () => {
   const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
   const condensed =
