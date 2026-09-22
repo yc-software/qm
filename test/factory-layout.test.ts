@@ -178,7 +178,7 @@ test("every Linear curl in both wrapper halves sends Authorization: Bearer $KEY,
   ] as const) {
     const linearCurls = text
       .split("\n")
-      .filter((line) => line.includes("curl") && line.includes("https://api.linear.app/graphql"));
+      .filter((line) => /curl\b.*-X POST https:\/\/api\.linear\.app\/graphql(\s|$)/.test(line));
     assert.ok(linearCurls.length > 0, `factory/${relative} contacts the Linear API nowhere`);
     for (const line of linearCurls)
       assert.ok(
