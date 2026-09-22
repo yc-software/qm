@@ -4,9 +4,8 @@ import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { FACTORY_LOOP_SURFACE } from "../src/loops/factory/effects.ts";
-import { scopeId, type ScopeId } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
 import { LINEAR_GRAPHQL_URL } from "../src/loops/factory/linear-intake.ts";
 import type { Config } from "../src/config.ts";
 
@@ -27,7 +26,9 @@ const FACTORY_CONFIG = {
 
 const MODEL_AUTH_NOTE = /model auth: core has no Anthropic credential configured/;
 const GITHUB_NOTE = /github: the loop owner has not connected GitHub/;
+const LINEAR_NOTE = /linear: the loop owner has not connected Linear/;
 const GITHUB_HOST = "api.github.com";
+const LINEAR_HOST = "api.linear.app";
 
 async function factoryLoopId(built: BuiltApp, name = "factory"): Promise<string> {
   const { loop } = await built.loops.store.create({
@@ -43,13 +44,8 @@ async function factoryLoopId(built: BuiltApp, name = "factory"): Promise<string>
   return loop.id;
 }
 
-async function seedFactoryCredentials(built: BuiltApp, org: ScopeId): Promise<void> {
-  await built.serviceCreds.setServiceCredential(org, {
-    slug: FACTORY_LINEAR_SLUG,
-    name: FACTORY_LINEAR_SLUG,
-    secret: "lin_FAKE",
-    host: "api.linear.app",
-  });
+async function seedFactoryCredentials(built: BuiltApp): Promise<void> {
+  await built.connectorTokens.setConnectorToken(LINEAR_HOST, "josh", { accessToken: "lin_WIRED" });
   await built.connectorTokens.setConnectorToken(GITHUB_HOST, "josh", { accessToken: "gho_WIRED" });
 }
 
@@ -63,9 +59,9 @@ test("a booted instance drives a factory loop through the factory dependencies i
 
   built.loops.config.setFactoryConfig(FACTORY_CONFIG);
 
-  const uncredentialed = await built.loops.fire!.fire(loopId, "f2");
-  assert.equal(uncredentialed.status, "failed");
-  assert.match(uncredentialed.note ?? "", /factory_credentials_missing: factory-linear/);
+  const unconnected = await built.loops.fire!.fire(loopId, "f2");
+  assert.equal(unconnected.status, "failed");
+  assert.match(unconnected.note ?? "", LINEAR_NOTE);
 });
 
 function stubEmptyLinearIntake(t: TestContext): string[] {
@@ -90,12 +86,7 @@ test("the wired factory resolves GitHub from the loop owner's connector store, n
   const built = buildApp(config);
   const loopId = await factoryLoopId(built);
   built.loops.config.setFactoryConfig(FACTORY_CONFIG);
-  await built.serviceCreds.setServiceCredential(scopeId("org", config.orgId), {
-    slug: FACTORY_LINEAR_SLUG,
-    name: FACTORY_LINEAR_SLUG,
-    secret: "lin_FAKE",
-    host: "api.linear.app",
-  });
+  await built.connectorTokens.setConnectorToken(LINEAR_HOST, "josh", { accessToken: "lin_WIRED" });
 
   const intakeUrls = stubEmptyLinearIntake(t);
 
@@ -116,12 +107,7 @@ test("the wired connector store keeps its operator token fallback, so VAULT_TOKE
   const built = buildApp(config);
   const loopId = await factoryLoopId(built);
   built.loops.config.setFactoryConfig(FACTORY_CONFIG);
-  await built.serviceCreds.setServiceCredential(scopeId("org", config.orgId), {
-    slug: FACTORY_LINEAR_SLUG,
-    name: FACTORY_LINEAR_SLUG,
-    secret: "lin_FAKE",
-    host: "api.linear.app",
-  });
+  await built.connectorTokens.setConnectorToken(LINEAR_HOST, "josh", { accessToken: "lin_WIRED" });
   process.env.VAULT_TOKEN_API_GITHUB_COM = "gho_OPERATOR";
   t.after(() => {
     delete process.env.VAULT_TOKEN_API_GITHUB_COM;
@@ -145,7 +131,7 @@ test("the wired modelAuthEnv comes from core's own Anthropic configuration, so a
     const built = buildApp(config);
     const loopId = await factoryLoopId(built);
     built.loops.config.setFactoryConfig(FACTORY_CONFIG);
-    await seedFactoryCredentials(built, scopeId("org", config.orgId));
+    await seedFactoryCredentials(built);
 
     const fired = await built.loops.fire!.fire(loopId, "f1");
 
@@ -160,7 +146,7 @@ test("a deployment whose only model auth is its CLAUDE_AUTH_CREDENTIAL keychain 
   const keychain = built.keychain;
   assert.ok(keychain, "the test config boots a keychain");
   built.loops.config.setFactoryConfig(FACTORY_CONFIG);
-  await seedFactoryCredentials(built, scopeId("org", config.orgId));
+  await seedFactoryCredentials(built);
 
   const unregistered = await built.loops.fire!.fire(await factoryLoopId(built, "factory-none"), "f1");
   assert.match(unregistered.note ?? "", MODEL_AUTH_NOTE);
@@ -201,7 +187,7 @@ test("the wired factory reads the org's Slack installation store live, so seedin
   const built = buildApp(config);
   const loopId = await factoryLoopId(built);
   built.loops.config.setFactoryConfig({ ...FACTORY_CONFIG, slackChannel: "#factory-runs" });
-  await seedFactoryCredentials(built, scopeId("org", config.orgId));
+  await seedFactoryCredentials(built);
 
   const uninstalled = await firePingsSkipped(built, loopId, "f1");
   await built.slackInstallation.set({ botToken: "xoxb-FAKE", appToken: "xapp-FAKE", updatedBy: "josh" });

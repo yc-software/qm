@@ -1886,8 +1886,6 @@ export function buildApp(
     factory: {
       sandbox,
       config: configStore,
-      credentials: credentialStore,
-      orgScopeId: orgScope,
       loops: loopStore,
       slackInstallation,
       connectorTokens,
