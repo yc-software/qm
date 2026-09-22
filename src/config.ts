@@ -471,7 +471,10 @@ interface SmolmachinesSandboxEnv {
   cpus?: number;
   memoryMb?: number;
   diskGb?: number;
+  autoStopSec?: number;
   egressProxyUrl?: string;
+  snapshotS3Bucket?: string;
+  snapshotIntervalSec?: number;
   defaultTimeoutSec?: number;
 }
 
@@ -490,7 +493,19 @@ function smolmachinesSandboxEnv(env: NodeJS.ProcessEnv): SmolmachinesSandboxEnv 
     ...(numEnvStrict("SMOLMACHINES_DISK_GB", env.SMOLMACHINES_DISK_GB) !== undefined
       ? { diskGb: numEnvStrict("SMOLMACHINES_DISK_GB", env.SMOLMACHINES_DISK_GB) }
       : {}),
+    ...(numEnvStrict("SMOLMACHINES_AUTOSTOP_SEC", env.SMOLMACHINES_AUTOSTOP_SEC) !== undefined
+      ? { autoStopSec: numEnvStrict("SMOLMACHINES_AUTOSTOP_SEC", env.SMOLMACHINES_AUTOSTOP_SEC) }
+      : {}),
     ...(env.SMOLMACHINES_EGRESS_PROXY_URL ? { egressProxyUrl: env.SMOLMACHINES_EGRESS_PROXY_URL } : {}),
+    ...(env.SMOLMACHINES_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.SMOLMACHINES_SNAPSHOT_S3_BUCKET } : {}),
+    ...(numEnvStrict("SMOLMACHINES_SNAPSHOT_INTERVAL_SEC", env.SMOLMACHINES_SNAPSHOT_INTERVAL_SEC) !== undefined
+      ? {
+          snapshotIntervalSec: numEnvStrict(
+            "SMOLMACHINES_SNAPSHOT_INTERVAL_SEC",
+            env.SMOLMACHINES_SNAPSHOT_INTERVAL_SEC,
+          ),
+        }
+      : {}),
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
       : {}),
@@ -1151,6 +1166,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "[config] modal sandbox backend enabled without MODAL_SNAPSHOT_S3_BUCKET — native home checkpoints have limited retention; portable recovery snapshots are memory-only. Set MODAL_SNAPSHOT_S3_BUCKET for durable portable recovery and configure DATABASE_URL for durable checkpoint references.",
     );
   }
+  if (env.SMOLMACHINES_TOKEN && !env.SMOLMACHINES_SNAPSHOT_S3_BUCKET) {
+    console.warn(
+      "[config] smolmachines sandbox backend enabled without SMOLMACHINES_SNAPSHOT_S3_BUCKET — stopping a machine is not a backup; set SMOLMACHINES_SNAPSHOT_S3_BUCKET for durable home recovery snapshots.",
+    );
+  }
   if (env.NODE_ENV === "production" && harnessEnvStrict(env.HARNESS) === "mock") {
     console.warn(
       `[config] HARNESS is ${env.HARNESS?.trim() ? '"mock"' : "unset, which means mock"} in production — this deployment answers every message with canned text and calls no model provider. Set HARNESS=pi to run real agent turns.`,
@@ -1164,6 +1184,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (env.SANDBOX_BACKEND === "sprites" && !env.SPRITES_SNAPSHOT_S3_BUCKET) {
     console.warn(
       "[config] SANDBOX_BACKEND=sprites without SPRITES_SNAPSHOT_S3_BUCKET — retiring a computer deletes its sprite and every checkpoint irreversibly with no exported home; set SPRITES_SNAPSHOT_S3_BUCKET to export the home to S3 before a sprite is destroyed and to rehydrate a replacement.",
+    );
+  }
+  if (env.SANDBOX_BACKEND === "smolmachines" && !env.SMOLMACHINES_EGRESS_PROXY_URL) {
+    console.warn(
+      "[config] SANDBOX_BACKEND=smolmachines without SMOLMACHINES_EGRESS_PROXY_URL — machines are created with open outbound networking and NO egress enforcement (fail-open); set SMOLMACHINES_EGRESS_PROXY_URL to allow-list only the egress proxy.",
     );
   }
   const dataDir = resolve(env.DATA_DIR ?? "./data");

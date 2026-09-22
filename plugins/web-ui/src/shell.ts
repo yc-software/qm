@@ -1001,6 +1001,7 @@ export async function bootSafely(): Promise<void> {
 }
 
 export async function boot(): Promise<void> {
+  if (new URLSearchParams(location.search).get("themeOnly") === "1") return;
   captureConnectionReturn(location.href);
   captureSlackReturn(location.href);
   const params = new URLSearchParams(location.search);
