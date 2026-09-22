@@ -379,6 +379,7 @@ export class UsersView {
                   "Controls who the bot treats as an internal employee in shared Slack workspaces.",
                 ],
               ],
+              "",
             ),
           )}
         </div>

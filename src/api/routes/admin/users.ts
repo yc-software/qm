@@ -130,6 +130,11 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   if ((!teammate && expiry.value === undefined) || (expiry.value !== undefined && expiry.value <= now))
     return bad("expiresAt is required and must be in the future");
   await deps.identity.refresh(true);
+  if (teammate && deps.identity.deactivationSource(email) === "manual")
+    return sendJson(res, 409, {
+      error: "conflict",
+      message: "This account is manually deactivated. Reactivate it before inviting them.",
+    });
   const existing = deps.identity.externalMember(email);
   if (!teammate && existing?.kind === "teammate") return bad("Manage this teammate in Users.");
   const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), email).isAdmin;

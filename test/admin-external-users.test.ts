@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
 import { mintSignedPayload, verifySignedPayload } from "../src/auth/signed-token.ts";
 import "./support/auto-fake-sprites.ts";
 
@@ -674,6 +676,88 @@ test("invitation links work without email delivery and are single use, scoped, a
     assert.equal((await redeem(revoked)).status, 403);
     await issue();
     assert.equal((await redeem(revoked)).status, 403);
+  } finally {
+    await s.close();
+  }
+});
+
+test("invitation redemption requires source authentication before consuming a valid invitation", async () => {
+  const s = start({ signed: true });
+  try {
+    const now = Date.now();
+    const inviteId = randomUUID();
+    const email = "signed-teammate@corp.example";
+    await s.built.identity.putExternalMember({
+      email,
+      role: "member",
+      expiresAt: null,
+      kind: "teammate",
+      inviteId,
+      invitedBy: "admin-alice",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const token = await mintSignedPayload(
+      {
+        purpose: "teammate-invite",
+        org: ORG,
+        aud: PORTAL,
+        email,
+        inviteId,
+        iat: now,
+        exp: now + DAY_MS,
+        jti: randomUUID(),
+      },
+      SECRET,
+    );
+    const body = JSON.stringify({ token });
+    const path = withSourceAuthNonce("/v1/auth/invitations/redeem", SECRET);
+    const unsigned = await fetch(`${s.base}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+    assert.equal(unsigned.status, 401);
+    const signed = await fetch(`${s.base}${path}`, {
+      method: "POST",
+      headers: signedHeaders(SECRET, "POST", path, body),
+      body,
+    });
+    assert.equal(signed.status, 200);
+    assert.deepEqual(await signed.json(), { email });
+    const reusedPath = withSourceAuthNonce("/v1/auth/invitations/redeem", SECRET);
+    const reused = await fetch(`${s.base}${reusedPath}`, {
+      method: "POST",
+      headers: signedHeaders(SECRET, "POST", reusedPath, body),
+      body,
+    });
+    assert.equal(reused.status, 400);
+    assert.deepEqual(await reused.json(), { error: "invitation_used" });
+  } finally {
+    await s.close();
+  }
+});
+
+test("teammate invites reject manual deactivation before changing access or sending mail", async () => {
+  const { sent, mailer } = stubMailer();
+  const s = start({ mailer });
+  const email = "inactive@corp.example";
+  try {
+    await s.built.identity.deactivate(email);
+    const denied = await inviteTeammate(s.base, { email, role: "org_admin" });
+    assert.equal(denied.status, 409);
+    assert.match(((await denied.json()) as any).message, /Reactivate/);
+    assert.equal(s.built.identity.externalMember(email), undefined);
+    assert.equal(adminStatusFromGrants(await s.built.admin.listGrants(), email).isAdmin, false);
+    assert.equal(sent.length, 0);
+    assert.equal(s.built.identity.classify(email).type, "guest");
+
+    await s.built.identity.reactivate(email);
+    assert.equal((await inviteTeammate(s.base, { email })).status, 200);
+    assert.equal((await revoke(s.base, email)).status, 200);
+    assert.equal((await inviteTeammate(s.base, { email })).status, 200);
+    assert.equal(s.built.identity.classify(email).type, "internal");
+    assert.equal(sent.length, 2);
   } finally {
     await s.close();
   }

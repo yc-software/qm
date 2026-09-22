@@ -25,6 +25,7 @@ export interface IdentityService extends IdentityProvider {
   isInternal(p: Principal): boolean;
   audienceIsAllInternal(audience: Principal[]): boolean;
   deactivate(externalId: string, source?: DeactivationSource): Promise<void>;
+  deactivationSource(externalId: string): DeactivationSource | undefined;
   reactivate(externalId: string): Promise<void>;
   recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome>;
   listExternalMembers(): Promise<ExternalMember[]>;
@@ -128,6 +129,9 @@ export function createIdentityService(
   return {
     classify,
     deactivate,
+    deactivationSource(externalId: string): DeactivationSource | undefined {
+      return deactivated.get(personKey(externalId))?.source;
+    },
     reactivate,
     async recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome> {
       const outcome: DirectorySyncOutcome = { deactivated: [], reactivated: [] };
