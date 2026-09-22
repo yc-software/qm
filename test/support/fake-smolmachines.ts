@@ -192,6 +192,7 @@ export function installFakeSmolmachines(): FakeSmolmachines {
       if (sub[2] === "exec") {
         if (m.state.toLowerCase() !== "running") return new Response("machine is stopped", { status: 409 });
         const body = JSON.parse(toBuf(init?.body).toString() || "{}") as { command?: string[] | string };
+        call.body = body;
         const argv = Array.isArray(body.command) ? body.command : ["sh", "-c", body.command ?? ""];
         const script = argv[argv.length - 1] ?? "";
         call.script = script;

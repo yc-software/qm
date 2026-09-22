@@ -314,7 +314,8 @@ test("exec requests carry no stdin field", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.run(h, "echo x");
   const execCall = fake.calls.filter((c) => c.path.endsWith("/exec")).at(-1)!;
-  assert.equal(execCall.body, undefined);
+  assert.ok(execCall.body && typeof execCall.body === "object");
+  assert.equal(Object.hasOwn(execCall.body, "stdin"), false);
   assert.ok(fake.execScripts().every((script) => !/stdin/.test(script)));
 });
 
