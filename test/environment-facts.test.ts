@@ -36,7 +36,7 @@ test("computer block: renders OS/size/runtimes/tools and the not-installed list"
   assert.match(out, /Installed CLIs:.*aws/);
   assert.match(out, /NOT installed.*gh/);
   assert.match(out, /`\/root\/workspace` \(read-write\)/);
-  assert.match(out, /publish ships files in your workspace/);
+  assert.match(out, /apps you publish with `apps`.*only workspace files ship/);
   assert.match(out, /Recovery depends on the sandbox provider/);
   assert.match(out, /\$HOME` \(`\/root`\) holds native logins/);
   assert.match(out, /`\.\/global` \(read-only\)/);
