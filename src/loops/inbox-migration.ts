@@ -1,3 +1,4 @@
+import { adapterForItem } from "./sources/index.ts";
 import { DECISION_LEASE_MS } from "./item-ledger.ts";
 import type { Loop } from "../types.ts";
 import type { LoopServiceDeps } from "../api/routes/loops.ts";
@@ -8,6 +9,7 @@ import { renderSourceInboxTask } from "./inbox-loop.ts";
 interface Migration {
   phase: "pending" | "complete";
   enabled: boolean;
+  sourcePayloadMigrated?: boolean;
 }
 
 async function migrateInboxLocked(
@@ -23,9 +25,12 @@ async function migrateInboxLocked(
     updatedAt: Date.now(),
   });
   const migration = record.value as Migration;
-  if (migration.phase === "complete") return true;
-  await deps.store.setState(legacy.id, "paused");
-  if (cron) await deps.crons!.setEnabled(cron.id, false);
+  const repair = migration.phase === "complete";
+  if (repair && migration.sourcePayloadMigrated) return true;
+  if (!repair) {
+    await deps.store.setState(legacy.id, "paused");
+    if (cron) await deps.crons!.setEnabled(cron.id, false);
+  }
   if (cron && (await deps.crons!.listFires(cron.id)).runs.some((fire) => fire.status === "running")) return false;
   const items = await deps.items.byLoop(legacy.id);
   if (
@@ -45,6 +50,7 @@ async function migrateInboxLocked(
     for (const item of await deps.items.byLoop(loop.id)) {
       if (item.previousLoopId === legacy.id) await deps.outputs.rebindItem(item.id, legacy.id, loop.id);
     }
+    if (repair) continue;
     if (cron && deps.crons) {
       const current = await deps.store.get(loop.id);
       const replacement =
@@ -67,13 +73,12 @@ async function migrateInboxLocked(
     }
     if (!migration.enabled) await deps.store.setState(loop.id, "paused");
   }
-  if ((await deps.items.byLoop(legacy.id)).some((item) => item.source === "gmail" || item.source === "slack"))
-    return false;
   for (const output of await deps.outputs.byLoop(legacy.id)) {
     const item = await deps.items.get(output.itemId);
     if (item?.previousLoopId === legacy.id && item.loopId !== legacy.id) return false;
   }
-  if (migration.enabled) {
+  if ((await deps.items.byLoop(legacy.id)).some((item) => adapterForItem(item))) return repair;
+  if (!repair && migration.enabled) {
     for (const loop of defaults) {
       const current = await deps.store.get(loop.id);
       if (current?.cronId && current.state === "enabled") await deps.crons?.setEnabled(current.cronId, true);
@@ -81,7 +86,10 @@ async function migrateInboxLocked(
   }
   if (cron) await deps.crons!.update(cron.id, { archived: true, enabled: false });
   await deps.store.setState(legacy.id, "archived");
-  await preferences.put(key, { value: { ...migration, phase: "complete" }, updatedAt: Date.now() });
+  await preferences.put(key, {
+    value: { ...migration, phase: "complete", sourcePayloadMigrated: true },
+    updatedAt: Date.now(),
+  });
   return true;
 }
 

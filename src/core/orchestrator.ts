@@ -2695,22 +2695,78 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             MAX_HISTORY_IMAGE_BYTES,
           );
         };
+        const tapeRows = await (async () => {
+          if (historyHasSecurityTaint || contextWindow.totalEntries > TAPE_IMPORT_MAX_ENTRIES) return undefined;
+          try {
+            const preAppended = new Set(preAppendedSeqs);
+            const priorMaxSeq = rawEntries.reduce((m, e) => (preAppended.has(e.seq) ? m : Math.max(m, e.seq)), -1);
+            let covered = priorMaxSeq < 0 || (await deps.sessions.tapeCoverage(session.id)) >= priorMaxSeq;
+            let rows = filterTapeForAudience(
+              await deps.sessions.getTape(session.id),
+              conversation.audience,
+              scopeId,
+              resolution.orgScopeId,
+            );
+            const sameHarness = rows.every(
+              (row) => row.kind !== "message" || row.harness === undefined || row.harness === "pi",
+            );
+            if (
+              (!covered || lastImportLacksScopes(rows)) &&
+              deps.sessionTapeMode === "serve" &&
+              sameHarness &&
+              participantHistorySeqs === undefined
+            ) {
+              const imported = await appendCoverageImport(deps.sessions, lease, rawEntries, scopeId);
+              if (imported) {
+                console.log(
+                  `[tape-heal] session=${session.id} covers=${imported.coversEntrySeq} messages=${
+                    (imported.payload as { messages: unknown[] }).messages.length
+                  }`,
+                );
+                rows = [...rows, imported];
+                covered = true;
+              }
+            }
+            const eventsEntitled = tapeEventsEntitled(rows, conversation.audience, scopeId, resolution.orgScopeId);
+            const eligible =
+              deps.sessionTapeMode === "serve" &&
+              covered &&
+              sameHarness &&
+              eventsEntitled &&
+              participantHistorySeqs === undefined;
+            let fold = eligible ? await rehydrateTape(foldTape(rows)) : undefined;
+            if (eligible && rows.length && fold && tapeNeedsInterruptHeal(rows, fold)) {
+              const interrupt = await deps.sessions.appendTape(lease, {
+                kind: "context_event",
+                payload: { event: "interrupt" },
+                scopeLabel: scopeId,
+              });
+              rows = [...rows, interrupt];
+              fold = healFoldInterrupt(fold, interrupt.createdAt);
+            }
+            const serve = eligible && !!fold?.length && lintFold(fold).ok;
+            return { rows, serve, covered, fold };
+          } catch (e) {
+            swallow("tape: read/heal", e);
+            return undefined;
+          }
+        })();
+        const compactStart = Date.now();
+        const history = await compactContextIfNeeded({
+          session,
+          lease,
+          visibleHistory,
+          scopeId,
+          orgScopeId: resolution.orgScopeId,
+          actorId: actor.id,
+          ...(input.model ? { model: input.model } : {}),
+        });
+        compactMs = Date.now() - compactStart;
         const documentInputs = strictReadOnly
           ? { documents: [], notices: [] }
           : await loadDocumentInputs(
               deps.files,
-              [
-                ...historicalDocumentMetas(
-                  filterHistory(
-                    forSearchView(
-                      contextWindow.totalEntries > rawEntries.length
-                        ? await deps.sessions.getEntries(session.id)
-                        : rawEntries,
-                    ),
-                  ),
-                ),
-                ...inbound.metas,
-              ],
+              [...historicalDocumentMetas(history), ...inbound.metas],
               mayReadArtifact,
               undefined,
               turnAbort.signal,
@@ -2770,62 +2826,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           MAX_DOCUMENT_BYTES -
           documentInputs.documents.reduce((sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"), 0);
         let remainingDocumentCount = 10 - documentInputs.documents.length;
-        const tapeRows = await (async () => {
-          if (historyHasSecurityTaint || contextWindow.totalEntries > TAPE_IMPORT_MAX_ENTRIES) return undefined;
-          try {
-            const preAppended = new Set(preAppendedSeqs);
-            const priorMaxSeq = rawEntries.reduce((m, e) => (preAppended.has(e.seq) ? m : Math.max(m, e.seq)), -1);
-            let covered = priorMaxSeq < 0 || (await deps.sessions.tapeCoverage(session.id)) >= priorMaxSeq;
-            let rows = filterTapeForAudience(
-              await deps.sessions.getTape(session.id),
-              conversation.audience,
-              scopeId,
-              resolution.orgScopeId,
-            );
-            const sameHarness = rows.every(
-              (row) => row.kind !== "message" || row.harness === undefined || row.harness === "pi",
-            );
-            if (
-              (!covered || lastImportLacksScopes(rows)) &&
-              deps.sessionTapeMode === "serve" &&
-              sameHarness &&
-              participantHistorySeqs === undefined
-            ) {
-              const imported = await appendCoverageImport(deps.sessions, lease, rawEntries, scopeId);
-              if (imported) {
-                console.log(
-                  `[tape-heal] session=${session.id} covers=${imported.coversEntrySeq} messages=${
-                    (imported.payload as { messages: unknown[] }).messages.length
-                  }`,
-                );
-                rows = [...rows, imported];
-                covered = true;
-              }
-            }
-            const eventsEntitled = tapeEventsEntitled(rows, conversation.audience, scopeId, resolution.orgScopeId);
-            const eligible =
-              deps.sessionTapeMode === "serve" &&
-              covered &&
-              sameHarness &&
-              eventsEntitled &&
-              participantHistorySeqs === undefined;
-            let fold = eligible ? await rehydrateTape(foldTape(rows)) : undefined;
-            if (eligible && rows.length && fold && tapeNeedsInterruptHeal(rows, fold)) {
-              const interrupt = await deps.sessions.appendTape(lease, {
-                kind: "context_event",
-                payload: { event: "interrupt" },
-                scopeLabel: scopeId,
-              });
-              rows = [...rows, interrupt];
-              fold = healFoldInterrupt(fold, interrupt.createdAt);
-            }
-            const serve = eligible && !!fold?.length && lintFold(fold).ok;
-            return { rows, serve, covered, fold };
-          } catch (e) {
-            swallow("tape: read/heal", e);
-            return undefined;
-          }
-        })();
         const principalDelivered = await recentPrincipalDeliveryNote(deps.deliveries, session.threadRef);
         const sender = !automatedTurn && input.text.trim() ? senderNote(actor.displayName) : "";
         const unscreenedNote =
@@ -2886,17 +2886,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ) {
           void provision(true).catch(swallowAs("orchestrator: eager provision", undefined));
         }
-        const compactStart = Date.now();
-        const history = await compactContextIfNeeded({
-          session,
-          lease,
-          visibleHistory,
-          scopeId,
-          orgScopeId: resolution.orgScopeId,
-          actorId: actor.id,
-          ...(input.model ? { model: input.model } : {}),
-        });
-        compactMs = Date.now() - compactStart;
         const turnStart = Date.now();
         let firstChunkAt: number | undefined;
         let lastChunkAt: number | undefined;

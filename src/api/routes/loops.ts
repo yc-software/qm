@@ -1,3 +1,4 @@
+import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
 import { unattendedGrantRefusal } from "../../cron/authority.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
@@ -181,6 +182,11 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   const b = isObj(ctx.body) ? ctx.body : {};
+  if (b.icon !== undefined && !validLoopIcon(b.icon))
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: LOOP_ICON_ERROR,
+    });
   if (typeof b.name !== "string" || !b.name.trim())
     return sendJson(ctx.res, 400, { error: "bad_request", message: "name required" });
   if (typeof b.playbook !== "string" || !b.playbook.trim())
@@ -251,6 +257,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     createdBy: acting.actorId,
     ownerScopeId,
     name: b.name,
+    ...(b.icon !== undefined ? { icon: b.icon as string | null } : {}),
     playbook: b.playbook,
     successCondition: b.successCondition,
     shipActions,
@@ -331,6 +338,11 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
   const { deps, loop, acting } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
   const b = isObj(ctx.body) ? ctx.body : {};
+  if (b.icon !== undefined && !validLoopIcon(b.icon))
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: LOOP_ICON_ERROR,
+    });
   const patch: LoopPatch = {};
   if (typeof b.playbook === "string" && b.playbook.trim()) {
     patch.playbookEdit = {
@@ -359,6 +371,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "state must be a string" });
   }
   Object.assign(patch, {
+    ...(b.icon !== undefined ? { icon: b.icon } : {}),
     ...(typeof b.name === "string" && b.name.trim() ? { name: b.name } : {}),
     ...(typeof b.purpose === "string" ? { purpose: b.purpose } : {}),
     ...(typeof b.successCondition === "string" && b.successCondition.trim()

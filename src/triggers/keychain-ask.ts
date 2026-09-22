@@ -184,7 +184,7 @@ export function createAskExpirySweep(deps: {
       }
       try {
         await deps.fire(ask);
-        await deps.keychain.markAskNotified(ask.id);
+        await deps.keychain.markAskNotified(ask.id, ask.status);
       } catch (e) {
         swallow(`keychain: ask sweep fire failed for ${ask.id} (will retry next tick)`, e);
       }

@@ -1187,14 +1187,14 @@ test("the system prompt does NOT advertise a credential the session isn't entitl
 test("the published-apps switch defaults on, round-trips, survives a partial update, and rejects non-booleans", async () => {
   const srv = start();
   try {
-    await putCred(srv.base, { slug: "yc-data", name: "YC data", secret: "s", host: "relay.example" });
-    let loaded = (await getCfg(srv.base)).serviceCredentials.find((c) => c.slug === "yc-data")!;
+    await putCred(srv.base, { slug: "acme-data", name: "Acme data", secret: "s", host: "relay.example" });
+    let loaded = (await getCfg(srv.base)).serviceCredentials.find((c) => c.slug === "acme-data")!;
     assert.equal(loaded.deployments, true);
     assert.equal(
       (
         await putCred(srv.base, {
-          slug: "yc-data",
-          name: "YC data",
+          slug: "acme-data",
+          name: "Acme data",
           host: "relay.example",
           deployments: false,
           expectedUpdatedAt: loaded.updatedAt,
@@ -1202,24 +1202,24 @@ test("the published-apps switch defaults on, round-trips, survives a partial upd
       ).status,
       200,
     );
-    loaded = (await getCfg(srv.base)).serviceCredentials.find((c) => c.slug === "yc-data")!;
+    loaded = (await getCfg(srv.base)).serviceCredentials.find((c) => c.slug === "acme-data")!;
     assert.equal(loaded.deployments, false);
     assert.equal(
       (
         await putCred(srv.base, {
-          slug: "yc-data",
-          name: "YC data renamed",
+          slug: "acme-data",
+          name: "Acme data renamed",
           host: "relay.example",
           expectedUpdatedAt: loaded.updatedAt,
         })
       ).status,
       200,
     );
-    loaded = (await getCfg(srv.base)).serviceCredentials.find((c) => c.slug === "yc-data")!;
+    loaded = (await getCfg(srv.base)).serviceCredentials.find((c) => c.slug === "acme-data")!;
     assert.equal(loaded.deployments, false, "a partial update keeps the switch as it was");
     const bad = await putCred(srv.base, {
-      slug: "yc-data",
-      name: "YC data",
+      slug: "acme-data",
+      name: "Acme data",
       host: "relay.example",
       deployments: "no",
       expectedUpdatedAt: loaded.updatedAt,

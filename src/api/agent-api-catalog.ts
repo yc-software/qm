@@ -246,7 +246,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/loops",
         summary:
-          'create a loop — body {name, playbook, successCondition, shipActions: [{action, gate: "hold"|"auto"}], schedule?, destinationKey?, caps?, governor?: {maxConsecutiveFailedFires?, maxReturnRate?, returnRateMinDecisions?, maxQueueAgeMs?, maxQueueDepth?, staleFireMs?}, successChecks?, purpose?}; a schedule creates a bound child cron that fires the loop; setting an escalation destination requires a live human',
+          'create a loop — body {name, icon?, playbook, successCondition, shipActions: [{action, gate: "hold"|"auto"}], schedule?, destinationKey?, caps?, governor?: {maxConsecutiveFailedFires?, maxReturnRate?, returnRateMinDecisions?, maxQueueAgeMs?, maxQueueDepth?, staleFireMs?}, successChecks?, purpose?}; a schedule creates a bound child cron that fires the loop; setting an escalation destination requires a live human',
       },
       {
         method: "DELETE",
@@ -258,7 +258,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET|PATCH|DELETE",
         path: "/v1/loops/:id",
         summary:
-          "inspect a loop (items, held outputs, vitals), edit it (playbook edits are versioned; destinationKey sets escalation delivery and null clears it; state: enabled|paused clears or sets the pause; clearing quarantine or changing destination requires a live human), or delete it and its child cron",
+          "inspect a loop (items, held outputs, vitals), edit it (icon sets a named icon such as bug or slack, or an uploaded PNG data URL up to 64 KiB and 128×128 pixels; null restores the default; playbook edits are versioned; destinationKey sets escalation delivery and null clears it; state: enabled|paused clears or sets the pause; clearing quarantine or changing destination requires a live human), or delete it and its child cron",
       },
       { method: "POST", path: "/v1/loops/:id/fire", summary: "fire a loop now (intake → work → judge → hold/ship)" },
       {
@@ -760,7 +760,7 @@ const FAMILIES: AgentApiFamily[] = [
     match: (_m, p) => p.startsWith("/v1/admin/"),
     when: (v) => v.isAdmin && livePersonCapability(v.claims),
     guidance:
-      "Admin plane: you act AS this org admin — live-authorized per call, audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads require a DM or effective Open sharing for the live admin (organization, personal, and conversation restrictions all apply); configuration mutations work anywhere; admin grant changes and impersonation are portal-only. Open admin reads can expose private data to the conversation; retrieve and report only what the request needs.",
+      "Admin plane: you act AS this org admin — live-authorized per call, audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads require a DM or effective Open sharing for the live admin (organization, personal, and conversation restrictions all apply); configuration mutations work anywhere; admin grant changes, impersonation, and identity links are portal-only. Open admin reads can expose private data to the conversation; retrieve and report only what the request needs.",
     routes: [
       { method: "GET", path: "/v1/admin/whoami", summary: "this user's admin status" },
       {

@@ -6,10 +6,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigInDir, type QmConfig } from "../src/config.ts";
 import {
+  CoreUnreachableError,
+  DEPLOYMENT_LAYER_UNAVAILABLE_ATTEMPTS,
   currentDeploymentLayerState,
   deploymentLayerBundle,
   syncDeploymentLayer,
   httpDeploymentLayerTransport,
+  type DeploymentLayerTransport,
 } from "../src/deployment-layer.ts";
 import { dockerDeploymentLayerTransport } from "../src/backends/docker.ts";
 import { flyDeploymentLayerTransport } from "../src/backends/fly.ts";
@@ -566,6 +569,7 @@ test("allowUnavailable swallows an unreachable core but NOT a local config error
         configDir: dir,
         sandboxDir: join(dir, "sandbox"),
         allowUnavailable: true,
+        wait: async () => {},
       }),
     );
     await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, () =>
@@ -589,6 +593,7 @@ test("allowUnavailable swallows an unreachable core but NOT a local config error
             configDir: dir,
             sandboxDir: join(dir, "sandbox"),
             allowUnavailable: true,
+            wait: async () => {},
           }),
         /CORE_SIGNING_SECRET is required/,
       ),
@@ -612,6 +617,7 @@ function flySyncOpts(dir: string, allowUnavailable?: boolean): Parameters<typeof
     configDir: dir,
     sandboxDir: join(dir, "sandbox"),
     ...(allowUnavailable !== undefined ? { allowUnavailable } : {}),
+    ...(allowUnavailable ? { wait: async () => {} } : {}),
   };
 }
 
@@ -690,6 +696,64 @@ test("a remote connection failure (core process down inside the VM) IS deferrabl
     await withEnv({ FLY_BIN: bin }, () =>
       assert.rejects(() => syncDeploymentLayer(flySyncOpts(dir)), /could not sync deployment layer/),
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("allowUnavailable retries an unreachable PUT until the core comes back", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-retry-recover-"));
+  const lines: string[] = [];
+  t.mock.method(console, "log", (...parts: unknown[]) => void lines.push(parts.join(" ")));
+  try {
+    writeLayer(dir);
+    let calls = 0;
+    const transport: DeploymentLayerTransport = async () => {
+      calls += 1;
+      if (calls < 3) {
+        const error = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+        throw error;
+      }
+      return { status: 200, body: JSON.stringify({ version: 4, contentHash: "abc123def456" }) };
+    };
+    await syncDeploymentLayer({
+      config: makeConfig("http://example.invalid"),
+      transport,
+      configDir: dir,
+      sandboxDir: join(dir, "sandbox"),
+      allowUnavailable: true,
+      wait: async () => {},
+    });
+    assert.equal(calls, 3);
+    assert.ok(lines.some((line) => /deployment layer: v4 abc123def456/.test(line)));
+    assert.equal(lines.filter((line) => /sync is deferred/.test(line)).length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("allowUnavailable retries then prints the deferred message once when the core stays unreachable", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-retry-exhaust-"));
+  const lines: string[] = [];
+  t.mock.method(console, "log", (...parts: unknown[]) => void lines.push(parts.join(" ")));
+  try {
+    writeLayer(dir);
+    let calls = 0;
+    const transport: DeploymentLayerTransport = async () => {
+      calls += 1;
+      throw new CoreUnreachableError("core is not reachable");
+    };
+    await syncDeploymentLayer({
+      config: makeConfig("http://example.invalid"),
+      transport,
+      configDir: dir,
+      sandboxDir: join(dir, "sandbox"),
+      allowUnavailable: true,
+      wait: async () => {},
+    });
+    assert.equal(calls, DEPLOYMENT_LAYER_UNAVAILABLE_ATTEMPTS);
+    assert.ok(calls > 1);
+    assert.equal(lines.filter((line) => /sync is deferred/.test(line)).length, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

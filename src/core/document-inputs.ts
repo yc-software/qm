@@ -2,6 +2,7 @@ import { addAbortSignal } from "node:stream";
 import { Worker } from "node:worker_threads";
 import type { AttachmentMeta, SessionEntry } from "../types.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
+import { forModelContext } from "../harness/context-compaction.ts";
 import { collectBytes } from "../util/bytes.ts";
 
 export interface DocumentInput {
@@ -62,7 +63,7 @@ export function isTextDocument(file: Pick<DocumentInput, "name" | "mimeType">): 
 }
 
 export function historicalDocumentMetas(history: readonly SessionEntry[]): AttachmentMeta[] {
-  return history.flatMap((entry) => {
+  return forModelContext([...history]).flatMap((entry) => {
     if (entry.type !== "user") return [];
     const attachments = (entry.payload as { attachments?: AttachmentMeta[] } | null)?.attachments;
     return Array.isArray(attachments)

@@ -2,7 +2,7 @@ import { orgId as configOrgId, orgScope as configOrgScope } from "../../config.t
 import type { Principal } from "../../types.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
-import { samePerson } from "../../directory/person.ts";
+import { canonicalPerson, samePerson } from "../../directory/person.ts";
 import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
@@ -16,11 +16,16 @@ export function audit(deps: ServerDeps, e: Omit<AuditEvent, "at">): void {
   deps.auditLog?.record({ at: Date.now(), ...e });
 }
 
-export function adminActorFrom(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor">): Principal | null {
+function rawAdminActor(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor">): Principal | null {
   if (ctx.capability) return { id: ctx.capability.actorId, type: "internal" };
   if (ctx.actor)
     return ctx.deps.admin?.resolveActor(`${ctx.actor.p}@${configOrgId()}`) ?? { id: ctx.actor.p, type: "internal" };
   return ctx.deps.admin?.resolveActor(headerValue(ctx.req, "x-admin-actor")) ?? null;
+}
+
+export function adminActorFrom(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor">): Principal | null {
+  const actor = rawAdminActor(ctx);
+  return actor ? { ...actor, id: canonicalPerson(actor.id) } : null;
 }
 
 export async function authorizeAdmin(

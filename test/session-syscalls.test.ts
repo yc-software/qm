@@ -994,12 +994,20 @@ test("disabled coordinators retain passive completion mail without a wake", asyn
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
 });
 
-async function delegatedHumanRig() {
+async function delegatedHumanRig(context: Partial<OrchestratorInput> = {}) {
   const r = await rig();
   const parent = await r.runs.enqueue({
     sessionId: r.room.threadRef,
     dedupKey: "human-authority",
-    request: { actor, conversation, surface: "slack", origin: { kind: "human" }, text: "inspect" },
+    request: {
+      actor,
+      conversation,
+      surface: "slack",
+      origin: { kind: "human" },
+      addressed: true,
+      text: "inspect",
+      ...context,
+    },
   });
   const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
     session: r.room,
@@ -1133,6 +1141,7 @@ test("completion wakes preserve live authorization for subsequent delegated step
   const wake = (await r.runs.getByDedupKey(`subagent-return:${r.run.id}`))!;
   assert.ok(wake);
   assert.equal(wake.request.origin.kind, "automation");
+  assert.equal(wake.request.addressed, true);
   assert.equal((await delegatedAuthorizationOrigin(wake.request, r))?.kind, "human");
   const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
     session: r.room,
@@ -1271,3 +1280,65 @@ test("a completion wake that consumed mail and then retries retains its turn and
   assert.equal((await r.runs.get(wake.id))!.attempts, 1);
   assert.deepEqual(await r.runs.pendingReturns(), []);
 });
+
+for (const addressed of [true, false]) {
+  test(`completion inherits request context without replaying its turn, addressed=${addressed}`, async () => {
+    const inherited = {
+      addressed,
+      surfaceTools: false,
+      deliveryTarget: "slack:D1:task",
+      deliveryCandidates: [{ target: "slack:D1:task", label: "Original conversation" }],
+      gatewayContext: { location: "original DM", details: { channel: "D1" }, instructions: "Reply in Slack" },
+      timezone: "America/Los_Angeles",
+      model: "test-model",
+      harness: "codex",
+      thinkingLevel: "high",
+      fastMode: false,
+      skipMemory: true,
+      turnWallClockMs: 120000,
+      analyticsSuppressed: true,
+    };
+    const transient: Partial<OrchestratorInput> = {
+      runId: "old-run",
+      attempt: 3,
+      runLeaseToken: "old-lease",
+      runStartedAt: 10,
+      finalAttempt: true,
+      queueMs: 50,
+      approval: { requestId: "old-approval", approved: true },
+      redeliveryKey: "old-envelope",
+      proactiveOpener: true,
+      intakePreambleMs: 20,
+      clientSentAt: 5,
+      attachments: [{ name: "old.txt", mimetype: "text/plain", sizeBytes: 1, blobId: "old-blob" }],
+      inboundNotes: ["old input"],
+      priorTurns: [],
+      overheard: [],
+      detectContext: "old detection",
+      detectOpener: "old opener",
+      conversationHeader: "old header",
+    };
+    const r = await delegatedHumanRig({ ...inherited, ...transient });
+    const parent = await r.runs.claimById(r.parent.id, "parent", 60000);
+    await r.runs.complete(r.parent.id, parent!.leaseToken!, { status: "silent" });
+    const child = await r.runs.claimById(r.run.id, "child", 60000);
+    await r.runs.complete(r.run.id, child!.leaseToken!, { status: "ok", reply: "verified result" });
+    const result = (await r.runs.get(r.run.id))!;
+    await deliverSubagentMail({ ...r, maxAttempts: 3, delegationEnabled: async () => true }, result);
+    const wake = (await r.runs.getByDedupKey(`subagent-return:${r.run.id}`))!;
+    assert.ok(wake);
+    for (const [key, value] of Object.entries(inherited)) {
+      if (key === "surfaceTools") continue;
+      assert.deepEqual(wake.request[key as keyof OrchestratorInput], value, key);
+    }
+    for (const key of Object.keys(transient))
+      assert.equal(wake.request[key as keyof OrchestratorInput], undefined, key);
+    assert.equal(wake.request.surfaceTools, true);
+    assert.equal(wake.request.delegatingRunId, r.parent.id);
+    assert.equal(wake.request.sessionSenderId, r.child.id);
+    assert.equal(wake.request.origin.kind, "automation");
+    assert.match(wake.request.text, /delegated task finished/i);
+    assert.equal(wake.request.displayText, "Delegated task completed");
+    assert.equal(wake.request.envelopeWrapped, true);
+  });
+}

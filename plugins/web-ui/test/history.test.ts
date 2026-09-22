@@ -32,8 +32,8 @@ test("approval decisions remain visible history events instead of unresolved too
     },
   ]);
   assert.deepEqual(messages.slice(-2), [
-    { role: "approval-decision", command: "rm -r --help", approved: false, timestamp: 4 },
-    { role: "approval-decision", command: "rm -r --help", approved: true, scope: "once", timestamp: 5 },
+    { role: "approval-decision", command: "rm -r --help", approved: false, timestamp: 4, entrySeq: 4 },
+    { role: "approval-decision", command: "rm -r --help", approved: true, scope: "once", timestamp: 5, entrySeq: 5 },
   ]);
 });
 

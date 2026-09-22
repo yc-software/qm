@@ -164,7 +164,7 @@ test("durable claim service failure cannot issue a session", async () => {
     assert.equal(response.status, 400);
     const html = await response.text();
     assert.match(html, /href="\/auth\/trusted\/login"/);
-    assert.equal(html.includes('href="/auth/login?provider=primary"'), preferenceEnabled);
+    assert.equal(html.includes('href="/auth/login?provider=primary"'), false);
     assert.ok(!response.headers.getSetCookie().some((cookie) => cookie.startsWith("portal_session=")));
   } finally {
     claimAvailable = true;

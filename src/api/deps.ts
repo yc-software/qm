@@ -1,3 +1,4 @@
+import type { DurableMap } from "../persistence/durable-map.ts";
 import type { BackgroundOwnershipStore } from "../runs/background-ownership.ts";
 import type { LoopIngressService } from "../loops/ingress.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
@@ -43,6 +44,7 @@ import type { EnvironmentStore } from "../environments/environment-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import type { WebhookReceiver } from "../webhooks/webhook-receiver.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
+import type { PrincipalLinkService } from "../identity/principal-links.ts";
 import type { DeviceFlowCutoverStore } from "../credentials/device-flow-cutover.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type {
@@ -72,7 +74,10 @@ import type { RateLimiter } from "../ratelimit/rate-limiter.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
 
+import type { SlackAccountLink } from "./routes/composio.ts";
+
 export interface ServerDeps {
+  slackAccounts?: DurableMap<SlackAccountLink>;
   composioFetch?: typeof fetch;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   production?: boolean;
@@ -180,6 +185,7 @@ export interface ServerDeps {
   webhookReceiver?: WebhookReceiver;
   loopIngress?: LoopIngressService;
   identity?: IdentityService;
+  principalLinks?: PrincipalLinkService;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;

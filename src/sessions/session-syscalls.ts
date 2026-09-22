@@ -833,10 +833,11 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     body:
       body.length > 16_000 ? `${body.slice(0, 16_000)}\n[truncated; read the child session for the full result]` : body,
   });
+  const inherited = { ...meta };
+  delete (inherited as Partial<SpawnMeta>).openFingerprint;
   const request: OrchestratorInput = {
+    ...inherited,
     sessionSenderId: child.id,
-    surface: meta.surface,
-    actor: meta.actor,
     conversation: {
       ...meta.conversation,
       ...(currentContext
@@ -844,19 +845,43 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
         : {}),
       threadRef: parent.threadRef,
     },
-    origin: { kind: "automation", screenData: text },
-    ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
-    ...(meta.scopeVersion ? { scopeVersion: meta.scopeVersion } : {}),
-    ...(meta.sessionParticipantIds ? { sessionParticipantIds: meta.sessionParticipantIds } : {}),
-    ...(meta.timezone ? { timezone: meta.timezone } : {}),
-    ...(meta.readOnly ? { readOnly: true } : {}),
-    ...(meta.model ? { model: meta.model } : {}),
-    ...(meta.harness ? { harness: meta.harness } : {}),
-    ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
+    origin: {
+      ...(meta.origin?.kind === "automation" ? meta.origin : { kind: "automation" as const }),
+      screenData: text,
+    },
     text,
     displayText: `[subagent ${title}: ${kind.replace("_", " ")}]`,
     envelopeWrapped: true,
   };
+  for (const key of [
+    "runId",
+    "attempt",
+    "runLeaseToken",
+    "runStartedAt",
+    "finalAttempt",
+    "background",
+    "cancel",
+    "queueMs",
+    "modelAccount",
+    "privateSessionMessage",
+    "sessionMessageDepth",
+    "delegatingRunId",
+    "swarm",
+    "approval",
+    "proactiveOpener",
+    "redeliveryKey",
+    "intakePreambleMs",
+    "clientSentAt",
+    "attachments",
+    "inboundNotes",
+    "priorTurns",
+    "overheard",
+    "detectContext",
+    "detectOpener",
+    "conversationHeader",
+  ] as const)
+    delete request[key];
+  if (!originalParent) request.addressed = false;
   const prepared = deps.prepareRequest ? await deps.prepareRequest(request) : request;
   assertAudienceCompatible(run.request, prepared);
   const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
@@ -901,12 +926,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
         ...prepared,
         surfaceTools: true,
         ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}),
-        ...(meta.unattendedGrants ? { unattendedGrants: [...meta.unattendedGrants] } : {}),
-        ...(meta.deliveryCandidates ? { deliveryCandidates: meta.deliveryCandidates } : {}),
-        origin: {
-          ...(meta.origin?.kind === "automation" ? meta.origin : { kind: "automation" as const }),
-          screenData: wake,
-        },
+        origin: { ...prepared.origin, kind: "automation", screenData: wake },
         text: wake,
         displayText: "Delegated task completed",
       },

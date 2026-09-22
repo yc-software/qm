@@ -93,6 +93,7 @@ export interface ChatSurface {
   ): void;
   mountLoadingPane(): void;
   scrollToBottom(): void;
+  revealEntry(seq: number): boolean;
   drawActiveChat(agent?: Agent | null, opts?: { forceScroll?: boolean }): void;
   setTranscriptWindow(anchorSeq: number | null, earlierCount: number, hasEarlier?: boolean): void;
   setPins(pins: import("./core-bridge").SessionPin[]): void;

@@ -419,12 +419,13 @@ test("a prompt stays in flow when pins leave too little room, and can stick agai
 
 test("prompt expansion control belongs inside the bubble in both renderers", () => {
   for (const [source, start] of [
-    [chat, '<article class="message-row user-row'],
-    [readFileSync(new URL("../src/shared-session.ts", import.meta.url), "utf8"), "<article class=${"],
+    [chat, /<article\s+class="message-row user-row/],
+    [readFileSync(new URL("../src/shared-session.ts", import.meta.url), "utf8"), /<article\s+class=\$\{/],
   ]) {
-    const rowStart = source!.indexOf(start!);
+    const rowStart = (source as string).search(start as RegExp);
     assert.ok(rowStart >= 0);
-    const row = source!.slice(rowStart, source!.indexOf("</article>", rowStart) + "</article>".length);
+    const text = source as string;
+    const row = text.slice(rowStart, text.indexOf("</article>", rowStart) + "</article>".length);
     const dom = new JSDOM(row);
     try {
       const toggle = dom.window.document.querySelector(".pin-toggle");
@@ -928,6 +929,23 @@ test("End inside a nested control retains the control's native behavior", () => 
     f.viewport.follow();
     f.flush();
     assert.equal(f.s.scrollTop, 200);
+  } finally {
+    f.close();
+  }
+});
+
+test("revealing a message cancels pending and future bottom following", () => {
+  const f = fixture();
+  try {
+    f.viewport.follow(true);
+    f.viewport.cancelFollow();
+    f.s.scrollTop = 40;
+    f.flush();
+    assert.equal(f.s.scrollTop, 40);
+    f.grow();
+    f.viewport.follow();
+    f.flush();
+    assert.equal(f.s.scrollTop, 40);
   } finally {
     f.close();
   }

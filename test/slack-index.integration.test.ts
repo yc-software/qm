@@ -1659,19 +1659,19 @@ test("a gated account with a denyMessage answers direct approaches with it, once
   const f = await fixture({
     identityEmail: "1",
     allowFrom: ["staff@example.com"],
-    denyMessage: "I only work with YC staff — ask your group partner.",
+    denyMessage: "I only work with Acme staff — ask your administrator.",
   });
   try {
     await f.app.emitEvent("app_mention", { channel: "C1", user: "U2", text: "<@UBOT> help", ts: "500.1" });
     assert.equal(f.client.ephemerals.length, 1);
     assert.equal(f.client.ephemerals[0].user, "U2");
-    assert.equal(f.client.ephemerals[0].text, "I only work with YC staff — ask your group partner.");
+    assert.equal(f.client.ephemerals[0].text, "I only work with Acme staff — ask your administrator.");
     await f.app.emitEvent("app_mention", { channel: "C1", user: "U2", text: "<@UBOT> hello?", ts: "500.2" });
     assert.equal(f.client.ephemerals.length, 1);
     await f.app.emitMessage({ channel: "D2", channel_type: "im", user: "U2", text: "hi", ts: "500.3" });
     assert.equal(f.client.posts.length, 1);
     assert.equal(f.client.posts[0].channel, "D2");
-    assert.equal(f.client.posts[0].text, "I only work with YC staff — ask your group partner.");
+    assert.equal(f.client.posts[0].text, "I only work with Acme staff — ask your administrator.");
     await f.app.emitMessage({ channel: "D2", channel_type: "im", user: "U2", text: "hello??", ts: "500.4" });
     assert.equal(f.client.posts.length, 1);
     assert.equal(f.core.turns.length, 0);

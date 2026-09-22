@@ -199,6 +199,7 @@ export interface TriggerBase {
 }
 
 export interface Destination {
+  keychainAskId?: string;
   type: string;
   target: string;
   audienceScopeId?: ScopeId;
@@ -348,6 +349,7 @@ interface LoopPlaybookRevision {
 
 export interface Loop extends TriggerBase {
   name: string;
+  icon?: string;
   purpose?: string;
   surface?: string;
   sources?: string[];

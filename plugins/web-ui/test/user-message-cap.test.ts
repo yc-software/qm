@@ -25,25 +25,20 @@ test("the scroller is the size container the cap measures", () => {
   assert.doesNotMatch(chat, /--chat-viewport/);
 });
 
-test("images a user attached render as chips, not inline, in the live chat", () => {
+test("user images have inline previews before and after persistence", () => {
   const fn = chat.match(/function userAttachmentBadge\([\s\S]*?\n {2}\}/)?.[0] ?? "";
-  assert.match(fn, /startsWith\("image\/"\)/);
-  assert.match(
-    fn,
-    /return chipBadge\(FileImage, a\.fileName, a\.size, artifactHref \?\? dataUrl \?\? undefined, download\);/,
-  );
-  assert.doesNotMatch(fn, /<img/);
-  assert.match(fn, /const download = !artifactHref \|\| !browserRenderableImage\(a\.mimeType\);/);
+  assert.match(fn, /artifactHref \?\? localContentUrl\(a\) \?\? dataUrl/);
+  assert.match(fn, /href && browserRenderableImage\(a\.mimeType\)/);
+  assert.match(fn, /<img src=\$\{href\} alt=\$\{a\.fileName\}/);
+  assert.match(fn, /return chipBadge\(FileImage/);
 });
 
-test("images a user attached render as chips that open inline on the share page", () => {
-  const files = shared.match(/message\.attachments\.map\(\(file\) => \{[\s\S]*?\n\s*\}\)\}/)?.[0] ?? "";
-  assert.match(files, /if \(inlineImage && message\.role !== "user"\) \{\s*return html`<a\s+class="file-image"/);
-  assert.equal(files.match(/<img/g)?.length, 1);
-  assert.match(
-    files,
-    /return chipBadge\(\s*inlineImage \? FileImage : File,\s*file\.name,\s*file\.sizeBytes,\s*inlineImage \? `\$\{href\}\?inline=1` : href,\s*!inlineImage,?\s*\);/,
-  );
+test("shared images open the original through the inline endpoint", () => {
+  assert.match(shared, /const inlineImage = sharedInlineImage\(file\.mimetype\)/);
+  assert.match(shared, /if \(inlineImage\) \{/);
+  assert.doesNotMatch(shared, /inlineImage && message.role/);
+  assert.match(shared, /href=\$\{`\$\{href\}\?inline=1`\} target="_blank"/);
+  assert.doesNotMatch(shared, /download=\$\{file.name\}/);
 });
 
 test("both transcript renderers provide an accessible control and an observable inner body", () => {

@@ -29,7 +29,7 @@ test("a published app gets only enabled broker credentials that are switched on 
       permission: "read",
       grantedBy: "admin",
     });
-  await grant("yc-data", ORG);
+  await grant("acme-data", ORG);
   await grant("finance-api", "personal:cfo");
   await grant("off-for-apps", ORG);
   await grant("disabled", ORG);
@@ -37,7 +37,7 @@ test("a published app gets only enabled broker credentials that are switched on 
   await grant("env-only", ORG);
   const slugs = await deploymentCredentialSlugs(
     [
-      cred("yc-data"),
+      cred("acme-data"),
       cred("finance-api"),
       cred("ungranted"),
       cred("off-for-apps", { deployments: false }),
@@ -50,7 +50,7 @@ test("a published app gets only enabled broker credentials that are switched on 
   );
   assert.deepEqual(
     slugs,
-    ["yc-data"],
+    ["acme-data"],
     "a personal grant, no grant, a flipped switch, or an unusable record never reaches an app",
   );
 });

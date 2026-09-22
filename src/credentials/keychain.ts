@@ -1,3 +1,4 @@
+import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { randomBytes } from "node:crypto";
 import { scopeId as toScopeId, parseScopeId, type Destination, type ScopeId } from "../types.ts";
@@ -5,7 +6,7 @@ import { CAPABILITY_CURL_AUTH, keychainUseCommand } from "../api/contract.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
-import { personKey, samePerson } from "../directory/person.ts";
+import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
@@ -138,6 +139,8 @@ export interface KeychainAsk {
   requesterScopeId: ScopeId;
   requesterDestination?: Destination;
   requesterThreadRef?: string;
+  requesterSeq?: number;
+  requesterMessageTs?: string;
   purpose: string;
   requestedMode?: GrantMode;
   status: AskStatus;
@@ -317,6 +320,8 @@ interface CreateAskInput {
   requesterScopeId: ScopeId;
   requesterDestination?: Destination;
   requesterThreadRef?: string;
+  requesterSeq?: number;
+  requesterMessageTs?: string;
   purpose: string;
   requestedMode?: GrantMode;
   expiresAt?: number;
@@ -409,7 +414,7 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   approveAsk(input: ApproveAskInput): Promise<{ ask: KeychainAsk; grant: KeychainGrant }>;
   declineAsk(input: { askId: string; ownerId: string; note?: string }): Promise<KeychainAsk>;
   unnotifiedResolvedAsks(now: number): Promise<KeychainAsk[]>;
-  markAskNotified(id: string): Promise<void>;
+  markAskNotified(id: string, status: KeychainAsk["status"]): Promise<void>;
   resolveAsksForGrant(grant: KeychainGrant): Promise<KeychainAsk[]>;
 
   materialize(grantId: string, scopeId: ScopeId, usedBy: string): Promise<MaterializedCred>;
@@ -471,7 +476,7 @@ function toMeta(rec: KeychainCredential): KeychainCredentialMeta {
 }
 
 function byOwners(ownerIds: string[]): { field: "ownerId"; anyOfFold: string[] } {
-  return { field: "ownerId", anyOfFold: ownerIds.map((id) => personKey(id)) };
+  return { field: "ownerId", anyOfFold: ownerIds.flatMap((id) => personIds(id)) };
 }
 
 function bucketByOwner<C extends { ownerId: string }, T>(
@@ -498,12 +503,14 @@ export function createKeychain(deps: {
   grants: DurableMap<KeychainGrant>;
   asks: DurableMap<KeychainAsk>;
   key: SecretKey;
+  lock?: AdvisoryLock;
   refreshConnector?: OAuthRefresh;
   oauthSkewMs?: number;
   oauthRefreshMarginMs?: number;
   now?: () => number;
 }): Keychain {
   const now = deps.now ?? Date.now;
+  const lock = deps.lock ?? createMemoryAdvisoryLock();
   const oauthSkew = deps.oauthSkewMs ?? 60_000;
   const oauthRefreshMargin = Math.max(deps.oauthRefreshMarginMs ?? 10 * 60_000, oauthSkew);
 
@@ -567,10 +574,27 @@ export function createKeychain(deps: {
   }
 
   async function freshAsk(rec: KeychainAsk, t: number): Promise<KeychainAsk> {
+    if (rec.status !== "pending" && rec.status !== "expired") return rec;
+    const grant = await deps.grants.get(hashId([rec.credentialId, "ask", rec.id]));
+    if (grant?.askId === rec.id) {
+      if (!deps.asks.update) throw new KeychainError(503, "ask store does not support atomic resolution");
+      return (
+        (await deps.asks.update(rec.id, (current) =>
+          current.status === "pending" || current.status === "expired"
+            ? { ...current, status: "approved", resolvedAt: grant.createdAt, grantId: grant.id, notifiedAt: undefined }
+            : current,
+        )) ?? rec
+      );
+    }
     if (rec.status !== "pending" || rec.expiresAt >= t) return rec;
-    const patch = { status: "expired" as const, resolvedAt: t };
-    await deps.asks.merge(rec.id, patch);
-    return { ...rec, ...patch };
+    if (!deps.asks.update) throw new KeychainError(503, "ask store does not support atomic expiry");
+    return (
+      (await deps.asks.update(rec.id, (current) =>
+        current.status === "pending" && current.expiresAt < t
+          ? { ...current, status: "expired", resolvedAt: t }
+          : current,
+      )) ?? rec
+    );
   }
 
   const brokerId = (orgScopeId: string, slug: string) => credId(orgScopeId, slug, "broker");
@@ -846,12 +870,13 @@ export function createKeychain(deps: {
         .map((f) => f.envKey)
         .sort()
         .join(",")}`;
-    const id = credId(input.ownerId, service, slot);
+    const ownerId = canonicalPerson(input.ownerId);
+    const id = credId(ownerId, service, slot);
     const buildRec = (prior?: KeychainCredential | null): KeychainCredential => {
       const carriedCapturePaths = input.capturePaths ?? prior?.capturePaths;
       return {
         id,
-        ownerId: input.ownerId,
+        ownerId,
         orgId: configOrgId(),
         service,
         kind,
@@ -963,7 +988,9 @@ export function createKeychain(deps: {
     const t = now();
     if (!cred.managed && credExpired(cred, t)) throw new KeychainError(410, "credential is expired");
     const grant: KeychainGrant = {
-      id: hashId([cred.id, input.audienceScopeId, String(t), purpose]),
+      id: input.askId
+        ? hashId([cred.id, "ask", input.askId])
+        : hashId([cred.id, input.audienceScopeId, String(t), purpose]),
       credentialId: cred.id,
       ownerId: cred.ownerId,
       orgId: cred.orgId,
@@ -975,6 +1002,7 @@ export function createKeychain(deps: {
       ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
       ...(input.askId ? { askId: input.askId } : {}),
     };
+    if (input.askId) return deps.grants.putIfAbsent(grant.id, grant);
     await deps.grants.put(grant.id, grant);
     return grant;
   }
@@ -1130,6 +1158,8 @@ export function createKeychain(deps: {
         requesterScopeId: input.requesterScopeId,
         ...(input.requesterDestination ? { requesterDestination: input.requesterDestination } : {}),
         ...(input.requesterThreadRef ? { requesterThreadRef: input.requesterThreadRef } : {}),
+        ...(input.requesterSeq !== undefined ? { requesterSeq: input.requesterSeq } : {}),
+        ...(input.requesterMessageTs ? { requesterMessageTs: input.requesterMessageTs } : {}),
         purpose,
         ...(input.requestedMode ? { requestedMode: input.requestedMode } : {}),
         status: "pending",
@@ -1159,37 +1189,41 @@ export function createKeychain(deps: {
     },
 
     async approveAsk(input) {
-      const rec = await deps.asks.get(input.askId);
-      if (!rec) throw new KeychainError(404, "unknown ask");
-      const t = now();
-      const ask = await freshAsk(rec, t);
-      if (ask.status !== "pending") throw new KeychainError(410, `ask already ${ask.status}`);
-      const grant = await mintGrant({
-        credentialId: ask.credentialId,
-        ownerId: input.ownerId,
-        audienceScopeId: ask.requesterScopeId,
-        mode: input.mode,
-        purpose: input.purpose,
-        ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
-        askId: ask.id,
+      return lock.withLock(`keychain-ask:${input.askId}`, async () => {
+        const rec = await deps.asks.get(input.askId);
+        if (!rec) throw new KeychainError(404, "unknown ask");
+        const t = now();
+        const ask = await freshAsk(rec, t);
+        if (ask.status !== "pending") throw new KeychainError(410, `ask already ${ask.status}`);
+        const grant = await mintGrant({
+          credentialId: ask.credentialId,
+          ownerId: input.ownerId,
+          audienceScopeId: ask.requesterScopeId,
+          mode: input.mode,
+          purpose: input.purpose,
+          ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+          askId: ask.id,
+        });
+        const patch = { status: "approved" as const, resolvedAt: t, grantId: grant.id, notifiedAt: undefined };
+        await deps.asks.merge(ask.id, patch);
+        return { ask: { ...ask, ...patch }, grant };
       });
-      const patch = { status: "approved" as const, resolvedAt: t, grantId: grant.id };
-      await deps.asks.merge(ask.id, patch);
-      return { ask: { ...ask, ...patch }, grant };
     },
 
     async declineAsk(input) {
-      const rec = await deps.asks.get(input.askId);
-      if (!rec) throw new KeychainError(404, "unknown ask");
-      if (!samePerson(rec.ownerId, input.ownerId))
-        throw new KeychainError(403, "only the credential's owner can decline an ask");
-      const t = now();
-      const ask = await freshAsk(rec, t);
-      if (ask.status !== "pending") throw new KeychainError(410, `ask already ${ask.status}`);
-      const note = input.note?.trim();
-      const patch = { status: "declined" as const, resolvedAt: t, ...(note ? { note } : {}) };
-      await deps.asks.merge(ask.id, patch);
-      return { ...ask, ...patch };
+      return lock.withLock(`keychain-ask:${input.askId}`, async () => {
+        const rec = await deps.asks.get(input.askId);
+        if (!rec) throw new KeychainError(404, "unknown ask");
+        if (!samePerson(rec.ownerId, input.ownerId))
+          throw new KeychainError(403, "only the credential's owner can decline an ask");
+        const t = now();
+        const ask = await freshAsk(rec, t);
+        if (ask.status !== "pending") throw new KeychainError(410, `ask already ${ask.status}`);
+        const note = input.note?.trim();
+        const patch = { status: "declined" as const, resolvedAt: t, ...(note ? { note } : {}) };
+        await deps.asks.merge(ask.id, patch);
+        return { ...ask, ...patch };
+      });
     },
 
     async unnotifiedResolvedAsks(nowAt) {
@@ -1209,25 +1243,32 @@ export function createKeychain(deps: {
       return out;
     },
 
-    async markAskNotified(id) {
-      await deps.asks.merge(id, { notifiedAt: now() });
+    async markAskNotified(id, status) {
+      if (!deps.asks.update) throw new KeychainError(503, "ask store does not support atomic notification");
+      await deps.asks.update(id, (current) =>
+        current.status === status ? { ...current, notifiedAt: now() } : current,
+      );
     },
 
     async resolveAsksForGrant(grant) {
       const t = now();
       const adopted: KeychainAsk[] = [];
       for (const rec of await deps.asks.all()) {
-        const a = await freshAsk(rec, t);
-        if (
-          a.status !== "pending" ||
-          a.credentialId !== grant.credentialId ||
-          a.requesterScopeId !== grant.audienceScopeId
-        )
-          continue;
-        const patch = { status: "approved" as const, resolvedAt: t, grantId: grant.id, notifiedAt: t };
-        await deps.asks.merge(a.id, patch);
-        await deps.grants.merge(grant.id, { askId: a.id });
-        adopted.push({ ...a, ...patch });
+        await lock.withLock(`keychain-ask:${rec.id}`, async () => {
+          const current = await deps.asks.get(rec.id);
+          if (!current) return;
+          const a = await freshAsk(current, t);
+          if (
+            a.status !== "pending" ||
+            a.credentialId !== grant.credentialId ||
+            a.requesterScopeId !== grant.audienceScopeId
+          )
+            return;
+          const patch = { status: "approved" as const, resolvedAt: t, grantId: grant.id, notifiedAt: t };
+          await deps.asks.merge(a.id, patch);
+          await deps.grants.merge(grant.id, { askId: a.id });
+          adopted.push({ ...a, ...patch });
+        });
       }
       return adopted;
     },

@@ -1,5 +1,7 @@
+import { loadMessageTranscript, messageLinkSeq } from "./message-link.ts";
 import { initializeBrowserErrors, stopBrowserErrors } from "./browser-errors";
 import { initializeAnalytics, capturePageview, stopAnalytics } from "./product-analytics";
+import { captureSlackReturn } from "./slack-account";
 import { captureConnectionReturn } from "./connection-return";
 import { renderModelConnectGate } from "./model-connect";
 import { html, nothing, render, type TemplateResult } from "lit";
@@ -45,7 +47,7 @@ import { brandMark, brandName, icon } from "./ui";
 import { PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection } from "./composer";
-import { ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
+import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
 import { clearAllDrafts, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, UI_BASE } from "./deep-link";
 import {
@@ -151,7 +153,10 @@ export function syncUrlFromState(sessionOverride?: string | null): void {
   const fromState =
     sessionOverride !== undefined ? sessionOverride : (chatState.sessionId ?? chatState.rememberedSessionId);
   const sessionId = splitState.active ? singlePaneSessionId() : fromState;
-  const next = deepLinkPath(UI_BASE, appState.currentView, sessionId, contextsState.selected);
+  let next = deepLinkPath(UI_BASE, appState.currentView, sessionId, contextsState.selected);
+  const linked = parseDeepLink(UI_BASE, location.pathname, location.search);
+  const seq = messageLinkSeq(location.search);
+  if (appState.currentView === "chats" && linked.session === sessionId && seq !== null) next += `?seq=${seq}`;
   if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
 }
 
@@ -997,6 +1002,7 @@ export async function bootSafely(): Promise<void> {
 
 export async function boot(): Promise<void> {
   captureConnectionReturn(location.href);
+  captureSlackReturn(location.href);
   const params = new URLSearchParams(location.search);
   const {
     view: wanted,
@@ -1007,8 +1013,9 @@ export async function boot(): Promise<void> {
   const chatsLink = wanted === null || wanted === "chats";
   const linkedId = wantedSession && chatsLink ? wantedSession : null;
   let transcriptUnavailable = false;
+  const wantedSeq = messageLinkSeq(location.search);
   const loadLinkedTranscript = (id: string) =>
-    fetchTranscript(id, { tailTurns: TAIL_TURNS }).catch((error: unknown) => {
+    loadMessageTranscript((window) => fetchTranscript(id, window), wantedSeq, TAIL_TURNS).catch((error: unknown) => {
       transcriptUnavailable = !(error instanceof ApiError && (error.status === 404 || error.status === 403));
       return null;
     });
@@ -1078,6 +1085,11 @@ export async function boot(): Promise<void> {
       if (!sessionsState.list.some((s) => s.id === linked.id)) sessionsState.list = [linked, ...sessionsState.list];
       revealSessionSurface(linked);
       await openSession(linked, transcript, approvalsPrefetch ?? undefined);
+      if (wantedSeq !== null)
+        requestAnimationFrame(() => {
+          for (const conversation of allConversations())
+            if (conversation.state.sessionId === linked.id) conversation.revealEntry(wantedSeq);
+        });
       return;
     }
     await sessions;

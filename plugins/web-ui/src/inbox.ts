@@ -1,3 +1,4 @@
+import { loopIcon } from "./loop-icon";
 import {
   ensureSentMail,
   openSentEmail,
@@ -22,10 +23,8 @@ import {
   ChevronDown,
   ChevronRight,
   Inbox as InboxGlyph,
-  Mail,
   MoreHorizontal,
   Plus,
-  Repeat,
   RefreshCw,
   Send,
   Undo2,
@@ -47,7 +46,7 @@ import { listBackLink } from "./list-page";
 import { registerPaneKind } from "./pane-kinds";
 import { exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
-import { brandName, icon, initials, relTime, slackMark, workingWave } from "./ui";
+import { brandName, icon, initials, relTime, workingWave } from "./ui";
 
 export type InboxSource = "gmail" | "slack" | "generic";
 
@@ -167,13 +166,22 @@ export const inboxState = {
   selected: [] as Array<{
     id: string;
     name: string;
+    icon?: string;
+    sources?: string[];
     count: number;
     source?: string;
     cronId?: string;
     syncCron?: InboxSyncCron | null;
     ingestionActive?: boolean;
   }>,
-  available: [] as Array<{ id: string; name: string; selected: boolean }>,
+  available: [] as Array<{
+    id: string;
+    name: string;
+    icon?: string;
+    sources?: string[];
+    source?: string;
+    selected: boolean;
+  }>,
   total: 0,
   nextCursor: null as string | null,
   picker: false,
@@ -990,10 +998,8 @@ function openDraftSession(e: MouseEvent, sessionId: string): void {
   else window.location.assign(deepLinkPath(UI_BASE, "chats", sessionId));
 }
 
-function sourceGlyph(source: InboxSource): SVGElement | TemplateResult {
-  if (source === "gmail") return icon(Mail, 14);
-  if (source === "slack") return slackMark(14);
-  return icon(Repeat, 14);
+function sourceGlyph(item: InboxItem): TemplateResult {
+  return loopIcon(inboxState.selected.find((loop) => loop.id === item.loopId) ?? { source: item.source }, 14);
 }
 
 function fmtClock(ms: number): string {
@@ -1394,7 +1400,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
             drawAll();
           }}
         >
-          <span class="inbox-item-glyph">${sourceGlyph(item.source)}</span>
+          <span class="inbox-item-glyph">${sourceGlyph(item)}</span>
           <span class="inbox-item-main">
             <span class="inbox-item-top">
               <span class="inbox-item-heading">${heading}</span>
@@ -1518,7 +1524,7 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
             drawAll();
           }}
         >
-          <span>${v.name}</span>${count > 0 ? html`<span class="inbox-chip-count">${count}</span>` : nothing}
+          ${v.id === "all" ? nothing : loopIcon(inboxState.selected.find((loop) => loop.id === v.id) ?? {})}<span>${v.name}</span>${count > 0 ? html`<span class="inbox-chip-count">${count}</span>` : nothing}
         </button>`;
       })}
       ${
@@ -1623,9 +1629,7 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
               ${setupLoops.map(
                 (loop) =>
                   html`<div class="inbox-setup-row">
-                    <span class="inbox-setup-icon" aria-hidden="true"
-                      >${loop.source === "gmail" ? icon(Mail, 17) : slackMark(17)}</span
-                    >
+                    <span class="inbox-setup-icon" aria-hidden="true">${loopIcon(loop, 17)}</span>
                     <div class="inbox-setup-copy">
                       <span class="inbox-setup-title">${loop.name}</span
                       ><span class="inbox-setup-description">Sync not set up</span>
@@ -1690,7 +1694,7 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
                 </button>
               </div>
               <p>Choose the Loops you want to review here.</p>
-              ${inboxState.available.map((loop) => html`<label><input type="checkbox" .checked=${loop.selected} ?disabled=${inboxState.selectionBusy} @change=${() => void toggleSelection(loop.id)} /><span>${loop.name}</span><span>${loop.selected ? "Included" : "Add"}</span></label>`)}
+              ${inboxState.available.map((loop) => html`<label><input type="checkbox" .checked=${loop.selected} ?disabled=${inboxState.selectionBusy} @change=${() => void toggleSelection(loop.id)} />${loopIcon(loop)}<span>${loop.name}</span><span>${loop.selected ? "Included" : "Add"}</span></label>`)}
             </section>`
           : nothing
       }
@@ -1733,7 +1737,7 @@ function itemPageTpl(item: InboxItem): TemplateResult {
       <div class="inbox-item-head-copy">
         ${listBackLink("Inbox", closeInboxItem)}
         <h1 class="pane-title">
-          <span class="inbox-item-glyph">${sourceGlyph(item.source)}</span><span>${heading}</span>
+          <span class="inbox-item-glyph">${sourceGlyph(item)}</span><span>${heading}</span>
           <span class="inbox-item-head-meta">
             ${participantsTpl(item)} ${itemSideMark(item, handled)}
             <span class="inbox-item-time" title=${fmtClock(item.receivedAt)}>${relTime(item.receivedAt)}</span>
