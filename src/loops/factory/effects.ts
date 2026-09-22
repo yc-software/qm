@@ -96,15 +96,30 @@ export interface FactoryEffectsDeps {
   repoDir?: string;
   fetch?: typeof globalThis.fetch;
   pausePollMs?: number;
+  modelAuthEnv: () => Promise<NodeJS.ProcessEnv>;
 }
 
 export interface FactoryContext {
   config: FactoryConfig;
   linearApiKey: string;
   githubToken: string;
-  anthropicApiKey: string;
+  modelAuth: Record<string, string>;
   slackBotToken?: string;
 }
+
+const FACTORY_MODEL_AUTH_KEYS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] as const;
+const FACTORY_MODEL_ENV_KEYS = [...FACTORY_MODEL_AUTH_KEYS, "ANTHROPIC_BASE_URL"] as const;
+
+const modelAuthFrom = (env: NodeJS.ProcessEnv): Record<string, string> =>
+  Object.fromEntries(
+    FACTORY_MODEL_ENV_KEYS.flatMap((key) => {
+      const value = env[key]?.trim() ?? "";
+      return value === "" ? [] : [[key, value] as const];
+    }),
+  );
+
+const modelAuthSecrets = (modelAuth: Record<string, string>): string[] =>
+  FACTORY_MODEL_AUTH_KEYS.flatMap((key) => (modelAuth[key] === undefined ? [] : [modelAuth[key]]));
 
 export type FactoryWorkEffects = Pick<LoopRunnerEffects, "enumerate" | "work" | "captureOutputs" | "evaluate">;
 
@@ -231,11 +246,15 @@ export async function loadFactoryContext(deps: FactoryEffectsDeps): Promise<Fact
     slack: factorySlackChannel(config) !== undefined,
   });
   if (!credentials.ok) throw new Error(`factory_credentials_missing: ${credentials.missing.join(", ")}`);
+  const modelAuth = modelAuthFrom(await deps.modelAuthEnv());
+  if (modelAuthSecrets(modelAuth).length === 0) {
+    throw new Error("model auth: core has no Anthropic credential configured");
+  }
   return {
     config,
     linearApiKey: credentials.linearApiKey,
     githubToken: credentials.githubToken,
-    anthropicApiKey: credentials.anthropicApiKey,
+    modelAuth,
     ...(credentials.slackBotToken !== undefined ? { slackBotToken: credentials.slackBotToken } : {}),
   };
 }
@@ -271,7 +290,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
 
     async work({ loop, item, guidance }) {
       if (!isFactoryTicketId(item.sourceKey)) throw new Error("factory_ticket_invalid");
-      const { config, linearApiKey, githubToken, anthropicApiKey, slackBotToken } = await loadFactoryContext(deps);
+      const { config, linearApiKey, githubToken, modelAuth, slackBotToken } = await loadFactoryContext(deps);
 
       const preflightHandle = await provisionWorkspace(loop.ownerScopeId);
       let preflight: PreflightResult;
@@ -302,7 +321,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
         guidance,
         linearApiKey,
         githubToken,
-        anthropicApiKey,
+        modelAuth,
         ...(slack ? { slack } : {}),
         factorySessionId: factorySessionIdFor(itemKey),
         repoDir,
@@ -338,7 +357,11 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
       if (result.aborted) throw new Error("factory_run_aborted");
 
       for (const key of runs.keys()) if (key.startsWith(itemPrefix)) runs.delete(key);
-      runs.set(runId, { result, config, redact: redactor([linearApiKey, githubToken, anthropicApiKey]) });
+      runs.set(runId, {
+        result,
+        config,
+        redact: redactor([linearApiKey, githubToken, ...modelAuthSecrets(modelAuth)]),
+      });
       return { runId };
     },
 

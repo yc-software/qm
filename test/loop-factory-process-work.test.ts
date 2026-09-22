@@ -72,7 +72,7 @@ const ENV_INPUT: FactoryEnvInput = {
   guidance: "reviewer asked for a smaller diff",
   linearApiKey: "lin_api_secret",
   githubToken: "ghp_secret",
-  anthropicApiKey: "sk-ant-secret",
+  modelAuth: { ANTHROPIC_API_KEY: "sk-ant-secret" },
   factorySessionId: 4242,
   repoDir: REPO_DIR,
   factorySourceDir: SOURCE_DIR,
@@ -301,7 +301,7 @@ test("renderFactoryEnv omits every optional key whose source is absent", () => {
     config: MINIMAL_CONFIG,
     linearApiKey: "lin_min",
     githubToken: "ghp_min",
-    anthropicApiKey: "sk-ant-min",
+    modelAuth: { ANTHROPIC_API_KEY: "sk-ant-min" },
     factorySessionId: 7,
     repoDir: "/srv/repo",
     factorySourceDir: SOURCE_DIR,
@@ -639,7 +639,7 @@ test("no path logs to the console or puts a credential in an error", async () =>
     ...ENV_INPUT,
     linearApiKey: "LEAK-LINEAR",
     githubToken: "LEAK-GITHUB",
-    anthropicApiKey: "LEAK-ANTHROPIC",
+    modelAuth: { ANTHROPIC_API_KEY: "LEAK-ANTHROPIC" },
   });
   const failures: Array<() => Promise<unknown>> = [
     () => runFactoryProcess(baseInput(fakeSandbox({}), { env, ticketId: "QM-12; rm -rf /" })),

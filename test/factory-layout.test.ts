@@ -789,35 +789,78 @@ test("pin_factory_control_plane still snapshots the signing helper for a source 
   });
 });
 
-test("the wrapper boots with IO_FACTORY_SOURCE_DIR pointed at factory and reaches its entry points", () => {
+function bootWrapper(modelAuth: Record<string, string>): { status: number | null; stderr: string } {
   const dir = mkdtempSync(join(tmpdir(), "qm-factory-boot-"));
   try {
     const home = join(dir, "home");
     mkdirSync(home);
+    const stubs = join(dir, "stubs");
+    mkdirSync(stubs);
+    writeFileSync(join(stubs, "security"), "#!/usr/bin/env bash\nexit 1\n");
+    chmodSync(join(stubs, "security"), 0o755);
     const booted = spawnSync("bash", [join(factoryRoot, WRAP_REL)], {
       cwd: dir,
       encoding: "utf8",
       env: {
-        ...PATH_ONLY,
+        PATH: `${stubs}:${PATH_ONLY.PATH}`,
         HOME: home,
         TMPDIR: dir,
         IO_REPO_DIR: dir,
         IO_FACTORY_SOURCE_DIR: factoryRoot,
         IO_WORKFLOW_MODE: "conflict",
-        ANTHROPIC_API_KEY: "synthetic-never-used",
+        ...modelAuth,
       },
       timeout: 60_000,
     });
     assert.equal(booted.error, undefined, `the wrapper did not finish: ${booted.error?.message}`);
-    assert.equal(
-      booted.stderr.trimEnd(),
-      "[io-coding-agent-js] FAIL: IO_WORKFLOW_MODE=conflict is not supported by this factory",
-      "the wrapper did not boot from factory into its mode dispatch cleanly",
-    );
-    assert.equal(booted.status, 2, "the IO_WORKFLOW_MODE=conflict fail-fast is gone or no longer exits 2");
+    return { status: booted.status, stderr: booted.stderr.trimEnd() };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+test("the wrapper boots with IO_FACTORY_SOURCE_DIR pointed at factory and reaches its entry points", () => {
+  const booted = bootWrapper({ ANTHROPIC_API_KEY: "synthetic-never-used" });
+  assert.equal(
+    booted.stderr,
+    "[io-coding-agent-js] FAIL: IO_WORKFLOW_MODE=conflict is not supported by this factory",
+    "the wrapper did not boot from factory into its mode dispatch cleanly",
+  );
+  assert.equal(booted.status, 2, "the IO_WORKFLOW_MODE=conflict fail-fast is gone or no longer exits 2");
+});
+
+test("the wrapper still fails fast when the environment carries no model credential and the CLI has no login", () => {
+  const booted = bootWrapper({});
+  assert.equal(
+    booted.stderr,
+    "[io-coding-agent-js] FAIL: no Anthropic credential in the environment, and the claude CLI is not logged in",
+  );
+  assert.equal(booted.status, 1);
+});
+
+test("the guard leaves no empty ANTHROPIC_API_KEY exported over the token it just accepted", () => {
+  const guard = /^export ANTHROPIC_API_KEY=[\s\S]*?\nfi\n/m.exec(WRAP)?.[0] ?? "";
+  assert.notEqual(guard, "", `the model-auth guard is no longer a top-level block in ${WRAP_REL}`);
+  const cases: [Record<string, string>, string][] = [
+    [{ ANTHROPIC_API_KEY: "sk-key" }, "sk-key|1"],
+    [{ CLAUDE_CODE_OAUTH_TOKEN: "oauth-token" }, "<unset>|1"],
+    [{ ANTHROPIC_API_KEY: "", ANTHROPIC_AUTH_TOKEN: "auth-token" }, "<unset>|1"],
+  ];
+  const report = `printf '%s|%s' "\${ANTHROPIC_API_KEY-<unset>}" "$IO_ENV_MODEL_AUTH"`;
+  for (const [carried, expected] of cases) {
+    const ran = spawnSync("bash", ["-c", `set -uo pipefail\n${guard}\n${report}`], {
+      encoding: "utf8",
+      env: { ...PATH_ONLY, HOME: join(tmpdir(), "qm-factory-no-login"), ...carried },
+      timeout: 10_000,
+    });
+    assert.equal(ran.status, 0, ran.stderr);
+    assert.equal(ran.stdout, expected, JSON.stringify(carried));
+  }
+});
+
+test("the private per-run CLAUDE_CONFIG_DIR keys off the widened guard, so a token-authenticated run does not share $HOME/.claude", () => {
+  const wrapper = readFileSync(join(factoryRoot, WRAP_REL), "utf8");
+  assert.match(wrapper, /\nif \[ -n "\$IO_ENV_MODEL_AUTH" \]; then\n {2}export CLAUDE_CONFIG_DIR=/);
 });
 
 const TOOLS_SH = join(factoryRoot, "tools/factory/tools.sh");

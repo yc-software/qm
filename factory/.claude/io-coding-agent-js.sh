@@ -220,22 +220,25 @@ fi
 # EXIT trap before the first post-snapshot failure path; every variable is unset-safe.
 trap 'kill "${TRAIL_TAILER_PID:-}" 2>/dev/null || true; kill "${HEARTBEAT_PID:-}" 2>/dev/null || true; kill "${STEERING_BRIDGE_PID:-}" 2>/dev/null || true; kill "${CLAUDE_PID:-}" 2>/dev/null || true; if command -v emit_ai_spend_usage >/dev/null 2>&1; then emit_ai_spend_usage || true; fi; exec 3>&- 2>/dev/null || true; rm -f "${IO_INBOX_PIPE:-}" "${IO_STALL_FLAG:-}" "${IO_CONVERGE_ACTIVE:-}" "${IO_CONVERGE_VECTOR_ERR:-}" "${IO_CONVERGE_FETCH_OUTPUT:-}" 2>/dev/null || true; rm -f "${IO_STEERING_DISARM_FILE:-}" "${IO_HB_DISARM_FILE:-}" 2>/dev/null || true; if [ -n "${IO_FACTORY_CONTROL_PLANE_DIR:-}" ]; then rm -rf -- "$IO_FACTORY_CONTROL_PLANE_DIR"; fi; if [ -n "${IO_FACTORY_SHIP_CONTROL_PLANE_DIR:-}" ]; then rm -rf -- "$IO_FACTORY_SHIP_CONTROL_PLANE_DIR"; fi' EXIT
 
-# The `claude` CLI authenticates via ANTHROPIC_API_KEY, but the coding-agent worker task
-# definition provides the key as CLAUDE_API_KEY (an SSM secret) and does NOT export the former.
-# Bridge them so the headless `claude -p` below is logged
-# in. Fail fast and loud if neither is set, rather than letting claude exit with an opaque
-# "Not logged in · Please run /login".
+# The `claude` CLI accepts any of ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or
+# CLAUDE_CODE_OAUTH_TOKEN; the legacy coding-agent worker task definition instead provides the key
+# as CLAUDE_API_KEY (an SSM secret), so bridge that one name. Fail fast and loud when the
+# environment carries no model credential at all and the CLI has no login of its own, rather than
+# letting claude exit with an opaque "Not logged in · Please run /login".
 export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-${CLAUDE_API_KEY:-}}"
-if [ -z "$ANTHROPIC_API_KEY" ]; then
-  # A developer running /work-ticket has no key: the CLI authenticates through its own login
-  # instead, and an exported EMPTY key would override that and force the very "Not logged in"
-  # this guard exists to pre-empt. Only a keyless environment with no login (the worker) is fatal.
+# An exported EMPTY key overrides both a token and the CLI's own login.
+[ -n "${ANTHROPIC_API_KEY:-}" ] || unset ANTHROPIC_API_KEY
+if [ -n "${ANTHROPIC_API_KEY:-}${ANTHROPIC_AUTH_TOKEN:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+  IO_ENV_MODEL_AUTH=1
+else
+  IO_ENV_MODEL_AUTH=""
+  # A developer running /work-ticket has no credential in the environment: the CLI authenticates
+  # through its own login instead.
   if security find-generic-password -s 'Claude Code-credentials' >/dev/null 2>&1 \
      || [ -s "$HOME/.claude/.credentials.json" ]; then
-    unset ANTHROPIC_API_KEY
-    echo "[io-coding-agent-js] no API key set — using the claude CLI's own login" >&2
+    echo "[io-coding-agent-js] no Anthropic credential in the environment — using the claude CLI's own login" >&2
   else
-    echo "[io-coding-agent-js] FAIL: no ANTHROPIC_API_KEY or CLAUDE_API_KEY set, and the claude CLI is not logged in" >&2
+    echo "[io-coding-agent-js] FAIL: no Anthropic credential in the environment, and the claude CLI is not logged in" >&2
     exit 1
   fi
 fi
@@ -2003,7 +2006,7 @@ set_claude_settings_args "$IO_CLAUDE_MODEL"
 # ONLY when auth is env-keyed: setting CLAUDE_CONFIG_DIR at all disables the CLI's own login
 # (verified — even pointed at the real ~/.claude it yields "Not logged in"), so a keyless local
 # run must share the developer's default dir or every `claude -p` fails.
-if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+if [ -n "$IO_ENV_MODEL_AUTH" ]; then
   export CLAUDE_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/io-claude-run.XXXXXX")"
 fi
 # Cap vitest fan-out so it can't OOM this memory-capped container; MIN vars required or tinypool raises RangeError when min > max.
