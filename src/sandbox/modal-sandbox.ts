@@ -453,7 +453,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     timeoutSec: number,
     env?: Record<string, string>,
   ): Promise<ExecResult> {
-    const r = await session.runCommand(`timeout ${timeoutSec} sh -c ${shq(script)}`, {
+    const r = await session.runCommand(script, {
       timeoutMs: timeoutSec * 1000,
       ...(env ? { env } : {}),
     });

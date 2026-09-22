@@ -1,3 +1,9 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { createModalSandbox } from "../src/sandbox/modal-sandbox.ts";
+import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -113,7 +119,7 @@ test("Modal exec deadlines are whole seconds with a single grace margin, even ne
     modalExecs.map((call) => call.params.timeoutMs),
     [13_000 + MODAL_EXEC_GRACE_MS, 1000 + MODAL_EXEC_GRACE_MS, 3600_000 + MODAL_EXEC_GRACE_MS],
   );
-  assert.deepEqual(modalExecs[0]!.args, ["sh", "-c", "wc -c < /root/.qm-home.tar"]);
+  assert.deepEqual(modalExecs[0]!.args, ["timeout", "13", "sh", "-c", "wc -c < /root/.qm-home.tar"]);
 });
 
 test("Modal passes command env through exec and spools oversized commands through the filesystem", async () => {
@@ -131,7 +137,10 @@ test("Modal passes command env through exec and spools oversized commands throug
   assert.equal(modalWrites.length, 1);
   assert.equal(modalWrites[0]!.bytes, Buffer.byteLength(huge));
   assert.match(modalWrites[0]!.path, /^\/tmp\/\.qm-exec-[0-9a-f-]{36}\.sh$/);
-  assert.equal(modalExecs[2]!.args[2], `sh ${modalWrites[0]!.path}; rc=$?; rm -f ${modalWrites[0]!.path}; exit $rc`);
+  assert.equal(
+    modalExecs[2]!.args[2],
+    `timeout 3600 sh ${modalWrites[0]!.path}; rc=$?; rm -f ${modalWrites[0]!.path}; exit $rc`,
+  );
   assert.ok(Buffer.byteLength(modalExecs[2]!.args[2]!) < MODAL_MAX_EXEC_ARG_BYTES);
 });
 
@@ -215,4 +224,61 @@ test("E2B sends explicit pause lifecycle, reads state without connect, and surfa
   pauseError = undefined;
   await client.create({ metadata: {}, autoPause: false });
   assert.deepEqual((e2bCalls.at(-1)![2] as { lifecycle: unknown }).lifecycle, { onTimeout: "kill", autoResume: false });
+});
+
+test("Modal executes a one-megabyte payload through the sandbox and SDK without nested oversized arguments", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "modal-large-command-"));
+  const home = join(root, "home");
+  mkdirSync(home);
+  const map = (value: string) =>
+    value
+      .replaceAll("/root", home)
+      .replaceAll("/tmp/.qm-exec-", `${root}/.qm-exec-`)
+      .replaceAll("exec setsid ", process.platform === "darwin" ? "exec " : "exec setsid ");
+  const originalExec = modalSandbox.exec;
+  const originalWrite = modalSandbox.filesystem.writeBytes;
+  t.after(() => {
+    modalSandbox.exec = originalExec;
+    modalSandbox.filesystem.writeBytes = originalWrite;
+    rmSync(root, { recursive: true, force: true });
+  });
+  modalSandbox.filesystem.writeBytes = async (data, path) => {
+    const file = map(path);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, map(Buffer.from(data).toString("utf8")));
+  };
+  modalSandbox.exec = async (args, params) => {
+    const mapped = args.map(map);
+    const result = spawnSync(mapped[0]!, mapped.slice(1), {
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, ...(params.env as Record<string, string> | undefined) },
+      timeout: 30_000,
+    });
+    if (result.error) throw result.error;
+    return {
+      stdout: { readText: async () => result.stdout },
+      stderr: { readText: async () => result.stderr },
+      wait: async () => result.status ?? -1,
+    };
+  };
+  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const session = await client.create({});
+  const sandbox = createModalSandbox(createLocalWorkspaceStore(join(root, "workspace")), {
+    client: {
+      create: async () => session,
+      fromId: async () => session,
+      fromName: async () => null,
+      terminate: async () => {},
+    },
+  });
+  const handle = await sandbox.provision([{ scopeId: "large-command", mountPath: "", mode: "rw" }]);
+  const size = 1024 * 1024;
+  const result = await sandbox.run(handle, `payload='${"x".repeat(size)}'; printf '%s' "${"${#payload}"}"`);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stdout, String(size));
+  const signalled = await sandbox.run(handle, `payload='${"x".repeat(size)}'; printf '%s' "${"${#payload}"}"`, {
+    signal: new AbortController().signal,
+  });
+  assert.equal(signalled.code, 0, signalled.stderr);
+  assert.equal(signalled.stdout, String(size));
 });

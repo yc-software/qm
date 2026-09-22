@@ -175,15 +175,16 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
   const wrap = (sbx: SdkSandbox): ModalSession => ({
     sandboxId: sbx.sandboxId,
     async runCommand(command, runOpts): Promise<ModalCommandResult> {
-      const timeoutMs = wholeSeconds(runOpts?.timeoutMs ?? maxCommandMs) + MODAL_EXEC_GRACE_MS;
+      const commandMs = wholeSeconds(runOpts?.timeoutMs ?? maxCommandMs);
+      const timeoutMs = commandMs + MODAL_EXEC_GRACE_MS;
       try {
-        let script = command;
+        let args = ["timeout", String(commandMs / 1000), "sh", "-c", command];
         if (Buffer.byteLength(command, "utf8") > MODAL_MAX_EXEC_ARG_BYTES) {
           const spooled = `/tmp/.qm-exec-${randomUUID()}.sh`;
           await sbx.filesystem.writeBytes(Buffer.from(command, "utf8"), spooled);
-          script = `sh ${spooled}; rc=$?; rm -f ${spooled}; exit $rc`;
+          args = ["sh", "-c", `timeout ${commandMs / 1000} sh ${spooled}; rc=$?; rm -f ${spooled}; exit $rc`];
         }
-        const p = await sbx.exec(["sh", "-c", script], {
+        const p = await sbx.exec(args, {
           mode: "text",
           timeoutMs,
           ...(runOpts?.env && Object.keys(runOpts.env).length ? { env: runOpts.env } : {}),
