@@ -5,28 +5,43 @@ import test from "node:test";
 const jump = readFileSync(new URL("../src/session-jump.ts", import.meta.url), "utf8");
 const main = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
 const sessions = readFileSync(new URL("../src/sessions.ts", import.meta.url), "utf8");
+const jumpHotkey = jump.slice(jump.indexOf("export function registerSessionJumpHotkeys"));
+const newSessionHotkey = jump.slice(
+  jump.indexOf("export function registerNewSessionHotkey"),
+  jump.indexOf("export function registerSessionJumpHotkeys"),
+);
 
 test("cmd+digit jumps to the Nth rendered sidebar session", () => {
-  assert.match(jump, /isMac \? e\.metaKey : e\.ctrlKey/, "meta on mac, ctrl elsewhere");
-  assert.match(jump, /e\.altKey \|\| e\.shiftKey/, "alt/shift combinations are left alone");
+  assert.match(jumpHotkey, /hasExactPrimaryModifier\(e, isMac\)/);
   assert.match(
-    jump,
+    jumpHotkey,
     /\^Digit\(\[1-9\]\)\$.*exec\(e\.code\)/,
     "physical digit keys, so shifted-digit layouts like AZERTY still work",
   );
   assert.match(
-    jump,
+    jumpHotkey,
     /appState\.listEl\?\.querySelectorAll<HTMLAnchorElement>\("a\.session"\)\[Number\(digit\) - 1\]/,
     "targets the Nth session anchor in rendered sidebar order, so pinned rows and visibility rules are honored for free",
   );
   assert.ok(
-    jump.indexOf("e.preventDefault()") > jump.indexOf("if (!target) return"),
+    jumpHotkey.indexOf("e.preventDefault()") > jumpHotkey.indexOf("if (!target) return"),
     "digits without a matching row fall through untouched",
   );
-  assert.match(jump, /target\.click\(\)/, "reuses the row's click path (openSession, split intercept, view switch)");
+  assert.match(
+    jumpHotkey,
+    /target\.click\(\)/,
+    "reuses the row's click path (openSession, split intercept, view switch)",
+  );
 });
 
-test("the session jump hotkey is registered at boot", () => {
+test("cmd+n starts a new session through the sidebar action path", () => {
+  assert.match(newSessionHotkey, /!appState\.me \|\| !appState\.mainEl\?\.isConnected/);
+  assert.match(newSessionHotkey, /matchesPrimaryShortcut\(e, "n", isMac\)/);
+  assert.match(newSessionHotkey, /e\.preventDefault\(\);\s*startNewChatInLastScope\(\);/);
+});
+
+test("the session hotkeys are registered at boot", () => {
+  assert.match(main, /registerNewSessionHotkey\(\)/);
   assert.match(main, /registerSessionJumpHotkeys\(\)/);
 });
 
