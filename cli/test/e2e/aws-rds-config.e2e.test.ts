@@ -141,6 +141,22 @@ test(
         const plan = terraform(dir, terraformBin!, ["test", "-verbose"]);
         assert.match(plan, /Success!.*1 passed, 0 failed/s);
       }
+
+      const overrideTfvars = join(overrideDir, "infra", "terraform.tfvars");
+      writeFileSync(
+        overrideTfvars,
+        readFileSync(overrideTfvars, "utf8").replace(
+          /db_instance_class\s*=\s*"db\.t4g\.micro"/,
+          'db_instance_class = "t4g.micro"',
+        ),
+      );
+      const invalidPlan = spawnSync(terraformBin!, [`-chdir=${join(overrideDir, "infra")}`, "test", "-verbose"], {
+        encoding: "utf8",
+        timeout: 180_000,
+      });
+      const invalidOutput = `${invalidPlan.stdout ?? ""}${invalidPlan.stderr ?? ""}`;
+      assert.notEqual(invalidPlan.status, 0, invalidOutput);
+      assert.match(invalidOutput, /db_instance_class must be a valid RDS DB instance class/);
     } finally {
       rmDir(defaultDir);
       rmDir(overrideDir);
