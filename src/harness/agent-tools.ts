@@ -3702,9 +3702,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         Type.Object(
           {
             minTurns: Type.Optional(Type.Number({ description: "Keep working for at least this many model turns." })),
-            minMs: Type.Optional(
-              Type.Number({ description: "Keep working at least this many milliseconds (capped at 4 hours)." }),
-            ),
+            minMs: Type.Optional(Type.Number({ description: "Keep working at least this many milliseconds." })),
             minTokens: Type.Optional(Type.Number({ description: "Keep working through at least this many tokens." })),
             minUsd: Type.Optional(Type.Number({ description: "Keep working through at least this much spend (USD)." })),
           },

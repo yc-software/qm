@@ -46,7 +46,6 @@ export interface GoalRecord {
 }
 
 export const GOAL_BLOCKED_MIN_ROUNDS = 3;
-export const GOAL_FLOOR_MAX_MS = 4 * 3_600_000;
 export const GOAL_FLOOR_RECHECK_MS = 60_000;
 export const GOAL_FLOOR_STALL_LIMIT = 5;
 const GOAL_MAX_OBJECTIVE_CHARS = 4000;
@@ -69,7 +68,6 @@ function sanitizeFloor(floor: GrindBudget | undefined): GrindBudget | undefined 
     const value = finitePositive((floor as Record<string, unknown>)[key]);
     if (value !== undefined) clean[key] = value;
   }
-  if (clean.minMs !== undefined) clean.minMs = Math.min(clean.minMs, GOAL_FLOOR_MAX_MS);
   return Object.keys(clean).length ? clean : undefined;
 }
 
@@ -273,7 +271,7 @@ export function createFloorCapPolicy(opts: {
     const t = now();
     if (goal && goalFloorApplies(goal)) {
       if (goalFloorUnmet(goal, opts.meter, t)) {
-        if (!stalled && t - opts.promptStart < GOAL_FLOOR_MAX_MS + opts.turnWallClockMs) {
+        if (!stalled) {
           floorSatisfiedAt = undefined;
           return GOAL_FLOOR_RECHECK_MS;
         }

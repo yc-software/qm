@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   GOAL_BLOCKED_MIN_ROUNDS,
-  GOAL_FLOOR_MAX_MS,
   GOAL_FLOOR_RECHECK_MS,
   GOAL_FLOOR_STALL_LIMIT,
   createFloorCapPolicy,
@@ -345,9 +344,9 @@ test("goalFloorMeter counts the goal's own cumulative tokens, not the turn's", (
   assert.equal(goalFloorUnmet(goal, meter), false);
 });
 
-test("createGoalRecord clamps a time floor to the ceiling", () => {
-  const goal = createGoalRecord({ objective: "work", floor: { minMs: 24 * 3_600_000 }, source: "tool" });
-  assert.equal(goal.floor?.minMs, GOAL_FLOOR_MAX_MS);
+test("createGoalRecord keeps a multi-day time floor as given", () => {
+  const goal = createGoalRecord({ objective: "work", floor: { minMs: 48 * 3_600_000 }, source: "tool" });
+  assert.equal(goal.floor?.minMs, 48 * 3_600_000);
 });
 
 test("enforceGoal enforces the token cap even while a completed goal grinds its floor", async () => {
@@ -456,12 +455,25 @@ test("floor cap policy: token progress resets the stall counter", () => {
   }
 });
 
-test("floor cap policy: extensions stop at the absolute ceiling even with an unmet floor", () => {
+test("floor cap policy: a progressing unmet floor keeps extending well past the plain cap", () => {
   const goal = createGoalRecord({ objective: "grind", floor: { minTokens: 5_000_000 }, source: "tool" });
   const h = policyHarness({ goal, capMs: 3_600_000 });
-  h.advance(GOAL_FLOOR_MAX_MS + 3_600_000);
-  goal.tokensUsed += 1;
-  assert.equal(h.policy.extendMs(), 0, "past floor-ceiling+cap, even progressing work is released");
+  for (let hour = 0; hour < 9; hour++) {
+    h.advance(3_600_000);
+    goal.tokensUsed += 1;
+    assert.equal(h.policy.extendMs(), GOAL_FLOOR_RECHECK_MS, `hour ${hour + 1}: no ceiling on a progressing floor`);
+  }
+});
+
+test("floor cap policy: a nine-hour time floor keeps the turn alive until it is met", () => {
+  const goal = createGoalRecord({ objective: "grind", floor: { minMs: 9 * 3_600_000 }, source: "tool" });
+  const h = policyHarness({ goal, capMs: 3_600_000 });
+  for (let hour = 0; hour < 9; hour++) {
+    h.advance(3_600_000 - 1);
+    assert.equal(h.policy.extendMs(), GOAL_FLOOR_RECHECK_MS, `hour ${hour + 1}: time floor still owed`);
+    h.advance(1);
+  }
+  assert.equal(h.policy.extendMs(), 3_600_000, "floor met: a full fresh cap from that moment");
 });
 
 test("floor cap policy: a floor met before the turn started imposes nothing and grants nothing", () => {
