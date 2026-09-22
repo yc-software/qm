@@ -499,6 +499,7 @@ const CARD_STYLE = `<style>
   .note .who b{ color:var(--text); }
   .note p{ margin:8px 0 0; color:var(--muted); }
   .actions{ display:grid; gap:10px; }
+  .actions form{ display:grid; margin:0; }
   .btn{ display:flex; align-items:center; justify-content:center; min-height:44px; padding:0 18px;
     text-decoration:none; font-weight:600; font-size:14px; border-radius:var(--radius-md); cursor:pointer;
     transition:opacity .12s ease, background .12s ease, color .12s ease; }
@@ -540,12 +541,12 @@ ${CARD_STYLE}
         ${o.icon}
       </div>
       <h1 id="t">${escapeHtml(o.heading)}</h1>
-      <p class="msg">${escapeHtml(o.msg)}</p>
+      ${o.msg ? `<p class="msg">${escapeHtml(o.msg)}</p>` : ""}
       ${o.extra ?? ""}
       <div class="actions">
         ${o.actions}
       </div>
-      <p class="help">${escapeHtml(o.help)}</p>
+      ${o.help ? `<p class="help">${escapeHtml(o.help)}</p>` : ""}
     </section>
   </main>
 </body>
@@ -1331,10 +1332,10 @@ async function inviteLogin(req: IncomingMessage, res: ServerResponse): Promise<v
         title: "Accept invitation",
         heading: "You're invited",
         icon: LOCK_ICON,
-        msg: "Continue to sign in to your teammate account.",
+        msg: "",
         extra: '<p id="invite-status"></p><noscript>JavaScript is required to open this invitation.</noscript>',
         actions: `<form method="post" action="/auth/invite"><input id="invite-token" name="token" type="hidden"><button id="invite-confirm" class="btn primary" type="submit" disabled>Accept invitation</button></form><script>${INVITE_LOGIN_SCRIPT}</script>`,
-        help: "Only continue if this invitation was sent to you.",
+        help: "",
       }),
       `${PAGE_CSP}; script-src '${INVITE_LOGIN_SCRIPT_HASH}'`,
     );
