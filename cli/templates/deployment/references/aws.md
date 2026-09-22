@@ -34,9 +34,13 @@ terraform -chdir=infra apply qm.tfplan
 Set `publicUrl`, `env.core.AWS_PUBLIC_ORIGIN_URL`, and `aws.deployRoleArn` from
 the Terraform outputs. Finish `npm exec qm -- setup .`, render again, and apply.
 
-The object-store bucket contains agent files and is protected from replacement.
-For an existing deployment, pin its current name before changing `aws.accountId`,
-`aws.region`, or `aws.cluster`:
+New directories scaffolded by the current CLI protect the object-store bucket
+from replacement and reject the placeholder account. Upgrading the CLI does not
+rewrite vendored `infra/` files in an existing deployment. Do not overwrite
+customized Terraform templates to gain these guards.
+
+For an existing deployment, first pin its current bucket name before changing
+`aws.accountId`, `aws.region`, or `aws.cluster`:
 
 ```bash
 terraform -chdir=infra output -raw object_store_bucket
@@ -45,6 +49,30 @@ terraform -chdir=infra output -raw object_store_bucket
 Copy that exact value to `aws.objectStoreBucket` in `qm.config.jsonc`, run
 `npm exec qm -- infra render`, and verify the plan does not replace
 `aws_s3_bucket.objects`. Do not infer the name from the corrected coordinates.
+Then make the minimal manual update by adding this block inside the existing
+`aws_s3_bucket.objects` resource:
+
+```hcl
+lifecycle { prevent_destroy = true }
+```
+
+To reject the scaffold account at Terraform plan time, add this validation
+inside the existing `variable "account_id"` block:
+
+```hcl
+validation {
+  condition     = var.account_id != "000000000000"
+  error_message = "account_id must replace the scaffold value 000000000000 before planning or applying infrastructure"
+}
+```
+
+Pinning and `prevent_destroy` are the controls that protect the existing
+bucket. `object_store_force_destroy=true` only allows
+Terraform to delete objects when intentionally deleting a bucket; it does not
+override `prevent_destroy`. For intentional deletion, retain any agent files
+that must survive, deliberately remove `prevent_destroy`, apply the
+`object_store_force_destroy` setting, and then destroy as described in the
+generated `AGENTS.md`.
 
 ## Publish the agent computer and deploy
 
