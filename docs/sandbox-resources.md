@@ -2,6 +2,8 @@
 
 A sandbox is an independently recorded resource with an owning scope, provider, backing identity, and lifecycle state. Creating a sandbox provisions a blank machine without copying files or changing a default. Setting a default changes routing only. Background jobs retain the target on which they started.
 
+For the provider evidence and proposed measurement contract behind Sprites inventory, runtime, and storage reporting, see [Sprites usage measurement](./sprites-usage-measurement.md).
+
 Before activation, agents have `execute`, `background`, and `sandbox` with `status` and `restart`. With `SANDBOX_RESOURCES_ENABLED=true`, a single `sandbox` tool replaces the advertised `execute` and `background` tools and provides management, command execution, and process control. `list` returns the available providers and supported actions. Unsupported provider operations fail explicitly. Files publication is separate from sandbox management.
 
 `sandbox` actions `exec` and `start_process` accept `sandbox_id`. Without a target, execution requires the scope's stored default after activation. `set_default` accepts an ID or null; null clears the default. A new scope has no default. Retiring a sandbox requires clearing its default and stopping its jobs first. Retirement is available only for providers with direct scope deletion. It never provisions or restores a machine. Once retirement begins, execution stays blocked; interrupted or failed cleanup remains visible and can be retried. Retirement deletes its working state, so durable outputs should be published to Files or git beforehand.
