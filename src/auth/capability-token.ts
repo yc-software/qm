@@ -3,6 +3,7 @@ import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeI
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
+export const SANDBOX_CAPABILITY_TTL_MS = 48 * 60 * 60_000;
 export const DEPLOYMENT_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
 
 export const CONTROL_PLANE_AUD = "control-plane";

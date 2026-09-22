@@ -79,6 +79,7 @@ import { estimateCostUsd } from "../ratelimit/budget.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
+  SANDBOX_CAPABILITY_TTL_MS,
   CONTROL_PLANE_AUD,
   OAUTH_CONSENT_AUD,
   CREDENTIAL_BROKER_AUD,
@@ -1538,7 +1539,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         controlClaims = {
           ...scopeAttestation,
           aud: CONTROL_PLANE_AUD,
-          exp: Date.now() + CAPABILITY_TTL_MS,
+          exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
           ...(turnTimezone ? { timezone: turnTimezone } : {}),
           ...(destination ? { destination } : {}),
           ...(delivery.candidates.length > 0 ? { destinations: delivery.candidates } : {}),
@@ -1570,7 +1571,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           {
             ...scopeAttestation,
             aud: OAUTH_CONSENT_AUD,
-            exp: Date.now() + CAPABILITY_TTL_MS,
+            exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
           },
           deps.capabilitySecret ?? deps.signingSecret,
         );
@@ -1587,7 +1588,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   ...scopeAttestation,
                   aud: CREDENTIAL_BROKER_AUD,
                   credentials: slugs,
-                  exp: Date.now() + CAPABILITY_TTL_MS,
+                  exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
                 },
                 deps.capabilitySecret ?? deps.signingSecret,
               );
@@ -1637,7 +1638,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               deps.apiBaseUrl ?? "",
               securityPolicy.denyPrivateNetworks,
             ),
-            exp: Date.now() + CAPABILITY_TTL_MS,
+            exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
           },
           egressSecret,
         );

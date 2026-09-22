@@ -28,7 +28,7 @@ import {
   type ToolResultScreen,
   type ToolResultScreenInput,
 } from "../security/security-posture.ts";
-import { CAPABILITY_TTL_MS } from "../auth/capability-token.ts";
+import { SANDBOX_CAPABILITY_TTL_MS } from "../auth/capability-token.ts";
 import { CRON_FIRE_NOTE_MAX_CHARS } from "../api/control-service.ts";
 import { utcMinute } from "../util/time.ts";
 
@@ -397,7 +397,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const bgTtlMaxSec = Math.round((opts?.backgroundJobTtlMaxMs ?? CONFIG_DEFAULTS.backgroundJobTtlMaxSec * 1000) / 1000);
   const bgTtlMin = Math.round(bgTtlSec / 60);
   const bgTtlMaxMin = Math.round(bgTtlMaxSec / 60);
-  const capabilityTtlMin = Math.round(CAPABILITY_TTL_MS / 60_000);
+  const capabilityTtlHours = Math.round(SANDBOX_CAPABILITY_TTL_MS / 3_600_000);
   const log = async (type: EntryType, payload: unknown, sourceScopeId?: ScopeId | null): Promise<void> => {
     if (!ref.emit || !ref.scopeLabel) return;
     const scopeLabel = classifyScopeLabel({
@@ -1630,7 +1630,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "it's stopped automatically (a watch survives just long enough to tell you) — for anything " +
       `that finishes within ${execCeilingSec}s, just use \`execute\`. Available on the default sandbox or an authorized explicit sandbox_id; ` +
       "elsewhere, use `execute`. A background job carries the same environment a foreground `execute` " +
-      `does — $AGENT_API_URL, $AGENT_API_TOKEN and $AGENT_CREDENTIAL_TOKEN all work, so self-API calls and shared-credential broker calls run fine from background work. Two limits: those turn tokens expire ${capabilityTtlMin} minutes after the turn that launched the job started (past that they 401 — checkpoint your progress to the workspace and continue from a later turn or a cron), and a background job cannot deliver a file itself, so write results to ordinary workspace paths and attach them from a live turn after polling.\n` +
+      `does — $AGENT_API_URL, $AGENT_API_TOKEN and $AGENT_CREDENTIAL_TOKEN all work, so self-API calls and shared-credential broker calls run fine from background work. Two limits: those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — checkpoint your progress to the workspace and continue from a later turn or a cron), and a background job cannot deliver a file itself, so write results to ordinary workspace paths and attach them from a live turn after polling.\n` +
       "INTERACTIVE LOGINS: device-flow logins (`gh auth login`, " +
       "`glab auth login`, `gcloud auth login`, and anything that prints a verification URL/code then " +
       "blocks waiting on a human) belong here, NOT in `execute`. Run them with action=start, read the " +
