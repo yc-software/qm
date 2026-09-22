@@ -35,6 +35,7 @@ function dropPage(title: string, content: string): string {
   .icon{width:40px;height:40px;margin:0 0 20px;border-radius:10px;background:var(--secondary);display:grid;place-items:center}
   .icon svg{width:22px;height:22px;stroke:var(--text);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
   h1{font-size:20px;font-weight:600;letter-spacing:-.02em;line-height:1.35;margin:0 0 8px}
+  h1 code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:.85em;font-weight:500;letter-spacing:0;background:color-mix(in srgb,var(--cta) 18%,var(--surface));border:1px solid color-mix(in srgb,var(--cta) 35%,var(--border));border-radius:6px;padding:2px 6px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
   p{color:var(--muted);margin:0}
   .request{margin:22px 0;text-align:left;background:var(--secondary);border:1px solid var(--border);border-radius:10px;padding:12px 14px}
   .request strong{display:block;color:var(--text);font-weight:500;margin-top:4px}
@@ -152,7 +153,7 @@ function dropFormHtml(
   const keys = JSON.stringify(fields.map((f) => f.key));
   return dropPage(
     "Provide a credential",
-    `<h1 id="title">Provide your ${service_} ${multi ? "login" : "credential"}</h1>
+    `<h1 id="title">Provide your <code>${service_}</code> ${multi ? "login" : "credential"}</h1>
 <div class="request"><p>The agent asked for this so it can:</p><strong>${purpose_}</strong>${requested_ ? `<span class="requested">Requested ${requested_}</span>` : ""}</div>
 <form id=f>
 ${inputs}
