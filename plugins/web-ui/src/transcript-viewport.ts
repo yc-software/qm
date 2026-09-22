@@ -26,6 +26,8 @@ export function preserveTranscriptScroll(root: HTMLElement): () => void {
   };
 }
 
+const PIN_MOTION_DELAY_MS = 300;
+
 export function createTranscriptViewport() {
   let scroller: HTMLElement | null = null;
   let pins: HTMLElement | null = null;
@@ -42,6 +44,9 @@ export function createTranscriptViewport() {
   let observer: ResizeObserver | null = null;
   let following = false;
   let frame: number | null = null;
+  let promptSince = 0;
+  let remeasure = true;
+  let motion: Animation | null = null;
   const contentUpdates = new Set<Promise<void>>();
 
   function setFollowing(value: boolean): void {
@@ -61,10 +66,13 @@ export function createTranscriptViewport() {
   }
 
   function clearPrompt(): void {
+    motion?.cancel();
+    motion = null;
     if (content) content.scrollTop = 0;
-    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded");
+    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded", "pin-motion");
     prompt?.style.removeProperty("--pin-expanded-max");
     prompt?.style.removeProperty("--pin-rest-height");
+    prompt?.style.removeProperty("--pin-content-rest");
     const toggle = prompt?.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) toggle.hidden = true;
     expanded = false;
@@ -120,14 +128,40 @@ export function createTranscriptViewport() {
       scroller.scrollTop > 0 &&
       prompt.getBoundingClientRect().top <=
         scroller.getBoundingClientRect().top + scroller.clientTop + paddingTop + top + 0.5;
+    const wasStuck = prompt?.classList.contains("stuck") ?? false;
+    const from = prompt && content && stuck !== wasStuck && !expanded ? content.getBoundingClientRect().height : null;
     prompt?.classList.toggle("stuck", stuck);
-    if (prompt && promptStyle && !stuck && !expanded) {
+    prompt?.classList.toggle("pin-motion", performance.now() - promptSince >= PIN_MOTION_DELAY_MS);
+    if (prompt && from !== null) animatePin(from, stuck ? "2lh" : prompt.style.getPropertyValue("--pin-content-rest"));
+    if (prompt && content && promptStyle && remeasure && !stuck && !wasStuck && !expanded && !settling(content)) {
+      remeasure = false;
+      prompt.style.setProperty("--pin-rest-height", "0px");
+      const rest = content.getBoundingClientRect().height;
       const inner =
         prompt.getBoundingClientRect().height -
         (parseFloat(promptStyle.paddingTop) || 0) -
         (parseFloat(promptStyle.paddingBottom) || 0);
+      prompt.style.setProperty("--pin-content-rest", `${Math.max(0, rest)}px`);
       prompt.style.setProperty("--pin-rest-height", `${Math.max(0, inner)}px`);
     }
+  }
+
+  function animatePin(from: number, to: string): void {
+    motion?.cancel();
+    motion = null;
+    if (!prompt || !content || !to || !prompt.classList.contains("pin-motion") || typeof content.animate !== "function")
+      return;
+    const raw = getComputedStyle(prompt).getPropertyValue("--pin-motion").trim();
+    const duration = raw.endsWith("ms") ? parseFloat(raw) : parseFloat(raw) * 1000;
+    if (!(duration > 0)) return;
+    motion = content.animate([{ maxHeight: `${from}px` }, { maxHeight: to }], {
+      duration,
+      easing: "cubic-bezier(0.2, 0, 0, 1)",
+    });
+  }
+
+  function settling(element: HTMLElement): boolean {
+    return typeof element.getAnimations === "function" && element.getAnimations().length > 0;
   }
 
   function onScroll(): void {
@@ -251,6 +285,7 @@ export function createTranscriptViewport() {
       scroller?.addEventListener("keydown", onKeyDown);
       if (typeof ResizeObserver !== "undefined") {
         observer = new ResizeObserver(() => {
+          remeasure = true;
           beforeRender();
           syncSticky();
           follow();
@@ -278,12 +313,14 @@ export function createTranscriptViewport() {
       clearPrompt();
       if (prompt) observer?.unobserve(prompt);
       prompt = nextPrompt;
+      promptSince = performance.now();
       promptKey = prompt?.dataset.index;
       if (prompt) observer?.observe(prompt);
     }
     const nextContent = prompt?.querySelector<HTMLElement>(".pin-content") ?? null;
     if (content !== nextContent) {
       changed = true;
+      remeasure = true;
       if (content) observer?.unobserve(content);
       content = nextContent;
       if (content) observer?.observe(content);

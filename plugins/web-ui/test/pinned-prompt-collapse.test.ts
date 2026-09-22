@@ -243,10 +243,105 @@ test("a stuck prompt condenses but keeps the transcript slot it had at rest", ()
     f.scroller.scrollTop = 0;
     f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
     assert.equal(f.row.classList.contains("stuck"), false);
+    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), rest);
+    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), rest);
+    f.resize(300);
     assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "60px");
     f.viewport.dispose();
     assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "");
   } finally {
+    f.close();
+  }
+});
+
+test("the rest height of the prompt body is re-measured on resize, never while the strip is settling", () => {
+  const f = fixture();
+  try {
+    assert.equal(f.row.style.getPropertyValue("--pin-content-rest"), "139.5px");
+    let animations = 0;
+    (f.content as HTMLElement & { getAnimations: () => Animation[] }).getAnimations = () =>
+      new Array(animations).fill(null) as unknown as Animation[];
+    f.scroller.scrollTop = 500;
+    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    f.content.getBoundingClientRect = () => ({ height: 46 }) as DOMRect;
+    f.scroller.scrollTop = 0;
+    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    assert.equal(f.row.style.getPropertyValue("--pin-content-rest"), "139.5px");
+    animations = 1;
+    f.resize(280);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-rest"), "139.5px");
+    animations = 0;
+    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    assert.equal(f.row.style.getPropertyValue("--pin-content-rest"), "46px");
+    f.viewport.dispose();
+    assert.equal(f.row.style.getPropertyValue("--pin-content-rest"), "");
+  } finally {
+    f.close();
+  }
+});
+
+test("sticking and releasing tween the prompt body between its two heights once motion is armed", () => {
+  const f = fixture();
+  const now = performance.now;
+  try {
+    const calls: Array<{ frames: Keyframe[]; options: KeyframeAnimationOptions }> = [];
+    let cancelled = 0;
+    (f.content as HTMLElement & { animate: unknown }).animate = (
+      frames: Keyframe[],
+      options: KeyframeAnimationOptions,
+    ) => {
+      calls.push({ frames, options });
+      return { cancel: () => cancelled++ } as unknown as Animation;
+    };
+    f.row.style.setProperty("--pin-motion", "180ms");
+    let clock = 5000;
+    performance.now = () => clock;
+    f.scroller.scrollTop = 500;
+    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    assert.equal(f.row.classList.contains("stuck"), true);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].frames, [{ maxHeight: "139.5px" }, { maxHeight: "2lh" }]);
+    assert.equal(calls[0].options.duration, 180);
+    f.content.getBoundingClientRect = () => ({ height: 80 }) as DOMRect;
+    f.scroller.scrollTop = 0;
+    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    assert.equal(calls.length, 2);
+    assert.equal(cancelled, 1);
+    assert.deepEqual(calls[1].frames, [{ maxHeight: "80px" }, { maxHeight: "139.5px" }]);
+    f.row.style.setProperty("--pin-motion", "0s");
+    f.scroller.scrollTop = 500;
+    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    assert.equal(calls.length, 2);
+    assert.equal(cancelled, 2);
+    f.viewport.dispose();
+    assert.equal(cancelled, 2);
+  } finally {
+    performance.now = now;
+    f.close();
+  }
+});
+
+test("motion is armed only once a prompt has been on screen for a moment", () => {
+  const f = fixture();
+  const now = performance.now;
+  try {
+    let clock = 1000;
+    performance.now = () => clock;
+    f.row.dataset.index = "9";
+    f.viewport.sync(f.scroller);
+    assert.equal(f.row.classList.contains("pin-motion"), false);
+    clock = 1200;
+    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    assert.equal(f.row.classList.contains("pin-motion"), false);
+    clock = 1300;
+    f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
+    assert.equal(f.row.classList.contains("pin-motion"), true);
+    f.row.dataset.index = "10";
+    f.viewport.sync(f.scroller);
+    assert.equal(f.row.classList.contains("pin-motion"), false);
+  } finally {
+    performance.now = now;
     f.close();
   }
 });
@@ -257,12 +352,32 @@ test("the condensed strip is a css contract on the stuck class, never on rest", 
     css.match(/\.message-stack \.user-row\.stuck:not\(\.pin-expanded\) \.user-bubble > \.pin-content \{[^}]*\}/)?.[0] ??
     "";
   assert.match(condensed, /-webkit-line-clamp: 2/);
-  assert.match(css, /\.user-row\.stuck:not\(\.pin-expanded\) \{\s*min-height: var\(--pin-rest-height\)/);
+  assert.doesNotMatch(condensed, /max-height/);
+  assert.match(css, /\.user-row:not\(:has\(~ \.user-row\)\) \{[^}]*min-height: var\(--pin-rest-height\)/);
+  assert.doesNotMatch(css, /\.user-row\.stuck:not\(\.pin-expanded\) \{\s*min-height/);
   const rest =
     css.match(
       /\.message-stack \.user-row:not\(:has\(~ \.user-row\)\):not\(\.pin-expanded\) \.user-bubble > \.pin-content \{[^}]*\}/,
     )?.[0] ?? "";
   assert.match(rest, /-webkit-line-clamp: 6/);
+  assert.doesNotMatch(rest, /max-height/);
+});
+
+test("the strip eases between its heights only when motion is armed, and not under reduced motion", () => {
+  const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
+  const motion = css.match(/\.message-stack \.user-row\.pin-motion \.user-bubble > \.pin-content \{[^}]*\}/)?.[0] ?? "";
+  assert.match(motion, /transition: -webkit-line-clamp 0s var\(--pin-clamp-delay\) allow-discrete/);
+  assert.doesNotMatch(motion, /max-height/);
+  assert.match(
+    css,
+    /\.user-row\.pin-motion:where\(\.stuck:not\(\.pin-expanded\)\) \{\s*--pin-motion: 180ms;\s*--pin-clamp-delay: 180ms/,
+  );
+  assert.match(
+    css,
+    /prefers-reduced-motion: reduce\) \{\s*\.message-stack \.user-row\.pin-motion \{\s*--pin-motion: 0s/,
+  );
+  const plain = css.replace(/\.pin-motion[^{]*\{[^}]*\}/g, "");
+  assert.doesNotMatch(plain.match(/\.pin-content \{[^}]*\}/g)?.join("") ?? "", /transition/);
 });
 
 test("expanded prompts reserve pins and chrome when panes resize or content grows", () => {

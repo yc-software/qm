@@ -1700,6 +1700,7 @@ a.chat-row-open {
   padding-top: 8px;
   margin-top: -8px;
   margin-bottom: 12px;
+  min-height: var(--pin-rest-height);
   background: transparent;
   pointer-events: none;
 }
@@ -2041,9 +2042,6 @@ qm-markdown .tok-in {
   overflow: auto;
   overscroll-behavior: contain;
 }
-.message-stack .user-row.stuck:not(.pin-expanded) {
-  min-height: var(--pin-rest-height);
-}
 .message-stack .user-row.stuck:not(.pin-expanded) .user-bubble > .pin-content {
   -webkit-line-clamp: 2;
 }
@@ -2059,6 +2057,33 @@ qm-markdown .tok-in {
   > .pin-content
   :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
   margin-block: 0;
+}
+.message-stack .user-row.stuck:not(.pin-expanded) .user-bubble > .pin-content :is(h1, h2, h3, h4, h5, h6) {
+  font-size: inherit;
+  line-height: inherit;
+}
+.message-stack .user-row.pin-motion {
+  --pin-motion: 220ms;
+  --pin-clamp-delay: 0s;
+}
+.message-stack .user-row.pin-motion:where(.stuck:not(.pin-expanded)) {
+  --pin-motion: 180ms;
+  --pin-clamp-delay: 180ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .message-stack .user-row.pin-motion {
+    --pin-motion: 0s;
+    --pin-clamp-delay: 0s;
+  }
+}
+.message-stack .user-row.pin-motion .user-bubble > .pin-content {
+  transition: -webkit-line-clamp 0s var(--pin-clamp-delay) allow-discrete;
+}
+.message-stack .user-row.pin-motion .user-bubble > .pin-content :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
+  transition:
+    margin-block var(--pin-motion) cubic-bezier(0.2, 0, 0, 1),
+    font-size var(--pin-motion) cubic-bezier(0.2, 0, 0, 1),
+    line-height var(--pin-motion) cubic-bezier(0.2, 0, 0, 1);
 }
 .pin-toggle {
   display: none;
