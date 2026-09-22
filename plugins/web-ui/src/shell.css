@@ -12229,9 +12229,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .assistant-row:has(.subagent-chip) .work-said {
   margin: 6px 0;
 }
-.assistant-row:has(.subagent-chip) .work-head {
-  font-size: 13px;
-}
 .subagent-mail-row .subagent-chip {
   padding: 2px 8px;
   font-size: 12px;
