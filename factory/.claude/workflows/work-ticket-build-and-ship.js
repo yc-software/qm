@@ -312,15 +312,14 @@ TEST QUALITY — read ${ADD_TESTS_SKILL_MD} § "Three Absolute Rules" (REQUIRED)
 and follow it: NO flaky tests, NO meaningless tests, FEWER better tests. When that snapshot
 points to contract-fidelity.md, read ${CONTRACT_FIDELITY_MD}, not the retained-branch copy.
 
-FACTORY TEST SCOPE — add the smallest test that proves the changed behavior and prevents the
-regression. Add another only for a materially different outcome. Do not backfill neighboring
-behavior, freeze exact prose/layout/internal sequencing, or enumerate equivalent inputs.
-Guard same-bug sibling fields uniformly in the implementation, but use representative or
-parameterized tests for equivalent handling. Understand a touched conditional's full truth
-table, but test only materially different outcomes. When multiple frontend call sites share
-one changed helper or contract, test it directly plus one representative integration; test
-each call site only when its contract or outcome differs. Security, authorization, money,
-sends, and destructive actions still require their distinct allowed, denied, or safe outcomes.`
+FACTORY TEST SCOPE — minimal killing set. A test exists to catch ONE plausible bug: one edit a
+maintainer could really make to the changed code. Every test must name the one bug it catches,
+in its title, or in its first comment line when the title cannot carry it. A test is EXCESS when
+another test in the same file already catches its named bug, or when the named bug is not an
+edit a maintainer would make. There is no cap on test count and no cap on test length. The
+default shape is one test per acceptance criterion in the ticket. Security, authorization,
+money, sends, and destructive actions still require their distinct allowed, denied, or safe
+outcomes.`
 
 // Mock-fidelity refute lens (frontend only) — the BLOCKING half of the mock-fidelity fix.
 // Appended to the refute prompt only when the branch has frontend changes, so it can
@@ -2138,11 +2137,14 @@ async function runSelfVerifyPanel(tag) {
   were written under. It judges EXCESS only: absent or weak coverage stays with the
   deterministic-verification bullet above, and this criterion never asks for more tests. When a
   test file this diff CHANGED breaks it — more than one test for the same materially different
-  outcome, enumerated equivalent inputs, or frozen prose, layout, or internal sequencing —
-  ALWAYS report it as a shortfall that names the specific tests to merge or drop and the rule
-  they break, even when every test passes and the ticket's required coverage is delivered. Test
-  files this diff did not touch are out of scope, and security, authorization, money, sends, and
-  destructive actions keep their distinct allowed, denied, and safe outcomes — per this rule:
+  outcome, enumerated equivalent inputs, frozen prose, layout, or internal sequencing, a test
+  whose named bug another test in that file already catches, or a test that names no bug —
+  ALWAYS report it as a shortfall that names the specific tests to merge or drop, the test that
+  already covers each one, and the rule they break, even when every test passes and the ticket's
+  required coverage is delivered. Test files this diff did not touch are out of scope, and so is
+  every test this diff left unchanged: the criterion judges only the tests this diff adds or
+  modifies; security, authorization, money, sends, and destructive actions keep their distinct
+  allowed, denied, and safe outcomes — per this rule:
   ${TEST_QUALITY_RULES}`
 
   let result
@@ -2821,7 +2823,7 @@ const reviewReceipts = new Map()
 const reviewUnresolvedInputs = new Set()
 const proofReceipts = new Map()
 const proofUnresolvedInputs = new Set()
-const REVIEW_PROMPT_SCHEMA_VERSION = 'factory-review-v3'
+const REVIEW_PROMPT_SCHEMA_VERSION = 'factory-review-v4'
 const PROOF_PROMPT_SCHEMA_VERSION = 'factory-proof-v2'
 
 async function semanticInputFingerprint(kind, extra = '', includeProofOutputs = true) {

@@ -1533,3 +1533,36 @@ test("the wrapper flushes exactly twice: in the tailer poll and after the tailer
     "the wrapper flushes at the poll and the Ship handoff, nowhere else",
   );
 });
+
+test("an edit that loosens the minimal-killing-set rule, the panel's excess lens, or the review schema version", () => {
+  const rulesAnchor = "const TEST_QUALITY_RULES = `";
+  const rulesStart = BAS.indexOf(rulesAnchor);
+  assert.notEqual(rulesStart, -1, `no inline TEST_QUALITY_RULES literal in ${BAS_REL}`);
+  const rules = BAS.slice(rulesStart, BAS.indexOf("`", rulesStart + rulesAnchor.length)).replace(/\s+/g, " ");
+  assert.ok(
+    rules.includes("name the one bug"),
+    "the test-economy rule no longer makes each test name the one bug it catches",
+  );
+
+  const promptAnchor = "const reviewPrompt = `";
+  const promptStart = BAS.indexOf(promptAnchor);
+  const clauseStart = BAS.indexOf("BLOCKING criterion — FACTORY TEST SCOPE:", promptStart);
+  assert.ok(
+    promptStart !== -1 && clauseStart !== -1,
+    "the self-verify blocking bar has no FACTORY TEST SCOPE criterion",
+  );
+  const clause = BAS.slice(clauseStart, BAS.indexOf("`", promptStart + promptAnchor.length)).replace(/\s+/g, " ");
+  assert.ok(
+    clause.includes("already catches"),
+    "the excess lens no longer flags a test whose bug a sibling already catches",
+  );
+  for (const limit of ["adds or modifies", "files this diff did not touch are out of scope"]) {
+    assert.ok(clause.includes(limit), `the excess lens dropped its scope limit: ${limit}`);
+  }
+
+  assert.ok(BAS.includes("factory-review-v4"), "the review prompt schema version was not bumped to factory-review-v4");
+  assert.ok(
+    !BAS.includes("factory-review-v3"),
+    "a factory-review-v3 receipt still satisfies the changed review prompt",
+  );
+});
