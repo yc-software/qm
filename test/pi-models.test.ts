@@ -107,7 +107,6 @@ test("the curated catalog contains only current model families", () => {
       "claude-opus-5-5",
       "claude-fable-5-1",
       "claude-fable-5",
-      "claude-opus-5-5",
       "claude-opus-5",
       "claude-opus-4-8",
       "claude-sonnet-5",

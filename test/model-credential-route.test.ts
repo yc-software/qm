@@ -62,7 +62,6 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { id: "claude-opus-5-5", name: "Claude Opus 5.5", provider: "anthropic" },
         { id: "claude-fable-5-1", name: "Claude Fable 5.1", provider: "anthropic" },
         { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
-        { id: "claude-opus-5-5", name: "Claude Opus 5.5", provider: "anthropic" },
         { id: "claude-opus-5", name: "Claude Opus 5", provider: "anthropic" },
         { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
         { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
