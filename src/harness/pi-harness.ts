@@ -1221,9 +1221,16 @@ export async function buildModelRuntime(
     if (!request) {
       const providerModelId =
         model.provider === CODEX_SUBSCRIPTION_PROVIDER ? codexProviderModelId(model.id) : model.id;
-      const passthrough = retained(options);
+      const candidate = withRequestHeaders(model, true, false);
+      const passthrough = {
+        ...retained(options),
+        onPayload: async (payload: unknown) => {
+          const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
+          return applyThinkingBinding(transformed === undefined ? payload : transformed, candidate);
+        },
+      } as T;
       return {
-        model,
+        model: candidate,
         options:
           providerModelId === model.id ? passthrough : wireModelId(passthrough, model, async () => providerModelId),
       };
@@ -1336,7 +1343,7 @@ export async function probeModel(
         maxTokens: Math.min(128, model.maxTokens),
         signal,
         maxRetryDelayMs: 1,
-        onPayload: (payload) => applyThinkingBinding(applyFastSpeed(payload, fastMode, model.api), candidate),
+        onPayload: (payload) => applyFastSpeed(payload, fastMode, model.api),
       },
     )
     .result();
@@ -1374,10 +1381,15 @@ function thinkingBindingApplies(model: Pick<Model<Api>, "api" | "compat"> | unde
   );
 }
 
-export function applyThinkingBinding<T>(payload: T, model: { headers?: Record<string, string> } | undefined): T {
+export function applyThinkingBinding<T>(
+  payload: T,
+  model: (Pick<Model<Api>, "headers"> & Partial<Pick<Model<Api>, "thinkingLevelMap">>) | undefined,
+): T {
   if (!payload || typeof payload !== "object") return payload;
   if (!model?.headers?.["anthropic-beta"]?.split(",").includes(THINKING_BINDING_BETA)) return payload;
-  const thinking = (payload as { thinking?: { type?: unknown } }).thinking;
+  const thinking =
+    (payload as { thinking?: { type?: unknown } }).thinking ??
+    (model.thinkingLevelMap?.off === null ? { type: "adaptive", display: "summarized" } : undefined);
   if (thinking?.type === "adaptive" || thinking?.type === "enabled") {
     (payload as Record<string, unknown>).thinking = { ...thinking, block_binding: THINKING_BINDING };
   }
@@ -1468,7 +1480,7 @@ export function withRequestHeaders(model: Model<Api>, direct: boolean, fast: boo
   const betas = [...(thinkingBindingApplies(model) ? [THINKING_BINDING_BETA] : []), ...(fast ? [FAST_MODE_BETA] : [])];
   if (!betas.length) return model;
   const prior = model.headers?.["anthropic-beta"];
-  const beta = [...(prior ? [prior] : []), ...betas].join(",");
+  const beta = [...new Set([...(prior ? prior.split(",").map((value) => value.trim()) : []), ...betas])].join(",");
   return { ...model, headers: { ...model.headers, "anthropic-beta": beta } };
 }
 
@@ -1666,7 +1678,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ref.pendingPrepareNextTurn = undefined;
           ref.pendingTransformContext = undefined;
           applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
-          applyThinkingBinding(payload, model as { headers?: Record<string, string> } | undefined);
           const result = prior ? await prior(payload, model) : payload;
           const capturedPayload = captureRequests ? sanitizeLlmPayload(result ?? payload, model) : undefined;
           let finalPayload = await withDocumentInputs(

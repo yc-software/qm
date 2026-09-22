@@ -104,6 +104,7 @@ test("the curated catalog contains only current model families", () => {
   assert.deepEqual(
     SELECTABLE_BASE_MODELS.map((model) => model.id),
     [
+      "claude-opus-5-5",
       "claude-fable-5-1",
       "claude-fable-5",
       "claude-opus-5",

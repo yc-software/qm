@@ -19,7 +19,7 @@ import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import { defaultInteractiveThinkingLevel, getRequiredModel } from "../src/model/pi-models.ts";
 
 test("modelSupportsFastMode allows only the documented direct Opus ids", () => {
-  for (const id of ["claude-opus-5", "claude-opus-4-8"]) {
+  for (const id of ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"]) {
     assert.equal(modelSupportsFastMode(id), true, `${id} should support fast mode`);
   }
   for (const id of [
@@ -103,6 +103,7 @@ test("auto resets a reused Anthropic session to its interactive default", () => 
 });
 
 const ASTRA = getRequiredModel("gpt-6-astra", false) as Model<Api>;
+const OPUS_55 = getRequiredModel("claude-opus-5-5", false);
 const OPUS = getRequiredModel("claude-opus-5", false) as Model<Api>;
 const ASTRA_TOKENS = { input: 10_000, output: 2_000, cacheRead: 50_000, cacheWrite: 4_000, totalTokens: 66_000 };
 
@@ -122,6 +123,14 @@ const pricingCases: Array<[string, Model<Api>, Partial<Usage>, number]> = [
     { input: 10_000, output: 1_000, cacheRead: 40_000, cacheWrite: 16_000, cacheWrite1h: 8_000 },
     0.225,
   ],
+  [
+    "Opus 5.5 mixed tokens and cache durations",
+    OPUS_55,
+    { input: 10_000, output: 1_000, cacheRead: 40_000, cacheWrite: 16_000, cacheWrite1h: 8_000 },
+    0.172,
+  ],
+  ["Opus 5.5 cache reads", OPUS_55, { cacheRead: 100_000 }, 0.02],
+  ["Opus 5.5 1h writes", OPUS_55, { cacheWrite: 4_000, cacheWrite1h: 4_000 }, 0.032],
   ["all 1h writes", OPUS, { cacheWrite: 4_000, cacheWrite1h: 4_000 }, 0.04],
   ["clamped 1h writes", OPUS, { cacheWrite: 4_000, cacheWrite1h: 40_000 }, 0.04],
 ];
@@ -160,7 +169,7 @@ const HAIKU = getRequiredModel("claude-haiku-4-5", false) as Model<Api>;
 const BINDING_BETA = "thinking-binding-controls-2026-08-01";
 
 test("request headers preserve rates and existing beta headers", () => {
-  for (const model of [ASTRA, OPUS]) {
+  for (const model of [ASTRA, OPUS, OPUS_55]) {
     const snapshot = structuredClone(model);
     assert.deepEqual(withRequestHeaders(model, true, true).cost, snapshot.cost);
     assert.deepEqual(model, snapshot);

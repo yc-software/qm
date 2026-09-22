@@ -68,6 +68,7 @@ interface ModelEntry {
     cacheWrite?: number;
     contextWindow: number;
     maxTokens: number;
+    thinkingLevelMap?: PiModel["thinkingLevelMap"];
 
     tiers?: ReadonlyArray<{
       inputTokensAbove: number;
@@ -82,6 +83,23 @@ interface ModelEntry {
 const GPT_56_CLONE = { template: "gpt-5.5", contextWindow: 1_050_000, maxTokens: 128_000 } as const;
 
 export const MODEL_REGISTRY: readonly ModelEntry[] = [
+  {
+    id: "claude-opus-5-5",
+    name: "Claude Opus 5.5",
+    fastMode: true,
+    webui: true,
+    base: true,
+    clone: {
+      template: "claude-opus-4-8",
+      thinkingLevelMap: { off: null },
+      input: 4,
+      output: 20,
+      cacheRead: 0.2,
+      cacheWrite: 5,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    },
+  },
   {
     id: "claude-fable-5-1",
     name: "Claude Fable 5.1",
@@ -335,7 +353,9 @@ function cloneModel(model: PiModel, id: string, name: string, overrides: Partial
     input: [...model.input],
     cost: structuredClone(overrides.cost ?? model.cost),
     ...(model.headers ? { headers: { ...model.headers } } : {}),
-    ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
+    ...(model.thinkingLevelMap || overrides.thinkingLevelMap
+      ? { thinkingLevelMap: { ...model.thinkingLevelMap, ...overrides.thinkingLevelMap } }
+      : {}),
     ...(model.compat ? { compat: { ...(model.compat as Record<string, unknown>) } as PiModel["compat"] } : {}),
   };
 }
@@ -383,6 +403,7 @@ export function resolveBuiltinModel(id: string): PiModel | undefined {
       ? cloneModel(template, id, entry.name, {
           contextWindow: entry.clone.contextWindow,
           maxTokens: entry.clone.maxTokens,
+          ...(entry.clone.thinkingLevelMap ? { thinkingLevelMap: entry.clone.thinkingLevelMap } : {}),
           cost: {
             input: entry.clone.input,
             output: entry.clone.output,
