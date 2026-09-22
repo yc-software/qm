@@ -23,6 +23,8 @@ const DERIVED_VARS = new Set([
   "transfer_lifecycle_prefix",
   "deploy_microvm_image",
   "deploy_microvm_execution_role_arn",
+  "db_instance_class",
+  "backup_retention_days",
   "services",
   "secret_names",
 ]);
@@ -202,9 +204,15 @@ function derivedValues(
       deploy_microvm_image: config.env.core?.AWS_DEPLOY_IMAGE?.trim() || config.orgId,
       deploy_microvm_execution_role_arn:
         config.env.core?.AWS_DEPLOY_EXEC_ROLE_ARN ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-microvm-exec`,
+      ...(declared.includes("db_instance_class") && aws.dbInstanceClass
+        ? { db_instance_class: aws.dbInstanceClass }
+        : {}),
     },
     json: {
       ...(declared.includes("core_public_hosts") ? { core_public_hosts: [...new Set(corePublicHosts)].sort() } : {}),
+      ...(declared.includes("backup_retention_days") && aws.backupRetentionDays !== undefined
+        ? { backup_retention_days: aws.backupRetentionDays }
+        : {}),
       services,
       secret_names: secrets.map((secret) => secret.name),
     },
@@ -271,13 +279,28 @@ export function assertTerraformScaffoldSupportsConfig(config: QmConfig, configDi
   const services = Object.values(config.aws?.services ?? {});
   const hasPublicPaths = services.some((service) => service?.publicPaths?.length);
   const hasAssumeRoles = services.some((service) => service?.assumeRoleArns !== undefined);
-  if (!hasPublicPaths && !hasAssumeRoles) return;
+  const hasDatabaseOverrides =
+    config.aws?.dbInstanceClass !== undefined || config.aws?.backupRetentionDays !== undefined;
+  if (!hasPublicPaths && !hasAssumeRoles && !hasDatabaseOverrides) return;
   const tfvarsPath = join(configDir, "infra", "terraform.tfvars");
   if (!existsSync(tfvarsPath)) return;
   const variablesPath = join(configDir, "infra", "variables.tf");
   const mainPath = join(configDir, "infra", "main.tf");
   const variables = existsSync(variablesPath) ? readFileSync(variablesPath, "utf8") : "";
   const main = existsSync(mainPath) ? readFileSync(mainPath, "utf8") : "";
+  if (
+    hasDatabaseOverrides &&
+    (!/variable\s+"db_instance_class"/.test(variables) ||
+      !/variable\s+"backup_retention_days"/.test(variables) ||
+      !/instance_class\s*=\s*var\.db_instance_class/.test(main) ||
+      !/backup_retention_period\s*=\s*coalesce\(var\.backup_retention_days,\s*var\.db_backup_retention_days\)/.test(
+        main,
+      ))
+  ) {
+    throw new CliError(
+      "the vendored AWS scaffold predates aws.dbInstanceClass and aws.backupRetentionDays; update infra/variables.tf and infra/main.tf from the current scaffold before configuring them",
+    );
+  }
   if (hasPublicPaths && (!/public_paths\s*=\s*optional/.test(variables) || !/public_path_services\s*=/.test(main))) {
     throw new CliError(
       "the vendored AWS scaffold predates aws.services.*.publicPaths; update infra/variables.tf and infra/main.tf before exposing plugins",

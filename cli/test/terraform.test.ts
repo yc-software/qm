@@ -50,6 +50,8 @@ test("declaredVariables reads the scaffolded variables.tf", () => {
     "core_public_hosts",
     "db_name",
     "db_username",
+    "db_instance_class",
+    "backup_retention_days",
     "github_repository",
     "github_subject_prefix",
     "github_oidc_provider_arn",
@@ -62,6 +64,26 @@ test("declaredVariables reads the scaffolded variables.tf", () => {
   ]) {
     assert.ok(declared.includes(name), `variables.tf declares ${name}`);
   }
+});
+
+test("database config renders defaults and overrides into Terraform variables", () => {
+  const defaults = terraformVars(config, "", declared);
+  assert.doesNotMatch(defaults, /db_instance_class|backup_retention_days/);
+
+  const overridden = terraformVars(
+    {
+      ...config,
+      aws: { ...config.aws!, dbInstanceClass: "db.t4g.micro", backupRetentionDays: 7 },
+    },
+    defaults,
+    declared,
+  );
+  assert.match(overridden, /db_instance_class\s*= "db\.t4g\.micro"/);
+  assert.match(overridden, /backup_retention_days\s*= 7/);
+
+  const upgraded = terraformVars(config, "db_backup_retention_days = 7\n", declared);
+  assert.match(upgraded, /db_backup_retention_days = 7/);
+  assert.doesNotMatch(upgraded, /^backup_retention_days\s*=/m);
 });
 
 test("the ECS execution role can read every declared contract secret independent of Terraform state", () => {
@@ -300,6 +322,47 @@ test("assume-role config rejects vendored AWS scaffolds that predate workload ro
       () => renderTerraformVars(configured, dir),
       /AWS scaffold predates aws\.services\.\*\.assumeRoleArns[\s\S]*variables\.tf[\s\S]*main\.tf/,
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("database overrides reject vendored AWS scaffolds that cannot render them", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-legacy-database-"));
+  try {
+    const infra = join(dir, "infra");
+    mkdirSync(infra);
+    writeFileSync(join(infra, "terraform.tfvars"), "services = {}\n");
+    writeFileSync(join(infra, "variables.tf"), 'variable "services" { type = map(any) }\n');
+    writeFileSync(join(infra, "main.tf"), "");
+    assert.throws(
+      () =>
+        renderTerraformVars(
+          { ...config, aws: { ...config.aws!, dbInstanceClass: "db.t4g.micro", backupRetentionDays: 7 } },
+          dir,
+        ),
+      /AWS scaffold predates aws\.dbInstanceClass and aws\.backupRetentionDays/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("database overrides render through the current vendored AWS scaffold", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-current-database-"));
+  try {
+    const infra = join(dir, "infra");
+    mkdirSync(infra);
+    writeFileSync(join(infra, "terraform.tfvars"), 'github_repository = "example/deployment"\n');
+    writeFileSync(join(infra, "variables.tf"), variablesTf);
+    writeFileSync(join(infra, "main.tf"), mainTf);
+    renderTerraformVars(
+      { ...config, aws: { ...config.aws!, dbInstanceClass: "db.t4g.micro", backupRetentionDays: 7 } },
+      dir,
+    );
+    const rendered = readFileSync(join(infra, "terraform.tfvars"), "utf8");
+    assert.match(rendered, /db_instance_class\s*= "db\.t4g\.micro"/);
+    assert.match(rendered, /backup_retention_days\s*= 7/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -697,7 +760,11 @@ test("AWS module provisions durable encrypted object storage and configurable sa
     mainTf,
     /id\s*= "qm-transfer-expiry"[\s\S]*?abort_incomplete_multipart_upload\s*\{\s*days_after_initiation\s*= 1\s*\}/,
   );
-  assert.match(mainTf, /backup_retention_period\s*= var\.db_backup_retention_days/);
+  assert.match(mainTf, /instance_class\s*= var\.db_instance_class/);
+  assert.match(
+    mainTf,
+    /backup_retention_period\s*= coalesce\(var\.backup_retention_days, var\.db_backup_retention_days\)/,
+  );
   assert.match(mainTf, /multi_az\s*= var\.db_multi_az/);
   assert.match(mainTf, /skip_final_snapshot\s*= var\.db_skip_final_snapshot/);
   assert.match(mainTf, /recovery_window_in_days = var\.secret_recovery_window_days/);

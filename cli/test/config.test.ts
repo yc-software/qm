@@ -675,6 +675,24 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
       assert.throws(() => loadConfigAt(path), /aws\.rdsInstance/);
     });
   }
+  withConfig(
+    { target: "aws", aws: { ...aws, dbInstanceClass: "db.t4g.micro", backupRetentionDays: 7 } },
+    ({ path }) => {
+      const parsed = loadConfigAt(path).config.aws!;
+      assert.equal(parsed.dbInstanceClass, "db.t4g.micro");
+      assert.equal(parsed.backupRetentionDays, 7);
+    },
+  );
+  for (const dbInstanceClass of ["", "t4g.micro", "db.T4g.micro", "db.t4g", "db..micro", "db.t4g.nano.micro"]) {
+    withConfig({ target: "aws", aws: { ...aws, dbInstanceClass } }, ({ path }) => {
+      assert.throws(() => loadConfigAt(path), /aws\.dbInstanceClass/);
+    });
+  }
+  for (const backupRetentionDays of ["7", 0, 1.5, 36, null]) {
+    withConfig({ target: "aws", aws: { ...aws, backupRetentionDays } }, ({ path }) => {
+      assert.throws(() => loadConfigAt(path), /aws\.backupRetentionDays/);
+    });
+  }
   for (const objectStoreBucket of ["legacy-bucket", "assets.acme.example", "192.168.5.bucket"]) {
     withConfig({ target: "aws", aws: { ...aws, objectStoreBucket } }, ({ path }) => {
       assert.equal(loadConfigAt(path).config.aws!.objectStoreBucket, objectStoreBucket);
