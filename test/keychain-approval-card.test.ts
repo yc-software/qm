@@ -61,6 +61,7 @@ async function fixture() {
     asks,
     ask,
     session,
+    sessions,
     approvals,
     resumed,
     revokeMembership: () => {
@@ -129,9 +130,20 @@ test("the card links the conversation inline and omits command-policy fields", a
   const wire = JSON.stringify(card);
   assert.match(wire, /\|in the Reports conversation>/);
   assert.doesNotMatch(wire, /Command:|Flagged as:|Allow session|fixture-secret/);
+  assert.match(wire, /ongoing access across your personal conversations/);
+  for (const [scope, audience] of [
+    ["channel:C1", "this channel"],
+    ["group:project", "this group"],
+  ] as const) {
+    const scoped = keychainApprovalMessage({ ...view, ask: { ...view.ask, requesterScopeId: scope } }, origin);
+    assert.ok(JSON.stringify(scoped).includes(`ongoing access across ${audience}`));
+  }
+  const once = keychainApprovalMessage({ ...view, ask: { ...view.ask, requestedMode: "once" } }, origin);
+  assert.match(JSON.stringify(once), /one-time access/);
   assert.match(wire, /Allow once/);
   assert.match(wire, /Allow always/);
   assert.match(wire, /Deny/);
+  assert.ok(card.blocks.every((block) => block.type !== "context"));
   const settled = keychainApprovalMessage(
     { ...view, ask: { ...view.ask, status: "approved" }, mode: "standing" },
     origin,
@@ -244,4 +256,17 @@ test("an expired notification cannot hide an approval recovered after a failed w
     await f.keychain.markAskNotified(f.ask.id, "approved");
     assert.equal((await f.keychain.unnotifiedResolvedAsks(Date.now())).length, 0);
   }
+});
+
+test("approval labels use the owner's session title without exposing inaccessible titles", async () => {
+  const f = await fixture();
+  await f.sessions.updateTitle(f.session.id, "Nightly report");
+  await f.sessions.updateParticipantView(f.session.id, "alice@example.com", { title: "My nightly report" });
+  const view = (await f.approvals.get(f.ask.id, "alice@example.com"))!;
+  assert.equal(view.conversation, "My nightly report");
+  assert.match(JSON.stringify(keychainApprovalMessage(view, "https://qm.example/s/test")), /\|in My nightly report>/);
+  f.sessions.getForParticipant = async () => null;
+  const hidden = (await f.approvals.get(f.ask.id, "alice@example.com"))!;
+  assert.equal(hidden.conversation, "the Reports conversation");
+  assert.equal(hidden.sessionId, undefined);
 });

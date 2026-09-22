@@ -1122,7 +1122,8 @@ export function createKeychain(deps: {
 
     async createAsk(input) {
       const purpose = input.purpose.trim();
-      if (!purpose) throw new KeychainError(400, "purpose required — record the requester's words verbatim");
+      if (!purpose)
+        throw new KeychainError(400, "purpose required — describe the specific task requiring this credential");
       const cred = await deps.creds.get(input.credentialId);
       if (!cred || cred.kind === "broker") throw new KeychainError(404, "unknown credential");
       const t = now();
@@ -1777,7 +1778,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     "3. Owner not here, or not answering? Offer to send them the ask. On a go-ahead from the requester:",
     '   `curl -fsS -X POST "$AGENT_API_URL/v1/keychain/asks" ' +
       CAPABILITY_CURL_AUTH +
-      ' -H \'content-type: application/json\' -d \'{"credential":"<credential id>","purpose":"<the requester\'s words, verbatim>"}\'` (`"requestedMode":"standing"` only if they asked for that).',
+      ' -H \'content-type: application/json\' -d \'{"credential":"<credential id>","purpose":"<specific task requiring this credential>"}\'` Set `requestedMode` to `"once"` for one credential use or `"standing"` when requesting recurring or repeated background use. Describe what this credential will do and why it is needed; do not just repeat the user\'s broad request. This proposes access for the owner to approve; it does not authorize it.',
     "   Core DMs the owner a notice composed from the record, and wakes THIS conversation the moment they answer (or the ask expires, 24h). You may set yourself a one-shot follow-up cron as a timeout check. A relayed approval never mints anything — explain that and send a real ask instead.",
     "4. On the turn where the owner speaks their approval (core verifies the speaker IS the owner), record it:",
     '   `curl -fsS -X POST "$AGENT_API_URL/v1/keychain/grants" ' +

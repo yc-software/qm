@@ -4,6 +4,7 @@ import type { Directory } from "./directory.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import { updateSlackMessage } from "./messaging.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
+import { parseScopeId } from "../types.ts";
 
 const ACTIONS = ["keychain_allow_once", "keychain_allow_always", "keychain_deny"] as const;
 const escape = (text: string): string => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -18,14 +19,20 @@ export function keychainApprovalMessage(
     originUrl && /^https?:\/\//.test(originUrl)
       ? `<${originUrl.replaceAll("|", "%7C").replaceAll(">", "%3E")}|${place}>`
       : place;
-  const summary = `Use your *${escape(view.service.slice(0, 150))}* credential ${origin}.`;
   const pending = ask.status === "pending";
+  const { kind } = parseScopeId(ask.requesterScopeId);
+  let audience = "this group";
+  if (kind === "personal") audience = "your personal conversations";
+  if (kind === "channel") audience = "this channel";
+  const standing = `ongoing access across ${audience}`;
+  const duration =
+    pending && ask.requestedMode ? ` (${ask.requestedMode === "standing" ? standing : "one-time access"})` : "";
+  const summary = `Use your *${escape(view.service.slice(0, 150))}* credential ${origin}${duration}.`;
   let status = "This request expired.";
-  if (ask.status === "approved")
-    status = `Approved — ${view.mode === "standing" ? "ongoing access for this conversation" : "one-time access"}.`;
+  if (ask.status === "approved") status = `Approved — ${view.mode === "standing" ? standing : "one-time access"}.`;
   if (ask.status === "declined") status = "Denied.";
   const text = pending
-    ? `Approval needed: use your ${view.service} credential in ${view.conversation}. ${ask.purpose}`
+    ? `Approval needed: use your ${view.service} credential in ${view.conversation}${duration}. ${ask.purpose}`
     : status;
   const blocks: Array<Record<string, unknown>> = [
     {
@@ -37,15 +44,6 @@ export function keychainApprovalMessage(
     },
   ];
   if (pending) {
-    blocks.push({
-      type: "context",
-      elements: [
-        {
-          type: "plain_text",
-          text: "Allow once permits one credential use. Allow always permits future use in this conversation until revoked.",
-        },
-      ],
-    });
     blocks.push({
       type: "actions",
       block_id: `keychain_ask:${ask.id}`,

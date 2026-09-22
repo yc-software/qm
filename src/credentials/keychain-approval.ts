@@ -60,7 +60,7 @@ export function createKeychainApprovals(deps: {
       ask,
       service: credential.service,
       ...(credential.accountLabel ? { accountLabel: credential.accountLabel } : {}),
-      conversation: context?.name || "the requesting conversation",
+      conversation: visible?.title || context?.name || "the requesting conversation",
       ...(visible ? { sessionId: visible.id } : {}),
       ...(ask.requesterSeq !== undefined && visible?.threadRef === ask.requesterThreadRef
         ? { seq: ask.requesterSeq }
