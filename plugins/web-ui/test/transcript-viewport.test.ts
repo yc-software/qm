@@ -745,6 +745,39 @@ test("a reader who left the bottom is not pulled back when work closes", () => {
   }
 });
 
+test("a shrink that clamps a reader to the bottom does not resume following", () => {
+  const f = fixture();
+  try {
+    f.scroll(700);
+    f.viewport.beforeRender();
+    f.collapse();
+    f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.Event("scroll"));
+    f.viewport.afterRender();
+    f.grow();
+    f.resize(30, 50);
+    f.flush();
+    assert.equal(f.s.scrollTop, 200);
+  } finally {
+    f.close();
+  }
+});
+
+test("a bottom-pinned reader keeps following when the browser clamps a shrink", () => {
+  const f = fixture();
+  try {
+    f.viewport.beforeRender();
+    f.collapse();
+    f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.Event("scroll"));
+    f.viewport.afterRender();
+    f.grow();
+    f.resize(30, 50);
+    f.flush();
+    assert.equal(f.s.scrollTop, 300);
+  } finally {
+    f.close();
+  }
+});
+
 test("upward input after work closes still cancels the queued follow", () => {
   const f = fixture();
   try {

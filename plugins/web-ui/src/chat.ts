@@ -1924,9 +1924,11 @@ export function createChatSurface(
         const work = (message as AssistantWork).work;
         const phase = work ? currentTextPhase(work) : null;
         const streamingFinal = isStreaming && phase?.phase === "final_answer";
+        const workActive =
+          hasWork && isStreaming && !streamingFinal && (work?.status === "working" || work?.status === "thinking");
         const text = streamingFinal ? chunk.text.slice(phase.streamOffset) : chunk.text;
         for (const [partIndex, part] of setupContent(
-          assistantDisplayText(isStreaming && hasWork && !streamingFinal ? "" : text, message.stopReason),
+          assistantDisplayText(workActive ? "" : text, message.stopReason),
         ).entries()) {
           if (part.type !== "text") {
             if (!(message as AssistantWork).persisted) continue;

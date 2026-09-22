@@ -129,8 +129,8 @@ export function createTranscriptViewport() {
       scroller.scrollTop > lastTop &&
       (Math.abs(scroller.scrollTop - lastBottom) <= 1 ||
         (inputBottom !== null && Math.abs(scroller.scrollTop - inputBottom) <= 1));
-    if (atBottom || reachedPreviousBottom) setFollowing(true);
-    else if (scroller.scrollTop < lastTop) cancelFollow();
+    if ((atBottom && (following || !movingUp)) || reachedPreviousBottom) setFollowing(true);
+    else if (movingUp) cancelFollow();
     if (scroller.scrollTop !== lastTop) clearInput();
     lastTop = scroller.scrollTop;
     measureBottom();

@@ -15,6 +15,15 @@ test("live and completed work share one chronological duration fold", () => {
   assert.doesNotMatch(chat, /function segmentSummaryLabel/);
 });
 
+test("the reply text is hidden only while the work fold is active, never for a finished-but-streaming turn", () => {
+  assert.match(
+    chat,
+    /const workActive =\s*hasWork && isStreaming && !streamingFinal && \(work\?\.status === "working" \|\| work\?\.status === "thinking"\);/,
+  );
+  assert.match(chat, /assistantDisplayText\(workActive \? "" : text, message\.stopReason\)/);
+  assert.doesNotMatch(chat, /isStreaming && hasWork && !streamingFinal \? ""/);
+});
+
 test("promoted speech keeps full reply styling", () => {
   assert.match(css, /\.work-said \{[\s\S]{0,200}?color: var\(--foreground\);/);
 });
