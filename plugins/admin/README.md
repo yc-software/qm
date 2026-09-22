@@ -15,15 +15,14 @@ The **Users** tab (org-wide, org_admin-only) lists everyone who has
 used the agent (from session metadata — no content) with admin status joined, plus the
 authoritative grant list, and lets an org_admin **promote** a principal to org_admin
 or **revoke** — every mutation attributed and audited, the last org_admin protected.
-The **+** on the Users card invites an **external user** (an address outside the org's
-Slack / email domain) with a role and an expiry; they get an invitation email and sign in
-at the portal with that address until it expires. Invitation emails go out through Resend
-when core has `RESEND_API_KEY` and `AUTH_EMAIL_FROM`; without them the user is still added
-and the dashboard shows the sign-in link for you to share. External users are listed in
-their own card, where **Revoke** ends access immediately and leaves the row listed as
-expired; a day after expiry, **Remove** drops the row. An address that already belongs to an
-org member (the org's email domain, the Slack directory, the sign-in allow-list, or anyone who
-has used the agent) cannot be invited.
+**Invite teammate** adds someone by email with Member or Org admin access. The invite form grants access without an
+expiration date. Teammates appear in Users before their
+first session. Addresses already admitted through the domain or allow-list may receive a
+sign-in invitation too. Re-inviting an admin never removes their admin role.
+Invitations are durable and listed with their access status. Revoke ends access immediately.
+Invitation email uses Resend when configured. Teammate invitations contain a single-use sign-in link valid for 24 hours. If delivery is unavailable or fails, Admin shows the same link with a copy control after the invitation is created. Redemption checks current membership and claims the token through durable storage; revocation or a new invitation invalidates earlier links. Company access displays the web email domain and the local Slack allow-list; these are deployment settings, not editable Admin policy.
+The existing external-user API still requires an expiry and rejects org members.
+Teammate invitations and revocations are restricted to the Admin surface.
 (`org_admin` is the only supported role for now; `team_admin` was removed — team-scoped admin
 observability is future work. See `src/admin/admin-service.ts`.) History (conversation listing with a
 by-type usage rollup, drilling into transcripts with per-turn model-context breakdowns), Files

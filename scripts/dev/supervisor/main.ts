@@ -399,7 +399,11 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   if (!portalDevPrincipal && adminGrantsSeed) portalDevPrincipal = adminGrantsSeed.split(":")[0] ?? "";
   if (!portalDevPrincipal && durableAdminPrincipal) portalDevPrincipal = durableAdminPrincipal;
   if (!portalDevPrincipal) portalDevPrincipal = assembled.env.USER || "dev-admin";
-  log(`portal auth: localhost bypass signs in as ${portalDevPrincipal}`);
+  log(
+    assembled.env.PORTAL_LOCAL_AUTH_BYPASS === "0"
+      ? "portal auth: localhost bypass disabled"
+      : `portal auth: localhost bypass signs in as ${portalDevPrincipal}`,
+  );
 
   const tokens = slackOn(spec) ? slotTokens(slot, store) : null;
 

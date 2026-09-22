@@ -135,6 +135,7 @@ export interface ServerDeps {
   inviteMailer?: InviteMailer;
   emailAuthPrincipals?: readonly string[];
   emailAuthDomain?: string;
+  slackAllowFrom?: readonly string[];
   rateLimiter?: RateLimiter;
   sessions?: SessionStore;
   screenSecurity?: SecurityScreenProbe;

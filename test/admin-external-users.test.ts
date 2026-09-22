@@ -1,3 +1,4 @@
+import { mintSignedPayload, verifySignedPayload } from "../src/auth/signed-token.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -55,6 +56,8 @@ function start(
     directory: built.directory,
     config: built.config,
     portalUrl: PORTAL,
+    portalIdentitySecret: SECRET,
+    replayDedupe: { durable: true, claim: built.replayDedupe!.claim.bind(built.replayDedupe!) },
     brandingDefault: { selfLabel: "Acme Bot" },
     ...(opts.mailer ? { inviteMailer: opts.mailer } : {}),
     ...(opts.emailAuthDomain ? { emailAuthDomain: opts.emailAuthDomain } : {}),
@@ -162,7 +165,7 @@ test("role org_admin grants admin; member revokes it; DELETE drops the grant and
     );
     const tomb = s.built.identity.externalMember("boss@partner.example");
     assert.equal(tomb?.role, "member");
-    assert.ok(tomb!.expiresAt <= Date.now());
+    assert.ok(typeof tomb?.expiresAt === "number" && tomb.expiresAt <= Date.now());
     assert.deepEqual(
       (await roster(s.base)).externalUsers.map((m: any) => [m.email, m.status]),
       [["boss@partner.example", "expired"]],
@@ -559,6 +562,118 @@ test("directory sync never deactivates an external member; manual deactivation s
     assert.equal(s.built.identity.classify("live@partner.example").type, "internal");
     await s.built.identity.deactivate("live@partner.example");
     assert.equal(s.built.identity.classify("live@partner.example").type, "guest");
+  } finally {
+    await s.close();
+  }
+});
+
+const inviteTeammate = (base: string, body: unknown, headers: Record<string, string> = { "x-admin-actor": ALICE }) =>
+  fetch(`${base}/v1/admin/users/invite`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+test("teammates receive permanent access and appear before their first session", async () => {
+  const { sent, mailer } = stubMailer();
+  const s = start({ mailer, emailAuthDomain: "corp.example" });
+  try {
+    const r = await inviteTeammate(s.base, { email: " Engineer@Corp.example " });
+    assert.equal(r.status, 200);
+    const d: any = await r.json();
+    assert.equal(d.member.expiresAt, null);
+    assert.equal(d.member.kind, "teammate");
+    assert.equal(d.emailSent, true);
+    assert.ok(sent[0]);
+    assert.match(sent[0].text, /no expiration/);
+    assert.doesNotMatch(sent[0].html, /Invalid Date/);
+    const list = await roster(s.base);
+    assert.ok(list.users.some((u: any) => u.principalId === "engineer@corp.example" && u.sessionCount === 0));
+    assert.equal(list.externalUsers[0].status, "active");
+    assert.equal(await coreEmailAllowed(s.base, undefined, "engineer@corp.example", "test"), true);
+    assert.equal((await inviteTeammate(s.base, { email: "engineer@corp.example" })).status, 200);
+    assert.equal(sent.length, 2);
+    assert.equal((await roster(s.base)).externalUsers.length, 1);
+    assert.equal((await revoke(s.base, "engineer@corp.example")).status, 200);
+    assert.equal(await coreEmailAllowed(s.base, undefined, "engineer@corp.example", "test"), false);
+    assert.equal(s.built.identity.classify("engineer@corp.example").type, "guest");
+  } finally {
+    await s.close();
+  }
+});
+
+test("teammate invitations validate expiry, require admin, and do not demote existing admins", async () => {
+  const s = start();
+  try {
+    assert.equal((await inviteTeammate(s.base, { email: "a@corp.example" }, { "x-admin-actor": NOBODY })).status, 403);
+    assert.equal((await inviteTeammate(s.base, { email: "invalid" })).status, 400);
+    assert.equal(
+      (await inviteTeammate(s.base, { email: "a@corp.example", expiresAt: Date.now() - DAY_MS })).status,
+      400,
+    );
+    const first = await inviteTeammate(s.base, { email: "a@corp.example", role: "org_admin" });
+    assert.equal(first.status, 200);
+    const again = await inviteTeammate(s.base, { email: "a@corp.example", role: "member" });
+    assert.equal(again.status, 200);
+    assert.equal(((await again.json()) as any).member.role, "org_admin");
+    assert.equal(adminStatusFromGrants(await s.built.admin.listGrants(), "a@corp.example").isAdmin, true);
+    assert.equal((await invite(s.base, { email: "a@corp.example", expiresAt: Date.now() + DAY_MS })).status, 400);
+  } finally {
+    await s.close();
+  }
+});
+
+test("agent capabilities cannot create permanent teammate access", async () => {
+  const s = start({ signed: true });
+  try {
+    const r = await inviteTeammate(
+      s.base,
+      { email: "a@corp.example" },
+      { "x-agent-capability": await capFor("admin-alice") },
+    );
+    assert.equal(r.status, 403);
+    assert.equal(s.built.identity.externalMember("a@corp.example"), undefined);
+  } finally {
+    await s.close();
+  }
+});
+
+test("invitation links work without email delivery and are single use, scoped, and revocable", async () => {
+  const s = start();
+  const redeem = (token: string) =>
+    fetch(`${s.base}/v1/auth/invitations/redeem`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+  const issue = async () => {
+    const r = await inviteTeammate(s.base, { email: "qa@corp.example" });
+    assert.equal(r.status, 200);
+    const data: any = await r.json();
+    assert.equal(data.emailSent, false);
+    const url = new URL(data.signInUrl);
+    assert.equal(url.pathname, "/auth/invite");
+    return new URLSearchParams(url.hash.slice(1)).get("token")!;
+  };
+  try {
+    const token = await issue();
+    const claims: any = await verifySignedPayload(token, SECRET);
+    assert.equal((await redeem(token + "tampered")).status, 400);
+    assert.equal((await redeem(await mintSignedPayload({ ...claims, exp: Date.now() - 1 }, SECRET))).status, 400);
+    assert.equal((await redeem(await mintSignedPayload({ ...claims, org: "org:other" }, SECRET))).status, 400);
+    assert.equal(
+      (await redeem(await mintSignedPayload({ ...claims, aud: "https://elsewhere.example" }, SECRET))).status,
+      400,
+    );
+    const results = await Promise.all([redeem(token), redeem(token)]);
+    assert.deepEqual(results.map((r) => r.status).sort(), [200, 400]);
+    const accepted: any = await results.find((r) => r.status === 200)!.json();
+    assert.equal(accepted.email, "qa@corp.example");
+    const revoked = await issue();
+    assert.equal((await revoke(s.base, "qa@corp.example")).status, 200);
+    assert.equal((await redeem(revoked)).status, 403);
+    await issue();
+    assert.equal((await redeem(revoked)).status, 403);
   } finally {
     await s.close();
   }

@@ -440,6 +440,9 @@ test("supervised children share the selected dev org", () => {
     assert.equal(spec.env.CODEX_HOME, undefined);
   }
   for (const spec of specs) assert.equal(spec.env.CORE_ORG_ID, "beta");
+  assert.equal(specs.find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "1");
+  inputs.baseEnv.PORTAL_LOCAL_AUTH_BYPASS = "0";
+  assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "0");
   inputs.baseEnv = {};
   assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "core")!.env.ORG_ID, "acme");
 });

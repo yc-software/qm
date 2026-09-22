@@ -143,6 +143,7 @@ const SYSTEM: Rule[] = [
   pat("POST", "/v1/egress-audit"),
   pat("POST", "/v1/auth/broker/claim"),
   pat("POST", "/v1/auth/trusted/admin"),
+  pat("POST", "/v1/auth/invitations/redeem"),
   pat("POST", "/v1/auth/broker/sessions"),
   pat("POST", "/v1/auth/broker/sessions/use"),
   pat("PUT", "/v1/deployment-layer"),

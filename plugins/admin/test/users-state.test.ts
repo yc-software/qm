@@ -13,7 +13,6 @@ function model() {
     data: {},
     email: "first@example.com",
     role: "member",
-    expires: "2026-12-01",
     inviteOpen: true,
   });
   return view;
@@ -70,7 +69,7 @@ test("roster refresh updates shell counts while retaining search focus and invit
     clearCache() {},
     labelRole: String,
   });
-  f.root.querySelector<HTMLButtonElement>('[aria-label="Invite external user"]')!.click();
+  f.root.querySelector<HTMLButtonElement>('[aria-label="Invite teammate"]')!.click();
   const email = f.root.querySelector<HTMLInputElement>("#users-email")!;
   email.value = "draft@example.com";
   email.dispatchEvent(new f.window.Event("input"));

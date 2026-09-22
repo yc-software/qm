@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { mintSignedPayload } from "../../../auth/signed-token.ts";
 import { scopeId as makeScopeId } from "../../../types.ts";
 import { adminStatusFromGrants, AdminError } from "../../../admin/admin-service.ts";
 import { personKey, samePerson } from "../../../directory/person.ts";
@@ -36,14 +38,38 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
   const now = Date.now();
   const externalUsers = ((await deps.identity?.listExternalMembers()) ?? [])
     .map((m) => ({ ...m, status: externalMemberActive(m, now) ? ("active" as const) : ("expired" as const) }))
-    .sort((a, b) => Number(b.status === "active") - Number(a.status === "active") || a.expiresAt - b.expiresAt);
+    .sort(
+      (a, b) =>
+        Number(b.status === "active") - Number(a.status === "active") ||
+        (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity),
+    );
+  for (const member of externalUsers.filter((m) => m.kind === "teammate" && m.status === "active")) {
+    if (!users.some((u) => samePerson(u.principalId, member.email)))
+      users.push({
+        principalId: member.email,
+        sessionCount: 0,
+        turnCount: 0,
+        lastSeenAt: null,
+        admin: adminStatusFromGrants(grants, member.email),
+      });
+  }
   const signInUrl = signInUrlOf(deps);
   const inviteEmail = {
     configured: deps.inviteMailer !== undefined,
     ...(deps.inviteMailer ? {} : { problem: INVITE_EMAIL_NOT_CONFIGURED }),
     ...(signInUrl ? { signInUrl } : {}),
   };
-  return sendJson(res, 200, { scopeId: scope, users, grants, externalUsers, inviteEmail });
+  return sendJson(res, 200, {
+    scopeId: scope,
+    users,
+    grants,
+    externalUsers,
+    inviteEmail,
+    access: {
+      emailDomain: deps.emailAuthDomain ?? null,
+      slackAllowFrom: deps.slackAllowFrom ?? null,
+    },
+  });
 }
 
 function signInUrlOf(deps: ApiCtx["deps"]): string | undefined {
@@ -70,11 +96,21 @@ async function orgMember(ctx: ApiCtx, email: string, includeSessions: boolean): 
 }
 
 export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
+  return inviteUser(ctx, false);
+}
+
+export async function inviteTeammate(ctx: ApiCtx): Promise<void> {
+  return inviteUser(ctx, true);
+}
+
+async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   const { res, deps, body } = ctx;
   const scope = orgScope(deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
+  if (teammate && ctx.capability)
+    return sendJson(res, 403, { error: "forbidden", message: "Teammate invitations must be made in Admin." });
   const bad = (message: string) => sendJson(res, 400, { error: "bad_request", message });
   const b = isObj(body) ? body : {};
   const email = String(b.email ?? "")
@@ -85,22 +121,29 @@ export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
   if (role !== "member" && role !== "org_admin") return bad("role must be member or org_admin");
   const expiry = normalizeInboundExpiresAt(endOfDayUtc(b.expiresAt));
   if (!expiry.ok) return bad(expiry.message);
+  if (teammate && (!deps.portalUrl || !deps.portalIdentitySecret || !deps.replayDedupe?.durable))
+    return sendJson(res, 503, {
+      error: "not_configured",
+      message: "Invitation sign-in requires a portal and durable token storage.",
+    });
   const now = Date.now();
-  if (expiry.value === undefined || expiry.value <= now) return bad("expiresAt is required and must be in the future");
+  if ((!teammate && expiry.value === undefined) || (expiry.value !== undefined && expiry.value <= now))
+    return bad("expiresAt is required and must be in the future");
   await deps.identity.refresh(true);
   const existing = deps.identity.externalMember(email);
+  if (!teammate && existing?.kind === "teammate") return bad("Manage this teammate in Users.");
   const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), email).isAdmin;
   const ownsGrant = existing?.role === "org_admin";
-  if ((!existing && holdsGrant) || (await orgMember(ctx, email, !existing)))
+  if (!teammate && ((!existing && holdsGrant) || (await orgMember(ctx, email, !existing))))
     return sendJson(res, 409, { error: "conflict", message: ALREADY_A_MEMBER });
   if (ctx.capability && (role === "org_admin" || ownsGrant || holdsGrant)) {
     return sendJson(res, 403, { error: "forbidden", message: EXTERNAL_ORG_ADMIN_PORTAL_ONLY });
   }
-  if (role === "member" && holdsGrant && !ownsGrant)
+  if (!teammate && role === "member" && holdsGrant && !ownsGrant)
     return sendJson(res, 409, { error: "conflict", message: HOLDS_OWN_GRANT });
   let grantChange: "grant.create" | "grant.revoke" | null = null;
   if (role === "org_admin" && !holdsGrant) grantChange = "grant.create";
-  else if (role === "member" && holdsGrant) grantChange = "grant.revoke";
+  else if (!teammate && role === "member" && holdsGrant) grantChange = "grant.revoke";
   try {
     if (grantChange === "grant.create")
       await deps.admin!.createGrant(actor, { principalId: email, role: "org_admin", scopeId: scope });
@@ -114,23 +157,41 @@ export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
   const readmitted = existing !== undefined && !externalMemberActive(existing, now);
   const member: ExternalMember = {
     email,
-    role,
-    expiresAt: expiry.value,
+    role: teammate && holdsGrant ? "org_admin" : role,
+    expiresAt: expiry.value ?? null,
+    ...(teammate ? { kind: "teammate" as const, inviteId: randomUUID() } : {}),
     invitedBy: existing?.invitedBy ?? actor.id,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
   await deps.identity.putExternalMember(member);
+  const action = created || readmitted ? "external_user.invite" : "external_user.update";
   audit(deps, {
     principalId: actor.id,
-    action: created || readmitted ? "external_user.invite" : "external_user.update",
+    action: teammate ? "user.invite" : action,
     resource: email,
     scopeLabel: scope,
   });
-  const signInUrl = signInUrlOf(deps);
+  const signInUrl = teammate
+    ? `${deps.portalUrl!.replace(/\/+$/, "")}/auth/invite#token=${encodeURIComponent(
+        await mintSignedPayload(
+          {
+            purpose: "teammate-invite",
+            inviteId: member.inviteId,
+            email,
+            org: scope,
+            aud: deps.portalUrl!.replace(/\/+$/, ""),
+            iat: now,
+            exp: now + 24 * 60 * 60 * 1000,
+            jti: randomUUID(),
+          },
+          deps.portalIdentitySecret!,
+        ),
+      )}`
+    : signInUrlOf(deps);
   let emailSent = false;
   let emailProblem: string | undefined;
-  if (created || readmitted || b.resendInvite === true) {
+  if (teammate || created || readmitted || b.resendInvite === true) {
     if (!deps.inviteMailer) emailProblem = INVITE_EMAIL_NOT_CONFIGURED;
     else if (!signInUrl)
       emailProblem = "no sign-in URL is configured on core (set PUBLIC_WEB_URL) — share the portal address by hand";
@@ -145,6 +206,7 @@ export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
             invitedBy: actor.id,
             signInUrl,
             expiresAt: member.expiresAt,
+            magicLink: teammate,
           }),
         });
         emailSent = true;
@@ -159,7 +221,7 @@ export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
     created,
     emailSent,
     ...(emailProblem ? { emailProblem } : {}),
-    ...(signInUrl ? { signInUrl } : {}),
+    ...(!emailSent && signInUrl ? { signInUrl } : {}),
   });
 }
 
@@ -174,7 +236,7 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   if (!existing) return sendJson(res, 404, { error: "not_found", message: "external user not found" });
   const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), existing.email).isAdmin;
   const ownsGrant = existing.role === "org_admin";
-  if (ctx.capability && (ownsGrant || holdsGrant)) {
+  if (ctx.capability && (existing.kind === "teammate" || ownsGrant || holdsGrant)) {
     return sendJson(res, 403, { error: "forbidden", message: EXTERNAL_ORG_ADMIN_PORTAL_ONLY });
   }
   if (holdsGrant && !ownsGrant) return sendJson(res, 409, { error: "conflict", message: HOLDS_OWN_GRANT });
@@ -195,14 +257,15 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   const tombstone: ExternalMember = {
     ...existing,
     role: "member",
-    expiresAt: Math.min(existing.expiresAt, now),
+    expiresAt: Math.min(existing.expiresAt ?? now, now),
     updatedAt: now,
   };
   if (externalMemberActive(existing, now) || existing.role !== "member") {
     await deps.identity.putExternalMember(tombstone);
     audit(deps, { principalId: actor.id, action: "external_user.revoke", resource: existing.email, scopeLabel: scope });
   }
-  if (now - tombstone.expiresAt < FORGET_AFTER_MS) return sendJson(res, 200, { ok: true, removed: false });
+  if (existing.kind === "teammate" || now - tombstone.expiresAt! < FORGET_AFTER_MS)
+    return sendJson(res, 200, { ok: true, removed: false });
   await deps.identity.removeExternalMember(existing.email);
   audit(deps, { principalId: actor.id, action: "external_user.forget", resource: existing.email, scopeLabel: scope });
   return sendJson(res, 200, { ok: true, removed: true });

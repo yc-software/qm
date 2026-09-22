@@ -11,7 +11,9 @@ export class UsersView {
   inviteOpen = false;
   email = "";
   role = "member";
-  expires = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+  inviteLink = "";
+  inviteWarning = "";
+  copyLabel = "Copy invite link";
   counts = new Map<string, number[]>();
   pending = new Set<string>();
   refreshRequest = 0;
@@ -98,10 +100,22 @@ export class UsersView {
     }
     this.services.clearCache();
   }
+  confirmAdmin(principalId: string) {
+    return this.services.confirm(
+      "Make " +
+        principalId +
+        " an org admin?\n\nThey will be able to manage users, permissions, and organization settings.",
+    );
+  }
   async admin(user: any, event: Event) {
     event.stopPropagation();
     const revoke = user.admin?.isAdmin;
-    if (!this.services.confirm((revoke ? "Revoke admin access for " : "Make admin: ") + user.principalId + "?")) return;
+    if (
+      !(revoke
+        ? this.services.confirm("Revoke admin access for " + user.principalId + "?")
+        : this.confirmAdmin(user.principalId))
+    )
+      return;
     await this.action(user.principalId, async () => {
       const r = revoke
         ? await this.services.api(
@@ -147,16 +161,20 @@ export class UsersView {
     );
   }
   async invite() {
-    const body = { email: this.email.trim(), role: this.role, expiresAt: this.expires };
-    if (!body.email || !body.expiresAt) {
-      this.feedback(!body.email ? "Email required." : "Expiry date required.", "err", true);
+    const body = { email: this.email.trim(), role: this.role };
+    if (!body.email) {
+      this.feedback("Email required.", "err", true);
       this.draw();
       return;
     }
+    if (body.role === "org_admin" && !this.confirmAdmin(body.email)) return;
+    this.inviteLink = "";
+    this.inviteWarning = "";
+    this.copyLabel = "Copy invite link";
     await this.action(
       "invite",
       async () => {
-        const r = await this.services.api("POST", "/api/external-users", body);
+        const r = await this.services.api("POST", "/api/users/invite", body);
         if (!r.ok)
           return this.feedback(
             r.status === 403 ? "Only an admin may invite." : r.data?.message || "Invite failed.",
@@ -164,21 +182,16 @@ export class UsersView {
             true,
           );
         const member = r.data.member;
-        const expiry = " (expires " + this.services.fmtTime(member.expiresAt) + ")";
         await this.refresh();
-        let message = "Updated " + member.email + " — " + this.services.labelRole(member.role) + expiry;
-        if (r.data.emailSent) message = "Invite sent to " + member.email + expiry;
-        else if (r.data.emailProblem)
-          message =
-            "Added " +
-            member.email +
-            ", but no invitation email was sent: " +
-            r.data.emailProblem +
-            "." +
-            (r.data.signInUrl ? " Portal: " + r.data.signInUrl + ". A working sign-in method is required." : "");
-        this.feedback(message, r.data.emailSent || !r.data.emailProblem ? "ok" : "dirty", true);
-        if (this.email.trim() === body.email && this.role === body.role && this.expires === body.expiresAt)
-          this.inviteOpen = false;
+        this.feedback(r.data.emailSent ? "Invite sent to " + member.email : "Added " + member.email + ".", "ok", true);
+        if (!r.data.emailSent && r.data.signInUrl) {
+          this.inviteLink = r.data.signInUrl;
+          this.inviteWarning =
+            this.data.inviteEmail?.configured === false
+              ? "You'll need to configure RESEND_API_KEY to send magic link emails. Otherwise, share the link directly:"
+              : "Email couldn't be sent. Share the invite link directly.";
+        }
+        if (this.email.trim() === body.email && this.role === body.role) this.inviteOpen = false;
       },
       true,
     );
@@ -226,34 +239,22 @@ export class UsersView {
             <option value="member">Member</option>
             <option value="org_admin">Admin</option>
           </select>`,
-        )}${field(
-          "Expires",
-          html`<input
-            id="users-expires"
-            type="date"
-            min=${new Date().toISOString().slice(0, 10)}
-            .value=${this.expires}
-            @input=${(e: Event) => {
-              this.expires = (e.target as HTMLInputElement).value;
-            }}
-          />`,
         )}<button type="button" class="primary" ?disabled=${this.pending.has("invite")} @click=${() => this.invite()}>
-          ${inviteEmail.configured === false ? "Add user" : "Send invite"}
+          Send invite
         </button>
       </div>
-      <p class=${inviteEmail.configured === false ? "hint flag-warn" : "hint"}>
-        ${inviteEmail.configured === false ? (inviteEmail.problem || "Invitation emails are not configured") + ". Users can still be added, but need a configured sign-in method before they can log in." + (inviteEmail.signInUrl ? " Sign-in link to share: " + inviteEmail.signInUrl : "") : "Invitation emails go out through Resend — core needs RESEND_API_KEY and AUTH_EMAIL_FROM. Without them users can still be added, but need a configured sign-in method before they can log in."}
-      </p>
     </div>`;
     const externalTable = table(
       ["Email", "Role", "Expires", "Invited by", "Status", ""],
       externals.map((m: any) => [
         { text: m.email, cls: "mono" },
         { node: html`<span class="subline">${s.labelRole(m.role)}</span>` },
-        (m.status === "active" ? "Ends " : "Ended ") + new Date(m.expiresAt).toISOString().slice(0, 10) + " (UTC)",
+        m.expiresAt === null
+          ? "No expiration"
+          : (m.status === "active" ? "Ends " : "Ended ") + new Date(m.expiresAt).toISOString().slice(0, 10) + " (UTC)",
         m.invitedBy || "-",
         { badge: m.status === "active" ? "Active" : "Expired", kind: m.status === "active" ? "ok" : "warn" },
-        m.status === "active" || Date.now() - m.expiresAt >= 86400000
+        m.status === "active" || (m.kind !== "teammate" && Date.now() - m.expiresAt >= 86400000)
           ? {
               action: {
                 label: m.status === "active" ? "Revoke" : "Remove",
@@ -264,9 +265,7 @@ export class UsersView {
             }
           : "",
       ]),
-      this.data.externalUsers?.length
-        ? "No external users match."
-        : "No external users. Use Invite external user to invite an outside collaborator.",
+      this.data.externalUsers?.length ? "No invitations match." : "No invitations yet. Invite a teammate above.",
     );
     const roster = table(
       ["Principal", "Role", "Last seen", "Sessions", "Turns", "Credentials", "Grants", "", ""],
@@ -309,15 +308,12 @@ export class UsersView {
         <div class="list-root">
           <section class="card users-roster">
             <div class="head">
-              <h2>External users</h2>
-              <p>
-                Outside collaborators invited by email until an expiry date. Org members do not need an external invite.
-              </p>
+              <h2>Users</h2>
               <button
                 type="button"
-                class="rowbtn"
-                title="Invite external user"
-                aria-label="Invite external user"
+                class="primary"
+                title="Invite teammate"
+                aria-label="Invite teammate"
                 aria-expanded=${String(this.inviteOpen)}
                 @click=${() => {
                   this.inviteOpen = !this.inviteOpen;
@@ -325,11 +321,12 @@ export class UsersView {
                   if (this.inviteOpen) this.root.querySelector<HTMLInputElement>("#users-email")?.focus();
                 }}
               >
-                Invite external user
+                Invite teammate
               </button>
             </div>
             <div class="body">
-              ${invite}${externalTable}
+              ${invite}${roster}
+              <p class=${"status " + this.tone} id="st-users" role="status">${this.message}</p>
               <p
                 id="st-external"
                 class=${"status" + (this.externalTone ? " " + this.externalTone : "")}
@@ -337,15 +334,52 @@ export class UsersView {
               >
                 ${this.externalMessage}
               </p>
+              ${
+                this.inviteLink
+                  ? html`<p class="flag-warn">${this.inviteWarning}</p>
+                      <button
+                        type="button"
+                        @click=${async () => {
+                  this.copyLabel = (await s.copyText(this.inviteLink)) ? "Copied" : "Copy failed";
+                  this.draw();
+                }}
+                      >
+                        ${this.copyLabel}
+                      </button>`
+                  : ""
+              }
             </div>
           </section>
+          ${card("Invitations", "Access granted by email. Revoking ends access to this instance.", externalTable)}
           ${card(
-            "Users",
-            "Everyone who has used the agent — click a row for their activity, artifacts, and config.",
-            html`<p class=${"status" + (this.tone ? " " + this.tone : "")} id="st-users" role="status">
-                ${this.message}
-              </p>
-              ${roster}`,
+            "Company access",
+            "",
+            table(
+              ["Rule", "Value", "Purpose"],
+              [
+                [
+                  "Email domain allowlist",
+                  this.data.access?.emailDomain
+                    ? "@" + this.data.access.emailDomain
+                    : { node: html`<span class="subline">Not configured</span>` },
+                  {
+                    node: html`Controls who can create an account at
+                      <a href=${(inviteEmail.signInUrl || "/auth/login") + "?provider=primary"}
+                        >${inviteEmail.signInUrl || "/auth/login"}</a
+                      >.`,
+                  },
+                ],
+                [
+                  "Slack email allowlist",
+                  this.data.access?.slackAllowFrom?.length
+                    ? this.data.access.slackAllowFrom
+                        .map((rule: string) => (rule.includes("@") ? rule : "@" + rule))
+                        .join(", ")
+                    : { node: html`<span class="subline">Not configured</span>` },
+                  "Controls who the bot treats as an internal employee in shared Slack workspaces.",
+                ],
+              ],
+            ),
           )}
         </div>
       </div>`,

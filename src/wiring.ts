@@ -2779,6 +2779,7 @@ export function serverDeps(
     admin: built.admin,
     ...(config.emailAuthPrincipals ? { emailAuthPrincipals: config.emailAuthPrincipals } : {}),
     ...(config.emailAuthDomain ? { emailAuthDomain: config.emailAuthDomain } : {}),
+    ...(config.slack ? { slackAllowFrom: config.slack.allowFrom ?? [] } : {}),
     ...(config.resendApiKey && config.emailFrom
       ? { inviteMailer: createResendMailer(config.resendApiKey, config.emailFrom) }
       : {}),
