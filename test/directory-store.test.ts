@@ -222,28 +222,6 @@ describe("group-DM (mpim) membership (addressed by participant set, §10)", () =
     assert.equal(await d.groupMembership("G-new", "U-new"), undefined);
   });
 
-  it("conversationRosterKnown says whether the store holds a roster for a room, per room", async () => {
-    const d = createDirectoryStore();
-    assert.equal(await d.conversationRosterKnown("group", "G-new"), false, "never synced");
-    await d.replaceGroups([{ groupId: "G-one", principalId: "U-one" }], undefined, ["G-one", "G-listed"], ["G-one"]);
-    assert.equal(await d.conversationRosterKnown("group", "G-one"), true);
-    assert.equal(await d.conversationRosterKnown("group", "G-listed"), false, "listed by id, roster not crawled");
-    assert.equal(await d.conversationRosterKnown("group", "G-new"), false, "a room created after the sync");
-    assert.equal(await d.conversationRosterKnown("channel", "C-new"), false);
-    await d.replaceChannels(
-      [
-        { channelId: "C-one", name: "one", isPrivate: true },
-        { channelId: "C-listed", name: "listed", isPrivate: true },
-      ],
-      [{ channelId: "C-one", principalId: "U-one" }],
-      undefined,
-      ["C-one"],
-    );
-    assert.equal(await d.conversationRosterKnown("channel", "C-one"), true);
-    assert.equal(await d.conversationRosterKnown("channel", "C-listed"), false);
-    assert.equal(await d.conversationRosterKnown("channel", "C-new"), false);
-  });
-
   it("members and channels swaps are stale-guarded the same way", async () => {
     const d = createDirectoryStore();
     assert.equal(await d.replace([{ principalId: "U-new", displayName: "New", type: "internal" }], 2000), true);

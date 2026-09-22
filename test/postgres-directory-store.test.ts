@@ -248,8 +248,6 @@ test(
       ["U-alice", "U-carol", "U-sam"],
     );
     assert.deepEqual(await store.listGroupsFor("U-sam"), ["G-1"]);
-    assert.equal(await store.conversationRosterKnown("group", "G-1"), true);
-    assert.equal(await store.conversationRosterKnown("group", "G-brand-new"), false, "a room created after the sync");
 
     const direct = (await freshPg(URL!)).query;
     const t0 = await direct("SELECT groups_hash FROM directory_sync WHERE org_id = $1", ["default-org"]);

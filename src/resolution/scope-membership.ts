@@ -21,7 +21,6 @@ export interface ScopeMembershipDeps {
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
     list?(): Promise<Array<{ principalId: string; displayName?: string }>>;
     get?(principalId: string): Promise<{ principalId?: string; slackId?: string } | null>;
-    conversationRosterKnown?(kind: "channel" | "group", id: string): Promise<boolean>;
   };
   identity?: {
     classify(externalId: string, isExternalGuest?: boolean): { type?: string; teamIds?: readonly string[] };
@@ -88,22 +87,13 @@ async function memberOfSharedScope(
 
 export type CanReadScope = (principalId: string, targetScope: ScopeId) => Promise<boolean>;
 export type CanWriteScope = (principalId: string, targetScope: ScopeId) => Promise<boolean>;
-export type IsCurrentSharedScopeMember = (
-  principalId: string,
-  scope: ScopeId,
-  verifiedLiveSpeaker?: boolean,
-) => Promise<boolean>;
+export type IsCurrentSharedScopeMember = (principalId: string, scope: ScopeId) => Promise<boolean>;
 
 export function createIsCurrentSharedScopeMember(deps: ScopeMembershipDeps): IsCurrentSharedScopeMember {
-  return async function isCurrentSharedScopeMember(principalId, scope, verifiedLiveSpeaker) {
+  return async function isCurrentSharedScopeMember(principalId, scope) {
     if (!principalId) return false;
     const { kind, ref } = parseScopeId(scope);
-    if (kind !== "channel" && kind !== "group") return false;
-    if (await currentSharedScopeMember(deps, kind, ref, principalId)) return true;
-    if (!verifiedLiveSpeaker || (kind === "group" && deps.managedGroups?.recognizes(ref))) return false;
-    const rosterKnown = deps.directory?.conversationRosterKnown;
-    if (!rosterKnown) return false;
-    return (await rosterKnown.call(deps.directory, kind, ref).catch(() => true)) === false;
+    return (kind === "channel" || kind === "group") && currentSharedScopeMember(deps, kind, ref, principalId);
   };
 }
 
@@ -112,11 +102,8 @@ export function withLiveTurnMembership(
   turn: { actorId: string; scopeId: ScopeId; verified: boolean },
 ): IsCurrentSharedScopeMember {
   return async (principalId, scope) =>
-    (await stored?.(
-      principalId,
-      scope,
-      turn.verified && scope === turn.scopeId && samePerson(principalId, turn.actorId),
-    )) === true;
+    (turn.verified && scope === turn.scopeId && samePerson(principalId, turn.actorId)) ||
+    (await stored?.(principalId, scope)) === true;
 }
 
 export type CurrentScopeMembers = (scope: ScopeId) => Promise<Principal[] | undefined>;

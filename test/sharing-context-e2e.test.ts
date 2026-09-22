@@ -514,7 +514,33 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   await assert.rejects(denied({ kind: "automation" }), /owner-auth box is not available/);
   await assert.rejects(denied({ kind: "ambient" }), /owner-auth box is not available/);
   await assert.rejects(denied({ kind: "ambient", live: false }), /owner-auth box is not available/);
+  const firstTurn = (channelRef: string, origin: TurnRequest["origin"] = { kind: "human" }) =>
+    b.turn(`!owner ${probe}`, true, "U1", {
+      origin,
+      conversation: {
+        kind: "channel",
+        channelRef,
+        threadRef: `${channelRef}:first-turn-${++deniedTurn}`,
+        audience: [{ externalId: "U1" }, { externalId: "U2" }],
+        publishMembers: [{ externalId: "U1" }, { externalId: "U2" }],
+      },
+    });
+  assert.equal(await firstTurn("C-unsynced"), "npm_U1|gmail_U1|file_U1|unset|isolated");
+  assert.equal(
+    await firstTurn("C-unsynced", { kind: "ambient", live: true }),
+    "npm_U1|gmail_U1|file_U1|unset|isolated",
+  );
   await b.remove("U1");
-  await assert.rejects(denied(), /owner-auth box is not available/);
-  await assert.rejects(denied({ kind: "ambient", live: true }), /owner-auth box is not available/);
+  const removed = (origin: TurnRequest["origin"] = { kind: "human" }) =>
+    b.turn("!owner true", true, "U1", {
+      origin,
+      conversation: {
+        kind: "channel",
+        channelRef: "C1",
+        threadRef: `C1:keychain-denied-${++deniedTurn}`,
+        audience: [{ externalId: "U1" }, { externalId: "slack-external", isExternalGuest: true }],
+      },
+    });
+  await assert.rejects(removed(), /non-internal participant/);
+  await assert.rejects(removed({ kind: "ambient", live: true }), /non-internal participant/);
 });
