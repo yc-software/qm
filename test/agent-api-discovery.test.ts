@@ -16,11 +16,12 @@ import { testConfig } from "./support/test-config.ts";
 const SECRET = "discovery-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
 
-async function start() {
+async function start(swarmsEnabled = true) {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "agent-apis-")),
       signingSecret: SECRET,
+      swarmsEnabled,
     }),
   );
   const server = createServer(built.app, {
@@ -123,6 +124,8 @@ test("discovery for an org admin's LIVE turn includes the admin plane (live gran
     assert.ok(p.includes("/v1/admin/users"));
     assert.ok(!p.includes("/v1/admin/grants"), "grant management is portal-only and must not be advertised");
     assert.ok(body.guidance.some((g: string) => g.includes("confirm before any mutation")));
+    assert.match(JSON.stringify(body), /content reads require a DM or effective Open sharing for the live admin/);
+    assert.doesNotMatch(JSON.stringify(body), /DM only|only from a DM|bulk config imports require/);
     assert.equal(p.filter((x: string) => x === "/v1/admin/whoami").length, 1, "whoami listed once, not duplicated");
   } finally {
     await s.close();
@@ -235,10 +238,37 @@ test("discovery includes admin routes for a verified human thread reply", async 
     assert.equal(p.filter((path) => path === "/v1/admin/whoami").length, 1);
     assert.equal(p.filter((path) => path === "/v1/admin/scopes").length, 1);
     assert.ok(body.guidance.some((g: string) => g.includes("confirm before any mutation")));
+    assert.match(JSON.stringify(body), /content reads require a DM or effective Open sharing for the live admin/);
+    assert.doesNotMatch(JSON.stringify(body), /DM only|only from a DM|bulk config imports require/);
     assert.ok(!body.guidance.some((g: string) => g.includes("This cron")));
     const member = await listApis(s.base, await capFor("U1", { liveAuthor: true }));
     assert.ok(!paths(member.body).includes("/v1/admin/scopes"));
   } finally {
     await s.close();
+  }
+});
+
+test("disabled swarms are absent from discovery and reject direct API calls", async () => {
+  const { base, built, close } = await start(false);
+  try {
+    assert.equal(built.app.swarms, undefined);
+    const token = await capFor("U1");
+    const { status, body } = await listApis(base, token);
+    assert.equal(status, 200);
+    assert.ok(!paths(body).includes("/v1/swarm"));
+    assert.ok(body.guidance.every((line: string) => !line.includes("Swarm")));
+    for (const method of ["GET", "POST"]) {
+      const response = await fetch(`${base}/v1/swarm`, {
+        method,
+        headers: { "x-agent-capability": token, "content-type": "application/json" },
+        ...(method === "POST"
+          ? { body: JSON.stringify({ action: "spawn", requestId: "disabled", text: "work" }) }
+          : {}),
+      });
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), { error: "swarm service unavailable" });
+    }
+  } finally {
+    await close();
   }
 });

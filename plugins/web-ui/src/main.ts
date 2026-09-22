@@ -1,7 +1,6 @@
 import "dockview-core/dist/styles/dockview.css";
 import "./shell.css";
 import { bootSafely, closeUserMenu } from "./shell";
-import "./draft-review";
 import { registerChatSearchHotkey } from "./search";
 import { registerSessionJumpHotkeys } from "./session-jump";
 import { closeFormMenus } from "./ui";

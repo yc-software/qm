@@ -48,6 +48,7 @@ interface CtxOpts {
   ledger?: ToolLedger;
   runId?: string;
   rw?: boolean;
+  splitEnv?: Record<string, string>;
 }
 
 function fileSandbox(files: Array<{ path: string; data: Uint8Array }>): Sandbox {
@@ -81,6 +82,9 @@ function ctx(deploy: DeployService, opts: CtxOpts = {}) {
     createdBy: "U1",
     ...(opts.ledger ? { ledger: opts.ledger } : {}),
     ...(opts.runId ? { runId: opts.runId } : {}),
+    ...(opts.splitEnv
+      ? { actingSlackUserId: "U1", layerAuth: { credentialPaths: [], splitEnvTemplates: [opts.splitEnv] } }
+      : {}),
   });
 }
 
@@ -201,6 +205,42 @@ test("publish by name inherits the current entrypoint when redeploying without o
   );
 });
 
+test("publish by name keeps the previous version's env unless the call replaces it", async () => {
+  const s = svc();
+  const files = [{ path: "app/server.js", data: bytes("v1") }];
+  await ctx(s.deploy, { files }).publish({
+    dir: "app",
+    entrypoint: "node server.js",
+    name: "dash",
+    env: { DB: "one" },
+  });
+  await ctx(s.deploy, { files }).publish({ dir: "app", name: "dash" });
+  await ctx(s.deploy, { files }).publish({ dir: "app", name: "dash", env: { OTHER: "x" } });
+  await ctx(s.deploy, { files }).publish({ dir: "app", name: "dash", env: {} });
+  const envs = (await s.deployStore.getByName("dash"))!.versions.map((v) => v.env);
+  assert.deepEqual(envs, [{ DB: "one" }, { DB: "one" }, { OTHER: "x" }, {}]);
+});
+
+test("publish from a layer with split env stamps it on top of the previous version's env when env is omitted", async () => {
+  const s = svc();
+  const files = [{ path: "app/server.js", data: bytes("v1") }];
+  const splitEnv = { ACTING: "{actingSlackUserId}" };
+  await ctx(s.deploy, { files, splitEnv }).publish({
+    dir: "app",
+    entrypoint: "node server.js",
+    name: "dash",
+    env: { DB: "one" },
+  });
+  await ctx(s.deploy, { files, splitEnv }).publish({ dir: "app", name: "dash", env: { DB: "two" } });
+  await ctx(s.deploy, { files, splitEnv }).publish({ dir: "app", name: "dash" });
+  const envs = (await s.deployStore.getByName("dash"))!.versions.map((v) => v.env);
+  assert.deepEqual(envs, [
+    { DB: "one", ACTING: "U1" },
+    { DB: "two", ACTING: "U1" },
+    { DB: "two", ACTING: "U1" },
+  ]);
+});
+
 test("publish without an entrypoint and without a prior version fails before provisioning", async () => {
   const s = svc();
   let provisioned = false;
@@ -248,6 +288,7 @@ test("publish: renameFrom moves the link but keeps the id (and shares ride the i
 
   assert.equal(renamed.id, created.id);
   assert.equal(renamed.url, "/d/new-name/");
+  assert.equal((await s.deployStore.getByName("new-name"))!.versions.length, 1, "a pure rename ships no version");
   assert.equal(await s.deployStore.getByName("old-name"), null);
   assert.equal((await s.deployStore.getByName("new-name"))!.id, created.id);
   assert.equal((await s.acl.grantsFor(scopeId("personal", "U1"), `deployment:${created.id}`)).length, 1);

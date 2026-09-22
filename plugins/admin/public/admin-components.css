@@ -1,0 +1,1904 @@
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) {
+  --control-height: 32px;
+  --control-radius: 6px;
+  --control-font: 13px;
+  --section-font: 14px;
+  --section-gap: 24px;
+  --control-gap: 8px;
+  font-size: var(--control-font);
+  line-height: 1.4;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .admin-inner {
+  max-width: 960px;
+  margin-inline: auto;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .shell-title {
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: -0.025em;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .shellbar {
+  margin-bottom: 16px;
+}
+
+:where(html body[data-admin-kit="true"])
+  :is(#app-view #main, dialog)
+  button:not(
+    :where(
+      .viewlink,
+      .link,
+      .danger-link,
+      .icon,
+      .icon-button,
+      .project-icon-button,
+      .policy-rule .rowbtn,
+      .seg,
+      .shell-tab,
+      .dd-item,
+      .model-chip button,
+      .emoji-picker-grid button,
+      .ovmenu button,
+      .dd-btn
+    )
+  ) {
+  min-height: var(--control-height);
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--control-font);
+  font-weight: 500;
+  line-height: 18px;
+  box-shadow: none;
+}
+
+:where(html body[data-admin-kit="true"])
+  :is(#app-view #main, dialog)
+  button:not(:where(.viewlink, .link, .danger-link, .icon, .policy-rule .rowbtn, .model-chip button)):hover:not(
+    :disabled
+  ) {
+  background: var(--subtle);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) button.primary {
+  background: var(--cta);
+  border-color: var(--cta);
+  color: var(--cta-foreground);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) button.primary:hover:not(:disabled) {
+  background: var(--cta-hover);
+  border-color: var(--cta-hover);
+  color: var(--cta-foreground);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) button.danger {
+  color: var(--danger);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) button.primary:disabled {
+  background: var(--subtle);
+  border-color: var(--border);
+  color: var(--muted);
+  opacity: 1;
+}
+
+:where(html body[data-admin-kit="true"])
+  :is(#app-view #main, dialog)
+  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="file"]):not([type="color"]):not(
+    :where(.admin-search input)
+  ),
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) select,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) textarea,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .dd > .dd-btn {
+  min-height: var(--control-height);
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--control-font);
+  font-weight: 400;
+  line-height: 18px;
+  box-shadow: none;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) input:disabled,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) select:disabled,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) textarea:disabled,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .dd > .dd-btn:disabled {
+  background: var(--subtle);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) input[aria-invalid="true"],
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) textarea[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) input:focus-visible,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) select:focus-visible,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) textarea:focus-visible,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) button:focus-visible {
+  outline: 2px solid var(--cta);
+  outline-offset: 2px;
+}
+
+:where(html body[data-admin-kit="true"])
+  :is(#app-view #main, dialog)
+  label:not(:where(.posture-choice, .setting-toggle, .screening-compare, .switch)) {
+  font-size: var(--control-font);
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .card > .head h2,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .parity-subsection > .head h2,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .spec-demo > .head h2 {
+  margin: 0;
+  font-size: var(--section-font);
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .card > .head p,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .parity-subsection > .head p,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .hint,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .field-hint {
+  font-size: var(--control-font);
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .card > .head p,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .parity-subsection > .head p {
+  margin: 4px 0 0;
+  max-width: 70ch;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .card,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .card.setting-row {
+  padding-block: var(--section-gap);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .card > .foot,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .parity-subsection > .foot {
+  gap: var(--control-gap);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .card > .foot:has(> .primary),
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .parity-subsection > .foot:has(> .primary) {
+  display: flex;
+  justify-content: flex-end;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .foot > .status {
+  order: -1;
+  font-size: var(--control-font);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .viewlink,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .link,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .danger-link {
+  font-size: var(--control-font);
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border-color: color-mix(in srgb, currentColor 14%, transparent);
+  background: color-mix(in srgb, currentColor 7%, transparent);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .credential-row {
+  padding: 12px 0;
+  gap: 12px;
+  align-items: center;
+  border-color: var(--border);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .credential-title strong,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .credential-main > strong {
+  font-size: var(--control-font);
+  font-weight: 500;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .credential-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--control-gap);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .tablewrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--control-font);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) th {
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--muted);
+  background: transparent;
+  border-bottom: 1px solid var(--border);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) td {
+  padding: 12px;
+  font-size: var(--control-font);
+  line-height: 1.4;
+  border-bottom: 1px solid var(--border);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .empty {
+  padding: 16px 0;
+  color: var(--muted);
+  font-size: var(--control-font);
+  text-align: left;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .posture-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  font-size: var(--control-font);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .posture-choice:has(input:checked) {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--text) 2%, transparent);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .posture-choice:hover {
+  background: var(--subtle);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .posture-choice strong {
+  display: block;
+  color: var(--text);
+  font-size: var(--control-font);
+  font-weight: 500;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .posture-choice small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: var(--control-font);
+  line-height: 1.4;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) input[type="radio"] {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 1px 0 0;
+  padding: 0;
+  border: 1.5px solid var(--muted);
+  border-radius: 50%;
+  background: transparent;
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) input[type="radio"]::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cta);
+  transform: scale(0);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) input[type="radio"]:checked {
+  border-color: var(--cta);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) input[type="radio"]:checked::before {
+  transform: scale(1);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) input[type="checkbox"] {
+  accent-color: var(--cta);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .setting-toggle input:checked + .setting-switch {
+  border-color: var(--cta);
+  background: var(--cta);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  padding: 4px 8px;
+  background: var(--subtle);
+  font-size: var(--control-font);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .model-chip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+#view-design {
+  padding-top: 8px;
+}
+#view-design > .hint {
+  margin-bottom: 32px;
+  overflow-wrap: anywhere;
+}
+#view-design .spec-demo {
+  min-width: 0;
+  width: 100%;
+}
+#view-design .spec-demo.stack > label {
+  margin-top: 16px;
+}
+#view-design .spec-demo.stack > label:first-child {
+  margin-top: 0;
+}
+#view-design .spec-demo.stack > label + input,
+#view-design .spec-demo.stack > label + textarea,
+#view-design .spec-demo.stack > label + .dd {
+  margin-top: 4px;
+}
+#view-design .spec-demo .card {
+  width: 100%;
+  margin: 0;
+}
+#view-design .spec-demo .credential-row {
+  width: 100%;
+}
+#view-design .spec-demo .tablewrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+#view-design .spec-demo .dd {
+  width: 100%;
+}
+#view-design .spec-demo .dd-btn {
+  width: 100%;
+}
+#view-design .spec-demo .choice-stack {
+  width: 100%;
+}
+#view-design .spec-demo .setting-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#view-design .spec-demo .card {
+  border: 0;
+  border-block: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+}
+#view-design .spec-demo .card > .head,
+#view-design .spec-demo .card > .body,
+#view-design .spec-demo .card > .foot {
+  padding: 0;
+  border: 0;
+}
+#view-design .spec-demo .card > .body,
+#view-design .spec-demo .card > .foot {
+  margin-top: 16px;
+}
+@media (max-width: 600px) {
+  #view-design .spec {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  #view-design .credential-row {
+    flex-wrap: wrap;
+  }
+}
+
+:where(html body[data-admin-kit="true"])
+  :is(#app-view #main, dialog)
+  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="file"]):not([type="color"]),
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) select,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .dd > .dd-btn {
+  height: var(--control-height);
+}
+
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .icon-button {
+  width: var(--control-height);
+  height: var(--control-height);
+  border-radius: var(--control-radius);
+}
+
+body.design-view {
+  background: var(--bg);
+}
+
+:where(html body[data-admin-kit="true"]) :is(.review-dialog-head, .project-dialog-head) h2 {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+:where(html body[data-admin-kit="true"]) :is(.review-dialog-head, .project-dialog-head) p {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+:where(html body[data-admin-kit="true"]) :is(.review-dialog-foot, .project-dialog-actions) {
+  gap: 8px;
+}
+
+:where(html body[data-admin-kit="true"]) dialog .review-dialog-confirm.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--cta-foreground);
+}
+
+:where(html body[data-admin-kit="true"]) dialog .review-dialog-confirm.danger:hover:not(:disabled) {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--cta-foreground);
+  filter: brightness(0.9);
+}
+
+.credential-slug {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+dialog.credential-dialog {
+  width: min(900px, calc(100vw - 32px));
+  padding: 24px;
+}
+.credential-dialog .sc-form-head {
+  display: none;
+}
+.credential-dialog #sc-editor {
+  border-top: 0 !important;
+  padding: 20px 0 0 !important;
+}
+.credential-dialog .project-dialog-actions {
+  position: sticky;
+  bottom: -24px;
+  margin: 20px -24px -24px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  flex-wrap: wrap;
+}
+.credential-dialog .project-dialog-actions .status {
+  flex: 1;
+  min-width: 120px;
+}
+@media (max-width: 650px) {
+  dialog.credential-dialog {
+    padding: 16px;
+  }
+  .credential-dialog .project-dialog-actions {
+    bottom: -16px;
+    margin: 16px -16px -16px;
+    padding: 12px 16px;
+  }
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .admin-main {
+  padding-top: 28px;
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .admin-inner {
+  max-width: 960px;
+  margin-inline: auto;
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #shellbar {
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 24px;
+  overflow: visible;
+  white-space: normal;
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .shell-title {
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+  #shellbar
+  .back {
+  flex-basis: 100%;
+  justify-content: flex-start;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+  text-decoration: none;
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+  #shellbar
+  .back:hover {
+  color: var(--text);
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+  :is(.seg, .shell-tab) {
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+  :is(.seg.active, .shell-tab.active) {
+  color: var(--text);
+  background: var(--subtle);
+  border-color: color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+  :is(.seg, .shell-tab):hover {
+  color: var(--text);
+  background: var(--subtle);
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+  #view-data
+  > .card {
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+  #view-data
+  > .card
+  > :is(.body, .head) {
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+  #view-data
+  > .card
+  > .head {
+  margin-bottom: 8px;
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-list {
+  border-top: 1px solid var(--border);
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr) 112px;
+  gap: 12px;
+  align-items: center;
+  min-height: 32px;
+  padding: 5px 0;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-name {
+  grid-column: 1;
+  grid-row: 1;
+  max-width: none;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-preview {
+  grid-column: 2;
+  grid-row: 1;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+  .dense-preview:empty {
+  display: none;
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-time {
+  grid-column: 3;
+  grid-row: 1;
+  align-self: center;
+  line-height: 1.6;
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-tag {
+  padding: 0;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+  :is(.dense-row, .back, .seg, .shell-tab):focus-visible {
+  outline: 2px solid var(--cta);
+  outline-offset: 3px;
+}
+@media (max-width: 640px) {
+  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #shellbar {
+    gap: 10px;
+  }
+
+  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .shell-sort {
+    flex-basis: 100%;
+    flex-wrap: wrap;
+  }
+
+  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+    .shell-spacer {
+    display: none;
+  }
+
+  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 8px;
+    padding: 5px 0;
+    min-height: 44px;
+  }
+
+  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+    .dense-preview {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-time {
+    grid-column: 2;
+    grid-row: 1;
+    margin-left: 0;
+  }
+}
+
+#app-view.history-view #view-data > .card:not(:last-child) {
+  margin-bottom: 32px;
+}
+
+#app-view.slack-view .shell-search {
+  flex: 0 1 320px;
+  min-width: 0;
+}
+#app-view.slack-view .shell-search input {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+#app-view.slack-view .dense-row {
+  grid-template-columns: minmax(180px, 280px) minmax(0, 1fr) 112px;
+}
+#app-view.slack-view #shellbar:has(.sm-channel-heading) {
+  position: sticky;
+  top: var(--header-total-h);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 280px);
+  gap: 12px 24px;
+  max-width: 840px;
+  margin: 0 auto 20px;
+  padding: 12px 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+#app-view.slack-view .sm-toolbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+#app-view.slack-view #shellbar .sm-toolbar .back {
+  flex: none;
+  margin-right: auto;
+}
+#app-view.slack-view .sm-toolbar a {
+  padding: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  text-decoration: none;
+}
+#app-view.slack-view .sm-toolbar a:hover {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+#app-view.slack-view .sm-channel-heading {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+#app-view.slack-view .sm-channel-heading .shell-title {
+  overflow-wrap: anywhere;
+}
+#app-view.slack-view .sm-channel-heading .shell-context {
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+#app-view.slack-view .sm-stream {
+  width: 100%;
+  max-width: 840px;
+  margin-inline: auto;
+}
+#app-view.judgments-view .sm-stream {
+  max-width: none;
+}
+#app-view:is(.slack-view, .judgments-view) .sm-msg {
+  margin: 16px 0 0;
+  padding: 8px 10px;
+  gap: 12px;
+  border: 0;
+  border-radius: 6px;
+  scroll-margin-block: 190px 32px;
+}
+#app-view:is(.slack-view, .judgments-view) .sm-msg.sm-cont {
+  margin-top: 0;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+#app-view:is(.slack-view, .judgments-view) .sm-msg.sm-reply {
+  margin-left: 0;
+  border-left: 0;
+}
+#app-view:is(.slack-view, .judgments-view) .sm-gutter {
+  flex-basis: 28px;
+  width: 28px;
+}
+#app-view:is(.slack-view, .judgments-view) .sm-avatar {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--subtle);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+}
+#app-view:is(.slack-view, .judgments-view) .sm-author {
+  font-size: 13px;
+  font-weight: 500;
+}
+#app-view:is(.slack-view, .judgments-view) .sm-text {
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+#app-view:is(.slack-view, .judgments-view) .sm-head {
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-bottom: 6px;
+}
+#app-view:is(.slack-view, .judgments-view) .sm-when {
+  margin-left: auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+#app-view:is(.slack-view, .judgments-view) .sm-tag {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+#app-view:is(.slack-view, .judgments-view) .sm-text a {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 3px;
+}
+#app-view:is(.slack-view, .judgments-view) .sm-text a:hover {
+  text-decoration-color: currentColor;
+}
+#app-view:is(.slack-view, .judgments-view) .sm-text blockquote {
+  margin: 6px 0;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+}
+#app-view:is(.slack-view, .judgments-view) .sm-day {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 16px 0 0;
+  padding: 0;
+  border: 0;
+  font-size: 11px;
+  font-weight: 400;
+}
+#app-view:is(.slack-view, .judgments-view) .sm-day::before,
+#app-view:is(.slack-view, .judgments-view) .sm-day::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: var(--border);
+}
+@media (max-width: 900px) {
+  #app-view.slack-view #shellbar:has(.sm-channel-heading) {
+    position: static;
+  }
+}
+@media (max-width: 640px) {
+  #app-view.slack-view #shellbar:has(.sm-channel-heading) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+  #app-view.slack-view .sm-toolbar {
+    flex-wrap: wrap;
+    gap: 8px 12px;
+  }
+  #app-view.slack-view .shell-search {
+    flex-basis: 100%;
+  }
+  #app-view.slack-view .dense-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  #app-view:is(.slack-view, .judgments-view) .sm-msg {
+    gap: 8px;
+    padding-inline: 0;
+  }
+}
+
+#app-view.judgments-view #shellbar .judgment-filters {
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  order: 1;
+}
+
+#app-view.judgments-view .dense-preview .badges {
+  flex-wrap: nowrap;
+  min-width: 0;
+  gap: 8px;
+}
+#app-view.judgments-view .judgment-reason {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+}
+#app-view.judgments-view .dense-preview :is(.badge, .dense-time) {
+  flex-shrink: 0;
+}
+#app-view.judgments-view .judg-split {
+  gap: 24px;
+  margin: 0 0 24px;
+}
+#app-view.judgments-view :is(.judg-mirror, .judg-prompt) {
+  border-radius: 8px;
+  padding: 12px;
+  background: transparent;
+}
+#app-view.judgments-view .judg-pane-title {
+  margin-bottom: 12px;
+  font-size: 13px;
+  font-weight: 400;
+}
+#app-view.judgments-view .judg-decision {
+  max-width: none;
+  padding: 16px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  font-size: 13px;
+  line-height: 1.6;
+}
+#app-view.errors-view #main .errors-table table {
+  min-width: 800px;
+}
+#app-view.errors-view #main .errors-table :is(th, td) {
+  padding: 7px 10px;
+  vertical-align: top;
+  font-size: 13px;
+  line-height: 1.4;
+}
+#app-view.errors-view #main .errors-table th {
+  font-size: 12px;
+}
+#app-view.errors-view #main .errors-table :is(th, td):first-child {
+  width: 88px;
+  padding-left: 0;
+}
+#app-view.errors-view #main .errors-table th:nth-child(2) {
+  width: 120px;
+}
+#app-view.errors-view #main .errors-table th:nth-child(3) {
+  width: auto;
+}
+#app-view.errors-view #main .errors-all th:nth-child(4) {
+  width: 112px;
+}
+#app-view.errors-view #main .errors-table :is(th, td):nth-last-child(2) {
+  width: 100px;
+  white-space: nowrap;
+}
+#app-view.errors-view #main .errors-table :is(th, td):last-child {
+  width: 144px;
+  padding-right: 0;
+  white-space: nowrap;
+  text-align: right;
+  color: var(--muted);
+}
+#app-view.errors-view #main .errors-table td.mono {
+  font-size: 12px;
+  color: var(--muted);
+}
+#app-view.errors-view .error-message summary {
+  display: block;
+  list-style: none;
+}
+#app-view.errors-view .error-message summary::-webkit-details-marker {
+  display: none;
+}
+#app-view.errors-view .error-message:not([open]) .error-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+#app-view.errors-view .error-message summary:hover {
+  color: var(--muted);
+}
+#app-view.errors-view .error-message summary:focus-visible {
+  outline: 2px solid var(--cta);
+  outline-offset: 3px;
+}
+
+#app-view.judgments-view .dense-row {
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr) 144px;
+}
+@media (max-width: 640px) {
+  #app-view.judgments-view .dense-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
+#app-view #main .two-way-toggle {
+  display: inline-flex;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--subtle);
+}
+#app-view #main .two-way-toggle legend,
+#app-view #main .two-way-toggle input[type="radio"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+#app-view #main .two-way-toggle label {
+  position: relative;
+  display: flex;
+  margin: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
+  color: var(--muted);
+  cursor: pointer;
+}
+#app-view #main .two-way-toggle label > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 28px;
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+#app-view #main .two-way-toggle input:checked + span {
+  color: var(--cta-foreground);
+  background: var(--cta);
+  box-shadow: none;
+}
+#app-view #main .two-way-toggle input:focus-visible + span {
+  outline: 2px solid var(--cta);
+  outline-offset: 2px;
+}
+#app-view #main .two-way-toggle label:hover > input:not(:disabled):not(:checked) + span {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+#app-view #main .two-way-toggle:disabled {
+  opacity: 0.45;
+}
+#app-view #main .two-way-toggle:disabled label {
+  cursor: not-allowed;
+}
+
+:where(html body[data-subview="metrics"]) #app-view #main #view-data > .card {
+  margin: 24px 0 0;
+  padding: 20px 0 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+:where(html body[data-subview="metrics"]) #app-view #main #view-data > .card > .head {
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+}
+:where(html body[data-subview="metrics"]) #app-view #main #view-data > .card > .body {
+  padding: 0;
+  min-width: 0;
+}
+:where(html body:is([data-subview="metrics"], [data-subview="design-system"])) #app-view #main .statline {
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+:where(html body[data-subview="metrics"]) #app-view #main .primaryline {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+:where(html body[data-subview="metrics"]) #app-view #main .subline {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+:where(html body[data-subview="metrics"]) #app-view #main :is(th, td) {
+  padding: 9px 10px;
+  vertical-align: middle;
+}
+:where(html body[data-subview="metrics"]) #app-view #main :is(th, td):first-child {
+  padding-left: 0;
+}
+:where(html body[data-subview="metrics"]) #app-view #main :is(th, td):last-child {
+  padding-right: 0;
+}
+:where(html body[data-subview="metrics"]) #app-view #main .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+:where(html body[data-subview="metrics"]) #app-view #main th:not(:first-child) {
+  text-align: right;
+}
+:where(html body[data-subview="metrics"]) #app-view #main .spark {
+  margin-left: auto;
+  color: var(--muted);
+}
+:where(html body[data-subview="metrics"]) #app-view #main .dist {
+  gap: 8px;
+  max-width: 640px;
+}
+:where(html body[data-subview="metrics"]) #app-view #main .dist-row {
+  font-size: 13px;
+}
+:where(html body[data-subview="metrics"]) #app-view #main .dist-track {
+  height: 8px;
+  background: var(--subtle);
+  border-radius: 999px;
+  overflow: hidden;
+}
+:where(html body[data-subview="metrics"]) #app-view #main .dist-bar {
+  background: var(--cta);
+  border-radius: 999px;
+}
+:where(html body[data-subview="metrics"]) #app-view #main .shellbar:has(.back) {
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+:where(html body[data-subview="metrics"]) #app-view #main .shellbar .back {
+  flex-basis: 100%;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  font-weight: 400;
+}
+@media (max-width: 640px) {
+  :where(html body[data-subview="metrics"]) #app-view #main table {
+    min-width: 620px;
+  }
+  :where(html body[data-subview="metrics"]) #app-view #main .shell-context {
+    flex-basis: 100%;
+    white-space: normal;
+  }
+}
+
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main #view-data > .card {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main #view-data > .card > .body {
+  padding: 0;
+  min-width: 0;
+}
+
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main .tablewrap {
+  border: 0;
+  border-radius: 0;
+}
+
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main th,
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main td {
+  padding: 10px 12px;
+  vertical-align: top;
+}
+
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main th:first-child,
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main td:first-child {
+  padding-left: 0;
+}
+
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main th:last-child,
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main td:last-child {
+  padding-right: 0;
+}
+
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main .num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main th:last-child {
+  text-align: right;
+}
+
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main .subline,
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main .mono {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main .shellbar {
+  flex-wrap: wrap;
+  gap: 12px 20px;
+}
+
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main .shell-stats {
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main .shell-stats .kpi {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main .shell-stats .kpi .n {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main .shell-stats .kpi .k {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+@media (max-width: 640px) {
+  :where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main table {
+    min-width: 660px;
+  }
+  :where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main .shell-stats {
+    flex-basis: 100%;
+    margin: 0;
+    justify-content: flex-start;
+  }
+}
+
+#app-view #main .admin-search {
+  position: relative;
+  width: 320px;
+  max-width: 100%;
+  min-width: 0;
+}
+#app-view #main .admin-search input {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  height: 32px;
+  padding: 6px 32px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
+  box-shadow: none;
+}
+#app-view #main .admin-search input:focus {
+  background: transparent;
+  border-color: var(--cta);
+}
+#app-view #main .admin-search input::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+#app-view #main .admin-search input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+#app-view #main .admin-search-icon {
+  position: absolute;
+  left: 10px;
+  top: 8px;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  pointer-events: none;
+}
+#app-view #main .admin-search-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+#app-view #main .admin-search-clear {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+#app-view #main .admin-search:has(input:placeholder-shown) .admin-search-clear {
+  display: none;
+}
+#app-view #main .admin-search:has(input:disabled) {
+  opacity: 0.5;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="files"], [data-subview="design-system"]))
+  #app-view
+  #main
+  #view-data
+  .card {
+  margin: 0 0 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main #view-data .card > .head {
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="files"], [data-subview="design-system"]))
+  #app-view
+  #main
+  #view-data
+  .card
+  > .body {
+  padding: 0;
+  min-width: 0;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main #view-data .card .card {
+  margin-top: 24px;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main .primaryline,
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main .pack-name strong {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main .subline {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main .tablewrap {
+  border: 0;
+  border-radius: 0;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main th,
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main td {
+  padding: 10px 12px;
+  vertical-align: middle;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main th:first-child,
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main td:first-child {
+  padding-left: 0;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main th:last-child,
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main td:last-child {
+  padding-right: 0;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main .pack-register {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main .pack-register > input {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main .pack-register .linkish {
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main .pack-adv:not(.hidden) {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main .pack-adv input,
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main .pack-adv .dd {
+  width: 100%;
+  min-width: 0;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="files"], [data-subview="design-system"]))
+  #app-view
+  #main
+  .dense-row {
+  min-height: 32px;
+  padding: 5px 0;
+  gap: 12px;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="files"], [data-subview="design-system"]))
+  #app-view
+  #main
+  .dense-name {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="files"], [data-subview="design-system"]))
+  #app-view
+  #main
+  .dense-preview {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="files"], [data-subview="design-system"]))
+  #app-view
+  #main
+  .dense-tag {
+  padding: 0;
+  background: transparent;
+  font-size: 12px;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main .skillbody {
+  padding: 16px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--subtle);
+  overflow-wrap: anywhere;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="files"], [data-subview="design-system"]))
+  #app-view
+  #main
+  .shellbar {
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="files"], [data-subview="design-system"]))
+  #app-view
+  #main
+  .shellbar
+  .back {
+  flex-basis: 100%;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+}
+
+:where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main .ovwrap > button {
+  width: 32px;
+  padding: 0;
+}
+
+@media (max-width: 640px) {
+  :where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main .pack-register > input {
+    flex-basis: 100%;
+  }
+  :where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main .pack-adv:not(.hidden) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  :where(html body:is([data-subview="skills"], [data-subview="design-system"])) #app-view #main table {
+    min-width: 620px;
+  }
+  :where(html body:is([data-subview="skills"], [data-subview="files"], [data-subview="design-system"]))
+    #app-view
+    #main
+    .shell-search {
+    flex-basis: 100%;
+    max-width: none;
+  }
+  :where(html body:is([data-subview="skills"], [data-subview="files"], [data-subview="design-system"]))
+    #app-view
+    #main
+    .dense-row {
+    min-height: 44px;
+  }
+}
+
+:where(html body:is([data-subview="files"], [data-subview="design-system"])) #app-view #main .file-upload {
+  margin: 0 0 16px;
+  padding: 0 0 16px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+}
+
+:where(html body:is([data-subview="files"], [data-subview="design-system"])) #app-view #main .file-upload.dragging {
+  background: var(--subtle);
+  outline: 1px dashed var(--brand);
+  outline-offset: 6px;
+}
+
+:where(html body:is([data-subview="files"], [data-subview="design-system"])) #app-view #main .file-upload-main strong {
+  font-weight: 500;
+}
+
+:where(html body:is([data-subview="files"], [data-subview="design-system"])) #app-view #main .file-thumb {
+  width: 30px;
+  height: 24px;
+  border: 0;
+  border-radius: 4px;
+  font-weight: 400;
+}
+
+@media (max-width: 640px) {
+  :where(html body:is([data-subview="files"], [data-subview="design-system"])) #app-view #main .dense-row {
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    padding: 8px 0;
+  }
+
+  :where(html body:is([data-subview="files"], [data-subview="design-system"])) #app-view #main .dense-name {
+    max-width: calc(100% - 38px);
+  }
+
+  :where(html body:is([data-subview="files"], [data-subview="design-system"])) #app-view #main .dense-time {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+}
+
+#app-view:is(.deployments-view, .crons-view) .shell-search {
+  flex: 0 1 320px;
+  min-width: 0;
+}
+#app-view:is(.deployments-view, .crons-view) .dense-row {
+  grid-template-columns: minmax(180px, 280px) minmax(0, 1fr) 144px;
+}
+@media (max-width: 640px) {
+  #app-view:is(.deployments-view, .crons-view) .shell-search {
+    flex-basis: 100%;
+  }
+  #app-view:is(.deployments-view, .crons-view) .dense-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
+#app-view.crons-view .dense-time {
+  white-space: normal;
+  text-align: right;
+}
+#app-view.crons-view .factlist {
+  font-size: 13px;
+  gap: 10px 20px;
+}
+#app-view.crons-view .prompt-body {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+#view-design .design-layouts {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 16px;
+}
+#view-design .design-layout-frame {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 11px;
+}
+#view-design .design-layout-nav {
+  padding: 12px 8px;
+  background: var(--subtle);
+  color: var(--muted);
+}
+#view-design .design-layout-main {
+  padding: 18px;
+  background: color-mix(in srgb, var(--brand) 5%, var(--bg));
+}
+#view-design .design-layout-content {
+  background: var(--bg);
+  padding: 12px;
+  min-width: 0;
+}
+#view-design .design-layout-title {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+#view-design .design-layout-title span {
+  color: var(--muted);
+}
+#view-design .design-layout-section {
+  margin-top: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+#view-design .design-layout-lines {
+  padding-top: 12px;
+  overflow: hidden;
+  color: var(--muted);
+}
+#view-design .design-layout-frame.mobile {
+  display: block;
+}
+#view-design .design-layout-frame.mobile .design-layout-main {
+  padding: 14px;
+}
+#view-design .design-rules {
+  padding-left: 18px;
+  margin: 0;
+}
+#view-design .design-rules li + li {
+  margin-top: 8px;
+}
+#view-design .design-page-links p {
+  margin: 4px 0 16px;
+  color: var(--muted);
+}
+#view-design .design-open-section {
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+#view-design .design-open-section h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+#view-design .design-open-section > p {
+  margin: 4px 0 12px;
+}
+@media (max-width: 640px) {
+  #view-design .design-layouts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+#view-design .design-contents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 16px 0 28px;
+  font-size: 13px;
+}
+#view-design .design-group {
+  scroll-margin-top: 80px;
+}
+
+#app-view #main #shellbar:has(.shell-back-row) {
+  flex-wrap: wrap;
+}
+#app-view #main #shellbar .shell-back-row {
+  display: flex;
+  flex: 0 0 100%;
+}
+#app-view #main #shellbar .shell-back-row:empty {
+  display: none;
+}
+
+#app-view #main {
+  --table-body-size: 13px;
+  --table-meta-size: 12px;
+  --table-line-height: 1.4;
+}
+#app-view #main table :is(th, td) {
+  padding: 7px 12px;
+  line-height: var(--table-line-height);
+  vertical-align: middle;
+}
+#app-view #main table th {
+  font-size: var(--table-meta-size);
+  font-weight: 400;
+  color: var(--muted);
+  background: transparent;
+}
+#app-view #main table td {
+  font-size: var(--table-body-size);
+  font-weight: 400;
+  border-bottom: 1px solid var(--border);
+}
+#app-view #main table :is(th, td):first-child {
+  padding-left: 0;
+}
+#app-view #main table :is(th, td):last-child {
+  padding-right: 0;
+}
+
+#app-view #main :is(table .primaryline, table .pack-name strong, table .mono, .dense-name, .credential-title strong) {
+  font-size: var(--table-body-size);
+  font-weight: 400;
+  line-height: var(--table-line-height);
+}
+
+#app-view #main :is(table .subline, .credential-main .hint, .dense-time, .dense-tag) {
+  font-size: var(--table-meta-size);
+  font-weight: 400;
+  line-height: var(--table-line-height);
+}
+#app-view #main :is(table .subline, .dense-time, .dense-preview) {
+  color: var(--muted);
+}
+#app-view #main .dense-preview {
+  font-size: var(--table-body-size);
+  font-weight: 400;
+  line-height: var(--table-line-height);
+}
+#app-view #main .dense-row {
+  min-height: 32px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+#app-view #main table .num {
+  font-size: var(--table-meta-size);
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 640px) {
+  #app-view #main .dense-row {
+    min-height: 44px;
+  }
+}
+
+#app-view #main #shellbar .file-upload {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+#app-view #main .upload-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+#app-view #main .upload-button svg {
+  flex-shrink: 0;
+}
+
+#who {
+  gap: 16px;
+}
+#who .account-identity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 0;
+  gap: 0;
+  line-height: 1.15;
+}
+#who #who-name {
+  display: block;
+  order: -1;
+  max-width: 220px;
+  font-size: 13px;
+  font-weight: 400;
+}
+#who #org-tag {
+  display: block;
+  max-width: 220px;
+  font-size: 11px;
+}
+#who #org-tag::before {
+  content: "Organization ";
+}
+#who #signout {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.3;
+  text-decoration: none;
+  white-space: nowrap;
+}
+#who #signout:hover {
+  color: var(--text);
+  background: var(--subtle);
+}
+#who #signout:focus-visible {
+  outline: 2px solid var(--cta);
+  outline-offset: 2px;
+}
+@media (max-width: 560px) {
+  #who {
+    gap: 8px;
+  }
+  #who :is(#who-name, #org-tag) {
+    max-width: 28vw;
+  }
+  #who #signout {
+    min-height: 44px;
+  }
+}
+
+#app-view #main .file-scope-index .dense-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px minmax(144px, 1fr);
+  gap: 12px;
+}
+#app-view #main .file-scope-index .dense-name {
+  max-width: none;
+  min-width: 0;
+}
+#app-view #main .file-scope-index .dense-preview {
+  font-variant-numeric: tabular-nums;
+}
+#app-view #main .file-scope-index .dense-time {
+  margin-left: 0;
+  text-align: right;
+}
+@media (max-width: 640px) {
+  #app-view #main .file-scope-index .dense-row {
+    grid-template-columns: minmax(0, 1fr) 76px;
+    gap: 4px 12px;
+  }
+  #app-view #main .file-scope-index .dense-time {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+}

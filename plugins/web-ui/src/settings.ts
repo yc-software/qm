@@ -1,3 +1,6 @@
+import "./slack-account";
+import { openModelConnectManager, type StatusResponse } from "./model-connect";
+import { api } from "./core-bridge";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { BookOpen, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type IconNode } from "lucide";
 import { icon } from "./ui";
@@ -234,6 +237,116 @@ function sidebarSurfaceRow(): TemplateResult {
   `;
 }
 
+let aiStatus: StatusResponse | null = null;
+let aiError = "";
+let aiBusy = false;
+let aiSaving = false;
+let aiRevision = 0;
+
+function acceptAiStatus(status: StatusResponse): void {
+  aiRevision++;
+  aiStatus = status;
+  if (appState.me) {
+    appState.me.individualModelAuth = status.individualModelAuth;
+    appState.me.modelAuthConnected = status.connections.some(
+      (c) => status.account === "personal" || status.account === c.provider,
+    );
+  }
+  drawSettings();
+}
+
+window.addEventListener("model-account-changed", (event) => {
+  const status = (event as CustomEvent<StatusResponse>).detail;
+  if (status) {
+    aiBusy = false;
+    acceptAiStatus(status);
+  }
+});
+
+async function loadAiStatus(): Promise<void> {
+  if (aiSaving) return;
+  const revision = ++aiRevision;
+  aiBusy = true;
+  aiError = "";
+  drawSettings();
+  try {
+    const status = await api<StatusResponse>("/api/user-model-auth/status");
+    if (revision !== aiRevision) return;
+    acceptAiStatus(status);
+  } catch (error) {
+    aiError = errMessage(error);
+  }
+  aiBusy = false;
+  drawSettings();
+}
+
+async function chooseAiAccount(account: "company" | "anthropic" | "openai"): Promise<void> {
+  if (aiBusy || aiSaving) return;
+  if (
+    account === aiStatus?.account &&
+    (account === "company" || aiStatus.connections.some((c) => c.provider === account))
+  )
+    return;
+  if (account !== "company" && !aiStatus?.connections.some((c) => c.provider === account)) {
+    openModelConnectManager(account);
+    return;
+  }
+  aiSaving = true;
+  aiError = "";
+  drawSettings();
+  try {
+    const status = await api<StatusResponse>("/api/user-model-auth/account", {
+      method: "POST",
+      body: JSON.stringify({
+        account: account === "company" ? "company" : "personal",
+        provider: account === "company" ? undefined : account,
+      }),
+    });
+    acceptAiStatus(status);
+    window.dispatchEvent(new CustomEvent("model-account-changed", { detail: status }));
+  } catch (error) {
+    aiError = errMessage(error);
+  }
+  aiSaving = false;
+  drawSettings();
+}
+
+function aiAccountsRow(): TemplateResult {
+  return html`
+    <div class="settings-row">
+      <div class="settings-row-copy">
+        <div class="settings-row-title">AI access</div>
+        <div class="settings-row-note">Use company access or your own subscription.</div>
+        ${aiError ? html`<div class="settings-row-error" role="alert">${aiError} <button class="settings-theme-link" ?disabled=${aiSaving} @click=${loadAiStatus}>Retry</button></div>` : nothing}
+      </div>
+      <div class="settings-ai-controls">
+        <div class="settings-choice" role="group" aria-label="AI access">
+          ${(
+            [
+              ["company", "Company"],
+              ["anthropic", "Claude"],
+              ["openai", "ChatGPT / Codex"],
+            ] as const
+          ).map(
+            ([value, label]) => html`
+              <button
+                type="button"
+                class="settings-choice-option ${aiStatus?.account === value ? "selected" : ""}"
+                aria-pressed=${aiStatus?.account === value}
+                ?disabled=${aiBusy || aiSaving || !aiStatus || (value === "company" && aiStatus.required)}
+                @click=${() => void chooseAiAccount(value)}
+              >
+                ${label}
+              </button>
+            `,
+          )}
+        </div>
+        ${aiStatus?.account === "anthropic" || aiStatus?.account === "openai" ? html`<button class="settings-theme-link" ?disabled=${aiBusy || aiSaving} @click=${() => openModelConnectManager(aiStatus!.account as "anthropic" | "openai")}>Connection settings</button>` : nothing}
+      </div>
+    </div>
+  `;
+}
+
 function adminRow(): TemplateResult {
   return html`
     <div class="settings-row">
@@ -287,7 +400,11 @@ function settingsPane(): TemplateResult {
       <h1 class="pane-title">Settings</h1>
     </div>
     <div class="settings-group">
-      ${themeRow()} ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${aboutRow()} ${accountRow()}
+      ${aiAccountsRow()} ${themeRow()} ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${aboutRow()}
+      ${accountRow()}
+      <div class="settings-row settings-slack-account">
+        <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
+      </div>
     </div>
   `;
 }
@@ -304,4 +421,5 @@ function drawSettings(): void {
 
 export function renderSettings(): void {
   drawSettings();
+  void loadAiStatus();
 }

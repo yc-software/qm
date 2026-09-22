@@ -20,6 +20,7 @@ const GMAIL_HOST = "gmail.googleapis.com";
 
 interface GmailMeta {
   threadId: string;
+  accountType?: "default" | "personal" | "company";
   messageId?: string;
   rfcMessageId?: string;
   to?: string[];
@@ -31,13 +32,21 @@ function parseGmailMeta(v: unknown): GmailMeta | undefined {
   if (!isObj(v)) return undefined;
   const threadId = clip(v.threadId, 200);
   if (!threadId) return undefined;
+  if (
+    v.accountType !== undefined &&
+    (typeof v.accountType !== "string" || !["default", "personal", "company"].includes(v.accountType))
+  )
+    return undefined;
+  const accountType = v.accountType as GmailMeta["accountType"];
   const messageId = clipOpt(v.messageId, 200);
   const rfcMessageId = clipOpt(v.rfcMessageId, 400);
   const to = addressList(v.to);
   const cc = addressList(v.cc);
+  if (to === null || cc === null) return undefined;
   const subject = clipOpt(v.subject, 300);
   return {
     threadId,
+    ...(accountType ? { accountType } : {}),
     ...(messageId ? { messageId } : {}),
     ...(rfcMessageId ? { rfcMessageId } : {}),
     ...(to ? { to } : {}),
@@ -81,7 +90,11 @@ export function replySubject(item: LoopItem, draft: ReplyDraft): string {
 
 export function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft): string | null {
   const meta = metaOf(item);
-  const to = (draft.to?.length ? draft.to : meta?.to) ?? [];
+  if (!meta) return null;
+  const parsed = parseReplyDraft(draft);
+  if (!parsed) return null;
+  draft = parsed;
+  const to = draft.to ?? meta.to ?? [];
   if (to.length === 0) return null;
   const cc = draft.cc ?? meta?.cc ?? [];
   const rfcId = meta?.rfcMessageId;
@@ -101,13 +114,19 @@ export function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft): string |
 
 async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDraft): Promise<SourceActionResult> {
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const token = await tokenFor(deps.tokens, GMAIL_HOST, deps.owner);
+  const meta = metaOf(item);
+  if (!meta) return { ok: false, reason: "bad_item", message: "invalid Gmail metadata" };
+  const accountType = meta.accountType ?? (item.sourcePayload?.sentChat === true ? "default" : undefined);
+  const token = accountType
+    ? await deps.tokens.connectorAccessToken(GMAIL_HOST, deps.owner, accountType)
+    : await tokenFor(deps.tokens, GMAIL_HOST, deps.owner);
   if (!token) return { ok: false, reason: "not_connected", message: "Google is not connected for this account" };
   const mime = buildGmailReplyMime(item, draft);
   if (!mime) return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };
   const threadId = metaOf(item)?.threadId;
   const res = await fetchImpl(`https://${GMAIL_HOST}/gmail/v1/users/me/messages/send`, {
     method: "POST",
+    signal: AbortSignal.timeout(30000),
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({
       raw: Buffer.from(mime, "utf8").toString("base64url"),
@@ -151,7 +170,7 @@ export const gmailAdapter: LoopSourceAdapter = {
   },
   async act(deps, item, kind, args) {
     if (kind !== "send") return { ok: false, reason: "bad_item", message: `gmail items do not support "${kind}"` };
-    const draft = parseReplyDraft(args) ?? draftOf(item);
+    const draft = args.body !== undefined ? parseReplyDraft(args) : draftOf(item);
     if (!draft || !draft.body.trim()) return { ok: false, reason: "bad_item", message: "the draft is empty" };
     try {
       return await sendGmail(deps, item, { ...draft, body: draft.body.trim() });

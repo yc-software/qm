@@ -7,7 +7,7 @@ import {
   type TranscriptAppendSessions,
 } from "../sessions/session-store.ts";
 import { messageTag } from "../util/message-tag.ts";
-import { errMessage, swallow } from "../util/errors.ts";
+import { reportFailure, swallow } from "../util/errors.ts";
 
 const DEDUPE_SCAN_LIMIT = 200;
 const RECORDED_CACHE_CAP = 1000;
@@ -128,9 +128,10 @@ export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebT
         if (disposition === "deliver" || (await recordedForDelivery(d))) out.push(d);
       } catch (err) {
         if (overdue(d)) {
-          console.error(
-            `[delivery] web delivery ${d.idempotencyKey} could not be recorded in ${d.destination.target}'s transcript within ${WRITE_GIVEUP_MS}ms — delivering as a nudge only:`,
-            errMessage(err),
+          reportFailure(
+            "web delivery: transcript write gave up (delivering as a nudge only)",
+            err,
+            `delivery=${d.idempotencyKey} target=${d.destination.target} after=${WRITE_GIVEUP_MS}ms`,
           );
           remember(d.idempotencyKey);
           out.push(d);

@@ -372,9 +372,17 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     },
     async pendingReturns(limit = 100, afterId = "") {
       const { rows } = await q(
-        `SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
-         AND session_id LIKE 'agent:main:subagent:%'
-         AND id > $2 ORDER BY id LIMIT $1`,
+        `SELECT * FROM (
+           SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
+           AND session_id LIKE 'agent:main:subagent:%' AND id > $2
+           UNION
+           SELECT child.* FROM runs wake JOIN runs child
+           ON child.id = substring(wake.idempotency_key FROM length('subagent-return:') + 1)
+           WHERE wake.status = 'pending' AND wake.attempts = 0 AND wake.turn_user_seq IS NULL
+           AND wake.idempotency_key LIKE 'subagent-return:%'
+           AND child.status IN ('done','failed') AND child.session_id LIKE 'agent:main:subagent:%'
+           AND child.id > $2
+         ) pending ORDER BY id LIMIT $1`,
         [limit, afterId],
       );
       return rows.map(rowToRun);
@@ -404,9 +412,48 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       return rows.map(rowToRun);
     },
 
-    async withdraw(runId: string): Promise<boolean> {
-      const { rowCount } = await q("DELETE FROM runs WHERE id = $1 AND status = 'pending'", [runId]);
+    async editPendingText(runId: string, text: string, expectedText: string): Promise<boolean> {
+      const { rowCount } = await q(
+        `UPDATE runs SET request = (request::jsonb || jsonb_build_object('text', $2::text, 'displayText', $2::text))::text
+         WHERE id = $1 AND status = 'pending' AND attempts = 0 AND turn_user_seq IS NULL
+         AND COALESCE(request::jsonb ->> 'displayText', request::jsonb ->> 'text') = $3`,
+        [runId, text, expectedText],
+      );
       return (rowCount ?? 0) > 0;
+    },
+
+    async withdraw(runId: string, opts): Promise<boolean> {
+      const { rowCount } = await q(
+        "DELETE FROM runs WHERE id = $1 AND status = 'pending' AND (NOT $2::boolean OR (attempts = 0 AND turn_user_seq IS NULL))",
+        [runId, Boolean(opts?.unstartedOnly)],
+      );
+      return (rowCount ?? 0) > 0;
+    },
+
+    async steerQueued(queuedRunId, targetRunId, signal, signals) {
+      await signals.hasDedupeKey(signal.dedupeKey!);
+      const { rows } = await q(
+        `WITH target AS (
+           SELECT id FROM runs WHERE id=$2 AND status IN ('pending','running') FOR UPDATE
+         ), moved AS (
+           DELETE FROM runs WHERE id=$1 AND id<>$2 AND status='pending'
+           AND COALESCE(request::jsonb->>'displayText',request::jsonb->>'text') = $5::jsonb->'request'->>'text'
+           AND EXISTS (SELECT 1 FROM target) RETURNING id
+         ), sent AS (
+           INSERT INTO run_signals(run_id,kind,text,payload,created_at,dedupe_key)
+           SELECT $2,$3,$4,$5,$6,$7 FROM moved RETURNING id
+         ) SELECT pg_notify('run_signals',$2) FROM sent`,
+        [
+          queuedRunId,
+          targetRunId,
+          signal.kind,
+          signal.text ?? null,
+          JSON.stringify(signal),
+          Date.now(),
+          signal.dedupeKey ?? null,
+        ],
+      );
+      return rows.length > 0;
     },
 
     async activeSessionIds(): Promise<string[]> {
@@ -414,8 +461,13 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       return rows.map((r) => r.session_id as string);
     },
 
-    async list({ limit = 200 }: { limit?: number } = {}): Promise<Run[]> {
-      const { rows } = await q("SELECT * FROM runs ORDER BY created_at DESC LIMIT $1", [limit]);
+    async list({ limit = 200, threadRef }: { limit?: number; threadRef?: string } = {}): Promise<Run[]> {
+      const { rows } = threadRef
+        ? await q(
+            "SELECT * FROM runs WHERE session_id = $1 OR starts_with(session_id, $1 || ':task:') OR starts_with(session_id, $1 || ':status:') ORDER BY created_at DESC LIMIT $2",
+            [threadRef, limit],
+          )
+        : await q("SELECT * FROM runs ORDER BY created_at DESC LIMIT $1", [limit]);
       return rows.map(rowToRun);
     },
 

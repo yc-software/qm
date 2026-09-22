@@ -1,9 +1,11 @@
+import type { Harness, HarnessTurnInput } from "../src/harness/harness.ts";
+import { createMemoryBlobTransferStore, type BlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { createSkillBundleStore, type SkillBundleStore } from "../src/skills/skill-bundle-store.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -90,6 +92,8 @@ const skills = {
 
 function buildOrchestrator(
   extra: {
+    blobTransfer?: BlobTransferStore;
+    harness?: Harness;
     memoryPolicy?: import("../src/memory/policy.ts").MemoryPolicy;
     crons?: CronStore;
     sandbox?: Sandbox;
@@ -789,12 +793,28 @@ for (const location of [
         audience: [actor],
         publishMembers: [actor],
       },
-      text: "!read skills/carried-method/SKILL.md",
+      text: "!skill carried-method",
     });
     assert.equal(read.status, "ok", read.reason);
     assert.doesNotMatch(read.reply ?? "", /!security-risk|!security-screen-unavailable/);
     assert.equal(disk.has("skills/carried-method/SKILL.md"), false);
-    assert.ok(disk.has("skills/local-method/SKILL.md"));
+    assert.equal(disk.has("skills/local-method/SKILL.md"), false);
+    const localRead = await orchestrator.handleTurn({
+      surface: "test",
+      actor,
+      origin: { kind: "human" },
+      conversation: {
+        kind: "channel",
+        channelRef: "C1",
+        threadRef: `C1:read-local-${location}`,
+        audience: [actor],
+        publishMembers: [actor],
+      },
+      text: "!skill local-method",
+    });
+    assert.equal(localRead.status, "ok", localRead.reason);
+    assert.match(localRead.reply ?? "", /Do useful work/);
+    assert.equal(disk.has("skills/carried-method/SKILL.md"), false);
   });
 }
 
@@ -853,3 +873,283 @@ test("Open uses the exact skill snapshot that passed screening despite an in-fli
   assert.match(result.reply ?? "", /SAFE_DESCRIPTION/);
   assert.doesNotMatch(result.reply ?? "", /UNSCREENED_UPDATE|UNSCREENED_BODY/);
 });
+
+test("steered files materialize in separate inboxes and keep distinct durable artifacts", async () => {
+  const blobTransfer = createMemoryBlobTransferStore();
+  const first = await blobTransfer.put(Buffer.from("first file"));
+  const second = await blobTransfer.put(Buffer.from("second file"));
+  const writes = new Map<string, string>();
+  const sandbox: Sandbox = {
+    ...readSandbox(),
+    removeDir: async () => {},
+    listDir: async () => [],
+    writeFile: async () => {},
+    writeFileBytes: async (_handle, path, bytes) => {
+      writes.set(path, Buffer.from(bytes).toString());
+    },
+  };
+  const harness = createMockHarness();
+  const prepared: Array<Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>>> = [];
+  harness.turns.runTurn = async (turn) => {
+    for (const blob of [first, second]) {
+      prepared.push(
+        await turn.prepareSteer!("read this", {
+          surface: "web",
+          actor: { externalId: actor.id },
+          conversation: { kind: "dm", threadRef: "steer-files" },
+          text: "read this",
+          attachments: [{ name: "report.txt", mimetype: "text/plain", ...blob }],
+        }),
+      );
+    }
+    return { reply: "done" };
+  };
+  const { orchestrator, config, files } = buildOrchestrator({ harness, sandbox, blobTransfer });
+  await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
+  const result = await orchestrator.handleTurn(dm("steer-files", "hello"));
+  assert.equal(result.status, "ok", result.reason);
+  const inboundWrites = [...writes].filter(([path]) => path.endsWith("/report.txt"));
+  assert.equal(inboundWrites.length, 2);
+  assert.deepEqual(
+    inboundWrites.map(([, content]) => content),
+    ["first file", "second file"],
+  );
+  for (const [i, [path]] of inboundWrites.entries()) {
+    assert.ok(prepared[i]!.text.includes(path));
+    assert.ok(await files.get(prepared[i]!.attachments![0]!.artifactId!));
+    assert.equal(
+      Buffer.from(prepared[i]!.documents![0]!.dataBase64, "base64").toString(),
+      i === 0 ? "first file" : "second file",
+    );
+  }
+  assert.notEqual(prepared[0]!.attachments![0]!.artifactId, prepared[1]!.attachments![0]!.artifactId);
+});
+
+test("read-only turns report steered files as unavailable without provisioning a sandbox", async () => {
+  const harness = createMockHarness();
+  let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+  harness.turns.runTurn = async (turn) => {
+    prepared = await turn.prepareSteer!("", {
+      surface: "web",
+      actor: { externalId: actor.id },
+      conversation: { kind: "dm", threadRef: "steer-strict" },
+      text: "",
+      attachments: [{ name: "secret.txt", mimetype: "text/plain", sizeBytes: 4, blobId: "b1" }],
+    });
+    return { reply: "done" };
+  };
+  const { orchestrator, config } = buildOrchestrator({ harness });
+  await config.setSecurityPosture(scopeId("org", ORG), "strict");
+  const result = await orchestrator.handleTurn(dm("steer-strict", "hello", { readOnly: true }));
+  assert.equal(result.status, "ok", result.reason);
+  assert.deepEqual(prepared?.attachments, []);
+  assert.deepEqual(prepared?.documents, []);
+  assert.match(prepared?.text ?? "", /secret.txt/);
+});
+
+test("steered documents use the inbound security screen before writing their contents", async () => {
+  const blobTransfer = createMemoryBlobTransferStore();
+  const blob = await blobTransfer.put(Buffer.from("STEER_UNTRUSTED_CONTENT"));
+  const writes: string[] = [];
+  const sandbox: Sandbox = {
+    ...readSandbox(),
+    removeDir: async () => {},
+    listDir: async () => [],
+    writeFile: async () => {},
+    writeFileBytes: async (_handle, path) => {
+      writes.push(path);
+    },
+  };
+  const harness = createMockHarness();
+  let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+  harness.turns.runTurn = async (turn) => {
+    prepared = await turn.prepareSteer!("read the attachment", {
+      surface: "web",
+      actor: { externalId: actor.id },
+      conversation: { kind: "dm", threadRef: "steer-screen" },
+      text: "read the attachment",
+      attachments: [{ name: "unsafe.txt", mimetype: "text/plain", ...blob }],
+    });
+    return { reply: "done" };
+  };
+  const securityScreener: SecurityScreener = {
+    provider: "test",
+    shadow: false,
+    classify: async ({ payload }) => ({
+      verdict: { decision: payload.includes("STEER_UNTRUSTED_CONTENT") ? "strict" : "auto" },
+      score: 0,
+      threshold: 1,
+    }),
+  };
+  const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer, securityScreener });
+  const result = await orchestrator.handleTurn(dm("steer-screen", "hello"));
+  assert.equal(result.status, "ok", result.reason);
+  assert.deepEqual(prepared?.attachments, []);
+  assert.deepEqual(prepared?.documents, []);
+  assert.match(prepared?.text ?? "", /unsafe.txt.*withheld/);
+  assert.equal(
+    writes.some((path) => path.endsWith("unsafe.txt")),
+    false,
+  );
+});
+
+for (const budget of ["count", "bytes"] as const) {
+  test(`steered documents share the initial turn ${budget} budget`, async () => {
+    const blobTransfer = createMemoryBlobTransferStore();
+    const blob = await blobTransfer.put(Buffer.from(budget === "bytes" ? "x".repeat(7_999_995) : "initial"));
+    const steerBlob = await blobTransfer.put(Buffer.from("steered document"));
+    const sandbox: Sandbox = {
+      ...readSandbox(),
+      removeDir: async () => {},
+      listDir: async () => [],
+      writeFile: async () => {},
+      writeFileBytes: async () => {},
+    };
+    const harness = createMockHarness();
+    let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+    harness.turns.runTurn = async (turn) => {
+      assert.equal(turn.documents?.length, budget === "count" ? 10 : 1);
+      prepared = await turn.prepareSteer!("read this", {
+        surface: "web",
+        actor: { externalId: actor.id },
+        conversation: { kind: "dm", threadRef: `steer-budget-${budget}` },
+        text: "read this",
+        attachments: [{ name: "steered.txt", mimetype: "text/plain", ...steerBlob }],
+      });
+      return { reply: "done" };
+    };
+    const { orchestrator, config } = buildOrchestrator({ harness, sandbox, blobTransfer });
+    await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
+    const result = await orchestrator.handleTurn({
+      ...dm(`steer-budget-${budget}`, "hello"),
+      attachments: Array.from({ length: budget === "count" ? 10 : 1 }, (_, i) => ({
+        name: `initial-${i}.txt`,
+        mimetype: "text/plain",
+        ...blob,
+      })),
+    });
+    assert.equal(result.status, "ok", result.reason);
+    assert.deepEqual(prepared?.documents, []);
+    assert.match(prepared?.text ?? "", /steered.txt.*count or byte budget/);
+  });
+}
+
+test("steered native office documents are screened after extraction", async () => {
+  const blobTransfer = createMemoryBlobTransferStore();
+  const blob = await blobTransfer.put(readFileSync(new URL("./fixtures/documents/sample.docx", import.meta.url)));
+  const sandbox: Sandbox = {
+    ...readSandbox(),
+    removeDir: async () => {},
+    listDir: async () => [],
+    writeFile: async () => {},
+    writeFileBytes: async () => {},
+  };
+  const harness = createMockHarness();
+  let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+  let screened = false;
+  harness.turns.runTurn = async (turn) => {
+    prepared = await turn.prepareSteer!("summarize", {
+      surface: "web",
+      actor: { externalId: actor.id },
+      conversation: { kind: "dm", threadRef: "steer-office-screen" },
+      text: "summarize",
+      attachments: [
+        {
+          name: "unsafe.docx",
+          mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          ...blob,
+        },
+      ],
+    });
+    return { reply: "done" };
+  };
+  const securityScreener: SecurityScreener = {
+    provider: "test",
+    shadow: false,
+    classify: async ({ payload }) => {
+      const blocked = payload.includes("DOCX-QUARTZ-731");
+      screened ||= blocked;
+      return { verdict: { decision: blocked ? "strict" : "auto" }, score: 0, threshold: 1 };
+    },
+  };
+  const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer, securityScreener });
+  const result = await orchestrator.handleTurn(dm("steer-office-screen", "hello"));
+  assert.equal(result.status, "ok", result.reason);
+  assert.equal(screened, true);
+  assert.deepEqual(prepared?.documents, []);
+  assert.match(prepared?.text ?? "", /unsafe.docx.*withheld by the external-data security screen/);
+});
+
+test("documents uploaded during a turn survive a runtime handoff without aliasing the active harness", async () => {
+  const blobTransfer = createMemoryBlobTransferStore();
+  const blob = await blobTransfer.put(Buffer.from("HANDOFF-DOCUMENT-492"));
+  const sandbox: Sandbox = {
+    ...readSandbox(),
+    removeDir: async () => {},
+    listDir: async () => [],
+    writeFile: async () => {},
+    writeFileBytes: async () => {},
+  };
+  const harness = createMockHarness();
+  let segments = 0;
+  harness.turns.runTurn = async (turn) => {
+    if (++segments === 1) {
+      const activeDocuments = turn.documents!;
+      const prepared = await turn.prepareSteer!("read this", {
+        surface: "web",
+        actor: { externalId: actor.id },
+        conversation: { kind: "dm", threadRef: "steer-handoff" },
+        text: "read this",
+        attachments: [{ name: "steered.txt", mimetype: "text/plain", ...blob }],
+      });
+      assert.equal(prepared.documents?.length, 1);
+      assert.equal(activeDocuments.length, 0);
+      return { reply: "", runtimeHandoff: { choice: { harnessId: "pi", modelId: "gpt-6-astra" }, lifetime: "task" } };
+    }
+    assert.equal(turn.documents?.length, 1);
+    assert.equal(Buffer.from(turn.documents![0]!.dataBase64, "base64").toString(), "HANDOFF-DOCUMENT-492");
+    return { reply: "read after switching" };
+  };
+  const { orchestrator, config } = buildOrchestrator({ harness, sandbox, blobTransfer });
+  await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
+  const result = await orchestrator.handleTurn(dm("steer-handoff", "hello"));
+  assert.equal(result.status, "ok", result.reason);
+  assert.equal(segments, 2);
+});
+
+for (const surfaceTools of [false, true]) {
+  test(`automatic memory is injected once, then only updates (${surfaceTools ? "spine" : "DM"})`, async () => {
+    const base = createMockHarness();
+    const seen: HarnessTurnInput[] = [];
+    const harness: Harness = {
+      ...base,
+      turns: {
+        ...base.turns,
+        runTurn: async (turn) => {
+          seen.push(turn);
+          await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+          await turn.emit({ type: "assistant", payload: { text: "ok" }, scopeLabel: turn.scopeLabel });
+          return { reply: "ok" };
+        },
+      },
+    };
+    const { orchestrator, memory, sessions } = buildOrchestrator({ harness });
+    const personal = scopeId("personal", actor.id);
+    await memory.replace(personal, "# Memory\n- ALPHA_MARKER\n- BETA_MARKER");
+    const input = slackDm("memory-once", "hello", { surfaceTools });
+    const first = await orchestrator.handleTurn(input);
+    assert.equal(first.status, "ok");
+    assert.match(seen[0]!.environment!, /ALPHA_MARKER/);
+    await orchestrator.handleTurn({ ...input, text: "next" });
+    assert.doesNotMatch(seen[1]!.environment ?? "", /ALPHA_MARKER|BETA_MARKER|What you remember/);
+    await memory.replace(personal, "# Memory\n- ALPHA_MARKER\n- GAMMA_MARKER");
+    await orchestrator.handleTurn({ ...input, text: "third" });
+    assert.doesNotMatch(seen[2]!.environment!, /ALPHA_MARKER/);
+    assert.match(seen[2]!.environment!, /GAMMA_MARKER/);
+    assert.match(seen[2]!.environment!, /withdrawn[\s\S]*BETA_MARKER/);
+    const entries = await sessions.getEntries(first.sessionId!);
+    const users = entries.filter((entry) => entry.type === "user");
+    assert.match(JSON.stringify(users[0]!.payload), /memoryRecall/);
+    assert.doesNotMatch(JSON.stringify(users[1]!.payload), /ALPHA_MARKER|BETA_MARKER/);
+  });
+}

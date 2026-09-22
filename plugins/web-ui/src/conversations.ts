@@ -88,7 +88,11 @@ export function ensureDeliveryStream(): void {
       for (const conv of live) conv.onDelivery(threadRef);
     },
     (event) => {
-      const { list, matched } = applySessionState(sessionsState.list, event);
+      if (event.state === "metadata") {
+        void refreshSessions({ silent: true });
+        return;
+      }
+      const { list, matched } = applySessionState(sessionsState.list, { ...event, state: event.state });
       if (matched) {
         sessionsState.list = list;
         renderList();

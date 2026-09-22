@@ -21,7 +21,14 @@ test("conversation details include the waiting message after prior context with 
     const { contextTpl, toInboxItem } = await vite.ssrLoadModule("/src/inbox.ts");
     const { render } = await vite.ssrLoadModule("lit");
     const host = dom.window.document.getElementById("main")!;
-    for (const source of ["slack", "gmail"]) {
+    for (const [source, payloadSource] of [
+      ["slack", undefined],
+      ["gmail", undefined],
+      [undefined, "slack"],
+      [undefined, "gmail"],
+      ["slack", "gmail"],
+      ["gmail", "slack"],
+    ]) {
       for (const context of [
         undefined,
         [],
@@ -34,6 +41,7 @@ test("conversation details include the waiting message after prior context with 
           state: "held",
           source,
           sourcePayload: {
+            source: payloadSource,
             title: "Conversation",
             from: "Sam",
             snippet: "Latest waiting message",
@@ -44,6 +52,7 @@ test("conversation details include the waiting message after prior context with 
           updatedAt: 3000,
           thread: [],
         });
+        assert.equal(item.source, source ?? payloadSource);
         render(contextTpl(item), host);
         assert.deepEqual(
           [...host.querySelectorAll(".inbox-context-text")].map((el) => el.textContent?.trim()),

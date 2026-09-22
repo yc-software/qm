@@ -185,3 +185,90 @@ test("canonical transcripts retain foreign harness tool detail and exact bounded
     await built.runtime.stop();
   }
 });
+
+test("earlier pages bound canonical reads, widen for dense turns, and match full-read windows", async () => {
+  const built = freshApp();
+  try {
+    const { session } = await coarseForeignSession(built.sessions, 100);
+    const canonical = built.sessions.getTranscriptEntries.bind(built.sessions);
+    const calls: Array<{ limit?: number; beforeSeq?: number } | undefined> = [];
+    built.sessions.getTranscriptEntries = async (id, opts) => {
+      calls.push(opts);
+      return canonical(id, opts);
+    };
+    for (const beforeSeq of [1, 50, 251, 499, 900]) {
+      const full = (await built.app.getSessionForViewer(session.id, "U1"))!;
+      calls.length = 0;
+      const window = { beforeSeq, tailTurns: 2 };
+      const expected = windowedTranscript(full.entries as SessionEntry[], window);
+      for (const page of [
+        await built.app.getSessionForViewer(session.id, "U1", window),
+        await built.app.getSession(session.id, window),
+      ]) {
+        assert.deepEqual(page!.entries, expected.entries);
+        assert.equal(page!.earlierEntries ?? 0, expected.earlier);
+      }
+      assert.ok(calls.every((opts) => opts?.beforeSeq === beforeSeq && opts.limit === 80));
+    }
+    const { lease } = await built.sessions.acquireLease(session.id);
+    for (let i = 0; i < 180; i++)
+      await built.sessions.append(lease!, {
+        type: "text",
+        payload: { text: `detail ${i}` },
+        scopeLabel: session.scopeId,
+      });
+    await built.sessions.releaseLease(lease!);
+    calls.length = 0;
+    const page = await built.app.getSessionForViewer(session.id, "U1", { beforeSeq: 680, tailTurns: 1 });
+    assert.equal(page!.entries[0]!.seq, 495);
+    assert.deepEqual(
+      calls.map((opts) => opts?.limit),
+      [40, 80, 160, 320],
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("earlier pages retain tape fallback and viewer tenure boundaries", async () => {
+  const built = freshApp();
+  try {
+    const { session } = await coarseForeignSession(built.sessions, 30);
+    await built.sessions.addParticipant(session.id, "late");
+    const { lease } = await built.sessions.acquireLease(session.id);
+    for (let i = 0; i < 10; i++) {
+      await built.sessions.append(lease!, {
+        type: "user",
+        payload: { text: `late question ${i}` },
+        scopeLabel: session.scopeId,
+      });
+      await built.sessions.append(lease!, {
+        type: "assistant",
+        payload: { text: `late reply ${i}` },
+        scopeLabel: session.scopeId,
+      });
+    }
+    await built.sessions.releaseLease(lease!);
+    for (const viewer of ["late", "U1", "stranger"]) {
+      const full = await built.app.getSessionForViewer(session.id, viewer);
+      for (const beforeSeq of [100, 155, 170]) {
+        const page = await built.app.getSessionForViewer(session.id, viewer, { beforeSeq, tailTurns: 2 });
+        if (!full) {
+          assert.equal(page, null);
+          continue;
+        }
+        const expected = windowedTranscript(full.entries as SessionEntry[], { beforeSeq, tailTurns: 2 });
+        assert.deepEqual(page!.entries, expected.entries);
+        assert.equal(page!.earlierEntries ?? 0, expected.earlier);
+      }
+    }
+    withoutCanonicalTranscript(built.sessions);
+    const full = (await built.app.getSession(session.id))!;
+    const expected = windowedTranscript(full.entries as SessionEntry[], { beforeSeq: 101, tailTurns: 2 });
+    const page = (await built.app.getSessionForViewer(session.id, "U1", { beforeSeq: 101, tailTurns: 2 }))!;
+    assert.deepEqual(page.entries, expected.entries);
+    assert.equal(page.earlierEntries ?? 0, expected.earlier);
+  } finally {
+    await built.runtime.stop();
+  }
+});

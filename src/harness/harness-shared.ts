@@ -101,6 +101,7 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
           readOnly: turn.readOnly,
           sessionTools: Boolean(turn.tools.sessionSyscalls),
           surfaceTools: turn.surfaceTools,
+          delegateWork: turn.delegateWork,
           surfaceName: turn.surfaceName,
           credentialExecServices: turn.credentialExecServices,
         }
@@ -183,7 +184,7 @@ export function oneShotModelUtilities(
 ): Pick<HarnessModelUtilities, "oneShot" | "judge" | "screenSecurity" | "generateTitle" | "summarizeApproval"> {
   return {
     oneShot: (system, prompt) => single(system, prompt),
-    judge: (system, prompt) => single(system, prompt, undefined, undefined, judgeModelId),
+    judge: (system, prompt, signal) => single(system, prompt, signal, undefined, judgeModelId),
     screenSecurity: async ({ payload, signal, recordModelCall, recordLlmRequest }) =>
       parseSecurityScreenVerdict(
         await single(SECURITY_SCREEN_SYSTEM_PROMPT, payload, signal, {

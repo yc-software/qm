@@ -1,3 +1,6 @@
+import { buildGovernanceUI } from "./governance-bundle.ts";
+import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import "./instrument.ts";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable } from "node:stream";
@@ -8,6 +11,7 @@ import { json, readBody, cookie, gzipAccepted } from "../../chassis/src/http.ts"
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
+import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 import {
   CORE_API_URL as CORE,
   CORE_ORG_ID as ORG,
@@ -28,12 +32,18 @@ function signedHeaders(method: string, corePath: string, rawBody: string): Recor
   return signedRequestHeaders(CORE_SIGNING_SECRET, method, corePath, rawBody, { "content-type": "application/json" });
 }
 
-const BASE_HTML = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "../public/index.html"),
-  "utf8",
-).replaceAll("__ADMIN_BASE__", () => ADMIN_BASE_PATH);
+const BASE_HTML = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8")
+  .replaceAll("__ADMIN_BASE__", () => ADMIN_BASE_PATH)
+  .replace('"__GOVERNANCE_UI__";', () => buildGovernanceUI())
+  .replace(
+    "<style data-admin-components></style>",
+    () =>
+      "<style data-admin-components>" +
+      readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/admin-components.css"), "utf8") +
+      "</style>",
+  );
 const BRAND_MARK = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/brand-mark.svg"));
-const ADMIN_SCRIPT = BASE_HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? "";
+const ADMIN_SCRIPT = BASE_HTML.match(/<script>([\s\S]*?)<\/script>/i)?.[1] ?? "";
 const ADMIN_CSP = [
   "default-src 'self'",
   `script-src 'sha256-${createHash("sha256").update(ADMIN_SCRIPT).digest("base64")}'`,
@@ -86,6 +96,9 @@ const cookiePrincipal = (req: IncomingMessage): string | null => {
     token && PORTAL_IDENTITY_SECRET ? verifyPortalIdentity(token, PORTAL_IDENTITY_SECRET, Date.now())?.p : null;
   return principal ?? (!CORE_SIGNING_SECRET || ALLOW_UNSIGNED_TEST_IDENTITY ? cookie(req, "admin") : null);
 };
+
+const inboxPermissions = (principal: string): string[] =>
+  principalInAllowlist(principal, process.env.INBOX_USERS) ? ["inbox"] : [];
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
 function portalIdentityHeader(): Record<string, string> {
@@ -145,6 +158,7 @@ async function forward(
     res.writeHead(r.status, { "content-type": "application/json", vary: "accept-encoding" });
     pipeBody(res, r.body);
   } catch (err) {
+    reportBackendError(err);
     console.error("[admin] core request failed:", String(err));
     json(res, 502, { error: "core_unreachable", message: "core unavailable" });
   }
@@ -180,6 +194,7 @@ async function forwardDownload(res: ServerResponse, principal: string, corePath:
     res.writeHead(r.status, headers);
     pipeBody(res, r.body);
   } catch (err) {
+    reportBackendError(err);
     console.error("[admin] core download failed:", String(err));
     json(res, 502, { error: "core_unreachable", message: "core unavailable" });
   }
@@ -240,6 +255,7 @@ async function uploadFileFromRequest(
     });
     return forward(req, res, principal, "POST", corePath, body);
   } catch (err) {
+    reportBackendError(err);
     console.error("[admin] upload failed:", String(err));
     return json(res, 502, { error: "core_unreachable", message: "core unavailable" });
   }
@@ -282,6 +298,7 @@ async function coreWhoami(principal: string): Promise<{ isAdmin: boolean; role?:
 
 const WRITES = new Map<string, string[]>([
   ["grants", ["POST", "DELETE"]],
+  ["principal-links", ["POST", "DELETE"]],
   ["external-users", ["POST", "DELETE"]],
   ["memory", ["PUT"]],
   ["crons", ["PUT"]],
@@ -319,6 +336,7 @@ const READS = [
   "model-providers",
   "model-registry",
   "custom-providers",
+  "principal-links",
 ];
 
 export async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -327,6 +345,7 @@ export async function handler(req: IncomingMessage, res: ServerResponse): Promis
   await portalTokenStore
     .run(token, () => handle(req, res))
     .catch((err: unknown) => {
+      reportBackendError(err);
       console.error("[admin] unhandled request error:", String(err));
       json(res, 500, { error: "internal_error", message: "internal server error" });
     });
@@ -378,7 +397,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!p) return json(res, 401, { error: "signed_out" });
     const who = await coreWhoami(p);
     if (!who) return json(res, 502, { error: "core_unreachable", message: "could not verify admin status" });
-    return json(res, 200, { principal: p, org: ORG, ...who });
+    return json(res, 200, { principal: p, org: ORG, ...who, permissions: inboxPermissions(p) });
   }
   if (method === "POST" && pathname === "/api/logout") {
     res.writeHead(200, {
@@ -405,14 +424,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!principal) return json(res, 401, { error: "signed_out" });
     const rest = pathname.slice("/api/scopes/".length);
     if (method === "GET") {
-      if (rest.endsWith("/export")) {
-        const scopeId = decodeURIComponent(rest.slice(0, -"/export".length));
+      const suffix = ["/export", "/credential-usage"].find((suffix) => rest.endsWith(suffix));
+      if (suffix) {
+        const scopeId = decodeURIComponent(rest.slice(0, -suffix.length));
         return forward(
           req,
           res,
           principal,
           "GET",
-          `/v1/admin/scopes/${encodeURIComponent(scopeId)}/export${url.search}`,
+          `/v1/admin/scopes/${encodeURIComponent(scopeId)}${suffix}${url.search}`,
         );
       }
       const scopeId = decodeURIComponent(rest);
@@ -446,6 +466,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         res.writeHead(r.status, { "content-type": "application/json" });
         res.end(text);
       } catch (err) {
+        reportBackendError(err);
         console.error("[admin] core request failed:", String(err));
         json(res, 502, { error: "core_unreachable", message: "core unavailable" });
       }
@@ -481,6 +502,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (method === "GET" && READS.includes(first)) {
     if (!principal) return json(res, 401, { error: "signed_out" });
     return forward(req, res, principal, "GET", `/v1/admin/${rest}${url.search}`);
+  }
+
+  if (method === "GET" && ["/design-system", "/design-system/", "/design", "/design/"].includes(pathname)) {
+    const viewer = cookiePrincipal(req);
+    if (!viewer || !principalInAllowlist(viewer, process.env.INBOX_USERS)) {
+      return json(res, 404, { error: "not_found" });
+    }
+    return serveShell();
   }
 
   if (method === "GET" && !pathname.startsWith("/api/") && !pathname.startsWith("/deployments/")) {

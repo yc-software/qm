@@ -92,8 +92,15 @@ turn's memory tool; they are not added to reusable sandbox API tokens. Candidate
 is limited to 100 recent sessions and 200 files, and binary files require explicit sharing
 before being copied into a different conversation's computer. Organization, personal, room, and source-room policy compose fail-closed, with
 Isolated winning. These reads are labelled and audited, but model output is not a disclosure
-control. Open does not change transcript audience filtering, writes or memory capture,
-credential materialization, automation or ambient turns, tenant boundaries, another
+control. In an Open shared conversation, the authenticated internal speaker can use their
+own keychain through isolated owner execution without creating a room grant. Credentials
+are supplied only to a separate disposable computer, which is destroyed at turn end, not
+the shared workspace. Each owner command rechecks composed sharing policy and current
+membership. Other people's credentials and automated or ambient turns still require grants.
+The raw keychain-use endpoint remains personal-or-grant-only. Command approvals remain in
+force; code can still disclose secrets while using them, so this is not an output filter.
+Open does not change transcript audience filtering, writes or memory capture,
+automation or ambient turns, tenant boundaries, another
 person's entitlement, command approvals, content screening, or egress. In Auto, carried
 skills and their bundled files must pass screening before prompt inclusion or materialization;
 flagged, oversized, or unavailable screening leaves the carried skill inaccessible.

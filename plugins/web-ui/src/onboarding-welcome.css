@@ -74,40 +74,6 @@ qm-onboarding-welcome {
   opacity: 0;
   z-index: -1;
 }
-.welcome-slack {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  max-width: 480px;
-  padding: 16px 18px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  color: var(--foreground);
-  text-decoration: none;
-  margin-bottom: 16px;
-  background: var(--background);
-}
-.welcome-slack > span {
-  flex: 1;
-}
-.welcome-slack strong {
-  display: block;
-  font-size: 14px;
-  font-weight: 600;
-}
-.welcome-slack small {
-  display: block;
-  font-size: 12px;
-  color: var(--muted-foreground);
-  margin-top: 4px;
-}
-.welcome-slack:hover {
-  background: var(--secondary);
-}
-.welcome-slack:focus-visible {
-  outline: 2px solid var(--foreground);
-  outline-offset: 3px;
-}
 .welcome-load {
   padding: 16px;
   border: 1px solid var(--border);
@@ -294,4 +260,27 @@ qm-onboarding-welcome {
 .connection-consent-preview a {
   font-size: 13px;
   color: var(--foreground);
+}
+
+.welcome-more-ideas {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: color-mix(in srgb, var(--foreground) 40%, var(--muted-foreground));
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 38%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.welcome-more-ideas:hover,
+.welcome-more-ideas:focus-visible {
+  color: var(--foreground);
+  text-decoration-color: currentColor;
+}
+.welcome-more-ideas:disabled {
+  opacity: 0.5;
+  cursor: default;
 }

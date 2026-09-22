@@ -238,14 +238,18 @@ function drawCronsPage(): void {
   const yoursDisabled = yours.filter(({ c }) => !c.enabled);
   const shared = all.filter(({ c, mine }) => !mine && !c.archived);
   const ownsAny = all.some(({ mine }) => mine);
-  const counts: Record<CronTab, number> = { yours: yours.length, shared: shared.length, archived: archived.length };
+  const counts: Record<CronTab, number> = {
+    yours: yoursEnabled.length,
+    shared: shared.filter(({ c }) => c.enabled).length,
+    archived: archived.length,
+  };
 
   const rows: TemplateResult[] = [];
   if (cronActionNotice) {
     rows.push(html`<div class="action-notice">${cronActionNotice}</div>`);
     cronActionNotice = "";
   }
-  if (all.length) rows.push(cronTabs(counts));
+  if (all.length) rows.push(cronTabs(counts, shared.length > 0));
   if (cronTab === "yours") {
     rows.push(...yoursEnabled.map(({ c }) => cronPageRow(c, true)));
     if (all.length && !yoursEnabled.length)
@@ -300,8 +304,10 @@ function cronEmptyRow(text: string): TemplateResult {
   return html`<div class="empty compact cron-filter-empty">${text}</div>`;
 }
 
-function cronTabs(counts: Record<CronTab, number>): TemplateResult {
-  const tabs = CRON_TABS.filter((t) => t.value === "yours" || counts[t.value] > 0 || cronTab === t.value);
+function cronTabs(counts: Record<CronTab, number>, hasShared: boolean): TemplateResult {
+  const tabs = CRON_TABS.filter(
+    (t) => t.value === "yours" || (t.value === "shared" && hasShared) || counts[t.value] > 0 || cronTab === t.value,
+  );
   return html`
     <div class="cron-list-controls" role="tablist" aria-label="Cron view">
       ${tabs.map(

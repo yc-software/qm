@@ -2,6 +2,7 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresInstanceRegistry, createLegacyEnrollmentBridge } from "../src/runs/instance-registry.ts";
+import { settle } from "./support/settle.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the instance-registry tests";
@@ -92,3 +93,35 @@ test("controlled enrollment drains same-image legacy workers without self-supers
     await factory.pool.close();
   }
 });
+
+test(
+  "a core with background work disabled never heartbeats, so it cannot drain a peer that does",
+  { skip },
+  async () => {
+    await import("./support/auto-fake-sprites.ts");
+    const [{ buildApp }, { testConfig }] = await Promise.all([
+      import("../src/wiring.ts"),
+      import("./support/test-config.ts"),
+    ]);
+    const pool = createPostgresMapFactory(URL!).pool;
+    const boot = async (backgroundWorkEnabled: boolean, buildSha: string): Promise<number> => {
+      const built = buildApp(
+        testConfig({ databaseUrl: URL, buildSha, backgroundWorkEnabled, workers: 1, reaperIntervalMs: 60_000 }),
+      );
+      built.runtime.start();
+      const count = async (): Promise<number> => {
+        const { rows } = await pool.query("SELECT count(*)::int AS n FROM instance_heartbeats WHERE build_sha = $1", [
+          buildSha,
+        ]);
+        return (rows[0] as { n: number }).n;
+      };
+      if (backgroundWorkEnabled) await settle(async () => (await count()) > 0);
+      else await new Promise((r) => setTimeout(r, 500));
+      const n = await count();
+      await built.runtime.stop();
+      return n;
+    };
+    assert.equal(await boot(false, "sha-inactive"), 0, "an inactive stack must leave no heartbeat behind");
+    assert.equal(await boot(true, "sha-active"), 1, "a claiming instance still announces itself");
+  },
+);

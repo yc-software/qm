@@ -16,6 +16,7 @@ import { userFacingFailureClause } from "../core/failure-copy.ts";
 import { principalDestination, reachEnqueue } from "../reach/reach.ts";
 import { consentRequiredRecipient, recipientConsentSatisfied } from "./trigger-store.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
+import type { DirectoryStore } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 
@@ -33,6 +34,7 @@ export interface TriggerDeps {
     get(principalId: string): Promise<{ displayName: string } | null>;
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
     groupMembership?(groupId: string, principalId: string): Promise<boolean | undefined>;
+    conversationMembers?: DirectoryStore["conversationMembers"];
   };
   sessions?: { listByParticipant(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
 }
@@ -205,10 +207,15 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   const { kind: ownerKind, ref: ownerRef } = parseScopeId(spec.ownerScopeId);
   const threadRef = spec.threadRef ?? spec.fireKey;
   let conversation: TurnRequest["conversation"] = { kind: "dm", threadRef };
-  if (ownerKind === "channel") {
-    conversation = { kind: "channel", channelRef: ownerRef, threadRef, ...(audience ? { audience } : {}) };
-  } else if (ownerKind === "group") {
-    conversation = { kind: "group", channelRef: ownerRef, threadRef, ...(audience ? { audience } : {}) };
+  if (ownerKind === "channel" || ownerKind === "group") {
+    const roster = await deps.directory?.conversationMembers?.(ownerKind, ownerRef).catch(() => undefined);
+    conversation = {
+      kind: ownerKind,
+      channelRef: ownerRef,
+      threadRef,
+      ...(audience ? { audience } : {}),
+      ...(roster ? { publishMembers: roster.map((m) => ({ externalId: m.principalId })) } : {}),
+    };
   }
 
   let homeAccess: { ok: boolean; note?: string };

@@ -1,3 +1,4 @@
+import { assertPersonalConversationParity } from "./support/personal-conversation-parity.ts";
 import "./run-availability.ts";
 import { migrateTranscriptPage } from "../scripts/lib/transcript-tape-migration.ts";
 import { test, before } from "node:test";
@@ -1913,6 +1914,43 @@ test("pg search: full-text over entries with prefix match, window ACL, and type 
   assert.deepEqual(await s.searchEntries("USRCH", "memo missing"), [], "every term must match");
 });
 
+test("pg search: participation windows filter global matches before the result limit", { skip }, async () => {
+  let at = Date.now();
+  const s = createPostgresSessionStore(URL!, { now: () => at });
+  const scope = scopeId("personal", "SEARCH-WINDOW");
+  const session = await s.getOrCreateByThread("search-window-limit", "dm", scope);
+  const lease = (await s.acquireLease(session.id)).lease!;
+  const append = async (text: string) => {
+    at += 1;
+    return s.append(lease, { type: "user", payload: { text }, scopeLabel: scope });
+  };
+  await append("limitwindow before joining");
+  await s.addParticipant(session.id, "SEARCH-WINDOW");
+  const visible = await append("limitwindow visible");
+  await s.removeParticipant(session.id, "SEARCH-WINDOW");
+  await append("limitwindow after leaving");
+  await s.releaseLease(lease);
+
+  const hidden = await s.getOrCreateByThread("search-hidden-limit", "dm", scope);
+  const hiddenLease = (await s.acquireLease(hidden.id)).lease!;
+  at += 1;
+  await s.append(hiddenLease, {
+    type: "user",
+    payload: { text: "limitwindow inaccessible session" },
+    scopeLabel: scope,
+  });
+  await s.releaseLease(hiddenLease);
+
+  for (const limit of [1, 200]) {
+    const hits = await s.searchEntries("SEARCH-WINDOW", "limitwindow", limit);
+    assert.deepEqual(
+      hits.map((hit) => [hit.sessionId, hit.seq]),
+      [[session.id, visible.seq]],
+    );
+  }
+  assert.deepEqual(await s.searchEntries("SEARCH-OUTSIDER", "limitwindow", 1), []);
+});
+
 test("pg search: message writes populate the index and tool results stay unfindable", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "UIDX");
@@ -2256,6 +2294,15 @@ test(
     assert.deepEqual(await s.getTranscriptEntries(session.id), before);
     assert.deepEqual(await s.getTranscriptEntries(session.id, { limit: 2 }), before.slice(-2));
     assert.deepEqual(await s.getTranscriptEntries(session.id, { sinceSeq: 1, limit: 2 }), before.slice(-2));
+    for (const beforeSeq of [0, 1, 3, 4, 99]) {
+      for (const limit of [undefined, 0, 1, 10]) {
+        const expected = before.filter((entry) => entry.seq >= 1 && entry.seq < beforeSeq);
+        let page = expected;
+        if (limit !== undefined) page = limit === 0 ? [] : expected.slice(-limit);
+        assert.deepEqual(await s.getTranscriptEntries(session.id, { sinceSeq: 1, beforeSeq, limit }), page);
+        assert.deepEqual(await s.getEntries(session.id, { sinceSeq: 1, beforeSeq, limit }), page);
+      }
+    }
     assert.equal(await s.tapeCoverage(session.id), -1);
     assert.equal(await s.clearSecurityTaint(session.id), true);
     const after = await s.getEntries(session.id);
@@ -2474,4 +2521,99 @@ test("pg child parentage and spawn metadata survive reopening", { skip }, async 
   );
   await reopened.setParentSession(child.id, null);
   assert.equal((await reopened.get(child.id))?.parentSessionId, undefined);
+});
+
+test("pg personal conversation counts exclude synthetic and inherited chats", { skip }, async () => {
+  await assertPersonalConversationParity(createPostgresSessionStore(URL!), "pg-personal-count");
+});
+
+test("pg personal conversation counts tolerate legacy null characters", { skip }, async () => {
+  const store = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", "legacy-null-count");
+  const session = await store.getOrCreateByThread("legacy-null-count", "dm", scope);
+  const { lease } = await store.acquireLease(session.id);
+  assert.ok(lease);
+  await store.append(lease, { type: "user", payload: { text: "Hello" }, scopeLabel: scope });
+  await store.releaseLease(lease);
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  try {
+    await raw.query("DELETE FROM session_tape WHERE session_id = $1", [session.id]);
+    await raw.query("UPDATE session_entries SET payload = $2 WHERE session_id = $1", [
+      session.id,
+      JSON.stringify({ text: "Hello\u0000", hidden: "true", overheard: "true" }),
+    ]);
+    assert.equal(await store.countPersonalConversations(scope), 1);
+    await raw.query("UPDATE session_entries SET payload = $2 WHERE session_id = $1", [
+      session.id,
+      JSON.stringify({ text: "Hello\u0000", hidden: true }),
+    ]);
+    assert.equal(await store.countPersonalConversations(scope), 0);
+  } finally {
+    await raw.end();
+  }
+});
+
+test("pg session status survives restart, is shared, and clears", { skip }, async () => {
+  const first = createPostgresSessionStore(URL!);
+  const session = await first.getOrCreateByThread("session-status", "dm", scopeId("personal", "U1"));
+  await first.addParticipant(session.id, "U1");
+  await first.addParticipant(session.id, "U2");
+  const status = { emoji: "🚀", text: "Live in production" };
+  await first.updateStatus(session.id, status);
+  const restarted = createPostgresSessionStore(URL!);
+  assert.deepEqual((await restarted.get(session.id))?.status, status);
+  assert.deepEqual((await restarted.getForParticipant(session.id, "U2"))?.status, status);
+  await restarted.updateStatus(session.id, null);
+  assert.equal((await first.get(session.id))?.status ?? null, null);
+});
+
+test(
+  "pg legacy completion wakeups remain discoverable after return and restart until withdrawn",
+  { skip },
+  async () => {
+    const first = createPostgresRunStore(URL!);
+    const { run } = await first.runs.enqueue({
+      sessionId: `agent:main:subagent:${randomUUID()}`,
+      request: turn("child"),
+    });
+    const claimed = await first.runs.claimById(run.id, "child", 30_000);
+    await first.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+    const { run: wake } = await first.runs.enqueue({
+      sessionId: `parent-${randomUUID()}`,
+      dedupKey: `subagent-return:${run.id}`,
+      request: turn("completion"),
+    });
+    await first.runs.markReturned(run.id);
+    await first.close();
+    const second = createPostgresRunStore(URL!);
+    try {
+      assert.ok((await second.runs.pendingReturns(1000)).some((pending) => pending.id === run.id));
+      assert.ok(!(await second.runs.pendingReturns(1000, run.id)).some((pending) => pending.id === run.id));
+      assert.equal(await second.runs.withdraw(wake.id), true);
+      assert.ok(!(await second.runs.pendingReturns(1000)).some((pending) => pending.id === run.id));
+    } finally {
+      await second.close();
+    }
+  },
+);
+
+test("pg unstarted withdrawal preserves claimed and released turns atomically", { skip }, async () => {
+  const store = createPostgresRunStore(URL!);
+  try {
+    const { run } = await store.runs.enqueue({ sessionId: `wake-retry-${randomUUID()}`, request: turn("completion") });
+    const claimed = await store.runs.claimById(run.id, "worker", 30_000);
+    assert.equal(await store.runs.withdraw(run.id, { unstartedOnly: true }), false);
+    await store.runs.releaseLease(run.id, claimed!.leaseToken!);
+    assert.equal(await store.runs.withdraw(run.id, { unstartedOnly: true }), false);
+    assert.equal((await store.runs.get(run.id))!.status, "pending");
+    const { run: fresh } = await store.runs.enqueue({
+      sessionId: `wake-fresh-${randomUUID()}`,
+      request: turn("completion"),
+    });
+    assert.equal(await store.runs.withdraw(fresh.id, { unstartedOnly: true }), true);
+    assert.equal(await store.runs.get(fresh.id), null);
+  } finally {
+    await store.close();
+  }
 });

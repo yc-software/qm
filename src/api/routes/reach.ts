@@ -155,12 +155,15 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
           createdInScope: capability.scopeId,
           seed: `reach:${randomUUID()}`,
           onError: (e) =>
-            deps.errors?.record({
-              category: "file_store",
-              code: "register_failed",
-              message: errMessage(e),
-              scopeLabel: capability.scopeId,
-            }),
+            deps.errors?.record(
+              {
+                category: "file_store",
+                code: "register_failed",
+                message: errMessage(e),
+                scopeLabel: capability.scopeId,
+              },
+              e,
+            ),
         }
       : undefined;
     const handle = await sandbox.provision([{ scopeId: envScope, mountPath: "", mode: "rw" }]);

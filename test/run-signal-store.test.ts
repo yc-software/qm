@@ -29,18 +29,19 @@ test("memory store: send appends, takePending drains in order and consumes", asy
   assert.equal((await store.takePending("other")).length, 1, "other run unaffected");
 });
 
-test("memory store: takeLive consumes steers but leaves an abort pending for the terminal drain", async () => {
+test("memory store: pending retains steers until acknowledged and leaves aborts for terminal drain", async () => {
   const store = createMemoryRunSignalStore();
   await store.send("r1", { kind: "steer", text: "a" });
   await store.send("r1", { kind: "abort" });
   await store.send("r1", { kind: "steer", text: "b" });
   assert.deepEqual(
-    (await store.takeLive("r1")).map((s) => s.kind),
+    (await store.pending("r1")).map((s) => s.signal.kind),
     ["steer", "abort", "steer"],
     "a live drain sees everything pending, in order",
   );
+  for (const row of await store.pending("r1")) if (row.signal.kind === "steer") await store.acknowledge("r1", row.id);
   assert.deepEqual(
-    (await store.takeLive("r1")).map((s) => s.kind),
+    (await store.pending("r1")).map((s) => s.signal.kind),
     ["abort"],
     "steers are consumed exactly once; the abort is never consumed by a live drain",
   );
@@ -49,7 +50,7 @@ test("memory store: takeLive consumes steers but leaves an abort pending for the
     ["abort"],
     "the terminal drain is what consumes the abort",
   );
-  assert.deepEqual(await store.takeLive("r1"), []);
+  assert.deepEqual(await store.pending("r1"), []);
   assert.deepEqual(await store.pendingRunIds(), [], "nothing outlives the terminal drain");
 });
 
@@ -66,7 +67,7 @@ test("startSignalPoll: a user stop outlives a lease-losing poller, is honored by
   await until(() => loserAborts >= 1);
   await loser();
   assert.deepEqual(
-    (await store.takeLive("r1")).map((s) => s.kind),
+    (await store.pending("r1")).map((s) => s.signal.kind),
     ["abort"],
     "the losing poller did not consume the stop",
   );
@@ -316,7 +317,7 @@ test("pg store: NOTIFY doorbell reaches a listener on a different connection", {
   }
 });
 
-test("pg store: takeLive consumes steers but leaves an abort pending for the terminal drain", { skip }, async () => {
+test("pg store: pending retains steers until acknowledged and leaves aborts for terminal drain", { skip }, async () => {
   const store = createPostgresRunSignalStore(URL!);
   const runId = `test-run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   try {
@@ -324,12 +325,14 @@ test("pg store: takeLive consumes steers but leaves an abort pending for the ter
     await store.send(runId, { kind: "abort" });
     await store.send(runId, { kind: "steer", text: "b" });
     assert.deepEqual(
-      (await store.takeLive(runId)).map((s) => s.kind),
+      (await store.pending(runId)).map((s) => s.signal.kind),
       ["steer", "abort", "steer"],
       "a live drain sees everything pending, in order",
     );
+    for (const row of await store.pending(runId))
+      if (row.signal.kind === "steer") await store.acknowledge(runId, row.id);
     assert.deepEqual(
-      (await store.takeLive(runId)).map((s) => s.kind),
+      (await store.pending(runId)).map((s) => s.signal.kind),
       ["abort"],
       "steers are consumed exactly once; the abort is never consumed by a live drain",
     );
@@ -339,7 +342,7 @@ test("pg store: takeLive consumes steers but leaves an abort pending for the ter
       ["abort"],
       "the terminal drain is what consumes the abort",
     );
-    assert.deepEqual(await store.takeLive(runId), []);
+    assert.deepEqual(await store.pending(runId), []);
     assert.ok(!(await store.pendingRunIds()).includes(runId), "nothing outlives the terminal drain");
   } finally {
     await store.close?.();
@@ -468,3 +471,105 @@ for (const backend of ["memory", "postgres"] as const) {
     },
   );
 }
+test("startSignalPoll delivers the request and files even when a steer has no caption", async () => {
+  const signals = createMemoryRunSignalStore();
+  const request = {
+    surface: "web",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm" as const, threadRef: "files" },
+    text: "",
+    attachments: [{ name: "report.txt", mimetype: "text/plain", sizeBytes: 3, blobId: "b1" }],
+  };
+  let received: unknown;
+  const stop = startSignalPoll(signals, "files", {
+    onAbort: async () => {},
+    onSteer: async (text, ts, carried) => {
+      received = { text, ts, request: carried };
+    },
+  });
+  try {
+    await signals.send("files", { kind: "steer", request, ts: "1" });
+    await until(() => received !== undefined);
+    assert.deepEqual(received, { text: "", ts: "1", request });
+  } finally {
+    await stop();
+  }
+});
+
+test("failed preparation preserves the entire pending batch for retry", async () => {
+  const store = createMemoryRunSignalStore();
+  await store.send("prepare-failure", { kind: "steer", text: "first" });
+  await store.send("prepare-failure", { kind: "steer", text: "second" });
+  let failed = false;
+  const stop = startSignalPoll(
+    store,
+    "prepare-failure",
+    {
+      onSteer: async () => {
+        throw new Error("upload unavailable");
+      },
+      onAbort: async () => {},
+    },
+    {
+      intervalMs: 10,
+      onError: () => {
+        failed = true;
+      },
+    },
+  );
+  await until(() => failed);
+  await stop();
+  assert.deepEqual(
+    (await store.takePending("prepare-failure")).map((s) => s.text),
+    ["first", "second"],
+  );
+});
+
+test("a declined late steer stays durable for terminal replay without spinning", async () => {
+  const store = createMemoryRunSignalStore();
+  let attempts = 0;
+  const stop = startSignalPoll(
+    store,
+    "late-steer",
+    {
+      onSteer: async () => {
+        attempts++;
+        return false;
+      },
+      onAbort: async () => {},
+    },
+    { intervalMs: 10 },
+  );
+  await store.send("late-steer", { kind: "steer", text: "late" });
+  await until(() => attempts > 0);
+  await sleep(35);
+  await stop();
+  assert.equal(attempts, 1);
+  assert.equal((await store.takePending("late-steer"))[0]?.text, "late");
+});
+
+test("failed attachment preparation does not block Stop", async () => {
+  const store = createMemoryRunSignalStore();
+  await store.send("stop-after-failure", { kind: "steer", text: "file" });
+  await store.send("stop-after-failure", { kind: "abort" });
+  let aborted = false;
+  const stop = startSignalPoll(
+    store,
+    "stop-after-failure",
+    {
+      onSteer: async () => {
+        throw new Error("upload unavailable");
+      },
+      onAbort: async () => {
+        aborted = true;
+      },
+    },
+    { intervalMs: 5 },
+  );
+  try {
+    await until(() => aborted);
+  } finally {
+    await stop();
+  }
+  assert.equal((await store.pending("stop-after-failure"))[0]?.signal.text, "file");
+});

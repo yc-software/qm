@@ -173,7 +173,11 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         .filter(
           (run) =>
             isTerminal(run.status) &&
-            !returned.has(run.id) &&
+            (!returned.has(run.id) ||
+              (() => {
+                const wake = runs.get(byKey.get(`subagent-return:${run.id}`) ?? "");
+                return wake?.status === "pending" && wake.attempts === 0 && wake.turnUserSeq === null;
+              })()) &&
             run.id > afterId &&
             run.sessionId.startsWith("agent:main:subagent:"),
         )
@@ -211,12 +215,39 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         .sort((a, b) => a.createdAt - b.createdAt);
     },
 
-    async withdraw(runId) {
+    async editPendingText(runId, text, expectedText) {
+      const run = runs.get(runId);
+      if (!run || run.status !== "pending" || run.attempts !== 0 || run.turnUserSeq !== null) return false;
+      if ((run.request.displayText ?? run.request.text) !== expectedText) return false;
+      run.request = { ...run.request, text, displayText: text };
+      return true;
+    },
+
+    async withdraw(runId, opts) {
       const run = runs.get(runId);
       if (!run || run.status !== "pending") return false;
+      if (opts?.unstartedOnly && (run.attempts !== 0 || run.turnUserSeq !== null)) return false;
       runs.delete(runId);
       retryAfter.delete(runId);
       if (run.dedupKey) byKey.delete(run.dedupKey);
+      return true;
+    },
+
+    async steerQueued(queuedRunId, targetRunId, signal, signals) {
+      const queued = runs.get(queuedRunId);
+      const target = runs.get(targetRunId);
+      if (!queued || queued.status !== "pending" || !target || isTerminal(target.status) || queuedRunId === targetRunId)
+        return false;
+      if ((queued.request.displayText ?? queued.request.text) !== signal.request?.text) return false;
+      runs.delete(queuedRunId);
+      try {
+        await signals.send(targetRunId, signal);
+      } catch (error) {
+        runs.set(queuedRunId, queued);
+        throw error;
+      }
+      retryAfter.delete(queuedRunId);
+      if (queued.dedupKey) byKey.delete(queued.dedupKey);
       return true;
     },
 
@@ -226,8 +257,17 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       return [...ids];
     },
 
-    async list({ limit = 200 }: { limit?: number } = {}) {
-      return [...runs.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+    async list({ limit = 200, threadRef }: { limit?: number; threadRef?: string } = {}) {
+      return [...runs.values()]
+        .filter(
+          (run) =>
+            !threadRef ||
+            run.sessionId === threadRef ||
+            run.sessionId.startsWith(`${threadRef}:task:`) ||
+            run.sessionId.startsWith(`${threadRef}:status:`),
+        )
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, limit);
     },
 
     async reapExpired(

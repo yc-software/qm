@@ -14,7 +14,7 @@ import type {
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";
 import type { ResolutionService } from "../../resolution/resolution-service.ts";
-import type { OrgBranding, ScopedConfigStore } from "../../resolution/config-store.ts";
+import type { ModelAccount, OrgBranding, ScopedConfigStore } from "../../resolution/config-store.ts";
 import type { UserModelCredentialStore } from "../../model/user-model-credential-store.ts";
 import type { IsCurrentSharedScopeMember, ManagedGroupDirectory } from "../../resolution/scope-membership.ts";
 import type { DirectoryStore } from "../../directory/directory-store.ts";
@@ -85,8 +85,10 @@ export interface OrchestratorInput extends Omit<
   | "unprompted"
   | "liveActor"
 > {
+  modelAccount?: ModelAccount;
   surface?: string;
   privateSessionMessage?: true;
+  delegatingRunId?: string;
   sessionMessageDepth?: number;
   actor: Principal;
   conversation: Conversation;

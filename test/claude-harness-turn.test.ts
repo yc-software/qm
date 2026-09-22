@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
@@ -10,11 +11,20 @@ type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => Asy
 
 const toolHandlers = new Map<string, (args: unknown) => Promise<unknown>>();
 
+let capturedOptions: Record<string, unknown> = {};
+
 let currentScript: Script = async function* () {};
 
 mock.module("@anthropic-ai/claude-agent-sdk", {
   namedExports: {
-    query: ({ prompt }: { prompt: AsyncIterable<{ message: { content: unknown } }> }) => {
+    query: ({
+      prompt,
+      options,
+    }: {
+      prompt: AsyncIterable<{ message: { content: unknown } }>;
+      options: Record<string, unknown>;
+    }) => {
+      capturedOptions = options;
       const generator = currentScript(prompt);
       return {
         async initializationResult() {
@@ -166,6 +176,138 @@ test("a user stop that surfaces as a non-success SDK result is a clean stop, and
     "the stop stays pending for the terminal drain",
   );
 });
+
+for (const late of [
+  { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: " late" } } },
+  resultMessage("replacement after stop"),
+]) {
+  test(`Claude freezes partial output when cancellation races with ${late.type}`, async () => {
+    const waiting = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const cancel = new AbortController();
+    const deltas: string[] = [];
+    currentScript = async function* (prompts) {
+      await prompts[Symbol.asyncIterator]().next();
+      yield {
+        type: "stream_event",
+        event: { type: "content_block_delta", delta: { type: "text_delta", text: "Visible partial" } },
+      };
+      waiting.resolve();
+      await release.promise;
+      yield late;
+    };
+    const harness = createClaudeHarness({});
+    const { turn, entries } = harnessTurn({ cancel: cancel.signal, onDelta: (text) => deltas.push(text) });
+    const running = harness.turns.runTurn(turn);
+    await waiting.promise;
+    cancel.abort();
+    release.resolve();
+    const result = await running;
+    assert.equal(result.stopped, true);
+    assert.equal(result.reply, "Visible partial");
+    assert.deepEqual(deltas, ["Visible partial"]);
+    assert.deepEqual(
+      entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
+      [{ text: "Visible partial", stopped: true }],
+    );
+  });
+}
+
+for (const bookkeeping of ["request recording", "thinking persistence"]) {
+  test(`Claude preserves its partial reply when stopped during ${bookkeeping}`, async () => {
+    const waiting = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const cancel = new AbortController();
+    currentScript = async function* (prompts) {
+      await prompts[Symbol.asyncIterator]().next();
+      yield {
+        type: "stream_event",
+        event: { type: "content_block_delta", delta: { type: "text_delta", text: "Visible partial" } },
+      };
+      yield {
+        type: "assistant",
+        message: { id: "thinking", content: [{ type: "thinking", thinking: "Checking the answer." }] },
+      };
+      yield resultMessage("replacement after stop");
+    };
+    const harness = createClaudeHarness({});
+    const { turn, entries } = harnessTurn({ cancel: cancel.signal });
+    const pause = async () => {
+      waiting.resolve();
+      await release.promise;
+    };
+    if (bookkeeping === "request recording") turn.recordLlmRequest = pause;
+    else {
+      const emit = turn.emit;
+      turn.emit = async (entry) => {
+        if (entry.type === "thinking") await pause();
+        return emit(entry);
+      };
+    }
+    const running = harness.turns.runTurn(turn);
+    await waiting.promise;
+    cancel.abort();
+    release.resolve();
+    const result = await running;
+    assert.equal(result.stopped, true);
+    assert.equal(result.reply, "Visible partial");
+    assert.deepEqual(
+      entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
+      [{ text: "Visible partial", stopped: true }],
+    );
+  });
+}
+
+for (const persistence of ["final entry", "reply checkpoint"]) {
+  for (const ending of ["close", "throw"]) {
+    test(`Claude completes a committed reply when cancelled during ${persistence} persistence and the SDK will ${ending}`, async () => {
+      const waiting = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const cancel = new AbortController();
+      currentScript = (prompts) => {
+        const generator = (async function* () {
+          await prompts[Symbol.asyncIterator]().next();
+          yield {
+            type: "stream_event",
+            event: { type: "content_block_delta", delta: { type: "text_delta", text: "Visible partial" } },
+          };
+          yield resultMessage("Final full answer");
+          if (ending === "throw") throw new Error("query interrupted");
+        })();
+        if (ending === "throw") generator.return = async () => ({ done: true, value: undefined });
+        return generator;
+      };
+      const harness = createClaudeHarness({});
+      const { turn, entries } = harnessTurn({ cancel: cancel.signal });
+      const pause = async () => {
+        waiting.resolve();
+        await release.promise;
+      };
+      if (persistence === "final entry") {
+        const emit = turn.emit;
+        turn.emit = async (entry) => {
+          if (entry.type === "assistant") await pause();
+          return emit(entry);
+        };
+      } else {
+        turn.tape = async (entry) => {
+          if (entry.kind === "annotation") await pause();
+        };
+      }
+      const running = harness.turns.runTurn(turn);
+      await waiting.promise;
+      cancel.abort();
+      release.resolve();
+      const result = await running;
+      assert.equal(result.stopped, undefined);
+      assert.equal(result.reply, "Final full answer");
+      assert.deepEqual(
+        entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
+        [{ text: "Final full answer" }],
+      );
+    });
+  }
+}
 
 test("model calls are counted per API response and charged their real input tokens", async () => {
   currentScript = async function* (prompts) {
@@ -348,4 +490,157 @@ test("Claude preserves a committed runtime handoff when SDK interruption returns
   assert.equal(result.stopped, undefined);
   assert.equal(entries.filter((entry) => entry.type === "assistant").length, 0);
   assert.ok(entries.some((entry) => entry.type === "tool_result"));
+});
+
+for (const terminal of [{ stop_reason: "max_tokens" }, { is_error: true }]) {
+  test(`Claude compaction rejects incomplete SDK success: ${JSON.stringify(terminal)}`, async () => {
+    currentScript = async function* (prompts) {
+      await prompts[Symbol.asyncIterator]().next();
+      yield resultMessage("partial summary", terminal);
+    };
+    const harness = createClaudeHarness({});
+    await assert.rejects(
+      harness.models.compactHistory!({
+        session: { id: "summary-session" } as HarnessTurnInput["session"],
+        history: [],
+        recordModelCall: () => {},
+      }),
+      /did not complete/,
+    );
+  });
+}
+
+test("steering forwards prepared images and file paths while retaining the original caption in history", async () => {
+  const signals = createMemoryRunSignalStore();
+  const runId = "run-steer-files";
+  const request = {
+    surface: "web",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm" as const, threadRef: "files" },
+    text: "check this",
+    attachments: [{ name: "photo.png", mimetype: "image/png", sizeBytes: 3, blobId: "b1" }],
+  };
+  let injected: unknown;
+  currentScript = async function* (prompts) {
+    const iterator = prompts[Symbol.asyncIterator]();
+    await iterator.next();
+    await signals.send(runId, { kind: "steer", text: "check this", ts: "files.1", request });
+    injected = (await iterator.next()).value?.message.content;
+    yield resultMessage("saw the image");
+    yield resultMessage("done");
+  };
+  const harness = createClaudeHarness({ signals });
+  const { turn, entries } = harnessTurn({ runId });
+  turn.prepareSteer = async (text, received) => {
+    assert.equal(text, "check this");
+    assert.deepEqual(received, request);
+    return {
+      text: "check this\nThe file is in inbox/steer/photo.png",
+      attachments: [{ name: "photo.png", mimetype: "image/png", sizeBytes: 3, direction: "in", artifactId: "f1" }],
+      images: [{ mimeType: "image/png", dataBase64: "YWJj", artifactId: "f1" }],
+    };
+  };
+  await harness.turns.runTurn(turn);
+  assert.deepEqual(injected, [
+    { type: "text", text: "check this\nThe file is in inbox/steer/photo.png" },
+    { type: "image", source: { type: "base64", media_type: "image/png", data: "YWJj" } },
+  ]);
+  const entry = entries.find((e) => (e.payload as { steered?: boolean }).steered);
+  assert.ok(entry);
+  assert.equal((entry.payload as { text: string }).text, "check this");
+  assert.equal((entry.payload as { attachments: Array<{ artifactId: string }> }).attachments[0]?.artifactId, "f1");
+});
+
+test("Claude sends documents without persisting their contents in the tape", async () => {
+  const pdf = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString("base64");
+  const secret = "private-document-text";
+  let sent = "";
+  currentScript = async function* (prompts) {
+    for await (const prompt of prompts) {
+      sent = JSON.stringify(prompt);
+      yield resultMessage("Read both");
+      return;
+    }
+  };
+  const tape: unknown[] = [];
+  const { turn } = harnessTurn({
+    documents: [
+      { name: "a.pdf", mimeType: "application/pdf", dataBase64: pdf },
+      { name: "a.txt", mimeType: "text/plain", dataBase64: Buffer.from(secret).toString("base64") },
+    ],
+    tape: async (entry) => {
+      tape.push(entry);
+    },
+  });
+  await createClaudeHarness({}).turns.runTurn(turn);
+  assert.ok(sent.includes(pdf));
+  assert.ok(sent.includes(secret));
+  assert.ok(!JSON.stringify(tape).includes(pdf));
+  assert.ok(!JSON.stringify(tape).includes(secret));
+});
+
+test("Claude includes steered native and fallback documents without capturing their echoed contents", async () => {
+  const signals = createMemoryRunSignalStore();
+  const pdf = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString("base64");
+  const docx = (await readFile(new URL("./fixtures/documents/sample.docx", import.meta.url))).toString("base64");
+  const tape: unknown[] = [];
+  let sent = "";
+  currentScript = async function* (prompts) {
+    const iterator = prompts[Symbol.asyncIterator]();
+    const initial = (await iterator.next()).value;
+    yield initial!;
+    await signals.send("steer-documents", { kind: "steer", text: "read the documents", ts: "files.2" });
+    const steered = (await iterator.next()).value!;
+    sent = JSON.stringify(steered);
+    yield steered;
+    yield resultMessage("read both");
+    yield resultMessage("done");
+  };
+  const { turn } = harnessTurn({
+    runId: "steer-documents",
+    tape: async (row) => {
+      tape.push(row);
+    },
+  });
+  turn.documents = [
+    { name: "initial.txt", mimeType: "text/plain", dataBase64: Buffer.from("A".repeat(80_000)).toString("base64") },
+  ];
+  turn.prepareSteer = async (text) => ({
+    text,
+    documents: [
+      { name: "steered.pdf", mimeType: "application/pdf", dataBase64: pdf },
+      {
+        name: "steered.docx",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        dataBase64: docx,
+      },
+      {
+        name: "overflow.txt",
+        mimeType: "text/plain",
+        dataBase64: Buffer.from("Z".repeat(30_000) + "OUTSIDE-BUDGET-492").toString("base64"),
+      },
+    ],
+  });
+  await createClaudeHarness({ signals }).turns.runTurn(turn);
+  assert.ok(sent.includes(pdf));
+  assert.ok(!sent.includes("OUTSIDE-BUDGET-492"));
+  assert.match(sent, /truncated to fit/);
+  assert.ok(sent.includes("DOCX-QUARTZ-731"));
+  assert.ok(!JSON.stringify(tape).includes(pdf));
+  assert.ok(!JSON.stringify(tape).includes("DOCX-QUARTZ-731"));
+});
+
+test("Claude coordinators expose neither command tools nor native subagents", async () => {
+  currentScript = async function* () {
+    yield resultMessage("ready");
+  };
+  const harness = createClaudeHarness({});
+  const { turn } = harnessTurn({ readOnly: false, delegateWork: true });
+  await harness.turns.runTurn(turn);
+  assert.deepEqual(capturedOptions.tools, []);
+  assert.equal(capturedOptions.agents, undefined);
+  const allowed = capturedOptions.allowedTools as string[];
+  for (const name of ["Agent", "mcp__qm__execute", "mcp__qm__background", "mcp__qm__credential_exec"])
+    assert.ok(!allowed.includes(name));
+  await harness.turns.close?.();
 });

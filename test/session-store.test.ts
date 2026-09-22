@@ -1,3 +1,4 @@
+import { assertPersonalConversationParity } from "./support/personal-conversation-parity.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
@@ -1125,4 +1126,8 @@ test("renewLease keeps a live turn's lock fresh and refuses stale or superseded 
   const taken = await store.acquireLease(s.id, "turn");
   assert.ok(taken.lease, "an expired lease can still be taken over");
   assert.equal(await store.renewLease(lease!), false, "the superseded holder cannot renew the new lock");
+});
+
+test("personal conversation counts exclude synthetic and inherited chats", async () => {
+  await assertPersonalConversationParity(createMemorySessionStore(), "personal-count");
 });

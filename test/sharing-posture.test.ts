@@ -55,7 +55,7 @@ test("durable sharing policy composes organization, personal, and room vetoes an
   assert.equal(await restarted.getSharingPostureOwnDurable(room), "open");
 });
 
-test("open sources require a live internal human and bind personal carry to the authenticated actor", async () => {
+test("open sources accept live human-authored ambient turns and bind carry to the authenticated actor", async () => {
   const config = createMemoryConfigStore("acme", { defaultSharingPosture: "open" });
   const sessions = { listByParticipant: async () => [] };
   const targetScope = scopeId("channel", "C1");
@@ -71,7 +71,23 @@ test("open sources require a live internal human and bind personal carry to the 
   };
   assert.deepEqual(await sharingSourcesForTurn({ ...base, origin: { kind: "human" } }), [scopeId("personal", "U2")]);
   assert.deepEqual(await sharingSourcesForTurn({ ...base, origin: { kind: "automation" } }), []);
-  assert.deepEqual(await sharingSourcesForTurn({ ...base, origin: { kind: "ambient", live: true } }), []);
+  assert.deepEqual(await sharingSourcesForTurn({ ...base, origin: { kind: "ambient", live: true } }), [
+    scopeId("personal", "U2"),
+  ]);
+  assert.deepEqual(await sharingSourcesForTurn({ ...base, origin: { kind: "ambient" } }), []);
+  assert.deepEqual(await sharingSourcesForTurn({ ...base, origin: { kind: "ambient", live: false } }), []);
+  assert.deepEqual(
+    await sharingSourcesForTurn({ ...base, trustedLiveHuman: false, origin: { kind: "ambient", live: true } }),
+    [],
+  );
+  assert.deepEqual(
+    await sharingSourcesForTurn({
+      ...base,
+      isCurrentSharedScopeMember: async () => false,
+      origin: { kind: "ambient", live: true },
+    }),
+    [],
+  );
   assert.deepEqual(await sharingSourcesForTurn({ ...base, origin: { kind: "direct" } }), []);
   assert.deepEqual(
     await sharingSourcesForTurn({ ...base, actor: { id: "U2", type: "guest" }, origin: { kind: "human" } }),

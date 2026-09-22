@@ -25,8 +25,8 @@ flow.
 
 ## Gmail
 
-For the `email-voice-profile` task, the direct OAuth corpus helper is
-`python3 skills/email-voice-profile/scripts/fetch_sent.py --limit 300`.
+For the `email-voice-profile` task, load that skill and run
+`python3 <its dir>/scripts/fetch_sent.py --limit 300` from the directory it reports.
 
 Use the bundled helper for every Gmail operation — it owns MIME construction, encoding,
 and reply threading so you only ever handle plain text:

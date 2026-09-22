@@ -286,6 +286,7 @@ export interface GetTapeOptions {
 
 export interface GetEntriesOptions {
   sinceSeq?: number;
+  beforeSeq?: number;
   limit?: number;
 }
 
@@ -698,6 +699,7 @@ export interface SessionStore {
   setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
   setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
   childrenOf(parentSessionId: string): Promise<Session[]>;
+  updateStatus(sessionId: string, status: Session["status"]): Promise<void>;
   updateForkProvenance(
     sessionId: string,
     provenance: { forkedFrom: { sessionId: string; title?: string | null }; forkBoundarySeq: number },
@@ -757,6 +759,8 @@ export interface SessionStore {
   listByScope(scope: ScopeId): Promise<Session[]>;
 
   scopeHasSessions(scope: ScopeId): Promise<boolean>;
+
+  countPersonalConversations(scope: ScopeId, limit?: number): Promise<number>;
 
   sessionsByThreadRefs(threadRefs: readonly string[]): Promise<SessionRef[]>;
 

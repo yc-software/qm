@@ -9,6 +9,8 @@ COPY plugins/auth/src ./src
 COPY plugins/chassis/src /chassis/src
 COPY plugins/auth/tsconfig.json ./
 
+ARG GIT_SHA=
+ENV GIT_SHA=$GIT_SHA
 ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080

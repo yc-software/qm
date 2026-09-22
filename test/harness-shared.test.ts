@@ -97,6 +97,16 @@ test("without a configured judge model, judge falls back to the harness default 
   assert.equal(turns[0]!.runtime, undefined);
 });
 
+test("routing judge cancellation reaches the model turn", async () => {
+  const { turns, runPrompt } = capturingRunPrompt();
+  const utilities = oneShotModelUtilities(oneShotRunner(runPrompt));
+  const controller = new AbortController();
+  await utilities.judge!("s", "p", controller.signal);
+  assert.equal(turns[0]!.cancel, controller.signal);
+  controller.abort();
+  assert.equal(turns[0]!.cancel?.aborted, true);
+});
+
 test("security screening passes the abort signal and instrumentation through the one-shot runner", async () => {
   const { turns, runPrompt } = capturingRunPrompt('{"decision":"auto"}');
   const utilities = oneShotModelUtilities(oneShotRunner(runPrompt));

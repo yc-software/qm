@@ -30,3 +30,10 @@ test("shared, Slack, and other people's conversations do not get the welcome", (
   const shared = { ...first, scopeId: "group:team", threadRef: "web:sam:first", createdAt: 0 };
   assert.equal(isWelcomeConversation([shared, first], "alex", first.threadRef, first.scopeId), true);
 });
+
+test("ideas chats never show the welcome or take the first welcome slot", () => {
+  const ideas = { ...first, threadRef: "web:alex:ideas:12345678-1234-4123-8123-123456789abc", createdAt: 0 };
+  assert.equal(isWelcomeConversation([], "alex", ideas.threadRef, null), false);
+  assert.equal(isWelcomeConversation([ideas], "alex", first.threadRef, null), true);
+  assert.equal(isWelcomeConversation([ideas, first], "alex", first.threadRef, null), true);
+});

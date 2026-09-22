@@ -24,6 +24,82 @@ test("every no-fallback var() in shell.css names a property something defines", 
   assert.deepEqual([...dead], [], "var() references that nothing defines (add the property or a fallback)");
 });
 
+test("colored session actions keep their row hue at rest and on hover", () => {
+  const variables = shellCss.match(/\.session-row\.colored \{[^}]+\}/)?.[0] ?? "";
+  assert.match(variables, /--session-action-hover:\s*color-mix\([^;]+var\(--session-color\)/);
+  assert.match(variables, /--session-action-foreground:\s*color-mix\([^;]+var\(--session-color\)/);
+  assert.match(shellCss, /\.session-row\.colored \.session-menu-btn \{\s*color: var\(--session-action-foreground\);/);
+  assert.match(
+    shellCss,
+    /\.session-row\.colored \.session-menu-btn:hover,[\s\S]*?\.session-row\.colored\.menu-open \.session-menu-btn \{\s*background: var\(--session-action-hover\);\s*color: var\(--session-action-foreground\);/,
+  );
+});
+
+test("conversation colors use solid fills from the refined spectrum palette on every list surface", () => {
+  assert.match(tsSource, /const SESSION_COLORS = \["#f43f5e", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6", "#ec4899"\]/);
+  assert.equal(tsSource.match(/const color = displaySessionColor\(s\.color\);/g)?.length, 2);
+  assert.match(tsSource, /const current = displaySessionColor\(s\.color\);/);
+  assert.doesNotMatch(tsSource, /#d2664d|#b98a52|#7d884f|#5f8b83|#527d99|#8b5d52/);
+  assert.match(shellCss, /conic-gradient\(#f43f5e, #f59e0b, #10b981, #3b82f6, #8b5cf6, #ec4899, #f43f5e\)/);
+  for (const rule of [
+    shellCss.match(/\.session-row\.colored \.session \{[^}]+\}/)?.[0] ?? "",
+    shellCss.match(
+      /\.session-row\.colored \.session:hover,\s*\.session-row\.colored\.menu-open \.session \{[^}]+\}/,
+    )?.[0] ?? "",
+    shellCss.match(/\.session-row\.colored\.active \.session \{[^}]+\}/)?.[0] ?? "",
+    shellCss.match(/\.list-row\.chat-row\.colored \{[^}]+\}/)?.[0] ?? "",
+    shellCss.match(/\.list-row\.chat-row\.colored:hover \{[^}]+\}/)?.[0] ?? "",
+  ]) {
+    assert.match(rule, /background:\s*color-mix\(/);
+    assert.doesNotMatch(rule, /gradient\(/);
+  }
+  assert.doesNotMatch(shellCss, /\.session-row\.colored \.session::before/);
+});
+
+test("painted sidebar backgrounds align without moving conversation text", () => {
+  const extended =
+    shellCss.match(
+      /\.session-row:is\(\.colored, \.active, \.menu-open, \.selected, \.read-only, :hover\) \.session \{[^}]+\}/,
+    )?.[0] ?? "";
+  assert.match(extended, /width:\s*calc\(100% \+ 4px\);/);
+  assert.match(extended, /margin-left:\s*-4px;/);
+  assert.match(extended, /padding-left:\s*15px;/);
+  const nested =
+    shellCss.match(
+      /\.recent-project-children \.session-row:is\(\.colored, \.active, \.menu-open, \.selected, \.read-only, :hover\) \.session,[\s\S]*?\{[^}]+\}/,
+    )?.[0] ?? "";
+  assert.match(
+    nested,
+    /\.archived-children \.session-row:is\(\.colored, \.active, \.menu-open, \.selected, \.read-only, :hover\) \.session,/,
+  );
+  assert.match(
+    nested,
+    /\.pinned-children \.session-row:is\(\.colored, \.active, \.menu-open, \.selected, \.read-only, :hover\) \.session \{/,
+  );
+  assert.match(nested, /padding-left:\s*10px;/);
+});
+
+test("pinned conversations align with project conversations without a header-to-child gap", () => {
+  assert.match(tsSource, /class="pinned-head-glyph"/);
+  assert.match(tsSource, /class="pinned-children"/);
+  assert.match(shellCss, /\.recent-project \{[\s\S]*?margin:\s*3px 0 5px 4px;/);
+  const header = shellCss.match(/\.recents-group\.pinned-head \{[^}]+\}/)?.[0] ?? "";
+  assert.match(header, /min-height:\s*30px;/);
+  assert.match(header, /margin:\s*3px 0 0 4px;/);
+  assert.match(header, /padding:\s*4px 3px 4px 2px;/);
+  assert.match(header, /font-size:\s*12\.5px;/);
+  assert.match(shellCss, /\.pinned-head-glyph \{[\s\S]*?flex: 0 0 14px;/);
+  assert.match(shellCss, /\.pinned-children \{[\s\S]*?margin-left: 13px;/);
+  assert.match(shellCss, /\.pinned-children \.session \{\s*padding-left: 6px;/);
+});
+
+test("sidebar conversations keep space between their backgrounds and the scrollbar", () => {
+  const list = shellCss.match(/\.sidebar \.list \{[^}]+\}/)?.[0] ?? "";
+  assert.match(list, /box-sizing:\s*border-box;/);
+  assert.match(list, /padding-right:\s*8px;/);
+  assert.match(list, /scrollbar-gutter:\s*stable;/);
+});
+
 test("every drop zone the canvas renders has a positioning rule in shell.css", () => {
   const splitTs = readFileSync(new URL("../src/split.ts", import.meta.url), "utf8");
   const edges = [...splitTs.matchAll(/zoneTpl\("([a-z]+)"/g)].map((m) => m[1]);
@@ -32,7 +108,7 @@ test("every drop zone the canvas renders has a positioning rule in shell.css", (
   assert.deepEqual(missing, [], "drop zones rendered with no .zone-<edge> rule (they collapse to 0×0)");
 });
 
-test("only the elevated chat surfaces paint a shadow", () => {
+test("chat shadows stay limited to elevated surfaces and subtle activity hover glow", () => {
   const elevated = [".pinned-strip", ".message-stack .user-row.stuck > .user-bubble"];
   const rules = shellCss.replace(/\/\*[\s\S]*?\*\//g, "");
   const painted = [...rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap((rule) =>
@@ -44,9 +120,14 @@ test("only the elevated chat surfaces paint a shadow", () => {
     painted,
     [
       ...elevated.map((selector) => [selector, "box", "var(--chat-surface-shadow)"]),
+      [
+        ".work-head:hover,\n.tool-row .tool-summary:hover,\n.thinking-summary:hover",
+        "text",
+        "0 0 12px color-mix(in srgb, var(--foreground) 12%, transparent)",
+      ],
       [".composer-wrap", "box", "0 2px 5px rgb(0 0 0 / 0.05), 0 8px 24px rgb(0 0 0 / 0.06)"],
     ],
-    "only pinned surfaces use the shared shadow; the composer keeps its softer shadow",
+    "pinned surfaces and the composer retain their shadows; activity glow appears only on hover",
   );
   const inlineShadows = [...tsSource.matchAll(/(?:box|text)-shadow\s*:\s*([^;}]+)/g)]
     .map((m) => m[1].trim())

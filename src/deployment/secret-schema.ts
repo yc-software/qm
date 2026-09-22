@@ -11,6 +11,7 @@ type SecretGate =
   | "modal"
   | "porter"
   | "agent37"
+  | "superserve"
   | "porter-deploy"
   | "fly-shared-deploy"
   | "fly-deploy"
@@ -43,6 +44,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "SPRITES_TOKEN", requiredWhen: "sprites" },
   { name: "SMOLMACHINES_TOKEN", requiredWhen: "smolmachines" },
   { name: "AGENT37_API_KEY", requiredWhen: "agent37" },
+  { name: "SUPERSERVE_API_KEY", requiredWhen: "superserve" },
   { name: "E2B_API_KEY", requiredWhen: "e2b" },
   { name: "MODAL_TOKEN_ID", requiredWhen: "modal" },
   { name: "MODAL_TOKEN_SECRET", requiredWhen: "modal" },
@@ -74,6 +76,7 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   modal: (env) => sandboxBackendSelected(env, "modal"),
   porter: (env) => sandboxBackendSelected(env, "porter"),
   agent37: (env) => sandboxBackendSelected(env, "agent37"),
+  superserve: (env) => sandboxBackendSelected(env, "superserve"),
   "porter-deploy": (env) => env.DEPLOY_PROVIDER === "porter",
   "fly-shared-deploy": (env) => env.DEPLOY_PROVIDER === "fly" && Boolean(env.FLY_DEPLOY_SHARED_APP_NAME?.trim()),
   "fly-deploy": (env) => env.DEPLOY_PROVIDER === "fly",

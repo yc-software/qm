@@ -21,6 +21,8 @@
     "@earendil-works/pi-ai": "0.77.0",
     "@earendil-works/pi-web-ui": "0.75.3",
     "@mariozechner/mini-lit": "^0.2.0",
+    "@sentry/browser": "10.75.0",
+    "@sentry/node": "10.75.0",
     "@tanstack/ai": "0.54.0",
     "@tanstack/ai-client": "0.31.1",
     "date-fns": "^4.4.0",
@@ -31,7 +33,8 @@
     "lru-cache": "^11.5.2",
     "lucide": "^0.544.0",
     "marked": "^18.0.5",
-    "morphdom": "2.7.8"
+    "morphdom": "2.7.8",
+    "posthog-js": "1.433.10"
   },
   "devDependencies": {
     "@types/jsdom": "^28.0.3",

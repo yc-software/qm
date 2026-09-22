@@ -185,7 +185,10 @@ test(
       assert.doesNotMatch(flyPlan, /source checkout|deploy\/core\/Dockerfile/);
       const generatedCore = join(deployment, ".generated", "fly", "acme", "core.fly.toml");
       assert.ok(existsSync(generatedCore));
-      assert.doesNotMatch(readFileSync(generatedCore, "utf8"), /^\s*PI_(?:MODEL|DETECT_MODEL)\s*=/m);
+      const generatedCoreToml = readFileSync(generatedCore, "utf8");
+      assert.doesNotMatch(generatedCoreToml, /^\s*PI_(?:MODEL|DETECT_MODEL)\s*=/m);
+      assert.match(generatedCoreToml, /\[\[restart\]\]\n\s*policy = "always"/);
+      assert.match(generatedCoreToml, /\[\[vm\]\]\n\s*size = "performance-2x"\n\s*memory = "4gb"/);
       assert.match(
         execFileSync(bin, ["sandbox", "build", "--dry-run"], { cwd: deployment, encoding: "utf8", env }),
         /qm-sandbox-base@sha256:a{64}/,

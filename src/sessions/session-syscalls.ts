@@ -1,4 +1,5 @@
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
+import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { errMessage } from "../util/errors.ts";
@@ -17,6 +18,79 @@ const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 
 export function isSubagentThreadRef(threadRef: string): boolean {
   return threadRef.startsWith(SUBAGENT_THREAD_PREFIX);
+}
+
+export function requiresDelegation(
+  request: Pick<OrchestratorInput, "surface" | "surfaceTools" | "conversation" | "swarm">,
+  enabled: boolean,
+): boolean {
+  return (
+    enabled &&
+    !request.swarm &&
+    !isSubagentThreadRef(request.conversation.threadRef) &&
+    (request.surface === "slack" || request.surfaceTools === true)
+  );
+}
+
+export async function delegatedAuthorizationOrigin(
+  request: OrchestratorInput,
+  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "getByThread" | "getForParticipant"> },
+): Promise<OrchestratorInput["origin"] | undefined> {
+  const seen = new Set<string>();
+  let current = request;
+  for (let depth = 0; depth < 32; depth++) {
+    if (
+      current.origin.kind !== "automation" ||
+      current.readOnly ||
+      current.privateSessionMessage ||
+      current.swarm ||
+      !current.delegatingRunId ||
+      !current.sessionSenderId ||
+      seen.has(current.delegatingRunId)
+    )
+      return;
+    seen.add(current.delegatingRunId);
+    const source = await deps.runs.get(current.delegatingRunId);
+    const sender = await deps.sessions.getForParticipant(current.sessionSenderId, request.actor.id);
+    const child = await deps.sessions.getByThread(current.conversation.threadRef);
+    if (!source || !sender || !child) return;
+    const delegated =
+      isSubagentThreadRef(child.threadRef) &&
+      child.parentSessionId === sender.id &&
+      source.sessionId === sender.threadRef;
+    const continued =
+      requiresDelegation(current, true) &&
+      isSubagentThreadRef(sender.threadRef) &&
+      sender.parentSessionId === child.id &&
+      source.sessionId === child.threadRef;
+    if (!delegated && !continued) return;
+    const parent = source.request;
+    const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
+    if (
+      parent.actor.id !== request.actor.id ||
+      parent.actor.type !== "internal" ||
+      parent.readOnly ||
+      parent.privateSessionMessage ||
+      parent.swarm ||
+      sender.scopeId !== child.scopeId ||
+      child.scopeId !== conversationScope(parent.conversation, parent.actor.id) ||
+      child.scopeId !== conversationScope(current.conversation, current.actor.id) ||
+      current.conversation.audience.some((person) => !audience.has(person.id))
+    )
+      return;
+    const internal =
+      parent.conversation.audience.every((person) => person.type === "internal") &&
+      (parent.conversation.kind === "dm" ||
+        (!!parent.conversation.publishMembers?.length &&
+          parent.conversation.publishMembers.every((person) => person.type === "internal")));
+    if (
+      internal &&
+      (parent.origin.kind === "human" ||
+        (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
+    )
+      return parent.origin;
+    current = parent;
+  }
 }
 
 export const SUBAGENT_TREE_RUN_CAP = 10;
@@ -83,6 +157,9 @@ interface SessionSyscallBinding {
     OrchestratorInput,
     | "cancel"
     | "surface"
+    | "surfaceTools"
+    | "deliveryCandidates"
+    | "unattendedGrants"
     | "privateSessionMessage"
     | "sessionMessageDepth"
     | "swarm"
@@ -94,7 +171,7 @@ interface SessionSyscallBinding {
     | "readOnly"
     | "scopeVersion"
     | "sessionParticipantIds"
-  >;
+  > & { origin?: OrchestratorInput["origin"] };
 }
 
 export interface SessionSyscalls {
@@ -216,7 +293,12 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     surface: meta.surface,
     actor: meta.actor,
     conversation: { ...meta.conversation, threadRef: child.threadRef },
-    origin: { kind: "automation", screenData: text },
+    origin: {
+      kind: "automation",
+      ...(meta.origin?.kind === "automation" && meta.origin.useOwnerKeychain ? { useOwnerKeychain: true } : {}),
+      screenData: text,
+    },
+    ...(meta.unattendedGrants ? { unattendedGrants: [...meta.unattendedGrants] } : {}),
     text,
     displayText,
     envelopeWrapped: true,
@@ -337,7 +419,11 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
         )
           throw new Error("the sender no longer has access to this session");
-        const request: OrchestratorInput = { ...binding.request, origin: { kind: "automation" }, text: "" };
+        const request: OrchestratorInput = {
+          ...binding.request,
+          origin: binding.request.origin?.kind === "automation" ? binding.request.origin : { kind: "automation" },
+          text: "",
+        };
         return deps.prepareRequest ? deps.prepareRequest(request) : request;
       }
 
@@ -436,6 +522,20 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               );
               const title = existing?.title || input.name?.trim() || autoTitle(task);
               const meta: SpawnMeta = {
+                ...(caller.origin.kind === "automation"
+                  ? {
+                      origin: {
+                        kind: "automation" as const,
+                        ...(caller.origin.useOwnerKeychain ? { useOwnerKeychain: true } : {}),
+                        ...(caller.origin.destination ? { destination: caller.origin.destination } : {}),
+                      },
+                    }
+                  : {}),
+                ...(binding.request.surfaceTools ? { surfaceTools: true } : {}),
+                ...(binding.request.deliveryCandidates
+                  ? { deliveryCandidates: binding.request.deliveryCandidates }
+                  : {}),
+                ...(caller.unattendedGrants ? { unattendedGrants: [...caller.unattendedGrants] } : {}),
                 openFingerprint: fingerprint,
                 ...(binding.request.scopeVersion ? { scopeVersion: binding.request.scopeVersion } : {}),
                 ...(binding.request.sessionParticipantIds
@@ -462,7 +562,11 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 await deps.sessions.addParticipant(child.id, id);
               await deps.sessions.updateTitle(child.id, title);
               const text = renderSubagentTask({ title, parentTitle: callerTitle, task });
-              const request = { ...childRunRequest(child, meta, text, task), sessionSenderId: binding.session.id };
+              const request = {
+                ...childRunRequest(child, meta, text, task),
+                sessionSenderId: binding.session.id,
+                ...(binding.request.runId ? { delegatingRunId: binding.request.runId } : {}),
+              };
               await deps.runs.enqueue({
                 sessionId: child.threadRef,
                 dedupKey: `subagent-open:${threadRef}`,
@@ -514,6 +618,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   ...meta,
                   surface: meta.surface ?? target.surface ?? "web",
                   actor: caller.actor,
+                  origin: caller.origin,
+                  unattendedGrants: caller.unattendedGrants,
                   readOnly: privateMessage || caller.readOnly || meta.readOnly || target.spawnMeta?.readOnly,
                 },
                 "",
@@ -576,8 +682,12 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   return { ok: true, sessionId: target.id, title, delivered: "queued_turn" };
                 }
               }
-              request.origin = { kind: "automation", screenData: stamped };
+              request.origin = {
+                ...(request.origin.kind === "automation" ? request.origin : { kind: "automation" as const }),
+                screenData: stamped,
+              };
               request.sessionSenderId = binding.session.id;
+              request.delegatingRunId = binding.request.runId;
               if (
                 (await sessionTreeRunCount(deps.sessions, deps.runs, await sessionTreeRoot(deps.sessions, target))) >=
                 cap
@@ -656,27 +766,43 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
 }
 
 export interface SubagentMailDeps {
+  delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
   sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
-  runs: Pick<RunStore, "enqueue"> & Partial<Pick<RunStore, "latestForThread">>;
+  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> &
+    Partial<Pick<RunStore, "latestForThread" | "get">>;
   maxAttempts: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }
 
-export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Promise<void> {
-  if (!isSubagentThreadRef(run.sessionId) || run.request.privateSessionMessage) return;
+export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Promise<boolean> {
+  if (!isSubagentThreadRef(run.sessionId) || run.request.privateSessionMessage) return true;
   const child = await deps.sessions.getByThread(run.sessionId);
-  if (!child?.parentSessionId || !child.spawnMeta) return;
+  if (!child?.parentSessionId || !child.spawnMeta) return true;
   const parent = await deps.sessions.get(child.parentSessionId);
-  if (!parent) return;
+  if (!parent) return true;
   if (parent.threadRef.startsWith("swarm:")) throw new Error("subagent returns cannot enter swarm workers");
   const latestParent = await deps.runs.latestForThread?.(parent.threadRef, { excludePrivateMessages: true });
   if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
-  const meta =
-    latestParent?.request ??
-    parent.spawnMeta ??
-    (parent.threadRef === child.spawnMeta.conversation.threadRef ? child.spawnMeta : undefined);
-  if (!meta) throw new Error("the current parent has no verified runtime context yet");
+  const initiatingRun = run.request.delegatingRunId ? await deps.runs.get?.(run.request.delegatingRunId) : undefined;
+  if (run.request.delegatingRunId && !initiatingRun) throw new Error("the delegation's originating run is unavailable");
+  const initiatingContext = initiatingRun?.request ?? child.spawnMeta;
+  const currentContext = latestParent?.request ?? parent.spawnMeta;
+  const originalParent = parent.threadRef === initiatingContext.conversation.threadRef;
+  if (!originalParent && !currentContext) throw new Error("the current parent has no verified runtime context yet");
+  const meta = originalParent
+    ? initiatingContext
+    : {
+        ...currentContext!,
+        actor: run.request.actor,
+        origin: {
+          kind: "automation" as const,
+          ...(currentContext!.origin?.kind === "automation" && currentContext!.origin.destination
+            ? { destination: currentContext!.origin.destination }
+            : {}),
+        },
+        unattendedGrants: undefined,
+      };
   const title = child.title?.trim() || child.id;
   const result = run.result;
   let kind: SubagentMailKind;
@@ -711,7 +837,13 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     sessionSenderId: child.id,
     surface: meta.surface,
     actor: meta.actor,
-    conversation: { ...meta.conversation, threadRef: parent.threadRef },
+    conversation: {
+      ...meta.conversation,
+      ...(currentContext
+        ? { audience: currentContext.conversation.audience, publishMembers: currentContext.conversation.publishMembers }
+        : {}),
+      threadRef: parent.threadRef,
+    },
     origin: { kind: "automation", screenData: text },
     ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
     ...(meta.scopeVersion ? { scopeVersion: meta.scopeVersion } : {}),
@@ -745,4 +877,42 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     audience: prepared.conversation.audience,
     createdAt: Date.now(),
   });
+  if (
+    requiresDelegation(
+      { ...prepared, surfaceTools: meta.surfaceTools },
+      (await deps.delegationEnabled?.(prepared.actor.id)) === true,
+    )
+  ) {
+    const dedupKey = `subagent-return:${run.id}`;
+    const existing = await deps.runs.getByDedupKey(dedupKey);
+    const unread = (await deps.mailbox.pending(parent.id)).some((message) => message.id === `subagent-mail-${run.id}`);
+    if (!unread) {
+      if (existing?.status === "pending") await deps.runs.withdraw(existing.id, { unstartedOnly: true });
+      return true;
+    }
+    if (existing && (existing.status === "done" || existing.status === "failed")) return true;
+    if ((await deps.runs.inFlightForThread(parent.threadRef)).length) return false;
+    const wake =
+      "A delegated task finished. Check internal messages with session wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
+    await deps.runs.enqueue({
+      sessionId: parent.threadRef,
+      dedupKey,
+      request: {
+        ...prepared,
+        surfaceTools: true,
+        ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}),
+        ...(meta.unattendedGrants ? { unattendedGrants: [...meta.unattendedGrants] } : {}),
+        ...(meta.deliveryCandidates ? { deliveryCandidates: meta.deliveryCandidates } : {}),
+        origin: {
+          ...(meta.origin?.kind === "automation" ? meta.origin : { kind: "automation" as const }),
+          screenData: wake,
+        },
+        text: wake,
+        displayText: "Delegated task completed",
+      },
+      maxAttempts: deps.maxAttempts,
+    });
+    return false;
+  }
+  return true;
 }

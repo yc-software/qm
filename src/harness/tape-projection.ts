@@ -407,7 +407,11 @@ interface TranscriptRead {
 
 export interface TranscriptSource {
   forRender(sessionId: string, opts?: GetEntriesOptions): Promise<TranscriptRead>;
-  forViewer(sessionId: string, principalId: string, opts?: { limit?: number }): Promise<TranscriptRead>;
+  forViewer(
+    sessionId: string,
+    principalId: string,
+    opts?: { limit?: number; beforeSeq?: number },
+  ): Promise<TranscriptRead>;
 }
 
 interface ProjectedRead {
@@ -417,16 +421,23 @@ interface ProjectedRead {
 }
 
 export function createTranscriptSource(sessions: TranscriptStore): TranscriptSource {
-  const projected = async (sessionId: string, limit?: number): Promise<ProjectedRead | null> => {
+  const projected = async (sessionId: string, limit?: number, beforeSeq?: number): Promise<ProjectedRead | null> => {
     try {
-      const latest = await sessions.latestEntrySeq(sessionId);
+      const latest = Math.min(
+        await sessions.latestEntrySeq(sessionId),
+        beforeSeq === undefined ? Infinity : beforeSeq - 1,
+      );
       if (latest < 0) return { entries: [], anchored: false, base: -1 };
       if (sessions.getTranscriptEntries) {
-        const entries = await sessions.getTranscriptEntries(sessionId, limit === undefined ? undefined : { limit });
+        const entries = await sessions.getTranscriptEntries(sessionId, { limit, beforeSeq });
         const first = limit === undefined ? 0 : Math.max(0, latest - limit + 1);
         if (entries.length === latest - first + 1 && entries.every((entry, i) => entry.seq === first + i)) {
           return { entries, anchored: first > 0, base: first - 1 };
         }
+      }
+      if (beforeSeq !== undefined) {
+        const full = await projected(sessionId);
+        return full ? { ...full, entries: full.entries.filter((entry) => entry.seq < beforeSeq) } : null;
       }
       let rows: TapeRecord[];
       let anchored = false;
@@ -452,19 +463,22 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
 
   return {
     async forRender(sessionId, opts?): Promise<TranscriptRead> {
-      const read = await projected(sessionId, opts?.limit);
+      const read = await projected(sessionId, opts?.limit, opts?.beforeSeq);
       if (read === null) {
         const rows = await sessions.getEntries(sessionId, opts);
         return { entries: rows, earlier: rows[0]?.seq ?? 0 };
       }
       const since = opts?.sinceSeq !== undefined ? read.entries.filter((e) => e.seq >= opts.sinceSeq!) : read.entries;
-      const entries = opts?.limit !== undefined ? since.slice(-opts.limit) : since;
+      const limit = opts?.beforeSeq !== undefined && !read.anchored ? undefined : opts?.limit;
+      const entries = limit !== undefined ? since.slice(-limit) : since;
       const below = read.anchored ? read.base + 1 : 0;
       return { entries, earlier: read.entries.length - entries.length + below };
     },
     async forViewer(sessionId, principalId, opts?): Promise<TranscriptRead> {
       const fallback = async (): Promise<TranscriptRead> => ({
-        entries: await sessions.visibleEntries(sessionId, principalId),
+        entries: (await sessions.visibleEntries(sessionId, principalId)).filter(
+          (entry) => opts?.beforeSeq === undefined || entry.seq < opts.beforeSeq,
+        ),
         earlier: 0,
       });
       let windows;
@@ -480,11 +494,12 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
         return fallback();
       }
       const limit = window.validToSeq === null ? opts?.limit : undefined;
-      let read = await projected(sessionId, limit);
+      let read = await projected(sessionId, limit, opts?.beforeSeq);
       if (read === null) return fallback();
       let filtered = read.entries.filter((e) => entryWithinTenure(e, window));
+      if (opts?.beforeSeq !== undefined && !read.anchored) return { entries: filtered, earlier: 0 };
       if (limit !== undefined && filtered.length < limit && (read.entries[0]?.seq ?? 0) > window.validFromSeq) {
-        read = await projected(sessionId);
+        read = await projected(sessionId, undefined, opts?.beforeSeq);
         if (read === null) return fallback();
         filtered = read.entries.filter((e) => entryWithinTenure(e, window));
       }

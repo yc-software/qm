@@ -3,7 +3,7 @@ import type { WebhookStore } from "./webhook-store.ts";
 import { getVerifier, type VerifierInput } from "./verifiers.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
 import { buildWebhookWakeEnvelope, capForEscaping } from "../core/wake-envelope.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, reportFailure } from "../util/errors.ts";
 
 export type DeliverResult = { status: 202 } | { status: 200; body: string } | { status: 401 } | { status: 404 };
 
@@ -139,7 +139,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
         .catch((e: unknown) => {
           const msg = errMessage(e);
           void deps.webhooks.recordFire(wh.id, { at: Date.now(), error: msg });
-          console.error(`[webhook] ${wh.id} turn threw: ${msg}`);
+          reportFailure("webhook: fire", e, `webhook=${wh.id}`);
         });
 
       return { status: 202 };

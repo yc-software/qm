@@ -23,7 +23,7 @@ import { testConfig } from "./support/test-config.ts";
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
 
-function start() {
+function start(withConfig = true) {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "admin-agent-cap-")),
@@ -34,7 +34,10 @@ function start() {
   );
   void built.directory.replaceChannels(
     [{ channelId: "C1", name: "agent-admin", isPrivate: false }],
-    [{ channelId: "C1", principalId: "admin-alice" }],
+    [
+      { channelId: "C1", principalId: "admin-alice" },
+      { channelId: "C1", principalId: "U1" },
+    ],
   );
   const keychain = createKeychain({
     creds: createMemoryMap(),
@@ -45,7 +48,7 @@ function start() {
   const server = createServer(built.app, {
     admin: built.admin,
     memory: built.memory,
-    config: built.config,
+    ...(withConfig ? { config: built.config } : {}),
     auditLog: built.auditLog,
     sessions: built.sessions,
     runs: built.runs,
@@ -412,8 +415,8 @@ test("content reads need a DM-scoped token", async () => {
       headers: { "x-agent-capability": fromChannel, "content-type": "application/json" },
       body: JSON.stringify({}),
     });
-    assert.equal(importFromChannel.status, 403);
-    assert.match(((await importFromChannel.json()) as any).message, /credentials/);
+    assert.equal(importFromChannel.status, 404);
+    assert.match(((await importFromChannel.json()) as { message: string }).message, /unknown admin resource/);
     const ackPicksFromChannel = await fetch(`${s.base}/v1/admin/ack-emoji-picks`, {
       headers: { "x-agent-capability": fromChannel },
     });
@@ -558,6 +561,148 @@ for (const [name, input, expected] of [
         body: JSON.stringify({ posture: "auto" }),
       });
       assert.equal(res.status, expected);
+    } finally {
+      await s.close();
+    }
+  });
+}
+
+for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
+  test(`Open admin reads and writes from ${room} preserve live authorization and posture vetoes`, async () => {
+    const s = start();
+    try {
+      await s.built.directory.replaceGroups([
+        { groupId: "G1", principalId: "admin-alice" },
+        { groupId: "G1", principalId: "U1" },
+      ]);
+      await s.built.config.setSharingPosture(ORG, "open");
+      const cap = await capFor("admin-alice", { scope: room });
+      const headers = { "x-agent-capability": cap, "content-type": "application/json" };
+      const personal = scopeId("personal", "admin-alice");
+      const target = scopeId("personal", "U1");
+      await s.built.memory.replace(target, "# Memory\n\n- private test sentinel");
+      const path = `/v1/admin/memory?scope=${encodeURIComponent(target)}`;
+      const read = () => fetch(`${s.base}${path}`, { headers });
+      const response = await read();
+      assert.equal(response.status, 200);
+      assert.match(((await response.json()) as { content: string }).content, /private test sentinel/);
+      const reads = (await s.built.auditLog.events()).filter((e) => e.action === "memory.read");
+      assert.equal(reads.length, 1);
+      assert.equal(reads[0]!.principalId, "admin-alice");
+      assert.equal(reads[0]!.scopeLabel, target);
+      for (const route of [`/v1/admin/sessions?scope=${target}`, "/v1/admin/keychain", `/v1/admin/scopes/${target}`]) {
+        assert.equal((await fetch(`${s.base}${route}`, { headers })).status, 200, route);
+      }
+      const write = (token = cap) =>
+        fetch(`${s.base}/v1/admin/scopes/${target}/soul`, {
+          method: "PUT",
+          headers: { ...headers, "x-agent-capability": token },
+          body: JSON.stringify({ content: "Open admin configuration sentinel" }),
+        });
+      assert.equal((await write()).status, 200);
+      assert.equal(await s.built.config.getSoul(target), "Open admin configuration sentinel");
+      const writes = (await s.built.auditLog.events()).filter((e) => e.action === "soul.update");
+      assert.equal(writes.length, 1);
+      assert.equal(writes[0]!.principalId, "admin-alice");
+      assert.equal(writes[0]!.scopeLabel, target);
+      for (const veto of [ORG, personal, room]) {
+        await s.built.config.setSharingPosture(veto, "isolated");
+        assert.equal((await read()).status, 403, `${veto} vetoes Open on an existing token`);
+        await s.built.config.setSharingPosture(veto, "open");
+        assert.equal((await read()).status, 200);
+      }
+      for (const liveAuthor of [false, true]) {
+        const token = await capFor("admin-alice", { scope: room, live: false, liveAuthor });
+        assert.equal(
+          (await fetch(`${s.base}${path}`, { headers: { "x-agent-capability": token } })).status,
+          liveAuthor ? 200 : 403,
+          "only a live human's authority may use Open",
+        );
+        assert.equal((await write(token)).status, liveAuthor ? 200 : 403);
+      }
+      const unattended = await capFor("admin-alice", {
+        scope: room,
+        live: false,
+        grants: ["admin.sessions.read"],
+      });
+      assert.equal(
+        (
+          await fetch(`${s.base}/v1/admin/sessions`, {
+            headers: { "x-agent-capability": unattended },
+          })
+        ).status,
+        403,
+        "Open does not widen unattended grants",
+      );
+      for (const [method, route] of [
+        ["POST", "/v1/admin/grants"],
+        ["DELETE", `/v1/admin/grants/admin-bob?scope=${ORG}&role=org_admin`],
+        ["POST", "/v1/admin/impersonate"],
+      ]) {
+        assert.equal(
+          (
+            await fetch(`${s.base}${route}`, {
+              method,
+              headers,
+              body: "{}",
+            })
+          ).status,
+          403,
+          `${route} retains its existing restriction`,
+        );
+      }
+      const nonAdmin = await capFor("U1", { scope: room });
+      assert.equal(
+        (
+          await fetch(`${s.base}${path}`, {
+            headers: { "x-agent-capability": nonAdmin, "x-admin-actor": "admin-alice@default-org" },
+          })
+        ).status,
+        403,
+        "Open and a spoofed header cannot grant admin authority",
+      );
+      assert.equal((await write(nonAdmin)).status, 403, "Open does not give members admin write access");
+      await s.built.admin.revokeGrant({ id: "admin-bob", type: "internal" }, "admin-alice", ORG, "org_admin");
+      assert.equal((await read()).status, 403, "revocation applies to an existing Open token");
+      assert.equal((await write()).status, 403, "revocation also stops writes on an existing Open token");
+    } finally {
+      await s.close();
+    }
+  });
+}
+
+test("shared admin reads fail closed without a sharing config resolver", async () => {
+  const s = start(false);
+  try {
+    await s.built.config.setSharingPosture(ORG, "open");
+    const cap = await capFor("admin-alice", { scope: scopeId("channel", "C1") });
+    const response = await fetch(`${s.base}/v1/admin/sessions`, { headers: { "x-agent-capability": cap } });
+    assert.equal(response.status, 403);
+  } finally {
+    await s.close();
+  }
+});
+
+for (const room of [scopeId("personal", "admin-alice"), scopeId("channel", "C1"), scopeId("group", "G1")]) {
+  test(`retired bulk import is equally unsupported from ${room}`, async () => {
+    const s = start();
+    try {
+      await s.built.directory.replaceGroups([
+        { groupId: "G1", principalId: "admin-alice" },
+        { groupId: "G1", principalId: "U1" },
+      ]);
+      const cap = await capFor("admin-alice", { scope: room });
+      for (const posture of ["isolated", "open"] as const) {
+        await s.built.config.setSharingPosture(ORG, posture);
+        const response = await fetch(`${s.base}/v1/admin/scopes/${ORG}/import`, {
+          method: "PUT",
+          headers: { "x-agent-capability": cap, "content-type": "application/json" },
+          body: JSON.stringify({ soul: "must not be imported" }),
+        });
+        assert.equal(response.status, 404, posture);
+        assert.deepEqual(await response.json(), { error: "not_found", message: "unknown admin resource: import" });
+        assert.notEqual(await s.built.config.getSoul(ORG), "must not be imported");
+      }
     } finally {
       await s.close();
     }

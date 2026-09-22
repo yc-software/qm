@@ -126,18 +126,19 @@ export function emailFormPage(o: {
   return page({
     title: "Sign in",
     brandName: o.brandName,
-    trustedSignInLabel: o.trustedSignInLabel,
-    icon: MAIL_ICON,
+    icon: o.trustedSignInLabel ? LOCK_ICON : MAIL_ICON,
     heading: `Sign in to ${o.brandName}`,
-    msg: "Enter your work email and we'll send you a one-time sign-in link.",
-    body: `${o.problem ? `<p class="reason"><strong>Try again</strong>${escapeHtml(o.problem)}</p>` : ""}<form method="post" action="${escapeHtml(o.action)}">
+    msg: o.trustedSignInLabel
+      ? `Use your ${o.trustedSignInLabel} account to continue.`
+      : "Enter your work email and we'll send you a one-time sign-in link.",
+    body: `${o.trustedSignInLabel ? `<a class="btn" href="/auth/trusted/login">Sign in with ${escapeHtml(o.trustedSignInLabel)}</a><div class="divider">OR</div>` : ""}${o.problem ? `<p class="reason"><strong>Try again</strong>${escapeHtml(o.problem)}</p>` : ""}<form method="post" action="${escapeHtml(o.action)}">
         <input type="hidden" name="request" value="${escapeHtml(o.requestToken)}">
         <label for="email">Email address</label>
-        <input id="email" name="email" type="email" autocomplete="email" inputmode="email" required autofocus
+        <input id="email" name="email" type="email" autocomplete="email" inputmode="email" required${o.trustedSignInLabel ? "" : " autofocus"}
           spellcheck="false" maxlength="254" placeholder="you@example.com" value="${escapeHtml(o.email ?? "")}">
-        <button class="btn" type="submit">Email me a sign-in link</button>
+        <button class="btn${o.trustedSignInLabel ? " alternative" : ""}" type="submit">Email me a sign-in link</button>
       </form>`,
-    help: "Only addresses your administrator has allowed can sign in.",
+    help: "For email sign-in, use an address your administrator has allowed.",
   });
 }
 

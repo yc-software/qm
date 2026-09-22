@@ -8,8 +8,6 @@ import {
   oversizeAttachmentNote,
   requestStop,
   uploadAttachments,
-  verifySteerDelivered,
-  latestTranscriptSeq,
 } from "../src/core-bridge.ts";
 
 const realFetch = globalThis.fetch;
@@ -89,49 +87,6 @@ test("a non-413 upload failure is noted per file with its reason", async () => {
   assert.match(skipped[0]!.note, /network unreachable/);
 });
 
-test("verifySteerDelivered finds a landed steer in the transcript tail", async () => {
-  globalThis.fetch = (async () =>
-    new Response(
-      JSON.stringify({
-        entries: [{ type: "user", payload: { text: "alice: make it louder", steered: true }, createdAt: Date.now() }],
-      }),
-      { status: 200 },
-    )) as typeof fetch;
-  assert.equal(await verifySteerDelivered("s1", "make it louder", Date.now(), [0]), true);
-});
-
-test("verifySteerDelivered says no when the text never made the transcript", async () => {
-  globalThis.fetch = (async () =>
-    new Response(JSON.stringify({ entries: [{ type: "user", payload: { text: "other" }, createdAt: Date.now() }] }), {
-      status: 200,
-    })) as typeof fetch;
-  assert.equal(await verifySteerDelivered("s1", "make it louder", Date.now(), [0]), false);
-});
-
-test("verifySteerDelivered ignores an ordinary (non-steered) message with the same text", async () => {
-  globalThis.fetch = (async () =>
-    new Response(
-      JSON.stringify({ entries: [{ type: "user", payload: { text: "continue" }, createdAt: Date.now() }] }),
-      { status: 200 },
-    )) as typeof fetch;
-  assert.equal(
-    await verifySteerDelivered("s1", "continue", Date.now(), [0]),
-    false,
-    "a repeated 'continue' that was typed, not steered, must not count as the lost steer",
-  );
-});
-
-test("verifySteerDelivered ignores a stale steered match from before the attempt", async () => {
-  globalThis.fetch = (async () =>
-    new Response(
-      JSON.stringify({
-        entries: [{ type: "user", payload: { text: "make it louder", steered: true }, createdAt: 1000 }],
-      }),
-      { status: 200 },
-    )) as typeof fetch;
-  assert.equal(await verifySteerDelivered("s1", "make it louder", Date.now(), [0]), false);
-});
-
 test("requestStop targets the current submit generation, not a fixed flag", () => {
   const slot = createRunSlot();
   assert.equal(slot.stopGeneration, null);
@@ -189,33 +144,6 @@ test("queued turns carry the staged attachments; attachment-only queues are real
   assert.match(bridge, /attachments: CoreAttachment\[\] = \[\],\n\): Promise<QueuedRun>/);
 });
 
-test("a queued run that carries files cannot be steered — steering would drop them", () => {
-  assert.match(composer, /\?disabled=\$\{!steerable \|\| q\.hasAttachments\}/);
-  assert.match(composer, /if \(!threadRef \|\| queued\.hasAttachments\) return;/);
-  const appTurn = readFileSync(new URL("../../../src/api/app-turn.ts", import.meta.url), "utf8");
-  assert.match(
-    appTurn,
-    /\.\.\.\(run\.request\.attachments\?\.length \? \{ hasAttachments: true \} : \{\}\)/,
-    "core names which queued runs carry files, so every tab knows, not just the one that queued",
-  );
-});
-
-test("an ambiguous steer failure verifies against the transcript before re-submitting", () => {
-  const fn = composer.slice(
-    composer.indexOf("async function steerQueued"),
-    composer.indexOf("function recoverEndedRunSteer"),
-  );
-  const verify = fn.indexOf("await verifySteerDelivered(steerSessionId, queued.text, sentAt, undefined, sinceSeq)");
-  const requeue = fn.indexOf("await enqueueTurn(agent, threadRef, queued.text)");
-  assert.ok(verify > 0, "the transcript is consulted first");
-  assert.ok(requeue > verify, "only a steer that provably never arrived goes back on the queue");
-  assert.match(
-    fn,
-    /const steerSessionId = ctx\.chat\.state\.sessionId;/,
-    "the session is captured before signaling so a mid-steer switch verifies the right transcript",
-  );
-});
-
 test("Stop pressed before the run id arrives still stops core's run", () => {
   assert.match(chat, /requestStop\(runSlot\);/);
   assert.match(composer, /void ctx\.chat\.stopLiveRun\(\)\.catch/);
@@ -228,56 +156,6 @@ test("Stop pressed before the run id arrives still stops core's run", () => {
 test("confirmed aborted output is preserved during transcript refresh", () => {
   assert.match(chat, /if \(last\?\.stopReason === "error"\) return drawActiveChat\(agent\);/);
   assert.match(chat, /if \(last\?\.stopReason === "aborted"\) return drawActiveChat\(agent\);/);
-});
-
-test("verifySteerDelivered only trusts a steered entry newer than the baseline it was given", async () => {
-  globalThis.fetch = (async () =>
-    new Response(
-      JSON.stringify({
-        entries: [
-          { type: "user", seq: 4, payload: { text: "yes", steered: true }, createdAt: Date.now() - 30_000 },
-          { type: "user", seq: 5, payload: { text: "yes, run the tests", steered: true }, createdAt: Date.now() },
-        ],
-      }),
-      { status: 200 },
-    )) as typeof fetch;
-  assert.equal(
-    await verifySteerDelivered("s1", "yes", Date.now(), [0], 4),
-    false,
-    "an earlier identical steer and a longer steer containing the word are not this steer",
-  );
-  assert.equal(await verifySteerDelivered("s1", "yes", Date.now(), [0], 3), true, "seq 4 is newer than baseline 3");
-  assert.equal(await verifySteerDelivered("s1", "yes, run the tests", Date.now(), [0], 4), true);
-});
-
-test("verifySteerDelivered matches the attributed form core stores for another person's steer", async () => {
-  globalThis.fetch = (async () =>
-    new Response(
-      JSON.stringify({
-        entries: [{ type: "user", seq: 9, payload: { text: "Ada: ship it", steered: true }, createdAt: Date.now() }],
-      }),
-      { status: 200 },
-    )) as typeof fetch;
-  assert.equal(await verifySteerDelivered("s1", "ship it", Date.now(), [0], 8), true);
-  assert.equal(await verifySteerDelivered("s1", "it", Date.now(), [0], 8), false, "no substring matches");
-});
-
-test("latestTranscriptSeq reads the newest seq from the tail, or nothing for an empty session", async () => {
-  globalThis.fetch = (async () =>
-    new Response(
-      JSON.stringify({
-        entries: [
-          { type: "user", seq: 7 },
-          { type: "assistant", seq: 12 },
-        ],
-      }),
-      {
-        status: 200,
-      },
-    )) as typeof fetch;
-  assert.equal(await latestTranscriptSeq("s1"), 12);
-  globalThis.fetch = (async () => new Response(JSON.stringify({ entries: [] }), { status: 200 })) as typeof fetch;
-  assert.equal(await latestTranscriptSeq("s1"), undefined);
 });
 
 test("an empty attachment is reported and left out rather than silently dropped", async () => {

@@ -148,3 +148,12 @@ test("failed initial persistence leaves no configuration and a complete pool can
   assert.equal(swarm.messages.length, 1);
   assert.equal(swarm.settings.turnMs, 700_000);
 });
+
+test("operators can disable swarms without changing other background work", () => {
+  assert.equal(loadConfig({}).swarmsEnabled, true);
+  assert.equal(loadConfig({ SWARMS_ENABLED: "true" }).swarmsEnabled, true);
+  const disabled = loadConfig({ SWARMS_ENABLED: "false" });
+  assert.equal(disabled.swarmsEnabled, false);
+  assert.equal(disabled.backgroundWorkEnabled, true);
+  assert.throws(() => loadConfig({ SWARMS_ENABLED: "invalid" }), /SWARMS_ENABLED/);
+});

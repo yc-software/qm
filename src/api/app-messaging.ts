@@ -3,7 +3,7 @@ import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
 import type { Destination, SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
-import { errMessage } from "../util/errors.ts";
+import { reportFailureAs } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { randomUUID } from "node:crypto";
@@ -161,9 +161,6 @@ export function createMessagingMethods(
           throw new Error("scopeShared requires a shared (channel/group) scope, not a personal one");
         if (!input.members?.length) throw new Error("scopeShared requires a member snapshot");
       }
-      if ((await deps.crons.list()).filter((cron) => cron.owner === input.owner).length >= 100) {
-        throw new Error("cron limit reached for this owner (100)");
-      }
       const cron = await deps.crons.create(input);
       deps.auditLog.record({
         at: Date.now(),
@@ -315,14 +312,12 @@ export function createMessagingMethods(
       if (self && (self.name || self.mentionId)) ambientSelf.set(`${orgIdOf()}:${surface}`, self);
       const out = await deps.surfaceCache.ingest(events);
       if (surface === "slack" && hasRevisionEvents(events)) {
-        void recordMessageRevisions(deps.sessions, events).catch((e) =>
-          console.error("[revisions] surface revision record failed:", errMessage(e)),
+        void recordMessageRevisions(deps.sessions, events).catch(
+          reportFailureAs("revisions: surface revision record", undefined),
         );
       }
       for (const container of new Set(events.filter((e) => !e.self).map((e) => e.container))) {
-        void judgeAmbientContainer(surface, container).catch((e) =>
-          console.error("[ambient] judge failed:", errMessage(e)),
-        );
+        void judgeAmbientContainer(surface, container).catch(reportFailureAs("ambient: judge", undefined));
       }
       return out;
     },

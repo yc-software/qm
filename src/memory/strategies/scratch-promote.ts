@@ -104,12 +104,6 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
     return m ? Number(m[1]) : 0;
   }
 
-  async function resetMarker(scopeId: ScopeId): Promise<void> {
-    await rewriteMarker(scopeId, (body) =>
-      MARKER_RE.test(body) ? body.replace(MARKER_RE, "<!-- captures-since-promote: 0 -->") : null,
-    );
-  }
-
   async function readLogWindow(
     scopeId: ScopeId,
     now: number,
@@ -157,7 +151,6 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
 
         const count = await bumpMarker(scopeId, added.length);
         if (deps.consolidateAfter > 0 && count >= deps.consolidateAfter) {
-          await resetMarker(scopeId);
           await strategy.maintain!(scopeId).catch(() => {});
         }
         return added.length;
@@ -204,18 +197,16 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
         const longTerm = stripMarker(raw);
         const scratch = window.map(({ date, body }) => `## ${date}\n${body}`).join("\n\n");
         const out = (
-          (await deps.harness.oneShot(
-            PROMOTION_PROMPT,
-            `Current notebook:\n${longTerm || "(empty)"}\n\nScratch log:\n${scratch}`,
-          )) ?? ""
+          (await deps.harness
+            .oneShot(PROMOTION_PROMPT, `Current notebook:\n${longTerm || "(empty)"}\n\nScratch log:\n${scratch}`)
+            .catch(() => "")) ?? ""
         ).trim();
-        if (!out || out.length > MAX_PROMOTED_NOTEBOOK_CHARS) return;
-        if (!/^none$/i.test(out)) {
-          if (head) {
-            await base.replaceIfRevision!(scopeId, out, head.revision);
-          } else {
-            await base.replace(scopeId, out);
-          }
+        const promoted = out && out.length <= MAX_PROMOTED_NOTEBOOK_CHARS && !/^none$/i.test(out);
+        const next = promoted ? out : longTerm;
+        if (head) {
+          if (!(await base.replaceIfRevision!(scopeId, next, head.revision))) return;
+        } else {
+          await base.replace(scopeId, next);
         }
       }
       const cutoff = dateStr(now - LOG_RETENTION_DAYS * 86_400_000);

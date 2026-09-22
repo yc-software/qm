@@ -40,7 +40,13 @@ after(async () => {
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 function request(text: string, threadRef = "t-signal"): OrchestratorInput {
-  return { actor, conversation: { kind: "dm", threadRef, audience: [actor] }, origin: { kind: "direct" }, text };
+  return {
+    modelAccount: "company",
+    actor,
+    conversation: { kind: "dm", threadRef, audience: [actor] },
+    origin: { kind: "direct" },
+    text,
+  };
 }
 
 async function coreSignal(runId: string, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
@@ -158,6 +164,7 @@ test("signalRun attributes a bare steer from a shared-scope viewer who is not th
   const { run } = await built.runs.enqueue({
     sessionId: threadRef,
     request: {
+      modelAccount: "company",
       actor: owner,
       conversation: { kind: "channel", channelRef: "C-STEER", threadRef, audience: [owner] },
       origin: { kind: "direct" },
@@ -544,6 +551,7 @@ test("run control follows current shared membership while public history require
     const { run } = await built.runs.enqueue({
       sessionId: threadRef,
       request: {
+        modelAccount: "company",
         actor: owner,
         conversation: { kind: shared.kind, channelRef: shared.ref, threadRef, audience: [owner] },
         origin: { kind: "direct" },
@@ -627,4 +635,35 @@ test("web proxy: /api/runs/active tracks queued runs — the live one first, the
     await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("carol"))
   ).json()) as { runId?: string | null };
   assert.equal(active2.runId, second, "once the live run finishes, the queued one becomes active");
+});
+
+test("web steering atomically transfers file-only queues and deduplicates retries", async () => {
+  const threadRef = "web:U1:steer-files";
+  const attachments = [{ name: "report.txt", mimetype: "text/plain", sizeBytes: 6, blobId: "steer-blob" }];
+  const submit = async (text: string, files: import("../src/types.ts").IncomingAttachment[] = []) => {
+    const res = await fetch(
+      `${webBase}/api/turn`,
+      asUser("U1", {
+        method: "POST",
+        body: JSON.stringify({ text, threadRef, attachments: files }),
+      }),
+    );
+    return ((await res.json()) as { runId: string }).runId;
+  };
+  const runId = await submit("working");
+  const queuedRunId = await submit("", attachments);
+  for (let i = 0; i < 2; i++) {
+    const response = await fetch(
+      `${webBase}/api/runs/${runId}/signal`,
+      asUser("U1", {
+        method: "POST",
+        body: JSON.stringify({ kind: "steer", text: "", threadRef, queuedRunId }),
+      }),
+    );
+    assert.equal(response.status, 200, await response.text());
+  }
+  assert.equal(await built.runs.get(queuedRunId), null);
+  const signals = await built.signals.takePending(runId);
+  assert.equal(signals.length, 1);
+  assert.deepEqual(signals[0]?.request?.attachments, attachments);
 });

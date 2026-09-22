@@ -16,11 +16,16 @@ RUN npm ci --omit=dev && rm package-lock.json \
   && rm -rf /root/.npm /tmp/node-compile-cache
 COPY plugins/web-ui/server ./server
 COPY plugins/web-ui/src/app-edit.ts ./src/app-edit.ts
+COPY plugins/admin/package.json plugins/admin/package-lock.json /admin/
+RUN npm ci --prefix /admin --omit=dev && rm -rf /root/.npm /tmp/node-compile-cache
 COPY plugins/admin/src /admin/src
+COPY plugins/admin/ui /admin/ui
 COPY plugins/admin/public /admin/public
 COPY plugins/chassis/src /chassis/src
 COPY --from=build /app/dist-web ./dist-web
 
+ARG GIT_SHA=
+ENV GIT_SHA=$GIT_SHA
 ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080

@@ -14,6 +14,7 @@ import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
 import { swallow, swallowAs } from "../../util/errors.ts";
+import { cronIdOf } from "../../sessions/session-store.ts";
 import { keychainUseCommand } from "../contract.ts";
 
 const CONSENT_ON_TRIGGERED_TURN =
@@ -165,28 +166,11 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       const connectorCredentials = (await kc.listConnectorsByOwners([actorId])).get(actorId) ?? [];
       const grants = await kc.listGrants({ ownerId: actorId });
       const asks = (await kc.listAsks({ ownerId: actorId })).filter((ask) => ask.status === "pending");
-      const usage = deps.credentialUsage
-        ? (
-            await Promise.all(
-              credentials.map(async (credential) => {
-                const rows = await deps.credentialUsage!.list({
-                  slug: `keychain:${credential.service}:${credential.id}`,
-                  limit: 20,
-                });
-                return rows.map((row) => ({ ...row, credentialId: credential.id }));
-              }),
-            )
-          )
-            .flat()
-            .sort((a, b) => b.ts - a.ts)
-            .slice(0, 50)
-        : [];
       const scopeNames = await resolveScopeNames(app, deps, [
         ...grants.map((grant) => grant.audienceScopeId),
         ...asks.map((ask) => ask.requesterScopeId),
-        ...usage.map((row) => row.scopeLabel),
       ]);
-      return sendJson(res, 200, { credentials, connectorCredentials, grants, asks, usage, scopeNames });
+      return sendJson(res, 200, { credentials, connectorCredentials, grants, asks, scopeNames });
     }
 
     if (method === "DELETE" && pathname.startsWith("/v1/keychain/credentials/")) {
@@ -246,17 +230,14 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         });
         void deps
           .fireAskResolution?.(ask, grant)
-          .then(() => kc.markAskNotified(ask.id))
+          .then(() => kc.markAskNotified(ask.id, ask.status))
           .catch((e) => swallow("keychain: ask resolution fire failed (sweep will retry)", e));
         return sendJson(res, 200, {
           grant,
           ask,
-          use:
-            grant.audienceScopeId === capability.scopeId
-              ? useBlock(grant)
-              : {
-                  note: `Grant is active in ${grant.audienceScopeId} — the asking conversation. It cannot be used from here; that conversation resumes on its own.`,
-                },
+          use: {
+            note: `Grant is active in ${grant.audienceScopeId} — the asking conversation resumes automatically. Do not load or consume the grant on this approval turn.`,
+          },
         });
       }
       let granter = actorId;
@@ -315,12 +296,6 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
     }
 
     if (method === "POST" && pathname === "/v1/keychain/asks") {
-      if (capability.triggered) {
-        return sendJson(res, 403, {
-          error: "forbidden",
-          message: "asks can only be sent on a turn a person sent — this turn was fired by a trigger",
-        });
-      }
       const b = body as { credential?: unknown; purpose?: unknown; requestedMode?: unknown; expiresAt?: unknown };
       const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
       if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
@@ -335,50 +310,56 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         });
       }
       const scope = parseScopeId(capability.scopeId);
-      if (scope.kind !== "channel") {
-        return sendJson(res, 403, {
-          error: "forbidden",
-          message: "asks can only be sent from a channel — in a DM or group, ask the owner directly",
-        });
+      if (scope.kind !== "channel" && scope.kind !== "personal" && scope.kind !== "group") {
+        return sendJson(res, 403, { error: "forbidden", message: "asks require a personal or shared conversation" });
       }
       const cred = await kc.getCredential(b.credential);
       if (!cred) return sendJson(res, 404, { error: "not_found", message: "unknown credential" });
-      const ch = await app.resolveChannel(scope.ref);
-      if (ch.kind !== "one") {
+      const requester = await app.directoryMember(actorId);
+      if (
+        !(await app.belongsToScope(actorId, capability.scopeId)) ||
+        !(await app.belongsToScope(cred.ownerId, capability.scopeId)) ||
+        (scope.kind !== "personal" &&
+          (requester?.type !== "internal" || (await app.directoryMember(cred.ownerId))?.type !== "internal"))
+      ) {
         return sendJson(res, 403, {
           error: "forbidden",
-          message: "this channel isn't in the directory yet — try again in a minute",
+          message: "the requester and credential owner must have current access to this conversation",
         });
       }
-      const ownerIsMember = ch.channel.isPrivate
-        ? await app.channelMember(ch.channel.channelId, cred.ownerId)
-        : (await app.directoryMember(cred.ownerId))?.type === "internal";
-      if (!ownerIsMember) {
-        return sendJson(res, 403, {
-          error: "forbidden",
-          message: "the credential's owner isn't a verified member of this conversation",
-        });
-      }
+      const context = (await app.listContexts(cred.ownerId)).find((c) => c.scopeId === capability.scopeId);
+      const cronId = cronIdOf(capability.threadRef);
+      const cron = cronId ? await app.getCron(cronId) : null;
       const dest = resolveCapabilityDestination(capability, undefined);
+      const originRun = capability.runId ? await deps.runs?.get(capability.runId) : null;
+      const requesterSeq = originRun && originRun.sessionId === capability.threadRef ? originRun?.turnUserSeq : null;
+      const requesterMessageTs =
+        originRun && originRun.sessionId === capability.threadRef && originRun.request.origin.kind === "human"
+          ? originRun.request.origin.messageTs
+          : undefined;
       const { ask, existing } = await kc.createAsk({
+        ...(capability.triggered ? { triggered: true } : {}),
         credentialId: cred.id,
         requesterId: actorId,
         requesterScopeId: capability.scopeId,
+        ...(requesterSeq != null ? { requesterSeq } : {}),
+        ...(requesterMessageTs ? { requesterMessageTs } : {}),
         ...(dest.ok && dest.destination ? { requesterDestination: dest.destination } : {}),
         ...(capability.threadRef ? { requesterThreadRef: capability.threadRef } : {}),
         purpose: b.purpose,
         ...(b.requestedMode !== undefined ? { requestedMode: b.requestedMode as GrantMode } : {}),
         ...(expiresAt.value !== undefined ? { expiresAt: expiresAt.value } : {}),
       });
-      const requester = await app.directoryMember(actorId);
       const notice = renderAskNotice({
         ask,
         credential: cred,
         ...(requester?.displayName ? { requesterName: requester.displayName } : {}),
-        channelName: ch.channel.name,
+        ...(scope.kind === "channel" && context?.name ? { channelName: context.name } : {}),
+        ...(scope.kind === "group" && context?.name ? { scopeName: context.name } : {}),
+        ...(cron?.ownerScopeId === capability.scopeId ? { taskTitle: cron.title ?? cron.id } : {}),
       });
       await deps.deliveries?.enqueue({
-        destination: principalDestination(cred.ownerId, actorId),
+        destination: { ...principalDestination(cred.ownerId, actorId), keychainAskId: ask.id },
         text: notice,
         idempotencyKey: `ask:${ask.id}:notice`,
       });
@@ -421,7 +402,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       });
       void deps
         .fireAskResolution?.(ask)
-        .then(() => kc.markAskNotified(ask.id))
+        .then(() => kc.markAskNotified(ask.id, ask.status))
         .catch((e) => swallow("keychain: ask resolution fire failed (sweep will retry)", e));
       return sendJson(res, 200, { ask });
     }
@@ -442,7 +423,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
           return sendJson(res, 403, {
             error: "forbidden",
             message:
-              "own-credential use is implied only on a turn its owner themself sent live — this turn wasn't; use a grant instead",
+              "own-credential use is implied only on a turn its owner themself sent live — this turn wasn't; use an existing grant or POST /v1/keychain/asks to request owner approval, then wait",
           });
         }
         m = await kc.materializeOwnById(actorId, b.credential as string, capability.scopeId);

@@ -9,6 +9,7 @@ import {
 import type { Deployment, DeploymentCredentialBinding } from "./deploy-store.ts";
 import { brokerPathAllowed } from "../api/credential-broker.ts";
 import { personalScope } from "../types.ts";
+import { samePerson } from "../directory/person.ts";
 
 const host = z
   .string()
@@ -57,7 +58,7 @@ export function validateCredentialBinding(
   credential: KeychainCredentialMeta | null,
   ownerId: string,
 ): void {
-  if (binding.ownerId !== ownerId || !credential || credential.ownerId !== ownerId) {
+  if (!samePerson(binding.ownerId, ownerId) || !credential || !samePerson(credential.ownerId, ownerId)) {
     throw new KeychainError(403, "every credential must belong to the app owner");
   }
   if (

@@ -1,3 +1,5 @@
+import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import "./instrument.ts";
 import { coreRememberedSessions } from "./sessions.ts";
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
@@ -54,6 +56,7 @@ export async function startServer(
   });
   const server = createServer((req, res) => {
     void handle(req, res).catch((err: unknown) => {
+      reportBackendError(err);
       console.error("[auth] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
       if (!res.headersSent) json(res, 500, { error: "internal_error" });
       else res.end();

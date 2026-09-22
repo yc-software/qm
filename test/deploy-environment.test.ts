@@ -61,3 +61,36 @@ test("deploy-service: without deploymentEnv the provider sees no deployment env"
   await s.service.deploy({ ownerScopeId: scopeId("personal", "U1"), createdBy: "U1", entrypoint: "node x", files: [] });
   assert.equal(s.applied?.env?.AGENT_CREDENTIAL_TOKEN, undefined);
 });
+
+test("deploy-service: redeploy inherits the current version's env and home files unless the input replaces them", async () => {
+  const s = svc(async () => ({ VIEWER_IDENTITY_KEY: "viewer" }));
+  const d = await s.service.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node x",
+    files: [],
+    homeFiles: [{ path: ".npmrc", data: "token" }],
+    env: { DB_URL: "postgres://one" },
+  });
+  const versionAt = async (n: number) => (await s.deployStore.get(d.id))!.versions[n - 1]!;
+
+  await s.service.redeploy(d.id, { entrypoint: "node x", files: [] });
+  assert.deepEqual((await versionAt(2)).env, { DB_URL: "postgres://one" }, "omitted env inherits");
+  assert.equal((await versionAt(2)).homeDir, (await versionAt(1)).homeDir, "omitted homeFiles inherit");
+  assert.deepEqual(s.applied?.env, { DB_URL: "postgres://one", VIEWER_IDENTITY_KEY: "viewer" }, "deploymentEnv on top");
+
+  await s.service.redeploy(d.id, { entrypoint: "node x", files: [], env: { DB_URL: "postgres://two" } });
+  assert.deepEqual((await versionAt(3)).env, { DB_URL: "postgres://two" }, "provided env replaces");
+
+  await s.service.redeploy(d.id, { entrypoint: "node x", files: [], env: {}, homeFiles: [] });
+  assert.deepEqual((await versionAt(4)).env, {}, "an empty env clears");
+  assert.equal((await versionAt(4)).homeDir, undefined, "empty homeFiles clear");
+  assert.deepEqual(s.applied?.env, { VIEWER_IDENTITY_KEY: "viewer" });
+
+  await s.service.rollbackDeployment(d.id, 3);
+  await s.service.redeploy(d.id, { entrypoint: "node x", files: [] });
+  assert.deepEqual((await versionAt(5)).env, { DB_URL: "postgres://two" }, "inherits from the rolled-back version");
+
+  await s.service.redeploy(d.id, { entrypoint: "node x", files: [], stampEnv: { STAMP: "s" } });
+  assert.deepEqual((await versionAt(6)).env, { DB_URL: "postgres://two", STAMP: "s" }, "stampEnv merges on top");
+});

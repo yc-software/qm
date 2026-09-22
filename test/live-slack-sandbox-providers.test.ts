@@ -70,6 +70,7 @@ test("every provider has its own parallel execution scenario", () => {
     "porter",
     "smolmachines",
     "sprites",
+    "superserve",
   ]);
   assert.equal(sandboxProviderScenarios.length, sandboxProviders.length);
   assert.ok(sandboxProviderScenarios.every((s) => s.lane === "parallel" && s.tags?.includes("provider-execution")));
@@ -158,7 +159,7 @@ test("explicit provider selection retains strict coverage without treating defer
       "sandbox-execute-modal",
     ],
   );
-  assert.equal(selectSandboxProviderScenarios("all").length, 8);
+  assert.equal(selectSandboxProviderScenarios("all").length, 9);
   assert.deepEqual(selectSandboxProviderScenarios(undefined), []);
   for (const value of ["", "sprites,", "typo", "sprites,sprites", "all,sprites", "constructor", "__proto__"])
     assert.throws(() => selectSandboxProviderScenarios(value));

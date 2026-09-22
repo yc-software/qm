@@ -46,7 +46,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const actor = await authorizeAdmin(ctx, targetScope);
   if (!actor) return;
-  if (["base-model", "runtime", "webui-models", "browse-model", "auto-flagger", "import"].includes(resource))
+  if (["base-model", "runtime", "webui-models", "browse-model", "auto-flagger"].includes(resource))
     await deps.refreshModels?.();
   const withScopeMutationLock = async <T>(fn: () => Promise<T>): Promise<T> =>
     deps.advisoryLock ? deps.advisoryLock.withLock(`admin-governance:${targetScope}`, fn) : fn();
@@ -250,20 +250,10 @@ const SETTINGS_RESOURCES = {
     "commandPolicy",
     "ambientPolicy",
     "egress",
-    "externalSlackParticipants",
-    "internalMemberOverrides",
     "orgAmbient",
   ],
-  customize: [
-    "soul",
-    "branding",
-    "peopleDirectoryUrl",
-    "ackEmoji",
-    "turnWallClockSec",
-    "featureFlags",
-    "orgAmbient",
-    "channelHeaderPinDefault",
-  ],
+  customize: ["soul", "branding", "featureFlags"],
+  "slack-settings": ["externalSlackParticipants", "internalMemberOverrides", "channelHeaderPinDefault", "ackEmoji"],
   models: [
     "baseModel",
     "runtime",
@@ -282,24 +272,31 @@ const SETTINGS_RESOURCES = {
 type SettingsView = keyof typeof SETTINGS_RESOURCES;
 
 async function scopeServiceCredentials(deps: ApiCtx["deps"], targetScope: string) {
-  return Promise.all(
-    (deps.serviceCreds ? await deps.serviceCreds.listServiceCredentials(targetScope) : []).map(async (c) => {
-      const [usage, grants] = await Promise.all([
-        deps.credentialUsage?.list({ slug: c.slug, limit: 5000 }) ?? [],
-        deps.acl?.grantsFor(targetScope, encodeRef(serviceCredRef(c.slug))) ?? [],
-      ]);
-      const successful = usage.filter((u) => u.status === "ok");
-      return {
-        ...c,
-        grantees: grants.map((g) => g.granteeScopeId),
-        usageCount: successful.length,
-        usageTruncated: usage.length === 5000,
-        usageSince: successful.length ? Math.min(...successful.map((u) => u.ts)) : null,
-        lastUsedAt: successful.length ? Math.max(...successful.map((u) => u.ts)) : null,
-        recentUsagePrincipals: [...new Set(successful.map((u) => u.principalId))].slice(0, 12),
-      };
-    }),
-  );
+  const [credentials, grants] = await Promise.all([
+    deps.serviceCreds?.listServiceCredentials(targetScope) ?? [],
+    deps.acl?.list() ?? [],
+  ]);
+  const grantees = new Map<string, string[]>();
+  for (const grant of grants) {
+    if (grant.ownerScopeId !== targetScope) continue;
+    const scopes = grantees.get(grant.ref) ?? [];
+    scopes.push(grant.granteeScopeId);
+    grantees.set(grant.ref, scopes);
+  }
+  return credentials.map((credential) => ({
+    ...credential,
+    grantees: grantees.get(encodeRef(serviceCredRef(credential.slug))) ?? [],
+  }));
+}
+
+export async function getCredentialUsageSummary(ctx: ApiCtx): Promise<void> {
+  const targetScope = ctx.params.scope!;
+  if (!targetScope || targetScope.includes("/")) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!(await authorizeAdmin(ctx, targetScope))) return;
+  const credentials = (await ctx.deps.serviceCreds?.listServiceCredentials(targetScope)) ?? [];
+  if (!ctx.deps.credentialUsage) return sendJson(ctx.res, 503, { error: "usage_unavailable" });
+  const summaries = await ctx.deps.credentialUsage.summary(credentials.map((credential) => credential.slug));
+  return sendJson(ctx.res, 200, { summaries });
 }
 
 async function scopeEgress(deps: ApiCtx["deps"], targetScope: string) {

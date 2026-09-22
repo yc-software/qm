@@ -84,6 +84,10 @@ export interface Deployment {
   versions: DeploymentVersion[];
 }
 
+export function currentVersionOf(d: Deployment | null): DeploymentVersion | undefined {
+  return d?.versions.find((v) => v.version === d.currentVersion);
+}
+
 interface VersionInput {
   entrypoint: string;
   snapshotDir: string;
@@ -344,7 +348,7 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
       const d = await backingMap.get(id);
       if (!d) throw new Error(`unknown deployment: ${id}`);
       const version = d.versions.length + 1;
-      const parentCommit = d.versions.find((x) => x.version === d.currentVersion)?.commit;
+      const parentCommit = currentVersionOf(d)?.commit;
       const v = await makeVersion(id, version, input, parentCommit);
       await backingMap.merge(id, { versions: [...d.versions, v], currentVersion: version });
       await updateVersionRef(id, v);
@@ -353,7 +357,7 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
     async addVersionFromCommit(id, commit) {
       const d = await backingMap.get(id);
       if (!d) throw new Error(`unknown deployment: ${id}`);
-      const current = d.versions.find((x) => x.version === d.currentVersion);
+      const current = currentVersionOf(d);
       if (current?.commit === commit) return null;
       const version = d.versions.length + 1;
       const v: DeploymentVersion = {

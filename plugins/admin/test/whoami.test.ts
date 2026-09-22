@@ -34,6 +34,7 @@ const corePort = (core.address() as AddressInfo).port;
 
 process.env.CORE_API_URL = `http://localhost:${corePort}`;
 process.env.CORE_SIGNING_SECRET = "admin-whoami-test-secret";
+process.env.INBOX_USERS = "U-admin";
 
 const { server } = await import("../src/index.ts");
 await new Promise<void>((r) => server.listen(0, r));
@@ -79,6 +80,7 @@ test("/api/whoami with cookie admin=U-admin → 200 with the core's admin status
     isAdmin: true,
     role: "org_admin",
     scopeId: "org:acme",
+    permissions: ["inbox"],
   });
   assert.equal(lastActor, "U-admin@acme", "x-admin-actor forwarded as <sub>@<org>");
   assert.equal(lastSigned, true, "source-auth headers present when CORE_SIGNING_SECRET is set");
@@ -87,7 +89,7 @@ test("/api/whoami with cookie admin=U-admin → 200 with the core's admin status
 test("/api/whoami with cookie admin=U-rando → 200 { isAdmin:false } (any non-empty cookie is trusted identity; the core decides)", async () => {
   const r = await api("/api/whoami", "admin=U-rando");
   assert.equal(r.status, 200);
-  assert.deepEqual(await r.json(), { principal: "U-rando", org: "acme", isAdmin: false });
+  assert.deepEqual(await r.json(), { principal: "U-rando", org: "acme", isAdmin: false, permissions: [] });
 });
 
 test("/api/whoami with NO admin cookie → 401 signed_out", async () => {
@@ -139,6 +141,7 @@ test("a forwarded portal identity is relayed to core (so an enforcing core can v
     isAdmin: true,
     role: "org_admin",
     scopeId: "org:acme",
+    permissions: ["inbox"],
   });
 });
 

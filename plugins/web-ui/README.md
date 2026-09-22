@@ -1,6 +1,6 @@
 # Web UI plugin
 
-An end-user web surface with a custom ChatGPT/Claude-style chat shell, stitched to the
+An end-user web surface with a custom chat shell, connected to the
 platform core. It still uses Pi's `Agent` state machine and selected Pi web utilities
 for markdown, attachment loading, and model metadata, but the visible conversation UI is
 owned by this plugin. Two processes:
@@ -28,6 +28,7 @@ no run bearer is exposed to browser code or placed in a URL. The active-run resu
 (`/api/runs/active`) is per-process best-effort with a durable core fallback for personal threads.
 
 ```
+npm install --prefix ../admin
 npm install
 npm run build
 npm run serve
@@ -114,9 +115,9 @@ or edit the cron; custom task text and schedules are preserved. The global disab
 flag pauses managed jobs. Background work must also be enabled.
 
 Set `SUGGESTED_ACTIVITIES_CONTEXT` on core for rollout guidance (up to 8,000
-characters). For a YC rollout, describe WaaS sourcing, investor CRM, deck review,
-office hours, and Bookface advice there; optionally provide fallback starters on web.
-Guidance updates propagate to unmodified managed tasks. Public QM has no YC context
+characters). Describe the organization’s workflows and available tools there;
+optionally provide fallback starters on web. Guidance updates propagate to
+unmodified managed tasks. Public QM has no organization-specific suggestion context
 by default. Suggestions are private to their owner; generated sessions use the
 same scoped access controls as other personal work.
 
@@ -156,8 +157,8 @@ the CSS media queries, the composer, and the split canvas.
   alongside the light/dark choice.
   The UI drives Pi's `Agent` with a custom `streamFn` (`src/core-bridge.ts`) instead of
   mounting Pi's stock `AgentInterface`.
-- **Slash-command skill picker** — type `/` at the start of the composer for a Codex-style
-  autofill of the **skills** available to you (B6): icon · name · description · scope, with the
+- **Slash-command skill picker** — type `/` at the start of the composer to browse the
+  **skills** available to you (B6): icon · name · description · scope, with the
   typed letters emboldened. Arrow/Tab/Enter to choose (it inserts `/<name> `), Esc/click-out to
   dismiss. The list is the signed-in principal's _visible_ skills — the same set the agent gets
   materialized into a DM turn — fetched once per session via the server's `/api/skills` proxy
@@ -269,7 +270,7 @@ Gmail, Google Calendar, Google Drive, and Google Sheets artwork comes from
 
 Set `WEB_UI_WELCOME_COHORT=F26` on the web surface to show the cohort welcome in a new user's empty chat. It replaces the automatic first agent turn for that deployment; ordinary chat starts when the user sends a message. The greeting uses the signed-in display name. The welcome remains above the messages in the earliest personal web conversation, including when reopened. It is selected from persisted session creation times. The champagne and soft flutter sequence replays on refresh only before the first message and respects reduced motion.
 
-The picker reads Composio's live catalog in usage order, omits apps that need no authorization, and searches the complete paginated catalog. Known services use local logos; remaining catalog logos use Composio's logo host. Selecting an app submits to the authenticated web surface and opens the provider's authorization link directly. Consent remains on the provider page. The Slack action opens the existing administrator setup page.
+The picker reads Composio's live catalog in usage order, omits apps that need no authorization, and searches the complete paginated catalog. Known services use local logos; remaining catalog logos use Composio's logo host. Selecting an app submits to the authenticated web surface and opens the provider's authorization link directly. Consent remains on the provider page. Slack is excluded from this picker. A dedicated Connect Slack card in onboarding and Settings authorizes the signed-in person’s Slack tools through Composio and links their verified Slack workspace identity to their existing web account. Installing the company bot remains a separate administrator action.
 
 The core bridge accepts a verified portal identity and uses either that person's own `COMPOSIO_API_KEY` keychain entry or an enabled org service credential granted to them. Secrets never enter the browser. The agent skill reads `/v1/composio/identity` to use the same organization/person identity as the picker. A company project key retains Composio's existing project-wide access boundary; the identity selects accounts and does not isolate them from other holders of that key.
 
@@ -286,3 +287,83 @@ The welcome uses the organization's configured branding `orgName`, falling back 
 ### Setup widgets in agent replies
 
 In web chat, an assistant reply can include `::connect-apps{}` as a standalone paragraph to render the reusable app picker. The separate `::add-to-slack{}` directive renders the Slack setup action for administrators; include both to show both. It omits the welcome and animation and uses the signed-in viewer’s authorization routes. The Composio skill teaches this response for requests to connect apps or reopen setup. Code blocks, quotations, and inline examples remain ordinary text. The directive persists in the transcript and renders again when reopened. Connected-account status retains the same limitations as the onboarding picker and local return-flow preview.
+
+## Optional product analytics
+
+Set `POSTHOG_API_KEY` to a PostHog project ingestion token to enable browser
+analytics. `POSTHOG_HOST` defaults to `https://us.i.posthog.com` and must be an
+HTTPS origin. The authenticated `/me` response supplies this public configuration;
+the portal serves the same web application, so it needs no separate SDK.
+
+Events are explicit pageviews by navigation view, accepted `message_sent` events,
+and `session_started` for the first user message in a chat. Company grouping uses
+`CORE_ORG_ID`; user identities combine company and authenticated principal. Browser
+analytics is disabled during impersonation. Autocapture, replay, exception capture,
+performance capture and feature flags are disabled. Event properties exclude chat
+content, URLs, query strings, titles and referrers. Delivery is best effort.
+
+Set the same variables on core to capture `app_published` after a successful new
+application or version deployment. Publications use the application's creator and
+company, matching browser identity. No key means no analytics requests.
+
+Core also captures `response_completed` and `response_failed` when a human turn
+reaches its final run state, including when a separate worker executes it.
+`completion_boundary=run` means processing finished, not confirmed delivery to the
+user. Successful silent or reaction-only results count as completed processing.
+`result_status` distinguishes those results; `surface` identifies web or Slack.
+Automation, automatic openers, impersonated turns, stopped turns, refusals, queued
+results and pending approvals do not emit outcomes. Retries emit only at the final
+run state. Stable insert IDs support deduplication. These best-effort events are
+not a complete reliability ledger and contain no response text or raw errors.
+
+## Optional browser error reporting
+
+Set `SENTRY_BROWSER_DSN` on the web server to enable browser error reporting.
+Use a public HTTPS DSN without a secret key, such as
+`https://public@sentry.example.com/1`. Backend `SENTRY_DSN` is never exposed or
+used as a browser fallback. The authenticated `/me` response supplies the public
+DSN and an optional `SENTRY_RELEASE` (or `GIT_SHA`). The server adds only the DSN
+origin to the web application's connection policy.
+
+Reporting starts after authentication and stops on sign-out or an authentication
+failure. It is disabled during impersonation and when the browser DSN is unset.
+Only uncaught errors and unhandled promise rejections are collected. Events retain
+standard error types, release, and same-origin compiled asset filenames with line
+and column numbers. Fingerprints use the sanitized error type, capture mechanism,
+and last retained stack position. Identical asset locations group across release
+label changes; changed asset hashes start separate groups. Without a retained
+frame, grouping falls back to the sanitized type and mechanism.
+Other stack frames and function names are omitted. Messages,
+URLs, requests, user identities, content, attachments, breadcrumbs, replay, logs,
+and tracing are excluded. A final transport gate rejects unsanitized SDK failures
+and non-event envelopes. Requests omit cookies and referrers. The ingestion
+server can still see the network source IP. Delivery is best effort.
+
+### Browser performance timing
+
+Set `SENTRY_BROWSER_TRACES_SAMPLE_RATE` (0 to 1, default 0) alongside `SENTRY_BROWSER_DSN` to sample
+browser timings; `0.1` is a reasonable start. Each timing is sampled independently at that rate
+and carries its own random trace id. A page reports one `pageload` transaction (time to first
+byte, DOM content loaded, load, first and largest contentful paint, and a `page` tag drawn from
+the fixed list of application views) and one `http.client` transaction per same-origin request
+made through the web client's shared fetch helper, measured to response headers and named by a
+fixed `/api/<resource>` allowlist (`GET /api/sessions/*`) with the HTTP status. At most 200
+timings are sent per page. URLs, query strings, identifiers, and request or response content are
+never included; timings stop with error reporting on sign-out, authentication failure, and
+impersonation.
+
+## Personal AI accounts
+
+Open **Settings → AI access**, or use the account label beside the model picker.
+Choose Company, Claude, or ChatGPT / Codex. Sign in with your subscription
+or use the secondary API-key option; connecting automatically selects that account. **Company access** switches back without disconnecting
+personal credentials. The choice is durable per person and applies to their human
+chat turns on the web and in Slack; background tasks retain company access.
+
+A submitted turn keeps its account choice, so switching affects new turns. Personal
+access failures do not retry on company credentials. Messages using a different
+account queue separately instead of steering an existing run; an explicit steer
+across accounts is refused. Organizations that already require individual accounts
+continue to require them.
+
+The standalone `::link-slack-account{}` directive offers personal Slack account linking in a web reply. It shows the account card or linked status, requires the company bot to be installed first, and does not include the app picker. `::add-to-slack{}` remains the company installation trigger.

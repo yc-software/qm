@@ -22,9 +22,12 @@ primary_region = "sjc"
 [deploy]
   strategy = "bluegreen"
 
+[[restart]]
+  policy = "always"
+
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "2gb"
+  size = "performance-2x"
+  memory = "4gb"
 
 kill_signal = "SIGTERM"
 kill_timeout = "300s"

@@ -71,19 +71,17 @@ commit.
 The skills are governed store records, visible and auditable on the admin Skills page, rather than
 ungoverned files on each box.
 
-## Reading published skills
+## Loading published skills
 
-The skill index advertises `skill://<name>/SKILL.md` for the agent's `read` tool.
-These read-only references resolve the currently visible, screened published skill
-without creating or waking a sandbox. Relative manifest files can be read at
-`skill://<name>/<relative-path>`. Unavailable skills and invalid paths return no file.
+The skill index lists each visible skill. The agent's `skill` tool resolves the currently
+visible, screened published skill and returns its SKILL.md, or a relative manifest file
+named by `path`, without creating or waking a sandbox. Unavailable skills and invalid
+paths return no file.
 
-Shell commands still use `skills/<name>/...`. Filesystem reads and commands referencing a
-skill materialize its assets when needed, including pack files under the path named
-in the skill body. Ordinary filesystem reads and writes
-retain their existing behavior, including local edits; they are distinct from the
-published source. Publish changes through the skill API to update that source.
-
-Command detection uses literal skill paths. Before executing a command that constructs
-its asset paths dynamically, read the needed file at its `skills/...` filesystem path
-to materialize it.
+When a skill ships supporting files or pack bundles, the same call lays them into the
+turn's private directory under `.agent-turn/<conversation>/skills/<name>/` (packs under
+`.packs/<id>/` beside it) and reports that path; the body's own `skills/<name>/` references
+are rewritten to it. That directory is wiped when the turn ends and before the next one
+starts, so nothing reconciles, locks, or sweeps: plain commands and filesystem reads never
+wait on skill synchronization, and revoked or archived content cannot outlive the turn
+that loaded it. Publish changes through the skill API to update the source.

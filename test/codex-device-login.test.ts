@@ -15,7 +15,7 @@ function loginBinary(dir: string, opts: { succeed: boolean; delayMs?: number }):
   const path = join(dir, `codex-login-${opts.succeed ? "ok" : "fail"}`);
   writeFileSync(
     path,
-    `#!${process.execPath}
+    `#!/usr/bin/env node
 const fs = require("node:fs");
 const path = require("node:path");
 const readline = require("node:readline");

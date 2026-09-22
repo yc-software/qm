@@ -765,7 +765,7 @@ export function createApprovals(deps: {
         const replyBody = stripAckPrefix(cleanedContinuation.text, ctx.ackedFirstBlock);
         const { reactions, agentRequests } = cleanedContinuation;
         const actionableAgentRequests = ctx.threadOnly ? agentRequests : [];
-        let reply = "(no response)";
+        let reply = result.stopped ? "Stopped." : "(no response)";
         if (replyBody) reply = toSlackMrkdwn(replyBody);
         else if (result.attachments?.length || reactions.length || actionableAgentRequests.length) reply = "Done.";
         if (cardIsRemote) {

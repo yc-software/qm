@@ -160,6 +160,11 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       if (s) s.title = title;
     },
 
+    async updateStatus(sessionId, status) {
+      const s = sessions.get(sessionId);
+      if (s) s.status = status ? { ...status } : null;
+    },
+
     async updateForkProvenance(sessionId, provenance) {
       const s = sessions.get(sessionId);
       if (s) Object.assign(s, provenance);
@@ -290,7 +295,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     async getEntries(sessionId, opts?: GetEntriesOptions) {
       const log = entries.get(sessionId) ?? [];
       const since = opts?.sinceSeq ?? 0;
-      const filtered = log.filter((e) => e.seq >= since);
+      const filtered = log.filter((e) => e.seq >= since && (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq));
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : filtered;
     },
 
@@ -301,7 +306,10 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         if (entry) projected.set(entry.seq, entry);
       }
       const filtered = [...projected.values()]
-        .filter((entry) => entry.seq >= (opts?.sinceSeq ?? 0))
+        .filter(
+          (entry) =>
+            entry.seq >= (opts?.sinceSeq ?? 0) && (opts?.beforeSeq === undefined || entry.seq < opts.beforeSeq),
+        )
         .sort((a, b) => a.seq - b.seq);
       if (opts?.limit === 0) return [];
       return opts?.limit === undefined ? filtered : filtered.slice(-opts.limit);
@@ -641,6 +649,41 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
 
     async scopeHasSessions(scope) {
       return [...sessions.values()].some((s) => s.scopeId === scope);
+    },
+
+    async countPersonalConversations(scope, limit = 3) {
+      const boundedLimit = Math.max(0, Math.floor(limit));
+      if (!boundedLimit) return 0;
+      let count = 0;
+      for (const session of sessions.values()) {
+        if (
+          session.scopeId !== scope ||
+          session.type !== "dm" ||
+          session.parentSessionId ||
+          sessionOrigin(session.threadRef) !== "conversation"
+        )
+          continue;
+        const log = new Map((entries.get(session.id) ?? []).map((entry) => [entry.seq, entry]));
+        for (const row of tape.get(session.id) ?? []) {
+          const entry = transcriptEntryFromTape(row);
+          if (entry) log.set(entry.seq, entry);
+        }
+        if (
+          [...log.values()].some((entry) => {
+            const payload = entry.payload as { hidden?: unknown; overheard?: unknown } | null;
+            return (
+              entry.seq > (session.forkBoundarySeq ?? -1) &&
+              entry.type === "user" &&
+              payload?.hidden !== true &&
+              payload?.overheard !== true
+            );
+          })
+        ) {
+          count++;
+          if (count >= boundedLimit) break;
+        }
+      }
+      return count;
     },
 
     async sessionsByThreadRefs(threadRefs) {

@@ -335,25 +335,21 @@ export function browserRenderableImage(mimeType?: string): boolean {
   return RENDERABLE_IMAGE_TYPES.has((mimeType ?? "").split(";")[0]!.trim().toLowerCase());
 }
 
-const copyFeedback = new WeakMap<HTMLButtonElement, { html: string; timer: ReturnType<typeof setTimeout> }>();
+const copyFeedback = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>();
 
 export async function copyText(text: string, btn?: HTMLButtonElement): Promise<void> {
   try {
     await navigator.clipboard.writeText(text);
-    if (btn) {
-      const active = copyFeedback.get(btn);
-      if (active) clearTimeout(active.timer);
-      const html = active?.html ?? btn.innerHTML;
-      btn.textContent = "Copied";
-      const timer = setTimeout(() => {
-        btn.innerHTML = html;
-        copyFeedback.delete(btn);
-      }, 1200);
-      copyFeedback.set(btn, { html, timer });
-    }
   } catch {
-    void 0;
+    return;
   }
+  if (!btn) return;
+  clearTimeout(copyFeedback.get(btn));
+  btn.classList.add("copied");
+  copyFeedback.set(
+    btn,
+    setTimeout(() => btn.classList.remove("copied"), 1200),
+  );
 }
 
 export function actionSnippet(action: string): string {

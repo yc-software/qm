@@ -135,3 +135,12 @@ test("grants/users require a signed-in cookie → 401 when absent (no core hop)"
   assert.equal((await fetch(`${base}/api/keychain`)).status, 401);
   assert.equal(calls.length, before, "a signed-out request is rejected at the surface, never forwarded");
 });
+
+test("GET credential usage forwards the scoped path with signed admin identity", async () => {
+  const response = await fetch(`${base}/api/scopes/org%3Aacme/credential-usage`, { headers: { cookie: ADMIN } });
+  assert.equal(response.status, 200);
+  const call = calls.at(-1)!;
+  assert.equal(call.url, "/v1/admin/scopes/org%3Aacme/credential-usage");
+  assert.equal(call.actor, "U-admin@acme");
+  assert.equal(call.signed, true);
+});

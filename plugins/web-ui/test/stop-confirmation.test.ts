@@ -1,3 +1,4 @@
+import { streamingTextTail } from "../src/timeline.ts";
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -109,4 +110,47 @@ test("a stalled stop acknowledgment cannot delay confirmation or report a late e
   await sleep(0);
   assert.equal(first?.stopReason, "aborted");
   assert.deepEqual(errors, []);
+});
+
+test("the authoritative final answer replaces longer accumulated commentary", async () => {
+  const commentary = "I will check this carefully.\n\nI will check this carefully.";
+  const fn = makeRunResumeStreamFn("finished", {
+    status: "done",
+    partial: commentary + "\n\nOK",
+    result: { status: "ok", reply: "OK" },
+    activity: [
+      { seq: 1, type: "text", payload: { text: "I will check this carefully." }, createdAt: 1 },
+      { seq: 2, type: "text", payload: { text: "I will check this carefully." }, createdAt: 2 },
+    ],
+  });
+  const stream = await fn(model, {} as Context, {});
+  const final = (await stream.result()) as AssistantWork;
+  assert.deepEqual(final.content, [{ type: "text", text: "OK" }]);
+  assert.equal(final.work?.activity.length, 2);
+});
+
+test("a failure after commentary preserves only unfinished text outside its work fold", async () => {
+  const fn = makeRunResumeStreamFn("failed", {
+    status: "failed",
+    partial: "Checking.\n\nUnfinished",
+    result: { status: "failed", reason: "provider failed" },
+    activity: [{ seq: 1, type: "text", payload: { text: "Checking.", phase: "commentary" }, createdAt: 1 }],
+  });
+  const stream = await fn(model, {} as Context, {});
+  const final = (await stream.result()) as AssistantWork;
+  assert.equal(final.stopReason, "error");
+  const text = final.content[0];
+  assert.equal(streamingTextTail(text?.type === "text" ? text.text : "", final.work!.activity), "Unfinished");
+});
+
+test("resume carries already visible text as its streaming animation baseline", async () => {
+  const fn = makeRunResumeStreamFn(
+    "resumed",
+    { status: "done", partial: "Existing reply", result: { status: "ok", reply: "Existing reply and new text" } },
+    undefined,
+    undefined,
+    "Existing",
+  );
+  const stream = await fn(model, {} as Context, {});
+  assert.equal(((await stream.result()) as AssistantWork).streamingBaseline, "Existing reply");
 });

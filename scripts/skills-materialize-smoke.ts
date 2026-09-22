@@ -5,7 +5,7 @@ import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
 import { loadConfig } from "../src/config.ts";
-import { materializeSkillIndex, materializeSkillTree } from "../src/skills/materialize.ts";
+import { materializeSkillTree } from "../src/skills/materialize.ts";
 import { computeBundleHash, type SkillBundle } from "../src/skills/skill-bundle-store.ts";
 import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
 
@@ -38,21 +38,10 @@ try {
     { path: "scripts/render.py", content: "print('render')\n" },
     { path: "references/catalog.md", content: "# big catalog\n" },
   ]);
-  const light = res("plain-skill", "# Plain\njust instructions");
-
-  console.log("materializeSkillIndex (eager, bodies only) …");
-  await materializeSkillIndex(sb, h, [heavy, light]);
-  assert((await sb.readFile(h, "skills/popular-web-designs/SKILL.md"))?.includes("entry point"), "heavy SKILL.md laid");
-  assert((await sb.readFile(h, "skills/plain-skill/SKILL.md"))?.includes("just instructions"), "light SKILL.md laid");
-  assert(
-    (await sb.readFile(h, "skills/popular-web-designs/scripts/render.py")) === null,
-    "asset NOT laid by index (lazy)",
-  );
-  console.log("  ok: bodies present, assets absent");
 
   console.log("materializeSkillTree (lazy, assets + bundle, one tar) …");
   const b = bundle("pack1", [{ path: "lib/cite.mjs", content: "export const cite = 1\n" }]);
-  await materializeSkillTree(sb, h, heavy, [b]);
+  await materializeSkillTree(sb, h, "skills", heavy, [b]);
   assert(
     (await sb.readFile(h, "skills/popular-web-designs/scripts/render.py"))?.includes("render"),
     "asset laid lazily",
@@ -61,37 +50,11 @@ try {
     (await sb.readFile(h, "skills/popular-web-designs/references/catalog.md"))?.includes("catalog"),
     "ref laid lazily",
   );
-  assert((await sb.readFile(h, "lib/cite.mjs"))?.includes("cite"), "pack bundle overlaid at repo-relative path");
-  assert((await sb.readFile(h, "skills/popular-web-designs/.tree")) !== null, "tree marker written");
-  console.log("  ok: assets + bundle landed via tar");
-
-  const before = await sb.readFile(h, "skills/popular-web-designs/.tree");
-  await materializeSkillTree(
-    sb,
-    h,
-    res("popular-web-designs", "# Popular web designs\nthe entry point", [
-      { path: "scripts/render.py", content: "print('render')\n" },
-      { path: "references/catalog.md", content: "# big catalog\n" },
-    ]),
-    [bundle("pack1", [{ path: "lib/cite.mjs", content: "export const cite = 1\n" }])],
-  );
-  assert((await sb.readFile(h, "skills/popular-web-designs/.tree")) === before, "unchanged tree → same marker (skip)");
-  console.log("  ok: unchanged tree skipped");
-
-  console.log("re-lay with references/ removed …");
-  await materializeSkillTree(
-    sb,
-    h,
-    res("popular-web-designs", "# Popular web designs\nthe entry point", [
-      { path: "scripts/render.py", content: "print('render v2')\n" },
-    ]),
-  );
   assert(
-    (await sb.readFile(h, "skills/popular-web-designs/scripts/render.py"))?.includes("v2"),
-    "changed asset re-laid",
+    (await sb.readFile(h, "skills/.packs/pack1/lib/cite.mjs"))?.includes("cite"),
+    "pack bundle overlaid at repo-relative path",
   );
-  assert((await sb.readFile(h, "skills/popular-web-designs/references/catalog.md")) === null, "removed asset cleared");
-  console.log("  ok: removed asset gone, changed asset updated");
+  console.log("  ok: assets + bundle landed via tar");
 
   console.log("\nALL SKILLS MATERIALIZE SMOKE CHECKS PASSED");
 } finally {

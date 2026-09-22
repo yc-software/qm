@@ -526,6 +526,27 @@ test("reverse race: an addressed mention steers into the live ambient run, not a
   assert.equal(signals[0]!.text, "@bot are you on it?");
 });
 
+for (const personalSide of ["ambient", "mention"] as const) {
+  test(`reverse race: ${personalSide} personal access cannot share the other run's company account`, async () => {
+    const built = freshApp();
+    const channel = `C-account-${personalSide}`;
+    const askTs = "1600.2";
+    const ambientRef = `slack:${channel}:ambient:${askTs}`;
+    await built.config.setPersonalModelAuth(personalSide === "ambient" ? "jordan@acme.test" : "U1", true, "openai");
+    await built.sessions.getOrCreateByThread(ambientRef, "channel", `channel:${channel}`);
+    const ambient = await built.app.turn(spawnedWorker(channel, askTs));
+    const second = await built.app.turn({ ...mention("@bot continue", channel, askTs), triggerTs: askTs });
+    assert.equal(second.status, "queued");
+    assert.notEqual(second.runId, ambient.runId);
+    assert.notEqual(second.steered, true);
+    assert.deepEqual(await built.signals.takePending(ambient.runId!), []);
+    assert.equal(
+      (await built.runs.get(second.runId!))?.request.modelAccount,
+      personalSide === "mention" ? "openai" : "company",
+    );
+  });
+}
+
 test("spine ON: the FIRST message (no live run) engages normally — no steer", async () => {
   const built = freshApp();
   const channel = "C4";
@@ -796,4 +817,72 @@ test("screening off delivers ambient updates to the existing run without a class
   assert.equal(signals[0]!.kind, "steer");
   assert.match(signals[0]!.text ?? "", /build finished/);
   assert.equal(built.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
+});
+
+test("queued web edits require the author and preserve queue identity", async () => {
+  const built = freshApp();
+  const threadRef = "web:U1:edit";
+  const first = await built.app.turn(web("first", threadRef));
+  await built.runs.claimById(first.runId!, "worker", 30000);
+  const second = await built.app.turn(web("second", threadRef));
+  const owner = (await built.runs.get(second.runId!))!.request.actor.id;
+  assert.deepEqual(await built.app.editQueuedRun(second.runId!, "edited", "second", "internal:other"), {
+    edited: false,
+    reason: "not_found",
+  });
+  assert.deepEqual(await built.app.editQueuedRun(second.runId!, "", "second", owner), {
+    edited: false,
+    reason: "empty_text",
+  });
+  assert.deepEqual(await built.app.editQueuedRun(second.runId!, "edited", "second", owner), { edited: true });
+  assert.deepEqual((await built.app.activeRunForThread(threadRef, owner))?.queued, [
+    { runId: second.runId, text: "edited" },
+  ]);
+  assert.deepEqual(await built.app.editQueuedRun(second.runId!, "stale", "second", owner), {
+    edited: false,
+    reason: "changed_or_started",
+  });
+  assert.deepEqual(await built.app.editQueuedRun(first.runId!, "late", "first", owner), {
+    edited: false,
+    reason: "changed_or_started",
+  });
+});
+
+test("run snapshots expose authorized durable web input with safe attachment metadata", async () => {
+  const built = freshApp();
+  const turn = await built.app.turn({
+    ...web("pending input", "web:U1:pending-input"),
+    attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: 50, blobId: "private-blob" }],
+  });
+  const run = (await built.runs.get(turn.runId!))!;
+  const snapshot = await built.app.getRun(run.id, run.request.actor.id);
+  assert.deepEqual(snapshot?.input, {
+    runId: run.id,
+    seq: null,
+    text: "pending input",
+    createdAt: run.createdAt,
+    attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: 50 }],
+  });
+  assert.equal(await built.app.getRun(run.id, "internal:other"), null);
+  await built.runs.noteTurnUserSeq(run.id, 0);
+  assert.equal((await built.app.getRun(run.id, run.request.actor.id))?.input?.seq, 0);
+  const slack = await built.app.turn(dm("slack input", "D-no-web-input"));
+  assert.equal((await built.app.getRun(slack.runId!))?.input, undefined);
+  const replay = await built.runs.enqueue({
+    sessionId: run.sessionId,
+    request: { ...run.request, approval: { requestId: "approval-replay", approved: true } },
+  });
+  assert.equal((await built.app.getRun(replay.run.id, run.request.actor.id))?.input, undefined);
+  for (const text of ["", "   "]) {
+    const opener = await built.runs.enqueue({
+      sessionId: run.sessionId,
+      request: { ...run.request, text, proactiveOpener: true },
+    });
+    assert.equal((await built.app.getRun(opener.run.id, run.request.actor.id))?.input, undefined);
+  }
+  const explicit = await built.runs.enqueue({
+    sessionId: run.sessionId,
+    request: { ...run.request, proactiveOpener: true },
+  });
+  assert.equal((await built.app.getRun(explicit.run.id, run.request.actor.id))?.input?.text, "pending input");
 });

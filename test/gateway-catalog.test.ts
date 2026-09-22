@@ -1,3 +1,4 @@
+import { nativeDocumentFormat } from "../src/harness/document-inputs.ts";
 import { runtimeFallback } from "../src/api/runtime-config.ts";
 import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
@@ -287,4 +288,26 @@ test("gateway-only fallback retains models hidden by picker aliases", async () =
       modelIds: new Set([`gateway/${target}`]),
     }),
   );
+});
+
+test("gateway document support uses provider metadata rather than vision alone", async () => {
+  const f = fixture([
+    group("openai-docs", { providers: ["openai"] }),
+    group("google-docs", { providers: ["gemini"] }),
+    group("unknown-docs", { providers: ["unknown"] }),
+    group("mixed-docs", { providers: ["openai", "unknown"] }),
+  ]);
+  await f.catalog.refresh();
+  const pdf = { name: "a.pdf", mimeType: "application/pdf", dataBase64: "" };
+  const docx = {
+    name: "a.docx",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    dataBase64: "",
+  };
+  const openai = resolveModel("gateway/openai-docs")!;
+  assert.equal(openai.api, "openai-responses");
+  assert.equal(nativeDocumentFormat(openai, docx), "responses");
+  assert.equal(nativeDocumentFormat(resolveModel("gateway/google-docs")!, pdf), "chat");
+  for (const id of ["unknown-docs", "mixed-docs"])
+    assert.equal(nativeDocumentFormat(resolveModel(`gateway/${id}`)!, pdf), undefined);
 });

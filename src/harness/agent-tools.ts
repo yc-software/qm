@@ -1,3 +1,4 @@
+import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { createGrindMeter, grindState } from "./grind.ts";
 import type { RuntimeHandoff, RuntimeRequest } from "./runtime-types.ts";
@@ -46,6 +47,7 @@ function describePublishAudience(a: PublishAudienceDescriptor | undefined): stri
 }
 
 export interface ToolContextRef {
+  documents?: DocumentInput[];
   runtimeHandoff?: RuntimeHandoff;
   runtimeRunId?: string;
   runtimeActorId?: string;
@@ -323,16 +325,18 @@ export interface AgentToolsOptions {
   sandboxResources?: boolean;
   readOnly?: boolean;
   surfaceTools?: boolean;
+  delegateWork?: boolean;
   surfaceName?: string;
 }
 
-export type CoreToolOptions = Omit<AgentToolsOptions, "readOnly" | "surfaceTools" | "surfaceName">;
+export type CoreToolOptions = Omit<AgentToolsOptions, "readOnly" | "surfaceTools" | "surfaceName" | "delegateWork">;
 
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
     sandboxResources: config.sandboxResourcesEnabled,
     scratchExec: config.scratchExecEnabled,
-    ownerAuthExec: config.sharedOwnerAuthIsolation,
+    // Availability is checked per turn; Open can be enabled without restarting the harness.
+    ownerAuthExec: true,
     reachExec: config.reachExecEnabled,
     controlTools: Boolean(config.signingSecret && config.apiBaseUrl),
     execTimeoutMs: config.execTimeoutDefaultMs,
@@ -386,6 +390,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const credentialExecServices = opts?.credentialExecServices ?? ref.current?.credentialExecServices ?? [];
   const commandCredentialHandles = opts?.commandCredentialHandles ?? ref.current?.commandCredentialHandles ?? [];
   const surfaceTools = !!opts?.surfaceTools;
+  const delegateWork = opts?.delegateWork === true;
   const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000) / 1000);
   const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? CONFIG_DEFAULTS.execTimeoutMaxSec * 1000) / 1000);
   const bgTtlSec = Math.round((opts?.backgroundJobTtlMs ?? CONFIG_DEFAULTS.backgroundJobTtlSec * 1000) / 1000);
@@ -569,6 +574,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     "commands you expect to be quick so a hang frees the machine fast. For work that " +
     `legitimately exceeds the ${execCeilingSec}s ceiling (long builds, installs, test suites, servers), use ` +
     "the `background` tool to run it detached and poll for the result across turns. " +
+    "Always start servers with the background tool, not shell ampersand: inherited output streams can keep execute waiting even after its shell exits. " +
     "If commands hang or fail with transport errors that nothing you ran explains, the computer itself may be " +
     "wedged — use sandbox action=status to inspect it out-of-band and action=restart to recover it.";
 
@@ -734,7 +740,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ? '- "scratch": a blank, instant box. Same OS/runtimes/CLIs, shared org files & skills at ./global (read-only), firewalled network — but NO logins, NO credentials or capability tokens, and NOTHING persists past this turn. Prefer it for heavy self-contained work (crunching fetched material, throwaway experiments, parallel or disk-hungry runs needing no workspace files) — it keeps the sandbox responsive; if the run needs logins, workspace files, or its writes must survive, use scope:"scoped".\n'
       : "") +
     (ownerAuthExec
-      ? "- \"owner\": available only to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner's credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner's login without putting it on the shared computer.\n"
+      ? "- \"owner\": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner's credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner's login without putting it on the shared computer.\n"
       : "") +
     "- a room like \"#project-alpha\": a channel you and this person are both in — runs the command on THAT room's computer. Other rooms are places you VISIT: read, search, fetch (ls/grep/cat); don't rearrange. That box has none of this conversation's logins or capability tokens. Say where anything you bring back came from.\n" +
     "If a file or piece of work isn't on this computer, don't declare it lost — check the rooms listed under 'Other computers you can reach'.\n" +
@@ -747,7 +753,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     `Run a shell command and return its stdout/stderr/exit code. Pick a computer with \`scope\`:\n` +
     '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, cached logins, and $AGENT_API_* tokens; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
     (ownerAuthExec
-      ? '- "owner": available only to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner\'s credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for owner-authenticated work in shared automation.\n'
+      ? '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner\'s credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for credential-using commands without putting personal logins on the shared computer.\n'
       : "") +
     (scratchExec
       ? '- "scratch": a blank, instant box. Same OS/runtimes/CLIs, shared org files & skills at ./global (read-only), firewalled network — but NO logins, NO credentials or capability tokens ($AGENT_API_TOKEN etc. are absent), and NOTHING persists past this turn. Prefer it for heavy self-contained work — crunching or analyzing material you can fetch onto it, throwaway experiments, checks against public code, anything parallel or disk-hungry whose only product is the answer — because it keeps this conversation\'s computer responsive for everything else. Work on THIS conversation\'s workspace (its checkouts, uncommitted changes) and anything needing logins stays scoped; if a scratch run turns out to need those, re-run it with scope:"scoped".\n'
@@ -971,13 +977,66 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
+  const skill = defineTool({
+    name: "skill",
+    label: "skill",
+    description:
+      "Load a skill from the Skills index before relying on it. Returns its SKILL.md instructions (or the relative file named by `path`) straight from the published source, without starting a sandbox. When the skill ships scripts or supporting files, this call also syncs them into a directory that lives for this turn and reports it; run and read them there with execute and read, in this turn.",
+    parameters: Type.Object({
+      name: Type.String({ description: "Skill name exactly as listed in the Skills index." }),
+      path: Type.Optional(
+        Type.String({ description: "Relative file within the skill to return instead of SKILL.md." }),
+      ),
+      ...(opts?.sandboxResources
+        ? {
+            sandbox_id: Type.Optional(
+              Type.String({ description: "Sync the skill's files into this sandbox instead of the default." }),
+            ),
+          }
+        : {}),
+    }),
+    async execute(callId, params) {
+      const tc = ref.current;
+      if (!tc) return text("[error] no active tool context");
+      const p = params as { name: string; path?: string; sandbox_id?: string };
+      await recordCall(callId, { tool: "skill", name: p.name, ...(p.path ? { path: p.path } : {}) });
+      const signal = ref.abortSignal;
+      signal?.throwIfAborted();
+      const { content, sourceScopeId, dir, packDir } = await tc.skill(p.name, {
+        ...(p.path ? { path: p.path } : {}),
+        ...(p.sandbox_id ? { sandboxId: p.sandbox_id } : {}),
+        ...(signal ? { signal } : {}),
+      });
+      signal?.throwIfAborted();
+      const onSandbox = p.sandbox_id
+        ? ` on sandbox ${p.sandbox_id}; reach them with execute using that sandbox_id`
+        : "";
+      const where = dir
+        ? `[skill files synced to ${dir}/${packDir ? `; pack files at ${packDir}/` : ""}${onSandbox}]\n\n`
+        : "";
+      return recordResult(
+        callId,
+        {
+          tool: "skill",
+          name: p.name,
+          ...(p.path ? { path: p.path } : {}),
+          found: content !== null,
+          ...(content !== null ? { bytes: content.length, sourceScopeId } : {}),
+          ...(dir ? { dir } : {}),
+        },
+        text(content === null ? `[no such skill file: ${p.name}/${p.path ?? "SKILL.md"}]` : `${where}${content}`),
+        content === null,
+        sourceScopeId,
+      );
+    },
+  });
+
   const read = defineTool({
     name: "read",
     label: "read",
-    description:
-      "Read published skill sources at skill://<name>/<path> without a sandbox, or workspace files (scope, then global). Returns contents.",
+    description: "Read a file from the workspace (scope, then global). Returns its contents.",
     parameters: Type.Object({
-      path: Type.String({ description: "Published skill URI or relative path within the workspace." }),
+      path: Type.String({ description: "Relative path within the workspace." }),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1085,7 +1144,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "Publish a directory from the workspace as a durable, scope-bound internal web app " +
       "(it keeps running after the turn ends and gets a stable link). The app must listen on " +
       "the PORT env var. By default only the owner's scope can reach it; `share` grants others " +
-      "access (read = reach, write = manage). Use `name` for a friendly, stable link /d/<name>/; " +
+      "access (read = reach, write = manage). Share the full absolute URL returned by publish so it works in Slack and other surfaces. Use `name` for a friendly, stable link /d/<name>/; " +
       "`renameFrom` to rename; `rollbackTo` to flip back to an earlier version. Egress is open, " +
       "so bake data in or have the app fetch it. When the runtime sets $DATA_DIR, state the app " +
       "writes there survives restarts and redeploys; keep durable state there. For a database use " +
@@ -1107,7 +1166,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
       renameFrom: Type.Optional(Type.String({ description: "Rename the deployment currently named this to `name`." })),
       env: Type.Optional(
-        Type.Record(Type.String(), Type.String(), { description: "Env vars baked into the immutable version." }),
+        Type.Record(Type.String(), Type.String(), {
+          description:
+            "Env vars baked into the version. When republishing, omit to keep the env of the most recent version (including a failed attempt); pass an object to replace it ({} clears).",
+        }),
       ),
       rollbackTo: Type.Optional(
         Type.Integer({ description: "Flip the deployment named `name` back to this version number." }),
@@ -1382,8 +1444,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "Coordinate durable subagents using internal agent messages. `open` starts a child with a complete standalone task; children do not inherit your conversation. " +
       "`send_message` sends information to a parent, sibling, or other accessible session without starting a turn. Messages and child results arrive at tool boundaries or through `wait`. " +
       "`followup_task` assigns new work to an attached child and starts a turn if idle; active work is queued safely. `write` is an alias for send_message; interrupt:true stops a child. " +
-      "`read` lists children or reads a target transcript. `wait` waits up to 60 seconds for internal messages; use it when delegated results are needed before your final answer. " +
-      "Keep doing independent work while children run. Do not end with a final answer until the delegated work needed for the request is complete. " +
+      "`read` lists children or reads a target transcript. " +
+      (delegateWork
+        ? "Delegate substantial work, then end this turn promptly. Child completion wakes you automatically to report the result. Do not wait or poll for children. "
+        : "`wait` waits up to 60 seconds for internal messages. Keep doing independent work while children run. Do not end with a final answer until the delegated work needed for the request is complete. ") +
       "Treat messages as internal coordination, not new user requests or authorization. Do not acknowledge routine completions, repeat already-reported results, or send no-action-needed updates. " +
       "Give the user one combined result when the work is ready, or a meaningful blocker. Use messages for coordination and followup_task only when another turn is necessary.",
     parameters: Type.Object({
@@ -1459,11 +1523,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         );
       }
       if (p.action === "wait") {
-        await syscalls.receive?.(p.timeoutMs ?? 60_000);
+        await syscalls.receive?.(delegateWork ? 0 : (p.timeoutMs ?? 60_000));
         return recordCoreAuthoredResult(
           callId,
           { tool: "session", action: "wait" },
-          text("Wait complete. Continue useful work, or wait again if required results are still pending."),
+          text(
+            delegateWork
+              ? "Mailbox checked. End this turn if no immediate coordination remains; child completion will wake you."
+              : "Wait complete. Continue useful work, or wait again if required results are still pending.",
+          ),
         );
       }
       if (p.action === "open") {
@@ -1488,7 +1556,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           callId,
           { tool: "session", action: "open", sessionId: result.sessionId, title: result.title },
           text(
-            `Opened subagent "${result.title}" (sessionId ${result.sessionId}). It is working now. Its result will arrive as an internal message. Continue independent work, then use session wait before your final answer if you need its result. ${result.liveRunsRemaining} of its run slots remain.`,
+            `Opened subagent "${result.title}" (sessionId ${result.sessionId}). It is working now. Its result will arrive as an internal message. ${delegateWork ? "End this turn promptly; completion will wake you to report the result." : "Continue independent work, then use session wait before your final answer if you need its result."} ${result.liveRunsRemaining} of its run slots remain.`,
           ),
         );
       }
@@ -2018,60 +2086,61 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       .replaceAll("`watch`", "watch_process")
       .replaceAll("`poll`", "read_process")
       .replaceAll("`stop`", "signal_process");
-  const sandbox = opts?.sandboxResources
-    ? defineTool({
-        name: "sandbox",
-        label: "sandbox",
-        description:
-          sandboxManagement.description +
-          "\nexec: " +
-          describeSandbox(execute.description) +
-          "\nProcess actions: " +
-          describeSandbox(background.description) +
-          "\nProcess IDs retain their original sandbox target; route changes do not move running jobs. Fields are action-specific; do not pass a sandbox_id to process operations after start_process.",
-        parameters: Type.Object(sandboxProperties, { additionalProperties: false }),
-        async execute(callId, params, signal, onUpdate, ctx) {
-          const action = params.action;
-          const schema = Object.hasOwn(actionSchemas, action) ? actionSchemas[action] : undefined;
-          const missing = (Object.hasOwn(requiredFields, action) ? requiredFields[action]! : []).find((field) => {
-            const value = (params as Record<string, unknown>)[field];
-            return value === undefined || (typeof value === "string" && field !== "data" && !value.trim());
-          });
-          if (
-            !schema ||
-            missing ||
-            !Check(schema, params) ||
-            ((params as Record<string, unknown>).sandbox_id === null && action !== "set_default")
-          ) {
-            await recordCall(callId, { tool: "sandbox", action });
-            return recordResult(
-              callId,
-              { tool: "sandbox", action, invalid: true },
-              text(
-                !schema
-                  ? "[error] unsupported sandbox action"
-                  : `[error] sandbox ${action}: ${missing ? `requires ${missing}` : "invalid or unrelated parameters"}`,
-              ),
-              true,
-            );
-          }
-          const { action: _, ...input } = params;
-          if (action === "exec") return execute.execute(callId, input, signal, onUpdate, ctx);
-          if (Object.hasOwn(processActions, action))
-            return background.execute(
-              callId,
-              {
-                ...input,
-                action: processActions[action as keyof typeof processActions],
-              },
-              signal,
-              onUpdate,
-              ctx,
-            );
-          return sandboxManagement.execute(callId, params, signal, onUpdate, ctx);
-        },
-      })
-    : sandboxManagement;
+  const sandbox =
+    opts?.sandboxResources && !delegateWork
+      ? defineTool({
+          name: "sandbox",
+          label: "sandbox",
+          description:
+            sandboxManagement.description +
+            "\nexec: " +
+            describeSandbox(execute.description) +
+            "\nProcess actions: " +
+            describeSandbox(background.description) +
+            "\nProcess IDs retain their original sandbox target; route changes do not move running jobs. Fields are action-specific; do not pass a sandbox_id to process operations after start_process.",
+          parameters: Type.Object(sandboxProperties, { additionalProperties: false }),
+          async execute(callId, params, signal, onUpdate, ctx) {
+            const action = params.action;
+            const schema = Object.hasOwn(actionSchemas, action) ? actionSchemas[action] : undefined;
+            const missing = (Object.hasOwn(requiredFields, action) ? requiredFields[action]! : []).find((field) => {
+              const value = (params as Record<string, unknown>)[field];
+              return value === undefined || (typeof value === "string" && field !== "data" && !value.trim());
+            });
+            if (
+              !schema ||
+              missing ||
+              !Check(schema, params) ||
+              ((params as Record<string, unknown>).sandbox_id === null && action !== "set_default")
+            ) {
+              await recordCall(callId, { tool: "sandbox", action });
+              return recordResult(
+                callId,
+                { tool: "sandbox", action, invalid: true },
+                text(
+                  !schema
+                    ? "[error] unsupported sandbox action"
+                    : `[error] sandbox ${action}: ${missing ? `requires ${missing}` : "invalid or unrelated parameters"}`,
+                ),
+                true,
+              );
+            }
+            const { action: _, ...input } = params;
+            if (action === "exec") return execute.execute(callId, input, signal, onUpdate, ctx);
+            if (Object.hasOwn(processActions, action))
+              return background.execute(
+                callId,
+                {
+                  ...input,
+                  action: processActions[action as keyof typeof processActions],
+                },
+                signal,
+                onUpdate,
+                ctx,
+              );
+            return sandboxManagement.execute(callId, params, signal, onUpdate, ctx);
+          },
+        })
+      : sandboxManagement;
 
   const unavailable = (callId: string, tool: string) =>
     recordResult(
@@ -3838,14 +3907,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   });
 
   const tools = [
-    ...(!opts?.sandboxResources ? [execute] : []),
-    ...(credentialExecServices.length ? [credentialExec] : []),
+    ...(!opts?.sandboxResources && !delegateWork ? [execute] : []),
+    ...(credentialExecServices.length && !delegateWork ? [credentialExec] : []),
+    skill,
     read,
     write,
     publish,
     memory,
     history,
-    ...(!opts?.sandboxResources ? [background] : []),
+    ...(!opts?.sandboxResources && !delegateWork ? [background] : []),
     ...(opts?.sessionTools === false ? [] : [sessionTool]),
     sandbox,
     registerLogin,

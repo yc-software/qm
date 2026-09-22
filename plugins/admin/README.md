@@ -9,9 +9,9 @@ You reach it through the **portal** (real SSO); the surface trusts the portal-sy
 `admin=<sub>` cookie as identity and asks the **core** whether that principal is an admin
 (`GET /api/whoami` → core `GET /v1/admin/whoami` → `canAdminister`). It holds **no admin id list**
 of its own. Pick a scope, then either **edit governance** (command policy, SOUL, egress),
-**manage users** (the org-wide **Users** tab), or read the **observability** views — Metrics,
-History, Files, Live, Errors, Audit, Skills, Crons, Deployments, Volumes, Retention.
-The **Users** tab (org-wide, org_admin-only, like Retention) lists everyone who has
+**manage users** (the org-wide **Users** tab), or read the **observability** views —
+History, Files, Live, Errors, Audit, Skills, Crons, Deployments, Volumes.
+The **Users** tab (org-wide, org_admin-only) lists everyone who has
 used the agent (from session metadata — no content) with admin status joined, plus the
 authoritative grant list, and lets an org_admin **promote** a principal to org_admin
 or **revoke** — every mutation attributed and audited, the last org_admin protected.
@@ -25,16 +25,11 @@ expired; a day after expiry, **Remove** drops the row. An address that already b
 org member (the org's email domain, the Slack directory, the sign-in allow-list, or anyone who
 has used the agent) cannot be invited.
 (`org_admin` is the only supported role for now; `team_admin` was removed — team-scoped admin
-observability is future work. See `src/admin/admin-service.ts`.) Metrics
-shows TTFT + turn/queue/execution-latency
-percentiles, throughput, and a daily TTFT trend. History (conversation listing with a
+observability is future work. See `src/admin/admin-service.ts`.) History (conversation listing with a
 by-type usage rollup, drilling into transcripts with per-turn model-context breakdowns), Files
 (workspace contents), and Live (ongoing/recent runs) are **top-down content** views: an
 org-scope query spans the whole org; a narrower scope is limited to that scope. Every
 action is authorized in the core and audited.
-**Retention** is org-wide (no scope picker): DAU/WAU/MAU, new-vs-returning, weekly retention cohorts,
-stickiness, and per-user distributions — derived from session/participant metadata only
-(channel attribution is approximate, since entries carry no author principal).
 
 ## Run
 
@@ -48,10 +43,15 @@ CORE_API_URL=http://localhost:8080 CORE_ORG_ID=acme PORT=8090 npm start
 
 ```
 
-No build step, no runtime dependencies (pure `node:http` + native TS). Node 24+.
+No separate build command is needed. The Node 24+ server bundles the admin Lit modules once at startup and embeds them in the existing CSP-hashed script. The backend uses `node:http` and native TypeScript, with optional Sentry error reporting.
+
+The admin tabs render through the Lit modules in `ui/`, with `ui/admin.ts` as their shared entry point. They use the existing light-DOM elements, classes, and styles without layout wrappers. Settings drafts, validation, dirty state, and save feedback render from state; list views own filtering, pagination, and editor state. Stable row keys preserve focus. Shared table, card, and list templates live in `ui/shared.ts`. Specialized safe Markdown, XML, and tool-output formatters remain shared adapters in the shell.
+
+The shared admin controller retains routing, API calls, and change-review dialogs. Successful saves commit the submitted snapshot, preserving newer edits made while a request was in flight. Scope and render generations prevent stale requests from replacing a newer page. Related settings refresh independently so changing one section cannot discard neighboring drafts. Run `npm test` and `npm run typecheck` from this directory after changing the UI.
 
 Env: `CORE_API_URL` (default `http://localhost:8080`), `CORE_ORG_ID` (default `acme`),
-`PORT` (default `8090`) and `CORE_SIGNING_SECRET` (required outside isolated development). The
+`PORT` (default `8090`), `CORE_SIGNING_SECRET` (required outside isolated development), and
+`INBOX_USERS` (the same comma-separated principal allowlist used by Inbox and Calendar). The
 portal also supplies a short-lived `x-portal-identity` token, which this surface forwards to core.
 There is **no** `ADMIN_PRINCIPALS` — admin identity + role + scope live solely in the core's
 durable, mutable `admin_grants` store, and this surface derives admin status from it via

@@ -1307,6 +1307,51 @@ test("AWS up scales services to the configured desired count and live check flag
   }
 });
 
+test("AWS up reapplies the recorded layer after starting a stopped core", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-stopped-layer-"));
+  const dockerBin = join(dir, "docker");
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
+  chmodSync(dockerBin, 0o755);
+  const single = oneServiceConfig();
+  const fake = statefulAws(dir, single);
+  const priorPath = process.env.PATH;
+  process.env.PATH = `${dir}:${priorPath}`;
+  try {
+    await awsUp(single, dir, { yes: true, sandboxDir: dir });
+    const stopped = JSON.parse(readFileSync(fake.state, "utf8"));
+    const previousId = stopped.dynamo["deployment/current"].manifestId.S;
+    const previous = JSON.parse(stopped.dynamo[`deployment/manifest/${previousId}`].manifest.S);
+    stopped.services["acme-core"].desiredCount = 0;
+    writeFileSync(fake.state, JSON.stringify(stopped));
+    const fetchLayer = globalThis.fetch;
+    const writes: string[] = [];
+    let stoppedReads = 0;
+    globalThis.fetch = async (url, init) => {
+      if (String(url).includes("/v1/deployment-layer")) {
+        const current = JSON.parse(readFileSync(fake.state, "utf8"));
+        if (current.services["acme-core"].desiredCount === 0) {
+          stoppedReads++;
+          return new Response("core is stopped", { status: 503 });
+        }
+        if (init?.method === "PUT") writes.push(String(init.body));
+      }
+      return fetchLayer(url, init);
+    };
+    await awsUp(single, dir, { yes: true, sandboxDir: dir });
+    const resumed = JSON.parse(readFileSync(fake.state, "utf8"));
+    const currentId = resumed.dynamo["deployment/current"].manifestId.S;
+    const current = JSON.parse(resumed.dynamo[`deployment/manifest/${currentId}`].manifest.S);
+    assert.equal(stoppedReads, 0);
+    assert.deepEqual(writes, [EMPTY_LAYER_BODY]);
+    assert.equal(resumed.services["acme-core"].desiredCount, 1);
+    assert.deepEqual(current.layer, previous.layer);
+  } finally {
+    process.env.PATH = priorPath;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("AWS up records a restore point under the lease before any mutation and stamps it in the manifest", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-db-restore-point-"));
   const dockerBin = join(dir, "docker");
@@ -2667,7 +2712,10 @@ test("AWS optional-secret activation restores prior tasks when a later service r
     "web-ui": state.services["acme-web-ui"].taskDefinition,
   };
   const arns = Object.fromEntries(
-    required.map((secret) => [secret.name, "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf"]),
+    [...required.map((secret) => secret.name), "INBOX_USERS"].map((name) => [
+      name,
+      "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf",
+    ]),
   );
   for (const workload of ["core", "web-ui"] as const) {
     const repository = secretsConfig.aws!.services[workload]!.ecrRepository;
@@ -5992,8 +6040,20 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
     await assert.rejects(awsSetBackgroundWork(single, dir, false), /different deployment/);
     assert.equal(mutations.length, beforeWrongPause);
     ownership.desiredDeploymentId = manifest.backgroundDeploymentId;
-    await awsSetBackgroundWork(single, dir, false);
-    await awsSetBackgroundWork(single, dir, true);
+    const beforeCompensation = mutations.length;
+    for (const expected of [
+      { generation: ownership.generation - 1, lastRequestId: ownership.lastRequestId },
+      { generation: ownership.generation, lastRequestId: "different-request" },
+    ]) {
+      await assert.rejects(awsSetBackgroundWork(single, dir, false, undefined, expected), /changed since promotion/);
+    }
+    assert.equal(mutations.length, beforeCompensation);
+    await awsSetBackgroundWork(single, dir, false, undefined, {
+      generation: ownership.generation,
+      lastRequestId: ownership.lastRequestId,
+    });
+    const confirmed = await awsSetBackgroundWork(single, dir, true);
+    assert.equal(confirmed?.generation, 3);
     assert.equal(ownership.generation, 3);
     assert.equal(mutations.length, 4);
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs update-service|register-task-definition|run-task/);

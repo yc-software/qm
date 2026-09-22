@@ -173,7 +173,9 @@ export function assertOneStatement(stmt: string): void {
 }
 
 export function concurrentIndexName(stmt: string): string | undefined {
-  return /^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_$]*)\b/i.exec(stmt)?.[1];
+  return /^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_$]*)\s+ON\s/i.exec(
+    stmt,
+  )?.[1];
 }
 
 export function pgMigrationChecksum(statements: readonly string[]): string {
@@ -225,6 +227,42 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
             `pg-pool: migration ${migration.id} checksum mismatch (database=${applied.rows[0].checksum}, source=${migration.checksum})`,
           );
         }
+        continue;
+      }
+      if (migration.statements.some((statement) => concurrentIndexName(statement))) {
+        if (migration.legacyId || !migration.statements.every((statement) => concurrentIndexName(statement))) {
+          throw new Error(`pg-pool: concurrent index migration ${migration.id} must contain only concurrent indexes`);
+        }
+        for (const statement of migration.statements) {
+          const name = concurrentIndexName(statement)!;
+          const table =
+            /\sON\s+(?:ONLY\s+)?([a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?)\s*(?:USING\s+[a-z_]+\s*)?\(/i.exec(
+              statement,
+            )?.[1];
+          if (!table) throw new Error(`pg-pool: unsupported concurrent index target in ${migration.id}`);
+          const inspect = () =>
+            client.query<{ indisvalid: boolean; indisready: boolean; same_table: boolean; qualified_name: string }>(
+              `SELECT i.indisvalid, i.indisready, i.indrelid = t.oid AS same_table,
+                    quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS qualified_name
+             FROM pg_class t JOIN pg_namespace n ON n.oid = t.relnamespace
+             JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = $2
+             JOIN pg_index i ON i.indexrelid = c.oid WHERE t.oid = to_regclass($1)`,
+              [table.toLowerCase(), name.toLowerCase()],
+            );
+          const existing = (await inspect()).rows[0];
+          if (existing && !existing.same_table)
+            throw new Error(`pg-pool: concurrent index ${name} belongs to a different table`);
+          if (existing?.indisvalid === false) await client.query(`DROP INDEX CONCURRENTLY ${existing.qualified_name}`);
+          await client.query(statement);
+          const built = (await inspect()).rows[0];
+          if (!built?.indisvalid || !built.indisready || !built.same_table) {
+            throw new Error(`pg-pool: concurrent index ${name} is not ready and valid`);
+          }
+        }
+        await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [
+          migration.id,
+          migration.checksum,
+        ]);
         continue;
       }
       await client.query("BEGIN");

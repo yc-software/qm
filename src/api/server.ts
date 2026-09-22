@@ -1,3 +1,5 @@
+import { reportBackendError, startTiming } from "../../plugins/chassis/src/error-reporting.ts";
+import { traceStatus } from "../../plugins/chassis/src/timing.ts";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -20,7 +22,7 @@ import { verifyCapabilityToken, CONTROL_PLANE_AUD, type CapabilityClaims } from 
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { isUserScoped, userScopedField, assertedActor, isUnclassifiedWrite } from "./user-scoped-routes.ts";
 import { errMessage } from "../util/errors.ts";
-import { parseScopeId } from "../types.ts";
+import { parseScopeId, scopeId } from "../types.ts";
 import {
   armBodyDeadline,
   canonicalPayload,
@@ -29,11 +31,12 @@ import {
   sendJson,
   verifyOrReject,
 } from "./http.ts";
-import { dispatch, findRoute, run, type ApiCtx, type BaseCtx, type Route, type RouteAuth } from "./routes/route.ts";
+import { findRoute, run, type ApiCtx, type BaseCtx, type Route, type RouteAuth } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
+import { canonicalPerson, samePerson } from "../directory/person.ts";
 
 const safeDecode = (s: string): string => {
   try {
@@ -43,7 +46,13 @@ const safeDecode = (s: string): string => {
   }
 };
 
-function capabilityAdminDenied(method: string, pathname: string, url: URL, claims: CapabilityClaims): string | null {
+async function capabilityAdminDenied(
+  method: string,
+  pathname: string,
+  url: URL,
+  claims: CapabilityClaims,
+  config: ServerDeps["config"],
+): Promise<string | null> {
   if (method === "GET" && pathname === "/v1/admin/whoami") return null;
   if (claims.aud !== CONTROL_PLANE_AUD) return "admin routes require the per-turn agent token";
   if (!livePersonCapability(claims) && !unattendedAdminReadAllowed(method, pathname, claims)) {
@@ -55,19 +64,19 @@ function capabilityAdminDenied(method: string, pathname: string, url: URL, claim
   if (pathname.startsWith("/v1/admin/impersonate")) {
     return "impersonating a user is portal-only — the agent cannot act as another person";
   }
-  if (
-    method === "PUT" &&
-    /^\/v1\/admin\/scopes\/[^/]+\/import$/.test(pathname) &&
-    parseScopeId(claims.scopeId).kind !== "personal"
-  ) {
-    return "bulk configuration imports may contain credentials — run them from a DM or the portal";
+  if (pathname.startsWith("/v1/admin/principal-links")) {
+    return "identity links are portal-only — the agent cannot decide which sign-ins belong to one person";
   }
   if (method === "GET" && isAdminContentRead(pathname) && parseScopeId(claims.scopeId).kind !== "personal") {
     let target = "";
     if (pathname.startsWith("/v1/admin/scopes/"))
       target = safeDecode(pathname.slice("/v1/admin/scopes/".length).split("/")[0] ?? "");
     else if (pathname === "/v1/admin/memory") target = url.searchParams.get("scope") ?? "";
-    if (parseScopeId(target).kind !== "org") {
+    if (
+      parseScopeId(target).kind !== "org" &&
+      (!livePersonCapability(claims) ||
+        (await config?.resolveSharingPostureDurable(scopeId("personal", claims.actorId), claims.scopeId)) !== "open")
+    ) {
       return "this admin read returns private content — ask the agent in a DM";
     }
   }
@@ -258,7 +267,7 @@ async function gate(
         return null;
       }
       if (pathname.startsWith("/v1/admin/")) {
-        const denied = capabilityAdminDenied(method, pathname, url, capability);
+        const denied = await capabilityAdminDenied(method, pathname, url, capability, deps.config);
         if (denied) {
           sendJson(res, 403, { error: "forbidden", message: denied });
           return null;
@@ -312,9 +321,17 @@ async function gate(
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
     actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
     if (actor && deps.identity) {
-      await deps.identity.refresh();
-      if (deps.identity.classify(actor.p).type !== "internal") actor = null;
+      await deps.identity.refresh(Boolean(actor.authenticatedAs));
+      if (
+        deps.identity.classify(actor.p).type !== "internal" ||
+        (actor.authenticatedAs &&
+          (deps.identity.classify(actor.authenticatedAs).type !== "internal" ||
+            !samePerson(actor.authenticatedAs, actor.imp ?? actor.p)))
+      )
+        actor = null;
     }
+    if (actor)
+      actor = { ...actor, p: canonicalPerson(actor.p), ...(actor.imp ? { imp: canonicalPerson(actor.imp) } : {}) };
     if (!isPublicRoute && requirePortalIdentity) {
       const webTurn =
         method === "POST" &&
@@ -336,7 +353,9 @@ async function gate(
         let asserted: unknown = null;
         if (webTurn) asserted = (body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null;
         else if (field) asserted = assertedActor(field, url, body, req);
-        if ((field && asserted !== actor.p) || (!field && asserted !== null && asserted !== actor.p)) {
+        const actorId = actor.p;
+        const matchesActor = (value: unknown): boolean => typeof value === "string" && samePerson(value, actorId);
+        if ((field && !matchesActor(asserted)) || (!field && asserted !== null && !matchesActor(asserted))) {
           sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
           return null;
         }
@@ -357,6 +376,7 @@ function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): 
     else res.destroy();
     return;
   }
+  reportBackendError(err);
   console.error("[server] 500 %s %s: %s", req.method ?? "?", req.url ?? "?", errMessage(err));
   if (!res.headersSent) sendJson(res, 500, { error: "internal_error", message: "internal server error" });
   else res.destroy();
@@ -426,6 +446,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
   fastify.decorateRequest("gate", undefined);
 
   fastify.setErrorHandler((err, request, reply) => {
+    reportBackendError(err);
     console.error("%s", `[server] 500 ${request.raw.method ?? "?"} ${request.raw.url ?? "?"}:`, errMessage(err));
     return reply.code(500).send({ error: "internal_error", message: "internal server error" });
   });
@@ -502,7 +523,17 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     requirePortalIdentity,
     allowUnsignedSourceAuth,
   };
+  const requestNames = new WeakMap<IncomingMessage, string>();
   const server = createHttpServer((req, res) => {
+    const finishTiming = req.url === "/healthz" ? undefined : startTiming("http.server", `${req.method ?? "GET"} /*`);
+    if (finishTiming)
+      res.once("close", () =>
+        finishTiming({
+          name: `${req.method ?? "GET"} ${requestNames.get(req) ?? "/*"}`,
+          status: res.writableFinished ? traceStatus(res.statusCode) : "cancelled",
+          data: { http_status: res.writableFinished ? String(res.statusCode) : undefined },
+        }),
+      );
     req.on("error", () => res.destroy());
     res.on("error", () => res.destroy());
     void front(req, res).catch((err: unknown) => respondError(req, res, err));
@@ -518,9 +549,18 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
     armBodyDeadline(req, 30_000);
     const base = baseCtx(req, res, wiring);
-    if (await proxyDeploymentSubdomain(base)) return;
-    if (await dispatch(rawRoutes, base)) return;
+    if (await proxyDeploymentSubdomain(base)) {
+      requestNames.set(req, "/deployment-proxy/*");
+      return;
+    }
+    const raw = findRoute(rawRoutes, base.method, base.pathname);
+    if (raw) {
+      if ("path" in raw.route) requestNames.set(req, raw.route.path);
+      await run(raw.route, raw.params, base);
+      return;
+    }
     const matched = findRoute(apiRoutes, base.method, base.pathname);
+    if (matched && "path" in matched.route) requestNames.set(req, matched.route.path);
     const routeAuth = matched?.route.auth;
     const acceptsSourceAuth = !matched || routeAuth === "source" || routeAuth === "either";
     if (wiring.secret && !capabilityFromHeaders(req) && routeAuth !== "public" && acceptsSourceAuth) {

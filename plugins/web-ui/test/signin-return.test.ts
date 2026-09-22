@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { JSDOM } from "jsdom";
+import { getClient } from "@sentry/browser";
+import { initializeBrowserErrors, stopBrowserErrors } from "../src/browser-errors.ts";
 import { webFetch } from "../src/core-bridge.ts";
 import { currentInAppLocation, SIGNIN_REQUIRED_EVENT, signinRedirect } from "../src/signin-return.ts";
 
@@ -30,6 +32,7 @@ const realWindow = globalThis.window;
 const realEvent = globalThis.Event;
 
 afterEach(() => {
+  stopBrowserErrors();
   globalThis.fetch = realFetch;
   Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: realWindow });
   Object.defineProperty(globalThis, "Event", { configurable: true, writable: true, value: realEvent });
@@ -58,7 +61,15 @@ test("webFetch redirects a 401 through the same-origin sign-in endpoint", async 
   target.addEventListener(SIGNIN_REQUIRED_EVENT, () => signinRequired++);
   globalThis.fetch = async () => Response.json({ loginUrl: "/auth/login" }, { status: 401 });
 
+  await initializeBrowserErrors({
+    user: "test",
+    org: "test",
+    browserErrors: { dsn: "https://public@sentry.example.com/1" },
+  });
+  const client = getClient()!;
+  assert.notEqual(client.getOptions().enabled, false);
   const response = await webFetch("/api/me");
+  assert.equal(client.getOptions().enabled === false, response.status === 401);
 
   assert.equal(response.status, 401);
   assert.deepEqual(assigned, ["/auth/login?returnTo=%2Fcrons%2Fjob-1%3Ftab%3Druns%23output"]);
@@ -71,7 +82,15 @@ test("webFetch dispatches the sign-in fallback for an unusable 401 body", async 
   target.addEventListener(SIGNIN_REQUIRED_EVENT, () => signinRequired++);
   globalThis.fetch = async () => new Response("not json", { status: 401 });
 
+  await initializeBrowserErrors({
+    user: "test",
+    org: "test",
+    browserErrors: { dsn: "https://public@sentry.example.com/1" },
+  });
+  const client = getClient()!;
+  assert.notEqual(client.getOptions().enabled, false);
   const response = await webFetch("/api/me");
+  assert.equal(client.getOptions().enabled === false, response.status === 401);
 
   assert.equal(response.status, 401);
   assert.deepEqual(assigned, []);
@@ -84,7 +103,15 @@ test("webFetch leaves non-401 responses alone", async () => {
   target.addEventListener(SIGNIN_REQUIRED_EVENT, () => signinRequired++);
   globalThis.fetch = async () => Response.json({ error: "forbidden" }, { status: 403 });
 
+  await initializeBrowserErrors({
+    user: "test",
+    org: "test",
+    browserErrors: { dsn: "https://public@sentry.example.com/1" },
+  });
+  const client = getClient()!;
+  assert.notEqual(client.getOptions().enabled, false);
   const response = await webFetch("/api/me");
+  assert.equal(client.getOptions().enabled === false, response.status === 401);
 
   assert.equal(response.status, 403);
   assert.deepEqual(assigned, []);

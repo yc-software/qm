@@ -7,7 +7,7 @@ import {
   type HarnessTurnResult,
 } from "./harness.ts";
 import { classifyScopeLabel } from "../classify/scope-classifier.ts";
-import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { NonRetryableTurnError, TitleRejected } from "../core/turn-error.ts";
 import { NeedsApproval } from "../tools/primitives.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "./context-compaction.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -31,6 +31,8 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!screened-run ",
   "!double-exec ",
   "!read ",
+  "!skill ",
+  "!skill-run ",
   "!write ",
   "!attach ",
   "!writeattach ",
@@ -137,6 +139,9 @@ export function createMockHarness(): Harness {
             messages: [...mockProviderMessages(turn.history), { role: "user", content: modelPrompt }],
             ...(turn.images?.length
               ? { images: turn.images.map((image) => ({ mimeType: image.mimeType, dataBase64: image.dataBase64 })) }
+              : {}),
+            ...(turn.documents?.length
+              ? { documents: turn.documents.map(({ name, mimeType, artifactId }) => ({ name, mimeType, artifactId })) }
               : {}),
             ...(turn.tapeMode ? { tapeMode: turn.tapeMode } : {}),
           },
@@ -259,6 +264,7 @@ export function createMockHarness(): Harness {
             cmd.slice(cmd.indexOf("!preamble-then-quiet") + "!preamble-then-quiet".length).trim() ||
             "Still queued — silent.";
           if (turn.onDelta) for (const chunk of streamChunks(preamble)) turn.onDelta(chunk);
+          await turn.emit({ type: "text", payload: { text: preamble }, scopeLabel: turn.scopeLabel });
           await turn.emit({
             type: "tool_call",
             payload: { tool: "execute", command: "check" },
@@ -272,6 +278,7 @@ export function createMockHarness(): Harness {
           const narration =
             cmd.slice(cmd.indexOf("!narrate-no-update") + "!narrate-no-update".length).trim() || "Nothing new.";
           if (turn.onDelta) for (const chunk of streamChunks(narration)) turn.onDelta(chunk);
+          await turn.emit({ type: "text", payload: { text: narration }, scopeLabel: turn.scopeLabel });
           await turn.emit({
             type: "tool_call",
             payload: { tool: "execute", command: "check" },
@@ -280,9 +287,20 @@ export function createMockHarness(): Harness {
           await turn.emit({ type: "tool_result", payload: { tool: "execute", ok: true }, scopeLabel: turn.scopeLabel });
           usedTool = true;
           reply = `${narration}\n\n[no-update]`;
+        } else if (command0.startsWith("!phased-reply")) {
+          await turn.onTextBlockStart?.("commentary");
+          turn.onDelta?.("Checking.");
+          await turn.emit({
+            type: "text",
+            payload: { text: "Checking.", phase: "commentary" },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.onTextBlockStart?.("final_answer");
+          reply = "All clear.";
         } else if (command0.startsWith("!preamble")) {
           const preamble = cmd.slice(cmd.indexOf("!preamble") + "!preamble".length).trim() || "On it — checking.";
           if (turn.onDelta) for (const chunk of streamChunks(preamble)) turn.onDelta(chunk);
+          await turn.emit({ type: "text", payload: { text: preamble }, scopeLabel: turn.scopeLabel });
           await turn.emit({
             type: "tool_call",
             payload: { tool: "execute", command: "check" },
@@ -537,6 +555,39 @@ export function createMockHarness(): Harness {
           const added = await turn.tools.memoryRemember([fact]);
           usedTool = true;
           reply = added === null ? "(memory unavailable)" : `remembered ${added}`;
+        } else if (command0.startsWith("!skill-run ")) {
+          const rest = command0.slice(11).trim();
+          const sp = rest.indexOf(" ");
+          const name = sp === -1 ? rest : rest.slice(0, sp);
+          const r = await turn.tools.skill(name);
+          usedTool = true;
+          if (r.content == null) reply = `(no skill file: ${name}/SKILL.md)`;
+          else {
+            const command = rest
+              .slice(sp + 1)
+              .split("{dir}")
+              .join(r.dir ?? "");
+            const ran = await turn.tools.execute(command);
+            reply = (ran.stdout || ran.stderr).trim();
+          }
+        } else if (command0.startsWith("!skill ")) {
+          const [name, path] = command0.slice(7).trim().split(/\s+/);
+          const r = await turn.tools.skill(name!, path ? { path } : undefined);
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "skill", name, found: r.content != null, ...(r.dir ? { dir: r.dir } : {}) },
+            scopeLabel: classifyScopeLabel({
+              type: "tool_result",
+              sessionScopeId: turn.scopeLabel,
+              orgScopeId: turn.orgScopeId,
+              sourceScopeId: r.sourceScopeId,
+            }),
+          });
+          usedTool = true;
+          reply =
+            r.content == null
+              ? `(no skill file: ${name}/${path ?? "SKILL.md"})`
+              : `${r.dir ? `${r.dir}\n` : ""}${r.content}`;
         } else if (command0.startsWith("!write ")) {
           const rest = command0.slice(7);
           const sp = rest.indexOf(" ");
@@ -830,6 +881,11 @@ export function createMockHarness(): Harness {
               ...(turn.images?.length
                 ? { images: turn.images.map((image) => ({ mimeType: image.mimeType, dataBase64: image.dataBase64 })) }
                 : {}),
+              ...(turn.documents?.length
+                ? {
+                    documents: turn.documents.map(({ name, mimeType, artifactId }) => ({ name, mimeType, artifactId })),
+                  }
+                : {}),
               ...(turn.tapeMode ? { tapeMode: turn.tapeMode } : {}),
             },
             truncated: false,
@@ -961,6 +1017,8 @@ export function createMockHarness(): Harness {
       generateTitle(transcript: string): Promise<string | undefined> {
         if (transcript.includes("Simulate title provider exception"))
           return Promise.reject(new Error("title model overloaded"));
+        if (transcript.includes("Simulate reply-shaped title"))
+          return Promise.reject(new TitleRejected("reply_opener", "Sorry, I can't title this one"));
         if (transcript.includes("Simulate four-way title outage")) return Promise.resolve(undefined);
         const line = transcript
           .split("\n")

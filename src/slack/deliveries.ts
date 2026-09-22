@@ -1,3 +1,4 @@
+import { keychainApprovalMessage, keychainApprovalOrigin } from "./keychain-approvals.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { performance } from "node:perf_hooks";
 import {
@@ -339,7 +340,10 @@ export function createDeliveryPoller(deps: {
               slackApiMs = Math.round(performance.now() - tPost);
             }
           },
-          ack: (body) => ackDelivery(d.id, mergeSlackApiMs(body, slackApiMs)),
+          ack: async (body) => {
+            if (runId) await core.taskAcknowledgements?.finish(client, runId);
+            return ackDelivery(d.id, mergeSlackApiMs(body, slackApiMs));
+          },
           onError: logDeliveryError(d.id),
         });
       },
@@ -358,14 +362,23 @@ export function createDeliveryPoller(deps: {
           post: async () => {
             const tPost = performance.now();
             try {
-              const text = toSlackMrkdwn(stripReactionDirectives(d.text));
+              const approval =
+                d.destination.keychainAskId && core.keychainApprovals
+                  ? await core.keychainApprovals.get(d.destination.keychainAskId, d.destination.target)
+                  : null;
+              const card = approval
+                ? keychainApprovalMessage(approval, await keychainApprovalOrigin(approval, client, deps.webUiPublicUrl))
+                : null;
+              const text = card?.text ?? toSlackMrkdwn(stripReactionDirectives(d.text));
               if (!text.trim() && !d.attachments?.length) return undefined;
               const channel = await openConversationFor(client, [d.destination.target]);
               const threadTs = d.destination.threadTs;
               const footer = deliveryFooter(d);
-              const blocks = footer.length
-                ? [...(text.trim() ? slackSectionBlocks(text) : []), { type: "context", elements: footer }]
-                : undefined;
+              const blocks =
+                card?.blocks ??
+                (footer.length
+                  ? [...(text.trim() ? slackSectionBlocks(text) : []), { type: "context", elements: footer }]
+                  : undefined);
               let uploadError: unknown;
               let reused = false;
               if (text.trim() || blocks) {
@@ -423,6 +436,10 @@ export function createDeliveryPoller(deps: {
         deliverToConversations(client, leaseLost),
         deliverToPrincipals(client, leaseLost),
       ]);
+      if (!lostFlag)
+        await core.taskAcknowledgements
+          ?.reconcile(client)
+          .catch(swallowAs("slack: task ack reconciliation", undefined));
       const cycleMs = Date.now() - cycleStart;
       if (cycleMs >= slowDrainMs) {
         void core

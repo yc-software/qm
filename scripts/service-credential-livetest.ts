@@ -78,7 +78,7 @@ async function main(): Promise<void> {
   check(
     "GET projects the credential (hasSecret, no material)",
     !!cred && cred.hasSecret === true && !cfg1.raw.includes(FAKE_SECRET),
-    cred ? `grantees=${JSON.stringify(cred.grantees)} usage=${cred.usageCount}` : "not found",
+    cred ? `grantees=${JSON.stringify(cred.grantees)}` : "not found",
   );
   check("default sharing is org-wide", !!cred && Array.isArray(cred.grantees) && cred.grantees.includes(`org:${ORG}`));
 
@@ -125,8 +125,13 @@ async function main(): Promise<void> {
     `${notEntitled.status} ${notEntitled.json?.error}`,
   );
 
-  const cfg2 = await admin("GET", `/v1/admin/scopes/org:${ORG}`);
-  const used = cfg2.json?.serviceCredentials?.find((c: any) => c.slug === SLUG)?.usageCount;
+  let used: number | undefined;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const usage = await admin("GET", `/v1/admin/scopes/org:${ORG}/credential-usage`);
+    used = usage.json?.summaries?.find((c: any) => c.slug === SLUG)?.usageCount;
+    if (used === 1) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   check("usage count incremented by the one successful call", used === 1, `usageCount=${used}`);
 
   await admin("PUT", `/v1/admin/scopes/org:${ORG}/service-credentials`, {

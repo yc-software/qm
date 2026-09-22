@@ -1,3 +1,4 @@
+import { GmailReadError, getSentEmail, listSentEmails } from "../../connectors/gmail-sent.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import {
   authorizeUrl,
@@ -13,7 +14,7 @@ import {
   type OAuthState,
 } from "../../connectors/oauth.ts";
 import { bestOAuthTokenStatus, CONNECTOR_STATUS_ACCOUNT_TYPES } from "../../credentials/connector-status.ts";
-import type { OAuthTokenStatus } from "../../credentials/keychain.ts";
+import type { DerivedOAuthAuth, OAuthTokenStatus } from "../../credentials/keychain.ts";
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
@@ -501,7 +502,60 @@ export const connectorRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   { match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "callback", auth: "public", handle: oauthCallback },
 ];
 
+export async function gmailSent(ctx: ApiCtx): Promise<void> {
+  const principal = ctx.actor?.p;
+  ctx.res.setHeader("Cache-Control", "no-store");
+  if (!principal) return sendJson(ctx.res, 403, { error: "forbidden", message: "Sign in to read sent mail." });
+  const requestedAccountType = ctx.url.searchParams.get("accountType");
+  if (requestedAccountType !== null && !["default", "personal", "company"].includes(requestedAccountType))
+    return sendJson(ctx.res, 400, { error: "bad_request" });
+  const pageToken = ctx.url.searchParams.get("pageToken") ?? undefined;
+  if (pageToken && pageToken.length > 2048) return sendJson(ctx.res, 400, { error: "bad_request" });
+  try {
+    let accountType: AccountType | undefined;
+    let auth: DerivedOAuthAuth | null | undefined;
+    let authError: unknown;
+    for (const candidate of requestedAccountType
+      ? [requestedAccountType as AccountType]
+      : (["default", "personal", "company"] satisfies AccountType[])) {
+      try {
+        auth = await ctx.deps.connectorTokens?.connectorDerivedAuth("gmail.googleapis.com", principal, candidate);
+        if (auth) {
+          accountType = candidate;
+          break;
+        }
+      } catch (error) {
+        authError ??= error;
+      }
+    }
+    if (!auth && authError) throw authError;
+    if (!auth || !accountType)
+      return sendJson(ctx.res, 409, {
+        error: "not_connected",
+        message: "Connect this Google account in Settings to see sent mail.",
+      });
+    return sendJson(ctx.res, 200, {
+      ...(ctx.params.messageId
+        ? await getSentEmail(auth.accessToken, ctx.params.messageId)
+        : await listSentEmails(auth.accessToken, pageToken)),
+      accountType,
+    });
+  } catch (error) {
+    let status = 502;
+    if (error instanceof GmailReadError) {
+      if ([401, 403].includes(error.status)) status = 409;
+      else if (error.status === 404) status = 404;
+    }
+    return sendJson(ctx.res, status, {
+      error: "gmail_unavailable",
+      message: error instanceof GmailReadError ? error.message : "Couldn't load sent mail from Gmail. Try again.",
+    });
+  }
+}
+
 export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "GET", path: "/v1/connectors/gmail/sent/:messageId", auth: "source", handle: gmailSent },
+  { method: "GET", path: "/v1/connectors/gmail/sent", auth: "source", handle: gmailSent },
   { method: "POST", path: "/v1/connectors/oauth/consent/mint", auth: { aud: "oauth-consent" }, handle: consentMint },
   { method: "GET", path: "/v1/connectors/oauth/consent/redeem/:linkId", auth: "source", handle: consentRedeem },
   { match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "start", auth: "source", handle: oauthStart },

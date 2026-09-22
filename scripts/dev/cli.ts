@@ -41,7 +41,7 @@ import { sweepSlackTokenOrphans } from "./lib/orphans.ts";
 import { destroyLocalDevSandboxes } from "./lib/sandbox.ts";
 import { bestEffort, errMessage, formatAge, nowEpoch, sleep } from "./lib/util.ts";
 import { runDoctor } from "./commands/doctor.ts";
-import type { BootPhaseEvent, BootResult, LeaseInfo } from "./lib/types.ts";
+import type { BootPhaseEvent, BootResult, DevSandboxChoice, LeaseInfo } from "./lib/types.ts";
 import { CHILD_ORDER, EXIT } from "./lib/types.ts";
 import { validOrgId } from "../../cli/src/config.ts";
 
@@ -258,7 +258,7 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
         branch,
         callerEnv,
         watch: !opts["no-watch"] && callerEnv.DEV_INSTANCE_WATCH !== "0",
-        sandbox: opts.sandbox as "local" | "sprites" | "smolmachines" | "e2b" | "porter" | "agent37" | "auto",
+        sandbox: opts.sandbox as DevSandboxChoice,
         canaryChannel,
         strict: opts.strict,
         slack: withSlack,
@@ -674,7 +674,7 @@ async function main(): Promise<number> {
       });
     default:
       console.error(
-        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|e2b|porter|agent37|auto] [--surface web|slack|both] [--no-slack] [--no-watch] [--org id] [--fix]",
+        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|e2b|porter|agent37|superserve|auto] [--surface web|slack|both] [--no-slack] [--no-watch] [--org id] [--fix]",
       );
       return EXIT.usage;
   }

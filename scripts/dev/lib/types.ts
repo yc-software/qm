@@ -104,13 +104,16 @@ export interface StatusReport {
   children: Record<string, ChildStatus & { slack?: SlackHealth }>;
 }
 
+export type DevSandboxBackend = "local" | "sprites" | "smolmachines" | "e2b" | "porter" | "agent37" | "superserve";
+export type DevSandboxChoice = DevSandboxBackend | "auto";
+
 export interface BootSpec {
   slot: string;
   worktree: string;
   branch: string;
   callerEnv: Record<string, string>;
   watch: boolean;
-  sandbox: "local" | "sprites" | "smolmachines" | "e2b" | "porter" | "agent37" | "auto";
+  sandbox: DevSandboxChoice;
   canaryChannel?: string;
   strict: boolean;
   slack?: boolean;

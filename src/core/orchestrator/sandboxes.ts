@@ -1,4 +1,5 @@
 import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
+import { personalScope } from "../../types.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions } from "../../sandbox/sandbox.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
@@ -10,11 +11,17 @@ import {
 import type { DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
 import { expandServiceAliases } from "../../credentials/resident-paths.ts";
 import { shq } from "../../util/shell.ts";
-import { createSkillMaterializer, renderSkillBody, safeSkillDirName } from "../../skills/materialize.ts";
+import {
+  materializeSkillTree as laySkillTree,
+  packRoot,
+  rehomeSkillPaths,
+  renderSkillBody,
+  skillDir,
+  SKILLS_DIR,
+} from "../../skills/materialize.ts";
 import { safeSkillFilePath, type SkillResolution } from "../../skills/skill-store.ts";
 import { isSafeSkillName } from "../../skills/skill-name.ts";
-import { isSkillMaterializationControlPath } from "../../skills/materialization-paths.ts";
-import type { ReadResult } from "../../tools/primitives.ts";
+import type { SkillResult } from "../../tools/primitives.ts";
 import { TURN_FILES_DIR } from "../attachments.ts";
 import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
@@ -37,6 +44,7 @@ export interface TurnSandboxContext {
   connectorEnv: Record<string, string>;
   egressTokenForTurn: string | undefined;
   isolateOwnerKeychain: boolean;
+  openSpeakerKeychain?: boolean;
   ownerAuthAvailable: boolean;
   ownerAuthEnv: Record<string, string>;
   ownerEnvCredentialIds: string[];
@@ -45,9 +53,7 @@ export interface TurnSandboxContext {
   credentialCutoverServices: string[];
   quarantinedServices: string[];
   cutoverModeOf: (service: string) => DeviceFlowCutoverMode;
-  visibleSkills: SkillResolution[];
   visibleSkillsForTurn: () => Promise<SkillResolution[]>;
-  skillMaterializer: ReturnType<typeof createSkillMaterializer>;
   emitGapWork: (phase: GapPhase, start: number, end: number) => void;
   perf: { credsMs: number };
 }
@@ -67,6 +73,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     connectorEnv,
     egressTokenForTurn,
     isolateOwnerKeychain,
+    openSpeakerKeychain,
     ownerAuthAvailable,
     ownerAuthEnv,
     ownerEnvCredentialIds,
@@ -75,9 +82,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     credentialCutoverServices,
     quarantinedServices,
     cutoverModeOf,
-    visibleSkills,
     visibleSkillsForTurn,
-    skillMaterializer,
     emitGapWork,
     perf,
   } = ctx;
@@ -99,6 +104,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     : undefined;
   if (ownerAuthAvailable) {
     ownerAuthCommand = (command) => {
+      if (openSpeakerKeychain)
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: actor.id,
+          action: "keychain.open_speaker_use",
+          resource: "isolated owner execution",
+          scopeLabel: scopeId,
+        });
       for (const credentialId of ownerEnvCredentialIds) {
         deps.auditLog.record({
           at: Date.now(),
@@ -246,13 +259,16 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           await deps.deviceFlowCutover?.markResidentReset(memoryScopeId, service, generation, handle.resourceId);
         }
       } catch (err) {
-        deps.errors?.record({
-          category: "keychain",
-          code: "device_flow_restore_failed",
-          message: errMessage(err),
-          scopeLabel: scopeId,
-          sessionId: session.id,
-        });
+        deps.errors?.record(
+          {
+            category: "keychain",
+            code: "device_flow_restore_failed",
+            message: errMessage(err),
+            scopeLabel: scopeId,
+            sessionId: session.id,
+          },
+          err,
+        );
       }
       emit("creds", deviceFlowStart, Date.now());
       perf.credsMs += Date.now() - deviceFlowStart;
@@ -280,92 +296,83 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       try {
         await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId);
       } catch (err) {
-        deps.errors?.record({
-          category: "process_session",
-          code: "reconcile_failed",
-          message: errMessage(err),
-          scopeLabel: scopeId,
-          sessionId: session.id,
-        });
+        deps.errors?.record(
+          {
+            category: "process_session",
+            code: "reconcile_failed",
+            message: errMessage(err),
+            scopeLabel: scopeId,
+            sessionId: session.id,
+          },
+          err,
+        );
       } finally {
         emit("proc_reconcile", procReconcileStart, Date.now());
-      }
-    }
-    if (deps.skills) {
-      const materializeStart = Date.now();
-      try {
-        await skillMaterializer.materializeIndex(deps.sandbox, handle, visibleSkills, visibleSkillsForTurn);
-      } finally {
-        emit("skills_materialize", materializeStart, Date.now());
-        box.materializeMs = Date.now() - materializeStart;
       }
     }
     box.handle = handle;
     return handle;
   };
-  const readSkill = async (path: string): Promise<ReadResult> => {
-    const missing = { content: null, sourceScopeId: null };
-    const match = /^skill:\/\/([^/]+)\/(.+)$/.exec(path);
-    if (!match || !isSafeSkillName(match[1]!)) return missing;
-    const [, name, file] = match;
+  const skillsRoot = `${turnFilesDir}/${SKILLS_DIR}`;
+  const laidTrees = new Set<string>();
+  const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution, sandboxId?: string): Promise<void> => {
+    const treeKey = `${sandboxId ?? "default"}:${skillDir(skillsRoot, r)}`;
+    if (laidTrees.has(treeKey)) return;
+    const start = Date.now();
     try {
-      if (safeSkillFilePath(file!) !== file || isSkillMaterializationControlPath(`skills/${name}/${file}`))
-        return missing;
+      const bundles = r.screenedBundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [r]) : []);
+      await laySkillTree(deps.sandbox, handle, skillsRoot, r, bundles);
+      laidTrees.add(treeKey);
+    } catch (err) {
+      deps.errors?.record(
+        {
+          category: "skills",
+          code: "tree_materialize_failed",
+          message: errMessage(err),
+          scopeLabel: scopeId,
+          sessionId: session.id,
+        },
+        err,
+      );
+      throw err;
+    } finally {
+      emitGapWork("skills_materialize", start, Date.now());
+    }
+  };
+  const useSkill = async (name: string, file: string, sandboxId?: string): Promise<SkillResult> => {
+    const missing = { content: null, sourceScopeId: null };
+    if (!isSafeSkillName(name)) return missing;
+    try {
+      if (safeSkillFilePath(file) !== file) return missing;
     } catch {
       return missing;
     }
     const resolution = (await visibleSkillsForTurn()).find((r) => r.skill?.manifest.name === name);
     if (!resolution?.skill) return missing;
-    const content =
-      file === "SKILL.md"
-        ? renderSkillBody(resolution)
-        : resolution.skill.manifest.files?.find((f) => f.path === file)?.content;
+    const shipsFiles = (resolution.skill.manifest.files?.length ?? 0) > 0 || resolution.skill.pack !== undefined;
+    const asset = resolution.skill.manifest.files?.find((f) => {
+      try {
+        return safeSkillFilePath(f.path) === file;
+      } catch {
+        return false;
+      }
+    })?.content;
+    let content: string | undefined;
+    if (file === "SKILL.md") content = renderSkillBody(resolution, shipsFiles ? skillsRoot : undefined);
+    else if (asset !== undefined) content = rehomeSkillPaths(resolution, asset, skillsRoot);
     if (content === undefined) return missing;
     if (deps.skills)
       void deps.skills.recordUse(resolution.skill.id).catch((e) => swallow("orchestrator: skill recordUse", e));
-    return { content, sourceScopeId: resolution.skill.scopeId };
-  };
-  const laidTrees = new Set<string>();
-  const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution, sandboxId?: string): Promise<void> => {
-    const skillDir = safeSkillDirName(r.skill!.manifest.name);
-    const treeKey = `${sandboxId ?? "default"}:${skillDir}`;
-    if (laidTrees.has(treeKey)) return;
-    const start = Date.now();
-    try {
-      await skillMaterializer.materializeTree(deps.sandbox, handle, r, [], async () => {
-        const latest = (await visibleSkillsForTurn()).find(
-          (candidate) => candidate.skill && safeSkillDirName(candidate.skill.manifest.name) === skillDir,
-        );
-        if (!latest) return null;
-        const bundles =
-          latest.screenedBundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [latest]) : []);
-        return { resolution: latest, bundles };
-      });
-      laidTrees.add(treeKey);
-      if (r.skill && deps.skills)
-        void deps.skills.recordUse(r.skill.id).catch((e) => swallow("orchestrator: skill recordUse", e));
-    } catch (err) {
-      deps.errors?.record({
-        category: "skills",
-        code: "tree_materialize_failed",
-        message: errMessage(err),
-        scopeLabel: scopeId,
-        sessionId: session.id,
-      });
-    } finally {
-      emitGapWork("skills_materialize", start, Date.now());
-    }
-  };
-  const ensureSkillTree = async (skillDir: string, sandboxId?: string): Promise<void> => {
-    const current = await visibleSkillsForTurn();
-    const requested = current.filter(
-      (r) => r.skill && (skillDir === ".packs" ? r.skill.pack : r.skill.manifest.name === skillDir),
-    );
-    if (!requested.length) return;
+    if (!shipsFiles) return { content, sourceScopeId: resolution.skill.scopeId };
     const handle = sandboxId ? await provisionResource(sandboxId) : await provision();
-    for (const r of requested) {
-      await materializeSkillTree(handle, r, sandboxId);
-    }
+    await materializeSkillTree(handle, resolution, sandboxId);
+    const pack = packRoot(skillsRoot, resolution);
+    return {
+      content,
+      sourceScopeId: resolution.skill.scopeId,
+      dir: skillDir(skillsRoot, resolution),
+      ...(pack ? { packDir: pack } : {}),
+    };
   };
   const provisionResource = (id: string): Promise<SandboxHandle> => {
     const existing = resourceHandles.get(id);
@@ -386,8 +393,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       resourcePendingHandles.set(id, handle);
       await prepareCredentials(handle, emitGapWork);
       await prepareTurnFiles(handle);
-      if (deps.skills)
-        await skillMaterializer.materializeIndex(deps.sandbox, handle, visibleSkills, visibleSkillsForTurn);
       resourceHandles.set(id, handle);
       resourcePendingHandles.delete(id);
       return handle;
@@ -416,8 +421,15 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     return handle;
   };
   const provisionOwnerAuth = ownerAuthAvailable
-    ? (): Promise<SandboxHandle> => {
-        if (ownerAuthBox.handle) return Promise.resolve(ownerAuthBox.handle);
+    ? async (): Promise<SandboxHandle> => {
+        // Recheck each command, including commands reusing this turn's isolated computer.
+        if (
+          openSpeakerKeychain &&
+          (!(await deps.isCurrentSharedScopeMember?.(actor.id, scopeId)) ||
+            (await deps.config?.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open")
+        )
+          throw new Error("Open speaker keychain access is no longer authorized");
+        if (ownerAuthBox.handle) return ownerAuthBox.handle;
         if (ownerAuthBox.pending && !ownerAuthProvisionInFlight) {
           return Promise.reject(new Error("owner-auth box initialization failed and cleanup is still pending"));
         }
@@ -441,6 +453,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
               handle,
               keychain: deps.keychain,
               ownerId: actor.id,
+              ...(openSpeakerKeychain ? { allOrigins: true } : {}),
               ...(credentialCutoverServices.length ? { excludeServices: credentialCutoverServices } : {}),
               onAnomaly: (service, detail) =>
                 deps.errors?.record({
@@ -469,24 +482,30 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           if (pendingHandle) {
             try {
               await scrubOwnerAuthHandle(pendingHandle).catch((scrubErr) => {
-                deps.errors?.record({
-                  category: "sandbox",
-                  code: "owner_auth_scrub_failed",
-                  message: errMessage(scrubErr),
-                  scopeLabel: scopeId,
-                  sessionId: session.id,
-                });
+                deps.errors?.record(
+                  {
+                    category: "sandbox",
+                    code: "owner_auth_scrub_failed",
+                    message: errMessage(scrubErr),
+                    scopeLabel: scopeId,
+                    sessionId: session.id,
+                  },
+                  scrubErr,
+                );
               });
               await destroyOwnerAuthHandle(pendingHandle);
               if (ownerAuthBox.pending === pendingHandle) ownerAuthBox.pending = null;
             } catch (cleanupErr) {
-              deps.errors?.record({
-                category: "sandbox",
-                code: "owner_auth_init_cleanup_failed",
-                message: errMessage(cleanupErr),
-                scopeLabel: scopeId,
-                sessionId: session.id,
-              });
+              deps.errors?.record(
+                {
+                  category: "sandbox",
+                  code: "owner_auth_init_cleanup_failed",
+                  message: errMessage(cleanupErr),
+                  scopeLabel: scopeId,
+                  sessionId: session.id,
+                },
+                cleanupErr,
+              );
             }
           }
           throw err;
@@ -573,26 +592,32 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     if (ownerHandle) {
       try {
         await scrubOwnerAuthHandle(ownerHandle).catch((scrubErr) => {
-          deps.errors?.record({
-            category: "sandbox",
-            code: "owner_auth_scrub_failed",
-            message: errMessage(scrubErr),
-            scopeLabel: scopeId,
-            sessionId: session.id,
-          });
+          deps.errors?.record(
+            {
+              category: "sandbox",
+              code: "owner_auth_scrub_failed",
+              message: errMessage(scrubErr),
+              scopeLabel: scopeId,
+              sessionId: session.id,
+            },
+            scrubErr,
+          );
         });
         await destroyOwnerAuthHandle(ownerHandle);
         ownerAuthBox.handle = null;
         ownerAuthBox.pending = null;
       } catch (err) {
         ownerCleanupError = err;
-        deps.errors?.record({
-          category: "sandbox",
-          code: "owner_auth_destroy_failed",
-          message: errMessage(err),
-          scopeLabel: scopeId,
-          sessionId: session.id,
-        });
+        deps.errors?.record(
+          {
+            category: "sandbox",
+            code: "owner_auth_destroy_failed",
+            message: errMessage(err),
+            scopeLabel: scopeId,
+            sessionId: session.id,
+          },
+          err,
+        );
       }
     }
     const scratchHandle = scratchBox.handle;
@@ -663,8 +688,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     provisionScratch,
     provisionResource,
     provisionOwnerAuth,
-    ensureSkillTree,
-    readSkill,
+    useSkill,
     provisionForReach,
     reclaimBox,
     provisionPending: () => provisionInFlight !== null,

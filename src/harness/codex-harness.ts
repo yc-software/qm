@@ -1,3 +1,4 @@
+import { documentsFallbackText } from "../core/document-inputs.ts";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -126,6 +127,8 @@ type ActiveTurn = {
   reject(error: Error): void;
   responseItems: CodexItem[];
   completedItems: CodexItem[];
+  publicMessages: Map<string, CodexItem & { complete?: boolean }>;
+  stoppedReply?: string;
   taskIds: Map<string, string>;
   taskStatuses: Map<string, TaskStatus>;
   taskResults: Set<string>;
@@ -497,11 +500,41 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           });
         }
         if (method === "item/agentMessage/delta" && threadId === state.threadId && typeof p.delta === "string") {
+          if (state.stopped) return;
+          const id = typeof p.itemId === "string" ? p.itemId : "";
+          const item = state.publicMessages.get(id) ?? { type: "agentMessage" };
+          item.text = (typeof item.text === "string" ? item.text : "") + p.delta;
+          state.publicMessages.set(id, item);
           state.firstOutputAt ??= Date.now();
           state.turn.onDelta?.(p.delta);
         }
         if ((method === "item/started" || method === "item/completed") && p.item && typeof p.item === "object") {
           const item = p.item as CodexItem;
+          if (threadId === state.threadId && item.type === "agentMessage") {
+            if (state.stopped) return;
+            const id = typeof item.id === "string" ? item.id : "";
+            state.publicMessages.set(id, {
+              ...item,
+              text: typeof item.text === "string" ? item.text : "",
+              complete: method === "item/completed",
+            });
+            if (method === "item/started")
+              await state.turn.onTextBlockStart?.(
+                item.phase === "commentary" || item.phase === "final_answer" ? item.phase : undefined,
+              );
+            if (
+              method === "item/completed" &&
+              item.phase === "commentary" &&
+              typeof item.text === "string" &&
+              item.text.trim()
+            ) {
+              await state.turn.emit({
+                type: "text",
+                payload: { text: item.text, phase: "commentary" },
+                scopeLabel: state.turn.scopeLabel,
+              });
+            }
+          }
           if (method === "item/completed") {
             state.completedItems.push(item);
             if (state.turn.tape && !state.tapeError) {
@@ -909,7 +942,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             computer_use: false,
             image_generation: false,
             in_app_browser: false,
-            multi_agent: !turn.readOnly,
+            multi_agent: !turn.readOnly && !turn.delegateWork,
             request_permissions_tool: false,
             tool_suggest: false,
           },
@@ -920,9 +953,12 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     }
     let started: { thread: { id: string }; model?: string };
     try {
-      const requestTimeoutMs = deadline ? Math.max(1, deadline - Date.now()) : CODEX_START_TIMEOUT_MS;
+      const requestTimeoutMs = deadline
+        ? Math.max(1, deadline - Date.now())
+        : (opts.appServerStartTimeoutMs ?? CODEX_START_TIMEOUT_MS);
       let requestTimer: NodeJS.Timeout | undefined;
       const requestAbort = new AbortController();
+      let threadStartTimedOut = false;
       started = await awaitSetup(
         Promise.race([
           rt.server.request(
@@ -933,13 +969,23 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           ),
           new Promise<never>((_, reject) => {
             requestTimer = setTimeout(() => {
+              threadStartTimedOut = true;
               requestAbort.abort();
               reject(new NonRetryableTurnError("Codex thread/start request timed out"));
             }, requestTimeoutMs);
           }),
-        ]).finally(() => {
-          if (requestTimer) clearTimeout(requestTimer);
-        }),
+        ])
+          .finally(() => {
+            if (requestTimer) clearTimeout(requestTimer);
+          })
+          .catch((error: unknown) => {
+            if (threadStartTimedOut) {
+              const timeoutError = new NonRetryableTurnError("Codex thread/start request timed out");
+              timeoutError.cause = error;
+              throw timeoutError;
+            }
+            throw error;
+          }),
       );
     } catch (error) {
       return failSetup(error);
@@ -968,6 +1014,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     let resolveCompleted!: (value: CodexTurn) => void;
     let rejectCompleted!: (error: Error) => void;
     let completed!: Promise<CodexTurn>;
+    const documentTextBudget = { remaining: 100_000 };
     let inputText!: string;
     let input!: Array<Record<string, unknown>>;
     let selectedModel!: string;
@@ -978,7 +1025,10 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         rejectCompleted = rejectTurn;
       });
       void completed.catch(() => undefined);
-      inputText = codexTurnInputText(turn);
+      inputText = [
+        codexTurnInputText(turn),
+        await documentsFallbackText(turn.documents ?? [], turn.cancel, documentTextBudget),
+      ].join("\n\n");
       input = [
         userInput(inputText),
         ...(turn.images ?? []).map((image) => ({
@@ -996,6 +1046,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         reject: rejectCompleted,
         responseItems: [],
         completedItems: [],
+        publicMessages: new Map(),
         taskIds: new Map(),
         taskStatuses: new Map(),
         taskResults: new Set(),
@@ -1021,7 +1072,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             type: "message",
             role: "user",
             content: [
-              { type: "input_text", text: inputText },
+              { type: "input_text", text: codexTurnInputText(turn) },
               ...(turn.images ?? []).map((image) => ({
                 type: "input_image",
                 image_url: "[image bytes omitted]",
@@ -1078,11 +1129,37 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     };
     let turnId = "";
     const interrupt = async (stopped: boolean) => {
+      if (stopped && !state.stopped) {
+        state.stoppedReply = textFromTurn({
+          id: turnId,
+          status: "interrupted",
+          items: [...state.publicMessages.values()].filter((item) => item.phase !== "commentary"),
+        });
+      }
       state.stopped ||= stopped;
       toolAbort.abort();
       if (turnId) await rt.server.request("turn/interrupt", { threadId, turnId }).catch(() => undefined);
     };
     state.interrupt = () => interrupt(false);
+    let stoppedReplySaved: Promise<void> | undefined;
+    const saveStoppedReply = (): Promise<void> => {
+      stoppedReplySaved ??= (async () => {
+        for (const item of state.publicMessages.values()) {
+          if (item.phase === "commentary" && !item.complete && typeof item.text === "string" && item.text.trim())
+            await turn.emit({
+              type: "text",
+              payload: { text: item.text, phase: "commentary" },
+              scopeLabel: turn.scopeLabel,
+            });
+        }
+        await turn.emit({
+          type: "assistant",
+          payload: { text: state.stoppedReply ?? "", stopped: true },
+          scopeLabel: turn.scopeLabel,
+        });
+      })();
+      return stoppedReplySaved;
+    };
     const onCancel = () => {
       runtimeCleanupRequested = true;
       void interrupt(true);
@@ -1098,10 +1175,17 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             turn.runId,
             {
               onAbort: async () => interrupt(true),
-              onSteer: async (text, ts) => {
+              onSteer: async (text, ts, request) => {
+                const prepared = await turn.prepareSteer?.(text, request);
+                const prompt = prepared?.text ?? text;
                 const steered = await turn.emit({
                   type: "user",
-                  payload: { text, ...(ts ? { ts } : {}), steered: true },
+                  payload: {
+                    text,
+                    ...(ts ? { ts } : {}),
+                    steered: true,
+                    ...(prepared?.attachments?.length ? { attachments: prepared.attachments } : {}),
+                  },
                   scopeLabel: turn.scopeLabel,
                 });
                 if (turn.tape) {
@@ -1115,10 +1199,25 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
                       ...(ts ? { ts } : {}),
                       entryCreatedAt: steered.createdAt,
                     },
-                    payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
+                    payload: { type: "message", role: "user", content: [{ type: "input_text", text: prompt }] },
                   });
                 }
-                await rt.server.request("turn/steer", { threadId, expectedTurnId: turnId, input: [userInput(text)] });
+                const documentText = await documentsFallbackText(
+                  prepared?.documents ?? [],
+                  turn.cancel,
+                  documentTextBudget,
+                );
+                await rt.server.request("turn/steer", {
+                  threadId,
+                  expectedTurnId: turnId,
+                  input: [
+                    userInput([prompt, documentText].filter(Boolean).join("\n\n")),
+                    ...(prepared?.images ?? []).map((image) => ({
+                      type: "image",
+                      url: `data:${image.mimeType};base64,${image.dataBase64}`,
+                    })),
+                  ],
+                });
               },
             },
             { onError: (error) => swallow("codex signal poll", error) },
@@ -1188,9 +1287,10 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       }
       if (result.status === "failed" && !state.stopped && !ref.runtimeHandoff)
         throw codexProviderFailure(result.error?.message ?? "Codex turn failed");
-      if (turn.cancel?.aborted) {
-        runtimeCleanupRequested = true;
-        turnResult = { reply: "", stopped: true };
+      if (state.stopped || turn.cancel?.aborted) {
+        if (turn.cancel?.aborted) runtimeCleanupRequested = true;
+        await saveStoppedReply();
+        turnResult = { reply: state.stoppedReply ?? "", stopped: true };
       } else {
         const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
         const reply = terminal ? "" : textFromTurn(result);
@@ -1217,7 +1317,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     } catch (error) {
       if (turn.cancel?.aborted) {
         runtimeCleanupRequested = true;
-        turnResult = { reply: "", stopped: true };
+        await saveStoppedReply();
+        turnResult = { reply: state.stoppedReply ?? "", stopped: true };
       } else {
         throw error;
       }

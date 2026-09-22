@@ -1,9 +1,14 @@
+import { loadMessageTranscript, messageLinkSeq } from "./message-link.ts";
+import { initializeBrowserErrors, stopBrowserErrors } from "./browser-errors";
+import { initializeAnalytics, capturePageview, stopAnalytics } from "./product-analytics";
+import { captureSlackReturn } from "./slack-account";
 import { captureConnectionReturn } from "./connection-return";
-import { openModelConnectManager, renderModelConnectGate } from "./model-connect";
+import { renderModelConnectGate } from "./model-connect";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
   Box,
   Brain,
+  CalendarDays,
   Clock,
   Files,
   Folder,
@@ -42,7 +47,7 @@ import { brandMark, brandName, icon } from "./ui";
 import { PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection } from "./composer";
-import { ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
+import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
 import { clearAllDrafts, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, UI_BASE } from "./deep-link";
 import {
@@ -57,6 +62,7 @@ import {
   mountRestoredCanvas,
   restoredCanvasNeedsSessionList,
   splitState,
+  singlePaneSessionId,
 } from "./split";
 import { activityOf } from "./session-list";
 import { replaceChildrenPreservingFocus } from "./pane-focus";
@@ -85,9 +91,9 @@ import { attachTooltip, hideTooltip, tip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
 import { openDeployById, renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
+import { renderCalendar } from "./calendar";
 import {
   inboxOpenCount,
-  openInboxItemById,
   refreshInbox,
   renderInbox,
   resetActiveInboxItem,
@@ -146,8 +152,11 @@ export function syncUrlFromState(sessionOverride?: string | null): void {
   const chatState = mainConversation().state;
   const fromState =
     sessionOverride !== undefined ? sessionOverride : (chatState.sessionId ?? chatState.rememberedSessionId);
-  const sessionId = splitState.active ? null : fromState;
-  const next = deepLinkPath(UI_BASE, appState.currentView, sessionId, contextsState.selected);
+  const sessionId = splitState.active ? singlePaneSessionId() : fromState;
+  let next = deepLinkPath(UI_BASE, appState.currentView, sessionId, contextsState.selected);
+  const linked = parseDeepLink(UI_BASE, location.pathname, location.search);
+  const seq = messageLinkSeq(location.search);
+  if (appState.currentView === "chats" && linked.session === sessionId && seq !== null) next += `?seq=${seq}`;
   if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
 }
 
@@ -203,6 +212,7 @@ function resetSidebarWidth(): void {
 const ICON = {
   newChat: Plus,
   inbox: InboxGlyph,
+  calendar: CalendarDays,
   chats: MessageSquare,
   contexts: Folder,
   files: Files,
@@ -218,6 +228,8 @@ const ICON = {
 };
 
 export async function signOut(): Promise<void> {
+  stopAnalytics();
+  stopBrowserErrors();
   const portal = authMode === "portal";
   if (!portal) {
     try {
@@ -435,6 +447,8 @@ export type AuthGate =
   | { kind: "dev"; value?: string; error?: string; pending?: boolean };
 
 export function renderAuthGate(gate: AuthGate): void {
+  stopAnalytics();
+  stopBrowserErrors();
   shellMounted = false;
   const body = (() => {
     switch (gate.kind) {
@@ -494,7 +508,6 @@ export function mountShell(): void {
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize sidebar"
-          ${tip("Drag to resize · double-click to reset")}
           @pointerdown=${startSidebarResize}
           @dblclick=${resetSidebarWidth}
         ></div>
@@ -558,7 +571,6 @@ export function renderSidebarFooter(): void {
         ${
           userMenuOpen
             ? html`<div class="session-menu-popover user-menu-popover" role="menu">
-                ${appState.me?.individualModelAuth ? html`<button class="session-menu-option" type="button" role="menuitem" @click=${openModelConnectManager}>Manage AI account</button>` : nothing}
                 <button class="session-menu-option" type="button" role="menuitem" @click=${signOutFromMenu}>
                   ${icon(LogOut, 15)}<span>Sign out</span>
                 </button>
@@ -612,7 +624,8 @@ export function renderSidebarTop(): void {
   render(
     html`
       <nav class="nav quick-nav" @click=${onNavClick}>
-        ${navRow("chats", ICON.home, "Home")} ${can("inbox") ? inboxNavRow() : nothing}
+        ${navRow("chats", ICON.home, "Home")}
+        ${can("inbox") ? html`${inboxNavRow()} ${navRow("calendar", ICON.calendar, "Calendar")}` : nothing}
         ${actionRow(Search, "Search", () => {
           hideTooltip();
           openChatSearch();
@@ -628,7 +641,7 @@ export function renderSidebarTop(): void {
           startNewChatInLastScope();
         })}
       </div>
-      ${sessionSelectionBar() ?? html` <div class="section-label recents-label"><span>Sessions</span></div> `}
+      ${sessionSelectionBar() ?? nothing}
     `,
     appState.topEl,
   );
@@ -674,6 +687,7 @@ export function switchView(v: View): void {
     return;
   }
   appState.currentView = v;
+  capturePageview(v);
   appState.viewRenderSeq++;
   sessionsState.openMenuId = null;
   sessionsState.renamingId = null;
@@ -692,6 +706,9 @@ export function switchView(v: View): void {
       break;
     case "inbox":
       void renderInbox();
+      break;
+    case "calendar":
+      renderCalendar();
       break;
     case "webhooks":
       void renderWebhooksPage();
@@ -756,6 +773,9 @@ function refreshActiveView(v: View): void {
       break;
     case "inbox":
       void renderInbox();
+      break;
+    case "calendar":
+      renderCalendar();
       break;
     case "contexts":
       void renderContexts();
@@ -982,6 +1002,7 @@ export async function bootSafely(): Promise<void> {
 
 export async function boot(): Promise<void> {
   captureConnectionReturn(location.href);
+  captureSlackReturn(location.href);
   const params = new URLSearchParams(location.search);
   const {
     view: wanted,
@@ -992,8 +1013,9 @@ export async function boot(): Promise<void> {
   const chatsLink = wanted === null || wanted === "chats";
   const linkedId = wantedSession && chatsLink ? wantedSession : null;
   let transcriptUnavailable = false;
+  const wantedSeq = messageLinkSeq(location.search);
   const loadLinkedTranscript = (id: string) =>
-    fetchTranscript(id, { tailTurns: TAIL_TURNS }).catch((error: unknown) => {
+    loadMessageTranscript((window) => fetchTranscript(id, window), wantedSeq, TAIL_TURNS).catch((error: unknown) => {
       transcriptUnavailable = !(error instanceof ApiError && (error.status === 404 || error.status === 403));
       return null;
     });
@@ -1021,6 +1043,8 @@ export async function boot(): Promise<void> {
   }
   resetKeychainState();
   appState.me = (await r.json()) as Me;
+  void initializeBrowserErrors(appState.me);
+  void initializeAnalytics(appState.me, isView(wanted) && canView(wanted) ? wanted : "chats");
   authMode = appState.me.mode ?? "portal";
   clearPortalAttempt();
   if (appState.me.individualModelAuth && !appState.me.modelAuthConnected) {
@@ -1061,6 +1085,11 @@ export async function boot(): Promise<void> {
       if (!sessionsState.list.some((s) => s.id === linked.id)) sessionsState.list = [linked, ...sessionsState.list];
       revealSessionSurface(linked);
       await openSession(linked, transcript, approvalsPrefetch ?? undefined);
+      if (wantedSeq !== null)
+        requestAnimationFrame(() => {
+          for (const conversation of allConversations())
+            if (conversation.state.sessionId === linked.id) conversation.revealEntry(wantedSeq);
+        });
       return;
     }
     await sessions;
@@ -1101,9 +1130,9 @@ export async function boot(): Promise<void> {
     if (wanted === "deploys" && wantedItem) openDeployById(wantedItem);
     if (wanted === "crons" && wantedItem) openCronById(wantedItem);
     if (wanted === "webhooks" && wantedItem) openWebhookById(wantedItem);
-    if (wanted === "inbox" && wantedItem) openInboxItemById(wantedItem);
     if (wanted === "skills" && wantedItem) openSkillById(wantedItem);
     switchView(wanted as View);
+    if (wanted === "inbox") routeInboxHistory(wantedItem);
   } else if (connectedProvider && sessionsState.list.length) {
     const recent = [...sessionsState.list].sort((a, b) => activityOf(b) - activityOf(a))[0]!;
     exitSplitIfActive();

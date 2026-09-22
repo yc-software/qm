@@ -525,3 +525,15 @@ test("quiet checks reject invalid supplied sandbox credentials just like human c
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("only public PostHog ingestion tokens may be configured as plaintext", () => {
+  for (const value of ["phc_example123", "phx_personal123", "private-token"]) {
+    const d = deployment(() => {}, { env: { core: { POSTHOG_API_KEY: value } } });
+    try {
+      if (value.startsWith("phc_")) assert.doesNotThrow(() => check(d));
+      else assert.throws(() => check(d), /POSTHOG_API_KEY belongs in the target secret store/);
+    } finally {
+      rmSync(d.dir, { recursive: true, force: true });
+    }
+  }
+});

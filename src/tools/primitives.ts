@@ -47,8 +47,8 @@ import type {
   BackgroundJobSummary,
 } from "../connectors/background-exec-broker.ts";
 import type { MonitorBroker, BackgroundWatchResult, BackgroundUnwatchResult } from "../monitors/monitor-broker.ts";
-import type { DeployService, DeployFile } from "../deploy/deploy-service.ts";
-import { publicUrlOf, type Deployment } from "../deploy/deploy-store.ts";
+import { deploymentEntrypoint, type DeployService, type DeployFile } from "../deploy/deploy-service.ts";
+import { publicUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
@@ -76,19 +76,6 @@ import type { Cron, Webhook } from "../types.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
-
-const SKILL_FILE_RE = /^(?:\.\/)?skills\/([^/]+)\/.+$/;
-function skillTreeDirFor(path: string): string | null {
-  const m = SKILL_FILE_RE.exec(path);
-  return m ? m[1]! : null;
-}
-
-const SKILL_DIR_IN_COMMAND_RE = /(?:^|[\s'"=(&|;])(?:\.\/)?skills\/([^/\s'"&|;)]+)(?=[/\s'"&|;)]|$)/g;
-function skillTreeDirsInCommand(command: string): string[] {
-  const dirs = new Set<string>();
-  for (const m of command.matchAll(SKILL_DIR_IN_COMMAND_RE)) dirs.add(m[1]!);
-  return [...dirs];
-}
 
 export interface PublishInput {
   dir?: string;
@@ -120,11 +107,6 @@ interface PublishResult {
   alwaysOn?: boolean;
 }
 
-function deploymentEntrypoint(d: Deployment | null): string | undefined {
-  if (!d) return undefined;
-  return d.versions.find((v) => v.version === d.currentVersion)?.entrypoint || undefined;
-}
-
 export class NeedsApproval extends Error {
   command: string;
   approvalReason: string;
@@ -149,10 +131,17 @@ export class CommandDenied extends Error {
   }
 }
 
-export interface ReadResult {
+interface ReadResult {
   content: string | null;
   sourceScopeId: ScopeId | null;
   shared?: true;
+}
+
+export interface SkillResult {
+  content: string | null;
+  sourceScopeId: ScopeId | null;
+  dir?: string;
+  packDir?: string;
 }
 
 export interface ShareDirective {
@@ -220,6 +209,7 @@ export interface ToolContext extends SurfaceToolDeps {
   restartComputer(sandboxId?: string): Promise<void>;
   migrateComputer(to: string): Promise<{ from: string; to: string }>;
   read(path: string, signal?: AbortSignal): Promise<ReadResult>;
+  skill(name: string, opts?: { path?: string; sandboxId?: string; signal?: AbortSignal }): Promise<SkillResult>;
   write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult>;
   publish(input: PublishInput): Promise<PublishResult>;
   createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
@@ -439,8 +429,7 @@ export interface ToolContextDeps {
   provisionOwnerAuth?: () => Promise<SandboxHandle>;
   ownerAuthCommand?: (command: string) => string;
   scopedCommand?: (command: string) => string;
-  readSkill?: (path: string) => Promise<ReadResult>;
-  ensureSkillTree?: (skillDir: string, sandboxId?: string) => Promise<void>;
+  useSkill?: (name: string, path: string, sandboxId?: string) => Promise<SkillResult>;
   reach?: {
     resolveChannel(query: string): Promise<ReachResolution>;
     provisionFor(scopeId: ScopeId): Promise<SandboxHandle>;
@@ -790,11 +779,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               ...(execOpts?.signal ? { signal: execOpts.signal } : {}),
             }
           : undefined;
-      const local = !scratch && !ownerAuth && reached === undefined && !execOpts?.sandboxId;
-      if ((local || execOpts?.sandboxId) && deps.ensureSkillTree) {
-        for (const skillDir of skillTreeDirsInCommand(command))
-          await deps.ensureSkillTree(skillDir, execOpts?.sandboxId);
-      }
       return once(async () => {
         if (reached) {
           deps.auditLog?.record({
@@ -820,8 +804,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async read(path: string, signal?: AbortSignal): Promise<ReadResult> {
       signal?.throwIfAborted();
-      if (path.startsWith("skill://"))
-        return deps.readSkill ? withAbort(() => deps.readSkill!(path), signal) : { content: null, sourceScopeId: null };
       if (path === MEMORY_FILE && deps.memory && deps.memoryScopeId) {
         if (!deps.memoryAccess?.read.includes(deps.memoryScopeId)) {
           throw new Error("memory recall is not enabled for this conversation; use the `memory` tool when enabled");
@@ -862,8 +844,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         };
       }
       if (path.startsWith("shared/open-")) return { content: null, sourceScopeId: null };
-      const skillDir = skillTreeDirFor(path);
-      if (skillDir && deps.ensureSkillTree) await deps.ensureSkillTree(skillDir);
       signal?.throwIfAborted();
       const handle = await deps.provision();
       return timed("file_op", async () => {
@@ -888,9 +868,23 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       );
     },
 
+    async skill(
+      name: string,
+      opts?: { path?: string; sandboxId?: string; signal?: AbortSignal },
+    ): Promise<SkillResult> {
+      opts?.signal?.throwIfAborted();
+      if (!deps.useSkill) return { content: null, sourceScopeId: null };
+      if (opts?.sandboxId) {
+        if (!deps.sandboxResources || !deps.provisionResource)
+          throw new Error("named sandboxes are not available here");
+        const record = await deps.sandboxResources.get(opts.sandboxId);
+        if (!record) throw new Error(`unknown sandbox ${opts.sandboxId}`);
+        if (record.ownerScopeId !== writableScopeId) throw new Error("load skills from the sandbox's owning scope");
+      }
+      return withAbort(() => deps.useSkill!(name, opts?.path ?? "SKILL.md", opts?.sandboxId), opts?.signal);
+    },
+
     async write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult> {
-      if (path.startsWith("skill://"))
-        throw new Error("Published skill sources are read-only; edit skills through the skill API.");
       const wantShare = share !== undefined && share.length > 0;
       if (data === undefined && !wantShare) {
         throw new Error("write needs `data` to save content, `share` to grant access, or both");
@@ -1001,7 +995,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             ),
           )
         : {};
-      const env = { ...input.env, ...authEnv };
 
       const pc = deps.publishContext;
       const aud: PublishAudience =
@@ -1036,7 +1029,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ...(input.entrypoint ? { entrypoint: input.entrypoint } : {}),
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.renameFrom !== undefined ? { renameFrom: input.renameFrom } : {}),
-          ...(Object.keys(env).length ? { env } : {}),
+          ...(input.env !== undefined ? { env: input.env } : {}),
+          ...(Object.keys(authEnv).length ? { stampEnv: authEnv } : {}),
           ...(input.rollbackTo !== undefined ? { rollbackTo: input.rollbackTo } : {}),
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
           ...(doReconcile
@@ -1163,9 +1157,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (decision === "deny") throw new CommandDenied(command, reason ?? "denied by policy");
       if (decision === "require_approval" && !deps.authorizeCommand(command, approvalKey)) {
         throw new NeedsApproval(command, reason ?? "requires approval", "approval", matched, approvalKey);
-      }
-      if (deps.ensureSkillTree) {
-        for (const skillDir of skillTreeDirsInCommand(command)) await deps.ensureSkillTree(skillDir, opts?.sandboxId);
       }
       return once(
         () =>

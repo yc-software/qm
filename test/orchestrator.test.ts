@@ -21,6 +21,10 @@ import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import type { AclStore } from "../src/acl/acl-store.ts";
 import type { ScopeId } from "../src/types.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
+import { runTrigger } from "../src/triggers/run-trigger.ts";
+import { createDirectoryStore } from "../src/directory/directory-store.ts";
+import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 function freshApp(overrides: Partial<Config> = {}, securityScreener?: SecurityScreener) {
   const config = testConfig({
@@ -734,6 +738,78 @@ test("env-delivery injection is all-internal only, and an existing env key (keyc
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "a room with externals gets no org env credentials");
 });
 
+test("a channel cron receives env credentials only when the directory proves an all-internal roster", async () => {
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "ap-")),
+    signingSecret: "test-secret",
+    apiBaseUrl: "https://core.example.com",
+  });
+  const { app, sandbox, serviceCreds, acl, deliveries, identity } = buildApp(config);
+  const org = scopeId("org", "default-org");
+  await serviceCreds.setServiceCredential(org, {
+    slug: "browse-steel",
+    name: "Steel",
+    delivery: "env",
+    envKey: "STEEL_API_KEY",
+    secret: "steel-org-key",
+    host: "",
+  });
+  await grantCred(acl, org, "browse-steel");
+  const captures: ProvisionOptions[] = [];
+  const realProvision = sandbox.provision.bind(sandbox);
+  sandbox.provision = (layers, opts) => {
+    if (opts) captures.push(opts);
+    return realProvision(layers, opts);
+  };
+  const directory = createDirectoryStore();
+  await directory.replace([
+    { principalId: "U1", displayName: "One", type: "internal" },
+    { principalId: "U2", displayName: "Two", type: "internal" },
+  ]);
+  await directory.replaceChannels(
+    [
+      { channelId: "C-internal", name: "internal" },
+      { channelId: "C-unsynced", name: "unsynced" },
+      { channelId: "C-shared", name: "shared", isExternal: true },
+      { channelId: "C-guest", name: "guest" },
+    ],
+    [
+      { channelId: "C-internal", principalId: "U1" },
+      { channelId: "C-internal", principalId: "U2" },
+      { channelId: "C-shared", principalId: "U1" },
+      { channelId: "C-shared", principalId: "U2" },
+      { channelId: "C-guest", principalId: "U1" },
+      { channelId: "C-guest", principalId: "visitor" },
+    ],
+    undefined,
+    ["C-internal", "C-shared", "C-guest"],
+  );
+  const fire = async (channelId: string) => {
+    const out = await runTrigger(
+      {
+        deliveries,
+        idempotency: createIdempotencyStore(createMemoryMap()),
+        identity,
+        run: (req) => app.turn(req),
+        directory,
+      },
+      {
+        owner: "U1",
+        ownerScopeId: scopeId("channel", channelId),
+        input: "!run echo keys",
+        fireKey: `cron:${channelId}:1`,
+        surface: "cron",
+      },
+    );
+    assert.equal(out.status, "ok", `the ${channelId} cron turn runs`);
+    return captures.at(-1)?.env?.STEEL_API_KEY;
+  };
+  assert.equal(await fire("C-internal"), "steel-org-key", "an all-internal synced roster admits the env credential");
+  assert.equal(await fire("C-unsynced"), undefined, "a channel with no synced roster stays fail-closed");
+  assert.equal(await fire("C-shared"), undefined, "an externally shared channel stays fail-closed");
+  assert.equal(await fire("C-guest"), undefined, "a roster with a non-internal principal stays fail-closed");
+});
+
 test("env-delivery credentials are gated by service-cred grants — no grant, no env var; a person grant admits only that person", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
@@ -1122,6 +1198,14 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
     adminTurn({ text: "!sysprompt", conversation: { kind: "dm", threadRef: "dm:admin-alice:t2" } }),
   );
   assert.match(adminPrompt.reply ?? "", /## Acting for an org admin/);
+  assert.match(
+    adminPrompt.reply ?? "",
+    /private-content reads require a DM or an Open conversation on a live admin turn/,
+  );
+  assert.doesNotMatch(
+    adminPrompt.reply ?? "",
+    /private-content reads work only from a DM|bulk configuration imports require/,
+  );
   assert.match(adminPrompt.reply ?? "", /"scope":"org"/, "the org-notebook option rides in the admin hint");
 
   captured = undefined;
@@ -2072,6 +2156,23 @@ test("read/write round-trip through the workspace", async () => {
   const r = await app.turn(dm("!read notes.md"));
   assert.equal(r.status, "ok");
   assert.match(r.reply ?? "", /hello-workspace/);
+});
+
+test("an approval pause persists timing on its boundary entry", async () => {
+  const { app } = freshApp();
+  const before = Date.now();
+  const first = await app.turn(dm("!paused-approval git push --force origin main"));
+  assert.equal(first.status, "ok");
+  assert.ok(first.pendingApprovals?.length);
+  const paused = await app.getSession(first.sessionId!);
+  const boundary = paused!.entries.findLast(
+    (entry) => (entry.payload as { blocked?: string })?.blocked === "needs_approval",
+  );
+  assert.ok(boundary);
+  const timing = boundary.payload as { workStartedAt: number; workFinishedAt: number };
+  assert.ok(timing.workStartedAt >= before);
+  assert.ok(timing.workFinishedAt >= timing.workStartedAt);
+  assert.ok(timing.workFinishedAt <= boundary.createdAt);
 });
 
 test("dangerous command pauses for HiLO approval, then proceeds when approved", async () => {
@@ -3265,6 +3366,27 @@ test("'allow for session' approves every same-command invocation in the same tur
   assert.equal(second.pendingApprovals?.length ?? 0, 0);
 });
 
+test("accepted approval decisions are durably recorded in the conversation", async () => {
+  for (const approved of [false, true]) {
+    const { app, sessions, runs } = freshApp();
+    const command = "git push --force origin main";
+    const first = await app.turn(dm(`!run ${command}`));
+    const requestId = first.pendingApprovals![0]!.requestId;
+    await app.turn(dm(`!run ${command}`, { approval: { requestId, approved } }));
+    const decisions = (await sessions.getEntries(first.sessionId!)).filter(
+      (entry) => entry.type === "approval_resolved",
+    );
+    assert.equal(decisions.length, 1);
+    assert.deepEqual(decisions[0]!.payload, { requestId, command, approved, ...(approved ? { scope: "once" } : {}) });
+    const replay = (await runs.list()).find((run) => run.request.approval?.requestId === requestId);
+    assert.ok(replay);
+    const live = await app.getRun(replay.id);
+    const liveDecisions = live?.activity?.filter((entry) => entry.type === "approval_resolved");
+    assert.equal(liveDecisions?.length, 1);
+    assert.deepEqual(liveDecisions![0]!.payload, decisions[0]!.payload);
+  }
+});
+
 test("'session busy' does not consume the one-shot approval (a retry click still works)", async () => {
   const { app, sessions } = freshApp();
   const command = "git push --force origin main";
@@ -4017,4 +4139,43 @@ test("private session approval replay preserves restrictions even when the click
   assert.equal(run?.request.sessionMessageDepth, 7);
   assert.equal(run?.request.readOnly, true);
   assert.equal(run?.request.origin.kind, "automation");
+});
+
+test("narration reaches the live activity feed before its tool call", async () => {
+  const { app, runs } = freshApp();
+  const text = "!preamble I'll check the first item.";
+  const result = await app.turn(dm(text));
+  assert.equal(result.status, "ok");
+  const run = (await runs.list()).find((entry) => entry.request.text === text);
+  assert.ok(run);
+  const view = await app.getRun(run.id);
+  assert.deepEqual(
+    view?.activity?.map((entry) => entry.type),
+    ["text", "tool_call", "tool_result"],
+  );
+  assert.deepEqual(view?.activity?.[0]?.payload, { text: "I'll check the first item." });
+});
+
+test("public text phases persist with exact stream offsets in session history and run activity", async () => {
+  const { app, runs } = freshApp();
+  const result = await app.turn(dm("!phased-reply"));
+  assert.equal(result.status, "ok");
+  assert.equal(result.reply, "All clear.");
+  const run = (await runs.list()).find((entry) => entry.request.text === "!phased-reply");
+  assert.ok(run);
+  const view = await app.getRun(run.id);
+  const history = await app.getSession(result.sessionId!);
+  const expected = [
+    { phase: "commentary", streamOffset: 0 },
+    { phase: "final_answer", streamOffset: "Checking.\n\n".length },
+  ];
+  assert.deepEqual(
+    view?.activity?.filter((entry) => entry.type === "text_start").map((entry) => entry.payload),
+    expected,
+  );
+  assert.deepEqual(
+    history?.entries.filter((entry) => entry.type === "text_start").map((entry) => entry.payload),
+    expected,
+  );
+  assert.equal(view?.partial, "Checking.\n\nAll clear.");
 });

@@ -15,6 +15,7 @@ import {
   thinkingLevelsForHarness,
   safeModelMetadata,
   modelSupportedByHarness,
+  codexSubscriptionModelId,
 } from "../model/pi-models.ts";
 
 export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authorizesCapabilityScope">): RuntimeService {
@@ -36,8 +37,8 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
       if (snapshot.approvedHarnesses.includes("pi")) {
         const piModels = snapshot.modelsByHarness.pi ?? [];
         for (const id of piModels) {
-          if (id.startsWith("codex/")) continue;
-          const subscriptionId = `codex/${id}`;
+          const subscriptionId = codexSubscriptionModelId(id);
+          if (subscriptionId === id) continue;
           if (modelSupportedByHarness(subscriptionId, "pi") && !piModels.includes(subscriptionId)) {
             piModels.push(subscriptionId);
             const metadata = safeModelMetadata(subscriptionId);

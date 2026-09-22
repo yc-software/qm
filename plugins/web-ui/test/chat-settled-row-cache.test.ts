@@ -18,6 +18,7 @@ test("live, approval-paused, and subagent rows bypass the cache (their render re
 
 test("the cache key covers every mutable render input of a settled row", () => {
   for (const field of [
+    "hit.day === day",
     "hit.index === index",
     "hit.activity === work?.activity",
     "hit.status === work?.status",

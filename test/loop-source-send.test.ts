@@ -374,3 +374,80 @@ test("a mention that fell out of the bounded draft history is still disarmed thr
   held.agentMentionKeys = ["!here"];
   assert.equal(renderSlackSendText(held, "human kept <!here>"), "human kept @\u200bhere");
 });
+
+test("Gmail sends only through the explicitly bound account, including legacy sent chats", async () => {
+  for (const accountType of ["default", "personal", "company", undefined]) {
+    for (const connected of [true, false]) {
+      const requested: (string | undefined)[] = [];
+      let sends = 0;
+      const bound = item("gmail", {
+        sentChat: true,
+        gmail: { threadId: "t", to: ["a@example.com"], ...(accountType ? { accountType } : {}) },
+      });
+      const result = await gmailAdapter.act(
+        {
+          owner: "alice",
+          tokens: {
+            connectorAccessToken: async (_host, _owner, slot) => {
+              requested.push(slot);
+              if (slot !== (accountType ?? "default")) return "wrong-token";
+              return connected ? "bound-token" : null;
+            },
+          },
+          fetchImpl: async (_url, init) => {
+            sends++;
+            assert.equal((init!.headers as Record<string, string>).authorization, "Bearer bound-token");
+            return Response.json({});
+          },
+        },
+        bound,
+        "send",
+        { body: "Hello" },
+      );
+      assert.equal(result.ok, connected);
+      assert.deepEqual(requested, [accountType ?? "default"]);
+      assert.equal(sends, connected ? 1 : 0);
+    }
+  }
+});
+
+test("Gmail drafts preserve recipient lists and reject invalid recipients without falling back", async () => {
+  const addresses = Array.from({ length: 15 }, (_, i) => `person${i}@example.com`);
+  const mime = buildGmailReplyMime(gmailItem, { body: "Hi", to: addresses, cc: [] })!;
+  assert.ok(mime.startsWith(`To: ${addresses.join(", ")}\r\n`));
+  assert.equal(buildGmailReplyMime(gmailItem, { body: "Hi", to: [] }), null);
+  const held = { ...gmailItem, proposal: { data: { body: "Previously saved" }, by: "human" as const, at: 1 } };
+  for (const to of [["x".repeat(8001)], Array(101).fill("a@example.com"), ["a@example.com\nBcc: b@example.com"]]) {
+    assert.equal(gmailAdapter.parseProposal({ body: "Hi", to }), null);
+    const result = await gmailAdapter.act(
+      {
+        owner: "alice",
+        tokens: tokens({ "gmail.googleapis.com": "token" }),
+        fetchImpl: async () => {
+          throw new Error("must not send");
+        },
+      },
+      held,
+      "send",
+      { body: "Hi", to },
+    );
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.reason, "bad_item");
+  }
+});
+
+test("Slack rejects an explicit invalid draft instead of sending the saved draft", async () => {
+  const spy = slackSpy();
+  const held = item("slack", slackMeta, { body: "OLD SAVED DRAFT" });
+  for (const invalid of [{ body: "NEW", to: null }, { body: "NEW", cc: ["x".repeat(8001)] }, { body: null }]) {
+    const result = await slackAdapter.act(
+      { owner: "alice", tokens: tokens({ "slack.com": "token" }), slackClient: spy.factory },
+      held,
+      "send",
+      invalid,
+    );
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.reason, "bad_item");
+  }
+  assert.equal(spy.calls.length, 0);
+});

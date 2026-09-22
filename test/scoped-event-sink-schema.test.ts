@@ -93,6 +93,7 @@ test("every released scoped-event sink pins its 0001 checksum", () => {
     registeredPgMigrations(url).map((m) => m.id),
     [
       "admin/scoped-events/credential_usage/0001",
+      "admin/scoped-events/credential_usage/0002",
       "admin/scoped-events/egress_events/0001",
       "admin/scoped-events/error_events/0001",
     ],

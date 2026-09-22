@@ -19,6 +19,7 @@ interface Call {
 }
 
 const calls: Call[] = [];
+let previewEnabled = true;
 const core = createServer((req: IncomingMessage, res) => {
   let raw = "";
   req.on("data", (chunk) => (raw += chunk));
@@ -26,7 +27,9 @@ const core = createServer((req: IncomingMessage, res) => {
     const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
     calls.push({ method: req.method ?? "GET", url: req.url ?? "", body });
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ ok: true }));
+    res.end(
+      JSON.stringify(corePath(req.url ?? "") === "/v1/inbox/access" ? { enabled: previewEnabled } : { ok: true }),
+    );
   });
 });
 await new Promise<void>((resolve) => core.listen(0, resolve));
@@ -61,10 +64,23 @@ function lastCallTo(pathname: string): Call | undefined {
 
 test("GET /api/inbox resolves the signed-in person's inbox loop, never someone else's", async () => {
   await fetch(`${base}/api/inbox`, { headers });
-  const call = lastCallTo("/v1/loops/inbox");
+  const call = lastCallTo("/v1/inbox");
   assert.ok(call, "expected a relayed core call");
   assert.equal(call.method, "GET");
   assert.equal(coreQuery(call.url, "principalId"), "alice");
+});
+
+test("sent mail routes preserve Gmail account affinity", async () => {
+  await fetch(`${base}/api/inbox/sent?pageToken=next&accountType=company`, { headers });
+  const list = lastCallTo("/v1/connectors/gmail/sent");
+  assert.ok(list);
+  assert.equal(coreQuery(list.url, "pageToken"), "next");
+  assert.equal(coreQuery(list.url, "accountType"), "company");
+
+  await fetch(`${base}/api/inbox/sent/message-1?accountType=company`, { headers });
+  const detail = lastCallTo("/v1/connectors/gmail/sent/message-1");
+  assert.ok(detail);
+  assert.equal(coreQuery(detail.url, "accountType"), "company");
 });
 
 test("POST /api/inbox/sync-cron carries the caller, not the body's claim", async () => {
@@ -153,4 +169,20 @@ test("a signed-in user who is not an inbox user cannot read the ledger", async (
 test("inbox routes refuse anonymous callers", async () => {
   const r = await fetch(`${base}/api/inbox`);
   assert.equal(r.status, 401);
+});
+
+test("feature flag denial blocks Inbox and Loop API access despite the environment allowlist", async () => {
+  previewEnabled = false;
+  try {
+    for (const path of ["/api/inbox", "/api/inbox/selection", "/api/loops/loop-1/ingestion"]) {
+      const response = await fetch(`${base}${path}`, {
+        headers,
+        ...(path.endsWith("selection") ? { method: "POST", body: "{}" } : {}),
+      });
+      assert.equal(response.status, 403);
+      assert.equal((await response.json()).error, "feature_disabled");
+    }
+  } finally {
+    previewEnabled = true;
+  }
 });

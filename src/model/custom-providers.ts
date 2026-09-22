@@ -69,6 +69,12 @@ export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
     for (const [field, v] of [
       ["contextWindow", m.contextWindow],
       ["maxTokens", m.maxTokens],
+    ] as const) {
+      if (v !== undefined && (!Number.isSafeInteger(v) || v <= 0)) {
+        throw new Error(`model "${m.id}": ${field} must be a positive safe integer`);
+      }
+    }
+    for (const [field, v] of [
       ["input", m.input],
       ["output", m.output],
     ] as const) {

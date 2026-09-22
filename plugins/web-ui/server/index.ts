@@ -1,3 +1,6 @@
+import "./instrument.ts";
+import { browserErrorConfig } from "./browser-error-config.ts";
+import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
@@ -10,6 +13,7 @@ import { dirname, extname, join, normalize } from "node:path";
 import { randomBytes } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import {
+  fetchCoreText,
   signedHeaders,
   withSourceAuthNonce,
   CAPABILITY_HEADER,
@@ -28,6 +32,7 @@ import {
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
+import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 
 import {
   CORE_API_URL as CORE,
@@ -51,15 +56,8 @@ const ALLOW = (process.env.WEB_UI_PRINCIPALS ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
-const INBOX_USERS = new Set(
-  (process.env.INBOX_USERS ?? "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean),
-);
-
-export function isInboxUser(principalId: string): boolean {
-  return INBOX_USERS.has("all") || INBOX_USERS.has(principalId.trim().toLowerCase());
+export function isInboxUser(principalId: string, configuredUsers = process.env.INBOX_USERS): boolean {
+  return principalInAllowlist(principalId, configuredUsers);
 }
 
 export function isLoopsUser(principalId: string, configuredUsers = process.env.LOOPS_USERS): boolean {
@@ -70,6 +68,15 @@ export function isLoopsUser(principalId: string, configuredUsers = process.env.L
     .map((entry) => entry.trim().toLowerCase())
     .filter(Boolean)
     .includes(normalizedPrincipalId);
+}
+
+async function hasInboxLoopPreview(user: string): Promise<boolean> {
+  try {
+    const response = await coreFetch("GET", `/v1/inbox/access?principalId=${encodeURIComponent(user)}`, "", 2_000);
+    return response.status === 200 && JSON.parse(response.text).enabled === true;
+  } catch {
+    return false;
+  }
 }
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -172,18 +179,38 @@ const CONTENT_TYPES: Record<string, string> = {
   ".wasm": "application/wasm",
 };
 
+const analyticsKey = process.env.POSTHOG_API_KEY?.trim();
+if (analyticsKey && !/^phc_[A-Za-z0-9]+$/.test(analyticsKey))
+  throw new Error("POSTHOG_API_KEY must be a public project ingestion token");
+const analyticsHost = new URL((analyticsKey && process.env.POSTHOG_HOST?.trim()) || "https://us.i.posthog.com");
+if (
+  analyticsKey &&
+  (analyticsHost.protocol !== "https:" ||
+    analyticsHost.username ||
+    analyticsHost.password ||
+    analyticsHost.search ||
+    analyticsHost.hash ||
+    analyticsHost.pathname !== "/")
+) {
+  throw new Error("POSTHOG_HOST must be an HTTPS origin");
+}
+const analyticsConfig = analyticsKey ? { apiKey: analyticsKey, host: analyticsHost.origin } : undefined;
+
+const browserErrors = browserErrorConfig(process.env);
+const browserErrorOrigin = browserErrors ? new URL(browserErrors.dsn).origin : undefined;
+
 const SPA_CSP = [
   "default-src 'self'",
   "script-src 'self' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  "connect-src 'self'",
+  `connect-src 'self'${analyticsConfig ? ` ${analyticsConfig.host}` : ""}${browserErrorOrigin ? ` ${browserErrorOrigin}` : ""}`,
   "frame-src 'self' data: https:",
   "worker-src 'self' blob:",
   "frame-ancestors 'self'",
   "base-uri 'none'",
-  "form-action 'self'",
+  `form-action 'self'${process.env.QM_SLACK_SERVICE_URL ? ` ${new URL(process.env.QM_SLACK_SERVICE_URL).origin} https://slack.com` : ""}`,
   "object-src 'none'",
 ].join("; ");
 
@@ -192,7 +219,7 @@ function withSecurityHeaders(headers: Record<string, string>): Record<string, st
     ...headers,
     "content-security-policy": SPA_CSP,
     "strict-transport-security": "max-age=63072000; includeSubDomains",
-    "referrer-policy": "no-referrer",
+    "referrer-policy": process.env.QM_SLACK_SERVICE_URL ? "strict-origin" : "no-referrer",
     "x-frame-options": "SAMEORIGIN",
     "x-content-type-options": "nosniff",
   };
@@ -556,8 +583,7 @@ function runInboxFeed(): Promise<void> {
     (data) => {
       const ev = data as { owner?: string; loopId?: string; itemId?: string; op?: string };
       if (!ev.owner || !ev.loopId || !ev.itemId) return;
-      for (const res of deliveryClients.get(ev.owner) ?? [])
-        sseEvent(res, "inbox_item", { loopId: ev.loopId, itemId: ev.itemId, op: ev.op ?? "" });
+      for (const clients of deliveryClients.values()) for (const res of clients) sseEvent(res, "inbox_resync", {});
     },
     () => {
       for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "inbox_resync", {});
@@ -571,19 +597,16 @@ async function coreFetch(
   rawBody = "",
   timeoutMs?: number,
 ): Promise<{ status: number; text: string }> {
-  const signedPath = withSourceAuthNonce(pathWithQuery, CORE_SIGNING_SECRET);
   const portalTok = portalTokenStore.getStore();
-  const r = await fetch(`${CORE}${signedPath}`, {
+  return fetchCoreText({
+    origin: CORE,
+    secret: CORE_SIGNING_SECRET,
     method,
-    headers: {
-      ...signedHeaders(CORE_SIGNING_SECRET, method, signedPath, rawBody),
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-    },
-    ...(rawBody ? { body: rawBody } : {}),
-    ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
-    redirect: "manual",
+    path: pathWithQuery,
+    body: rawBody,
+    headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
   });
-  return { status: r.status, text: await r.text() };
 }
 
 async function coreFetchCap(
@@ -659,7 +682,13 @@ function namespacedSendKey(user: string, raw: unknown): string | undefined {
   return SEND_KEY_PATTERN.test(key) ? `web:${encodeURIComponent(user)}:${key}` : undefined;
 }
 
-async function postTurnAndMint(res: ServerResponse, turn: unknown, user: string, threadRef: string): Promise<void> {
+async function postTurnAndMint(
+  req: IncomingMessage,
+  res: ServerResponse,
+  turn: Record<string, unknown>,
+  user: string,
+  threadRef: string,
+): Promise<void> {
   const startedAt = performance.now();
   let runId: string | undefined;
   res.once("finish", () => {
@@ -669,7 +698,11 @@ async function postTurnAndMint(res: ServerResponse, turn: unknown, user: string,
       elapsedMs: Math.round(performance.now() - startedAt),
     });
   });
-  const r = await coreFetch("POST", `/v1/turns?async=1`, JSON.stringify(turn));
+  const r = await coreFetch(
+    "POST",
+    `/v1/turns?async=1`,
+    JSON.stringify({ ...turn, ...(resolveIdentity(req)?.impersonator ? { analyticsSuppressed: true } : {}) }),
+  );
   if (r.status >= 200 && r.status < 300) {
     try {
       const parsed = JSON.parse(r.text) as Record<string, unknown> & { runId?: string };
@@ -1099,6 +1132,19 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "POST",
+    path: "/api/user-model-auth/account",
+    handle: async (c) => {
+      const p = JSON.parse((await readBody(c.req)) || "{}") as { account?: unknown; provider?: unknown };
+      return relayCore(
+        c.res,
+        "POST",
+        "/v1/user-model-auth/account",
+        JSON.stringify({ principalId: c.user, account: p.account, provider: p.provider }),
+      );
+    },
+  },
+  {
+    method: "POST",
     path: "/api/user-model-auth/api-key",
     handle: async (c) => {
       const p = JSON.parse((await readBody(c.req)) || "{}") as { provider?: unknown; apiKey?: unknown };
@@ -1150,6 +1196,32 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
 
+  { method: "GET", path: "/api/composio/slack", handle: (c) => relayCore(c.res, "GET", "/v1/composio/slack") },
+  {
+    method: "POST",
+    path: "/api/composio/slack/authorize",
+    handle: async (c) => {
+      const body = await readJson<{ returnTo?: unknown; state?: unknown }>(c.req, c.res, false);
+      if (!body) return;
+      const callback = composioCallbackUrl(PUBLIC_URL, body.returnTo, body.state);
+      if (!callback) return json(c.res, 400, { error: "invalid_return_url" });
+      const url = new URL(callback);
+      url.searchParams.delete("composioReturn");
+      url.searchParams.set("slackReturn", String(body.state));
+      c.res.setHeader("Cache-Control", "no-store");
+      return relayCore(c.res, "POST", "/v1/composio/slack/authorize", JSON.stringify({ callbackUrl: url.href }));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/composio/slack/complete",
+    handle: async (c) => {
+      const body = await readJson<{ ticket?: unknown }>(c.req, c.res, false);
+      if (!body) return;
+      c.res.setHeader("Cache-Control", "no-store");
+      return relayCore(c.res, "POST", "/v1/composio/slack/complete", JSON.stringify({ ticket: body.ticket }));
+    },
+  },
   {
     method: "GET",
     path: "/api/composio/toolkits",
@@ -1215,19 +1287,27 @@ const apiRoutes: readonly WebRoute[] = [
       }
       const parsed = JSON.parse(authStatus.text) as {
         individualModelAuth?: boolean;
+        account?: string;
         connections?: { provider: string }[];
       };
       const permissions = allPermissions.filter((permission) => permission !== "loops" && permission !== "inbox");
-      if (isLoopsUser(user)) permissions.push("loops");
-      if (isInboxUser(user)) permissions.push("inbox");
+      if (await hasInboxLoopPreview(user)) {
+        if (isLoopsUser(user)) permissions.push("loops");
+        if (isInboxUser(user)) permissions.push("inbox");
+      }
       return json(res, 200, {
         user,
         org: ORG,
         companyName: companyBranding.orgName?.trim() || null,
+        ...(analyticsConfig && !resolveIdentity(req)?.impersonator ? { analytics: analyticsConfig } : {}),
+        ...(browserErrors && !resolveIdentity(req)?.impersonator ? { browserErrors } : {}),
         mode: AUTH_MODE,
         slackWorkspaceUrl: workspaceUrl,
         individualModelAuth: parsed.individualModelAuth === true,
-        modelAuthConnected: (parsed.connections?.length ?? 0) > 0,
+        modelAuthConnected:
+          parsed.connections?.some(
+            (c) => !parsed.account || parsed.account === "personal" || parsed.account === c.provider,
+          ) ?? false,
         impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
         displayName: resolveIdentity(req)?.name ?? null,
         ...(welcomeCohort ? { welcomeCohort } : {}),
@@ -1493,8 +1573,28 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/inbox",
     handle: async (c) => {
       const { res, user } = c;
-      return relayCore(res, "GET", `/v1/loops/inbox?principalId=${encodeURIComponent(user)}`);
+      const qs = new URLSearchParams({ principalId: user });
+      for (const key of ["cursor", "loopId", "view", "itemId"]) {
+        const value = c.url.searchParams.get(key);
+        if (value) qs.set(key, value);
+      }
+      return relayCore(res, "GET", `/v1/inbox?${qs}`);
     },
+  },
+  {
+    method: "POST",
+    path: "/api/inbox/sent-chat",
+    handle: async ({ req, res, user }) => {
+      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+      res.setHeader("Cache-Control", "no-store");
+      return relayCore(res, "POST", "/v1/loops/inbox/sent-chat", await readBody(req));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/inbox/selection",
+    handle: async (c) =>
+      relayCore(c.res, "PUT", `/v1/inbox?principalId=${encodeURIComponent(c.user)}`, await readBody(c.req)),
   },
   {
     method: "POST",
@@ -1820,7 +1920,28 @@ const apiRoutes: readonly WebRoute[] = [
         const v = url.searchParams.get(p);
         if (v !== null) qs.set(p, v);
       }
-      return relayCore(res, "GET", `/v1/sessions/${encodeURIComponent(id)}?${qs.toString()}`);
+      const cancel = new AbortController();
+      const onClose = () => cancel.abort();
+      res.once("close", onClose);
+      try {
+        const portalTok = portalTokenStore.getStore();
+        return relay(
+          res,
+          await fetchCoreText({
+            origin: CORE,
+            secret: CORE_SIGNING_SECRET,
+            method: "GET",
+            path: `/v1/sessions/${encodeURIComponent(id)}?${qs.toString()}`,
+            headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+            signal: AbortSignal.any([cancel.signal, AbortSignal.timeout(30_000)]),
+            retrySafeRead: true,
+          }),
+        );
+      } catch (error) {
+        if (!cancel.signal.aborted) throw error;
+      } finally {
+        res.off("close", onClose);
+      }
     },
   },
   {
@@ -2193,7 +2314,7 @@ const apiRoutes: readonly WebRoute[] = [
       const replay: Record<string, unknown> = { ...record.request, approval };
       delete replay.idempotencyKey;
       if (idempotencyKey) replay.idempotencyKey = idempotencyKey;
-      return postTurnAndMint(res, replay, user, threadRef);
+      return postTurnAndMint(req, res, replay, user, threadRef);
     },
   },
   {
@@ -2281,7 +2402,7 @@ const apiRoutes: readonly WebRoute[] = [
         ...(proactiveOpener ? { proactiveOpener: true } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
       };
-      return postTurnAndMint(res, turn, user, threadRef);
+      return postTurnAndMint(req, res, turn, user, threadRef);
     },
   },
   {
@@ -2377,6 +2498,7 @@ const apiRoutes: readonly WebRoute[] = [
         threadRef?: unknown;
         scopeId?: unknown;
         channelName?: unknown;
+        queuedRunId?: unknown;
       }>(req, res, false);
       if (!p) return;
       const kind = typeof p.kind === "string" ? p.kind : "";
@@ -2399,8 +2521,22 @@ const apiRoutes: readonly WebRoute[] = [
         res,
         "POST",
         `/v1/runs/${encodeURIComponent(id)}/signal`,
-        JSON.stringify({ kind, ...(text !== undefined ? { text } : {}), ...steerFields }),
+        JSON.stringify({
+          kind,
+          ...(text !== undefined ? { text } : {}),
+          ...steerFields,
+          ...(typeof p.queuedRunId === "string" ? { queuedRunId: p.queuedRunId } : {}),
+        }),
       );
+    },
+  },
+  {
+    method: "PATCH",
+    path: "/api/runs/:id/input",
+    handle: async (c) => {
+      const body = await readJson<{ text?: unknown; expectedText?: unknown }>(c.req, c.res, false);
+      if (!body) return;
+      return relayCore(c.res, "PATCH", `/v1/runs/${encodeURIComponent(c.params.id!)}/input`, JSON.stringify(body));
     },
   },
   {
@@ -2469,6 +2605,36 @@ const apiRoutes: readonly WebRoute[] = [
         void 0;
       }
       return relay(res, r);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/inbox/sent/:messageId",
+    handle: async ({ res, user, params, url }) => {
+      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+      const query = new URLSearchParams();
+      const accountType = url.searchParams.get("accountType");
+      if (accountType) query.set("accountType", accountType);
+      res.setHeader("Cache-Control", "no-store");
+      return relayCore(
+        res,
+        "GET",
+        `/v1/connectors/gmail/sent/${encodeURIComponent(params.messageId!)}${query.size ? `?${query}` : ""}`,
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/inbox/sent",
+    handle: async ({ res, user, url }) => {
+      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+      const params = new URLSearchParams();
+      for (const key of ["pageToken", "accountType"]) {
+        const value = url.searchParams.get(key);
+        if (value) params.set(key, value);
+      }
+      res.setHeader("Cache-Control", "no-store");
+      return relayCore(res, "GET", `/v1/connectors/gmail/sent?${params}`);
     },
   },
   {
@@ -2543,6 +2709,38 @@ const apiRoutes: readonly WebRoute[] = [
         `/v1/loops/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(user)}`,
       );
     },
+  },
+  {
+    method: "GET",
+    path: "/api/loops/:id/ingestion",
+    handle: async ({ res, user, params }) =>
+      relayCore(
+        res,
+        "GET",
+        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion?principalId=${encodeURIComponent(user)}`,
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/loops/:id/ingestion",
+    handle: async ({ req, res, user, params }) =>
+      relayCore(
+        res,
+        "POST",
+        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion?principalId=${encodeURIComponent(user)}`,
+        await readBody(req),
+      ),
+  },
+  {
+    method: "PATCH",
+    path: "/api/loops/:id/ingestion/:sourceId",
+    handle: async ({ req, res, user, params }) =>
+      relayCore(
+        res,
+        "PATCH",
+        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion/${encodeURIComponent(params.sourceId!)}?principalId=${encodeURIComponent(user)}`,
+        await readBody(req),
+      ),
   },
   {
     method: "POST",
@@ -2941,8 +3139,13 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   if (path === "/me" || path.startsWith("/api/")) {
     const user = cookieUser(req);
     if (!user) return unauthorized(res, req);
+    const inboxPath = path === "/api/inbox" || path.startsWith("/api/inbox/");
     const loopsPath = path === "/api/loops" || path.startsWith("/api/loops/");
-    const ledgerPath = /^\/api\/loops\/[^/]+\/items(\/|$)/.test(path);
+    if ((inboxPath || loopsPath) && !(await hasInboxLoopPreview(user)))
+      return json(res, 403, { error: "feature_disabled" });
+    if (inboxPath && !isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+    const ledgerPath =
+      /^\/api\/loops\/[^/]+\/items(\/|$)/.test(path) || /^\/api\/loops\/[^/]+\/outputs\/[^/]+\/decide$/.test(path);
     if (loopsPath && !isLoopsUser(user) && !(ledgerPath && isInboxUser(user))) {
       return json(res, 403, { error: "forbidden" });
     }
@@ -3026,6 +3229,7 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
 
 const server = createServer((req, res) => {
   void handler(req, res).catch((err: unknown) => {
+    reportBackendError(err);
     console.error("%s", `[web-ui] 502 ${req.method ?? "?"} ${req.url ?? "?"}:`, String(err));
     if (!res.headersSent) json(res, 502, { error: "bad_gateway", message: "upstream error" });
     else res.end();
@@ -3050,8 +3254,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
         void runInboxFeed();
       });
     })
-    .catch((err: unknown) => {
+    .catch(async (err: unknown) => {
+      reportBackendError(err);
       console.error("[web-ui] failed to start:", String(err));
+      await flushErrorReporting();
       process.exit(1);
     });
 }

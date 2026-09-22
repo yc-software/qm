@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { assert, isLiveStatusText, type Scenario } from "./harness.ts";
-import { sleep } from "./slack.ts";
+import { sleep, type SlackMessage } from "./slack.ts";
 import { assertRuntimeHandoff } from "./runtime-handoff.ts";
 import { multiUserScenarios } from "./scenarios-multiuser.ts";
 import { twinScenarios } from "./scenarios-twin.ts";
@@ -96,7 +96,12 @@ export const scenarios: Scenario[] = [
       });
       await ch.mention("fwd this screenshot to my DM with you, let's send a fix", fileTs);
       await ch.waitForBotReply(fileTs, { timeoutMs: SANDBOX_TIMEOUT - 30_000 });
-      const dmMsg = await dm.waitForBotReply(baseline, { timeoutMs: 90_000 }).catch(() => null);
+      const dmMsg = await dm
+        .waitForBotReply(baseline, {
+          timeoutMs: 90_000,
+          accept: (message) => (message.files ?? []).some((file) => (file.name ?? file.title ?? "").includes(marker)),
+        })
+        .catch(() => null);
       const forwarded = !!dmMsg && (dmMsg.files ?? []).some((f) => (f.name ?? f.title ?? "").includes(marker));
       assert.ok(
         forwarded,
@@ -220,13 +225,19 @@ export const scenarios: Scenario[] = [
       const root = await ch.mention(
         `Create a text file named ${marker}.txt containing the single line "hello from ci" and share the file here in this thread.`,
       );
-      await ch.waitForBotReply(root, { timeoutMs: SANDBOX_TIMEOUT - 30_000 });
+      const hasSharedFile = (message: SlackMessage) =>
+        (message.files ?? []).some((file) => (file.name ?? file.title ?? "").includes(marker)) ||
+        [
+          ...(message.text ?? "").matchAll(
+            /<https?:\/\/[^>\s|]+(?:\|[^>]+)?>|\[[^\]]+\]\(https?:\/\/[^)\s]+\)|https?:\/\/[^\s<>]+/g,
+          ),
+        ].some(([link]) => link.includes(`${marker}.txt`));
+      await ch.waitForBotReply(root, {
+        timeoutMs: SANDBOX_TIMEOUT - 30_000,
+        accept: hasSharedFile,
+      });
       const botMsgs = await ch.botMessagesInThread(root);
-      const shared = botMsgs.some(
-        (m) =>
-          (m.files ?? []).some((f) => (f.name ?? f.title ?? "").includes(marker)) ||
-          (m.text ?? "").includes(`${marker}.txt`),
-      );
+      const shared = botMsgs.some(hasSharedFile);
       assert.ok(shared, `no shared file or file link mentioning ${marker}.txt found in thread`);
     },
   },
@@ -397,7 +408,10 @@ export const scenarios: Scenario[] = [
       const ts = await dm.send(
         `Create a text file named ${marker}.txt containing the single line "hello from ci" and send me the file here.`,
       );
-      await dm.waitForBotReply(ts, { timeoutMs: SANDBOX_TIMEOUT - 30_000 });
+      await dm.waitForBotReply(ts, {
+        timeoutMs: SANDBOX_TIMEOUT - 30_000,
+        accept: (message) => (message.files ?? []).some((file) => (file.name ?? file.title ?? "").includes(marker)),
+      });
       const msgs = await ctx.env.qa.history(dm.id, ts);
       const delivered = msgs.some(
         (m) =>

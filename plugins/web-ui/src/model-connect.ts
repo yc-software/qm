@@ -2,6 +2,8 @@ import { html, render, nothing, type TemplateResult } from "lit";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { brandMark, brandName } from "./ui";
+import { appState } from "./shell-state";
+import { trapDialogFocus, restoreDialogFocus } from "./dialog-focus";
 
 type ProviderKey = "claude" | "chatgpt";
 type ConnKind = "apikey" | "oauth";
@@ -44,7 +46,7 @@ const PROVIDERS: ProviderMeta[] = [
   },
   {
     key: "chatgpt",
-    name: "ChatGPT",
+    name: "ChatGPT / Codex",
     apiName: "openai",
     mark: OPENAI_MARK,
     markClass: "mc-mark-chatgpt",
@@ -63,8 +65,10 @@ interface DevicePrompt {
   expiresAt: number;
 }
 
-interface StatusResponse {
+export interface StatusResponse {
+  account: "company" | "personal" | "anthropic" | "openai";
   individualModelAuth: boolean;
+  required: boolean;
   connections: { provider: "anthropic" | "openai"; kind: ConnKind }[];
 }
 
@@ -78,10 +82,19 @@ type Flow =
 
 interface State {
   mode: Mode;
+  intent: ProviderMeta | null;
+  active: boolean;
+  revision: number;
+  loaded: boolean;
+  notice: string;
+  controller: AbortController;
   required: boolean;
+  personal: boolean;
+  account: StatusResponse["account"];
   loading: boolean;
   error: string;
   busy: boolean;
+  saving: boolean;
   connections: Partial<Record<ProviderKey, ConnKind>>;
   open: ProviderKey | null;
   method: Method | null;
@@ -92,15 +105,24 @@ interface State {
 
 let s: State;
 let overlay: HTMLElement | null = null;
-let deviceCache: DevicePrompt | null = null;
+let opener: HTMLElement | null = null;
 
 function fresh(mode: Mode): State {
   return {
     mode,
+    intent: null,
+    active: true,
+    revision: 0,
+    loaded: false,
+    notice: "",
+    controller: new AbortController(),
     required: false,
+    personal: false,
+    account: "company",
     loading: true,
     error: "",
     busy: false,
+    saving: false,
     connections: {},
     open: null,
     method: null,
@@ -121,24 +143,49 @@ function stopPolling(): void {
 
 function resetFlow(): void {
   stopPolling();
+  s.revision++;
   s.flow = { kind: "pick" };
   s.method = null;
   s.busy = false;
   s.error = "";
+  s.notice = "";
+}
+
+function current(state: State, revision = state.revision): boolean {
+  return s === state && state.active && state.revision === revision;
+}
+
+function applyStatus(status: StatusResponse): void {
+  s.required = status.required === true;
+  s.personal = status.individualModelAuth === true;
+  s.account = status.account;
+  s.connections = {};
+  for (const c of status.connections ?? []) {
+    s.connections[c.provider === "anthropic" ? "claude" : "chatgpt"] = c.kind;
+  }
+  s.loaded = true;
+  if (appState.me) {
+    appState.me.individualModelAuth = s.personal;
+    appState.me.modelAuthConnected = status.connections.some(
+      (c) => s.account === "personal" || s.account === c.provider,
+    );
+    window.dispatchEvent(new CustomEvent("model-account-changed", { detail: status }));
+  }
 }
 
 async function load(): Promise<void> {
+  const state = s;
+  const revision = s.revision;
   s.loading = true;
+  s.error = "";
   paint();
   try {
-    const status = await api<StatusResponse>("/api/user-model-auth/status");
-    s.required = status.individualModelAuth === true;
-    s.connections = {};
-    for (const c of status.connections ?? []) {
-      s.connections[c.provider === "anthropic" ? "claude" : "chatgpt"] = c.kind;
-    }
-    s.error = "";
+    const status = await api<StatusResponse>("/api/user-model-auth/status", { signal: state.controller.signal });
+    if (!current(state, revision)) return;
+    applyStatus(status);
   } catch (e) {
+    if (!current(state, revision)) return;
+    s.loaded = false;
     s.error = friendly(e);
   }
   s.loading = false;
@@ -155,41 +202,56 @@ function friendly(e: unknown): string {
   return raw;
 }
 
-function afterConnect(): void {
-  stopPolling();
-  deviceCache = null;
-  if (s.mode === "gate") {
-    location.reload();
+async function afterConnect(provider: "anthropic" | "openai"): Promise<void> {
+  const state = s;
+  resetFlow();
+  s.open = null;
+  await load();
+  if (!current(state)) return;
+  s.saving = false;
+  if (!s.loaded) {
+    paint();
     return;
   }
-  const mode = s.mode;
-  s = fresh(mode);
-  void load();
+  if (s.intent || s.mode === "gate") {
+    await switchAccount("personal", provider);
+    if (current(state) && !s.error && s.mode === "manager") closeManager();
+    return;
+  }
+  s.notice = "Account connected. Choose Use account to use it for your chats.";
+  paint();
 }
 
 async function pickSubscription(p: ProviderMeta): Promise<void> {
+  if (s.busy || s.method === "subscription") return;
+  resetFlow();
+  const state = s;
+  const revision = s.revision;
   s.method = "subscription";
-  s.error = "";
   s.busy = true;
   paint();
   try {
     if (p.key === "claude") {
       const start = await api<{ authorizeUrl: string; verifier: string }>("/api/user-model-auth/claude/start", {
         method: "POST",
+        signal: state.controller.signal,
       });
+      if (!current(state, revision)) return;
       s.flow = { kind: "claude", ...start, code: "" };
     } else {
-      if (!deviceCache || deviceCache.expiresAt - 30_000 <= Date.now()) {
-        deviceCache = await api<DevicePrompt>("/api/user-model-auth/chatgpt/start", { method: "POST" });
-      }
-      stopPolling();
-      s.flow = { kind: "chatgpt", device: deviceCache };
+      const device = await api<DevicePrompt>("/api/user-model-auth/chatgpt/start", {
+        method: "POST",
+        signal: state.controller.signal,
+      });
+      if (!current(state, revision)) return;
+      s.flow = { kind: "chatgpt", device };
       s.busy = false;
       paint();
-      pollChatGPT();
+      void pollChatGPT();
       return;
     }
   } catch (e) {
+    if (!current(state, revision)) return;
     s.error = friendly(e);
     s.method = null;
   }
@@ -198,84 +260,112 @@ async function pickSubscription(p: ProviderMeta): Promise<void> {
 }
 
 function pickApiKey(): void {
-  stopPolling();
+  if (s.busy || s.method === "apikey") return;
+  resetFlow();
   s.method = "apikey";
   s.flow = { kind: "apikey", value: "" };
-  s.error = "";
   paint();
 }
 
 async function copyCode(code: string): Promise<void> {
+  const state = s;
+  const revision = s.revision;
   try {
     await navigator.clipboard.writeText(code);
+    if (!current(state, revision)) return;
     s.copied = true;
     paint();
     setTimeout(() => {
+      if (!current(state, revision)) return;
       s.copied = false;
       paint();
     }, 1600);
   } catch {
-    s.copied = false;
+    if (!current(state, revision)) return;
+    s.error = "Could not copy the code. Select it and copy it manually.";
+    paint();
   }
 }
 
 async function finishClaude(): Promise<void> {
   if (s.flow.kind !== "claude" || !s.flow.code.trim() || s.busy) return;
+  const state = s;
+  const revision = s.revision;
   s.error = "";
   s.busy = true;
+  s.saving = true;
   paint();
   try {
     await api("/api/user-model-auth/claude/complete", {
       method: "POST",
       body: JSON.stringify({ code: s.flow.code.trim(), verifier: s.flow.verifier }),
+      signal: state.controller.signal,
     });
-    return afterConnect();
+    if (!current(state, revision)) return;
+    return afterConnect("anthropic");
   } catch (e) {
+    if (!current(state, revision)) return;
     s.busy = false;
+    s.saving = false;
     s.error = friendly(e);
     paint();
   }
 }
 
 async function pollChatGPT(): Promise<void> {
-  if (s.flow.kind !== "chatgpt") return;
+  if (s.flow.kind !== "chatgpt" || !s.active) return;
+  const state = s;
+  const revision = s.revision;
   const device = s.flow.device;
   if (Date.now() > device.expiresAt) {
-    deviceCache = null;
     resetFlow();
-    s.error = "That code expired — start the sign-in again.";
+    s.error = "That code expired. Select Sign in to get a new code.";
     paint();
     return;
   }
+  s.saving = true;
+  paint();
   try {
     const r = await api<{ status: string }>("/api/user-model-auth/chatgpt/poll", {
       method: "POST",
+      signal: state.controller.signal,
       body: JSON.stringify({ deviceAuthId: device.deviceAuthId, userCode: device.userCode }),
     });
-    if (r.status === "connected") return afterConnect();
+    if (!current(state, revision)) return;
+    if (r.status === "connected") return afterConnect("openai");
+    s.saving = false;
+    paint();
   } catch (e) {
-    s.error = friendly(e);
-    deviceCache = null;
+    if (!current(state, revision)) return;
     resetFlow();
+    s.saving = false;
+    s.error = friendly(e);
     paint();
     return;
   }
-  if (s.flow.kind === "chatgpt") s.pollTimer = setTimeout(pollChatGPT, device.intervalMs || 5000);
+  if (current(state, revision)) s.pollTimer = setTimeout(pollChatGPT, Math.max(1000, device.intervalMs || 5000));
 }
 
 async function saveKey(p: ProviderMeta): Promise<void> {
   if (s.flow.kind !== "apikey" || !s.flow.value.trim() || s.busy) return;
+  const state = s;
+  const revision = s.revision;
   s.error = "";
   s.busy = true;
+  s.saving = true;
   paint();
   try {
     await api("/api/user-model-auth/api-key", {
       method: "POST",
       body: JSON.stringify({ provider: p.key, apiKey: s.flow.value.trim() }),
+      signal: state.controller.signal,
     });
-    return afterConnect();
+    if (!current(state, revision)) return;
+    return afterConnect(p.apiName);
   } catch (e) {
+    if (!current(state, revision)) return;
     s.busy = false;
+    s.saving = false;
     s.error = friendly(e);
     paint();
   }
@@ -283,15 +373,34 @@ async function saveKey(p: ProviderMeta): Promise<void> {
 
 async function disconnect(p: ProviderMeta): Promise<void> {
   if (s.busy) return;
+  resetFlow();
+  s.open = null;
+  const state = s;
+  const revision = s.revision;
   s.error = "";
   s.busy = true;
+  s.saving = true;
   paint();
   try {
-    await api("/api/user-model-auth/disconnect", { method: "POST", body: JSON.stringify({ provider: p.key }) });
+    await api("/api/user-model-auth/disconnect", {
+      method: "POST",
+      body: JSON.stringify({ provider: p.key }),
+      signal: state.controller.signal,
+    });
+    if (!current(state, revision)) return;
     resetFlow();
     await load();
+    if (!current(state)) return;
+    s.saving = false;
+    s.notice =
+      s.account === p.apiName
+        ? "Account disconnected. Reconnect it or choose company access to continue chatting."
+        : "Account disconnected.";
+    paint();
   } catch (e) {
+    if (!current(state, revision)) return;
     s.busy = false;
+    s.saving = false;
     s.error = friendly(e);
     paint();
   }
@@ -299,7 +408,13 @@ async function disconnect(p: ProviderMeta): Promise<void> {
 
 function methodRow(title: string, detail: string, selected: boolean, onPick: () => void): TemplateResult {
   return html`
-    <button type="button" class="mc-method ${selected ? "selected" : ""}" ?disabled=${s.busy} @click=${onPick}>
+    <button
+      type="button"
+      class="mc-method ${selected ? "selected" : ""}"
+      ?disabled=${s.busy || s.saving || (title === "Company access" && s.required)}
+      aria-pressed=${selected}
+      @click=${onPick}
+    >
       <span class="mc-method-radio" aria-hidden="true"></span>
       <span class="mc-method-text">
         <span class="mc-method-title">${title}</span>
@@ -315,14 +430,15 @@ function claudeSteps(): TemplateResult {
   return html`
     <ol class="mc-steps">
       <li>
-        <a class="btn" href=${flow.authorizeUrl} target="_blank" rel="noopener">Open claude.ai and approve ↗</a>
+        <a class="btn" href=${flow.authorizeUrl} target="_blank" rel="noopener">Continue to Claude ↗</a>
       </li>
       <li>
         <label class="mc-field">
-          <span>Paste the code Claude shows you</span>
+          <span>Authorization code</span>
           <input
+            ?disabled=${s.busy || s.saving}
             .value=${flow.code}
-            placeholder="Code from claude.ai"
+            placeholder="Paste the code from Claude"
             autocomplete="off"
             spellcheck="false"
             @input=${(e: Event) => {
@@ -335,7 +451,7 @@ function claudeSteps(): TemplateResult {
       </li>
       <li>
         <button class="btn primary" ?disabled=${!flow.code.trim() || s.busy} @click=${finishClaude}>
-          ${s.busy ? "Connecting…" : "Finish"}
+          ${s.busy ? "Connecting…" : "Connect account"}
         </button>
       </li>
     </ol>
@@ -377,6 +493,7 @@ function apikeySteps(p: ProviderMeta): TemplateResult {
         <span>API key · from <a href=${p.keyConsoleUrl} target="_blank" rel="noopener">${p.keyConsole}</a></span>
         <input
           type="password"
+          ?disabled=${s.busy || s.saving}
           .value=${flow.value}
           placeholder=${p.keyPlaceholder}
           autocomplete="off"
@@ -397,11 +514,25 @@ function apikeySteps(p: ProviderMeta): TemplateResult {
 function connectBody(p: ProviderMeta): TemplateResult {
   let subscriptionSteps: TemplateResult | typeof nothing = nothing;
   if (s.method === "subscription") subscriptionSteps = p.key === "claude" ? claudeSteps() : chatgptSteps();
+  if (s.intent) {
+    return html`<div class="mc-simple-flow">
+      ${s.method === "apikey" ? apikeySteps(p) : subscriptionSteps}
+      ${s.busy ? html`<p class="mc-waiting">Connecting…</p>` : nothing}
+      ${!s.method ? html`<button class="btn primary" ?disabled=${s.saving} @click=${() => void pickSubscription(p)}>Sign in with ${p.name}</button>` : nothing}
+      <button
+        class="settings-theme-link"
+        ?disabled=${s.busy || s.saving}
+        @click=${() => (s.method === "apikey" ? void pickSubscription(p) : pickApiKey())}
+      >
+        ${s.method === "apikey" ? "Use my subscription instead" : "Use an API key instead"}
+      </button>
+    </div>`;
+  }
   return html`
     <div class="mc-connect">
       ${methodRow(
         `Sign in with ${p.name}`,
-        `Uses your ${p.subscription} subscription — nothing extra to pay.`,
+        `Uses your ${p.subscription} subscription and its usage limits.`,
         s.method === "subscription",
         () => void pickSubscription(p),
       )}
@@ -425,13 +556,32 @@ function providerRow(p: ProviderMeta): TemplateResult {
   else if (kind === "apikey") statusLine = "Connected with your API key";
   let action: TemplateResult | typeof nothing = nothing;
   if (kind) {
-    action = html`<button class="btn mc-quiet-danger" ?disabled=${s.busy} @click=${() => disconnect(p)}>
-      ${s.busy ? "…" : "Disconnect"}
+    action = html`<button
+        class="btn"
+        ?disabled=${s.busy || s.saving || s.account === p.apiName}
+        @click=${() => switchAccount("personal", p.apiName)}
+      >
+        ${s.account === p.apiName ? "In use" : "Use account"}</button
+      ><button class="btn mc-quiet-danger" ?disabled=${s.busy || s.saving} @click=${() => disconnect(p)}>
+        ${s.busy ? "…" : "Disconnect"}
+      </button>`;
+  } else if (open) {
+    action = html`<button
+      type="button"
+      class="btn"
+      ?disabled=${s.saving}
+      @click=${() => {
+        resetFlow();
+        s.open = null;
+        paint();
+      }}
+    >
+      Cancel
     </button>`;
   } else if (!open) {
     action = html`<button
       class="btn"
-      ?disabled=${s.busy}
+      ?disabled=${s.busy || s.saving}
       @click=${() => {
         resetFlow();
         s.open = p.key;
@@ -449,49 +599,117 @@ function providerRow(p: ProviderMeta): TemplateResult {
           <strong>${p.name}</strong>
           <small>${statusLine}</small>
         </div>
-        ${action}
+        <div class="mc-provider-actions">${action}</div>
       </div>
       ${open && !kind ? connectBody(p) : nothing}
     </section>
   `;
 }
 
+async function switchAccount(account: "personal" | "company", provider?: "anthropic" | "openai"): Promise<void> {
+  if (s.busy || (account === "company" && !s.personal) || (account === "personal" && provider === s.account)) return;
+  resetFlow();
+  s.open = null;
+  const state = s;
+  const revision = s.revision;
+  s.busy = true;
+  s.saving = true;
+  paint();
+  try {
+    const status = await api<StatusResponse>("/api/user-model-auth/account", {
+      method: "POST",
+      body: JSON.stringify({ account, provider }),
+      signal: state.controller.signal,
+    });
+    if (!current(state, revision)) return;
+    applyStatus(status);
+    s.notice =
+      account === "company"
+        ? "New chats will use company access."
+        : `New chats will use your ${provider === "anthropic" ? "Claude" : "ChatGPT / Codex"} account.`;
+  } catch (e) {
+    if (!current(state, revision)) return;
+    s.error = friendly(e);
+  }
+  s.busy = false;
+  s.saving = false;
+  paint();
+}
+
 function view(): TemplateResult {
-  const anyConnected = Object.keys(s.connections).length > 0;
+  const anyConnected = PROVIDERS.some(
+    (p) => s.connections[p.key] && (s.account === "personal" || s.account === p.apiName),
+  );
   let cta: TemplateResult | typeof nothing = nothing;
-  if (anyConnected) {
+  if (s.loaded && (s.mode === "manager" || anyConnected || !s.personal)) {
     cta =
       s.mode === "gate"
-        ? html`<button class="btn primary mc-cta" @click=${() => location.reload()}>Start chatting</button>`
-        : html`<button class="btn primary mc-cta" @click=${closeManager}>Done</button>`;
+        ? html`<button class="btn primary mc-cta" ?disabled=${s.saving} @click=${() => location.reload()}>
+            Start chatting
+          </button>`
+        : html`<button class="btn primary mc-cta" ?disabled=${s.saving} @click=${closeManager}>Done</button>`;
   }
+  let choices: TemplateResult;
+  if (!s.loaded) choices = html`<button type="button" class="btn" @click=${() => void load()}>Retry</button>`;
+  else if (s.intent)
+    choices = html`<div class="mc-simple-connect">
+      ${s.connections[s.intent.key] ? providerRow(s.intent) : connectBody(s.intent)}
+    </div>`;
+  else
+    choices = html`<div class="mc-providers">
+      ${methodRow(
+        "Company access",
+        s.required ? "Your organization requires a personal account." : "Use the access provided by your organization.",
+        !s.personal,
+        () => {
+          if (!s.required) void switchAccount("company");
+        },
+      )}
+      <p class="mc-account-hint">
+        ${s.personal ? "Using a personal account. Choose a connected provider below." : "Or use your own account. Connect a provider, then choose Use account."}
+      </p>
+      ${PROVIDERS.map((p) => providerRow(p))}
+    </div>`;
+  let title = s.mode === "gate" ? "Connect your AI account" : "AI accounts";
+  if (s.intent) title = `Connect ${s.intent.name}`;
   const body = s.loading
     ? html`<div class="mc-waiting"><span class="mc-spinner" aria-hidden="true"></span>Loading…</div>`
     : html`
         ${s.error ? html`<div class="mc-error" role="alert">${s.error}</div>` : nothing}
-        <div class="mc-providers">${PROVIDERS.map((p) => providerRow(p))}</div>
-        ${cta}
+        ${s.saving || s.notice ? html`<p class="mc-notice" role="status">${s.saving ? "Saving changes…" : s.notice}</p>` : nothing}
+        ${choices} ${s.intent ? nothing : cta}
       `;
-  let subCopy = "Chats run on the account you connect here, billed to you — not the organization.";
-  if (s.mode === "gate") {
-    subCopy =
-      "Your organization has each person chat on their own AI account. Connect one to get started — you can switch any time.";
-  } else if (s.required && !s.loading && !anyConnected) {
-    subCopy =
-      "Chats run on the account you connect here, billed to you — not the organization. Connect at least one to keep using the assistant.";
-  }
+  const personalCopy =
+    s.method === "apikey"
+      ? "New chats will be billed to this API key."
+      : `Use your ${s.intent?.subscription} subscription for new chats.`;
+  const subCopy = s.intent
+    ? personalCopy
+    : "Choose who provides access for your chats on the web and in Slack. Background tasks continue using company access.";
   return html`
     <div class="signin">
-      <div class="signin-panel mc-panel">
+      <div
+        class="signin-panel mc-panel"
+        role=${s.mode === "manager" ? "dialog" : "region"}
+        aria-modal=${s.mode === "manager" ? "true" : nothing}
+        aria-labelledby="mc-title"
+      >
         ${
-          s.mode === "manager" && !anyConnected && !s.loading
-            ? html`<button type="button" class="mc-close" aria-label="Close" title="Close" @click=${closeManager}>
+          s.mode === "manager"
+            ? html`<button
+                type="button"
+                class="mc-close"
+                aria-label="Close"
+                title="Close"
+                ?disabled=${s.saving}
+                @click=${closeManager}
+              >
                 ×
               </button>`
             : nothing
         }
         ${s.mode === "gate" ? html`<div class="signin-brand">${brandMark()}<span>${brandName()}</span></div>` : nothing}
-        <h1>${s.mode === "gate" ? "Connect your AI account" : "Your AI account"}</h1>
+        <h1 id="mc-title">${title}</h1>
         <p class="signin-body">${subCopy}</p>
         ${body}
       </div>
@@ -501,31 +719,57 @@ function view(): TemplateResult {
 
 function paint(): void {
   const el = target();
-  if (el) render(view(), el);
+  if (!s.active || !el) return;
+  const focused = document.activeElement;
+  render(view(), el);
+  if (s.mode === "manager" && focused && !focused.isConnected) {
+    el.querySelector<HTMLElement>(".mc-provider.open .mc-provider-actions button, .mc-close")?.focus();
+  }
 }
 
 function closeManager(): void {
+  if (s.saving) return;
   stopPolling();
+  s.active = false;
+  s.controller.abort();
   overlay?.remove();
   overlay = null;
-  if (s.required && Object.keys(s.connections).length === 0) location.reload();
+  restoreDialogFocus(opener, () => document.querySelector<HTMLElement>("[aria-label='Settings']"));
+  opener = null;
 }
 
 export function renderModelConnectGate(): void {
+  if (s) {
+    stopPolling();
+    s.active = false;
+    s.controller.abort();
+  }
   s = fresh("gate");
   paint();
   void load();
 }
 
-export function openModelConnectManager(): void {
+export function openModelConnectManager(provider?: "anthropic" | "openai"): void {
   if (overlay) return;
+  opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   overlay = document.createElement("div");
   overlay.className = "mc-overlay";
   overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) closeManager();
+    if (!e.composedPath().some((node) => node instanceof Element && node.classList.contains("mc-panel")))
+      closeManager();
   });
+  overlay.addEventListener("keydown", (e) => trapDialogFocus(e, closeManager));
   document.body.appendChild(overlay);
   s = fresh("manager");
+  s.intent = PROVIDERS.find((p) => p.apiName === provider) ?? null;
   paint();
-  void load();
+  overlay.querySelector<HTMLElement>(".mc-close")?.focus();
+  const state = s;
+  void load().then(() => {
+    if (current(state) && s.loaded && s.intent) {
+      s.open = s.intent.key;
+      if (!s.connections[s.intent.key]) void pickSubscription(s.intent);
+      else paint();
+    }
+  });
 }

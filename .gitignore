@@ -1,5 +1,6 @@
 node_modules
 data/
+plugins/web-ui/public/*.local.json
 *.log
 .DS_Store
 

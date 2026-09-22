@@ -9,6 +9,7 @@ import { normalizeRelPath } from "./deploy-fs.ts";
 import { samePerson } from "../directory/person.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import {
+  currentVersionOf,
   deployCurrentGitRef,
   type DeployStore,
   type Deployment,
@@ -19,23 +20,27 @@ import type { DeployProfile, DeployProvider } from "./deploy-provider.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { errMessage, swallow } from "../util/errors.ts";
+import { errMessage, reportFailure, swallow } from "../util/errors.ts";
 
 export interface DeployFile {
   path: string;
   data: string | Uint8Array;
 }
 
-export interface DeployInput {
-  ownerScopeId: ScopeId;
-  createdBy: string;
-  createdInScope?: ScopeId;
+export interface RedeployInput {
   entrypoint: string;
   files: DeployFile[];
   homeFiles?: DeployFile[];
-  name?: string;
   env?: Record<string, string>;
+  stampEnv?: Record<string, string>;
   alwaysOn?: boolean;
+}
+
+export interface DeployInput extends RedeployInput {
+  ownerScopeId: ScopeId;
+  createdBy: string;
+  createdInScope?: ScopeId;
+  name?: string;
 }
 
 export type Reach =
@@ -49,6 +54,7 @@ export interface DeployOrUpdateInput {
   files?: DeployFile[];
   homeFiles?: DeployFile[];
   env?: Record<string, string>;
+  stampEnv?: Record<string, string>;
   renameFrom?: string;
   rollbackTo?: number;
   share?: Array<{ scope: ScopeId; permission: Permission }>;
@@ -64,16 +70,7 @@ export interface ReachOptions {
 export interface DeployService {
   readonly providerProfile: DeployProfile;
   deploy(input: DeployInput): Promise<Deployment>;
-  redeploy(
-    id: string,
-    input: {
-      entrypoint: string;
-      files: DeployFile[];
-      homeFiles?: DeployFile[];
-      env?: Record<string, string>;
-      alwaysOn?: boolean;
-    },
-  ): Promise<Deployment>;
+  redeploy(id: string, input: RedeployInput): Promise<Deployment>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
   listDeployments(): Promise<Deployment[]>;
   rollbackDeployment(id: string, version: number, options?: { alwaysOn?: boolean }): Promise<void>;
@@ -116,6 +113,7 @@ export interface DeployServiceDeps {
   provider: DeployProvider;
   deployDir: string;
   auditLog: AuditLog;
+  appPublished?: (principal: string, deploymentId: string, version: number) => Promise<void>;
   acl: AclStore;
   leaderLease?: LeaderLease;
   advisoryLock?: AdvisoryLock;
@@ -143,9 +141,8 @@ function validateDisplayName(displayName: string): void {
   if (displayName.length > DISPLAY_NAME_MAX) throw new Error(`display name too long (max ${DISPLAY_NAME_MAX} chars)`);
 }
 
-function deploymentEntrypoint(d: Deployment | null): string | undefined {
-  if (!d) return undefined;
-  return d.versions.find((v) => v.version === d.currentVersion)?.entrypoint || undefined;
+export function deploymentEntrypoint(d: Deployment | null): string | undefined {
+  return currentVersionOf(d)?.entrypoint || undefined;
 }
 
 function requiredEntrypoint(input: string | undefined, d: Deployment | null): string {
@@ -208,7 +205,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
   const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint> => {
     if (!deps.provider.resolveEndpoint || d.endpoint == null) return d.endpoint!;
-    const version = d.versions.find((v) => v.version === d.currentVersion);
+    const version = currentVersionOf(d);
     if (!version) return d.endpoint;
     const resolved = await deps.provider.resolveEndpoint(d, version);
     if (resolved) {
@@ -217,7 +214,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     }
     return withDeployLock(d.id, async () => {
       const cur = (await deps.deployStore.get(d.id)) ?? d;
-      const v = cur.versions.find((x) => x.version === cur.currentVersion) ?? version;
+      const v = currentVersionOf(cur) ?? version;
       const again = await deps.provider.resolveEndpoint!(cur, v);
       if (again) {
         if (!endpointsEqual(again, cur.endpoint)) await deps.deployStore.setEndpoint(cur.id, again);
@@ -360,6 +357,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       }
       const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
       const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
+      const env = input.stampEnv ? { ...input.env, ...input.stampEnv } : input.env;
       const d = await deps.deployStore.create({
         ownerScopeId: input.ownerScopeId,
         createdBy: input.createdBy,
@@ -369,11 +367,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         ...(homeDir ? { homeDir } : {}),
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.createdInScope !== undefined ? { createdInScope: input.createdInScope } : {}),
-        ...(input.env ? { env: input.env } : {}),
+        ...(env ? { env } : {}),
         ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
       });
       const endpoint = await applyVersion(d.id, d.versions[0]!);
       await markVersionRunning(d.id, d.versions[0]!.version, endpoint);
+      void deps.appPublished?.(input.createdBy, d.id, d.versions[0]!.version).catch(() => {});
       deps.auditLog.record({
         at: Date.now(),
         principalId: input.createdBy,
@@ -387,25 +386,29 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async redeploy(id, input) {
       return withDeployLock(id, async () => {
         const before = await deps.deployStore.get(id);
+        if (!before) throw new Error(`unknown deployment: ${id}`);
+        const current = currentVersionOf(before);
         const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
-        const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
+        let homeDir = input.homeFiles === undefined ? current?.homeDir : undefined;
+        if (input.homeFiles?.length) homeDir = await snapshotFiles(deps.deployDir, input.homeFiles);
+        const inherited = input.env ?? current?.env;
+        const env = input.stampEnv ? { ...inherited, ...input.stampEnv } : inherited;
         const v = await deps.deployStore.addVersion(id, {
           entrypoint: input.entrypoint,
           snapshotDir,
           files: input.files,
           ...(homeDir ? { homeDir } : {}),
-          ...(input.env ? { env: input.env } : {}),
+          ...(env ? { env } : {}),
         });
-        const d = await deps.deployStore.get(id);
-        if (!d) throw new Error(`unknown deployment: ${id}`);
-        const endpoint = await applyVersion(id, v, before?.appliedVersion ?? before?.currentVersion, input.alwaysOn);
+        const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion, input.alwaysOn);
         await markVersionRunning(id, v.version, endpoint);
+        void deps.appPublished?.(before.createdBy, id, v.version).catch(() => {});
         deps.auditLog.record({
           at: Date.now(),
-          principalId: d.createdBy,
+          principalId: before.createdBy,
           action: "deploy_version",
           resource: `${id}@v${v.version}`,
-          scopeLabel: d.ownerScopeId,
+          scopeLabel: before.ownerScopeId,
         });
         return (await deps.deployStore.get(id))!;
       });
@@ -454,7 +457,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!d) throw new Error(`unknown deployment: ${id}`);
         if (d.status === "running") return d;
         if (d.status !== "archived") throw new Error(`deployment is not archived: ${id}`);
-        const version = d.versions.find((v) => v.version === d.currentVersion);
+        const version = currentVersionOf(d);
         if (!version) throw new Error(`no such version ${d.currentVersion}`);
         try {
           const endpoint = await applyVersion(id, version, d.appliedVersion);
@@ -590,6 +593,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           if (!v) return result;
           const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion);
           await markVersionRunning(id, v.version, endpoint);
+          void deps.appPublished?.(before.createdBy, id, v.version).catch(() => {});
           deps.auditLog.record({
             at: Date.now(),
             principalId: before.createdBy,
@@ -598,7 +602,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             scopeLabel: before.ownerScopeId,
           });
         } catch (e) {
-          console.error("%s", `[deploy] failed to register pushed version for ${id}:`, errMessage(e));
+          reportFailure("deploy: register pushed version", e, `deployment=${id}`);
           deps.auditLog.record({
             at: Date.now(),
             principalId: "system",
@@ -655,7 +659,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           resource: existing.id,
           scopeLabel: existing.ownerScopeId,
         });
-        if ((input.entrypoint !== undefined || input.files !== undefined) && input.files) {
+        if (input.files?.length) {
           const entrypoint = requiredEntrypoint(input.entrypoint, existing);
           await this.redeploy(existing.id, {
             entrypoint,
@@ -663,6 +667,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
             ...(input.homeFiles ? { homeFiles: input.homeFiles } : {}),
             ...(input.env ? { env: input.env } : {}),
+            ...(input.stampEnv ? { stampEnv: input.stampEnv } : {}),
           });
           if (input.defaultAudience)
             await reconcileDefaultAudience((await deps.deployStore.get(existing.id))!, input.defaultAudience, false);
@@ -704,6 +709,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
           ...(input.homeFiles ? { homeFiles: input.homeFiles } : {}),
           ...(input.env ? { env: input.env } : {}),
+          ...(input.stampEnv ? { stampEnv: input.stampEnv } : {}),
         });
         isCreate = false;
       } else {
@@ -717,6 +723,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.createdInScope !== undefined ? { createdInScope: input.createdInScope } : {}),
           ...(input.env ? { env: input.env } : {}),
+          ...(input.stampEnv ? { stampEnv: input.stampEnv } : {}),
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
         });
         isCreate = true;

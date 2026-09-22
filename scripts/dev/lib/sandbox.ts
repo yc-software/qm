@@ -1,13 +1,15 @@
 import { existsSync, openSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { writePidFile } from "./lease.ts";
 import { run } from "./proc.ts";
 import { ensureDockerDaemon } from "./postgres.ts";
 import { bestEffortValue, sleep } from "./util.ts";
+import type { DevSandboxBackend, DevSandboxChoice } from "./types.ts";
 
 export interface SandboxResolution {
-  backend: "local" | "sprites" | "smolmachines" | "e2b" | "porter" | "agent37";
+  backend: DevSandboxBackend;
   env: Record<string, string>;
   detail: string;
   publicApiUrl: string | null;
@@ -24,7 +26,7 @@ async function localImagePresent(image: string): Promise<boolean> {
 
 export async function resolveSandbox(opts: {
   worktree: string;
-  requested: "local" | "sprites" | "smolmachines" | "e2b" | "porter" | "agent37" | "auto";
+  requested: DevSandboxChoice;
   corePort: number;
   lock: string;
   baseEnv: Record<string, string>;
@@ -148,6 +150,44 @@ export async function resolveSandbox(opts: {
       );
     if (apiUrl) env.PUBLIC_API_URL = apiUrl;
     return { backend: "agent37", env, detail: "Agent37 (api.agent37.com)", publicApiUrl: apiUrl, warnings };
+  }
+
+  if (backend === "superserve") {
+    const apiKey = opts.baseEnv.SUPERSERVE_API_KEY?.trim();
+    const template = opts.baseEnv.SUPERSERVE_TEMPLATE?.trim();
+    if (!apiKey)
+      throw new Error(
+        "--sandbox superserve requires SUPERSERVE_API_KEY in the environment (create an API key in the Superserve console)",
+      );
+    if (!template)
+      throw new Error(
+        "--sandbox superserve requires SUPERSERVE_TEMPLATE in the environment (the ready qm-agent-<release> template that carries the agent toolchain)",
+      );
+    let apiUrl = opts.baseEnv.PUBLIC_API_URL || null;
+    if (!apiUrl) {
+      apiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+      if (!apiUrl)
+        warnings.push(
+          "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
+        );
+    }
+    const env: Record<string, string> = {
+      SANDBOX_BACKEND: "superserve",
+      SUPERSERVE_API_KEY: apiKey,
+      SUPERSERVE_TEMPLATE: template,
+      SUPERSERVE_NAME_PREFIX:
+        opts.baseEnv.SUPERSERVE_NAME_PREFIX ||
+        `qmdev-${createHash("sha1").update(opts.worktree).digest("hex").slice(0, 12)}`,
+    };
+    if (opts.baseEnv.SUPERSERVE_BASE_URL) env.SUPERSERVE_BASE_URL = opts.baseEnv.SUPERSERVE_BASE_URL;
+    if (opts.baseEnv.SUPERSERVE_EGRESS_ALLOW) env.SUPERSERVE_EGRESS_ALLOW = opts.baseEnv.SUPERSERVE_EGRESS_ALLOW;
+    if (opts.baseEnv.SUPERSERVE_EGRESS_DENY) env.SUPERSERVE_EGRESS_DENY = opts.baseEnv.SUPERSERVE_EGRESS_DENY;
+    if (!opts.baseEnv.SUPERSERVE_EGRESS_ALLOW && !opts.baseEnv.SUPERSERVE_EGRESS_DENY)
+      warnings.push(
+        "SUPERSERVE_EGRESS_ALLOW/SUPERSERVE_EGRESS_DENY unset -- superserve sandbox runs with open egress; set one to QA the enforced path",
+      );
+    if (apiUrl) env.PUBLIC_API_URL = apiUrl;
+    return { backend: "superserve", env, detail: `Superserve (template ${template})`, publicApiUrl: apiUrl, warnings };
   }
 
   if (backend === "porter") {

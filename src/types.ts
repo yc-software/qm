@@ -68,6 +68,10 @@ export interface Conversation {
 export type SessionType = "dm" | "channel" | "group";
 
 export interface SpawnMeta {
+  surfaceTools?: boolean;
+  deliveryCandidates?: TurnRequest["deliveryCandidates"];
+  origin?: TurnOrigin;
+  unattendedGrants?: string[];
   openFingerprint?: string;
   scopeVersion?: string;
   sessionParticipantIds?: readonly string[];
@@ -82,6 +86,11 @@ export interface SpawnMeta {
   thinkingLevel?: string;
 }
 
+export interface SessionStatus {
+  emoji: string;
+  text: string;
+}
+
 export interface Session {
   id: string;
   type: SessionType;
@@ -94,6 +103,7 @@ export interface Session {
   archived?: boolean;
   pinned?: boolean;
   color?: string;
+  status?: SessionStatus | null;
   forkedFrom?: { sessionId: string; title?: string | null };
   forkBoundarySeq?: number;
   parentSessionId?: string;
@@ -111,6 +121,7 @@ export type EntryType =
   | "user"
   | "assistant"
   | "thinking"
+  | "text_start"
   | "text"
   | "tool_call"
   | "tool_result"
@@ -188,6 +199,7 @@ export interface TriggerBase {
 }
 
 export interface Destination {
+  keychainAskId?: string;
   type: string;
   target: string;
   audienceScopeId?: ScopeId;
@@ -337,6 +349,7 @@ interface LoopPlaybookRevision {
 
 export interface Loop extends TriggerBase {
   name: string;
+  icon?: string;
   purpose?: string;
   surface?: string;
   sources?: string[];
@@ -381,6 +394,8 @@ export interface LoopThreadMessage {
 }
 
 export interface LoopItem {
+  previousLoopId?: string;
+  inboxPreview?: LoopSourcePayload;
   id: string;
   loopId: string;
   sourceKey: string;
@@ -641,6 +656,7 @@ export interface TurnRequest {
   clientSentAt?: number;
   approval?: { requestId: string; approved: boolean; scope?: ApprovalScope };
   proactiveOpener?: boolean;
+  analyticsSuppressed?: boolean;
   spawned?: boolean;
   idempotencyKey?: string;
   redeliveryKey?: string;

@@ -26,6 +26,7 @@ import { hashId } from "../util/crypto.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
 
 export interface CreateCronInput extends CreateTriggerInput {
+  enabled?: boolean;
   schedule: Cron["schedule"];
   title?: string;
   action?: string;
@@ -120,6 +121,7 @@ export function createCronStore(
       ]);
       return createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
+        enabled: input.enabled !== false,
         schedule,
         ...(nextFireAt !== undefined ? { nextFireAt } : {}),
         ...(title ? { title } : {}),

@@ -28,7 +28,7 @@ test("approval panel caps to the pane viewport and scrolls instead of clipping",
   const panel = css.match(/\.composer-approval-panel \{[^}]*\}/)?.[0] ?? "";
   assert.match(panel, /max-height: min\(calc\(100dvh - 130px\), calc\(100cqh - 130px\)\);/);
   const pane = css.match(/\.split-pane-content \{[^}]*\}/)?.[0] ?? "";
-  assert.match(pane, /container-type: size;/, "approval height must follow the pane, not the whole window");
+  assert.match(pane, /container: split-pane \/ size;/, "approval height must follow the pane, not the whole window");
   assert.match(panel, /overflow-y: auto;/, "panel must scroll once the cap binds");
 });
 

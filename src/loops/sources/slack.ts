@@ -193,7 +193,7 @@ export const slackAdapter: LoopSourceAdapter = {
     }
     try {
       if (kind === "react") return await reactInSlack(deps, item, args.name);
-      const draft = parseReplyDraft(args) ?? draftOf(item);
+      const draft = args.body !== undefined ? parseReplyDraft(args) : draftOf(item);
       if (!draft || !draft.body.trim()) return { ok: false, reason: "bad_item", message: "the draft is empty" };
       return await sendSlack(deps, item, { ...draft, body: draft.body.trim() });
     } catch (err) {

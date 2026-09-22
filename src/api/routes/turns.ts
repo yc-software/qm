@@ -99,6 +99,7 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "kind must be abort or steer" });
   }
   const text = isObj(body) && typeof body.text === "string" ? body.text : undefined;
+  const queuedRunId = isObj(body) && typeof body.queuedRunId === "string" ? body.queuedRunId : undefined;
   const ts = isObj(body) && typeof body.ts === "string" && body.ts ? body.ts : undefined;
   let request: TurnRequest | undefined;
   if (isObj(body) && body.request !== undefined) {
@@ -114,7 +115,13 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
   }
   const outcome = await app.signalRun(
     id,
-    { kind, ...(text !== undefined ? { text } : {}), ...(ts ? { ts } : {}), ...(request ? { request } : {}) },
+    {
+      kind,
+      ...(text !== undefined ? { text } : {}),
+      ...(ts ? { ts } : {}),
+      ...(request ? { request } : {}),
+      ...(queuedRunId ? { queuedRunId } : {}),
+    },
     actor?.p,
   );
   if (outcome.accepted) return sendJson(res, 200, outcome);
@@ -144,6 +151,16 @@ async function getActiveRunForThread(ctx: ApiCtx): Promise<void> {
   if (!threadRef) return sendJson(res, 400, { error: "bad_request", message: "threadRef required" });
   const active = await app.activeRunForThread(threadRef, actor?.p);
   return sendJson(res, 200, { runId: active?.runId ?? null, ...(active?.queued ? { queued: active.queued } : {}) });
+}
+
+async function patchQueuedRun(ctx: ApiCtx): Promise<void> {
+  const { res, app, actor, body } = ctx;
+  if (!isObj(body) || typeof body.text !== "string" || typeof body.expectedText !== "string")
+    return sendJson(res, 400, { error: "bad_request", message: "text and expectedText required" });
+  const outcome = await app.editQueuedRun(ctx.params.id!, body.text, body.expectedText, actor?.p);
+  if (outcome.edited) return sendJson(res, 200, outcome);
+  if (outcome.reason === "not_found") return sendJson(res, 404, { error: "not_found" });
+  return sendJson(res, outcome.reason === "empty_text" ? 400 : 409, outcome);
 }
 
 async function postRunWithdraw(ctx: ApiCtx): Promise<void> {
@@ -210,6 +227,7 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/approvals/:id", auth: "source", handle: getApproval },
   { method: "POST", path: "/v1/runs/:id/delivery-state", auth: "source", handle: postRunDeliveryState },
   { method: "POST", path: "/v1/runs/:id/signal", auth: "source", handle: postRunSignal },
+  { method: "PATCH", path: "/v1/runs/:id/input", auth: "source", handle: patchQueuedRun },
   { method: "POST", path: "/v1/runs/:id/withdraw", auth: "source", handle: postRunWithdraw },
   { method: "GET", path: "/v1/runs/:id", auth: "source", handle: getRun },
   { method: "GET", path: "/v1/runs", auth: "source", handle: getActiveRunForThread },

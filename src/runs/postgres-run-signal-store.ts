@@ -121,22 +121,6 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       return toSignals(rows);
     },
 
-    async takeLive(runId) {
-      const { rows } = await q(
-        `WITH taken AS (
-           UPDATE run_signals SET consumed_at=$2
-           WHERE run_id=$1 AND consumed_at IS NULL AND kind <> 'abort'
-           RETURNING id, kind, text, payload
-         )
-         SELECT id, kind, text, payload FROM taken
-         UNION ALL
-         SELECT id, kind, text, payload FROM run_signals
-         WHERE run_id=$1 AND kind='abort' AND consumed_at IS NULL`,
-        [runId, Date.now()],
-      );
-      return toSignals(rows);
-    },
-
     async pendingRunIds() {
       const { rows } = await q(`SELECT DISTINCT run_id FROM run_signals WHERE consumed_at IS NULL`);
       return rows.map((r) => r.run_id as string);

@@ -26,7 +26,41 @@ async function getStatus(ctx: ApiCtx): Promise<void> {
   if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
   const required = (await ctx.deps.config?.getIndividualModelAuthDurable()) ?? false;
   const connections = (await ctx.deps.userModelCredentials?.connections(principal)) ?? [];
-  return sendJson(ctx.res, 200, { individualModelAuth: required, connections });
+  const individualModelAuth = (await ctx.deps.config?.getIndividualModelAuthDurable(principal)) ?? false;
+  const account = (await ctx.deps.config?.getModelAccountDurable(principal)) ?? "company";
+  return sendJson(ctx.res, 200, { individualModelAuth, required, account, connections });
+}
+
+async function setAccount(ctx: ApiCtx): Promise<void> {
+  const principal = caller(ctx);
+  if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
+  if (!ctx.deps.config || !ctx.deps.userModelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
+  const account = bodyObj(ctx).account;
+  if (account !== "personal" && account !== "company") return sendJson(ctx.res, 400, { error: "bad_request" });
+  if (account === "company" && (await ctx.deps.config.getIndividualModelAuthDurable())) {
+    return sendJson(ctx.res, 403, { error: "Your organization requires a personal AI account." });
+  }
+  if (account === "personal" && !(await ctx.deps.userModelCredentials.connections(principal)).length) {
+    return sendJson(ctx.res, 409, { error: "Connect an AI account first." });
+  }
+  const provider = bodyObj(ctx).provider;
+  if (provider !== undefined && provider !== "anthropic" && provider !== "openai")
+    return sendJson(ctx.res, 400, { error: "bad_request" });
+  if (
+    account === "personal" &&
+    provider &&
+    !(await ctx.deps.userModelCredentials.connections(principal)).some((c) => c.provider === provider)
+  ) {
+    return sendJson(ctx.res, 409, { error: "Connect this AI account first." });
+  }
+  await ctx.deps.config.setPersonalModelAuth(principal, account === "personal", provider);
+  audit(ctx.deps, {
+    principalId: principal,
+    action: "user-model-auth.account",
+    resource: account,
+    scopeLabel: principal,
+  });
+  return getStatus(ctx);
 }
 
 async function disconnect(ctx: ApiCtx): Promise<void> {
@@ -134,6 +168,7 @@ async function claudeComplete(ctx: ApiCtx): Promise<void> {
 }
 
 export const userModelAuthRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "POST", path: "/v1/user-model-auth/account", auth: "source", handle: setAccount },
   { method: "GET", path: "/v1/user-model-auth/status", auth: "source", handle: getStatus },
   { method: "POST", path: "/v1/user-model-auth/api-key", auth: "source", handle: putApiKey },
   { method: "POST", path: "/v1/user-model-auth/disconnect", auth: "source", handle: disconnect },

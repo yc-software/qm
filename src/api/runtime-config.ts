@@ -15,6 +15,7 @@ import {
   modelUnavailableReason,
   thinkingLevelsForHarness,
   harnessSupportsFastMode,
+  codexProviderModelId,
   type HarnessId,
 } from "../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
@@ -159,7 +160,7 @@ export function validateRuntimeChoice(choice: RuntimeChoice): string | null {
 }
 
 export async function webuiModelEnabled(ctx: { deps: RuntimeDeps }, modelId: string): Promise<boolean> {
-  modelId = modelId.replace(/^codex\//, "");
+  modelId = codexProviderModelId(modelId);
   const config = ctx.deps.config!;
   const picker = await config.getWebuiModelsDurable(orgScope(ctx.deps));
   if (picker == null || picker.includes(modelId)) return true;

@@ -3,7 +3,9 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 export const GATEWAY_PROVIDER = "qm:gateway";
 export const GATEWAY_MODEL_PREFIX = "gateway/";
 
-let models = new Map<string, Model<Api>>();
+export type GatewayModel = Model<Api> & { documentInput?: "pdf" | "files" };
+
+let models = new Map<string, GatewayModel>();
 let version = 0;
 let snapshot = "[]";
 let aliasedIds = new Set<string>();
@@ -16,7 +18,7 @@ export function gatewayModelsVersion(): number {
   return version;
 }
 
-export function setGatewayModels(next: readonly Model<Api>[], aliases: readonly string[] = []): void {
+export function setGatewayModels(next: readonly GatewayModel[], aliases: readonly string[] = []): void {
   const serialized = JSON.stringify([next, aliases]);
   if (serialized === snapshot) return;
   models = new Map(next.map((model) => [model.id, model]));
@@ -25,7 +27,7 @@ export function setGatewayModels(next: readonly Model<Api>[], aliases: readonly 
   version += 1;
 }
 
-export function resolveGatewayModel(id: string): Model<Api> | undefined {
+export function resolveGatewayModel(id: string): GatewayModel | undefined {
   return models.get(id);
 }
 

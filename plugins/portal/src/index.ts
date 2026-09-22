@@ -1,3 +1,5 @@
+import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -294,6 +296,43 @@ async function isAdmin(sub: string): Promise<boolean> {
   return (await adminProbe(sub)).isAdmin;
 }
 
+const CANONICAL_TTL_MS = 60_000;
+const CANONICAL_TIMEOUT_MS = 4_000;
+const canonicalCache = new LRUCache<string, string>({ max: 10_000, ttl: CANONICAL_TTL_MS });
+
+async function canonicalPrincipal(sub: string): Promise<string | null> {
+  const hit = canonicalCache.get(sub);
+  if (hit !== undefined) return hit;
+  const path = withSourceAuthNonce(`/v1/principals/${encodeURIComponent(sub)}/canonical`, CORE_SIGNING_SECRET);
+  try {
+    const r = await fetch(`${CORE}${path}`, {
+      headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
+      signal: AbortSignal.timeout(CANONICAL_TIMEOUT_MS),
+    });
+    if (!r.ok) {
+      console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
+      return null;
+    }
+    const body = (await r.json()) as { canonicalId?: unknown };
+    const canonical = typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
+    canonicalCache.set(sub, canonical);
+    return canonical;
+  } catch (error) {
+    console.warn(`[portal] canonical principal lookup failed: ${errMessage(error)}`);
+    return null;
+  }
+}
+
+function identityUnavailable(req: IncomingMessage, res: ServerResponse): void {
+  if (wantsHtml(req))
+    return sendHtml(
+      res,
+      503,
+      '<!doctype html><meta charset=utf-8><body style="font-family:system-ui;max-width:32rem;margin:4rem auto"><h2>Service unavailable</h2><p>Could not confirm your identity. Try again in a moment.</p></body>',
+    );
+  json(res, 503, { error: "identity_unavailable", message: "could not confirm your identity, try again in a moment" });
+}
+
 const PAGE_CSP =
   "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
@@ -523,8 +562,7 @@ export function signInErrorHtml(
     icon: ALERT_ICON,
     warn: true,
     extra: `<p class="reason"><strong>Details</strong>${escapeHtml(detail)}</p>`,
-    actions: `<a class="btn primary" href="${retryPath}">Try signing in again</a>
-        ${retryPath === "/auth/trusted/login" && trustedSignInLabel ? '<a class="btn ghost" href="/auth/login?provider=primary">Use another sign-in method</a>' : '<a class="btn ghost" href="/">Back to start</a>'}`,
+    actions: `<a class="btn primary" href="${retryPath}">Try signing in again</a>`,
     help: "Still stuck? Check that your account has access, then contact your admin.",
   });
 }
@@ -911,6 +949,7 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): void {
 
 const server = createServer((req, res) => {
   void handle(req, res).catch((err: unknown) => {
+    reportBackendError(err);
     console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
     if (!res.headersSent) json(res, 500, { error: "internal_error" });
     else res.end();
@@ -1014,6 +1053,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   let session = currentSession(req);
   if (session) renewSessionCookie(req, res);
+  const authenticatedPrincipal = session?.sub;
+  if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
+    const canonical = await canonicalPrincipal(session.sub);
+    if (canonical === null) return identityUnavailable(req, res);
+    session = { ...session, sub: canonical };
+  }
 
   if (pathname === "/auth/impersonate" && method === "POST") {
     if (!session) return json(res, 401, { error: "sign in" });
@@ -1021,7 +1066,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!(await isAdmin(session.sub))) return json(res, 403, { error: "forbidden", message: "admin access required" });
     const target = (url.searchParams.get("target") ?? "").trim();
     if (!target) return json(res, 400, { error: "bad_request", message: "target required" });
-    if (target === session.sub) return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
+    if (target === session.sub || (await canonicalPrincipal(target)) === session.sub)
+      return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
     const result = await coreImpersonate("start", session.sub, target);
     if (!result.ok) {
       const status = result.status === 403 || result.status === 400 ? result.status : 502;
@@ -1077,8 +1123,18 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     ]);
   }
 
-  if (method === "POST" && /^\/v1\/webhooks\/incoming\/[^/]+$/.test(pathname)) {
-    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, FORWARD_WEBHOOK_HEADERS);
+  if (
+    method === "POST" &&
+    (/^\/v1\/webhooks\/incoming\/[^/]+$/.test(pathname) || /^\/v1\/loop-ingress\/[^/]+$/.test(pathname))
+  ) {
+    return proxyToUpstream(
+      req,
+      res,
+      { baseUrl: CORE, path: pathname, search: url.search },
+      pathname.startsWith("/v1/loop-ingress/")
+        ? [...FORWARD_WEBHOOK_HEADERS, "authorization"]
+        : FORWARD_WEBHOOK_HEADERS,
+    );
   }
 
   const consentBounce = (): void => {
@@ -1259,6 +1315,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     ...(!impersonator && session.name ? { displayName: session.name } : {}),
     ...(impersonator ? { impersonator } : {}),
     ...(PORTAL_IDENTITY_SECRET ? { identitySecret: PORTAL_IDENTITY_SECRET } : {}),
+    authenticatedPrincipal,
   });
 }
 
@@ -1666,6 +1723,7 @@ export { handle, server };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   startServer().catch((error: unknown) => {
+    reportBackendError(error);
     console.error("[portal] failed to start:", errMessage(error));
     process.exitCode = 1;
   });

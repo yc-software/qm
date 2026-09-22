@@ -69,11 +69,7 @@ test("the Steer control's presence is fixed for the conversation; only enablemen
     composer.indexOf("function queuedStrip"),
     composer.indexOf("function composerApprovalPanel"),
   );
-  assert.match(
-    strip,
-    /\?disabled=\$\{!steerable \|\| q\.hasAttachments\}/,
-    "an unusable Steer is disabled, never removed",
-  );
+  assert.match(strip, /\?disabled=\$\{!steerable\}/, "an unusable Steer is disabled, never removed");
   assert.doesNotMatch(
     strip,
     /steerable\s*\?\s*html`<button/,
@@ -91,57 +87,20 @@ test("steering is reachable only as an explicit act on a queued row", () => {
   assert.match(strip, /class="chip-x"[\s\S]{0,240}removeQueued\(agent, q\)/);
   assert.match(
     composer,
-    /const steerable =\s*agent\.state\.isStreaming && ctx\.chat\.hasLiveRun\(\) &&\s*harnessSupportsSteer\(currentModelOption\(\)\?\.harnessId \?\? ""\);/,
+    /const steerable =\s*agent\.state\.isStreaming &&\s*!ctx\.chat\.isStopping\(\) &&\s*ctx\.chat\.hasLiveRun\(\) &&\s*harnessSupportsSteer\(currentModelOption\(\)\?\.harnessId \?\? ""\);/,
     "Steer acts only against a live run on a harness that can fold one in",
   );
 });
 
-// The one ordering that matters: withdraw is atomic, so putting it first means the message is
-// either steered or run — never both, and never neither.
-test("Steer withdraws the queued run before it signals, and only then shows the steered row", () => {
+test("Steer asks core to transfer the durable queued message before showing it as delivered", () => {
   const fn = composer.slice(
     composer.indexOf("async function steerQueued"),
     composer.indexOf("async function sendPrompt"),
   );
-  const withdraw = fn.indexOf("await withdrawRun(queued.runId)");
-  const signal = fn.indexOf('signalLiveRun("steer"');
-  const push = fn.indexOf("agent.state.messages.push");
-  assert.ok(withdraw > 0 && signal > withdraw, "the run is off the queue before its text is folded in");
-  assert.ok(
-    push > withdraw && signal > push,
-    "the steered row shows before the signal so a run that ended first can recover it in place",
-  );
-  assert.match(
-    fn,
-    /if \(!outcome\.ok\) await recoverEndedRunSteer\(agent, queued\.text, outcome\);/,
-    "a steer the run outlived is recovered (replayed run followed, or resent as its own turn)",
-  );
-  assert.match(fn, /if \(!\(await withdrawRun\(queued\.runId\)\)\) return ctx\.chat\.drawActiveChat\(agent\);/);
-  assert.match(
-    fn,
-    /err instanceof ApiError && err\.status === 409[\s\S]{0,240}?already started/,
-    "losing to the claim is reported as running, not as a failure to steer",
-  );
-  assert.match(
-    fn,
-    /err instanceof ApiError && err\.status === 404[\s\S]{0,240}?already removed/,
-    "a run another tab withdrew is reported gone",
-  );
-  assert.match(
-    fn,
-    /if \(started \|\| gone\) forgetQueuedRun\(threadRef, queued\.runId\);/,
-    "both ways out of the queue clear the chip — no ghost row survives a lost race",
-  );
-  assert.match(
-    fn,
-    /catch \(err\) \{[\s\S]{0,1400}?Could not steer the running task[\s\S]{0,600}?await enqueueTurn\(agent, threadRef, queued\.text\)/,
-    "a steer that never reached core puts the message back on the queue as its own turn",
-  );
-  assert.match(
-    fn,
-    /if \(steerSessionId && \(await verifySteerDelivered\(steerSessionId, queued\.text, sentAt, undefined, sinceSeq\)\)\)[\s\S]{0,120}?return ctx\.chat\.drawActiveChat\(agent\)/,
-    "an ambiguous failure verifies the steer landed before it would re-enqueue",
-  );
+  assert.match(fn, /signalLiveRun\("steer", queued\.text, queued\.runId\)/);
+  assert.doesNotMatch(fn, /withdrawRun|enqueueTurn|verifySteerDelivered/);
+  assert.ok(fn.indexOf("signalLiveRun") < fn.indexOf("agent.state.messages.push"));
+  assert.match(fn, /agent === ctx\.chat\.state\.agent && threadRef === ctx\.chat\.state\.threadRef/);
 });
 
 test("× cancels the queued run in core, and treats a lost race as running rather than removed", () => {
@@ -184,13 +143,10 @@ test("the strip renders core's queue, refreshed from the same read that names th
 });
 
 test("the queued strip sits behind and outside the composer form", () => {
-  assert.match(
-    chat,
-    /ctx\.composer\.queuedStrip\(agent\)[\s\S]*?ctx\.composer\.composerForm\(agent, html`\$\{glanceTier \? nothing : liveWorkStatus\(agent\)\} \$\{backgroundActivityStrip\(\)\}`\)/,
-  );
+  assert.match(chat, /ctx\.composer\.queuedStrip\(agent\)[\s\S]*?ctx\.composer\.composerForm\(agent\)/);
   const composerMarkup = composer.slice(composer.indexOf('<form class="composer-wrap"'), composer.indexOf("</form>"));
   assert.doesNotMatch(composerMarkup, /queuedStrip\(agent\)/);
-  const queuedRule = shell.match(/(?:^|\n)\.queued-strip \{[^}]*\}/)?.[0] ?? "";
+  const queuedRule = shell.match(/(?:^|\n)\.queued-strip,\s*\.chat-bottom-dock > \.bg-activity \{[^}]*\}/)?.[0] ?? "";
   const composerRule = shell.match(/(?:^|\n)\.composer-wrap \{[^}]*\}/)?.[0] ?? "";
   assert.match(queuedRule, /z-index: 0;/);
   assert.match(queuedRule, /width: min\(calc\(var\(--content-w\) - 24px\), calc\(100% - 56px\)\);/);
@@ -202,11 +158,11 @@ test("the queued strip sits behind and outside the composer form", () => {
   const narrow = shell.slice(narrowStart, shell.indexOf('[data-density="card"]', narrowStart));
   assert.match(
     midWidth,
-    /\.queued-strip \{[^}]*margin-right: max\(28px, calc\(22px \+ env\(safe-area-inset-right\)\)\);[^}]*margin-left: max\(28px, calc\(22px \+ env\(safe-area-inset-left\)\)\);[^}]*\}/,
+    /\.queued-strip,\s*\.chat-bottom-dock > \.bg-activity \{[^}]*margin-right: max\(28px, calc\(22px \+ env\(safe-area-inset-right\)\)\);[^}]*margin-left: max\(28px, calc\(22px \+ env\(safe-area-inset-left\)\)\);[^}]*\}/,
   );
   assert.match(
     narrow,
-    /\.queued-strip \{[^}]*margin-right: calc\(22px \+ env\(safe-area-inset-right\)\);[^}]*margin-left: calc\(22px \+ env\(safe-area-inset-left\)\);[^}]*\}/,
+    /\.queued-strip,\s*\.chat-bottom-dock > \.bg-activity \{[^}]*margin-right: calc\(22px \+ env\(safe-area-inset-right\)\);[^}]*margin-left: calc\(22px \+ env\(safe-area-inset-left\)\);[^}]*\}/,
   );
 });
 
@@ -222,7 +178,7 @@ test("settling a turn follows the next queued run instead of sending it", () => 
   assert.doesNotMatch(fn, /queueTurn/, "it never submits anything");
   assert.match(
     fn,
-    /await \(next && !recorded \? agent\.prompt\(next\.text\) : agent\.continue\(\)\)/,
+    /await \(!active\.run\.input && next && !recorded \? agent\.prompt\(next\.text\) : agent\.continue\(\)\)/,
     "an already-recorded turn is resumed, never prompted a second time onto the screen",
   );
   assert.match(fn, /await refreshTranscriptFromEntries\(agent\)/);

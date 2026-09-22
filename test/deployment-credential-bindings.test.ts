@@ -19,6 +19,8 @@ import { personalScope, scopeId } from "../src/types.ts";
 import { orgScope } from "../src/config.ts";
 import { realBrokerFetch } from "../src/api/credential-broker.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
+import { createPrincipalLinkService } from "../src/identity/principal-links.ts";
+import { installPrincipalLinks } from "../src/directory/person.ts";
 
 const SECRET = "local-deployment-binding-tests".repeat(2);
 const OWNER = "owner@example.com";
@@ -527,4 +529,26 @@ test("deactivated actors and alternate broker routes deny app tokens with deploy
     ),
   );
   assert.equal(f.upstreamCalls.length, 0);
+});
+
+test("linked credential owners follow the keychain identity model and unlinking revokes app access", async (t) => {
+  const f = await fixture();
+  t.after(f.close);
+  t.after(() => installPrincipalLinks(null));
+  const alias = "legacy-owner@example.com";
+  await f.records.merge(f.credential.id, { ownerId: alias });
+  const token = await f.token();
+  const binding = { ...f.binding, ownerId: alias };
+  assert.equal((await f.bindings(token, { credentialBindings: [binding] })).status, 403);
+  const links = createPrincipalLinkService();
+  await links.link({ principalId: alias, canonicalId: OWNER, evidence: "Verified test identity", linkedBy: "admin" });
+  installPrincipalLinks(links);
+  assert.equal((await f.keychain.readOwnSecret(OWNER, f.credential.id)) !== null, true);
+  assert.equal((await f.bindings(token, { credentialBindings: [binding] })).status, 200);
+  assert.equal((await f.broker()).status, 200);
+  assert.equal(f.upstreamCalls[0]!.headers["x-token-secret"], "fake-token-secret");
+  await links.unlink(alias);
+  assert.equal((await f.broker()).status, 404);
+  assert.equal((await f.bindings(token, { credentialBindings: [binding] })).status, 403);
+  assert.equal(f.upstreamCalls.length, 1);
 });

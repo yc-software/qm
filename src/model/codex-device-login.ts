@@ -1,6 +1,6 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { CodexAppServer } from "../harness/codex-app-server.ts";
 import { codexOAuthAuthFromValue } from "../harness/codex-auth-store.ts";
 import { asObject, codexOAuthJwtAccountId, type JsonObject } from "../harness/codex-auth-file.ts";
@@ -72,7 +72,12 @@ export function createCodexDeviceLogin(opts: { binaryPath?: string; env?: NodeJS
       const server = new CodexAppServer({
         binaryPath,
         cwd: home,
-        env: { ...opts.env, CODEX_HOME: home },
+        env: {
+          PATH: dirname(process.execPath),
+          ...opts.env,
+          HOME: home,
+          CODEX_HOME: home,
+        },
         onNotification: async (method, params) => {
           if (method !== "account/login/completed") return;
           const p = (params ?? {}) as Record<string, unknown>;
