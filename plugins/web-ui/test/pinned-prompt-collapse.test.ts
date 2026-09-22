@@ -261,7 +261,7 @@ test("the rest height of the prompt body is re-measured on resize, never while t
     assert.equal(f.row.style.getPropertyValue("--pin-content-rest"), "139.5px");
     let animations = 0;
     (f.content as HTMLElement & { getAnimations: () => Animation[] }).getAnimations = () =>
-      new Array(animations).fill(null) as unknown as Animation[];
+      Array.from({ length: animations }, () => null) as unknown as Animation[];
     f.scroller.scrollTop = 500;
     f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
     f.content.getBoundingClientRect = () => ({ height: 46 }) as DOMRect;
@@ -295,7 +295,7 @@ test("sticking and releasing tween the prompt body between its two heights once 
       return { cancel: () => cancelled++ } as unknown as Animation;
     };
     f.row.style.setProperty("--pin-motion", "180ms");
-    let clock = 5000;
+    const clock = 5000;
     performance.now = () => clock;
     f.scroller.scrollTop = 500;
     f.scroller.dispatchEvent(new f.scroller.ownerDocument.defaultView!.Event("scroll"));
