@@ -12,14 +12,12 @@ const fn = (src: string, name: string): string => {
   return body;
 };
 
-test("a tab offers only close; archive is a header control and a menu item", () => {
+test("a tab offers only close; archive is a header control", () => {
   const tab = split.slice(split.indexOf("class PaneTab"), split.indexOf("class StripDrop"));
   assert.match(tab, /split-tab-actions[\s\S]*?tip\("Close pane"\)/);
   assert.doesNotMatch(tab, /split-tab-archive|archiveSessionById/);
   const btn = fn(split, "sessionActions");
   assert.match(btn, /split-tab-archive[\s\S]*?archiveSessionById\(sessionId\)/);
-  const items = fn(split, "sessionMenuItems");
-  assert.match(items, /archiveSessionById\(sessionId\)/);
 });
 
 test("archiveSessionById routes through setArchived so surfaces close and Recents updates at once", () => {
@@ -35,9 +33,9 @@ test("archiveSessionById routes through setArchived so surfaces close and Recent
   );
 });
 
-test("a lone session keeps archive in the group header instead of the tab", () => {
+test("every group keeps archive in the header instead of the tab", () => {
   const css = read("shell.css");
   assert.match(css, /\.dv-single-tab \.split-tab-actions\s*\{\s*display: none/);
-  assert.match(css, /\.dv-single-tab \.split-group-session-action\s*\{\s*display: inline-flex/);
+  assert.match(css, /\.split-group-session-action\s*\{\s*display: inline-flex/);
   assert.match(split, /sessionId \? sessionActions\(sessionId, panel!\.id\) : nothing/);
 });

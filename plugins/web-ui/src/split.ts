@@ -1122,48 +1122,6 @@ function sessionActions(sessionId: string, panelId: string): TemplateResult {
     </button>`;
 }
 
-function sessionMenuItems(sessionId: string, panelId: string, close: () => void): TemplateResult {
-  const parent = sessionParent(sessionId);
-  return html`<button
-      class="session-menu-option"
-      type="button"
-      role="menuitem"
-      @click=${() => {
-        close();
-        void openSessionShare(sessionId);
-      }}
-    >
-      ${icon(Link, 15)}<span>Share conversation</span>
-    </button>
-    <button
-      class="session-menu-option"
-      type="button"
-      role="menuitem"
-      @click=${() => {
-        close();
-        archiveSessionById(sessionId);
-      }}
-    >
-      ${icon(Archive, 15)}<span>Archive session</span>
-    </button>
-    ${
-      parent
-        ? html`<button
-            class="session-menu-option"
-            type="button"
-            role="menuitem"
-            @click=${() => {
-              close();
-              focusPane(panelId);
-              void openSession(parent);
-            }}
-          >
-            ${icon(ArrowUpLeft, 15)}<span>Back to ${sessionTitle(parent)}</span>
-          </button>`
-        : nothing
-    }`;
-}
-
 class PaneTab implements ITabRenderer {
   readonly element: HTMLElement;
   private panelId = "";
@@ -1398,12 +1356,6 @@ class GroupActions implements IHeaderActionsRenderer {
                 </button>
               `,
             )}
-            ${
-              sessionId
-                ? html`<div class="split-tools-menu-sep" role="separator"></div>
-                    ${sessionMenuItems(sessionId, panel!.id, closeMenu)}`
-                : nothing
-            }
             <div class="split-tools-menu-sep" role="separator"></div>
             <button
               class="session-menu-option"
@@ -1474,17 +1426,17 @@ class GroupActions implements IHeaderActionsRenderer {
           single
             ? html`<span class="split-single-tools">
                 ${PANE_TOOLS.map((t) => {
-                const count = scope ? scopeToolCount(t.tool, scope, () => this.draw()) : null;
-                return html`<button
-                  class="session-tool"
-                  type="button"
-                  aria-label=${t.label}
-                  ${tip(t.label)}
-                  @click=${() => runTool(t.tool)}
-                >
-                  ${icon(t.glyph, 15)}${count ? html`<span class="session-tool-count">${count}</span>` : nothing}
-                </button>`;
-              })}
+                  const count = scope ? scopeToolCount(t.tool, scope, () => this.draw()) : null;
+                  return html`<button
+                    class="session-tool"
+                    type="button"
+                    aria-label=${t.label}
+                    ${tip(t.label)}
+                    @click=${() => runTool(t.tool)}
+                  >
+                    ${icon(t.glyph, 15)}${count ? html`<span class="session-tool-count">${count}</span>` : nothing}
+                  </button>`;
+                })}
               </span>`
             : html`<span class="split-tools">
                 <button
@@ -1495,19 +1447,19 @@ class GroupActions implements IHeaderActionsRenderer {
                   aria-haspopup="menu"
                   aria-expanded=${this.menuOpen ? "true" : "false"}
                   @click=${() => {
-                  this.menuOpen = !this.menuOpen;
-                  this.draw();
-                }}
+                    this.menuOpen = !this.menuOpen;
+                    this.draw();
+                  }}
                 >
                   ${icon(MoreHorizontal, 15)}
                 </button>
                 ${menu}
               </span>`
         }
-        <span class="split-pane-actions-wide">
-          ${sessionId ? sessionActions(sessionId, panel!.id) : nothing}
-          ${single ? nothing : buttons.filter((b) => !b.cls).map(headerButton)}
-        </span>
+        ${sessionId ? sessionActions(sessionId, panel!.id) : nothing}
+        <span class="split-pane-actions-wide"
+          >${single ? nothing : buttons.filter((b) => !b.cls).map(headerButton)}</span
+        >
         ${single ? nothing : buttons.filter((b) => b.cls).map(headerButton)}`,
       this.element,
     );

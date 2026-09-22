@@ -8261,10 +8261,6 @@ h3.ambient-field-label {
 }
 
 .split-group-session-action {
-  display: none;
-}
-
-.dockview-theme-qm .dv-single-tab .split-group-session-action {
   display: inline-flex;
 }
 
@@ -8425,8 +8421,8 @@ h3.ambient-field-label {
   display: contents;
 }
 
-/* A narrow pane keeps only the tools menu and the group close in its header; the split,
-   focus, share and archive controls it dropped are all reachable from the menu. */
+/* A narrow pane keeps the tools menu, share, archive and the group close in its header;
+   split and focus fold into the menu. */
 @container pane-group (max-width: 560px) {
   .split-pane-actions-wide {
     display: none;
