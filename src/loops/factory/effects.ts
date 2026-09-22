@@ -7,6 +7,7 @@ import {
 import type { FactoryConfig, ScopedConfigStore } from "../../resolution/config-store.ts";
 import type { Loop, LoopItem, ScopeId } from "../../types.ts";
 import type { SlackInstallationStore } from "../../surfaces/slack-installation.ts";
+import type { LoopItemLedger } from "../item-ledger.ts";
 import { isRunnable, type LoopStore } from "../loop-store.ts";
 import type { CapturedArtifact, LoopRunnerEffects } from "../runner.ts";
 import type { SuccessVerdict } from "../success-evaluation.ts";
@@ -68,6 +69,65 @@ function factorySourceBootstrapScript(ref: string): string {
 
 export const FACTORY_LOOP_SURFACE = "factory";
 
+export const FACTORY_STAGES = [
+  "Setup",
+  "Fetch",
+  "Analyze",
+  "Design",
+  "Plan",
+  "Implement",
+  "Verify",
+  "Review",
+  "Proof",
+  "Ship",
+] as const;
+
+export interface FactoryStage {
+  name: (typeof FACTORY_STAGES)[number];
+  state: "active" | "done";
+  ts: number;
+}
+
+// Anchored on the literal `[trail] ` prefix so the wrapper's `[trail:final] ` exit replay never re-appends stages.
+const TRAIL_LINE = new RegExp(`^\\[trail\\] \\[(${FACTORY_STAGES.join("|")})\\] `);
+const FACTORY_STAGE_TRAIL_MAX = 40;
+const TRAIL_PENDING_MAX_CHARS = 4096;
+
+function createStageTrail(write: (stages: FactoryStage[]) => void): {
+  push: (chunk: string) => void;
+  finish: () => void;
+} {
+  const stages: FactoryStage[] = [];
+  let pending = "";
+  const close = (): boolean => {
+    const last = stages.at(-1);
+    if (!last || last.state === "done") return false;
+    stages[stages.length - 1] = { ...last, state: "done" };
+    return true;
+  };
+  const take = (line: string): void => {
+    const name = TRAIL_LINE.exec(line.replace(/\r$/, ""))?.[1] as FactoryStage["name"] | undefined;
+    if (name === undefined || stages.at(-1)?.name === name) return;
+    close();
+    stages.push({ name, state: "active", ts: Date.now() });
+    if (stages.length > FACTORY_STAGE_TRAIL_MAX) stages.splice(0, stages.length - FACTORY_STAGE_TRAIL_MAX);
+    write([...stages]);
+  };
+  return {
+    push: (chunk) => {
+      const lines = `${pending}${chunk}`.split("\n");
+      pending = (lines.pop() ?? "").slice(0, TRAIL_PENDING_MAX_CHARS);
+      for (const line of lines) take(line);
+    },
+    finish: () => {
+      const rest = pending;
+      pending = "";
+      if (rest !== "") take(rest);
+      if (close()) write([...stages]);
+    },
+  };
+}
+
 // The wrapper's ownership marker and session branch need a positive integer that is stable across an
 // item's attempts, so a re-run revises the same branch and PR, and distinct across items; a loop has no
 // ECS session, so the item key is hashed into one.
@@ -93,6 +153,7 @@ export interface FactoryEffectsDeps {
   sandbox: Sandbox;
   config: Pick<ScopedConfigStore, "getFactoryConfig">;
   loops: Pick<LoopStore, "get">;
+  items: Pick<LoopItemLedger, "annotate">;
   slackInstallation: Pick<SlackInstallationStore, "get">;
   connectorTokens: ConnectorTokenSource;
   buildSha?: string;
@@ -355,6 +416,13 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
       );
       pausePoll.start();
 
+      let trailWrites: Promise<unknown> = Promise.resolve();
+      const trail = createStageTrail((stages) => {
+        trailWrites = trailWrites
+          .then(() => deps.items.annotate(item.id, { stages }))
+          .catch((e: unknown) => swallow("factory stage trail", e));
+      });
+
       let result: FactoryProcessResult;
       try {
         result = await runFactoryProcess({
@@ -365,10 +433,12 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
           ticketId: item.sourceKey,
           env,
           signal: controller.signal,
-          onChunk: () => {},
+          onChunk: trail.push,
         });
       } finally {
         pausePoll.stop();
+        trail.finish();
+        await trailWrites;
       }
       if (result.aborted) throw new Error("factory_run_aborted");
 

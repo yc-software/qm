@@ -1887,6 +1887,7 @@ export function buildApp(
       sandbox,
       config: configStore,
       loops: loopStore,
+      items: loopItems,
       slackInstallation,
       connectorTokens,
       ...(config.buildSha ? { buildSha: config.buildSha } : {}),
