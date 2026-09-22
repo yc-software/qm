@@ -830,6 +830,8 @@ export function buildApp(
     const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;
     return createSpritesSandbox(workspace, {
       ...sprites,
+      initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
+      advisoryLock,
       ...(snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "sprites-home" }) }
         : {}),

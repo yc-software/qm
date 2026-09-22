@@ -1,3 +1,5 @@
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -654,4 +656,57 @@ test("control retries share an elapsed-time budget across backoff and SDK reques
     { name: "TimeoutError" },
   );
   assert.equal(calls, 2);
+});
+
+for (const outcome of ["healthy", "unknown", "403", "503"]) {
+  test(`refused restart with ${outcome} health observation never rolls back newer files`, async () => {
+    const h = await sandbox.provision(layers);
+    await sandbox.writeFile(h, "ledger", "old");
+    await sandbox.teardown(h);
+    await sandbox.writeFile(h, "ledger", "new");
+    fake.refuseRestart(h.id);
+    if (outcome === "healthy" || outcome === "unknown") fake.health(h.id, outcome, "machine is running");
+    else
+      for (let i = 0; i < (outcome === "503" ? 4 : 1); i++)
+        fake.failNext(Number(outcome), { headers: { "retry-after": "0" }, match: (c) => c.path.endsWith("/check") });
+    await assert.rejects(sandbox.restartComputer!(scope), /no checkpoint was restored/);
+    assert.equal(await sandbox.readFile(h, "ledger"), "new");
+    assert.equal(fake.calls.filter((c) => c.path.endsWith("/restore")).length, 0);
+  });
+}
+
+test("failed hydration and failed deletion remain pending across adapters without overwriting the saved home", async () => {
+  const snapshots = createMemorySnapshotStore();
+  const initializationStore = createMemoryMap<{ pending: boolean }>();
+  const advisoryLock = createMemoryAdvisoryLock();
+  let failOpen = false;
+  let opens = 0;
+  const wrapped = {
+    ...snapshots,
+    open: async (id: string) => {
+      opens++;
+      if (failOpen) throw new Error("snapshot unavailable");
+      return snapshots.open(id);
+    },
+  };
+  const options = { snapshots: wrapped, initializationStore, advisoryLock };
+  const a = make(options);
+  const h = await a.provision(layers);
+  await a.writeFile(h, "ledger", "saved");
+  await a.destroyScope!(scope);
+  failOpen = true;
+  fake.refuseDelete(403);
+  await assert.rejects(a.provision(layers), /snapshot unavailable/);
+  assert.deepEqual(await initializationStore.get(h.id), { pending: true });
+  const b = make(options);
+  await assert.rejects(b.persistHomeSnapshot!(scope), /initialization is incomplete/);
+  await assert.rejects(b.restartComputer!(scope), /initialization is incomplete/);
+  const before = opens;
+  await assert.rejects(b.provision(layers), /snapshot unavailable/);
+  assert.equal(opens, before + 1);
+  failOpen = false;
+  fake.refuseDelete();
+  const restored = await make(options).provision(layers);
+  assert.equal(await b.readFile(restored, "ledger"), "saved");
+  assert.equal(await initializationStore.get(h.id), null);
 });

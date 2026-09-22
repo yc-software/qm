@@ -44,6 +44,7 @@ export interface FakeSprites {
   failNext(status: number, opts?: InjectedFailure): void;
   refuseRestart(name: string): void;
   unhealthy(name: string, reason: string): void;
+  health(name: string, status: string, reason: string): void;
   refuseDelete(status?: number): void;
   rateLimitCreate(retryAfterSeconds: number): void;
   breakPolicyReadback(name: string): void;
@@ -173,6 +174,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
   const stallAfterRun = new Set<string>();
   const refusedRestart = new Set<string>();
   const unhealthy = new Map<string, string>();
+  const health = new Map<string, { status: string; reason: string }>();
   const brokenReadback = new Set<string>();
   const restarts: string[] = [];
   let refuseDeleteStatus: number | undefined;
@@ -328,8 +330,8 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       return Response.json({
         sprite_name: name,
         sprite_id: `id-${name}`,
-        status: reason ? "unhealthy" : "healthy",
-        reason: reason ?? null,
+        status: health.get(name)?.status ?? (reason ? "unhealthy" : "healthy"),
+        reason: health.get(name)?.reason ?? reason ?? null,
         checked_at: new Date().toISOString(),
         elapsed: 0.01,
       });
@@ -459,6 +461,9 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     refuseRestart: (name) => {
       refusedRestart.add(name);
     },
+    health: (name, status, reason) => {
+      health.set(name, { status, reason });
+    },
     unhealthy: (name, reason) => {
       unhealthy.set(name, reason);
     },
@@ -488,6 +493,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       gateway502.clear();
       refusedRestart.clear();
       unhealthy.clear();
+      health.clear();
       brokenReadback.clear();
       restarts.length = 0;
       injected.length = 0;
