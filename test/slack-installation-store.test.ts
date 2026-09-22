@@ -4,47 +4,47 @@ import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createMemorySlackInstallationBus } from "../src/surfaces/slack-installation-events.ts";
 
-type StoredMap = Parameters<typeof createSlackInstallationStore>[1];
-type Stored = NonNullable<Awaited<ReturnType<StoredMap["get"]>>>;
+type Stored = NonNullable<Awaited<ReturnType<Parameters<typeof createSlackInstallationStore>[1]["get"]>>>;
 
-function instrumentedMap(trace: string[] = []): { map: DurableMap<Stored>; gets: () => number; trace: string[] } {
+function tracingMap(trace: string[]): DurableMap<Stored> {
   const inner = createMemoryMap<Stored>();
-  let gets = 0;
   return {
-    map: {
-      ...inner,
-      get: async (id) => {
-        gets += 1;
-        return inner.get(id);
-      },
-      put: async (id, value) => {
-        await inner.put(id, value);
-        trace.push("put");
-      },
+    ...inner,
+    get: async (id) => {
+      trace.push("get");
+      return inner.get(id);
     },
-    gets: () => gets,
-    trace,
+    put: async (id, value) => {
+      await inner.put(id, value);
+      trace.push("put");
+    },
   };
 }
 
 const credentials = { botToken: "xoxb-live", appToken: "xapp-live", updatedBy: "admin@acme" };
 
-test("state() resolves unmanaged, active, and disabled from a single read", async () => {
-  const backing = instrumentedMap();
-  const store = createSlackInstallationStore("org", backing.map, "key-material", createMemorySlackInstallationBus());
+test("catches state() reading twice or calling a disabled record unmanaged", async () => {
+  const trace: string[] = [];
+  const store = createSlackInstallationStore(
+    "org",
+    tracingMap(trace),
+    "key-material",
+    createMemorySlackInstallationBus(),
+  );
 
   assert.deepEqual(await store.state(), { managed: false, installation: null });
-  assert.equal(backing.gets(), 1, "one read per state() snapshot");
 
   const saved = await store.set({ ...credentials, teamId: "T1" });
   const active = await store.state();
-  assert.equal(active.managed, true);
   assert.deepEqual(
-    { botToken: active.installation?.botToken, appToken: active.installation?.appToken },
-    { botToken: "xoxb-live", appToken: "xapp-live" },
+    {
+      managed: active.managed,
+      botToken: active.installation?.botToken,
+      appToken: active.installation?.appToken,
+      version: active.installation?.version,
+    },
+    { managed: true, botToken: "xoxb-live", appToken: "xapp-live", version: saved.version },
   );
-  assert.equal(active.installation?.version, saved.version);
-  assert.equal(backing.gets(), 2);
 
   await store.delete("admin@acme");
   assert.deepEqual(
@@ -52,26 +52,24 @@ test("state() resolves unmanaged, active, and disabled from a single read", asyn
     { managed: true, installation: null },
     "an uninstalled record stays managed so the environment fallback cannot resurrect it",
   );
-  assert.equal(backing.gets(), 3);
+  assert.equal(trace.filter((step) => step === "get").length, 3, "one read per state() snapshot");
 });
 
-test("set and delete publish the new version after the write, carrying no token material", async () => {
+test("catches a write publishing before the row lands, skipping the uninstall, or carrying tokens", async () => {
   const trace: string[] = [];
-  const backing = instrumentedMap(trace);
   const bus = createMemorySlackInstallationBus();
   const published: unknown[] = [];
   bus.subscribe((event) => {
     trace.push("emit");
     published.push(event);
   });
-  const store = createSlackInstallationStore("org", backing.map, "key-material", bus);
+  const store = createSlackInstallationStore("org", tracingMap(trace), "key-material", bus);
 
   const saved = await store.set(credentials);
   await store.delete("admin@acme");
 
   assert.deepEqual(trace, ["put", "emit", "put", "emit"], "each write publishes once, after the row lands");
   assert.deepEqual(published[0], { version: saved.version }, "the notify payload never carries token material");
-  const removal = published[1] as Record<string, unknown>;
-  assert.deepEqual(Object.keys(removal), ["version"]);
-  assert.notEqual(removal.version, saved.version);
+  assert.deepEqual(Object.keys(published[1] as object), ["version"]);
+  assert.notEqual((published[1] as { version: string }).version, saved.version);
 });
