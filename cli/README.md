@@ -199,7 +199,11 @@ environment. The CLI prints only the URL, which is a temporary login credential;
 do not publish it or put it in shared logs.
 
 `qm setup` offers email setup separately. Skip it to use administrator login
-without Resend or SMTP. To enable ordinary email login later, rerun `qm setup`
+without Resend or SMTP. For ordinary users before email is ready, the broker can
+accept passwords: hash one with `node plugins/auth/src/hash-password.ts
+user@example.com` and store the output with `qm secrets set AUTH_PASSWORD_USERS`.
+This is meant for onboarding; switch to email links or an identity provider
+afterwards. To enable ordinary email login later, rerun `qm setup`
 and configure the selected transport's complete credential set and sender,
 then push secrets and redeploy. Missing email credentials disable email sign-in;
 QM and `qm admin-login` remain available, even if a sender is still configured.
