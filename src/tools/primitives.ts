@@ -144,7 +144,7 @@ export interface SkillResult {
   packDir?: string;
 }
 
-export interface ShareDirective {
+interface ShareDirective {
   scope: ScopeId | "org";
   permission?: Permission;
 }
