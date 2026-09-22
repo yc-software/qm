@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import {
   applyTurnEffort,
   applyFastSpeed,
+  applyThinkingBinding,
   piUsageToCallUsage,
   scaleCost,
-  withFastModeHeaders,
+  withRequestHeaders,
   FAST_COST_MULTIPLIER,
   modelSupportsFastMode,
   wantsFastMode,
@@ -102,6 +103,7 @@ test("auto resets a reused Anthropic session to its interactive default", () => 
 });
 
 const ASTRA = getRequiredModel("gpt-6-astra", false) as Model<Api>;
+const OPUS_55 = getRequiredModel("claude-opus-5-5", false);
 const OPUS = getRequiredModel("claude-opus-5", false) as Model<Api>;
 const ASTRA_TOKENS = { input: 10_000, output: 2_000, cacheRead: 50_000, cacheWrite: 4_000, totalTokens: 66_000 };
 
@@ -121,6 +123,14 @@ const pricingCases: Array<[string, Model<Api>, Partial<Usage>, number]> = [
     { input: 10_000, output: 1_000, cacheRead: 40_000, cacheWrite: 16_000, cacheWrite1h: 8_000 },
     0.225,
   ],
+  [
+    "Opus 5.5 mixed tokens and cache durations",
+    OPUS_55,
+    { input: 10_000, output: 1_000, cacheRead: 40_000, cacheWrite: 16_000, cacheWrite1h: 8_000 },
+    0.172,
+  ],
+  ["Opus 5.5 cache reads", OPUS_55, { cacheRead: 100_000 }, 0.02],
+  ["Opus 5.5 1h writes", OPUS_55, { cacheWrite: 4_000, cacheWrite1h: 4_000 }, 0.032],
   ["all 1h writes", OPUS, { cacheWrite: 4_000, cacheWrite1h: 4_000 }, 0.04],
   ["clamped 1h writes", OPUS, { cacheWrite: 4_000, cacheWrite1h: 40_000 }, 0.04],
 ];
@@ -155,17 +165,62 @@ test("normalization ignores provider pricing, preserves tokens and never mutates
   assert.deepEqual(ASTRA.cost, card);
 });
 
-test("fast headers preserve rates and existing beta headers", () => {
-  for (const model of [ASTRA, OPUS]) {
+const HAIKU = getRequiredModel("claude-haiku-4-5", false) as Model<Api>;
+const BINDING_BETA = "thinking-binding-controls-2026-08-01";
+
+test("request headers preserve rates and existing beta headers", () => {
+  for (const model of [ASTRA, OPUS, OPUS_55]) {
     const snapshot = structuredClone(model);
-    assert.deepEqual(withFastModeHeaders(model).cost, snapshot.cost);
+    assert.deepEqual(withRequestHeaders(model, true, true).cost, snapshot.cost);
     assert.deepEqual(model, snapshot);
   }
-  assert.equal(withFastModeHeaders(OPUS).headers?.["anthropic-beta"], "fast-mode-2026-02-01");
   assert.equal(
-    withFastModeHeaders({ ...OPUS, headers: { "anthropic-beta": "prior-beta" } }).headers?.["anthropic-beta"],
-    "prior-beta,fast-mode-2026-02-01",
+    withRequestHeaders(OPUS, true, true).headers?.["anthropic-beta"],
+    `${BINDING_BETA},fast-mode-2026-02-01`,
   );
+  assert.equal(
+    withRequestHeaders({ ...OPUS, headers: { "anthropic-beta": "prior-beta" } }, true, true).headers?.[
+      "anthropic-beta"
+    ],
+    `prior-beta,${BINDING_BETA},fast-mode-2026-02-01`,
+  );
+});
+
+test("direct adaptive-thinking Claude requests opt into thinking binding controls", () => {
+  assert.equal(withRequestHeaders(OPUS, true, false).headers?.["anthropic-beta"], BINDING_BETA);
+  assert.equal(withRequestHeaders(OPUS, false, true).headers?.["anthropic-beta"], undefined);
+  assert.equal(withRequestHeaders(ASTRA, true, false).headers?.["anthropic-beta"], undefined);
+  assert.equal(withRequestHeaders(HAIKU, true, false).headers?.["anthropic-beta"], undefined);
+  assert.equal(withRequestHeaders(HAIKU, true, true).headers?.["anthropic-beta"], "fast-mode-2026-02-01");
+});
+
+test("applyThinkingBinding sets drop_block only on requests that carry the beta header", () => {
+  const bound = withRequestHeaders(OPUS, true, true);
+  const adaptive = { thinking: { type: "adaptive", display: "summarized" } } as Record<string, unknown>;
+  assert.equal(applyThinkingBinding(adaptive, bound), adaptive);
+  assert.deepEqual(adaptive.thinking, {
+    type: "adaptive",
+    display: "summarized",
+    block_binding: { prefix_mismatch_behavior: "drop_block" },
+  });
+  const budget = { thinking: { type: "enabled", budget_tokens: 2048 } } as Record<string, unknown>;
+  applyThinkingBinding(budget, bound);
+  assert.deepEqual(budget.thinking, {
+    type: "enabled",
+    budget_tokens: 2048,
+    block_binding: { prefix_mismatch_behavior: "drop_block" },
+  });
+  const disabled = { thinking: { type: "disabled" } } as Record<string, unknown>;
+  applyThinkingBinding(disabled, bound);
+  assert.deepEqual(disabled.thinking, { type: "disabled" });
+  const unbound = { thinking: { type: "adaptive" } } as Record<string, unknown>;
+  applyThinkingBinding(unbound, OPUS);
+  applyThinkingBinding(unbound, withRequestHeaders(HAIKU, true, true));
+  assert.deepEqual(unbound.thinking, { type: "adaptive" });
+  const none = { messages: [] } as Record<string, unknown>;
+  applyThinkingBinding(none, bound);
+  assert.equal("thinking" in none, false);
+  assert.doesNotThrow(() => applyThinkingBinding(undefined, bound));
 });
 
 test("normalization handles absent usage, missing token fields and an unknown model", () => {
@@ -258,9 +313,10 @@ async function runTurn(
   fastMode: boolean,
   respond: (payload: Record<string, unknown>, index: number) => Response,
   gateway = false,
-): Promise<{ rows: HarnessLlmRequestRecord[]; payloads: Array<Record<string, unknown>> }> {
+): Promise<{ rows: HarnessLlmRequestRecord[]; payloads: Array<Record<string, unknown>>; betas: Array<string | null> }> {
   const rows: HarnessLlmRequestRecord[] = [];
   const payloads: Array<Record<string, unknown>> = [];
+  const betas: Array<string | null> = [];
   const harness = createPiHarness({
     apiKey: "sk-anthropic-test",
     openaiApiKey: "sk-openai-test",
@@ -270,7 +326,7 @@ async function runTurn(
             url: "https://gateway.example/v1",
             apiKey: "sk-gateway-test",
             apiKeyHeader: "x-gateway-key",
-            models: { "gpt-6-astra": "openai/gpt-6-astra" },
+            models: { "gpt-6-astra": "openai/gpt-6-astra", "claude-sonnet-5": "anthropic/claude-sonnet-5" },
           },
         }
       : {}),
@@ -279,6 +335,7 @@ async function runTurn(
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
     const payload = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     payloads.push(payload);
+    betas.push(new Headers(init?.headers).get("anthropic-beta"));
     return respond(payload, payloads.length - 1);
   }) as typeof globalThis.fetch;
   let seq = 0;
@@ -302,7 +359,7 @@ async function runTurn(
   } finally {
     globalThis.fetch = realFetch;
   }
-  return { rows, payloads };
+  return { rows, payloads, betas };
 }
 
 for (const [name, gateway, fastMode, expected, echoedTier] of [
@@ -335,13 +392,31 @@ for (const [name, gateway, fastMode, expected, echoedTier] of [
 }
 
 test("an unsupported fast-mode request records the standard price", async () => {
-  const { rows, payloads } = await runTurn("sonnet-fast-ineligible", "claude-sonnet-5", true, () =>
+  const { rows, payloads, betas } = await runTurn("sonnet-fast-ineligible", "claude-sonnet-5", true, () =>
     anthropicReply("standard", ANTHROPIC_WIRE_USAGE),
   );
   assert.equal(payloads.length, 1);
   assert.equal("speed" in payloads[0]!, false);
+  assert.equal(betas[0], BINDING_BETA);
+  assert.deepEqual((payloads[0]!.thinking as { block_binding?: unknown }).block_binding, {
+    prefix_mismatch_behavior: "drop_block",
+  });
   assert.equal(rows.length, 1);
   assertUsd(rows[0]!.usage!.costUsd, 0.03);
+});
+
+test("gateway-routed Claude requests carry neither the binding beta nor block_binding", async () => {
+  const { payloads, betas } = await runTurn(
+    "sonnet-gateway-unbound",
+    "claude-sonnet-5",
+    false,
+    () => anthropicReply("routed", ANTHROPIC_WIRE_USAGE),
+    true,
+  );
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0]?.model, "anthropic/claude-sonnet-5");
+  assert.equal(betas[0]?.includes(BINDING_BETA) ?? false, false);
+  assert.equal("block_binding" in (payloads[0]!.thinking as object), false);
 });
 
 test("a refusal fallback prices each step on its actual model and tier", async () => {
