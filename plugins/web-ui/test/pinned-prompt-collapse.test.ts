@@ -302,7 +302,7 @@ test("the collapse is measured from the row's resting place, so it survives bein
   }
 });
 
-test("rest heights are re-measured for pane and content changes even while the strip is condensed", () => {
+test("rest heights are re-measured for pane and content changes, condensed or not", () => {
   const f = fixture();
   try {
     f.scroll(500);
@@ -313,9 +313,13 @@ test("rest heights are re-measured for pane and content changes even while the s
     assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "40px");
     f.grow(800);
     assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "163.5px");
+    f.scroll(20);
+    assert.equal(f.row.classList.contains("pin-condensed"), false);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "119.5px");
+    f.resize(300);
+    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "163.5px");
     f.scroll(0);
     assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "");
-    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "163.5px");
   } finally {
     f.close();
   }
@@ -344,10 +348,7 @@ test("the condensed strip is a css contract on the condensed class, with a scrol
     )?.[0] ?? "";
   assert.match(rest, /-webkit-line-clamp: 6/);
   assert.doesNotMatch(rest, /max-height|transition/);
-  assert.match(
-    css,
-    /prefers-reduced-motion: reduce\) \{\s*\.message-stack\s+\.user-row\.stuck:not\(\.pin-expanded\)[^{]*\{\s*transition: none/,
-  );
+  assert.doesNotMatch(css, /pin-condensed[^{]*\{[^}]*transition/);
 });
 
 test("expanded prompts reserve pins and chrome when panes resize or content grows", () => {

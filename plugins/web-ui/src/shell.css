@@ -2067,25 +2067,6 @@ qm-markdown .tok-in {
   font-size: inherit;
   line-height: inherit;
 }
-.message-stack
-  .user-row.stuck:not(.pin-expanded)
-  .user-bubble
-  > .pin-content
-  :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
-  transition:
-    margin-block 150ms ease-out,
-    font-size 150ms ease-out,
-    line-height 150ms ease-out;
-}
-@media (prefers-reduced-motion: reduce) {
-  .message-stack
-    .user-row.stuck:not(.pin-expanded)
-    .user-bubble
-    > .pin-content
-    :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
-    transition: none;
-  }
-}
 .pin-toggle {
   display: none;
   width: fit-content;

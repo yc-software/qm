@@ -48,6 +48,7 @@ export function createTranscriptViewport() {
   let restContent = 0;
   let condensedContent = 0;
   let contentHeight = 0;
+  let condensedHeight = 0;
   let gap: number | null = null;
   let contentMax = "";
   const contentUpdates = new Set<Promise<void>>();
@@ -74,7 +75,7 @@ export function createTranscriptViewport() {
     prompt?.style.removeProperty("--pin-expanded-max");
     prompt?.style.removeProperty("--pin-rest-height");
     prompt?.style.removeProperty("--pin-content-max");
-    restContent = condensedContent = contentHeight = 0;
+    restContent = condensedContent = contentHeight = condensedHeight = 0;
     gap = null;
     contentMax = "";
     remeasure = true;
@@ -170,11 +171,19 @@ export function createTranscriptViewport() {
     condensedContent = CONDENSED_LINES * lineHeight;
   }
 
+  function contentChanged(): boolean {
+    if (!content) return false;
+    return content.scrollHeight !== (prompt?.classList.contains("pin-condensed") ? condensedHeight : contentHeight);
+  }
+
   function condense(active: boolean, distance: number): void {
-    if (!prompt) return;
+    if (!prompt || !content) return;
     const span = restContent - condensedContent;
     const settled = span <= 0.5 || span - distance < 0.5;
-    prompt.classList.toggle("pin-condensed", active && settled);
+    if (active && settled && !prompt.classList.contains("pin-condensed")) {
+      prompt.classList.add("pin-condensed");
+      condensedHeight = content.scrollHeight;
+    } else if (!(active && settled)) prompt.classList.remove("pin-condensed");
     let max = "";
     if (active) max = `${settled ? condensedContent : restContent - Math.max(0, distance)}px`;
     if (max === contentMax) return;
@@ -304,8 +313,7 @@ export function createTranscriptViewport() {
       scroller?.addEventListener("keydown", onKeyDown);
       if (typeof ResizeObserver !== "undefined") {
         observer = new ResizeObserver((entries = []) => {
-          if (entries.some((entry) => entry.target === scroller) || (content && content.scrollHeight !== contentHeight))
-            remeasure = true;
+          if (entries.some((entry) => entry.target === scroller) || contentChanged()) remeasure = true;
           beforeRender();
           syncSticky();
           follow();
