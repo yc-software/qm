@@ -537,8 +537,8 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                                   src=${a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`}
                                   alt=${a.fileName}
                                   @error=${(event: Event) => {
-                            (event.currentTarget as HTMLImageElement).parentElement!.hidden = true;
-                          }}
+                                    (event.currentTarget as HTMLImageElement).parentElement!.hidden = true;
+                                  }}
                                 />
                               </button>`
                             : nothing
