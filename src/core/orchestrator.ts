@@ -832,17 +832,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         sessionSender.scopeId === scopeId &&
         (await deps.sessions.getForParticipant(sessionSender.id, actor.id)),
       );
+      const screenInput = {
+        ...input,
+        ...turnOriginRequestFields(input.origin),
+        overheard: [],
+        verifiedSwarm: Boolean(input.swarm && swarmBinding),
+        verifiedSessionMessage,
+      };
+      const turnScreenPayload = screenInbound
+        ? securityScreenPayload({ ...screenInput, externalPromptData: [] })
+        : null;
       const screenPayload = screenInbound
         ? securityScreenPayload({
-            ...input,
-            ...turnOriginRequestFields(input.origin),
-            overheard: [],
+            ...screenInput,
             externalPromptData,
-            verifiedSwarm: Boolean(input.swarm && swarmBinding),
-            verifiedSessionMessage,
           })
         : null;
       let flaggedScreenedInput: { reason: string; sources: string[] } | undefined;
+      let taintedOverheard = new Set(screenedOverheard);
       let inputUnscreened = false;
       if (screenPayload || hasUnscreenableAttachment) {
         const canScreenText =
@@ -861,7 +868,52 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         else if (screenPayload.truncated) unscreenableCause = "oversize-input";
         else if (!deps.securityScreener && !deps.harness.models.screenSecurity) unscreenableCause = "no-screener";
         if (verdict?.decision === "strict") {
-          const sources = externalPromptData.map((item) => item.source);
+          let turnScreenSource = input.surface ?? "turn";
+          if (verifiedSessionMessage) turnScreenSource = "session-delegation";
+          if (input.swarm && swarmBinding) turnScreenSource = "swarm-delegation";
+          const externalLocalizationPayloads = externalPromptData.flatMap((item, index) => {
+            const payload = securityScreenPayload({ text: "", externalPromptData: [item] });
+            return payload ? [{ source: item.source, content: payload.content, externalIndex: index }] : [];
+          });
+          const localizationPayloads = [
+            ...(turnScreenPayload ? [{ source: turnScreenSource, content: turnScreenPayload.content }] : []),
+            ...externalLocalizationPayloads,
+          ];
+          let sources = localizationPayloads.map((item) => item.source);
+          if (localizationPayloads.length > 1) {
+            const sourceVerdicts = await Promise.all(
+              localizationPayloads.map((item) =>
+                classifySecurityData(item.content, actor.id, scopeId, recordScreenRequest, {
+                  hook: "user_input",
+                  surface: input.surface,
+                  origin: input.origin.kind,
+                }),
+              ),
+            );
+            const localized = sourceVerdicts.some((sourceVerdict) => sourceVerdict?.decision === "strict");
+            if (localized) {
+              sources = localizationPayloads.flatMap((item, index) => {
+                const sourceVerdict = sourceVerdicts[index];
+                return sourceVerdict?.decision !== "auto" || sourceVerdict.unscreened === true ? [item.source] : [];
+              });
+            }
+            const externalVerdicts = new Map(
+              externalLocalizationPayloads.map((item, index) => [
+                item.externalIndex,
+                sourceVerdicts[index + (turnScreenPayload ? 1 : 0)],
+              ]),
+            );
+            taintedOverheard = new Set(
+              screenedOverheard.filter((entry) => {
+                if (!localized) return true;
+                const index = externalPromptData.findIndex(
+                  (item) => item.source === "overheard" && item.content === renderOverheard(entry),
+                );
+                const sourceVerdict = externalVerdicts.get(index);
+                return sourceVerdict?.decision !== "auto" || sourceVerdict.unscreened === true;
+              }),
+            );
+          }
           flaggedScreenedInput = {
             reason: verdict.reason ?? "strict security screen verdict",
             sources,
@@ -938,9 +990,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             await reconcileSessionParticipants(session.id);
             await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
             for (const overheard of screenedOverheard) {
+              const securityTainted = taintedOverheard.has(overheard);
               const imported = await deps.sessions.append(lease, {
                 type: "user",
-                payload: { ...overheard, securityTainted: true },
+                payload: { ...overheard, ...(securityTainted ? { securityTainted: true } : {}) },
                 scopeLabel: scopeId,
               });
               await deps.sessions.appendTape(lease, {
@@ -959,7 +1012,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   ts: overheard.ts,
                   ...(overheard.name ? { author: overheard.name } : {}),
                   ...(overheard.files?.length ? { attachments: overheard.files } : {}),
-                  securityTainted: true,
+                  ...(securityTainted ? { securityTainted: true } : {}),
                   entryCreatedAt: imported.createdAt,
                 },
               });
