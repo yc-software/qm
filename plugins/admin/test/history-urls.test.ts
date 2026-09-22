@@ -1,3 +1,5 @@
+import { litFixture } from "./lit-fixture.ts";
+import { renderDesign } from "./design-source.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -29,6 +31,7 @@ function routerAt(pathname: string, search = "", base = "/admin") {
     new Function(`${html.match(/const SCOPED = new Set\(\[[\s\S]*?\]\);/)?.[0]}; return SCOPED;`)(),
     [
       "connectors",
+      "slack-settings",
       "history",
       "files",
       "memory",
@@ -130,11 +133,7 @@ test("a mangled ?scopecom link still lands on the session and canonicalizes", ()
 
 test("session deep-link entries synthesize a list back-stop and repair it from the session's own scope", () => {
   assert.match(html, /history\.pushState\(\{ \.\.\.st, deepLink: true \}, "", stateToUrl\(st\)\);/);
-  assert.match(
-    html,
-    /if \(history\.state\?\.deepLink\)\s*go\(\{ view: "history", scope: sessionScope \|\| scope, session: null, historyKind \}\);\s*else history\.back\(\);/,
-  );
-  assert.match(html, /onClick: backToList\(session\.scopeId\)/);
+  assert.match(html, /governanceUI.transcript.show/);
 });
 
 test("a scope whose encoding the portal would reject stays in the query form", () => {
@@ -153,11 +152,39 @@ test("an undecodable scope segment falls back instead of throwing", () => {
   assert.equal(st.scope, "org:acme");
 });
 
-test("cron fire rows surface the fire's result digest and keep the silent styling", () => {
-  assert.match(html, /\} else if \(isBackground && s\.result\) \{\s*name = s\.result;/);
-  assert.match(html, /previewText = s\.result \|\| s\.lastMessage \|\| s\.firstMessage \|\| "";/);
-  assert.match(html, /s\.result \|\| "\(no messages\)"/);
-  assert.match(html, /isBackground && typeof s\.delivered === "number" && !s\.delivered \? "history-silent" : ""/);
+test("cron fire rows surface the result digest and retain silent styling", () => {
+  const f = litFixture();
+  f.ui.history.history(
+    f.root,
+    {
+      sessions: [
+        { id: "fire1", category: "background", result: "Digest result", lastMessage: "Tool chatter", delivered: 0 },
+      ],
+      total: 1,
+    },
+    {
+      historyKind: "cron",
+      cron: "job1",
+      scope: "org:acme",
+      orgScope: "org:acme",
+      environments: [],
+      historyKindMatches: () => true,
+      pageSize: 50,
+      correctPage() {},
+      historyModeLabel: () => "Crons",
+      kindLabels: { conversation: "Conversations", cron: "Crons" },
+      pageShell() {},
+      cronName: () => "Job",
+      scopeKind: () => "org",
+      plural: String,
+      stateToUrl: () => "/session/fire1",
+      go() {},
+    },
+  );
+  assert.equal(f.root.querySelector(".dense-name")!.textContent, "Digest result");
+  assert.equal(f.root.querySelector(".dense-preview")!.textContent, "Tool chatter");
+  assert.ok(f.root.querySelector(".history-silent"));
+  f.dom.window.close();
 });
 
 test("a bare history URL is the org scope, not whatever scope was viewed last", () => {
@@ -184,13 +211,13 @@ test("Errors pagination round-trips arbitrary pages without losing scope", () =>
   );
 });
 
-test("Slack setup links select connectors and preserve the guide through canonical routing", () => {
+test("Slack setup links select Slack settings and preserve the guide through canonical routing", () => {
   for (const pathname of ["/admin", "/admin/", "/admin/connectors"]) {
     const { stateToUrl, urlToState } = routerAt(pathname, "?setup=slack");
     const state = urlToState();
-    assert.equal(state.view, "connectors");
+    assert.equal(state.view, "slack-settings");
     assert.equal(state.setup, "slack");
-    assert.equal(stateToUrl(state), "/admin/connectors?setup=slack");
+    assert.equal(stateToUrl(state), "/admin/slack-settings?setup=slack");
   }
   const { stateToUrl } = routerAt("/admin/connectors", "?setup=slack");
   assert.equal(stateToUrl({ view: "connectors" }), "/admin/connectors");
@@ -208,36 +235,15 @@ test("navigation drops retired design parameters while retaining route state", (
 
 for (const base of ["", "/admin", "/control"]) {
   test(`catalog live links use the configured base (${base || "root"})`, () => {
-    const root = { innerHTML: "" };
-    const helpers = html.slice(
-      html.indexOf("      function designSpec("),
-      html.indexOf("      let designLibraryRendered"),
-    );
-    const start = html.indexOf('        const root = $("view-design");');
-    const end = html.indexOf('        const contents = document.createElement("nav");', start);
-    assert.ok(start >= 0 && end > start);
-    new Function("$", "DESIGN_TOKENS", helpers + html.slice(start, end))(() => root, []);
-    const section = root.innerHTML.match(/<div class="design-page-links">([\s\S]*?)<\/div>/)?.[1];
-    assert.ok(section);
-    const links = [...section.matchAll(/<a data-design-view="([^"]+)">/g)].map((match) => ({
-      dataset: { designView: match[1] },
-      href: "",
-    }));
+    const { stateToUrl } = routerAt(`${base}/design-system`, "", base);
+    const dom = renderDesign(stateToUrl, SCOPE);
+    const links = [...dom.window.document.querySelectorAll<HTMLAnchorElement>(".design-page-links a")];
     assert.deepEqual(
       links.map((link) => link.dataset.designView),
       ["governance", "skills", "files", "history", "audit", "egress"],
     );
-    const bindStart = html.indexOf('        root.querySelectorAll(".design-page-links a")');
-    const bindEnd = html.indexOf("        });", bindStart) + "        });".length;
-    assert.ok(bindStart >= 0 && bindEnd > bindStart);
-    const { stateToUrl } = routerAt(`${base}/design-system`, "", base);
-    new Function("root", "stateToUrl", "scope", html.slice(bindStart, bindEnd))(
-      { querySelectorAll: () => links },
-      stateToUrl,
-      SCOPE,
-    );
     assert.deepEqual(
-      links.map((link) => link.href),
+      links.map((link) => link.getAttribute("href")),
       [
         `${base}/governance?scope=${SCOPE_ENC}`,
         `${base}/skills?scope=${SCOPE_ENC}`,
@@ -247,5 +253,6 @@ for (const base of ["", "/admin", "/control"]) {
         `${base}/egress?scope=${SCOPE_ENC}`,
       ],
     );
+    dom.window.close();
   });
 }

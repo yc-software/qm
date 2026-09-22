@@ -372,9 +372,17 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     },
     async pendingReturns(limit = 100, afterId = "") {
       const { rows } = await q(
-        `SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
-         AND session_id LIKE 'agent:main:subagent:%'
-         AND id > $2 ORDER BY id LIMIT $1`,
+        `SELECT * FROM (
+           SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
+           AND session_id LIKE 'agent:main:subagent:%' AND id > $2
+           UNION
+           SELECT child.* FROM runs wake JOIN runs child
+           ON child.id = substring(wake.idempotency_key FROM length('subagent-return:') + 1)
+           WHERE wake.status = 'pending' AND wake.attempts = 0 AND wake.turn_user_seq IS NULL
+           AND wake.idempotency_key LIKE 'subagent-return:%'
+           AND child.status IN ('done','failed') AND child.session_id LIKE 'agent:main:subagent:%'
+           AND child.id > $2
+         ) pending ORDER BY id LIMIT $1`,
         [limit, afterId],
       );
       return rows.map(rowToRun);
@@ -414,8 +422,11 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       return (rowCount ?? 0) > 0;
     },
 
-    async withdraw(runId: string): Promise<boolean> {
-      const { rowCount } = await q("DELETE FROM runs WHERE id = $1 AND status = 'pending'", [runId]);
+    async withdraw(runId: string, opts): Promise<boolean> {
+      const { rowCount } = await q(
+        "DELETE FROM runs WHERE id = $1 AND status = 'pending' AND (NOT $2::boolean OR (attempts = 0 AND turn_user_seq IS NULL))",
+        [runId, Boolean(opts?.unstartedOnly)],
+      );
       return (rowCount ?? 0) > 0;
     },
 

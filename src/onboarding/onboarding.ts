@@ -91,7 +91,7 @@ export function renderPendingOnboardingPrompt(status: OnboardingStatus, version 
     "",
     "Onboarding is a high-priority setup task; already knowing who they are is no reason to skip it.",
     "",
-    "Before ordinary work in this personal DM, read `skill://onboarding/SKILL.md` and follow its complete ordered flow. Keep each turn light, but do not confuse a greeting or existing profile data with completion.",
+    "Before ordinary work in this personal DM, load the onboarding skill with the skill tool and follow its complete ordered flow. Keep each turn light, but do not confuse a greeting or existing profile data with completion.",
     "",
     `Use the \`memory\` tool as the source of truth. On completion or an explicit stop, preserve the notebook and add \`- Onboarding: completed ${version} on YYYY-MM-DD.\` so onboarding does not recur.`,
   ].join("\n");

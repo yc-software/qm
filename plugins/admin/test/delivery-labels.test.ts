@@ -31,7 +31,8 @@ for (const [type, surface] of [
 test("tool-associated and standalone deliveries use the same surface labels", () => {
   assert.match(html, /dlabel.textContent = deliveryLabel\(delivery\)/);
   assert.match(html, /badge\(deliverySurfaceLabel\(delivery\), "info"\)/);
-  assert.match(html, /label.textContent = event.shadow \|\| isDelivery \? deliveryLabel\(event\)/);
-  assert.match(html, /badge\(deliverySurfaceLabel\(event\), "info"\)/);
+  const transcript = readFileSync(new URL("../ui/transcript.ts", import.meta.url), "utf8");
+  assert.match(transcript, /s.deliveryLabel\(event\)/);
+  assert.match(transcript, /badge\(s.deliverySurfaceLabel\(event\), "info"\)/);
   assert.doesNotMatch(html, /"Slack delivery"|const slackDelivery/);
 });

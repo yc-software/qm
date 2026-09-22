@@ -1,11 +1,9 @@
 import { scopeId as makeScopeId } from "../../../types.ts";
-import { publicUrlOf } from "../../../deploy/deploy-store.ts";
 import { adminStatusFromGrants, AdminError } from "../../../admin/admin-service.ts";
 import { personKey, samePerson } from "../../../directory/person.ts";
 import type { AdminRole } from "../../../admin/admin-grant-store.ts";
 import type { DirectoryMember } from "../../../directory/directory-store.ts";
 import { computeUsers } from "../../../admin/users.ts";
-import { forEachAttributedTurn } from "../../../admin/attribution.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../../../admin/invite-email.ts";
 import { externalMemberActive, validEmail, type ExternalMember } from "../../../identity/external-members.ts";
 import { resolveBranding } from "../../../resolution/branding.ts";
@@ -15,14 +13,11 @@ import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } fr
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
-import { FILES_PAGE_SIZE } from "./common.ts";
 
-const USER_CONVERSATIONS_MAX = 100;
-const USER_FILES_MAX = 200;
 const EXTERNAL_ORG_ADMIN_PORTAL_ONLY =
   "granting or removing org admin for an external user is portal-only — the agent cannot manage who governs the org";
 const ALREADY_A_MEMBER =
-  "that address already belongs to a member of the org and does not need an external invite. To make them an admin, use Grant org admin in the admin dashboard and enter their email as the principal ID.";
+  "that address already belongs to a member of the org and does not need an external invite. To make them an admin, use Make admin on their row in the admin Users page.";
 const HOLDS_OWN_GRANT =
   "that address holds an org admin grant of its own — revoke it under Admins first, or re-invite with role org_admin";
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -238,6 +233,15 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   if (!deps.keychain)
     return sendJson(res, 200, { scopeId: scope, people: [], credentials: [], grants: [], asks: [], enabled: false });
 
+  const principalId = ctx.url.searchParams.get("principal")?.trim();
+  if (principalId) {
+    const [credentials, grants] = await Promise.all([
+      deps.keychain.listByOwner(principalId),
+      deps.keychain.listGrants({ ownerId: principalId }),
+    ]);
+    return sendJson(res, 200, { scopeId: scope, credentials, grants, enabled: true });
+  }
+
   if (ctx.url.searchParams.get("summary") === "1") {
     const [credentials, grants] = await Promise.all([deps.keychain.listAllMetadata(), deps.keychain.listGrants({})]);
     return sendJson(res, 200, {
@@ -298,124 +302,25 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { scopeId: scope, people, credentials, grants: grantsWithUse, asks, enabled: true });
 }
 
+async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string) {
+  const member = await deps.directory?.get(requestedPrincipal);
+  return { member, principalId: member?.principalId ?? personKey(requestedPrincipal) };
+}
+
 export async function getUserDetail(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, params } = ctx;
+  const { res, deps, params } = ctx;
   const org = orgScope(deps);
   const actor = await authorizeAdmin(ctx, org);
   if (!actor) return;
-  const principalId = params.principalId!;
+  const { member, principalId } = await resolveAdminUser(deps, params.principalId!);
   const personal = makeScopeId("personal", principalId);
   audit(deps, { principalId: actor.id, action: "user.read", resource: principalId, scopeLabel: org });
 
-  const grants = (await deps.admin?.listGrants()) ?? [];
-  const member = await app.directoryMember(principalId);
-
-  const participants = (await deps.sessions?.listParticipants()) ?? [];
-  const attributed = (await deps.sessions?.attributedTurns()) ?? [];
-  const mySessionIds = new Set<string>();
-  const turnsBySession = new Map<string, number>();
-  let firstSeenAt: number | null = null;
-  let lastSeenAt: number | null = null;
-  const mark = (t: number) => {
-    if (firstSeenAt == null || t < firstSeenAt) firstSeenAt = t;
-    if (lastSeenAt == null || t > lastSeenAt) lastSeenAt = t;
-  };
-  forEachAttributedTurn(
-    { participants, turns: attributed },
-    {
-      onWindow(sessionId, w) {
-        if (!samePerson(w.principalId, principalId)) return;
-        mySessionIds.add(sessionId);
-        mark(w.validFrom);
-      },
-      onTurn(w, turn) {
-        if (!samePerson(w.principalId, principalId)) return;
-        turnsBySession.set(w.sessionId, (turnsBySession.get(w.sessionId) ?? 0) + turn.turns);
-        mark(turn.firstAt);
-        mark(turn.lastAt);
-      },
-    },
-  );
-  const turns = [...turnsBySession.values()].reduce((a, b) => a + b, 0);
-
-  const summaries = mySessionIds.size
-    ? ((await deps.sessions?.scopeSessionSummaries(org, true, undefined, [...mySessionIds])) ?? [])
-    : [];
-  const conversations = summaries
-    .sort((a, b) => b.lastActivity - a.lastActivity)
-    .slice(0, USER_CONVERSATIONS_MAX)
-    .map((s) => ({
-      id: s.id,
-      type: s.type,
-      scopeId: s.scopeId,
-      turns: s.turns,
-      messages: s.messages,
-      userTurns: turnsBySession.get(s.id) ?? 0,
-      lastActivity: s.lastActivity,
-      createdAt: s.createdAt,
-      firstMessage: s.firstMessage,
-      lastMessage: s.lastMessage,
-    }));
-
-  const files: Array<{
-    id: string;
-    name: string;
-    path: string;
-    mimetype: string;
-    size: number;
-    direction: string;
-    createdAt: number;
-    openable: boolean;
-  }> = [];
-  if (deps.files) {
-    let cursor: string | undefined;
-    do {
-      const page = await deps.files.listOwnedByScopes([personal], {
-        limit: FILES_PAGE_SIZE,
-        ...(cursor ? { cursor } : {}),
-      });
-      for (const a of page.files) {
-        files.push({
-          id: a.id,
-          name: a.name,
-          path: a.path,
-          mimetype: a.mimetype,
-          size: a.sizeBytes,
-          direction: a.direction,
-          createdAt: a.createdAt,
-          openable: a.blobKey != null,
-        });
-      }
-      cursor = page.nextCursor;
-    } while (cursor && files.length < USER_FILES_MAX);
-  }
-  const crons = (await app.listCrons())
-    .filter((c) => c.ownerScopeId === personal)
-    .map((c) => ({
-      id: c.id,
-      title: c.title,
-      action: c.action,
-      message: c.message,
-      owner: c.owner,
-      createdBy: c.createdBy,
-      enabled: c.enabled,
-      archived: c.archived,
-      schedule: c.schedule,
-      createdAt: c.createdAt,
-      lastFiredAt: c.lastFiredAt,
-    }));
-  const deployments = (await app.listDeployments())
-    .filter((d) => d.ownerScopeId === personal)
-    .map((d) => ({
-      id: d.id,
-      name: d.displayName || d.name,
-      status: d.status,
-      currentVersion: d.currentVersion,
-      versions: d.versions.length,
-      createdBy: d.createdBy,
-      lastAccessAt: d.lastAccessAt,
-      publicUrl: publicUrlOf(d.endpoint),
-    }));
+  const [grants, stats, onboarding] = await Promise.all([
+    deps.admin?.listGrants() ?? [],
+    deps.sessions?.scopeSessionStats(personal, false, "conversation"),
+    deps.memory ? deps.memory.read(personal).then(detectOnboardingStatus) : null,
+  ]);
   const config = deps.config
     ? {
         hasSoul: !!deps.config.getSoul(personal),
@@ -427,18 +332,13 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
         connectors: await deps.config.listConnectorClients(personal),
       }
     : null;
-  const onboarding = deps.memory ? detectOnboardingStatus(await deps.memory.read(personal)) : null;
 
   return sendJson(res, 200, {
     principalId,
     scopeId: personal,
     ...(member?.displayName ? { displayName: member.displayName } : {}),
     admin: adminStatusFromGrants(grants, principalId),
-    stats: { sessions: mySessionIds.size, turns, firstSeenAt, lastSeenAt },
-    conversations,
-    files,
-    deployments,
-    crons,
+    stats: { sessions: stats?.total ?? 0 },
     config,
     onboarding,
   });
@@ -474,7 +374,7 @@ export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
   if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
-  const principalId = params.principalId!;
+  const { principalId } = await resolveAdminUser(deps, params.principalId!);
   const status = (body as { status?: unknown }).status;
   if (typeof status !== "string" || !ONBOARDING_STATUSES.has(status as OnboardingStatus)) {
     return sendJson(res, 400, {
@@ -500,7 +400,7 @@ export async function resetUserToBrandNew(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
   if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
-  const principalId = params.principalId!;
+  const { principalId } = await resolveAdminUser(deps, params.principalId!);
   const personal = makeScopeId("personal", principalId);
   const today = new Date().toISOString().slice(0, 10);
   await deps.memory.replace(

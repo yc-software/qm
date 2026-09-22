@@ -29,7 +29,7 @@ test("thinking shares input sizing while background activity stays compact", () 
   );
   assert.deepEqual(sizes, [
     [".composer-wrap", 15],
-    [".split-pane-chat .custom-chat-shell .composer-wrap", 12],
+    [".split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap", 12],
     [".composer-wrap", 16],
     ["body.app-edit-embed .composer-wrap", 13],
   ]);

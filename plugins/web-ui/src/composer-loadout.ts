@@ -114,3 +114,21 @@ export function modelLoadoutOptions(
     return preferred ? [preferred] : [];
   });
 }
+
+const LOADOUT_STORAGE_KEY = "web-ui:loadout";
+
+export function loadLoadout(): LoadoutEntry[] {
+  try {
+    return parseLoadout(localStorage.getItem(LOADOUT_STORAGE_KEY));
+  } catch {
+    return [];
+  }
+}
+
+export function saveLoadout(entries: LoadoutEntry[]): void {
+  try {
+    localStorage.setItem(LOADOUT_STORAGE_KEY, JSON.stringify(entries.slice(0, LOADOUT_CAP)));
+  } catch {
+    return;
+  }
+}

@@ -75,7 +75,7 @@ form, never into chat.
 ### Personal connections
 
 Check the live credential inventory first. When an authorized Composio credential is available,
-read `skill://composio/SKILL.md`, discover available apps, and use its consent flow for the
+load the composio skill with the skill tool, discover available apps, and use its consent flow for the
 user's choices. Reuse their connected accounts after checking identity and permissions;
 a project key is not proof that a personal account is connected. Do not ask them to
 create OAuth apps for connections this source already provides. Do not infer that Composio is unavailable from an empty direct OAuth list

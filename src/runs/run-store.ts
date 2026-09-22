@@ -93,7 +93,7 @@ export interface RunStore {
 
   inFlightForThread(sessionId: string): Promise<Run[]>;
 
-  withdraw(runId: string): Promise<boolean>;
+  withdraw(runId: string, opts?: { unstartedOnly?: boolean }): Promise<boolean>;
   steerQueued(queuedRunId: string, targetRunId: string, signal: RunSignal, signals: RunSignalStore): Promise<boolean>;
 
   editPendingText(runId: string, text: string, expectedText: string): Promise<boolean>;

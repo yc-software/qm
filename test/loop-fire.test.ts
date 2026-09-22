@@ -1,3 +1,7 @@
+import { createAdmittedWork } from "../src/util/admitted-work.ts";
+import { renderInboxSyncTask } from "../src/loops/inbox-loop.ts";
+import { createCronStore, type CreateCronInput } from "../src/cron/cron-store.ts";
+import { createScheduler } from "../src/cron/scheduler.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createLoopFireService } from "../src/loops/loop-fire.ts";
@@ -29,10 +33,18 @@ function fakeDeliveries() {
   };
 }
 
-type Responder = (req: TurnRequest) => string;
+type Responder = (req: TurnRequest) => string | Promise<string>;
 
-function service(respond: Responder, overrides?: { grants?: ReturnType<typeof createShipGrantStore> }) {
+function service(
+  respond: Responder,
+  overrides?: {
+    admittedWork?: ReturnType<typeof createAdmittedWork>;
+    grants?: ReturnType<typeof createShipGrantStore>;
+    samePerson?: (a: string, b: string) => Promise<boolean>;
+  },
+) {
   const loops = createLoopStore();
+  const crons = createCronStore();
   const items = createLoopItemLedger();
   const outputs = createLoopOutputStore();
   const grants = overrides?.grants ?? createShipGrantStore();
@@ -40,6 +52,9 @@ function service(respond: Responder, overrides?: { grants?: ReturnType<typeof cr
   const turns: TurnRequest[] = [];
   const idempotency = createIdempotencyStore();
   const fire = createLoopFireService({
+    admittedWork: overrides?.admittedWork,
+    crons,
+    samePerson: overrides?.samePerson,
     loops,
     items,
     outputs,
@@ -49,12 +64,15 @@ function service(respond: Responder, overrides?: { grants?: ReturnType<typeof cr
       idempotency,
       identity: fakeIdentity() as never,
       run: async (req): Promise<TurnResult> => {
-        turns.push(req);
-        return { status: "ok", reply: respond(req), sessionId: `s${turns.length}` };
+        const run = async (): Promise<TurnResult> => {
+          turns.push(req);
+          return { status: "ok", reply: await respond(req), sessionId: `s${turns.length}` };
+        };
+        return overrides?.admittedWork ? overrides.admittedWork.run(run) : run();
       },
     },
   });
-  return { loops, items, outputs, grants, fire, turns, deliveries, idempotency };
+  return { loops, crons, items, outputs, grants, fire, turns, deliveries, idempotency };
 }
 
 const base = { owner: "josh", createdBy: "josh", ownerScopeId: scopeId("personal", "josh") };
@@ -543,4 +561,318 @@ test("a paused loop refuses to fire", async () => {
   const result = await s.fire.fire(loop.id, "f1");
   assert.equal(result.status, "silent");
   assert.equal(s.turns.length, 0);
+});
+
+async function bindCron(
+  s: ReturnType<typeof service>,
+  loop: Awaited<ReturnType<typeof makeLoop>>,
+  over: Partial<CreateCronInput> = {},
+) {
+  const cron = await s.crons.create({
+    owner: loop.owner,
+    createdBy: over.owner ?? loop.owner,
+    ownerScopeId: loop.ownerScopeId,
+    schedule: { everyMs: 60_000 },
+    action: "fire loop",
+    loopId: loop.id,
+    ...(loop.runAs ? { runAs: loop.runAs } : {}),
+    ...over,
+  });
+  await s.loops.update(loop.id, { cronId: cron.id });
+  return cron;
+}
+
+for (const unattendedGrants of [undefined, ["admin.sessions.read"]]) {
+  test(`bound scheduled and manual loop turns use current cron grants: ${unattendedGrants}`, async () => {
+    const s = service(HAPPY);
+    const loop = await makeLoop(s.loops);
+    const cron = await bindCron(s, loop, { unattendedGrants, destination: { type: "slack", target: "C-alerts" } });
+    const scheduler = createScheduler({
+      crons: s.crons,
+      deliveries: s.deliveries.store as never,
+      idempotency: s.idempotency,
+      identity: fakeIdentity() as never,
+      run: async () => {
+        throw new Error("must delegate to loop");
+      },
+      fireLoop: (id, key, cronId) => s.fire.fire(id, key, cronId),
+    });
+    await scheduler.tick(cron.createdAt + 60_000);
+    assert.equal((await s.crons.listFires(cron.id)).runs[0]?.status, "ok");
+    assert.deepEqual(s.turns.map(stage), ["intake", "work", "judge"]);
+    await s.fire.fire(loop.id, "manual");
+    const output = (await s.outputs.awaitingReview(loop.id))[0]!;
+    await s.fire.shipOutput(loop.id, output.id, loop.owner);
+    for (const turn of s.turns) {
+      assert.deepEqual(turn.unattendedGrants, unattendedGrants);
+      assert.equal(turn.actor.externalId, loop.owner);
+      assert.equal(turn.triggered, true);
+      assert.equal(turn.triggerDestination, undefined);
+      assert.equal(turn.surfaceTools, undefined);
+      assert.equal(turn.readOnly, undefined);
+    }
+    assert.equal(s.deliveries.sent.length, 0);
+  });
+}
+
+test("bound loop stages reread grants after revocation", async () => {
+  const s = service(async (req) => {
+    if (stage(req) === "intake") await s.crons.update(cron.id, { unattendedGrants: [] });
+    return HAPPY(req);
+  });
+  const loop = await makeLoop(s.loops);
+  const cron = await bindCron(s, loop, { unattendedGrants: ["admin.sessions.read"] });
+  await s.fire.fire(loop.id, "revocation");
+  assert.deepEqual(
+    s.turns.map((t) => t.unattendedGrants),
+    [["admin.sessions.read"], [], []],
+  );
+  const output = (await s.outputs.awaitingReview(loop.id))[0]!;
+  await s.fire.shipOutput(loop.id, output.id, loop.owner);
+  assert.deepEqual(s.turns.at(-1)?.unattendedGrants, []);
+});
+
+for (const runAs of ["scopeShared", "scopeFloor"] as const) {
+  test(`bound loop preserves ${runAs} exclusions and member snapshot`, async () => {
+    const s = service(HAPPY);
+    const loop = await makeLoop(s.loops, { runAs, ownerScopeId: scopeId("channel", "C1") });
+    await bindCron(s, loop, { unattendedGrants: ["admin.sessions.read"], members: [{ id: "josh", type: "internal" }] });
+    const result = await s.fire.fire(loop.id, "shared");
+    assert.equal(result.status, "ok");
+    assert.equal(s.turns.length, 3);
+    for (const turn of s.turns) {
+      assert.equal(turn.unattendedGrants, undefined);
+      assert.equal(turn.ownerKeychainUnion, runAs === "scopeShared" ? true : undefined);
+      assert.equal(turn.conversation.kind, "channel");
+    }
+  });
+}
+
+test("bound loops reject missing crons, foreign scheduler bindings, and authority drift", async () => {
+  for (const over of [
+    { owner: "mallory" },
+    { ownerScopeId: scopeId("personal", "mallory") },
+    { runAs: "scopeFloor" as const },
+    { loopId: "another-loop" },
+  ]) {
+    const s = service(HAPPY);
+    const loop = await makeLoop(s.loops);
+    await bindCron(s, loop, over);
+    assert.equal((await s.fire.fire(loop.id, "mismatch")).status, "failed");
+    assert.equal(s.turns.length, 0);
+  }
+  const s = service(HAPPY);
+  const loop = await makeLoop(s.loops);
+  assert.equal((await s.fire.fire(loop.id, "unbound", "foreign")).status, "failed");
+  const cron = await bindCron(s, loop);
+  assert.equal((await s.fire.fire(loop.id, "foreign", "foreign")).status, "failed");
+  await s.crons.delete(cron.id);
+  assert.equal((await s.fire.fire(loop.id, "deleted")).status, "failed");
+  assert.equal(s.turns.length, 0);
+});
+
+test("legacy inbox sync cron is not a grant source for inbox event turns", async () => {
+  const s = service(HAPPY);
+  const loop = await makeLoop(s.loops, { surface: "inbox" });
+  const cron = await bindCron(s, loop, { loopId: undefined, unattendedGrants: ["admin.sessions.read"] });
+  assert.equal((await s.fire.fire(loop.id, "slack-event")).status, "silent");
+  assert.equal(s.turns.length, 1);
+  assert.equal(s.turns[0]?.text, renderInboxSyncTask(loop.id));
+  assert.ok(s.turns.every((turn) => turn.unattendedGrants === undefined));
+  assert.equal((await s.fire.fire(loop.id, "invalid-delegation", cron.id)).status, "failed");
+});
+
+test("privileged item turns inherit grants only for the owner", async () => {
+  const s = service(HAPPY);
+  const created = await makeLoop(s.loops);
+  await bindCron(s, created, { unattendedGrants: ["admin.sessions.read"] });
+  await s.fire.fire(created.id, "setup");
+  const loop = (await s.loops.get(created.id))!;
+  const item = (await s.items.byLoop(loop.id))[0]!;
+  await s.fire.followUp(loop, item, "inspect", "josh");
+  assert.deepEqual(s.turns.at(-1)?.unattendedGrants, ["admin.sessions.read"]);
+  assert.equal((await s.fire.itemAction(loop, item, "inspect", {}, "josh")).ok, true);
+  const before = s.turns.length;
+  assert.equal((await s.fire.itemAction(loop, item, "inspect", {}, "mallory")).ok, false);
+  await s.fire.followUp(loop, item, "inspect", "mallory");
+  assert.equal(s.turns.length, before);
+});
+
+for (const patch of [{ enabled: false }, { archived: true }]) {
+  test(`disabled or archived bound cron cannot authorize loop turns: ${JSON.stringify(patch)}`, async () => {
+    const s = service(HAPPY);
+    const loop = await makeLoop(s.loops);
+    const cron = await bindCron(s, loop, { unattendedGrants: ["admin.sessions.read"] });
+    await s.crons.update(cron.id, patch);
+    assert.equal((await s.fire.fire(loop.id, "disabled")).status, "failed");
+    assert.equal(s.turns.length, 0);
+  });
+}
+
+test("pausing an unprivileged cron does not block held-item follow-up", async () => {
+  const s = service(HAPPY);
+  const created = await makeLoop(s.loops);
+  const cron = await bindCron(s, created);
+  await s.fire.fire(created.id, "setup");
+  await s.crons.setEnabled(cron.id, false);
+  await s.loops.setState(created.id, "paused");
+  const loop = (await s.loops.get(created.id))!;
+  const item = (await s.items.byLoop(loop.id))[0]!;
+  const before = s.turns.length;
+  await s.fire.followUp(loop, item, "inspect", loop.owner);
+  assert.equal(s.turns.length, before + 1);
+  assert.equal(s.turns.at(-1)?.unattendedGrants, undefined);
+});
+
+test("privileged item turns recognize the owner's verified directory alias", async () => {
+  const s = service(HAPPY, { samePerson: async (a, b) => a === "josh" && b === "josh@example.test" });
+  const created = await makeLoop(s.loops);
+  await bindCron(s, created, { unattendedGrants: ["admin.sessions.read"] });
+  const loop = (await s.loops.get(created.id))!;
+  await s.fire.fire(loop.id, "alias-owner");
+  const item = (await s.items.byLoop(loop.id))[0]!;
+  const result = await s.fire.itemAction(loop, item, "custom", {}, "josh@example.test");
+  assert.equal(result.ok, true);
+  assert.deepEqual(s.turns.at(-1)?.unattendedGrants, ["admin.sessions.read"]);
+  const before = s.turns.length;
+  const refused = await s.fire.itemAction(loop, item, "custom", {}, "other@example.test");
+  assert.equal(refused.ok, false);
+  assert.equal(s.turns.length, before);
+});
+
+test("an admitted loop drains all stages after ownership closes", async () => {
+  const admission = createAdmittedWork();
+  let finishIntake!: () => void;
+  let enteredIntake!: () => void;
+  const started = new Promise<void>((resolve) => {
+    enteredIntake = resolve;
+  });
+  const release = new Promise<void>((resolve) => {
+    finishIntake = resolve;
+  });
+  const s = service(
+    async (req) => {
+      if (stage(req) === "intake") {
+        enteredIntake();
+        await release;
+      }
+      return HAPPY(req);
+    },
+    { admittedWork: admission },
+  );
+  const loop = await makeLoop(s.loops);
+  const running = s.fire.fire(loop.id, "handover");
+  await started;
+  admission.pause();
+  let drained = false;
+  const drain = admission.drained().then(() => {
+    drained = true;
+  });
+  await Promise.resolve();
+  assert.equal(drained, false);
+  const refused = await s.fire.fire(loop.id, "after-handover");
+  assert.equal(refused.status, "refused");
+  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires ?? 0, 0);
+  finishIntake();
+  assert.equal((await running).status, "ok");
+  await drain;
+  assert.deepEqual(s.turns.map(stage), ["intake", "work", "judge"]);
+  assert.equal((await s.outputs.awaitingReview(loop.id)).length, 1);
+  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 0);
+});
+
+test("inbox fires repair an existing shell without creating generic intake records", async () => {
+  const s = service(async (req) => {
+    assert.equal(req.text, renderInboxSyncTask(loop.id));
+    await s.items.ingest([
+      {
+        loopId: loop.id,
+        dedupeKey: "channel:123",
+        source: "slack",
+        sourceAt: 123,
+        sourcePayload: {
+          title: "#support",
+          from: "Alex",
+          snippet: "Can you help?",
+          slack: { channelId: "channel", ts: "123" },
+        },
+        proposal: { by: "agent", data: { body: "Yes, I will take a look." } },
+      },
+    ]);
+    return "Synced";
+  });
+  const loop = await makeLoop(s.loops, { surface: "inbox" });
+  await s.items.enqueue({ loopId: loop.id, sourceKey: "channel:123", sourceSummary: "support request" });
+  assert.equal((await s.fire.fire(loop.id, "sync-one")).status, "silent");
+  assert.equal((await s.fire.fire(loop.id, "sync-one")).status, "silent");
+  assert.equal(s.turns.length, 1);
+  const rows = await s.items.byLoop(loop.id);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.status, "ready");
+  assert.equal(rows[0]?.sourcePayload?.title, "#support");
+  assert.equal(rows[0]?.proposal?.data.body, "Yes, I will take a look.");
+  assert.equal((await s.outputs.byLoop(loop.id)).length, 0);
+});
+
+test("closed admission leaves item follow-ups and ship attempts untouched", async () => {
+  const admission = createAdmittedWork();
+  const s = service(HAPPY, { admittedWork: admission });
+  const loop = await makeLoop(s.loops);
+  await s.fire.fire(loop.id, "first");
+  const item = (await s.items.byLoop(loop.id))[0];
+  const output = (await s.outputs.awaitingReview(loop.id))[0];
+  assert.ok(item);
+  assert.ok(output);
+  admission.pause();
+  await assert.rejects(s.fire.followUp(loop, item, "Please revise", loop.owner), /not accepting synchronous work/);
+  await assert.rejects(s.fire.shipOutput(loop.id, output.id, loop.owner), /not accepting synchronous work/);
+  await assert.rejects(s.fire.itemAction(loop, item, "revise", {}, loop.owner), /not accepting synchronous work/);
+  assert.deepEqual(await s.items.get(item.id), item);
+  assert.deepEqual(await s.outputs.get(output.id), output);
+});
+
+test("inbox sync exceptions count once and recover on a successful retry", async () => {
+  let fail = true;
+  const s = service(() => {
+    if (fail) throw new Error("connector unavailable");
+    return "Synced";
+  });
+  const loop = await makeLoop(s.loops, { surface: "inbox" });
+  assert.equal((await s.fire.fire(loop.id, "broken")).status, "failed");
+  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 1);
+  assert.equal((await s.items.byLoop(loop.id)).length, 0);
+  fail = false;
+  assert.equal((await s.fire.fire(loop.id, "recovery")).status, "silent");
+  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 0);
+  await s.loops.setState(loop.id, "quarantined");
+  assert.equal((await s.fire.fire(loop.id, "quarantined")).status, "silent");
+  assert.equal(s.turns.length, 2);
+});
+
+test("event-only Email work skips scanning and holds its draft instead of marking it shipped", async () => {
+  const w = service((req) => {
+    if (stage(req) === "intake") throw new Error("Event work must not enumerate");
+    if (stage(req) === "work") {
+      assert.match(req.text ?? "", /sourcePayload/);
+      assert.match(req.text ?? "", /Hello from email/);
+      return '```json\n{"proposal":{"to":["sender@example.com"],"body":"Thanks, I will review it."},"outputs":[]}\n```';
+    }
+    return '```json\n{"outcome":"met","reason":"Draft ready for review"}\n```';
+  });
+  const loop = await makeLoop(w.loops, { sources: ["gmail"], shipActions: [{ action: "send", gate: "hold" }] });
+  await w.items.ingest([
+    {
+      loopId: loop.id,
+      dedupeKey: "thread1",
+      source: "gmail",
+      sourceAt: 1000,
+      sourcePayload: { source: "gmail", snippet: "Hello from email", gmail: { threadId: "thread1" } },
+    },
+  ]);
+  const result = await w.fire.fire(loop.id, "push:1", undefined, { enumerate: false });
+  const [item] = await w.items.byLoop(loop.id);
+  assert.equal(item?.status, "ready");
+  assert.equal(item?.proposal?.data.body, "Thanks, I will review it.");
+  assert.deepEqual(result.summary?.shipped, []);
+  assert.deepEqual(result.summary?.ready, [item?.id]);
 });

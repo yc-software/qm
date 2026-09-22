@@ -230,7 +230,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         });
         void deps
           .fireAskResolution?.(ask, grant)
-          .then(() => kc.markAskNotified(ask.id))
+          .then(() => kc.markAskNotified(ask.id, ask.status))
           .catch((e) => swallow("keychain: ask resolution fire failed (sweep will retry)", e));
         return sendJson(res, 200, {
           grant,
@@ -331,11 +331,19 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       const cronId = cronIdOf(capability.threadRef);
       const cron = cronId ? await app.getCron(cronId) : null;
       const dest = resolveCapabilityDestination(capability, undefined);
+      const originRun = capability.runId ? await deps.runs?.get(capability.runId) : null;
+      const requesterSeq = originRun && originRun.sessionId === capability.threadRef ? originRun?.turnUserSeq : null;
+      const requesterMessageTs =
+        originRun && originRun.sessionId === capability.threadRef && originRun.request.origin.kind === "human"
+          ? originRun.request.origin.messageTs
+          : undefined;
       const { ask, existing } = await kc.createAsk({
         ...(capability.triggered ? { triggered: true } : {}),
         credentialId: cred.id,
         requesterId: actorId,
         requesterScopeId: capability.scopeId,
+        ...(requesterSeq != null ? { requesterSeq } : {}),
+        ...(requesterMessageTs ? { requesterMessageTs } : {}),
         ...(dest.ok && dest.destination ? { requesterDestination: dest.destination } : {}),
         ...(capability.threadRef ? { requesterThreadRef: capability.threadRef } : {}),
         purpose: b.purpose,
@@ -351,7 +359,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         ...(cron?.ownerScopeId === capability.scopeId ? { taskTitle: cron.title ?? cron.id } : {}),
       });
       await deps.deliveries?.enqueue({
-        destination: principalDestination(cred.ownerId, actorId),
+        destination: { ...principalDestination(cred.ownerId, actorId), keychainAskId: ask.id },
         text: notice,
         idempotencyKey: `ask:${ask.id}:notice`,
       });
@@ -394,7 +402,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       });
       void deps
         .fireAskResolution?.(ask)
-        .then(() => kc.markAskNotified(ask.id))
+        .then(() => kc.markAskNotified(ask.id, ask.status))
         .catch((e) => swallow("keychain: ask resolution fire failed (sweep will retry)", e));
       return sendJson(res, 200, { ask });
     }

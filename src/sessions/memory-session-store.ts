@@ -160,6 +160,11 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       if (s) s.title = title;
     },
 
+    async updateStatus(sessionId, status) {
+      const s = sessions.get(sessionId);
+      if (s) s.status = status ? { ...status } : null;
+    },
+
     async updateForkProvenance(sessionId, provenance) {
       const s = sessions.get(sessionId);
       if (s) Object.assign(s, provenance);

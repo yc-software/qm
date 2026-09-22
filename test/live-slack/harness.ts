@@ -81,6 +81,7 @@ const STABLE_MS = 5000;
 export interface WaitOpts {
   timeoutMs?: number;
   match?: RegExp;
+  accept?: (message: SlackMessage) => boolean;
   afterTs?: string;
   onFrame?: (text: string) => void;
   record?: (msgTs: string, text: string) => void;
@@ -115,6 +116,7 @@ async function waitForFinalBotMessage(
       const text = m.text ?? "";
       if (isLiveStatusText(text)) continue;
       if (opts.match && !opts.match.test(text)) continue;
+      if (opts.accept && !opts.accept(m)) continue;
       const entry = seen.get(m.ts);
       if (entry && entry.text === text && Date.now() - entry.firstSeen >= STABLE_MS) return m;
     }

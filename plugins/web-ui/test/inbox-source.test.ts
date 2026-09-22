@@ -21,7 +21,7 @@ test("inbox access rides the existing permissions plumbing", () => {
   assert.match(shell, /can\("inbox"\) \? html`\$\{inboxNavRow\(\)\}/);
   assert.match(shellState, /if \(view === "inbox" \|\| view === "calendar"\) return can\("inbox"\);/);
   assert.match(server, /process\.env\.INBOX_USERS/);
-  assert.match(server, /INBOX_USERS\.has\("all"\) \|\| INBOX_USERS\.has\(principalId\.trim\(\)\.toLowerCase\(\)\)/);
+  assert.match(server, /principalInAllowlist\(principalId, configuredUsers\)/);
   assert.match(server, /if \(isInboxUser\(user\)\) permissions\.push\("inbox"\);/);
   assert.match(inbox, /if \(!can\("inbox"\)\) return;/);
 });
@@ -66,10 +66,10 @@ test("the address keeps naming the open item, even after switchView writes the b
     /syncInboxUrl\(openSentEmail\?\.id \?\? fullSurface\.selectedId\);/,
     "every draw re-states the URL from the selection it just rendered",
   );
-  assert.match(inbox, /void openSentEmailById\(sentId, drawAll\);/, "unknown inbox ids resolve through sent mail");
+  assert.match(inbox, /await openSentEmailById\(id, drawAll\);/, "unknown inbox ids resolve through sent mail");
   assert.match(
     shell,
-    /const next = deepLinkPath\(UI_BASE, appState\.currentView, sessionId, contextsState\.selected\);/,
+    /(?:const|let) next = deepLinkPath\(UI_BASE, appState\.currentView, sessionId, contextsState\.selected\);/,
     "syncUrlFromState carries no item id, which is what the inbox has to heal after",
   );
   const draw = inbox.match(/function drawFull\(\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
@@ -114,13 +114,11 @@ test("drafts persist on blur and send uses the current edit", () => {
   assert.match(inbox, /postAction\(item, status === "dismissed" \? "dismiss" : "reopen"\)/);
 });
 
-test("the inbox reads the loop's ledger, not a bespoke inbox endpoint", () => {
-  assert.doesNotMatch(inbox, /\/api\/inbox\/items/, "the bespoke item routes are gone");
-  assert.match(inbox, /api<\{ items: LedgerItem\[\] \}>\(`\/api\/loops\/\$\{encodeURIComponent\(loopId\)\}\/items`\)/);
-  assert.match(inbox, /inboxState\.loopId = found\.loop\?\.id \?\? null;/);
-  assert.match(inbox, /if \(entry\.state === "actioned"\) return "sent";/);
-  assert.match(inbox, /return entry\.actionKind === "replied" \? "replied" : "dismissed";/);
-  assert.match(inbox, /const payload = entry\.sourcePayload;/, "source fields are read out of the opaque payload");
+test("the inbox reads a paginated combined feed and retains original item references", () => {
+  assert.match(inbox, /api<Feed>\(`\/api\/inbox\?\$\{qs\}`\)/);
+  assert.match(inbox, /feedWindows/);
+  assert.match(inbox, /loopId: entry\.loopId/);
+  assert.match(inbox, /loadDeepLink/);
 });
 
 test("localhost can overlay private inbox seed data without checking it into source", () => {
@@ -130,8 +128,8 @@ test("localhost can overlay private inbox seed data without checking it into sou
     /if \(!\["localhost", "127\.0\.0\.1", "\[::1\]"\]\.includes\(location\.hostname\)\) return \[\];/,
   );
   assert.match(inbox, /const localItems = await fetchLocalInboxItems\(\);/);
-  assert.match(inbox, /inboxState\.items = localItems\.length/);
-  assert.match(inbox, /if \(!inboxState\.items\.length && inboxState\.loopId\) inboxState\.items = await fetchItems/);
+  assert.match(inbox, /if \(localItems\.length\) inboxState\.items = localItems/);
+  assert.match(inbox, /api<Feed>\(`\/api\/inbox\?\$\{qs\}`\)/);
 });
 
 test("each item carries a follow-up chat with the agent", () => {

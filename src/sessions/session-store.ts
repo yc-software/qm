@@ -699,6 +699,7 @@ export interface SessionStore {
   setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
   setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
   childrenOf(parentSessionId: string): Promise<Session[]>;
+  updateStatus(sessionId: string, status: Session["status"]): Promise<void>;
   updateForkProvenance(
     sessionId: string,
     provenance: { forkedFrom: { sessionId: string; title?: string | null }; forkBoundarySeq: number },

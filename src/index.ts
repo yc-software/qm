@@ -9,7 +9,7 @@ import { buildApp, serverDeps, stopWithBackstop } from "./wiring.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
-import { errMessage } from "./util/errors.ts";
+import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
@@ -113,7 +113,7 @@ const slackRuntime = createSlackRuntimeReconciler({
     return null;
   },
   startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
-  onError: (error) => console.error(`[qm] slack plugin reconciliation failed: ${errMessage(error)}`),
+  onError: reportFailureAs("slack plugin reconciliation", undefined),
 });
 if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) slackRuntime.start();
 
@@ -122,8 +122,7 @@ const slackAccountRuntimes = slackAccountConfigsFromEnv(process.env).map((accoun
     startPaused: Boolean(config.backgroundDeploymentId),
     load: () => Promise.resolve({ version: `environment:${account.accountId}`, config: account }),
     startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
-    onError: (error) =>
-      console.error(`[qm] slack account "${account.accountId}" reconciliation failed: ${errMessage(error)}`),
+    onError: reportFailureAs("slack account reconciliation", undefined, `account=${account.accountId}`),
   }),
 );
 if (config.backgroundWorkEnabled && !config.backgroundDeploymentId)
@@ -180,7 +179,7 @@ if (built.backgroundOwnership) {
     async drained() {
       await Promise.all([built.runtime.backgroundDrained(), built.scheduler.drained(), periodicStop]);
     },
-    onError: (error) => console.error("[qm] background ownership failed:", errMessage(error)),
+    onError: reportFailureAs("background ownership", undefined),
   });
   built.runtime.setBackgroundAdmission(backgroundController.canClaim);
   backgroundController.start();

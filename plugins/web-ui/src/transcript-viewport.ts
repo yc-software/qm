@@ -303,5 +303,5 @@ export function createTranscriptViewport() {
     });
   }
 
-  return { sync, follow, beforeRender, afterRender, dispose };
+  return { sync, follow, cancelFollow, beforeRender, afterRender, dispose };
 }

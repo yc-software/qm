@@ -1,3 +1,4 @@
+import "./slack-account";
 import { openModelConnectManager, type StatusResponse } from "./model-connect";
 import { api } from "./core-bridge";
 import { html, nothing, render, type TemplateResult } from "lit";
@@ -401,6 +402,9 @@ function settingsPane(): TemplateResult {
     <div class="settings-group">
       ${aiAccountsRow()} ${themeRow()} ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${aboutRow()}
       ${accountRow()}
+      <div class="settings-row settings-slack-account">
+        <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
+      </div>
     </div>
   `;
 }

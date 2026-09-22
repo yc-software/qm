@@ -26,7 +26,7 @@ If it is missing, say so and pick a path rather than failing halfway:
   provider's own installer, into the workspace or `$HOME`, not a system path. Say that you
   installed it; it lasts as long as the machine's disk.
 - **Use the provider's HTTP API** with a credential you already have (a keychain entry, or
-  a shared org credential by proxy — see `skill://use-shared-credential/SKILL.md`).
+  a shared org credential by proxy — see the `use-shared-credential` skill).
 - **Ask the operator** to add the CLI to the sandbox image if this will recur. That is the
   durable fix; a per-turn install is not.
 
@@ -61,7 +61,7 @@ The platform recognizes these as device-flow logins and runs them as **durable p
 sessions**: the command prints the verification URL and one-time code immediately and keeps
 polling across turns — it does not block your turn or die at teardown. Give the user the URL
 and the code, tell them to approve and then say "done". See
-`skill://interactive-login/SKILL.md` for how to drive that from the background tool.
+the `interactive-login` skill for how to drive that from the background tool.
 
 On the next turn, run the same login command again (or any provider command): if approval
 landed, the platform reports you are already authenticated and the token is cached; if it is

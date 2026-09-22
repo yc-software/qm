@@ -1,7 +1,7 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import type { AuditEvent, AuditLog } from "../audit/audit-log.ts";
-import { errMessage } from "../util/errors.ts";
+import { reportFailureAs } from "../util/errors.ts";
 
 function rowToEvent(r: Record<string, unknown>): AuditEvent {
   return {
@@ -72,7 +72,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
         e.detail ?? null,
       ])
         .then(() => undefined)
-        .catch((err) => console.error("[audit] failed to persist event to durable store:", errMessage(err)));
+        .catch(reportFailureAs("audit: persist event", undefined));
       pendingWrites.add(write);
       void write.finally(() => pendingWrites.delete(write));
     },

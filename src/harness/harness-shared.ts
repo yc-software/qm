@@ -101,6 +101,7 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
           readOnly: turn.readOnly,
           sessionTools: Boolean(turn.tools.sessionSyscalls),
           surfaceTools: turn.surfaceTools,
+          delegateWork: turn.delegateWork,
           surfaceName: turn.surfaceName,
           credentialExecServices: turn.credentialExecServices,
         }

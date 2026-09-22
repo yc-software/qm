@@ -41,6 +41,15 @@ database requirements apply.
 For local development, export the key and template and run
 `npm run dev-instance -- --sandbox superserve`.
 
+## Sandbox capacity
+
+Sandboxes inherit CPU, memory, and disk capacity from their template. The agent
+template builder defaults to 8 vCPUs, 16384 MiB (16 GiB) memory, and 32768 MiB
+(32 GiB) disk. Override these with `--vcpu`, `--memory-mib`, and `--disk-mib` at
+build time; there are no runtime resource-size settings. Existing sandboxes are
+not resized by updating QM or rebuilding a template. Follow the [capacity rollout steps](../superserve/templates/README.md#increase-sandbox-capacity)
+to build and verify a new template, preserve resident work, and replace sandboxes.
+
 ## Settings
 
 | Variable                       | Default     | Purpose                                                                            |

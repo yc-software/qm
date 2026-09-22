@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+import { readAdminSource } from "./admin-source.ts";
+import { loadScope, states, SlackSetting } from "../ui/integrations-state.ts";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -35,11 +37,11 @@ test.after(() => {
 });
 
 test("the org page ships an Internal member overrides card wired to the save machinery", () => {
-  const shell = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+  const shell = readAdminSource();
   assert.match(shell, /id="card-internal-member-overrides"/, "card exists");
   assert.match(shell, /<textarea[^>]*id="internal-member-overrides"/, "one-per-line textarea");
   assert.match(shell, /data-save="internal-member-overrides"/, "save button keyed to the core resource id");
-  assert.match(shell, /"internalMemberOverrides" in r\.data/, "shown only when the org scope carries the key");
+  assert.match(shell, /governanceUI.integrations.loadScope/, "loads through the reactive scope model");
   assert.match(shell, /"internal-member-overrides": "st-internal-member-overrides"/, "status target registered");
   assert.match(shell, /key === "internal-member-overrides"/, "changes go through the governance review dialog");
 });
@@ -107,43 +109,29 @@ test("editor is visible only for org payloads that support overrides", () => {
     ["personal:demo", { internalMemberOverrides: ["u123abc"] }, true, "", ""],
     ["channel:test", { internalMemberOverrides: [] }, true, "", ""],
   ] as const) {
-    let actualHidden: boolean | undefined;
-    const input = { value: "" };
-    const label = { textContent: "" };
-    vm.runInNewContext(slice("        const showInternalOverrides =", "        const showOrgAmbient ="), {
-      scope,
-      r: { data },
-      $: (id: string) => {
-        if (id === "internal-member-overrides") return input;
-        if (id.endsWith("-count")) return label;
-        return {
-          classList: {
-            toggle: (_name: string, on: boolean) => {
-              actualHidden = on;
-            },
-          },
-        };
-      },
-    });
-    assert.equal(actualHidden, hidden);
-    assert.equal(input.value, value);
-    assert.equal(label.textContent, count);
+    loadScope(data, scope);
+    const state = states.get("internal-member-overrides")!;
+    assert.equal(!state.available, hidden);
+    if (!hidden) {
+      assert.equal(state.draft.text, value);
+      assert.equal(state.collect().members?.length || 0, count === "No overrides configured." ? 0 : parseInt(count));
+    }
   }
 });
 
 test("collector trims, lowercases, deduplicates and supports clearing", () => {
-  const collector = slice('        "internal-member-overrides": () =>', '        "org-ambient": () =>');
   for (const [value, expected] of [
     [" Contractor@Example.com , U123ABC\r\ncontractor@example.com\n", ["contractor@example.com", "u123abc"]],
     ["  ,\n ", []],
   ] as const) {
-    const body = vm.runInNewContext(`({${collector}})["internal-member-overrides"]()`, { $: () => ({ value }) });
-    assert.deepEqual(JSON.parse(JSON.stringify(body)), { members: expected });
+    const state = new SlackSetting("internal-member-overrides");
+    state.change({ text: value });
+    assert.deepEqual(state.collect(), { members: expected });
   }
 });
 
 test("confirmation shows added/removed members, unique total, and returns the user's decision", async () => {
-  const review = slice("      function governanceSaveReview(", "      function renderSharingPosture(");
+  const review = slice("      function governanceSaveReview(", '      $("sharing-posture-inherit").onclick');
   for (const accepted of [false, true]) {
     let shown: { facts: [string, string][]; warning: string; danger: boolean } | undefined;
     const result = await vm.runInNewContext(
@@ -171,7 +159,7 @@ test("confirmation shows added/removed members, unique total, and returns the us
 });
 
 test("clearing reviews removals, while a normalized unchanged list needs no review", async () => {
-  const review = slice("      function governanceSaveReview(", "      function renderSharingPosture(");
+  const review = slice("      function governanceSaveReview(", '      $("sharing-posture-inherit").onclick');
   let reviews = 0;
   const context = vm.createContext({
     sectionSnapshots: new Map([["internal-member-overrides", JSON.stringify({ members: ["colleague@example.com"] })]]),

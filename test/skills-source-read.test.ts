@@ -29,13 +29,13 @@ async function fixture(t: TestContext) {
     assert.equal(result.status, "ok", JSON.stringify(result));
     return result.reply ?? "";
   };
-  const publish = async (scopeId: string, body: string, packId?: string) => {
+  const publish = async (scopeId: string, body: string, packId?: string, name = "source-helper") => {
     const skill = await built.skills.create({
       scopeId,
       createdBy: "U1",
-      ...(packId ? { pack: { packId, commit: "c", upstreamName: "source-helper" } } : {}),
+      ...(packId ? { pack: { packId, commit: "c", upstreamName: name } } : {}),
       manifest: {
-        name: "source-helper",
+        name,
         description: "source test",
         body,
         requiredCapabilities: [],
@@ -52,29 +52,47 @@ async function fixture(t: TestContext) {
 test("published skill sources and assets read without a sandbox, respecting scope and archive", async (t) => {
   const b = await fixture(t);
   const skill = await b.publish("personal:U1", "PUBLISHED_BODY");
-  assert.match(await b.turn("!sysprompt"), /skill:\/\/source-helper\/SKILL.md/);
-  assert.equal(await b.turn("!read skill://source-helper/SKILL.md"), "PUBLISHED_BODY");
-  assert.equal(await b.turn("!read skill://source-helper/references/example.txt"), "PUBLISHED_ASSET");
-  assert.match(await b.turn("!read skill://source-helper/SKILL.md", "U2"), /no file/);
+  assert.match(await b.turn("!sysprompt"), /\*\*source-helper\*\*/);
+  assert.match(
+    await b.turn("!skill source-helper"),
+    /^\.agent-turn\/\w+\/[\w-]+\/skills\/source-helper\nPUBLISHED_BODY$/,
+  );
+  assert.match(await b.turn("!skill source-helper references/example.txt"), /\nPUBLISHED_ASSET$/);
+  assert.equal(await b.turn("!skill-run source-helper cat {dir}/references/example.txt"), "PUBLISHED_ASSET");
+  assert.match(await b.turn("!skill source-helper", "U2"), /no skill file/);
   await b.skills.archive(skill.id);
-  assert.match(await b.turn("!read skill://source-helper/SKILL.md"), /no file/);
-  assert.equal(b.provisions(), 0);
+  assert.match(await b.turn("!skill source-helper"), /no skill file/);
+  assert.equal(b.provisions(), 3);
 });
 
-test("published skill reads reject invalid and control paths without provisioning", async (t) => {
+test("a body-only skill loads without any sandbox work", async (t) => {
+  const b = await fixture(t);
+  const skill = await b.skills.create({
+    scopeId: "personal:U1",
+    createdBy: "U1",
+    manifest: { name: "notes-only", description: "text only", body: "JUST_TEXT", requiredCapabilities: [] },
+  });
+  await b.skills.review(skill.id, "reviewer", []);
+  await b.skills.publish(skill.id);
+  assert.equal(await b.turn("!skill notes-only"), "JUST_TEXT");
+  assert.equal(await b.turn("!run echo hi"), "hi");
+  assert.equal(b.provisions(), 1);
+});
+
+test("published skill loads reject invalid and control paths without provisioning", async (t) => {
   const b = await fixture(t);
   await b.publish("personal:U1", "PUBLISHED_BODY");
-  for (const path of [
-    "skill://missing/SKILL.md",
-    "skill://source-helper/../SKILL.md",
-    "skill://source-helper/.tree",
-    "skill://../SKILL.md",
-    "skill://source-helper//SKILL.md",
-    "skill://source-helper/./SKILL.md",
-    "skill://source-helper/references/../../secret",
-    "skill://source-helper/%2e%2e/secret",
+  for (const [name, path] of [
+    ["missing", "SKILL.md"],
+    ["source-helper", "../SKILL.md"],
+    ["source-helper", ".tree"],
+    ["..", "SKILL.md"],
+    ["source-helper", "/SKILL.md"],
+    ["source-helper", "./SKILL.md"],
+    ["source-helper", "references/../../secret"],
+    ["source-helper", "%2e%2e/secret"],
   ])
-    assert.match(await b.turn(`!read ${path}`), /no file/, path);
+    assert.match(await b.turn(`!skill ${name} ${path}`), /no skill file/, `${name}/${path}`);
   assert.equal(b.provisions(), 0);
 });
 
@@ -82,19 +100,16 @@ test("published source follows scope shadowing and preserves sandbox-authored wo
   const b = await fixture(t);
   await b.publish("org:default-org", "ORG_BODY");
   const personal = await b.publish("personal:U1", "PERSONAL_BODY");
-  assert.equal(await b.turn("!read skill://source-helper/SKILL.md"), "PERSONAL_BODY");
-  assert.equal(b.provisions(), 0);
-  await b.turn("!read skills/source-helper/SKILL.md");
+  assert.match(await b.turn("!skill source-helper"), /\nPERSONAL_BODY$/);
   await b.turn("!write skills/source-helper/SKILL.md LOCAL_EDIT");
-  assert.equal(await b.turn("!read skill://source-helper/SKILL.md"), "PERSONAL_BODY");
+  assert.match(await b.turn("!skill source-helper"), /\nPERSONAL_BODY$/);
   assert.equal(await b.turn("!read skills/source-helper/SKILL.md"), "LOCAL_EDIT");
   await b.skills.archive(personal.id);
-  assert.equal(await b.turn("!read skill://source-helper/SKILL.md"), "ORG_BODY");
+  assert.match(await b.turn("!skill source-helper"), /\nORG_BODY$/);
 });
 
-test("a source-only read avoids sandbox work and a subsequent asset request materializes the current revision", async () => {
+test("a body read avoids sandbox work and a file request materializes that skill under the turn directory", async () => {
   const { createTurnSandboxes } = await import("../src/core/orchestrator/sandboxes.ts");
-  const { createSkillMaterializer } = await import("../src/skills/materialize.ts");
   type TurnSandboxContext = import("../src/core/orchestrator/sandboxes.ts").TurnSandboxContext;
   type SkillResolution = import("../src/skills/skill-store.ts").SkillResolution;
   const files = new Map<string, string>();
@@ -116,6 +131,7 @@ test("a source-only read avoids sandbox work and a subsequent asset request mate
   unrelated.skill!.id = "other";
   unrelated.skill!.manifest.name = "unrelated";
   unrelated.skill!.pack = { packId: "other-pack", commit: "c", upstreamName: "unrelated" };
+  const visible = [resolution, unrelated];
   const handle = { id: "box", rootDir: "/workspace" };
   const turn = createTurnSandboxes({
     deps: {
@@ -146,26 +162,31 @@ test("a source-only read avoids sandbox work and a subsequent asset request mate
     connectorEnv: {},
     ownerEnvCredentialIds: [],
     credentialCutoverServices: [],
-    visibleSkills: [resolution, unrelated],
-    visibleSkillsForTurn: async () => [resolution, unrelated],
-    skillMaterializer: createSkillMaterializer(),
+    visibleSkillsForTurn: async () => visible,
     emitGapWork: () => {},
     perf: { credsMs: 0 },
   } as unknown as TurnSandboxContext);
-  assert.equal((await turn.readSkill("skill://source-helper/SKILL.md")).content, "BODY");
-  assert.equal(provisions, 0);
+  const bodyOnly = structuredClone(unrelated);
+  bodyOnly.skill!.id = "body-only";
+  bodyOnly.skill!.manifest.name = "body-only";
+  bodyOnly.skill!.manifest.files = [];
+  delete bodyOnly.skill!.pack;
+  visible.push(bodyOnly);
+  assert.deepEqual(await turn.useSkill("body-only", "SKILL.md"), { content: "BODY", sourceScopeId: "personal:U1" });
+  await turn.provision();
+  assert.equal(provisions, 1);
   assert.equal(files.size, 0);
   resolution = structuredClone(resolution);
   resolution.skill!.manifest.files![0]!.content = "v2";
-  assert.equal((await turn.readSkill("skill://source-helper/references/example.txt")).content, "v2");
-  await turn.provision();
-  assert.deepEqual([...files.keys()], ["skills/.index"]);
-  await turn.ensureSkillTree("source-helper");
+  visible[0] = resolution;
+  const loaded = await turn.useSkill("source-helper", "references/example.txt");
+  assert.equal(loaded.content, "v2");
+  assert.equal(loaded.dir, "turn/s/t/skills/source-helper");
   assert.equal(provisions, 1);
-  assert.equal(files.get("skills/source-helper/references/example.txt"), "v2");
-  files.set("skills/source-helper/references/example.txt", "local edit");
-  await turn.provision();
-  assert.equal(files.get("skills/source-helper/references/example.txt"), "local edit");
+  assert.equal(files.get("turn/s/t/skills/source-helper/references/example.txt"), "v2");
+  files.set("turn/s/t/skills/source-helper/references/example.txt", "local edit");
+  await turn.useSkill("source-helper", "SKILL.md");
+  assert.equal(files.get("turn/s/t/skills/source-helper/references/example.txt"), "local edit");
   resolution.skill!.pack = { packId: "pack", commit: "c", upstreamName: "source-helper" };
   resolution.screenedBundles = [
     { packId: "pack", commit: "c", hash: "pack-hash", files: [{ path: "lib.txt", content: "PACK_RESOURCE" }] },
@@ -173,25 +194,26 @@ test("a source-only read avoids sandbox work and a subsequent asset request mate
   const beforeResource = new Map(files);
   await turn.provisionResource("resource-1");
   assert.deepEqual(files, beforeResource);
-  await turn.ensureSkillTree(".packs/pack", "resource-1");
+  const onResource = await turn.useSkill("source-helper", "SKILL.md", "resource-1");
+  assert.equal(onResource.packDir, "turn/s/t/skills/.packs/pack");
   assert.deepEqual(sandboxIds, [undefined, "resource-1"]);
-  assert.equal(files.get("skills/.packs/pack/lib.txt"), "PACK_RESOURCE");
+  assert.equal(files.get("turn/s/t/skills/.packs/pack/lib.txt"), "PACK_RESOURCE");
   assert.equal(
-    [...files.keys()].some((path) => path.startsWith("skills/unrelated/")),
+    [...files.keys()].some((path) => path.includes("/unrelated/")),
     false,
   );
 });
 
-test("pack assets remain readable and executable on later turns after source-only reads", async (t) => {
+test("pack assets run from the turn directory and vanish with it", async (t) => {
   const { computeBundleHash } = await import("../src/skills/skill-bundle-store.ts");
   const b = await fixture(t);
   const skill = await b.publish("personal:U1", "PACK_BODY", "source-pack");
   const files = [{ path: "example.sh", content: "printf PACK_ASSET" }];
   await b.skillBundles.put({ packId: "source-pack", commit: "c", files, hash: computeBundleHash(files) });
-  assert.match(await b.turn("!read skill://source-helper/SKILL.md"), /skills\/\.packs\/source-pack/);
-  assert.equal(b.provisions(), 0);
-  assert.equal(await b.turn("!run sh skills/.packs/source-pack/example.sh"), "PACK_ASSET");
-  assert.equal(await b.turn("!read skills/.packs/source-pack/example.sh"), "printf PACK_ASSET");
+  assert.match(await b.turn("!skill source-helper"), /skills\/\.packs\/source-pack/);
+  assert.equal(b.provisions(), 1);
+  assert.equal(await b.turn("!skill-run source-helper sh {dir}/../.packs/source-pack/example.sh"), "PACK_ASSET");
+  assert.equal(await b.turn("!run find . -name example.sh | wc -l | tr -d ' '"), "0");
   await b.skills.archive(skill.id);
-  assert.match(await b.turn("!read skills/.packs/source-pack/example.sh"), /no file/);
+  assert.match(await b.turn("!skill source-helper"), /no skill file/);
 });

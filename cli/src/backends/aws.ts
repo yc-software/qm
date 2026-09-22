@@ -3484,12 +3484,13 @@ export async function awsSetBackgroundWork(
   configDir: string,
   enabled: boolean,
   candidatePath?: string,
-): Promise<void> {
+  expectedOwnership?: Pick<BackgroundWorkStatus, "generation" | "lastRequestId">,
+): Promise<BackgroundWorkStatus | undefined> {
   const { aws, workloads } = awsTopology(config, configDir);
   if (!workloads.includes("core")) throw new CliError("background work requires the core workload");
   const candidate = candidatePath ? releaseCandidate(config, candidatePath) : undefined;
   assertAwsCallerAccount(aws);
-  await withAwsLease(aws, async () => {
+  const confirmed = await withAwsLease(aws, async () => {
     const current = currentDeploymentManifest(aws);
     if (!current) throw new CliError("background work requires a recorded deployment");
     const states = describedServices(config, workloads);
@@ -3532,26 +3533,35 @@ export async function awsSetBackgroundWork(
       const cohort = await awsBackgroundCohort(config, configDir, candidatePath);
       const transport = awsBackgroundWorkTransport(config);
       let status = await readBackgroundWork(transport, cohort.deploymentId);
+      if (
+        expectedOwnership &&
+        (status.generation !== expectedOwnership.generation || status.lastRequestId !== expectedOwnership.lastRequestId)
+      )
+        throw new CliError("background ownership changed since promotion; refusing automatic compensation");
       if (!status.enabled)
         throw new CliError("explicitly bootstrap all background ownership cohorts before changing ownership");
       if (!enabled && status.desiredDeploymentId !== null && status.desiredDeploymentId !== cohort.deploymentId)
         throw new CliError("cannot disable background work on a different deployment's current owner");
       const desiredDeploymentId = enabled ? cohort.deploymentId : null;
       if (status.desiredDeploymentId !== desiredDeploymentId) {
-        status = await mutateBackgroundWork(
-          transport,
-          cohort.deploymentId,
-          backgroundWorkMutation(status.generation, desiredDeploymentId),
-        );
+        status = await mutateBackgroundWork(transport, cohort.deploymentId, {
+          ...backgroundWorkMutation(status.generation, desiredDeploymentId),
+          ...(expectedOwnership ? { expectedLastRequestId: expectedOwnership.lastRequestId } : {}),
+        });
       }
-      await awaitBackgroundWork(
+      return awaitBackgroundWork(
         transport,
         cohort.deploymentId,
-        { generation: status.generation, desiredDeploymentId, taskArns: enabled ? cohort.taskArns : [] },
+        {
+          generation: status.generation,
+          desiredDeploymentId,
+          taskArns: enabled ? cohort.taskArns : [],
+          lastRequestId: status.lastRequestId,
+        },
         { timeoutMs: envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000), pollMs: 1000 },
       );
-      return;
     }
+    if (expectedOwnership) throw new CliError("ownership preconditions require controlled background work");
     if (current.backgroundDeploymentId)
       throw new CliError("controlled background work cannot fall back to task replacement");
     const desired = taskDefinitionForBackgroundWork(coreTask!, enabled);
@@ -3614,6 +3624,7 @@ export async function awsSetBackgroundWork(
     }
   });
   ok(`background work ${enabled ? "enabled" : "disabled"}`);
+  return confirmed;
 }
 
 function envValues(configDir: string, path: string | undefined): Map<string, string> {

@@ -36,6 +36,11 @@ interface FakeMachine {
   home: string;
 }
 
+export interface InjectedFailure {
+  headers?: Record<string, string>;
+  match?: (call: { method: string; path: string }) => boolean;
+}
+
 interface CreateBody {
   name?: string | null;
   ephemeral?: boolean;
@@ -52,6 +57,7 @@ export interface FakeSmolmachines {
   names(): string[];
   machine(name: string): FakeMachineView | null;
   stop(name: string): void;
+  failNext(status: number, opts?: InjectedFailure): void;
   fail(name: string, reason: string): void;
   notReadyFor(name: string, gets: number): void;
   deleteBehindCore(name: string): void;
@@ -68,6 +74,7 @@ export function installFakeSmolmachines(): FakeSmolmachines {
   const execScripts: string[] = [];
   const calls: SmolCall[] = [];
   let nextId = 1;
+  const injected: Array<InjectedFailure & { status: number }> = [];
 
   const byName = (name: string): FakeMachine | undefined => [...machines.values()].find((m) => m.name === name);
 
@@ -158,6 +165,11 @@ export function installFakeSmolmachines(): FakeSmolmachines {
     const method = init?.method ?? "GET";
     const call: SmolCall = { method, path: url.pathname, ...(url.search ? { query: url.search.slice(1) } : {}) };
     calls.push(call);
+    const at = injected.findIndex((f) => !f.match || f.match({ method, path: url.pathname }));
+    if (at >= 0) {
+      const [next] = injected.splice(at, 1);
+      return new Response(`injected ${next!.status}`, { status: next!.status, headers: next!.headers ?? {} });
+    }
     if (url.pathname === "/v1/machines" && method === "GET") {
       return Response.json([...machines.values()].map(info));
     }
@@ -244,6 +256,9 @@ export function installFakeSmolmachines(): FakeSmolmachines {
       const m = byName(name);
       if (m) m.state = "stopped";
     },
+    failNext: (status, opts = {}) => {
+      injected.push({ status, ...opts });
+    },
     fail: (name, reason) => {
       const m = byName(name);
       if (!m) return;
@@ -266,6 +281,7 @@ export function installFakeSmolmachines(): FakeSmolmachines {
       machines.clear();
       execScripts.length = 0;
       calls.length = 0;
+      injected.length = 0;
     },
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };

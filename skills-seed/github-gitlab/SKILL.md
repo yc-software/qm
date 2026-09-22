@@ -23,7 +23,7 @@ a write, ask. Do not infer permission from a login merely being present on the c
   provider account (for example, `gh api user --jq .login`) and the Git transport's auth
   configuration; a CLI API identity alone does not prove which account Git will use.
 - **Shared org credential:** if listed in the prompt, select its slug and use the
-  core-hosted smart HTTP remote in `skill://use-shared-credential/SKILL.md`. This uses
+  core-hosted smart HTTP remote in the `use-shared-credential` skill. This uses
   the configured shared account, even when a personal OAuth connector is live.
   Its name is an admin label, not a verified upstream username.
 - **Connected app:** use only advertised capabilities. API access does not by itself

@@ -258,10 +258,6 @@ function isSentThreadMessage(message: unknown): message is SentThreadMessage {
   );
 }
 
-export function isSentMailEmpty(): boolean {
-  return loaded && !loading && !error && messages.length === 0;
-}
-
 export function isSentMailLoading(): boolean {
   return loading;
 }

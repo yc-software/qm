@@ -2,8 +2,6 @@
 
 A multiplayer agent harness for work. In Slack and on the web.
 
-![The QM web UI: a conversation about Victor Hugo, with personal sessions and workspace tools in the sidebar](./docs/screenshots/web-ui-hero.png)
-
 ## Setup
 
 Tell your coding agent of choice `Let's deploy https://github.com/yc-software/qm`. From here, it should follow the deployment guide in this repo.
@@ -241,6 +239,7 @@ upstream source history to merge.
 - [`docs/getting-started.md`](./docs/getting-started.md) — first run, end to end
 - [`cli/README.md`](./cli/README.md) — the `qm` CLI and the deployment directory contract
 - [`docs/deploy-directory.md`](./docs/deploy-directory.md) — the deployment directory in full
+- [`docs/principal-links.md`](./docs/principal-links.md) — one person, several sign-ins: linking principals
 - [`docs/porter.md`](./docs/porter.md) — running qm on Porter
 - [`docs/superserve.md`](./docs/superserve.md) — using Superserve for agent sandboxes
 - [`.env.example`](./.env.example) — every knob, documented in place

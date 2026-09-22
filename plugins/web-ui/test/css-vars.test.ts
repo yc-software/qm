@@ -35,22 +35,57 @@ test("colored session actions keep their row hue at rest and on hover", () => {
   );
 });
 
-test("conversation colors use the refined spectrum palette on every list surface", () => {
+test("conversation colors use solid fills from the refined spectrum palette on every list surface", () => {
   assert.match(tsSource, /const SESSION_COLORS = \["#f43f5e", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6", "#ec4899"\]/);
   assert.equal(tsSource.match(/const color = displaySessionColor\(s\.color\);/g)?.length, 2);
   assert.match(tsSource, /const current = displaySessionColor\(s\.color\);/);
   assert.doesNotMatch(tsSource, /#d2664d|#b98a52|#7d884f|#5f8b83|#527d99|#8b5d52/);
   assert.match(shellCss, /conic-gradient\(#f43f5e, #f59e0b, #10b981, #3b82f6, #8b5cf6, #ec4899, #f43f5e\)/);
-  assert.match(shellCss, /\.session-row\.colored \.session \{[\s\S]*?linear-gradient\(/);
+  for (const rule of [
+    shellCss.match(/\.session-row\.colored \.session \{[^}]+\}/)?.[0] ?? "",
+    shellCss.match(
+      /\.session-row\.colored \.session:hover,\s*\.session-row\.colored\.menu-open \.session \{[^}]+\}/,
+    )?.[0] ?? "",
+    shellCss.match(/\.session-row\.colored\.active \.session \{[^}]+\}/)?.[0] ?? "",
+    shellCss.match(/\.list-row\.chat-row\.colored \{[^}]+\}/)?.[0] ?? "",
+    shellCss.match(/\.list-row\.chat-row\.colored:hover \{[^}]+\}/)?.[0] ?? "",
+  ]) {
+    assert.match(rule, /background:\s*color-mix\(/);
+    assert.doesNotMatch(rule, /gradient\(/);
+  }
   assert.doesNotMatch(shellCss, /\.session-row\.colored \.session::before/);
 });
 
-test("pinned conversations use the same header and child alignment as project conversations", () => {
+test("painted sidebar backgrounds align without moving conversation text", () => {
+  const extended =
+    shellCss.match(
+      /\.session-row:is\(\.colored, \.active, \.menu-open, \.selected, \.read-only, :hover\) \.session \{[^}]+\}/,
+    )?.[0] ?? "";
+  assert.match(extended, /width:\s*calc\(100% \+ 4px\);/);
+  assert.match(extended, /margin-left:\s*-4px;/);
+  assert.match(extended, /padding-left:\s*15px;/);
+  const nested =
+    shellCss.match(
+      /\.recent-project-children \.session-row:is\(\.colored, \.active, \.menu-open, \.selected, \.read-only, :hover\) \.session,[\s\S]*?\{[^}]+\}/,
+    )?.[0] ?? "";
+  assert.match(
+    nested,
+    /\.archived-children \.session-row:is\(\.colored, \.active, \.menu-open, \.selected, \.read-only, :hover\) \.session,/,
+  );
+  assert.match(
+    nested,
+    /\.pinned-children \.session-row:is\(\.colored, \.active, \.menu-open, \.selected, \.read-only, :hover\) \.session \{/,
+  );
+  assert.match(nested, /padding-left:\s*10px;/);
+});
+
+test("pinned conversations align with project conversations without a header-to-child gap", () => {
   assert.match(tsSource, /class="pinned-head-glyph"/);
   assert.match(tsSource, /class="pinned-children"/);
+  assert.match(shellCss, /\.recent-project \{[\s\S]*?margin:\s*3px 0 5px 4px;/);
   const header = shellCss.match(/\.recents-group\.pinned-head \{[^}]+\}/)?.[0] ?? "";
   assert.match(header, /min-height:\s*30px;/);
-  assert.match(header, /margin:\s*3px 0 5px 4px;/);
+  assert.match(header, /margin:\s*3px 0 0 4px;/);
   assert.match(header, /padding:\s*4px 3px 4px 2px;/);
   assert.match(header, /font-size:\s*12\.5px;/);
   assert.match(shellCss, /\.pinned-head-glyph \{[\s\S]*?flex: 0 0 14px;/);

@@ -108,7 +108,7 @@ test("connector onboarding is governed by the live admin-configured list", () =>
     assert.doesNotMatch(skill, /Slack and Google first|Slack, Google, Notion, Linear, and GitHub/);
   }
   for (const skill of [onboarding, connectApps]) {
-    assert.match(skill, /skill:\/\/composio\/SKILL\.md/);
+    assert.match(skill, /composio`? skill/);
     assert.match(skill, /never switch credentials to evade a denial/i);
     assert.doesNotMatch(skill, /If it says none are enabled, skip|offer none when that list is/);
   }
