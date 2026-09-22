@@ -56,7 +56,7 @@ import {
   json,
   escapeHtml,
   sendBuffered,
-  serveEmojiFavicon,
+  serveFavicon,
   readBody,
   PayloadTooLargeError,
 } from "../../chassis/src/http.ts";
@@ -984,7 +984,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
 
   if (method === "GET" && (pathname === "/favicon.ico" || pathname === "/favicon.svg")) {
-    return serveEmojiFavicon(res, process.env.PORTAL_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F", "max-age=86400");
+    return serveFavicon(
+      res,
+      {
+        svg: process.env.PORTAL_FAVICON_SVG,
+        emoji: process.env.PORTAL_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F",
+      },
+      "max-age=86400",
+    );
   }
 
   if (pathname === "/auth/login" && method === "GET") return authLogin(req, res, url);

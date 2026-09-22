@@ -27,7 +27,7 @@ import {
   cookie,
   PayloadTooLargeError,
   sendBuffered,
-  serveEmojiFavicon,
+  serveFavicon,
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
@@ -107,7 +107,14 @@ async function serveWebManifest(res: ServerResponse): Promise<void> {
     orientation: "any",
     background_color: "#ffffff",
     theme_color: "#ffffff",
-    icons: [{ src: "/brand-mark.svg", sizes: "any", type: "image/svg+xml", purpose: "any maskable" }],
+    icons: [
+      {
+        src: process.env.WEB_UI_FAVICON_SVG ? "/favicon.svg" : "/brand-mark.svg",
+        sizes: "any",
+        type: "image/svg+xml",
+        purpose: "any maskable",
+      },
+    ],
   };
   res.writeHead(200, { "content-type": "application/manifest+json; charset=utf-8", "cache-control": "no-cache" });
   res.end(JSON.stringify(manifest));
@@ -3035,7 +3042,14 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
   if (method === "GET" && path === "/healthz") return json(res, 200, { ok: true });
   if (method === "GET" && path === "/favicon.svg") {
-    return serveEmojiFavicon(res, process.env.WEB_UI_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F", "no-cache");
+    return serveFavicon(
+      res,
+      {
+        svg: process.env.WEB_UI_FAVICON_SVG,
+        emoji: process.env.WEB_UI_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F",
+      },
+      "no-cache",
+    );
   }
   if (method === "GET" && path === "/manifest.webmanifest") return serveWebManifest(res);
 
