@@ -1890,6 +1890,7 @@ export function buildApp(
       orgScopeId: orgScope,
       loops: loopStore,
       slackInstallation,
+      connectorTokens,
       ...(config.buildSha ? { buildSha: config.buildSha } : {}),
       modelAuthEnv: async () => ({
         ...(config.anthropicApiKey ? { ANTHROPIC_API_KEY: config.anthropicApiKey } : {}),

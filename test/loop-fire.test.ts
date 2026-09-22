@@ -9,7 +9,7 @@ import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { FACTORY_LOOP_SURFACE, type FactoryEffectsDeps } from "../src/loops/factory/effects.ts";
 import { FACTORY_REQUIRED_TOOLS } from "../src/loops/factory/preflight.ts";
-import { FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
+import { FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
 import { FACTORY_WRAPPER } from "../src/loops/factory/process-work.ts";
 import type { FactoryConfig } from "../src/resolution/config-store.ts";
 import type { ServiceCredentialReader } from "../src/credentials/keychain.ts";
@@ -568,10 +568,9 @@ const HEAD_SHA = "1".repeat(40);
 const LINEAR_KEY = "lin_FAKE_KEY";
 const GITHUB_TOKEN = "ghp_FAKE_TOKEN";
 const ANTHROPIC_KEY = "sk-ant-FAKE_KEY";
-const SECRET_BY_SLUG: Record<string, string> = {
-  [FACTORY_LINEAR_SLUG]: LINEAR_KEY,
-  [FACTORY_GITHUB_SLUG]: GITHUB_TOKEN,
-};
+const FACTORY_LOOP_OWNER = base.owner;
+const FACTORY_REVIEWER = "amy";
+const SECRET_BY_SLUG: Record<string, string> = { [FACTORY_LINEAR_SLUG]: LINEAR_KEY };
 const WRAPPER_STDOUT = `working\nBRANCH:${FACTORY_BRANCH}\nMR:42\n`;
 const ALREADY_FIXED_STDOUT = "ALREADY_FIXED:true\nALREADY_FIXED_EVIDENCE:fixed by #40\n";
 
@@ -781,10 +780,35 @@ interface FactoryFake {
   setConfig: (next: FactoryConfig | null) => void;
 }
 
+function factoryConnectorTokens(
+  tokens: (string | null)[] = [GITHUB_TOKEN],
+  grantedTo = FACTORY_LOOP_OWNER,
+): {
+  connectorTokens: FactoryEffectsDeps["connectorTokens"];
+  principals: string[];
+} {
+  const principals: string[] = [];
+  let resolved = 0;
+  return {
+    principals,
+    connectorTokens: {
+      connectorAccessToken: async (host, principalId, accountType) => {
+        if (host !== "api.github.com") return null;
+        principals.push(principalId);
+        if (accountType !== undefined || principalId !== grantedTo) return null;
+        const token = tokens[Math.min(resolved, tokens.length - 1)] ?? null;
+        resolved += 1;
+        return token;
+      },
+    },
+  };
+}
+
 function factoryFake(
   over: {
     config?: FactoryConfig | null;
     credentials?: ServiceCredentialReader;
+    connectorTokens?: FactoryEffectsDeps["connectorTokens"];
     sandbox?: FactorySandbox;
     fetch?: FactoryFetch;
   } = {},
@@ -807,6 +831,7 @@ function factoryFake(
       orgScopeId: scopeId("org", "acme"),
       loops,
       slackInstallation: { get: async () => null },
+      connectorTokens: over.connectorTokens ?? factoryConnectorTokens().connectorTokens,
       fetch: fetched.fetch,
       pausePollMs: 1,
       modelAuthEnv: async () => ({ ANTHROPIC_API_KEY: ANTHROPIC_KEY }),
@@ -950,8 +975,13 @@ test("factory surface: a missing config or credential fails the fire before the 
     ["config", /factory_config_missing/, { config: null }],
     [
       "credential",
-      /factory_credentials_missing: factory-github/,
-      { credentials: factoryCredentials([FACTORY_GITHUB_SLUG]) },
+      /factory_credentials_missing: factory-linear/,
+      { credentials: factoryCredentials([FACTORY_LINEAR_SLUG]) },
+    ],
+    [
+      "GitHub connector",
+      /github: the loop owner has not connected GitHub/,
+      { connectorTokens: factoryConnectorTokens([null]).connectorTokens },
     ],
   ];
   for (const [name, expected, over] of cases) {
@@ -1053,6 +1083,57 @@ test("factory surface: re-deciding an already-shipped pull request reports every
   assert.equal(shipped?.shipResult?.note, "undraft=false, linear-state=false, linear-label=false");
   const sent = fake.fetch.calls.slice(before);
   assert.deepEqual(traffic(sent), [`GET ${GH_REPO}/pulls/42`, `POST ${LINEAR_URL}`]);
+});
+
+const forgeAuthScenarios: [
+  string,
+  (s: ReturnType<typeof service>, loopId: string, outputId: string) => Promise<unknown>,
+][] = [
+  ["shipping an open_pr output", (s, loopId, outputId) => s.fire.shipOutput(loopId, outputId, FACTORY_REVIEWER)],
+  [
+    "returning an open_pr output",
+    (s, loopId, outputId) => s.fire.returnOutput(loopId, outputId, FACTORY_REVIEWER, "flaky"),
+  ],
+];
+
+for (const [label, decide] of forgeAuthScenarios) {
+  test(`factory surface: ${label} authenticates to the forge with the loop owner's connector token, not the deciding reviewer's`, async () => {
+    const connector = factoryConnectorTokens();
+    const fake = factoryFake({
+      connectorTokens: connector.connectorTokens,
+      fetch: factoryFetch({ issue: { name: "In Review", type: "started" } }),
+    });
+    const { s, loop, output, before } = await heldFactoryOutput(fake);
+
+    await decide(s, loop.id, output.id);
+
+    const forgeCalls = fake.fetch.calls.slice(before).filter((call) => call.url !== LINEAR_URL);
+    assert.ok(forgeCalls.length > 0, "the decision took no forge request");
+    for (const call of forgeCalls)
+      assert.equal(call.headers.get("Authorization"), `Bearer ${GITHUB_TOKEN}`, `${call.method} ${call.url}`);
+    assert.deepEqual([...new Set(connector.principals)], [FACTORY_LOOP_OWNER]);
+  });
+}
+
+test("factory surface: an owner who disconnects GitHub between work and ship fails the ship and leaves the output ready", async () => {
+  let connected = true;
+  const fake = factoryFake({
+    connectorTokens: {
+      connectorAccessToken: async (host, _principalId, accountType) =>
+        host === "api.github.com" && accountType === undefined && connected ? GITHUB_TOKEN : null,
+    },
+  });
+  const { s, loop, output, before } = await heldFactoryOutput(fake);
+  connected = false;
+
+  await assert.rejects(
+    s.fire.shipOutput(loop.id, output.id, FACTORY_REVIEWER),
+    /github: the loop owner has not connected GitHub/,
+  );
+
+  assert.equal((await s.outputs.get(output.id))?.state, "ready");
+  assert.equal((await s.items.get(output.itemId))?.status, "ready");
+  assert.equal(fake.fetch.calls.length, before);
 });
 
 test("factory surface: a forge failure while shipping releases the claim and re-throws", async () => {

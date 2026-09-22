@@ -2,18 +2,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { DecryptedServiceCredential, ServiceCredentialReader } from "../src/credentials/keychain.ts";
 import {
-  FACTORY_GITHUB_SLUG,
   FACTORY_LINEAR_SLUG,
   readFactoryCredentials,
   type FactoryCredentials,
 } from "../src/loops/factory/credentials.ts";
 
 const LINEAR_SECRET = "lin_FAKE_SECRET_1";
-const GITHUB_SECRET = "ghp_FAKE_SECRET_2";
+const PASTED_GITHUB_SECRET = "ghp_FAKE_PASTED_SECRET_2";
 const PASTED_SLACK_SECRET = "xoxb-FAKE_PASTED_SECRET_4";
 const SECRET_BY_SLUG: Record<string, string> = {
   [FACTORY_LINEAR_SLUG]: LINEAR_SECRET,
-  [FACTORY_GITHUB_SLUG]: GITHUB_SECRET,
+  "factory-github": PASTED_GITHUB_SECRET,
   "factory-slack": PASTED_SLACK_SECRET,
 };
 const ORG = "org:acme";
@@ -48,21 +47,17 @@ function fakeReader(records: DecryptedServiceCredential[]): {
   };
 }
 
-test("only factory-linear and factory-github are read, so a leftover factory-slack record is never consulted", async () => {
+test("only factory-linear is read, so leftover factory-github and factory-slack records are never consulted", async () => {
   const { reader, calls } = fakeReader([
     record(FACTORY_LINEAR_SLUG, { secret: `  ${LINEAR_SECRET}\n`, delivery: "env", envKey: "FACTORY_LINEAR_ENV_KEY" }),
-    record(FACTORY_GITHUB_SLUG),
+    record("factory-github"),
     record("factory-slack"),
   ]);
 
   const result = await readFactoryCredentials(reader, ORG);
 
-  assert.deepEqual(result, { ok: true, linearApiKey: LINEAR_SECRET, githubToken: GITHUB_SECRET });
-  assert.deepEqual(calls, [
-    [ORG, FACTORY_LINEAR_SLUG],
-    [ORG, FACTORY_GITHUB_SLUG],
-  ]);
-  assert.equal(JSON.stringify(result).includes(PASTED_SLACK_SECRET), false);
+  assert.deepEqual(result, { ok: true, linearApiKey: LINEAR_SECRET });
+  assert.deepEqual(calls, [[ORG, FACTORY_LINEAR_SLUG]]);
 });
 
 const unusable: { label: string; over: Partial<DecryptedServiceCredential> | null }[] = [
@@ -73,29 +68,18 @@ const unusable: { label: string; over: Partial<DecryptedServiceCredential> | nul
 ];
 
 for (const { label, over } of unusable) {
-  test(`${label} credential is reported missing by slug, alone or alongside the others`, async () => {
-    const slugs = [FACTORY_LINEAR_SLUG, FACTORY_GITHUB_SLUG];
-    for (const broken of slugs) {
-      const healthy = slugs.filter((slug) => slug !== broken).map((slug) => record(slug));
-      const { reader } = fakeReader(over ? [record(broken, over), ...healthy] : healthy);
+  test(`${label} factory-linear credential is reported missing by slug`, async () => {
+    const { reader } = fakeReader(over ? [record(FACTORY_LINEAR_SLUG, over)] : []);
 
-      const result = await readFactoryCredentials(reader, ORG);
+    const result = await readFactoryCredentials(reader, ORG);
 
-      assert.deepEqual(result, { ok: false, missing: [broken] });
-      assert.deepEqual(Object.keys(result), ["ok", "missing"]);
-    }
-
-    const { reader } = fakeReader(over ? slugs.map((slug) => record(slug, over)) : []);
-
-    assert.deepEqual(await readFactoryCredentials(reader, ORG), { ok: false, missing: slugs });
+    assert.deepEqual(result, { ok: false, missing: [FACTORY_LINEAR_SLUG] });
+    assert.deepEqual(Object.keys(result), ["ok", "missing"]);
   });
 }
 
-test("every credential unusable names every slug and carries no secret material", async () => {
-  const { reader } = fakeReader([
-    record(FACTORY_LINEAR_SLUG, { enabled: false }),
-    record(FACTORY_GITHUB_SLUG, { enabled: false }),
-  ]);
+test("an unusable credential's secret never reaches the failure result or the console", async () => {
+  const { reader } = fakeReader([record(FACTORY_LINEAR_SLUG, { enabled: false })]);
   const levels = ["log", "warn", "error", "info", "debug"] as const;
   const original = levels.map((level) => [level, console[level]] as const);
   const logged: string[] = [];
@@ -111,8 +95,7 @@ test("every credential unusable names every slug and carries no secret material"
     for (const [level, fn] of original) console[level] = fn;
   }
 
-  assert.deepEqual(result, { ok: false, missing: [FACTORY_LINEAR_SLUG, FACTORY_GITHUB_SLUG] });
-  const serialized = JSON.stringify(result);
-  assert.ok(!serialized.includes(LINEAR_SECRET) && !serialized.includes(GITHUB_SECRET), "result carries a secret");
+  assert.deepEqual(result, { ok: false, missing: [FACTORY_LINEAR_SLUG] });
+  assert.ok(!JSON.stringify(result).includes(LINEAR_SECRET), "result carries a secret");
   assert.deepEqual(logged, []);
 });

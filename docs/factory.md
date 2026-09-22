@@ -7,14 +7,20 @@ converged, and ships it by marking it ready and moving the ticket.
 
 ## Prerequisites
 
-Two org-scoped service credentials in the keychain. The slugs are fixed.
+One org-scoped service credential in the keychain. The slug is fixed.
 
 | Slug             | Holds            | Scope it needs                                                     |
 | ---------------- | ---------------- | ------------------------------------------------------------------ |
 | `factory-linear` | A Linear API key | Read and write issues, comments, and states on the configured team |
-| `factory-github` | A GitHub token   | Push, pull requests, and Actions re-runs on the publish project    |
 
 A missing or disabled credential fails the fire before any sandbox work, naming the slug.
+
+GitHub access is not a pasted credential. Every fire resolves the loop owner's GitHub connector
+token for `api.github.com`, so an org admin must have registered the GitHub OAuth client and the
+loop owner — the admin who applied the config, see "Ownership" — must have connected GitHub once
+through the connector flow. Without that grant the fire fails before any sandbox work with
+`github: the loop owner has not connected GitHub`. The connector's `repo` and `read:org` scopes
+are what the run can reach on the forge.
 
 Model calls made by `claude` inside the sandbox use core's own Anthropic configuration —
 `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, or the
@@ -42,8 +48,9 @@ delete the loop from the Loops page to stop it.
 Apply also gives the loop a cron that fires it every five minutes, so tickets are picked up
 without anyone asking. Applying again reuses that cron. Fire it early from the Loops page, or
 through `POST /v1/loops/:id/fire`. Three consecutive failed fires quarantine the loop, which on a
-five-minute cron is fifteen minutes: put the two credentials in the keychain before Apply, and
-re-enable a quarantined loop from the Loops page. A fire that lands while a run is still working
+five-minute cron is fifteen minutes: put the `factory-linear` credential in the keychain and
+connect the loop owner's GitHub before Apply, and re-enable a quarantined loop from the Loops
+page. A fire that lands while a run is still working
 claims nothing and records `deferred: <ticket> is still in progress` — the factory works one
 ticket at a time, and the queued tickets are picked up by the first fire after the run ends.
 
@@ -66,10 +73,11 @@ ticket at a time, and the queued tickets are picked up by the first fire after t
 
 The wrapper runs as root inside the sandbox with `IS_SANDBOX=1`, which lets `claude` run with
 `--dangerously-skip-permissions`. The model therefore executes tool calls with no permission gate,
-and its process environment holds the two credentials above plus core's model credential. The
-blast radius is the sandbox plus whatever those tokens can reach: the configured Linear team, the
-publish project, and core's Anthropic account.
-Scope the tokens accordingly. Admin-supplied commands in the config
+and its process environment holds the `factory-linear` key, the loop owner's GitHub connector
+token, and core's model credential. The blast radius is the sandbox plus whatever those tokens can
+reach: the configured Linear team, everything the owner's GitHub grant reaches under the
+connector's `repo` and `read:org` scopes, and core's Anthropic account.
+Scope the Linear key accordingly. Admin-supplied commands in the config
 also run in that environment, so the admin console is the trust boundary.
 
 Secrets never appear in a command string or in the run's recorded reason. The bootstrap

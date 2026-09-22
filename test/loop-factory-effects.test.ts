@@ -16,7 +16,7 @@ import {
   factorySessionIdFor,
 } from "../src/loops/factory/effects.ts";
 import { FACTORY_REQUIRED_TOOLS } from "../src/loops/factory/preflight.ts";
-import { FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
+import { FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
 import { FACTORY_WRAPPER, renderFactoryEnv } from "../src/loops/factory/process-work.ts";
 import { shq } from "../src/util/shell.ts";
 import { LINEAR_GRAPHQL_URL } from "../src/loops/factory/linear-intake.ts";
@@ -35,13 +35,15 @@ import type { Loop, LoopItem, LoopState, WorkspaceLayer } from "../src/types.ts"
 
 const ORG_SCOPE = "org:acme";
 const LINEAR_KEY = "lin_FAKE_KEY";
-const GITHUB_TOKEN = "ghp_FAKE_TOKEN";
+const GITHUB_TOKEN = "ghp_FAKE_CONNECTOR_TOKEN";
+const PASTED_GITHUB_TOKEN = "ghp_FAKE_PASTED_FACTORY_TOKEN";
+const GITHUB_HOST = "api.github.com";
 const ANTHROPIC_KEY = "sk-ant-FAKE_KEY";
 const INSTALLATION_TOKEN = "xoxb-FAKE_ORG_INSTALLATION_TOKEN";
 const PASTED_SLACK_TOKEN = "xoxb-FAKE_PASTED_FACTORY_TOKEN";
 const SECRET_BY_SLUG: Record<string, string> = {
   [FACTORY_LINEAR_SLUG]: LINEAR_KEY,
-  [FACTORY_GITHUB_SLUG]: GITHUB_TOKEN,
+  "factory-github": PASTED_GITHUB_TOKEN,
   "factory-slack": PASTED_SLACK_TOKEN,
 };
 const REPO_DIR = "/workspace/repo";
@@ -300,8 +302,40 @@ function fakeCredentials(records: (DecryptedServiceCredential | null)[]): Servic
   return { getServiceCredentialSecret: async (_org, slug) => bySlug.get(slug) ?? null };
 }
 
-const healthyCredentials = (): ServiceCredentialReader =>
-  fakeCredentials([credentialRecord(FACTORY_LINEAR_SLUG), credentialRecord(FACTORY_GITHUB_SLUG)]);
+const healthyCredentials = (): ServiceCredentialReader => fakeCredentials([credentialRecord(FACTORY_LINEAR_SLUG)]);
+
+const connectorSlot = (host: string, principalId: string, accountType?: string): string =>
+  `${host}|${principalId}|${accountType ?? "default"}`;
+
+function fakeConnectorTokens(slots: Record<string, string | string[]>): {
+  connectorTokens: FactoryEffectsDeps["connectorTokens"];
+  probes: string[];
+} {
+  const asked = new Map<string, number>();
+  const probes: string[] = [];
+  return {
+    probes,
+    connectorTokens: {
+      connectorAccessToken: async (host, principalId, accountType) => {
+        const key = connectorSlot(host, principalId, accountType);
+        probes.push(key);
+        const slot = slots[key];
+        if (slot === undefined) return null;
+        const values = Array.isArray(slot) ? slot : [slot];
+        const index = asked.get(key) ?? 0;
+        asked.set(key, index + 1);
+        return values[Math.min(index, values.length - 1)] ?? null;
+      },
+    },
+  };
+}
+
+const githubGrant = (
+  token: string | string[],
+  over: { principalId?: string; accountType?: string } = {},
+): Record<string, string | string[]> => ({
+  [connectorSlot(GITHUB_HOST, over.principalId ?? LOOP.owner, over.accountType)]: token,
+});
 
 function fakeLoops(states: (LoopState | null)[]): { loops: FactoryEffectsDeps["loops"]; ids: string[] } {
   const ids: string[] = [];
@@ -406,6 +440,7 @@ function deps(over: Partial<FactoryEffectsDeps> = {}): FactoryEffectsDeps {
     orgScopeId: ORG_SCOPE,
     loops: fakeLoops(["enabled"]).loops,
     slackInstallation: fakeSlackInstallation(null).slackInstallation,
+    connectorTokens: fakeConnectorTokens(githubGrant(GITHUB_TOKEN)).connectorTokens,
     modelAuthEnv: fakeModelAuthEnv({ ANTHROPIC_API_KEY: ANTHROPIC_KEY }).modelAuthEnv,
     ...over,
   };
@@ -490,8 +525,8 @@ test("a Linear failure propagates unwrapped out of enumerate", async () => {
   assert.equal(error.message, "linear_intake_failed: 500");
 });
 
-test("loadFactoryContext resolves the org config and both credentials", async () => {
-  const context: FactoryContext = await loadFactoryContext(deps());
+test("loadFactoryContext resolves the org config, the Linear key and the owner's connector token", async () => {
+  const context: FactoryContext = await loadFactoryContext(deps(), LOOP.owner);
   assert.deepEqual(context, {
     config: CONFIG,
     linearApiKey: LINEAR_KEY,
@@ -500,44 +535,45 @@ test("loadFactoryContext resolves the org config and both credentials", async ()
   });
 });
 
-test("a missing factory config fails every entry point before any sandbox or network call", async () => {
+test("a missing factory config fails every entry point before any sandbox, network or connector call", async () => {
   const fake = fakeSandbox();
   const fetched = fakeFetch([]);
-  const base = deps({ sandbox: fake.sandbox, config: fakeConfig(null).config, fetch: fetched.fetch });
+  const connector = fakeConnectorTokens(githubGrant(GITHUB_TOKEN));
+  const base = deps({
+    sandbox: fake.sandbox,
+    config: fakeConfig(null).config,
+    fetch: fetched.fetch,
+    connectorTokens: connector.connectorTokens,
+  });
   const effects = createFactoryLoopEffects(base);
 
-  for (const promise of [loadFactoryContext(base), effects.enumerate(LOOP), workedRunId(effects)]) {
+  for (const promise of [loadFactoryContext(base, LOOP.owner), effects.enumerate(LOOP), workedRunId(effects)]) {
     assert.equal((await rejection(promise)).message, "factory_config_missing");
   }
   assert.deepEqual(fake.calls, []);
   assert.equal(fetched.calls.length, 0);
+  assert.deepEqual(connector.probes, []);
 });
 
-test("missing credentials name every absent slug, linear first, without leaking a secret", async () => {
-  const fake = fakeSandbox();
-  const base = deps({
-    sandbox: fake.sandbox,
-    credentials: fakeCredentials([credentialRecord(FACTORY_GITHUB_SLUG)]),
-  });
-  const effects = createFactoryLoopEffects(base);
-  for (const promise of [loadFactoryContext(base), effects.enumerate(LOOP), workedRunId(effects)]) {
-    const error = await rejection(promise);
-    assert.equal(error.message, `factory_credentials_missing: ${FACTORY_LINEAR_SLUG}`);
-    assert.equal(error.message.includes(GITHUB_TOKEN), false);
-  }
-
-  const both = createFactoryLoopEffects(
-    deps({
+test("an unusable factory-linear credential fails every entry point by slug, before the connector is consulted", async () => {
+  for (const records of [[], [credentialRecord(FACTORY_LINEAR_SLUG, { secret: "   " })]]) {
+    const fake = fakeSandbox();
+    const connector = fakeConnectorTokens(githubGrant(GITHUB_TOKEN));
+    const base = deps({
       sandbox: fake.sandbox,
-      credentials: fakeCredentials([
-        credentialRecord(FACTORY_LINEAR_SLUG, { secret: "   " }),
-        credentialRecord(FACTORY_GITHUB_SLUG, { enabled: false }),
-      ]),
-    }),
-  );
-  const error = await rejection(both.enumerate(LOOP));
-  assert.equal(error.message, `factory_credentials_missing: ${FACTORY_LINEAR_SLUG}, ${FACTORY_GITHUB_SLUG}`);
-  assert.deepEqual(fake.calls, []);
+      credentials: fakeCredentials(records),
+      connectorTokens: connector.connectorTokens,
+    });
+    const effects = createFactoryLoopEffects(base);
+
+    for (const promise of [loadFactoryContext(base, LOOP.owner), effects.enumerate(LOOP), workedRunId(effects)]) {
+      const error = await rejection(promise);
+      assert.equal(error.message, `factory_credentials_missing: ${FACTORY_LINEAR_SLUG}`);
+      assert.equal(error.message.includes(LINEAR_KEY), false);
+    }
+    assert.deepEqual(fake.calls, []);
+    assert.deepEqual(connector.probes, []);
+  }
 });
 
 test("work preflights on a warm-released handle, then runs the wrapper with the rendered env", async () => {
@@ -644,7 +680,7 @@ test("a model auth env with no credential key fails every entry point with the m
     });
     const effects = createFactoryLoopEffects(base);
 
-    for (const promise of [loadFactoryContext(base), effects.enumerate(LOOP), workedRunId(effects)]) {
+    for (const promise of [loadFactoryContext(base, LOOP.owner), effects.enumerate(LOOP), workedRunId(effects)]) {
       assert.equal(
         (await rejection(promise)).message,
         "model auth: core has no Anthropic credential configured",
@@ -656,16 +692,121 @@ test("a model auth env with no credential key fails every entry point with the m
   }
 });
 
-test("a deployment missing both its credentials and its model auth is told about the credentials first", async () => {
+test("a deployment missing its credential, its model auth and its GitHub grant is told about the credential first", async () => {
   const base = deps({
     credentials: fakeCredentials([]),
     modelAuthEnv: fakeModelAuthEnv({}).modelAuthEnv,
+    connectorTokens: fakeConnectorTokens({}).connectorTokens,
   });
 
   assert.equal(
-    (await rejection(loadFactoryContext(base))).message,
-    `factory_credentials_missing: ${FACTORY_LINEAR_SLUG}, ${FACTORY_GITHUB_SLUG}`,
+    (await rejection(loadFactoryContext(base, LOOP.owner))).message,
+    `factory_credentials_missing: ${FACTORY_LINEAR_SLUG}`,
   );
+});
+
+test("the sandbox's IO_GITHUB_TOKEN and the bootstrap git env are the owner's connector token, not a pasted credential", async () => {
+  const fake = fakeSandbox();
+  const connector = fakeConnectorTokens(githubGrant(GITHUB_TOKEN));
+  const effects = createFactoryLoopEffects(
+    deps({
+      sandbox: fake.sandbox,
+      credentials: fakeCredentials([credentialRecord(FACTORY_LINEAR_SLUG), credentialRecord("factory-github")]),
+      connectorTokens: connector.connectorTokens,
+    }),
+  );
+
+  await workedRunId(effects);
+
+  assert.ok(connector.probes.length > 0, "the connector store was never asked");
+  for (const probe of connector.probes)
+    assert.ok(probe.startsWith(`${GITHUB_HOST}|${LOOP.owner}|`), `asked for ${probe}`);
+  assert.equal(wrapperStart(fake.calls).opts?.env?.IO_GITHUB_TOKEN, GITHUB_TOKEN);
+  assert.equal(
+    bootstrapStarts(fake.calls)[0]?.opts?.env?.GIT_CONFIG_KEY_0,
+    `url.https://x-access-token:${GITHUB_TOKEN}@github.com/.insteadOf`,
+  );
+  for (const call of fake.calls) {
+    if (call.op !== "startProcess") continue;
+    for (const [key, value] of Object.entries(call.opts?.env ?? {}))
+      assert.equal(value.includes(PASTED_GITHUB_TOKEN), false, `${key} carried the pasted credential`);
+  }
+});
+
+const unconnectedGrants: [string, Record<string, string | string[]>][] = [
+  ["no GitHub grant at all", {}],
+  ["a whitespace-only access token", githubGrant("   ")],
+];
+
+for (const [label, slots] of unconnectedGrants) {
+  test(`a loop owner with ${label} fails every entry point before any sandbox or Linear call`, async () => {
+    const fake = fakeSandbox();
+    const fetched = fakeFetch([]);
+    const base = deps({
+      sandbox: fake.sandbox,
+      fetch: fetched.fetch,
+      connectorTokens: fakeConnectorTokens(slots).connectorTokens,
+    });
+    const effects = createFactoryLoopEffects(base);
+
+    for (const promise of [loadFactoryContext(base, LOOP.owner), effects.enumerate(LOOP), workedRunId(effects)]) {
+      assert.equal((await rejection(promise)).message, "github: the loop owner has not connected GitHub");
+    }
+    assert.deepEqual(fake.calls, []);
+    assert.equal(fetched.calls.length, 0);
+  });
+}
+
+test("an owner who connected GitHub under a personal or company account is resolved, not treated as disconnected", async () => {
+  const personal = fakeConnectorTokens(githubGrant("gho_PERSONAL", { accountType: "personal" }));
+  const personalContext = await loadFactoryContext(deps({ connectorTokens: personal.connectorTokens }), LOOP.owner);
+  assert.equal(personalContext.githubToken, "gho_PERSONAL");
+  assert.deepEqual(personal.probes, [connectorSlot(GITHUB_HOST, LOOP.owner, "personal")]);
+
+  const company = fakeConnectorTokens(githubGrant("gho_COMPANY", { accountType: "company" }));
+  const companyContext = await loadFactoryContext(deps({ connectorTokens: company.connectorTokens }), LOOP.owner);
+  assert.equal(companyContext.githubToken, "gho_COMPANY");
+  assert.deepEqual(company.probes, [
+    connectorSlot(GITHUB_HOST, LOOP.owner, "personal"),
+    connectorSlot(GITHUB_HOST, LOOP.owner),
+    connectorSlot(GITHUB_HOST, LOOP.owner, "company"),
+  ]);
+});
+
+test("the token is never cached, so a refreshed grant reaches the next run and the forge poll without a restart", async () => {
+  const fake = fakeSandbox();
+  const fetched = fakeFetch(convergedForge());
+  const effects = createFactoryLoopEffects(
+    deps({
+      sandbox: fake.sandbox,
+      fetch: fetched.fetch,
+      connectorTokens: fakeConnectorTokens(githubGrant(["gho_1", "gho_2", "gho_3"])).connectorTokens,
+    }),
+  );
+
+  await workedRunId(effects);
+  const runId = await workedRunId(effects, { ...ITEM, attempts: 1 });
+  await effects.evaluate({ loop: LOOP, item: ITEM, attempt: 1, runId });
+
+  assert.deepEqual(
+    wrapperEnvs(fake.calls).map((env) => env.IO_GITHUB_TOKEN),
+    ["gho_1", "gho_2"],
+  );
+  assert.equal(new Headers(fetched.calls[0]?.init?.headers).get("Authorization"), "Bearer gho_3");
+});
+
+test("resolution is keyed by the firing loop's owner, not by a fixed principal", async () => {
+  const otherOwner = "U2";
+  const connector = fakeConnectorTokens(githubGrant(GITHUB_TOKEN, { principalId: otherOwner }));
+  const base = deps({ connectorTokens: connector.connectorTokens });
+  const effects = createFactoryLoopEffects(base);
+
+  assert.equal((await loadFactoryContext(base, otherOwner)).githubToken, GITHUB_TOKEN);
+  assert.equal(
+    (await rejection(effects.work({ loop: LOOP, item: ITEM }))).message,
+    "github: the loop owner has not connected GitHub",
+  );
+  assert.ok(connector.probes.includes(connectorSlot(GITHUB_HOST, LOOP.owner)), connector.probes.join(", "));
 });
 
 test("the sandbox env carries exactly the model-auth and base-URL keys core resolved, and none of the other env it was handed", async () => {
@@ -725,7 +866,7 @@ test("a modelAuthEnv that rejects surfaces its own failure instead of being swal
     modelAuthEnv: () => Promise.reject(new Error("keychain_unavailable")),
   });
 
-  assert.equal((await rejection(loadFactoryContext(base))).message, "keychain_unavailable");
+  assert.equal((await rejection(loadFactoryContext(base, LOOP.owner))).message, "keychain_unavailable");
 });
 
 test("factorySessionIdFor is a stable positive integer per item and differs across items and loops", () => {
@@ -1153,11 +1294,7 @@ const SLACK_TS = "1730000000.000100";
 const SLACK_CONFIG: FactoryConfig = { ...CONFIG, slackChannel: SLACK_CHANNEL };
 
 const pastedSlackCredentials = (): ServiceCredentialReader =>
-  fakeCredentials([
-    credentialRecord(FACTORY_LINEAR_SLUG),
-    credentialRecord(FACTORY_GITHUB_SLUG),
-    credentialRecord("factory-slack"),
-  ]);
+  fakeCredentials([credentialRecord(FACTORY_LINEAR_SLUG), credentialRecord("factory-slack")]);
 
 interface SlackPost {
   url: string;
@@ -1378,7 +1515,7 @@ for (const [label, outcome] of unusableInstallations) {
     const effects = createFactoryLoopEffects(base);
 
     const { result, warnings } = await capturingWarnings(async () => ({
-      context: await loadFactoryContext(base),
+      context: await loadFactoryContext(base, LOOP.owner),
       runId: await workedRunId(effects),
     }));
 
