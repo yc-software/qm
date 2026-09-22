@@ -10105,7 +10105,7 @@
           fmtTime,
           relTime,
           labelRole,
-          confirm,
+          confirm: (message) => window.confirm(message),
           openWebUiAs,
           orgScope: "org:" + orgId,
           clearCache: () => dataCache.clear(),
@@ -10694,7 +10694,7 @@
           plural,
           stateToUrl,
           go,
-          confirm,
+          confirm: (message) => window.confirm(message),
           orgId,
           webUiAsButton,
           current: (principal) =>
