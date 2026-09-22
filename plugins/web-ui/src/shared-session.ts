@@ -5,6 +5,7 @@ import { Lock, ArrowUpRight, Check, Copy, File, FileImage } from "lucide";
 import { createTranscriptViewport } from "./transcript-viewport";
 import { decorateTextCodeBlocks } from "./text-code";
 import { markdown } from "./message-markdown";
+import { sharedImagePolicy } from "./shared-image-policy";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
 import { brandName, brandMark, chipBadge, icon, copyText } from "./ui";
 
@@ -21,6 +22,10 @@ interface SharedTranscript {
 installMarkdownSanitizer({ shared: true });
 const transcript: SharedTranscript | null = JSON.parse(document.getElementById("shared-transcript")!.textContent!);
 const base = (import.meta as unknown as { env: { BASE_URL: string } }).env.BASE_URL;
+const imagePolicy = document.createElement("meta");
+imagePolicy.httpEquiv = "Content-Security-Policy";
+imagePolicy.content = sharedImagePolicy(location.href, base);
+document.head.append(imagePolicy);
 render(
   html`
     <div class="shared-conversation">
