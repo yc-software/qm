@@ -12487,3 +12487,9 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   font-size: 11px;
   line-height: 1.5;
 }
+
+.message-row.linked-message {
+  outline: 2px solid var(--accent, #6474eb);
+  outline-offset: 6px;
+  border-radius: 8px;
+}

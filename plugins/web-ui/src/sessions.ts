@@ -1639,7 +1639,7 @@ export async function openSessionInto(
     }
     return;
   }
-  if (s.id === conv.state.sessionId) return;
+  if (s.id === conv.state.sessionId && !entriesPrefetch) return;
 
   refreshSessionsOnOpen();
 
@@ -1662,6 +1662,10 @@ export async function openSessionInto(
   if (tracked) {
     if (sessionsState.openingKey !== opening) return;
     sessionsState.openingKey = null;
+  }
+  if (!entriesPrefetch && conv.state.sessionId === s.id) {
+    renderList();
+    return;
   }
 
   if (!entriesRes) {

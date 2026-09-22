@@ -1,3 +1,4 @@
+import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
 import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgements } from "../slack/task-ack.ts";
 import { orgId as configOrgId } from "../config.ts";
 import type { StagedEnvelope } from "../slack/envelope-staging.ts";
@@ -88,6 +89,7 @@ interface DirectoryPush {
 }
 
 export interface SlackCoreClient {
+  keychainApprovals?: KeychainApprovals;
   taskAcknowledgements?: TaskAcknowledgements;
   externalSlackParticipants(): Promise<boolean>;
   internalMemberOverrides(): Promise<string[]>;
@@ -154,6 +156,7 @@ type AckPickInput = {
 export type { SurfaceContextRequest };
 
 export interface SlackCoreClientDeps {
+  keychainApprovals?: KeychainApprovals;
   taskAcknowledgements?: DurableMap<TaskAckState>;
   app: App;
   config: ScopedConfigStore;
@@ -228,6 +231,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
   });
 
   return {
+    ...(deps.keychainApprovals ? { keychainApprovals: deps.keychainApprovals } : {}),
     ...(deps.taskAcknowledgements
       ? { taskAcknowledgements: createTaskAcknowledgements(deps.taskAcknowledgements, lease, deps) }
       : {}),

@@ -18,6 +18,7 @@ export interface Harness {
 
 interface HarnessOptions {
   path: string;
+  messageLink?: boolean;
   transcriptStatus?: number;
   transcriptFailures?: number;
   holdTranscript?: boolean;
@@ -82,6 +83,9 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         scrollTop: 0,
       }),
     );
+  dom.window.HTMLElement.prototype.scrollIntoView = function () {
+    this.setAttribute("data-scrolled", "true");
+  };
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const realSetTimeout = globalThis.setTimeout;
   const realSetInterval = globalThis.setInterval;
@@ -133,6 +137,20 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       if (failuresLeft > 0) {
         failuresLeft--;
         return Response.json({ error: "not_found" }, { status: opts.transcriptStatus ?? 500 });
+      }
+      if (opts.messageLink) {
+        const older = path.includes("beforeSeq=");
+        const seqs = older ? [10, 11] : [80, 81];
+        return Response.json({
+          session: SESSION,
+          entries: seqs.map((seq) => ({
+            seq,
+            type: seq % 2 ? "assistant" : "user",
+            createdAt: Date.now(),
+            payload: { text: `Linked QA message ${seq}` },
+          })),
+          earlierEntries: older ? 0 : 80,
+        });
       }
       return Response.json({ session: SESSION, entries: [] });
     }

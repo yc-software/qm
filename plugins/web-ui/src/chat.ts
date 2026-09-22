@@ -1,3 +1,4 @@
+import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "./app-edit";
 import { isConnectionReturn } from "./connection-return";
 import "./onboarding-welcome";
@@ -42,6 +43,7 @@ import {
   FileText,
   Files,
   GitFork,
+  Link2,
   Maximize2,
   MessageSquare,
   Paperclip,
@@ -123,7 +125,7 @@ import {
 } from "./timeline";
 import "./slack-setup";
 import { connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
-import { deepLinkPath, UI_BASE } from "./deep-link";
+import { deepLinkPath, sessionLink, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
@@ -1609,7 +1611,11 @@ export function createChatSurface(
       const mail = (message as { subagentMail?: SubagentMailRef }).subagentMail;
       if (mail) {
         return html`
-          <article class="message-row subagent-mail-row" data-index=${index}>
+          <article
+            class="message-row subagent-mail-row"
+            data-index=${index}
+            data-entry-seqs=${messageEntrySeqs(message).join(" ")}
+          >
             ${subagentChip(mail.title, mail.sessionId)}
             <span class="subagent-mail-note">${SUBAGENT_MAIL_NOTES[mail.kind] ?? mail.kind.replace(/_/g, " ")}</span>
           </article>
@@ -1623,7 +1629,11 @@ export function createChatSurface(
       const deleted = Boolean((message as { deleted?: boolean }).deleted);
       const edited = !deleted && Boolean((message as { edited?: boolean }).edited);
       return html`
-        <article class="message-row user-row ${steered ? "steered-row" : ""}" data-index=${index}>
+        <article
+          class="message-row user-row ${steered ? "steered-row" : ""}"
+          data-index=${index}
+          data-entry-seqs=${messageEntrySeqs(message).join(" ")}
+        >
           ${steered ? html`<div class="steer-label">↪ steered the running task</div>` : nothing}
           ${speaker ? html`<div class="speaker-label">${speaker}</div>` : nothing}
           <div class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}">
@@ -1659,7 +1669,11 @@ export function createChatSurface(
         };
         label = labels[decision.scope ?? "once"] ?? "Approved";
       }
-      return html`<article class="message-row system-note-row" data-index=${index}>
+      return html`<article
+        class="message-row system-note-row"
+        data-index=${index}
+        data-entry-seqs=${messageEntrySeqs(message).join(" ")}
+      >
         <div class="system-note">${label}: <code>${decision.command}</code></div>
       </article>`;
     }
@@ -1667,7 +1681,11 @@ export function createChatSurface(
       const note = message as unknown as HistorySystemNote;
       const who = note.speaker ?? "The user";
       return html`
-        <article class="message-row system-note-row" data-index=${index}>
+        <article
+          class="message-row system-note-row"
+          data-index=${index}
+          data-entry-seqs=${messageEntrySeqs(message).join(" ")}
+        >
           <div class="system-note">
             ${
               note.action === "deleted"
@@ -1706,7 +1724,11 @@ export function createChatSurface(
         msg.content.some((chunk) => chunk.type === "thinking" && chunk.thinking.trim());
       if (!hasVisibleContent && msg.stopReason !== "error" && msg.stopReason !== "aborted") return nothing;
       return html`
-        <article class="message-row assistant-row ${isStreaming ? "streaming" : ""}" data-index=${index}>
+        <article
+          class="message-row assistant-row ${isStreaming ? "streaming" : ""}"
+          data-index=${index}
+          data-entry-seqs=${messageEntrySeqs(message).join(" ")}
+        >
           <div class="assistant-body">
             ${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
             ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
@@ -1746,6 +1768,19 @@ export function createChatSurface(
                 @click=${(e: Event) => void copyText(text, e.currentTarget as HTMLButtonElement)}
               >
                 ${icon(Copy, 13)}${icon(Check, 13)}
+              </button>`
+            : nothing
+        }
+        ${
+          chatState.sessionId && messageEntrySeqs(message).length
+            ? html`<button
+                class="msg-copy"
+                type="button"
+                ${tip("Copy message link")}
+                aria-label="Copy message link"
+                @click=${(e: Event) => void copyText(sessionLink(location.origin, UI_BASE, chatState.sessionId!, messageEntrySeqs(message)[0]), e.currentTarget as HTMLButtonElement)}
+              >
+                ${icon(Link2, 13)}${icon(Check, 13)}
               </button>`
             : nothing
         }
@@ -2894,6 +2929,22 @@ export function createChatSurface(
     mountReadOnly,
     mountLoadingPane,
     scrollToBottom,
+    revealEntry: (seq: number) => {
+      if (chatState.inheritedMessages.some((message) => messageEntrySeqs(message).includes(seq))) {
+        chatState.inheritedExpanded = true;
+        if (readonlyRedraw) readonlyRedraw();
+        else drawActiveChat();
+      }
+      const host = chatState.host ?? ctx.container()?.querySelector<HTMLElement>(".custom-chat");
+      transcriptViewport.cancelFollow();
+      const found = host ? highlightMessage(host, seq) : false;
+      if (!found) {
+        ctx.composer.state.error = "The linked message is unavailable or isn't visible in this conversation.";
+        if (readonlyRedraw) readonlyRedraw();
+        else drawActiveChat();
+      }
+      return found;
+    },
     drawActiveChat,
     setTranscriptWindow,
     setPins,
