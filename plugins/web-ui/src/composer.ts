@@ -1386,12 +1386,16 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       if (outcome.ok || outcome.replayed) {
         forgetQueuedRun(threadRef, queued.runId);
         bumpSessionActivity(threadRef);
-        if (agent === ctx.chat.state.agent && threadRef === ctx.chat.state.threadRef) {
+        if (
+          !outcome.ok &&
+          outcome.replayed &&
+          agent === ctx.chat.state.agent &&
+          threadRef === ctx.chat.state.threadRef
+        ) {
           agent.state.messages.push({
             role: "user",
             content: queued.text,
             timestamp: Date.now(),
-            ...(outcome.ok ? { steered: true } : {}),
           } as unknown as AgentMessage);
         }
       } else if (outcome.reason === "queued_changed") {

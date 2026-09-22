@@ -7,6 +7,7 @@ import {
   streamedAnswer,
   streamingTextTail,
   buildTimeline,
+  workTimelineSegments,
   toolCategory,
   toolRowKind,
   toolExecutionOutput,
@@ -463,4 +464,39 @@ test("stopped stream projection uses the final boundary even when final text rep
     ],
   };
   assert.equal(streamedAnswer("Same words\n\nSame words again", work), "Same words again");
+});
+
+test("steering splits visible work without breaking a tool that completes across intake", () => {
+  const work: WorkBlock = {
+    status: "working",
+    activity: [
+      act(1, "tool_call", { tool: "execute", callId: "a", command: "first" }),
+      act(2, "user", { steered: true, text: "Change direction" }),
+      act(3, "tool_result", { tool: "execute", callId: "a", code: 0 }),
+      act(4, "tool_call", { tool: "execute", callId: "b", command: "second" }),
+      act(5, "user", { steered: true, text: "Keep it brief" }),
+    ],
+  };
+  const segments = workTimelineSegments(buildTimeline(work));
+  assert.deepEqual(
+    segments.map((items) => items.map((item) => item.kind)),
+    [["tool"], ["steer"], ["tool"], ["steer"], []],
+  );
+  const first = segments[0]![0]!;
+  assert.ok(first.kind === "tool");
+  assert.equal(first.row.call?.seq, 1);
+  assert.equal(first.row.result?.seq, 3);
+  assert.equal(toolRowKind(first.row, work.status), "ok");
+  assert.deepEqual(
+    work.activity.map((entry) => entry.seq),
+    [1, 2, 3, 4, 5],
+  );
+});
+
+test("ordinary and hidden user events do not become steering markers", () => {
+  const work: WorkBlock = {
+    status: "complete",
+    activity: [act(1, "user", { text: "ordinary" }), act(2, "user", { text: "hidden", steered: true, hidden: true })],
+  };
+  assert.deepEqual(buildTimeline(work), []);
 });

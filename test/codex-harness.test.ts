@@ -1974,8 +1974,13 @@ test("Codex steers extracted documents into the active turn without copying cont
   if (msg.method === "turn/steer") {
     writeFileSync(${JSON.stringify(capture)}, JSON.stringify(msg.params));
     send({ id: msg.id, result: {} });
+    setTimeout(() => {
+    send({ method: "item/completed", params: { threadId: "thread-sf", item: { id: "steered-user", type: "userMessage", content: msg.params.input } } });
+    send({ method: "item/completed", params: { threadId: "thread-sf", item: { id: "steered-user", type: "userMessage", content: msg.params.input } } });
     send({ method: "item/completed", params: { threadId: "thread-sf", item: { id: "answer", type: "agentMessage", phase: "final_answer", text: "document read" } } });
-    return send({ method: "turn/completed", params: { threadId: "thread-sf", turn: { id: "turn-sf", status: "completed", items: [] } } });
+    send({ method: "turn/completed", params: { threadId: "thread-sf", turn: { id: "turn-sf", status: "completed", items: [] } } });
+    }, 100);
+    return;
   }
   if (msg.method === "turn/interrupt") {`,
   );
@@ -1987,6 +1992,7 @@ test("Codex steers extracted documents into the active turn without copying cont
     rmSync(dir, { recursive: true, force: true });
   });
   const tape: unknown[] = [];
+  const entries: SessionEntry[] = [];
   const scope = "personal:tester" as ScopeId;
   const running = harness.turns.runTurn({
     session: { id: "steer-document-session" } as Session,
@@ -2000,8 +2006,16 @@ test("Codex steers extracted documents into the active turn without copying cont
     tools: {} as HarnessTurnInput["tools"],
     scopeLabel: scope,
     orgScopeId: scope,
-    emit: async (entry) =>
-      ({ ...entry, sessionId: "steer-document-session", seq: 1, createdAt: Date.now() }) as SessionEntry,
+    emit: async (entry) => {
+      const saved = {
+        ...entry,
+        sessionId: "steer-document-session",
+        seq: entries.length,
+        createdAt: Date.now(),
+      } as SessionEntry;
+      entries.push(saved);
+      return saved;
+    },
     recordModelCall: () => {},
     tape: async (row) => {
       tape.push(row);
@@ -2023,7 +2037,14 @@ test("Codex steers extracted documents into the active turn without copying cont
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   await signals.send("steer-document-run", { kind: "steer", text: "read the document", ts: "doc.1" });
+  while (!existsSync(capture)) {
+    if (Date.now() > deadline) throw new Error("mock Codex did not receive steer");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(entries.filter((entry) => entry.type === "user").length, 1, "turn/steer acceptance is not intake");
   await running;
+  assert.equal(entries.filter((entry) => entry.type === "user").length, 2);
+  assert.equal((await signals.pending("steer-document-run")).length, 0);
   assert.match(readFileSync(capture, "utf8"), /STEER-PRIVATE-492/);
   assert.doesNotMatch(JSON.stringify(tape), /STEER-PRIVATE-492/);
   assert.doesNotMatch(readFileSync(capture, "utf8"), /OUTSIDE-BUDGET-492/);

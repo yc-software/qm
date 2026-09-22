@@ -257,7 +257,8 @@ export function createTranscriptViewport() {
       if (stack) observer?.observe(stack);
     }
     const nextPins = scroller?.querySelector<HTMLElement>(".pinned-strip") ?? null;
-    const nextPrompt = scroller?.querySelector<HTMLElement>(".message-stack .user-row:not(:has(~ .user-row))") ?? null;
+    const nextPrompt =
+      scroller?.querySelector<HTMLElement>(".message-stack > .user-row:not(:has(~ .user-row))") ?? null;
     if (pins !== nextPins) {
       changed = true;
       if (pins) observer?.unobserve(pins);

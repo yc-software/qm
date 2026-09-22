@@ -38,10 +38,12 @@ import {
   oneShotModelUtilities,
   oneShotRunner,
   tapeReplyCheckpoint,
+  recordSteerIntake,
+  type SteerIntake,
   type BridgedTool,
   type HarnessToolPlumbing,
 } from "./harness-shared.ts";
-import { reconstructMessagesFromHistory } from "./replay.ts";
+import { recordedMessageTimestamps, reconstructMessagesFromHistory } from "./replay.ts";
 import { countTokens } from "../util/tokens.ts";
 
 const OPENCODE_VERSION = "1.17.18";
@@ -103,6 +105,13 @@ type ActiveTurn = {
   history: unknown[];
   userSeq: number | null;
   captures: LlmCapture[];
+  steers: Array<{
+    text: string;
+    parts: unknown[];
+    intake: SteerIntake;
+    stamp?: Awaited<ReturnType<typeof recordSteerIntake>>;
+    messageId: string;
+  }>;
   model: string;
   seenText: Map<string, string>;
   seenTasks: Map<string, string>;
@@ -469,6 +478,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
   const childState = (parent: ActiveTurn): ActiveTurn => ({
     ...parent,
     child: true,
+    steers: [],
     seenText: new Map(),
     seenTasks: new Map(),
     eventTail: Promise.resolve(),
@@ -593,6 +603,17 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
               });
             if (sessionMatch[2] === "capture") {
               const request = JSON.parse((await body(req)).toString("utf8")) as Record<string, unknown>;
+              if (!state.child && Array.isArray(request.messages)) {
+                await state.eventTail;
+                for (const message of request.messages) {
+                  if (message.info?.role !== "user") continue;
+                  const id = message.info?.id;
+                  const steer = state.steers.find((steer) => !steer.stamp && steer.messageId === id);
+                  if (steer) {
+                    steer.stamp = await recordSteerIntake(state.turn, steer.intake);
+                  }
+                }
+              }
               const model = state.model;
               state.captures.push({
                 sessionId: requestedSessionId,
@@ -865,6 +886,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       history: replayMessages(reconstructMessagesFromHistory(turn.history), sessionId, model),
       userSeq: userEntry.seq,
       captures: [],
+      steers: [],
       model: selectedModel,
       seenText: new Map(),
       seenTasks: new Map(),
@@ -919,11 +941,11 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       }
       return parts;
     };
-    const steeredTapeParts: Array<{ text: string; parts: unknown[] }> = [];
     const queueSignal = (
       text: string,
       images: HarnessTurnInput["images"] = [],
       documents: HarnessTurnInput["documents"] = [],
+      intake: SteerIntake,
     ): Promise<void> => {
       const pending = (async () => {
         const parts = [
@@ -935,9 +957,24 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             url: `data:${image.mimeType};base64,${image.dataBase64}`,
           })),
         ];
-        steeredTapeParts.push({ text, parts: [...parts] });
+        const steer = {
+          text,
+          parts: [...parts],
+          intake,
+          messageId: `msg_${Date.now().toString(16)}${randomBytes(12).toString("hex")}`,
+        };
         parts.push(...(await documentParts(documents)));
-        await rt.client.session.promptAsync({ path: { id: sessionId }, body: { model, agent: "qm", parts } });
+        state.steers.push(steer);
+        try {
+          await rt.client.session.promptAsync({
+            path: { id: sessionId },
+            body: { model, agent: "qm", parts, messageID: steer.messageId },
+          });
+        } catch (error) {
+          const index = state.steers.indexOf(steer);
+          if (index >= 0) state.steers.splice(index, 1);
+          throw error;
+        }
         await waitForSessionIdle(rt.client, sessionId, wallMs > 0 ? wallMs : OPENCODE_IDLE_WAIT_MS);
       })();
       queuedSignals.add(pending);
@@ -950,20 +987,17 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             turn.runId,
             {
               onAbort: async () => abort(true),
-              onSteer: async (text, ts, request) => {
+              onSteer: async (text, ts, request, acknowledge) => {
+                if (ts && recordedMessageTimestamps(turn.history).has(ts)) return;
                 const prepared = await turn.prepareSteer?.(text, request);
                 const prompt = prepared?.text ?? text;
-                await turn.emit({
-                  type: "user",
-                  payload: {
-                    text,
-                    ...(ts ? { ts } : {}),
-                    steered: true,
-                    ...(prepared?.attachments?.length ? { attachments: prepared.attachments } : {}),
-                  },
-                  scopeLabel: turn.scopeLabel,
+                await queueSignal(prompt, prepared?.images, prepared?.documents, {
+                  text,
+                  ts,
+                  attachments: prepared?.attachments,
+                  acknowledge,
                 });
-                await queueSignal(prompt, prepared?.images, prepared?.documents);
+                return false;
               },
             },
             { onError: (error) => swallow("opencode signal poll", error), drainOnStop: true },
@@ -1075,19 +1109,15 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
           const isTrigger = role === "user" && !tapedTriggerUser;
           if (isTrigger) tapedTriggerUser = true;
           const steered =
-            role === "user"
-              ? steeredTapeParts.find((steer) =>
-                  (message.parts as Array<{ type?: string; text?: string }>).some(
-                    (part) => part.type === "text" && part.text === steer.text,
-                  ),
-                )
-              : undefined;
+            role === "user" ? state.steers.find((steer) => steer.messageId === message.info.id) : undefined;
+          if (steered && !steered.stamp) continue;
           const storedParts = isTrigger ? tapePromptParts : steered?.parts;
           await turn.tape({
             kind: "message",
             harness: "opencode",
             payload: stripDataUrls(storedParts ? { ...message, parts: storedParts } : message),
             scopeLabel: turn.scopeLabel,
+            ...steered?.stamp,
             ...(isTrigger
               ? {
                   entrySeq: userEntry.seq,

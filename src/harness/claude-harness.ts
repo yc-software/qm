@@ -1,5 +1,5 @@
 import { documentBlocks } from "./document-inputs.ts";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chownSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,10 +46,18 @@ import {
   oneShotModelUtilities,
   oneShotRunner,
   tapeReplyCheckpoint,
+  recordSteerIntake,
+  type SteerIntake,
   transitionTask,
   type HarnessToolPlumbing,
 } from "./harness-shared.ts";
-import { reconstructMessagesFromHistory, seedPriorTurns, zeroUsage, type PiReplayMessage } from "./replay.ts";
+import {
+  recordedMessageTimestamps,
+  reconstructMessagesFromHistory,
+  seedPriorTurns,
+  zeroUsage,
+  type PiReplayMessage,
+} from "./replay.ts";
 
 export interface ClaudeHarnessOptions extends HarnessToolPlumbing {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
@@ -238,6 +246,7 @@ function promptText(turn: HarnessTurnInput): string {
 function userMessage(text: string, images: HarnessTurnInput["images"] = []): SDKUserMessage {
   return {
     type: "user",
+    uuid: randomUUID(),
     message: {
       role: "user",
       content: [
@@ -398,16 +407,22 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     let recordedSteps = 0;
     let lastTotalCostUsd = 0;
     let settled = false;
-    const steerPrompts: SDKUserMessage[] = [];
+    const steerPrompts: Array<{ message: SDKUserMessage; intake: SteerIntake }> = [];
     let streamedText = "";
     let initialUserEchoSkipped = false;
-    const appendTape = async (payload: unknown, trigger = false) => {
+    const seenUserMessages = new Set<string>();
+    const appendTape = async (
+      payload: unknown,
+      trigger = false,
+      stamp?: Awaited<ReturnType<typeof recordSteerIntake>>,
+    ) => {
       if (!turn.tape) return;
       await turn.tape({
         kind: "message",
         harness: "claude",
         payload,
         scopeLabel: turn.scopeLabel,
+        ...stamp,
         ...(trigger
           ? {
               entrySeq: userEntry.seq,
@@ -468,6 +483,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         allowDangerouslySkipPermissions: true,
         persistSession: false,
         includePartialMessages: true,
+        extraArgs: { "replay-user-messages": null },
         ...(processIdentity
           ? { spawnClaudeCodeProcess: (options: SpawnOptions) => spawnClaudeProcess(options, processIdentity) }
           : {}),
@@ -506,22 +522,13 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             turn.runId,
             {
               onAbort: async () => interrupt(true),
-              onSteer: async (steer, ts, request) => {
+              onSteer: async (steer, ts, request, acknowledge) => {
+                if (ts && recordedMessageTimestamps(turn.history).has(ts)) return;
                 const prepared = await turn.prepareSteer?.(steer, request);
+                if (settled || interrupted) return false;
                 const prompt = prepared?.text ?? steer;
-                await turn.emit({
-                  type: "user",
-                  payload: {
-                    text: steer,
-                    ...(ts ? { ts } : {}),
-                    steered: true,
-                    ...(prepared?.attachments?.length ? { attachments: prepared.attachments } : {}),
-                  },
-                  scopeLabel: turn.scopeLabel,
-                });
                 const baseMessage = userMessage(prompt, prepared?.images);
-                steerPrompts.push(baseMessage);
-                const message = userMessage(prompt, prepared?.images);
+                const message = { ...userMessage(prompt, prepared?.images), uuid: baseMessage.uuid };
                 if (Array.isArray(message.message.content))
                   message.message.content.push(
                     ...((await documentBlocks(
@@ -531,8 +538,14 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
                       turn.cancel,
                     )) as unknown as typeof message.message.content),
                   );
+                if (settled || interrupted) return false;
+                steerPrompts.push({
+                  message: baseMessage,
+                  intake: { text: steer, ts, attachments: prepared?.attachments, acknowledge },
+                });
                 pendingPrompts++;
                 queue.push(message);
+                return false;
               },
             },
             { onError: (error) => swallow("claude signal poll", error) },
@@ -627,22 +640,37 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
                 entryCount: turn.history.length,
               });
           }
-          if (message.type === "user" && !initialUserEchoSkipped) initialUserEchoSkipped = true;
-          else if (message.type === "assistant" || message.type === "user") {
+          if (message.type === "assistant" || message.type === "user") {
             let tapeMessage: SDKMessage = message;
-            if (message.type === "user" && Array.isArray(message.message.content)) {
-              const text = message.message.content.find((block) => block.type === "text")?.text;
+            let stamp: Awaited<ReturnType<typeof recordSteerIntake>> | undefined;
+            if (message.type === "user" && !message.parent_tool_use_id) {
+              if (message.uuid && seenUserMessages.has(message.uuid)) continue;
+              if (message.uuid) seenUserMessages.add(message.uuid);
+              const content = message.message.content;
+              const echoedText =
+                typeof content === "string" ? content : content.find((block) => block.type === "text")?.text;
+              if (
+                !initialUserEchoSkipped &&
+                (message.uuid === initial.uuid || (!message.uuid && echoedText === promptText(turn)))
+              ) {
+                initialUserEchoSkipped = true;
+                continue;
+              }
               const index = steerPrompts.findIndex(
-                (prompt) =>
-                  Array.isArray(prompt.message.content) &&
-                  prompt.message.content.some((block) => block.type === "text" && block.text === text),
+                ({ message: prompt }) =>
+                  prompt.uuid === message.uuid ||
+                  (!message.uuid &&
+                    Array.isArray(prompt.message.content) &&
+                    prompt.message.content.some((block) => block.type === "text" && block.text === echoedText)),
               );
               if (index >= 0) {
-                const [base] = steerPrompts.splice(index, 1);
-                tapeMessage = { ...message, message: { ...message.message, content: base!.message.content } };
+                const [steer] = steerPrompts.splice(index, 1);
+                await flushThinking();
+                stamp = await recordSteerIntake(turn, steer!.intake);
+                tapeMessage = { ...message, message: { ...message.message, content: steer!.message.message.content } };
               }
             }
-            await appendTape(stripClaudeImageBytes(tapeMessage));
+            await appendTape(stripClaudeImageBytes(tapeMessage), false, stamp);
           }
           if (message.type === "system" && message.subtype === "task_started") {
             const callId = message.tool_use_id ?? message.task_id;

@@ -1,3 +1,4 @@
+import { recordSteerIntake, type SteerIntake } from "./harness-shared.ts";
 import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
 import { gatewayModelsJson, gatewayModelsVersion } from "../model/gateway-models.ts";
 import { Type } from "typebox";
@@ -45,7 +46,6 @@ import type {
   LlmCallUsage,
   LlmTransportMeta,
   NewTapeRecord,
-  TapeMeta,
   TapeRecord,
 } from "../sessions/session-store.ts";
 import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
@@ -1843,33 +1843,14 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           let tapeError: Error | undefined;
           let tapedTriggerUser = false;
           const toolAbort = new AbortController();
-          const pendingSteerTapeMeta: Array<{
-            text: string;
-            bareText?: string;
-            ts?: string;
-            entryCreatedAt: number;
-            images?: HarnessTurnInput["images"];
-            attachments?: HarnessTurnInput["attachments"];
-          }> = [];
-          const steerTapeStamp = (
-            message: unknown,
-          ): { meta: TapeMeta; images?: HarnessTurnInput["images"] } | undefined => {
-            const text = textFromContent((message as { content?: unknown }).content);
-            const at = pendingSteerTapeMeta.findIndex((p) => p.text === text);
-            if (at < 0) return undefined;
-            const [steer] = pendingSteerTapeMeta.splice(at, 1);
-            return {
-              images: steer!.images,
-              meta: {
-                bareText: steer!.bareText ?? steer!.text,
-                ...(steer!.ts ? { ts: steer!.ts } : {}),
-                ...(steer!.attachments?.length ? { attachments: steer!.attachments } : {}),
-                entryCreatedAt: steer!.entryCreatedAt,
-              },
-            };
-          };
+          const pendingSteerTapeMeta: Array<
+            SteerIntake & {
+              prompt: string;
+              images?: HarnessTurnInput["images"];
+            }
+          > = [];
           const tapeMessage = async (message: unknown): Promise<void> => {
-            if (!turn.tape || tapeError) return;
+            if (tapeError) return;
             const role = (message as { role?: string }).role;
             if (role !== "user" && role !== "assistant" && role !== "toolResult") return;
             const isTrigger = role === "user" && !tapedTriggerUser;
@@ -1877,11 +1858,20 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const callId = role === "toolResult" ? (message as { toolCallId?: unknown }).toolCallId : undefined;
             const resultScope = typeof callId === "string" ? entry.ref.tapeResultScopes?.get(callId) : undefined;
             if (typeof callId === "string") entry.ref.tapeResultScopes?.delete(callId);
-            const steerStamp = role === "user" && !isTrigger ? steerTapeStamp(message) : undefined;
+            const steerAt =
+              role === "user" && !isTrigger
+                ? pendingSteerTapeMeta.findIndex(
+                    (steer) => steer.prompt === textFromContent((message as { content?: unknown }).content),
+                  )
+                : -1;
+            const steer = steerAt >= 0 ? pendingSteerTapeMeta.splice(steerAt, 1)[0] : undefined;
+            if (steer) await thinkTail;
+            const steerStamp = steer ? await recordSteerIntake(turn, steer) : undefined;
+            if (!turn.tape) return;
             const rec: NewTapeRecord = {
               kind: "message",
               harness: "pi",
-              payload: stripImageBytes(message, isTrigger ? turn.images : steerStamp?.images),
+              payload: stripImageBytes(message, isTrigger ? turn.images : steer?.images),
               scopeLabel: resultScope ?? turn.scopeLabel,
               ...(isTrigger
                 ? {
@@ -1894,7 +1884,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                     },
                   }
                 : {}),
-              ...(steerStamp ? { meta: steerStamp.meta } : {}),
+              ...(steerStamp ?? {}),
             };
             try {
               await turn.tape(rec);
@@ -2029,41 +2019,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (!turn.tape) return;
             await turn.tape(tapeEntryMirrorRecord(mirrored));
           };
-          const tapeLeftoverSteers = async (): Promise<void> => {
-            const leftovers = pendingSteerTapeMeta.splice(0);
-            if (!turn.tape) return;
-            for (const steer of leftovers) {
-              await turn.tape({
-                kind: "message",
-                harness: "pi",
-                payload: {
-                  role: "user",
-                  content: [
-                    { type: "text", text: steer.text },
-                    ...(steer.images ?? []).map((image) => ({
-                      type: "image",
-                      mimeType: image.mimeType,
-                      ...(image.artifactId ? { artifactRef: image.artifactId } : { omitted: true }),
-                    })),
-                  ],
-                  timestamp: steer.entryCreatedAt,
-                },
-                scopeLabel: turn.scopeLabel,
-                meta: {
-                  bareText: steer.bareText ?? steer.text,
-                  ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
-                  ...(steer.ts ? { ts: steer.ts } : {}),
-                  entryCreatedAt: steer.entryCreatedAt,
-                },
-              });
-            }
-          };
           const checkpointSubturn = async (
             finalEntry: { seq: number; createdAt: number },
             reply: string,
           ): Promise<void> => {
             if (!turn.tape) return;
-            await tapeLeftoverSteers();
             await turn.tape({
               kind: "annotation",
               payload: tapeCheckpointPayload("subturnEnd", {
@@ -2088,6 +2048,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           entry.ref.abortSignal = toolAbort.signal;
           const onCancel = (): void => {
             toolAbort.abort();
+            entry.agentSession.clearQueue();
             void entry.agentSession.abort().catch(swallowAs("pi: lease-lost abort", undefined));
           };
           if (turn.cancel) {
@@ -2101,51 +2062,45 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   signals,
                   turn.runId,
                   {
-                    onSteer: async (text, ts, request) => {
+                    onSteer: async (text, ts, request, acknowledge) => {
+                      if (ts && steeredSeen.has(ts)) return;
                       const prepared = await turn.prepareSteer?.(text, request);
                       const prompt = prepared?.text ?? text;
-                      if (!entry.agentSession.isStreaming) return false;
-                      if (ts && !steeredSeen.has(ts)) {
-                        steeredSeen.add(ts);
-                        try {
-                          const steered = await turn.emit({
-                            type: "user",
-                            payload: {
-                              text,
-                              ts,
-                              steered: true,
-                              ...(prepared?.attachments?.length ? { attachments: prepared.attachments } : {}),
-                            },
-                            scopeLabel: turn.scopeLabel,
-                          });
-                          pendingSteerTapeMeta.push({
-                            text: prompt,
-                            bareText: text,
-                            ts,
-                            entryCreatedAt: steered.createdAt,
-                            images: prepared?.images,
-                            attachments: prepared?.attachments,
-                          });
-                        } catch (e) {
-                          swallow("pi: steer persist", e);
-                        }
-                      }
-                      if (!entry.agentSession.isStreaming) return false;
+                      if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
+                      const steer = {
+                        text,
+                        prompt,
+                        ts,
+                        images: prepared?.images,
+                        attachments: prepared?.attachments,
+                        acknowledge,
+                      };
+                      pendingSteerTapeMeta.push(steer);
+                      if (ts) steeredSeen.add(ts);
                       if (prepared?.documents?.length)
                         entry.ref.documents = [...(entry.ref.documents ?? []), ...prepared.documents];
                       entry.ref.silentRequested = false;
-                      await entry.agentSession.steer(
-                        prompt,
-                        prepared?.images?.map((image) => ({
-                          type: "image" as const,
-                          mimeType: image.mimeType,
-                          data: image.dataBase64,
-                        })),
-                      );
+                      try {
+                        await entry.agentSession.steer(
+                          prompt,
+                          prepared?.images?.map((image) => ({
+                            type: "image" as const,
+                            mimeType: image.mimeType,
+                            data: image.dataBase64,
+                          })),
+                        );
+                      } catch (error) {
+                        const at = pendingSteerTapeMeta.indexOf(steer);
+                        if (at >= 0) pendingSteerTapeMeta.splice(at, 1);
+                        if (ts) steeredSeen.delete(ts);
+                        throw error;
+                      }
+                      return false;
                     },
                     onAbort: async () => {
                       userAborted = true;
                       toolAbort.abort();
+                      entry.agentSession.clearQueue();
                       await entry.agentSession.abort();
                     },
                   },
@@ -2329,6 +2284,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           } finally {
             turn.cancel?.removeEventListener("abort", onCancel);
             await stopSignalPoll?.();
+            if (pendingSteerTapeMeta.length) entry.agentSession.clearQueue();
             unsubscribeTape?.();
             unsubscribe?.();
             await thinkTail;

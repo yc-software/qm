@@ -573,3 +573,31 @@ test("failed attachment preparation does not block Stop", async () => {
   }
   assert.equal((await store.pending("stop-after-failure"))[0]?.signal.text, "file");
 });
+
+test("a queued steer remains durable until its native intake acknowledges it", async () => {
+  const store = createMemoryRunSignalStore();
+  let acknowledge: (() => Promise<void>) | undefined;
+  let deliveries = 0;
+  const stop = startSignalPoll(
+    store,
+    "intake",
+    {
+      onSteer: async (_text, _ts, _request, ack) => {
+        deliveries++;
+        acknowledge = ack;
+        return false;
+      },
+      onAbort: async () => {},
+    },
+    { intervalMs: 5 },
+  );
+  await store.send("intake", { kind: "steer", text: "queued, not consumed" });
+  await until(() => !!acknowledge);
+  await sleep(20);
+  assert.equal(deliveries, 1);
+  assert.equal((await store.pending("intake")).length, 1);
+  await acknowledge!();
+  await acknowledge!();
+  await stop();
+  assert.deepEqual(await store.pending("intake"), []);
+});

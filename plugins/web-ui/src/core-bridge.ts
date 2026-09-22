@@ -396,7 +396,15 @@ export interface SessionEntry {
 export interface ToolActivity {
   seq: number;
   parentSeq: number | null;
-  type: "tool_call" | "tool_result" | "approval_request" | "approval_resolved" | "thinking" | "text" | "text_start";
+  type:
+    | "tool_call"
+    | "tool_result"
+    | "approval_request"
+    | "approval_resolved"
+    | "thinking"
+    | "text"
+    | "text_start"
+    | "user";
   payload: unknown;
   createdAt: number;
   truncated?: boolean;
@@ -1286,6 +1294,8 @@ function parseActivity(raw: unknown): ToolActivity[] {
     const a = item as Partial<ToolActivity> | null;
     if (!a || typeof a.seq !== "number" || typeof a.type !== "string" || !ACTIVITY_TYPES.has(a.type)) continue;
     if (a.type === "thinking" && !isRenderableThinking(a.payload)) continue;
+    if (a.type === "user" && !(a.payload as { steered?: boolean; hidden?: boolean } | null)?.steered) continue;
+    if (a.type === "user" && (a.payload as { hidden?: boolean } | null)?.hidden) continue;
     out.push({
       seq: a.seq,
       parentSeq: a.parentSeq ?? null,
@@ -1629,6 +1639,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 const ACTIVITY_TYPES = new Set<string>([
+  "user",
   "tool_call",
   "tool_result",
   "approval_request",
@@ -1791,6 +1802,59 @@ function userEntryText(payload: unknown): string | null {
   return display.trim() ? display : null;
 }
 
+export function userEntryMessage(
+  entry: Pick<SessionEntry, "payload" | "seq" | "createdAt">,
+): HistoryUserMessage | null {
+  const payload = entry.payload as {
+    text?: string;
+    hidden?: boolean;
+    runId?: string;
+    steered?: boolean;
+    name?: string;
+    ts?: string;
+    attachments?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
+  } | null;
+  if (payload?.hidden) return null;
+  const text = userEntryText(payload) ?? "";
+  const attachments = payload?.attachments ?? [];
+  if (!text && !attachments.length) return null;
+  const mail = subagentMailOf(payload);
+  return {
+    role: "user",
+    ...(typeof payload?.runId === "string" ? { runId: payload.runId } : {}),
+    ...(entry.seq !== undefined ? { entrySeq: entry.seq } : {}),
+    content: text,
+    timestamp: entry.createdAt,
+    ...(mail ? { subagentMail: mail } : {}),
+    ...(payload?.steered ? { steered: true } : {}),
+    ...(typeof payload?.name === "string" && payload.name.trim() ? { speaker: payload.name.trim() } : {}),
+    ...(typeof payload?.ts === "string" && payload.ts ? { ts: payload.ts } : {}),
+    ...(attachments.length
+      ? {
+          attachments: attachments.map((a, i) => ({
+            id: a.artifactId ?? `${entry.seq ?? entry.createdAt}:${i}`,
+            type: a.mimetype?.startsWith("image/") ? ("image" as const) : ("document" as const),
+            fileName: a.name ?? "file",
+            mimeType: a.mimetype ?? "application/octet-stream",
+            ...(typeof a.sizeBytes === "number" ? { size: a.sizeBytes } : {}),
+            ...(a.artifactId ? { artifactId: a.artifactId } : {}),
+          })),
+        }
+      : {}),
+  };
+}
+
+export function appendConsumedSteers(messages: AgentMessage[], work: WorkBlock): void {
+  const recorded = new Set(messages.map((message) => (message as { entrySeq?: number }).entrySeq));
+  for (const activity of work.activity) {
+    if (activity.type !== "user" || recorded.has(activity.seq)) continue;
+    const message = userEntryMessage(activity);
+    if (!message?.steered) continue;
+    messages.push(message as AgentMessage);
+    recorded.add(activity.seq);
+  }
+}
+
 export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): AgentMessage[] {
   const out: AgentMessage[] = [];
   const userByTs = new Map<string, HistoryUserMessage>();
@@ -1913,7 +1977,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       }
       continue;
     }
-    if (ACTIVITY_TYPES.has(e.type)) {
+    if (e.type !== "user" && ACTIVITY_TYPES.has(e.type)) {
       const activity: ToolActivity = {
         seq: e.seq ?? out.length,
         parentSeq: e.parentSeq ?? null,
@@ -1963,31 +2027,17 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
         spillHeldPosts();
         flushWork("", e.createdAt);
       }
-      const atts = payload?.attachments ?? [];
-      const userText = userEntryText(e.payload) ?? text;
-      if (text || atts.length) {
-        const mail = subagentMailOf(e.payload);
-        const msg: HistoryUserMessage = {
-          role: "user",
-          ...(typeof payload?.runId === "string" ? { runId: payload.runId } : {}),
-          ...(e.seq !== undefined ? { entrySeq: e.seq } : {}),
-          content: userText,
-          timestamp: e.createdAt,
-          ...(mail ? { subagentMail: mail } : {}),
-          ...(payload?.steered ? { steered: true } : {}),
-          ...(typeof payload?.name === "string" && payload.name.trim() ? { speaker: payload.name.trim() } : {}),
-          ...(typeof payload?.ts === "string" && payload.ts ? { ts: payload.ts } : {}),
-        };
+      const msg = userEntryMessage(e);
+      if (msg) {
         if (msg.ts) userByTs.set(msg.ts, msg);
-        if (atts.length) {
-          msg.attachments = atts.map((a, i) => ({
-            id: a.artifactId ?? `${e.seq ?? e.createdAt}:${i}`,
-            type: a.mimetype?.startsWith("image/") ? "image" : "document",
-            fileName: a.name ?? "file",
-            mimeType: a.mimetype ?? "application/octet-stream",
-            ...(typeof a.sizeBytes === "number" ? { size: a.sizeBytes } : {}),
-            ...(a.artifactId ? { artifactId: a.artifactId } : {}),
-          }));
+        if (msg.steered) {
+          pending.push({
+            seq: e.seq ?? out.length,
+            parentSeq: e.parentSeq ?? null,
+            type: "user",
+            payload: e.payload,
+            createdAt: e.createdAt,
+          });
         }
         out.push(msg as AgentMessage);
       }

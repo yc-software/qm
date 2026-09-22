@@ -31,11 +31,18 @@ import {
   oneShotModelUtilities,
   oneShotRunner,
   tapeReplyCheckpoint,
+  recordSteerIntake,
+  type SteerIntake,
   transitionTask,
   type BridgedTool,
   type HarnessToolPlumbing,
 } from "./harness-shared.ts";
-import { reconstructMessagesFromHistory, seedPriorTurns, type PiReplayMessage } from "./replay.ts";
+import {
+  recordedMessageTimestamps,
+  reconstructMessagesFromHistory,
+  seedPriorTurns,
+  type PiReplayMessage,
+} from "./replay.ts";
 
 export interface CodexHarnessOptions extends HarnessToolPlumbing {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
@@ -140,6 +147,8 @@ type ActiveTurn = {
   firstOutputAt: number | null;
   fallbackInputTokens: number;
   tapeError?: Error;
+  seenUserItems: Set<string>;
+  pendingSteers: Array<{ prompt: string; inputText: string; intake: SteerIntake }>;
   interrupt?: () => Promise<void>;
   stopped: boolean;
 };
@@ -535,6 +544,27 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             }
           }
           if (method === "item/completed") {
+            let stamp: Awaited<ReturnType<typeof recordSteerIntake>> | undefined;
+            let tapeItem = item;
+            if (
+              threadId === state.threadId &&
+              item.type === "userMessage" &&
+              Array.isArray(item.content) &&
+              typeof item.id === "string"
+            ) {
+              if (state.seenUserItems.has(item.id)) return;
+              state.seenUserItems.add(item.id);
+              const text = item.content
+                .filter((part) => part.type === "text")
+                .map((part) => part.text)
+                .join("\n");
+              const index = state.pendingSteers.findIndex((steer) => steer.inputText === text);
+              if (index >= 0) {
+                const [steer] = state.pendingSteers.splice(index, 1);
+                stamp = await recordSteerIntake(state.turn, steer!.intake);
+                tapeItem = { type: "message", role: "user", content: [{ type: "input_text", text: steer!.prompt }] };
+              }
+            }
             state.completedItems.push(item);
             if (state.turn.tape && !state.tapeError) {
               try {
@@ -542,7 +572,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
                   kind: "message",
                   harness: "codex",
                   scopeLabel: state.turn.scopeLabel,
-                  payload: item,
+                  payload: tapeItem,
+                  ...stamp,
                 });
               } catch (error) {
                 state.tapeError = asError(error);
@@ -1045,6 +1076,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         reject: rejectCompleted,
         responseItems: [],
         completedItems: [],
+        pendingSteers: [],
+        seenUserItems: new Set(),
         publicMessages: new Map(),
         taskIds: new Map(),
         taskStatuses: new Map(),
@@ -1174,49 +1207,40 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             turn.runId,
             {
               onAbort: async () => interrupt(true),
-              onSteer: async (text, ts, request) => {
+              onSteer: async (text, ts, request, acknowledge) => {
+                if (ts && recordedMessageTimestamps(turn.history).has(ts)) return;
                 const prepared = await turn.prepareSteer?.(text, request);
                 const prompt = prepared?.text ?? text;
-                const steered = await turn.emit({
-                  type: "user",
-                  payload: {
-                    text,
-                    ...(ts ? { ts } : {}),
-                    steered: true,
-                    ...(prepared?.attachments?.length ? { attachments: prepared.attachments } : {}),
-                  },
-                  scopeLabel: turn.scopeLabel,
-                });
-                if (turn.tape) {
-                  await turn.tape({
-                    kind: "message",
-                    harness: "codex",
-                    scopeLabel: turn.scopeLabel,
-                    entrySeq: steered.seq,
-                    meta: {
-                      bareText: text,
-                      ...(ts ? { ts } : {}),
-                      entryCreatedAt: steered.createdAt,
-                    },
-                    payload: { type: "message", role: "user", content: [{ type: "input_text", text: prompt }] },
-                  });
-                }
                 const documentText = await documentsFallbackText(
                   prepared?.documents ?? [],
                   turn.cancel,
                   documentTextBudget,
                 );
-                await rt.server.request("turn/steer", {
-                  threadId,
-                  expectedTurnId: turnId,
-                  input: [
-                    userInput([prompt, documentText].filter(Boolean).join("\n\n")),
-                    ...(prepared?.images ?? []).map((image) => ({
-                      type: "image",
-                      url: `data:${image.mimeType};base64,${image.dataBase64}`,
-                    })),
-                  ],
-                });
+                const inputText = [prompt, documentText].filter(Boolean).join("\n\n");
+                const steer = {
+                  prompt,
+                  inputText,
+                  intake: { text, ts, attachments: prepared?.attachments, acknowledge },
+                };
+                state.pendingSteers.push(steer);
+                try {
+                  await rt.server.request("turn/steer", {
+                    threadId,
+                    expectedTurnId: turnId,
+                    input: [
+                      userInput(inputText),
+                      ...(prepared?.images ?? []).map((image) => ({
+                        type: "image",
+                        url: `data:${image.mimeType};base64,${image.dataBase64}`,
+                      })),
+                    ],
+                  });
+                } catch (error) {
+                  const index = state.pendingSteers.indexOf(steer);
+                  if (index >= 0) state.pendingSteers.splice(index, 1);
+                  throw error;
+                }
+                return false;
               },
             },
             { onError: (error) => swallow("codex signal poll", error) },

@@ -97,7 +97,7 @@ export function createMemoryRunSignalStore(): RunSignalStore {
 const SIGNAL_POLL_MS = 5_000;
 
 export interface SignalPollHandlers {
-  onSteer(text: string, ts?: string, request?: TurnRequest): Promise<void | boolean>;
+  onSteer(text: string, ts?: string, request?: TurnRequest, acknowledge?: () => Promise<void>): Promise<void | boolean>;
   onAbort(): Promise<void>;
 }
 
@@ -130,7 +130,9 @@ export function startSignalPoll(
             }
           } else if (!declined.has(id)) {
             if (s.text || s.request?.attachments?.length) {
-              const delivered = await handlers.onSteer(s.text ?? "", s.ts, s.request);
+              const delivered = await handlers.onSteer(s.text ?? "", s.ts, s.request, () =>
+                signals.acknowledge(runId, id),
+              );
               if (delivered === false) {
                 declined.add(id);
                 continue;
