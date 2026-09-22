@@ -115,11 +115,29 @@ test("the curated catalog contains only current model families", () => {
       "gpt-5.6-terra",
       "gpt-5.6-luna",
       "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
       "openrouter/auto",
     ],
   );
   assert.equal(getRequiredModel("gpt-5.6-sol").contextWindow, 1_050_000);
   assert.equal(getRequiredModel("gpt-6-astra").contextWindow, 1_050_000);
+  assert.equal(getRequiredModel("gpt-6-sol").contextWindow, 1_050_000);
+  assert.equal(getRequiredModel("gpt-6-luna").contextWindow, 1_050_000);
+  assert.deepEqual(getRequiredModel("gpt-6-sol").cost, {
+    input: 2,
+    output: 10,
+    cacheRead: 0.2,
+    cacheWrite: 2.5,
+    tiers: [{ inputTokensAbove: 272_000, input: 4, output: 15, cacheRead: 0.4, cacheWrite: 5 }],
+  });
+  assert.deepEqual(getRequiredModel("gpt-6-luna").cost, {
+    input: 0.1,
+    output: 0.5,
+    cacheRead: 0.01,
+    cacheWrite: 0.125,
+    tiers: [{ inputTokensAbove: 272_000, input: 0.2, output: 0.75, cacheRead: 0.02, cacheWrite: 0.25 }],
+  });
 });
 
 test("auxiliary models come from the configured base model's own provider", () => {
