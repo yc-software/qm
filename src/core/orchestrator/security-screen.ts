@@ -16,7 +16,7 @@ import type { OrchestratorDeps } from "./types.ts";
 
 const DEFAULT_SECURITY_SCREEN_TIMEOUT_MS = 15_000;
 const MAX_SCREEN_REQUEST_CHARS = 2_000;
-const MAX_SECURITY_SOURCE_LOCALIZATIONS = 16;
+const MAX_SECURITY_SOURCE_LOCALIZATIONS = 64;
 const MAX_SECURITY_SOURCE_CONCURRENCY = 4;
 
 const unscreenedVerdict = (): SecurityScreenVerdict => ({

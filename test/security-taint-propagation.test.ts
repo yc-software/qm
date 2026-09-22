@@ -9,6 +9,7 @@ import { localizeSecuritySources } from "../src/core/orchestrator/security-scree
 import { createTranscriptSource } from "../src/harness/tape-projection.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
+import { recentWindow, renderConversationView, type RecentMessage } from "../src/slack/lib.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -79,7 +80,7 @@ test("source localization preserves duplicate-content identity and bounds classi
 
   call = 0;
   const overflow = await localizeSecuritySources(
-    Array.from({ length: 17 }, (_, index) => ({ id: String(index), content: "x" })),
+    Array.from({ length: 65 }, (_, index) => ({ id: String(index), content: "x" })),
     async () => {
       call++;
       return { decision: "auto" };
@@ -167,7 +168,7 @@ test("orchestrator keeps failed and ambiguous source localization quarantined", 
   const overflow = await built.app.turn(
     channel(
       "ch:C862:fast-overflow",
-      Array.from({ length: 17 }, (_, index) => ({
+      Array.from({ length: 65 }, (_, index) => ({
         ts: `fast.overflow.${index}`,
         role: "user" as const,
         text: `source-${index}`,
@@ -182,6 +183,95 @@ test("orchestrator keeps failed and ambiguous source localization quarantined", 
       .every((entry) => (entry.payload as { securityTainted?: boolean }).securityTainted === true),
     true,
   );
+});
+
+test("default Slack window localizes clean siblings with header and reply-parent context", async () => {
+  let classifications = 0;
+  const windowScreener: SecurityScreener = {
+    provider: "slack-window-regression",
+    shadow: false,
+    async classify({ payload }) {
+      classifications++;
+      const strict = payload.includes("flagged-window-source");
+      return {
+        verdict: strict ? { decision: "strict", reason: "window source" } : { decision: "auto" },
+        score: strict ? 1 : 0,
+        threshold: 0.5,
+      };
+    },
+  };
+  const parentTs = "1717360800.000001";
+  const messages: RecentMessage[] = [
+    { ts: parentTs, name: "Parent", text: "clean reply parent", authorId: "U0" },
+    ...Array.from({ length: 19 }, (_, index) => ({
+      ts: `17173608${String(index + 1).padStart(2, "0")}.000001`,
+      name: `User${index + 1}`,
+      text: index === 9 ? "flagged-window-source" : `clean sibling ${index + 1}`,
+      authorId: `U${index + 1}`,
+    })),
+    {
+      ts: "1717360900.000001",
+      name: "Alice",
+      text: "please summarize",
+      authorId: "U20",
+      parentTs,
+      isTrigger: true,
+    },
+  ];
+  const selected = recentWindow(messages);
+  assert.equal(selected.length, 21);
+  const rendered = renderConversationView({
+    channel: { name: "security", kind: "channel", isPrivate: true },
+    members: [
+      { id: "U20", name: "Alice" },
+      { id: "UME", name: "QM", isYou: true },
+    ],
+    messages: selected,
+    here: { kind: "thread", youOpenedIt: false, starterName: "Parent" },
+    files: [{ name: "context.txt" }],
+    omittedFiles: [],
+  });
+  assert.equal(rendered.overheard.length, 20);
+  assert.ok(rendered.overheard.some((message) => message.ts === parentTs));
+  const built = memoryApp(windowScreener);
+  const threadRef = "ch:C862:default-slack-window";
+  const request = channel(threadRef, rendered.overheard, {
+    conversationHeader: rendered.header,
+    inboundNotes: ["clean connector metadata"],
+  });
+  const pending = await built.app.turn(request);
+  assert.equal(pending.status, "pending_approval");
+  assert.equal(classifications, 23);
+  const imported = (await built.sessions.getEntries(pending.sessionId!)).filter(
+    (entry) => (entry.payload as { overheard?: boolean }).overheard === true,
+  );
+  assert.equal(imported.length, 20);
+  const flagged = imported.filter((entry) =>
+    String((entry.payload as { text?: string }).text).includes("flagged-window-source"),
+  );
+  const clean = imported.filter((entry) => !flagged.includes(entry));
+  assert.equal(flagged.length, 1);
+  assert.equal((flagged[0]!.payload as { securityTainted?: boolean }).securityTainted, true);
+  assert.equal(clean.length, 19);
+  assert.equal(
+    clean.every((entry) => (entry.payload as { securityTainted?: boolean }).securityTainted !== true),
+    true,
+  );
+
+  const denied = await built.app.turn({
+    ...request,
+    approval: { requestId: pending.pendingApprovals![0]!.requestId, approved: false },
+  });
+  assert.equal(denied.status, "refused");
+  const followup = await built.app.turn(channel(threadRef, [], { text: "safe follow up" }));
+  assert.equal(followup.status, "ok");
+  const modelInput = [...(await built.sessions.listLlmRequests(pending.sessionId!))]
+    .reverse()
+    .find((record) => record.model !== "mock-security")?.promptEnvelope;
+  const serialized = JSON.stringify(modelInput);
+  assert.match(serialized, /clean sibling 1/);
+  assert.match(serialized, /clean reply parent/);
+  assert.doesNotMatch(serialized, /flagged-window-source/);
 });
 
 test("strict attachment data does not taint clean overheard attribution", async () => {
