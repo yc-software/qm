@@ -28,7 +28,7 @@ export interface FactoryEnvInput {
   guidance?: string;
   linearApiKey: string;
   githubToken: string;
-  anthropicApiKey: string;
+  modelAuth: Record<string, string>;
   slack?: FactorySlackTarget;
   factorySessionId: number;
   repoDir: string;
@@ -41,7 +41,7 @@ export function renderFactoryEnv(input: FactoryEnvInput): Record<string, string>
     guidance,
     linearApiKey,
     githubToken,
-    anthropicApiKey,
+    modelAuth,
     slack,
     factorySessionId,
     repoDir,
@@ -51,7 +51,7 @@ export function renderFactoryEnv(input: FactoryEnvInput): Record<string, string>
     ...(guidance !== undefined ? { IO_FEEDBACK: guidance } : {}),
     IO_LINEAR_API_KEY: linearApiKey,
     IO_GITHUB_TOKEN: githubToken,
-    ANTHROPIC_API_KEY: anthropicApiKey,
+    ...modelAuth,
     ...(slack?.botToken && slack.channelId && slack.threadTs
       ? { SLACK_BOT_TOKEN: slack.botToken, SLACK_CHANNEL_ID: slack.channelId, SLACK_THREAD_TS: slack.threadTs }
       : {}),

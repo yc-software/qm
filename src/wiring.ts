@@ -488,6 +488,7 @@ export interface BuiltApp {
 }
 
 const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
+const CLAUDE_AUTH_CREDENTIAL_ENV_KEYS = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"];
 
 export function buildApp(
   config: Config,
@@ -1210,10 +1211,7 @@ export function buildApp(
         ...claudeHarnessConfigOptions(config),
         ...(config.claudeAuthCredential && keychain
           ? {
-              authEnv: keychainHarnessAuthEnv(keychain, config.claudeAuthCredential, [
-                "CLAUDE_CODE_OAUTH_TOKEN",
-                "ANTHROPIC_AUTH_TOKEN",
-              ]),
+              authEnv: keychainHarnessAuthEnv(keychain, config.claudeAuthCredential, CLAUDE_AUTH_CREDENTIAL_ENV_KEYS),
             }
           : {}),
         signals: runSignals,
@@ -1892,6 +1890,13 @@ export function buildApp(
       orgScopeId: orgScope,
       loops: loopStore,
       ...(config.buildSha ? { buildSha: config.buildSha } : {}),
+      modelAuthEnv: async () => ({
+        ...(config.anthropicApiKey ? { ANTHROPIC_API_KEY: config.anthropicApiKey } : {}),
+        ...config.claudeProcessEnv,
+        ...(config.claudeAuthCredential && keychain
+          ? await keychainHarnessAuthEnv(keychain, config.claudeAuthCredential, CLAUDE_AUTH_CREDENTIAL_ENV_KEYS)()
+          : {}),
+      }),
     },
   });
   const loops: LoopServiceDeps = {

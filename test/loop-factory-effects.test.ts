@@ -16,12 +16,7 @@ import {
   factorySessionIdFor,
 } from "../src/loops/factory/effects.ts";
 import { FACTORY_REQUIRED_TOOLS } from "../src/loops/factory/preflight.ts";
-import {
-  FACTORY_ANTHROPIC_SLUG,
-  FACTORY_GITHUB_SLUG,
-  FACTORY_LINEAR_SLUG,
-  FACTORY_SLACK_SLUG,
-} from "../src/loops/factory/credentials.ts";
+import { FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG, FACTORY_SLACK_SLUG } from "../src/loops/factory/credentials.ts";
 import { FACTORY_WRAPPER, renderFactoryEnv } from "../src/loops/factory/process-work.ts";
 import { shq } from "../src/util/shell.ts";
 import { LINEAR_GRAPHQL_URL } from "../src/loops/factory/linear-intake.ts";
@@ -46,7 +41,6 @@ const SLACK_TOKEN = "xoxb-FAKE_SLACK_TOKEN";
 const SECRET_BY_SLUG: Record<string, string> = {
   [FACTORY_LINEAR_SLUG]: LINEAR_KEY,
   [FACTORY_GITHUB_SLUG]: GITHUB_TOKEN,
-  [FACTORY_ANTHROPIC_SLUG]: ANTHROPIC_KEY,
   [FACTORY_SLACK_SLUG]: SLACK_TOKEN,
 };
 const REPO_DIR = "/workspace/repo";
@@ -236,6 +230,11 @@ const wrapperStart = (calls: Call[]): Extract<Call, { op: "startProcess" }> => {
   return start;
 };
 
+const wrapperEnvs = (calls: Call[]): Record<string, string>[] =>
+  calls.flatMap((call) =>
+    call.op === "startProcess" && call.command.includes(FACTORY_WRAPPER) ? [call.opts?.env ?? {}] : [],
+  );
+
 const bootstrapStarts = (calls: Call[]): Extract<Call, { op: "startProcess" }>[] =>
   calls.filter(
     (call): call is Extract<Call, { op: "startProcess" }> =>
@@ -301,11 +300,7 @@ function fakeCredentials(records: (DecryptedServiceCredential | null)[]): Servic
 }
 
 const healthyCredentials = (): ServiceCredentialReader =>
-  fakeCredentials([
-    credentialRecord(FACTORY_LINEAR_SLUG),
-    credentialRecord(FACTORY_GITHUB_SLUG),
-    credentialRecord(FACTORY_ANTHROPIC_SLUG),
-  ]);
+  fakeCredentials([credentialRecord(FACTORY_LINEAR_SLUG), credentialRecord(FACTORY_GITHUB_SLUG)]);
 
 function fakeLoops(states: (LoopState | null)[]): { loops: FactoryEffectsDeps["loops"]; ids: string[] } {
   const ids: string[] = [];
@@ -356,6 +351,21 @@ const intakePage = (identifiers: string[]): Response =>
     },
   });
 
+function fakeModelAuthEnv(...envs: NodeJS.ProcessEnv[]): {
+  modelAuthEnv: () => Promise<NodeJS.ProcessEnv>;
+  calls: number;
+} {
+  const stub = {
+    calls: 0,
+    modelAuthEnv: async (): Promise<NodeJS.ProcessEnv> => {
+      const env = envs[Math.min(stub.calls, envs.length - 1)] ?? {};
+      stub.calls += 1;
+      return env;
+    },
+  };
+  return stub;
+}
+
 function deps(over: Partial<FactoryEffectsDeps> = {}): FactoryEffectsDeps {
   return {
     sandbox: fakeSandbox().sandbox,
@@ -363,6 +373,7 @@ function deps(over: Partial<FactoryEffectsDeps> = {}): FactoryEffectsDeps {
     credentials: healthyCredentials(),
     orgScopeId: ORG_SCOPE,
     loops: fakeLoops(["enabled"]).loops,
+    modelAuthEnv: fakeModelAuthEnv({ ANTHROPIC_API_KEY: ANTHROPIC_KEY }).modelAuthEnv,
     ...over,
   };
 }
@@ -452,7 +463,7 @@ test("loadFactoryContext resolves the org config and both credentials", async ()
     config: CONFIG,
     linearApiKey: LINEAR_KEY,
     githubToken: GITHUB_TOKEN,
-    anthropicApiKey: ANTHROPIC_KEY,
+    modelAuth: { ANTHROPIC_API_KEY: ANTHROPIC_KEY },
   });
 });
 
@@ -473,7 +484,7 @@ test("missing credentials name every absent slug, linear first, without leaking 
   const fake = fakeSandbox();
   const base = deps({
     sandbox: fake.sandbox,
-    credentials: fakeCredentials([credentialRecord(FACTORY_GITHUB_SLUG), credentialRecord(FACTORY_ANTHROPIC_SLUG)]),
+    credentials: fakeCredentials([credentialRecord(FACTORY_GITHUB_SLUG)]),
   });
   const effects = createFactoryLoopEffects(base);
   for (const promise of [loadFactoryContext(base), effects.enumerate(LOOP), workedRunId(effects)]) {
@@ -488,7 +499,6 @@ test("missing credentials name every absent slug, linear first, without leaking 
       credentials: fakeCredentials([
         credentialRecord(FACTORY_LINEAR_SLUG, { secret: "   " }),
         credentialRecord(FACTORY_GITHUB_SLUG, { enabled: false }),
-        credentialRecord(FACTORY_ANTHROPIC_SLUG),
       ]),
     }),
   );
@@ -534,7 +544,7 @@ test("work preflights on a warm-released handle, then runs the wrapper with the 
       guidance: "smaller diff please",
       linearApiKey: LINEAR_KEY,
       githubToken: GITHUB_TOKEN,
-      anthropicApiKey: ANTHROPIC_KEY,
+      modelAuth: { ANTHROPIC_API_KEY: ANTHROPIC_KEY },
       factorySessionId: factorySessionIdFor("factory:loop-1:item-1"),
       repoDir: REPO_DIR,
       factorySourceDir: FACTORY_SOURCE_DIR,
@@ -572,6 +582,117 @@ test("a run with no pull request carries the wrapper's redacted diagnostics in i
   assert.match(verdict.reason, /\[claude-stderr\] token \*\*\* rejected/);
   assert.equal(verdict.reason.includes(GITHUB_TOKEN), false);
   assert.equal(verdict.reason.includes("npm warn"), false);
+});
+
+test("loadFactoryContext re-resolves modelAuthEnv per run, so a rotated core credential reaches the next run without a restart", async () => {
+  const fake = fakeSandbox();
+  const auth = fakeModelAuthEnv({ ANTHROPIC_API_KEY: "key-before" }, { ANTHROPIC_API_KEY: "key-after" });
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox, modelAuthEnv: auth.modelAuthEnv }));
+
+  await workedRunId(effects);
+  await workedRunId(effects, { ...ITEM, attempts: 1 });
+
+  assert.deepEqual(
+    wrapperEnvs(fake.calls).map((env) => env.ANTHROPIC_API_KEY),
+    ["key-before", "key-after"],
+  );
+  assert.equal(auth.calls, 2);
+});
+
+test("a model auth env with no credential key fails every entry point with the model-auth note and no sandbox call", async () => {
+  const empty: NodeJS.ProcessEnv[] = [{}, { ANTHROPIC_BASE_URL: "https://gw.internal" }, { ANTHROPIC_API_KEY: "   " }];
+  for (const env of empty) {
+    const fake = fakeSandbox();
+    const fetched = fakeFetch([]);
+    const base = deps({
+      sandbox: fake.sandbox,
+      fetch: fetched.fetch,
+      modelAuthEnv: fakeModelAuthEnv(env).modelAuthEnv,
+    });
+    const effects = createFactoryLoopEffects(base);
+
+    for (const promise of [loadFactoryContext(base), effects.enumerate(LOOP), workedRunId(effects)]) {
+      assert.equal(
+        (await rejection(promise)).message,
+        "model auth: core has no Anthropic credential configured",
+        JSON.stringify(env),
+      );
+    }
+    assert.deepEqual(fake.calls, []);
+    assert.equal(fetched.calls.length, 0);
+  }
+});
+
+test("a deployment missing both its credentials and its model auth is told about the credentials first", async () => {
+  const base = deps({
+    credentials: fakeCredentials([]),
+    modelAuthEnv: fakeModelAuthEnv({}).modelAuthEnv,
+  });
+
+  assert.equal(
+    (await rejection(loadFactoryContext(base))).message,
+    `factory_credentials_missing: ${FACTORY_LINEAR_SLUG}, ${FACTORY_GITHUB_SLUG}`,
+  );
+});
+
+test("the sandbox env carries exactly the model-auth and base-URL keys core resolved, and none of the other env it was handed", async () => {
+  const fake = fakeSandbox();
+  const effects = createFactoryLoopEffects(
+    deps({
+      sandbox: fake.sandbox,
+      modelAuthEnv: fakeModelAuthEnv({
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth-token",
+        ANTHROPIC_AUTH_TOKEN: "auth-token",
+        ANTHROPIC_BASE_URL: "https://gw.internal",
+        PATH: "/usr/bin",
+        HTTP_PROXY: "http://proxy.internal:3128",
+        HOME: "/root",
+        TMPDIR: "/tmp",
+      }).modelAuthEnv,
+    }),
+  );
+
+  await workedRunId(effects);
+
+  const env = wrapperEnvs(fake.calls)[0] ?? {};
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "oauth-token");
+  assert.equal(env.ANTHROPIC_AUTH_TOKEN, "auth-token");
+  assert.equal(env.ANTHROPIC_BASE_URL, "https://gw.internal");
+  for (const key of ["ANTHROPIC_API_KEY", "PATH", "HTTP_PROXY", "HOME", "TMPDIR"]) {
+    assert.equal(Object.hasOwn(env, key), false, `${key} must not reach the sandbox`);
+  }
+});
+
+test("the no-PR diagnostic tail redacts a resolved model token but leaves the base URL readable", async () => {
+  const stdout = [
+    "[claude-stderr] token oauth-token rejected",
+    "[io-coding-agent-js] FAIL: https://gw.internal refused the request",
+    "",
+  ].join("\n");
+  const fake = fakeSandbox({ stdout });
+  const effects = createFactoryLoopEffects(
+    deps({
+      sandbox: fake.sandbox,
+      modelAuthEnv: fakeModelAuthEnv({
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth-token",
+        ANTHROPIC_BASE_URL: "https://gw.internal",
+      }).modelAuthEnv,
+    }),
+  );
+
+  const runId = await workedRunId(effects);
+  const verdict = await effects.evaluate({ loop: LOOP, item: ITEM, attempt: 1, runId });
+
+  assert.match(verdict.reason, /\[claude-stderr\] token \*\*\* rejected/);
+  assert.match(verdict.reason, /FAIL: https:\/\/gw\.internal refused the request/);
+});
+
+test("a modelAuthEnv that rejects surfaces its own failure instead of being swallowed into the no-credential note", async () => {
+  const base = deps({
+    modelAuthEnv: () => Promise.reject(new Error("keychain_unavailable")),
+  });
+
+  assert.equal((await rejection(loadFactoryContext(base))).message, "keychain_unavailable");
 });
 
 test("factorySessionIdFor is a stable positive integer per item and differs across items and loops", () => {
@@ -1002,7 +1123,6 @@ const slackCredentials = (over: Partial<DecryptedServiceCredential> | null = {})
   fakeCredentials([
     credentialRecord(FACTORY_LINEAR_SLUG),
     credentialRecord(FACTORY_GITHUB_SLUG),
-    credentialRecord(FACTORY_ANTHROPIC_SLUG),
     over === null ? null : credentialRecord(FACTORY_SLACK_SLUG, over),
   ]);
 
@@ -1156,7 +1276,7 @@ test("a blank or unset slack channel posts nothing, requires no credential, and 
         config,
         linearApiKey: LINEAR_KEY,
         githubToken: GITHUB_TOKEN,
-        anthropicApiKey: ANTHROPIC_KEY,
+        modelAuth: { ANTHROPIC_API_KEY: ANTHROPIC_KEY },
         factorySessionId: factorySessionIdFor(runId.replace(/:\d+$/, "")),
         repoDir: REPO_DIR,
         factorySourceDir: FACTORY_SOURCE_DIR,
@@ -1191,7 +1311,7 @@ test("loadFactoryContext carries the slack bot token as a key only when the cred
     config: SLACK_CONFIG,
     linearApiKey: LINEAR_KEY,
     githubToken: GITHUB_TOKEN,
-    anthropicApiKey: ANTHROPIC_KEY,
+    modelAuth: { ANTHROPIC_API_KEY: ANTHROPIC_KEY },
     slackBotToken: SLACK_TOKEN,
   });
 

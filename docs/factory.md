@@ -7,15 +7,19 @@ converged, and ships it by marking it ready and moving the ticket.
 
 ## Prerequisites
 
-Three org-scoped service credentials in the keychain. The slugs are fixed.
+Two org-scoped service credentials in the keychain. The slugs are fixed.
 
-| Slug                | Holds                | Scope it needs                                                     |
-| ------------------- | -------------------- | ------------------------------------------------------------------ |
-| `factory-linear`    | A Linear API key     | Read and write issues, comments, and states on the configured team |
-| `factory-github`    | A GitHub token       | Push, pull requests, and Actions re-runs on the publish project    |
-| `factory-anthropic` | An Anthropic API key | Model calls made by `claude` inside the sandbox                    |
+| Slug             | Holds            | Scope it needs                                                     |
+| ---------------- | ---------------- | ------------------------------------------------------------------ |
+| `factory-linear` | A Linear API key | Read and write issues, comments, and states on the configured team |
+| `factory-github` | A GitHub token   | Push, pull requests, and Actions re-runs on the publish project    |
 
 A missing or disabled credential fails the fire before any sandbox work, naming the slug.
+
+Model calls made by `claude` inside the sandbox use core's own Anthropic configuration —
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, or the
+`CLAUDE_AUTH_CREDENTIAL` keychain credential — and not a pasted secret. A deployment with none of
+them fails the fire with `model auth: core has no Anthropic credential configured`.
 
 ## Configuration
 
@@ -38,7 +42,7 @@ delete the loop from the Loops page to stop it.
 Apply also gives the loop a cron that fires it every five minutes, so tickets are picked up
 without anyone asking. Applying again reuses that cron. Fire it early from the Loops page, or
 through `POST /v1/loops/:id/fire`. Three consecutive failed fires quarantine the loop, which on a
-five-minute cron is fifteen minutes: put the three credentials in the keychain before Apply, and
+five-minute cron is fifteen minutes: put the two credentials in the keychain before Apply, and
 re-enable a quarantined loop from the Loops page. A fire that lands while a run is still working
 claims nothing and records `deferred: <ticket> is still in progress` — the factory works one
 ticket at a time, and the queued tickets are picked up by the first fire after the run ends.
@@ -62,8 +66,9 @@ ticket at a time, and the queued tickets are picked up by the first fire after t
 
 The wrapper runs as root inside the sandbox with `IS_SANDBOX=1`, which lets `claude` run with
 `--dangerously-skip-permissions`. The model therefore executes tool calls with no permission gate,
-and its process environment holds the three credentials above. The blast radius is the sandbox
-plus whatever those three tokens can reach: the configured Linear team and the publish project.
+and its process environment holds the two credentials above plus core's model credential. The
+blast radius is the sandbox plus whatever those tokens can reach: the configured Linear team, the
+publish project, and core's Anthropic account.
 Scope the tokens accordingly. Admin-supplied commands in the config
 also run in that environment, so the admin console is the trust boundary.
 

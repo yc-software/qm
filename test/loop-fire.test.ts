@@ -9,12 +9,7 @@ import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { FACTORY_LOOP_SURFACE, type FactoryEffectsDeps } from "../src/loops/factory/effects.ts";
 import { FACTORY_REQUIRED_TOOLS } from "../src/loops/factory/preflight.ts";
-import {
-  FACTORY_ANTHROPIC_SLUG,
-  FACTORY_GITHUB_SLUG,
-  FACTORY_LINEAR_SLUG,
-  FACTORY_SLACK_SLUG,
-} from "../src/loops/factory/credentials.ts";
+import { FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG, FACTORY_SLACK_SLUG } from "../src/loops/factory/credentials.ts";
 import { FACTORY_WRAPPER } from "../src/loops/factory/process-work.ts";
 import type { FactoryConfig } from "../src/resolution/config-store.ts";
 import type { ServiceCredentialReader } from "../src/credentials/keychain.ts";
@@ -577,7 +572,6 @@ const SLACK_TOKEN = "xoxb-FAKE_SLACK_TOKEN";
 const SECRET_BY_SLUG: Record<string, string> = {
   [FACTORY_LINEAR_SLUG]: LINEAR_KEY,
   [FACTORY_GITHUB_SLUG]: GITHUB_TOKEN,
-  [FACTORY_ANTHROPIC_SLUG]: ANTHROPIC_KEY,
   [FACTORY_SLACK_SLUG]: SLACK_TOKEN,
 };
 const WRAPPER_STDOUT = `working\nBRANCH:${FACTORY_BRANCH}\nMR:42\n`;
@@ -816,6 +810,7 @@ function factoryFake(
       loops,
       fetch: fetched.fetch,
       pausePollMs: 1,
+      modelAuthEnv: async () => ({ ANTHROPIC_API_KEY: ANTHROPIC_KEY }),
       get repoDir(): string {
         repoDirReads += 1;
         return "/workspace/repo";
@@ -956,8 +951,8 @@ test("factory surface: a missing config or credential fails the fire before the 
     ["config", /factory_config_missing/, { config: null }],
     [
       "credential",
-      /factory_credentials_missing: factory-github, factory-anthropic/,
-      { credentials: factoryCredentials([FACTORY_GITHUB_SLUG, FACTORY_ANTHROPIC_SLUG]) },
+      /factory_credentials_missing: factory-github/,
+      { credentials: factoryCredentials([FACTORY_GITHUB_SLUG]) },
     ],
   ];
   for (const [name, expected, over] of cases) {
