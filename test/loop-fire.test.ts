@@ -928,9 +928,11 @@ test("factory surface: a fire records the wrapper's stage trail on the persisted
 
   assert.equal(result.status, "ok");
   const worked = await s.items.get(item.id);
-  assert.equal(worked?.sourcePayload?.title, `${FACTORY_TICKET} title`);
+  assert.ok(worked?.sourcePayload);
+  assert.equal(worked.sourcePayload.title, `${FACTORY_TICKET} title`);
+  const stages = worked.sourcePayload.stages as { name: string; state: string }[];
   assert.deepEqual(
-    (worked?.sourcePayload?.stages as { name: string; state: string }[]).map((stage) => [stage.name, stage.state]),
+    stages.map((stage) => [stage.name, stage.state]),
     [
       ["Setup", "done"],
       ["Implement", "done"],

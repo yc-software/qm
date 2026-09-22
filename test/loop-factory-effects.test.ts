@@ -1337,6 +1337,29 @@ test("a stage line split across two chunks still lands, and the exit closes the 
   assert.deepEqual(await effects.captureOutputs({ loop: LOOP, item: ITEM, runId }), [OPEN_PR_ARTIFACT]);
 });
 
+test("the write a stage opens marks it active and the one before it done, so a live run shows where it is", async () => {
+  const items = fakeItems();
+  const fake = fakeSandbox({ read: trailReads("[trail] [Fetch] a\n", "[trail] [Analyze] b\n") });
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox, items: items.items }));
+
+  await workedRunId(effects);
+
+  assert.deepEqual(
+    trails(items).map((stages) => stages.map((stage) => [stage.name, stage.state])),
+    [
+      [["Fetch", "active"]],
+      [
+        ["Fetch", "done"],
+        ["Analyze", "active"],
+      ],
+      [
+        ["Fetch", "done"],
+        ["Analyze", "done"],
+      ],
+    ],
+  );
+});
+
 test("trail-channel noise never becomes a stage, and the trail writes once per change, not once per line", async () => {
   const items = fakeItems();
   const fake = fakeSandbox({
@@ -1376,6 +1399,7 @@ test("a second Verify after Review appends a third entry instead of reusing the 
     ["Verify", "done"],
   ]);
   const first = trails(items)[0]?.[0];
+  assert.equal(typeof first?.ts, "number");
   assert.equal(trails(items).at(-1)?.[0]?.ts, first?.ts);
 });
 
