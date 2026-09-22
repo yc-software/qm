@@ -1,3 +1,4 @@
+import { formatMessageTime } from "./message-time.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "./app-edit";
 import { isConnectionReturn } from "./connection-return";
@@ -180,6 +181,7 @@ installMarkdownSanitizer();
 
 const detachedAgents = new WeakSet<Agent>();
 interface SettledRowKey {
+  day: string;
   index: number;
   activity: WorkBlock["activity"] | undefined;
   status: WorkBlock["status"] | undefined;
@@ -1564,9 +1566,11 @@ export function createChatSurface(
     const speakerLabel = speakerLabelFor(message);
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
+    const day = new Date().toDateString();
     const hit = settledRowCache.get(message as object);
     if (
       hit &&
+      hit.day === day &&
       hit.index === index &&
       hit.activity === work?.activity &&
       hit.status === work?.status &&
@@ -1585,6 +1589,7 @@ export function createChatSurface(
     }
     const tpl = chatMessage(message, index, isStreaming);
     settledRowCache.set(message as object, {
+      day,
       index,
       activity: work?.activity,
       status: work?.status,
@@ -1757,7 +1762,7 @@ export function createChatSurface(
     const forkable = Boolean(index >= 0 && chatState.threadRef && chatState.sessionId && chatState.agent);
     return html`
       <div class="message-meta">
-        ${ts !== undefined ? html`<span class="message-time">${formatClock(ts)}</span>` : nothing}
+        ${ts !== undefined ? html`<span class="message-time">${formatMessageTime(ts)}</span>` : nothing}
         ${
           text
             ? html`<button
@@ -1837,14 +1842,6 @@ export function createChatSurface(
     } catch (err) {
       ctx.composer.state.error = errMessage(err, "Could not fork the conversation.");
       drawActiveChat();
-    }
-  }
-
-  function formatClock(ms: number): string {
-    try {
-      return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    } catch {
-      return "";
     }
   }
 
