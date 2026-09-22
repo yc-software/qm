@@ -21,6 +21,7 @@ export interface ScopeMembershipDeps {
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
     list?(): Promise<Array<{ principalId: string; displayName?: string }>>;
     get?(principalId: string): Promise<{ principalId?: string; slackId?: string } | null>;
+    conversationRosterKnown?(kind: "channel" | "group", id: string): Promise<boolean>;
   };
   identity?: {
     classify(externalId: string, isExternalGuest?: boolean): { type?: string; teamIds?: readonly string[] };
@@ -116,11 +117,11 @@ export function createIsCurrentSharedScopeMember(deps: ScopeMembershipDeps): IsC
  * stored check says "not a member" and Open sharing silently degrades for that
  * one turn: no carried memory, no live-speaker keychain. The plugin fetched the
  * room's roster from Slack for this very turn and verified the speaker is in
- * it, so when the store knows nothing about the room, that roster stands in.
+ * it, so while the store holds no roster for the room, that roster stands in.
  *
  * Narrow on purpose: only the speaker, only a complete all-internal roster,
- * never for managed groups, and never when the store already has a roster for
- * the room (a stored "no" is a revocation and must win).
+ * never for managed groups, and never once the store holds a roster for the
+ * room (a stored roster that excludes the speaker is a revocation and wins).
  */
 async function liveRosterCoversStoreLag(
   deps: ScopeMembershipDeps,
@@ -134,8 +135,13 @@ async function liveRosterCoversStoreLag(
   if (!live.members.length || !live.members.every((m) => m.type === "internal")) return false;
   if (!live.members.some((m) => samePerson(m.id, principalId))) return false;
   if (kind === "group" && deps.managedGroups?.recognizes(ref)) return false;
-  // Tri-state: a true/false answer means the store has a roster for this room and its word stands.
-  return (await sharedScopeMembership(deps, kind, ref, principalId)) === undefined;
+  const rosterKnown = deps.directory?.conversationRosterKnown;
+  if (!rosterKnown) return false;
+  try {
+    return (await rosterKnown.call(deps.directory, kind, ref)) === false;
+  } catch {
+    return false;
+  }
 }
 
 /** Forward the turn's verified roster only for lookups about the turn's own scope. */

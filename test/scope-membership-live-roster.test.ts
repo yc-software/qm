@@ -18,15 +18,13 @@ const live: LiveRoster = {
   ],
 };
 
-function deps(overrides: Partial<ScopeMembershipDeps["directory"]> = {}): ScopeMembershipDeps {
+function deps(overrides: Partial<NonNullable<ScopeMembershipDeps["directory"]>> = {}): ScopeMembershipDeps {
   return {
     directory: {
       channelMember: async () => false,
-      // The store only knows C0KNOWN, and josh is not in it.
+      // The store holds a roster only for C0KNOWN, and josh is not in it.
       groupMember: async (groupId, principalId) => groupId === "C0KNOWN" && principalId === "regan@example.com",
-      // Tri-state view: the store has a roster only for C0KNOWN.
-      groupMembership: async (groupId, principalId) =>
-        groupId === "C0KNOWN" ? principalId === "regan@example.com" : undefined,
+      conversationRosterKnown: async (_kind, id) => id === "C0KNOWN",
       ...overrides,
     },
   };
@@ -41,7 +39,7 @@ test("first turn in a room the store has not synced yet: the verified live roste
   assert.equal(await check("mallory@example.com", newGroup, live), false);
 });
 
-test("a stored roster is authoritative: revocation still wins over a claimed live roster", async () => {
+test("a stored roster is authoritative: a room the store knows without the speaker stays closed", async () => {
   const check = createIsCurrentSharedScopeMember(deps());
   assert.equal(await check("josh@example.com", knownGroup, live), false);
   assert.equal(await check("regan@example.com", knownGroup), true);
@@ -72,21 +70,26 @@ test("no fallback for incomplete or non-internal rosters, managed groups, or non
   assert.equal(await inactive("josh@example.com", newGroup, live), false);
 });
 
-test("a thrown tri-state read counts as unknown; a store without a tri-state view treats false as unknown", async () => {
+test("a failed or missing roster probe fails closed", async () => {
   const boom = createIsCurrentSharedScopeMember(
     deps({
-      groupMembership: async () => {
+      conversationRosterKnown: async () => {
         throw new Error("store down");
       },
     }),
   );
-  assert.equal(await boom("josh@example.com", newGroup, live), true);
-  assert.equal(await boom("mallory@example.com", newGroup, live), false);
-  const legacy = createIsCurrentSharedScopeMember({
+  assert.equal(await boom("josh@example.com", newGroup, live), false);
+  const noProbe = createIsCurrentSharedScopeMember({
     directory: { channelMember: async () => false, groupMember: async () => false },
   });
-  assert.equal(await legacy("josh@example.com", newGroup, live), true);
-  assert.equal(await legacy("josh@example.com", newGroup), false);
+  assert.equal(await noProbe("josh@example.com", newGroup, live), false);
+});
+
+test("a listed room whose roster is not synced yet still counts as unknown", async () => {
+  // The store may list a room by id before its member list has been crawled.
+  const check = createIsCurrentSharedScopeMember(deps({ conversationRosterKnown: async () => false }));
+  assert.equal(await check("josh@example.com", knownGroup, live), true);
+  assert.equal(await check("mallory@example.com", knownGroup, live), false, "still only the speaker");
 });
 
 test("withLiveRoster forwards the hint only for the turn's own scope", async () => {

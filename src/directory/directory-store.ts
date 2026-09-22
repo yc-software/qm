@@ -71,6 +71,12 @@ export interface DirectoryStore {
   groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
   listGroupsFor(principalId: string): Promise<string[]>;
   conversationMembers(kind: "channel" | "group", id: string): Promise<DirectoryMember[] | undefined>;
+  /**
+   * Whether the store holds a roster for this room. True means the room is listed and its member list
+   * has been synced, so a membership verdict about it is authoritative. False means the store has not
+   * heard of the room yet (or knows it only by id) and has nothing to say about who is in it.
+   */
+  conversationRosterKnown(kind: "channel" | "group", id: string): Promise<boolean>;
   listChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
   setWorkspaceUrl(url: string): Promise<void>;
   meta(): Promise<DirectoryMeta>;
@@ -239,6 +245,11 @@ export function createDirectoryStore(): DirectoryStore {
       const memberships = groupMembers;
       if (!memberships) return [];
       return [...memberships].filter(([, members]) => members.has(principalId)).map(([groupId]) => groupId);
+    },
+    async conversationRosterKnown(kind, id) {
+      if (kind === "channel")
+        return channels.some((channel) => channel.channelId === id) && knownChannelRosters?.has(id) === true;
+      return listedGroupIds?.has(id) === true && knownGroupRosters?.has(id) === true;
     },
     async conversationMembers(kind, id) {
       let ids: string[];

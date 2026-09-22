@@ -565,6 +565,20 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.map((row) => row.group_id as string);
     },
 
+    async conversationRosterKnown(kind, id) {
+      const rows =
+        kind === "channel"
+          ? await q("SELECT roster_known FROM directory_channels WHERE org_id = $1 AND channel_id = $2 LIMIT 1", [
+              orgId,
+              id,
+            ])
+          : await q("SELECT roster_known FROM directory_groups WHERE org_id = $1 AND group_id = $2 LIMIT 1", [
+              orgId,
+              id,
+            ]);
+      return rows[0]?.roster_known === true;
+    },
+
     async conversationMembers(kind, id) {
       const rows =
         kind === "channel"
