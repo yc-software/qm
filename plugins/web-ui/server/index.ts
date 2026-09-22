@@ -1203,6 +1203,28 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
 
+  {
+    method: "GET",
+    path: "/api/composio/callback",
+    handle: async (c) => {
+      c.res.setHeader("Cache-Control", "no-store");
+      c.res.setHeader("Referrer-Policy", "no-referrer");
+      const result = await coreFetch(
+        "POST",
+        "/v1/composio/complete-auth",
+        JSON.stringify({ sessionUri: c.url.searchParams.get("session_uri") }),
+      );
+      if (result.status !== 200) return relay(c.res, result);
+      const data = JSON.parse(result.text) as { returnTo?: string | null };
+      const base = new URL(PUBLIC_URL);
+      const target = data.returnTo
+        ? new URL(data.returnTo, base)
+        : new URL("./?view=settings", `${PUBLIC_URL.replace(/\/$/, "")}/`);
+      if (target.origin !== base.origin) return json(c.res, 400, { error: "invalid_return_url" });
+      c.res.writeHead(303, { location: target.href });
+      c.res.end();
+    },
+  },
   { method: "GET", path: "/api/composio/slack", handle: (c) => relayCore(c.res, "GET", "/v1/composio/slack") },
   {
     method: "POST",

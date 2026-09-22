@@ -172,11 +172,11 @@ export function sanitizeReturnTo(value: string | null | undefined, publicOrigin:
   if (!value || value[0] !== "/") return "/";
   if (value.startsWith("//")) return "/";
   if (/[\\\x00-\x1f]/.test(value)) return "/";
-  if (/%2f%2f|%5c/i.test(value)) return "/";
+  if (/%2f%2f|%5c/i.test(value.split(/[?#]/, 1)[0]!)) return "/";
   try {
     const base = new URL(publicOrigin).origin;
     const u = new URL(value, base);
-    if (u.origin !== base) return "/";
+    if (u.origin !== base || u.pathname.startsWith("//")) return "/";
     return `${u.pathname}${u.search}${u.hash}`;
   } catch {
     return "/";

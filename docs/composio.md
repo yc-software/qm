@@ -1,33 +1,49 @@
-# Composio through an ordinary credential
+# Composio through the QM backend
 
-QM uses Composio from its computer, through a skill and the official SDK.
+QM discovers apps, creates consent links, and executes Composio tools through its authenticated backend. Agent code never receives the project API key. The composio skill calls `/v1/composio` through the existing execute tool, retaining its command-policy and approval gates.
 
 ## Setup
 
-Register an ordinary personal keychain credential named `composio` with env key `COMPOSIO_API_KEY`, or use an existing org service credential with `delivery: "env"` and that env key. Set the normal credential grants. No provider flag is needed. Never paste the key into a conversation, a script or a repository.
+Store a personal keychain credential with env key `COMPOSIO_API_KEY`, or an org service credential with `delivery: "env"` and that env key. Existing records and service-credential grants remain compatible. The env key identifies a reserved backend credential: despite the legacy delivery label, QM never materializes it into a computer, command handle, or keychain-use script. Multi-field records containing that key are also backend-only.
 
-The existing credential machinery delivers the key only where authorized. The `composio` skill discovers apps and tools, starts consent, chooses connections and makes SDK calls. Onboarding and app skills prefer it when an authorized credential is available; otherwise direct OAuth remains unchanged. Sprites and Modal receive a pinned, prebuilt SDK bundle during provisioning. The core image carries this credential-free asset; SDK calls still run only in the scoped computer. Other sandbox backends retain the on-demand install described by the skill.
+An org administrator configures the project once. Users connect their own apps through QM's picker or agent-provided consent links. Composio handles provider authentication and refresh. Some apps still require provider setup. Never paste a project key into chat, scripts, or Git.
 
-## Access model
+## Authorization and execution
 
-A Composio project API key grants its holder the project's permitted capabilities. Resource-area restrictions are not per-user account isolation. Keychain grants control who receives that key; they do not narrow its authority within Composio. A caller-supplied `userId` is not a security boundary.
+The runtime attests whether the initiating actor may use their connections in the current context. This follows existing owner-keychain access: personal conversations, explicitly Open sharing on a human-started shared turn, and authorized automations using their owner's keychain. Shared human requests recheck sharing posture. Org credentials require current grants for the conversation audience. Published apps and bot actors cannot use this API.
 
-Use a key whose authority is appropriate for every recipient. Do not distribute one cross-company project key to mutually isolated companies and claim their connections remain isolated. This skill does not solve shared hosting credential isolation or provisioning.
+The backend derives the Composio user ID from the organization and canonical QM principal. Before every execution it verifies the chosen account's owner, ACTIVE status, disabled flag, and toolkit, then checks the tool and concrete version. Request bodies cannot supply another user identity or override authentication. There is no raw proxy, workbench, or tool-router execution endpoint. The generic credential broker rejects Composio destinations so it cannot serve as a project-wide bypass.
 
-Existing command policies remain unchanged. Rules written for direct provider URLs or particular CLI commands do not automatically cover SDK calls; operators must review their policy coverage. Skill instructions retain the user's sending, drafting and approval requirements.
+Tool discovery returns schemas; connection discovery returns account IDs and toolkit names, not credentials. Execution returns provider data and success/error status. Audit records contain the actor, scope, tool, account and execution stage without request arguments or response bodies. An uncertain execution failure is never retried automatically.
 
-## Consent and limitations
+Calls run through the ordinary execute tool. Existing policies inspecting provider URLs or CLI syntax must be updated to recognize the new QM API calls; these are not a semantic per-provider operation approval system. Strict posture continues to block direct control-plane mutations.
 
-Composio handles provider authentication and refresh. Some apps still require provider admin/customer setup. If project callback identity verification is enabled, an existing authenticated verifier must complete consent; this skill neither implements nor bypasses it. See [the vendor verifier contract](https://docs.composio.dev/reference/api-reference/connected-accounts#callback-identity-verification).
+## Browser callback verification
 
-No live key, grant or project setting is changed by adding these skills. Test app-originated consent and requested operations before rollout. Automatic SDK file transfer is disabled. The separate chat bot installation and deterministic background source adapters remain unchanged.
+Enable callback identity verification before production use, including for personal projects. Backend execution isolation alone does not prevent a forwarded consent link from attaching the wrong human’s account. For a project dedicated to one QM deployment, configure Composio's project verifier URL as:
 
-## Rollback
+```text
+https://<QM web origin>/api/composio/callback
+```
 
-Seed removal does not delete an already-published skill. When replacing the earlier prototype, archive its obsolete `integrations` skill if installed. To roll this version back, restore the previous app/onboarding skills, archive the published `composio` skill and stop workflows using it. Revoke any separately enabled credential grants; rotate or revoke the provider key if previously delivered copies must stop working. Do not delete provider connections without authorization.
+The authenticated web surface passes the opaque `session_uri` to core. Core supplies the signed-in user's derived identity to Composio's `connected_accounts/complete_auth` endpoint. Agent capabilities cannot complete verification. The browser must be signed into the same QM account that started consent.
 
-## SDK provisioning
+Composio ignores a link's `callback_url` when project verification is enabled. QM saves the original return URL and expiry in its durable store, keyed by principal and connected account, and restores it after successful verification. This preserves app-picker state and personal Slack linking. The web surface accepts only same-origin return destinations. The backend never changes project settings automatically.
 
-For source development, `npm start`, `npm run dev`, `npm run worker`, and the dev-instance launcher build the bundle automatically. When launching the core directly with Node, first run `npm run build:connector-sdk`. The core Dockerfile builds the same asset automatically. The published CLI deploys this core image; it does not run the connector SDK itself. The standalone lockfile in `deploy/connector-sdk` pins the SDK and all build dependencies. Its build produces portable Node JavaScript plus third-party licenses in `.generated/connector-sdk`; no native modules or credentials are included. Rebuild after changing the lockfile.
+Verification is project-wide. A project shared across several company deployments needs a trusted central verifier/router or separate company projects before enabling it. Do not point that shared project's verifier at one company's QM URL. Dashboard-originated connections cannot complete against a verifier that only recognizes QM users. See [Composio's verifier contract](https://docs.composio.dev/reference/api-reference/connected-accounts#callback-identity-verification).
 
-Provisioning checks the SDK's SHA-256, reuses a matching `/opt/qm/composio/sdk.cjs` from a baked image, or transfers the bundle to `$HOME/.qm/composio/<sha>/`. It atomically activates `$HOME/.qm/composio/current`. Concurrent provisioning can transfer duplicate bytes, but only verified complete files become active. Interrupted transfers are retried on the next provision. No npm registry connection or dependency resolution occurs in the sandbox. Home restoration runs before provisioning, so a restored older bundle is upgraded automatically; previous versions remain available for rollback. Node 22.22.3 or newer is required.
+## Existing deployment cutover
+
+A source or image pin must adopt this change before behavior changes. Existing credential records, grants, canonical user IDs, and connected accounts are preserved; upgrading alone does not disconnect users or rotate keys.
+
+1. Inventory project use across deployments and identify any personal credentials, generic broker records, custom skills, scripts, or scheduled jobs that directly call the SDK. Connections created under ad hoc user IDs require explicit reconciliation or reconnection; QM never guesses another account owner.
+2. Update custom callers to the authenticated `/v1/composio` API. Standard seed-managed skills update through normal startup seeding. User-authored or deployment-layer overrides are not silently overwritten and must be updated separately. SDK scripts that expect a sandbox `COMPOSIO_API_KEY` stop working after upgrade.
+3. Deploy the same version to all core/worker instances that share the key and drain old runs. During a rolling mixed-version deployment, old workers can still deliver the old key.
+4. Rotate the Composio project API key and update its existing QM credential records after old workers are retired. Keep the same project so connected accounts and user IDs remain valid. Coordinate every deployment sharing the key. Historical sandbox files, snapshots, environment captures and scripts may retain old copies; blocking new materialization cannot revoke them. Rebuild or clean affected sandboxes as appropriate; rotation invalidates old key copies.
+5. Configure and test callback verification only after deciding project routing. Existing connections do not need new OAuth consent merely because verification is enabled. Verify one new connection and one read-only operation, plus affected scheduled jobs and shared conversations.
+
+No production credentials, projects, consent settings, fleet pins, or connections are changed by installing this code in a development checkout. Rolling back to an older worker restores its ability to deliver whichever project key it can read and therefore reopens the old boundary.
+
+## SDK assets
+
+Older images and the build pipeline may still contain the credential-free Composio SDK bundle. It is not an authorization mechanism and is no longer used by the standard skill. Keeping or removing that asset does not replace rotating previously delivered keys.

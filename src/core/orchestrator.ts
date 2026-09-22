@@ -1,3 +1,4 @@
+import { isBackendCredential } from "../credentials/keychain.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
 import {
@@ -1479,6 +1480,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         for (const cred of serviceCredRecords) {
           if (
+            isBackendCredential(cred) ||
             cred.delivery !== "env" ||
             !cred.envKey ||
             !cred.enabled ||
@@ -1539,6 +1541,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         controlClaims = {
           ...scopeAttestation,
           aud: CONTROL_PLANE_AUD,
+          ...(allInternal &&
+          (scopeId === personalScope(actor.id) ||
+            openSpeakerKeychain ||
+            (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true))
+            ? { ownerConnections: true }
+            : {}),
           exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
           ...(turnTimezone ? { timezone: turnTimezone } : {}),
           ...(destination ? { destination } : {}),
@@ -1940,6 +1948,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         systemPrompt += sharedCredsBlock;
+        if (
+          serviceCredRecords.some(
+            (cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret && grantedCredSlugs.has(cred.slug),
+          )
+        )
+          systemPrompt +=
+            "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
         if (envCredLines.length) {
           systemPrompt +=
             "\n\n## Org credentials on your computer\n" +

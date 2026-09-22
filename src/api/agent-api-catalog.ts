@@ -24,8 +24,30 @@ const onPath = (m: string, p: string) => (method: string, pathname: string) => m
 
 const FAMILIES: AgentApiFamily[] = [
   {
-    match: onPath("GET", "/v1/composio/identity"),
+    match: (method, path) =>
+      (method === "GET" &&
+        ["identity", "connections", "toolkits", "tools"].some((name) => path === `/v1/composio/${name}`)) ||
+      (method === "POST" && ["authorize", "execute"].some((name) => path === `/v1/composio/${name}`)),
+    guidance:
+      "Use the composio skill for backend app access. Never load a Composio project key or call its SDK directly. Execution binds accounts to your identity and sharing permissions.",
     routes: [
+      { method: "GET", path: "/v1/composio/toolkits", summary: "discover available apps; cursor pagination" },
+      { method: "GET", path: "/v1/composio/connections", summary: "list your active connections; cursor pagination" },
+      {
+        method: "GET",
+        path: "/v1/composio/tools?toolkit=&query=",
+        summary: "discover tool schemas and concrete versions; cursor pagination",
+      },
+      {
+        method: "POST",
+        path: "/v1/composio/authorize",
+        summary: "{toolkit} creates a personal consent link on a human-started turn",
+      },
+      {
+        method: "POST",
+        path: "/v1/composio/execute",
+        summary: "{tool,accountId,version,arguments} executes a discovered tool using your own active connection",
+      },
       {
         method: "GET",
         path: "/v1/composio/identity",

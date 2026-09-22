@@ -30,6 +30,7 @@ export interface CapabilityClaims {
   destinations?: CandidateDestination[];
   defaultDestinationKey?: string;
   credentials?: string[];
+  ownerConnections?: boolean;
   members?: Principal[];
   keychainMembers?: Principal[];
   privateScope?: boolean;
@@ -83,6 +84,7 @@ export async function verifyCapabilityToken(
   if (claims.timezone !== undefined && !isValidCapabilityTimezone(claims.timezone)) return null;
   if (claims.scopeVersion !== undefined && typeof claims.scopeVersion !== "string") return null;
   if (claims.destinations !== undefined && !Array.isArray(claims.destinations)) return null;
+  if (claims.ownerConnections !== undefined && typeof claims.ownerConnections !== "boolean") return null;
   if (claims.credentials !== undefined && !Array.isArray(claims.credentials)) return null;
   if (
     claims.grants !== undefined &&

@@ -1,3 +1,5 @@
+import { isBackendCredential } from "../../credentials/keychain.ts";
+import { livePersonCapability } from "../artifact-share.ts";
 import { mintSignedPayload, verifySignedPayload } from "../../auth/signed-token.ts";
 import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
 import { PrincipalLinkError } from "../../identity/principal-links.ts";
@@ -20,8 +22,32 @@ function composioUserIds(principal: string): string[] {
   return [...new Set(personIds(principal).map((id) => composioUserId(orgId(), id)))];
 }
 
+async function activeRun(ctx: ApiCtx): Promise<boolean> {
+  const cap = ctx.capability;
+  if (!cap) return true;
+  const run = cap.runId ? await ctx.deps.runs?.get(cap.runId) : null;
+  if (
+    !run ||
+    run.status !== "running" ||
+    !cap.runLeaseToken ||
+    run.leaseToken !== cap.runLeaseToken ||
+    run.attempts !== cap.runAttempt ||
+    run.sessionId !== cap.sessionId ||
+    !samePerson(run.request.actor.id, cap.actorId) ||
+    (run.leaseExpiresAt ?? 0) <= Date.now()
+  ) {
+    sendJson(ctx.res, 403, {
+      error: "inactive_run",
+      message: "Connected app access requires this run's current capability.",
+    });
+    return false;
+  }
+  return true;
+}
+
 async function credential(ctx: ApiCtx): Promise<{ key: string; principal: string } | null> {
-  const principal = ctx.actor?.p;
+  if (!(await activeRun(ctx))) return null;
+  const principal = ctx.capability?.actorId ?? ctx.actor?.p;
   if (!principal) {
     sendJson(ctx.res, 401, { error: "unauthorized" });
     return null;
@@ -31,9 +57,28 @@ async function credential(ctx: ApiCtx): Promise<{ key: string; principal: string
     return null;
   }
   const personal = scopeId("personal", principal);
+  if (ctx.capability) {
+    const cap = ctx.capability;
+    const shared = cap.scopeId !== personal;
+    if (
+      cap.ownerConnections !== true ||
+      cap.deployment ||
+      cap.botActor ||
+      (shared &&
+        livePersonCapability(cap) &&
+        (await ctx.deps.config?.resolveSharingPostureDurable(personal, cap.scopeId)) !== "open")
+    ) {
+      sendJson(ctx.res, 403, {
+        error: "private_connections",
+        message:
+          "Use your connected apps in your own conversation, or explicitly open sharing to this conversation on a human-started turn.",
+      });
+      return null;
+    }
+  }
   const own = (await ctx.deps.keychain?.listByOwner(principal)) ?? [];
   const candidates = own.filter(
-    (c) => c.kind === "env" && c.envKey === "COMPOSIO_API_KEY" && (!c.expiresAt || c.expiresAt > Date.now()),
+    (c) => c.kind === "env" && isBackendCredential(c) && (!c.expiresAt || c.expiresAt > Date.now()),
   );
   if (candidates.length > 1) {
     sendJson(ctx.res, 409, {
@@ -43,18 +88,26 @@ async function credential(ctx: ApiCtx): Promise<{ key: string; principal: string
     return null;
   }
   if (candidates.length === 1) {
-    const material = await ctx.deps.keychain!.materializeOwnById(principal, candidates[0]!.id, personal);
-    if (material.kind === "env") {
-      const key = material.env.find((e) => e.key === "COMPOSIO_API_KEY")?.value;
-      if (key) return { key, principal };
-    }
+    const key = await ctx.deps.keychain!.composioKey(principal, candidates[0]!.id);
+    if (key) return { key, principal };
     sendJson(ctx.res, 503, { error: "credential_unavailable" });
     return null;
   }
   const org = scopeId("org", orgId());
   const identity = ctx.deps.identity?.classify(principal) ?? { id: principal, type: "internal" as const };
+  const audience = ctx.capability && ctx.capability.scopeId !== personal ? ctx.capability.keychainMembers : [identity];
+  if (!audience?.length || audience.some((member) => member.type !== "internal")) {
+    sendJson(ctx.res, 403, { error: "unknown_audience" });
+    return null;
+  }
   const grants =
-    (await ctx.deps.acl?.grantsOfKind("service-cred", [identity], personal, org, principalEntitledToScope)) ?? [];
+    (await ctx.deps.acl?.grantsOfKind(
+      "service-cred",
+      audience,
+      ctx.capability?.scopeId ?? personal,
+      org,
+      principalEntitledToScope,
+    )) ?? [];
   const allowed = new Set(grants.map((g) => parseRef(g.ref).id));
   const records = ((await ctx.deps.serviceCreds?.listServiceCredentials(org)) ?? []).filter(
     (c) => c.enabled && c.hasSecret && c.delivery === "env" && c.envKey === "COMPOSIO_API_KEY" && allowed.has(c.slug),
@@ -124,6 +177,8 @@ async function catalog(ctx: ApiCtx): Promise<void> {
 }
 
 async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
+  if (ctx.capability && !livePersonCapability(ctx.capability))
+    return sendJson(ctx.res, 403, { error: "human_consent_required" });
   const access = await credential(ctx);
   if (!access) return;
   const toolkit = linkSlack ? "slack" : (ctx.body as { toolkit?: unknown } | null)?.toolkit;
@@ -150,9 +205,10 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
       return sendJson(ctx.res, 400, { error: "invalid_callback" });
     }
   }
+  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
   try {
     const session = await request(ctx, access.key, "/tool_router/session", {
-      user_id: composioUserId(orgId(), canonicalPerson(access.principal)),
+      user_id: userId,
       toolkits: { enable: [toolkit] },
       manage_connections: { enable: false },
       workbench: { enable: false },
@@ -165,6 +221,12 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
     });
     if (typeof link.connected_account_id !== "string" || !/^ca_[a-zA-Z0-9_-]+$/.test(link.connected_account_id))
       throw new Error("Invalid account");
+    if (typeof callbackUrl === "string" && ctx.deps.composioReturns) {
+      await ctx.deps.composioReturns.put(`${userId}:${link.connected_account_id}`, {
+        url: callbackUrl,
+        expiresAt: Date.now() + 20 * 60_000,
+      });
+    }
     const url = new URL(String(link.redirect_url));
     if (
       !(
@@ -242,6 +304,159 @@ async function connections(ctx: ApiCtx): Promise<void> {
       message: "Could not check connected apps. Please try again.",
     });
   }
+}
+
+async function tools(ctx: ApiCtx): Promise<void> {
+  const access = await credential(ctx);
+  if (!access) return;
+  const toolkit = ctx.url.searchParams.get("toolkit") ?? "";
+  const query = ctx.url.searchParams.get("query") ?? "";
+  const cursor = ctx.url.searchParams.get("cursor") ?? "";
+  if (!/^[a-z0-9_-]{1,100}$/.test(toolkit) || query.length > 1000 || cursor.length > 2048)
+    return sendJson(ctx.res, 400, { error: "invalid_query" });
+  const params = new URLSearchParams({ toolkit_slug: toolkit, query, limit: "25", toolkit_versions: "latest" });
+  if (cursor) params.set("cursor", cursor);
+  try {
+    const data = await request(ctx, access.key, `/tools?${params}`);
+    if (!Array.isArray(data.items)) throw new Error("Invalid tools");
+    const items = data.items
+      .filter((item) => item?.toolkit?.slug === toolkit)
+      .map((item) => ({
+        slug: item.slug,
+        name: item.name,
+        description: item.description,
+        version: item.version,
+        input_parameters: item.input_parameters,
+      }));
+    return sendJson(ctx.res, 200, {
+      items,
+      nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
+    });
+  } catch {
+    return sendJson(ctx.res, 502, { error: "composio_unavailable" });
+  }
+}
+
+async function execute(ctx: ApiCtx): Promise<void> {
+  if (!ctx.capability || ctx.actor) return sendJson(ctx.res, 403, { error: "agent_capability_required" });
+  const access = await credential(ctx);
+  if (!access) return;
+  const body = ctx.body as Record<string, unknown> | null;
+  if (
+    !body ||
+    Object.keys(body).some((key) => !["tool", "accountId", "version", "arguments"].includes(key)) ||
+    typeof body.tool !== "string" ||
+    !/^[A-Z][A-Z0-9_]{1,199}$/.test(body.tool) ||
+    body.tool.startsWith("COMPOSIO_") ||
+    typeof body.accountId !== "string" ||
+    !/^ca_[a-zA-Z0-9_-]+$/.test(body.accountId) ||
+    typeof body.version !== "string" ||
+    !/^[a-zA-Z0-9_-]{1,100}$/.test(body.version) ||
+    body.version === "latest" ||
+    !body.arguments ||
+    typeof body.arguments !== "object" ||
+    Array.isArray(body.arguments)
+  )
+    return sendJson(ctx.res, 400, {
+      error: "invalid_execution",
+      message: "Supply tool, accountId, a concrete version, and arguments only.",
+    });
+  const resource = `${body.accountId}/${body.tool}@${body.version}`;
+  try {
+    const account = await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(body.accountId)}`);
+    const toolkit = (account.toolkit as { slug?: string } | undefined)?.slug;
+    if (
+      account.id !== body.accountId ||
+      typeof account.user_id !== "string" ||
+      !composioUserIds(access.principal).includes(account.user_id) ||
+      account.status !== "ACTIVE" ||
+      account.is_disabled === true ||
+      !toolkit ||
+      toolkit === "composio"
+    )
+      return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
+    const tool = await request(
+      ctx,
+      access.key,
+      `/tools/${body.tool}?${new URLSearchParams({ toolkit_versions: body.version })}`,
+    );
+    if (
+      tool.slug !== body.tool ||
+      (tool.toolkit as { slug?: string } | undefined)?.slug !== toolkit ||
+      tool.version !== body.version
+    )
+      return sendJson(ctx.res, 403, { error: "tool_not_authorized" });
+    if (!(await activeRun(ctx))) return;
+    if (!composioUserIds(access.principal).includes(account.user_id))
+      return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
+    audit(ctx.deps, {
+      principalId: access.principal,
+      action: "composio.execute.started",
+      resource,
+      scopeLabel: ctx.capability.scopeId,
+    });
+    const result = await request(ctx, access.key, `/tools/execute/${body.tool}`, {
+      user_id: account.user_id,
+      connected_account_id: body.accountId,
+      version: body.version,
+      arguments: body.arguments,
+    });
+    audit(ctx.deps, {
+      principalId: access.principal,
+      action: "composio.execute.completed",
+      resource,
+      scopeLabel: ctx.capability.scopeId,
+    });
+    return sendJson(ctx.res, 200, {
+      data: result.data,
+      successful: result.successful === true,
+      error: result.error ?? null,
+    });
+  } catch {
+    audit(ctx.deps, {
+      principalId: access.principal,
+      action: "composio.execute.failed",
+      resource,
+      scopeLabel: ctx.capability.scopeId,
+    });
+    return sendJson(ctx.res, 502, {
+      error: "composio_execution_failed",
+      message: "Execution failed or its outcome is unknown. Do not automatically retry a write.",
+    });
+  }
+}
+
+async function completeAuth(ctx: ApiCtx): Promise<void> {
+  if (!ctx.actor || ctx.actor.imp || ctx.capability)
+    return sendJson(ctx.res, 403, { error: "browser_identity_required" });
+  const access = await credential(ctx);
+  if (!access) return;
+  const sessionUri = (ctx.body as { sessionUri?: unknown } | null)?.sessionUri;
+  if (typeof sessionUri !== "string" || !sessionUri || sessionUri.length > 8192)
+    return sendJson(ctx.res, 400, { error: "invalid_session" });
+  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
+  try {
+    const result = await request(ctx, access.key, "/connected_accounts/complete_auth", {
+      session_uri: sessionUri,
+      user_id: userId,
+    });
+    if (typeof result.connected_account_id !== "string" || !/^ca_[a-zA-Z0-9_-]+$/.test(result.connected_account_id))
+      throw new Error("Invalid account");
+    const key = `${userId}:${result.connected_account_id}`;
+    const saved = await ctx.deps.composioReturns?.get(key);
+    await ctx.deps.composioReturns?.delete(key);
+    return sendJson(ctx.res, 200, { returnTo: saved && saved.expiresAt > Date.now() ? saved.url : null });
+  } catch {
+    return sendJson(ctx.res, 400, {
+      error: "verification_failed",
+      message: "Sign in to the QM account that started this connection and try connecting again.",
+    });
+  }
+}
+
+export interface ComposioReturn {
+  url: string;
+  expiresAt: number;
 }
 
 async function identity(ctx: ApiCtx): Promise<void> {
@@ -466,11 +681,14 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
 }
 
 export const composioRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "GET", path: "/v1/composio/tools", auth: "either", handle: tools },
+  { method: "POST", path: "/v1/composio/execute", auth: "either", handle: execute },
+  { method: "POST", path: "/v1/composio/complete-auth", auth: "source", handle: completeAuth },
   { method: "GET", path: "/v1/composio/slack", auth: "source", handle: slackStatus },
   { method: "POST", path: "/v1/composio/slack/authorize", auth: "source", handle: (ctx) => authorize(ctx, true) },
   { method: "POST", path: "/v1/composio/slack/complete", auth: "source", handle: completeSlack },
-  { method: "GET", path: "/v1/composio/connections", auth: "source", handle: connections },
-  { method: "GET", path: "/v1/composio/toolkits", auth: "source", handle: catalog },
-  { method: "POST", path: "/v1/composio/authorize", auth: "source", handle: authorize },
+  { method: "GET", path: "/v1/composio/connections", auth: "either", handle: connections },
+  { method: "GET", path: "/v1/composio/toolkits", auth: "either", handle: catalog },
+  { method: "POST", path: "/v1/composio/authorize", auth: "either", handle: authorize },
   { method: "GET", path: "/v1/composio/identity", auth: "either", handle: identity },
 ];

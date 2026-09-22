@@ -1599,3 +1599,31 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   assert.equal((await built.app.turn(dm)).status, "ok");
   assert.ok(execScriptsMention("ghp_e2e", mark), "an unlisted scope keeps legacy behavior");
 });
+
+test("Composio keys remain backend-only across all materialization paths including multi-field records", async () => {
+  for (const input of [
+    { secret: "project-key", envKey: "COMPOSIO_API_KEY" },
+    {
+      fields: [
+        { envKey: "COMPOSIO_API_KEY", value: "project-key" },
+        { envKey: "OTHER", value: "other" },
+      ],
+    },
+  ]) {
+    const k = kc();
+    const c = await k.save({ ownerId: "U1", service: "composio", ...input });
+    const grant = await k.createGrant({
+      credentialId: c.id,
+      ownerId: "U1",
+      audienceScopeId: "channel:C1",
+      mode: "standing",
+      purpose: "apps",
+    });
+    assert.deepEqual(await k.materializeOwn("U1"), []);
+    assert.deepEqual(await k.materializeStanding("channel:C1"), []);
+    await assert.rejects(k.materializeOwnById("U1", c.id, "personal:U1"), /keys stay in the backend/);
+    await assert.rejects(k.materialize(grant.id, "channel:C1", "U1"), /keys stay in the backend/);
+    assert.equal(await k.composioKey("U1", c.id), "project-key");
+    assert.equal(await k.composioKey("U2", c.id), null);
+  }
+});

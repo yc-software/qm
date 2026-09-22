@@ -9,6 +9,9 @@ function pat(method: string, template: string, field?: Field): Rule {
 }
 
 const USER_SCOPED: Rule[] = [
+  pat("POST", "/v1/composio/complete-auth"),
+  pat("POST", "/v1/composio/authorize"),
+  pat("POST", "/v1/composio/execute"),
   pat("POST", "/v1/auth/broker/sessions/revoke"),
   pat("POST", "/v1/loops", { in: "query", name: "principalId" }),
   pat("GET", "/v1/loops", { in: "query", name: "principalId" }),

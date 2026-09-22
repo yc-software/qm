@@ -14,6 +14,17 @@ import { homeRelativePath } from "./paths.ts";
 import type { CredentialPathSpec } from "./resident-paths.ts";
 import { envKey } from "./connector-token.ts";
 
+export const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
+
+export function isBackendCredential(c: { envKey?: string; fields?: ReadonlyArray<{ envKey: string }> }): boolean {
+  return c.envKey === COMPOSIO_ENV_KEY || c.fields?.some((f) => f.envKey === COMPOSIO_ENV_KEY) === true;
+}
+
+export function isComposioHost(host: string): boolean {
+  const normalized = host.toLowerCase().replace(/\.$/, "");
+  return normalized === "composio.dev" || normalized.endsWith(".composio.dev");
+}
+
 type CredentialKind = "env" | "file" | "broker";
 
 export interface CredentialInjection {
@@ -417,6 +428,7 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   markAskNotified(id: string, status: KeychainAsk["status"]): Promise<void>;
   resolveAsksForGrant(grant: KeychainGrant): Promise<KeychainAsk[]>;
 
+  composioKey(ownerId: string, credentialId: string): Promise<string | null>;
   materialize(grantId: string, scopeId: ScopeId, usedBy: string): Promise<MaterializedCred>;
   materializeOwnById(ownerId: string, credentialId: string, scopeId: ScopeId): Promise<MaterializedCred>;
   materializeOwn(ownerId: string): Promise<MaterializedEnvCred[]>;
@@ -946,6 +958,8 @@ export function createKeychain(deps: {
     cred: KeychainCredential,
     extra?: { grantId: string; purpose: string },
   ): MaterializedCred {
+    if (isBackendCredential(cred))
+      throw new KeychainError(403, "Composio keys stay in the backend; use /v1/composio through the agent API");
     const materialized = tryDecrypt(cred, (c) =>
       c.kind === "file"
         ? { kind: "file" as const, ...decryptToFiles(c, extra) }
@@ -1396,6 +1410,12 @@ export function createKeychain(deps: {
       );
     },
 
+    async composioKey(ownerId, credentialId) {
+      const cred = await getOwned(ownerId, credentialId);
+      if (!cred || cred.kind !== "env" || !isBackendCredential(cred) || credExpired(cred, now())) return null;
+      return tryDecrypt(cred, decryptToEnv)?.env.find((e) => e.key === COMPOSIO_ENV_KEY)?.value ?? null;
+    },
+
     async materialize(grantId, scopeId, usedBy) {
       const grant = await deps.grants.get(grantId);
       if (!grant) throw new KeychainError(404, "unknown grant");
@@ -1440,7 +1460,14 @@ export function createKeychain(deps: {
     async materializeOwn(ownerId) {
       const t = now();
       return (await deps.creds.select({ where: byOwners([ownerId]) }))
-        .filter((c) => samePerson(c.ownerId, ownerId) && c.kind === "env" && !c.managed && !expired(c, t))
+        .filter(
+          (c) =>
+            samePerson(c.ownerId, ownerId) &&
+            c.kind === "env" &&
+            !c.managed &&
+            !isBackendCredential(c) &&
+            !expired(c, t),
+        )
         .map((c) => tryDecrypt(c, decryptToEnv))
         .filter((c): c is MaterializedEnvCred => c !== null);
     },
@@ -1457,7 +1484,7 @@ export function createKeychain(deps: {
       for (const grant of await activeGrantsFor(scopeId)) {
         if (grant.mode !== "standing") continue;
         const cred = await deps.creds.get(grant.credentialId);
-        if (!cred || cred.kind !== "env") continue;
+        if (!cred || cred.kind !== "env" || isBackendCredential(cred)) continue;
         if (cred.managed === "connector") {
           const value = cred.host ? await connectorTokenForRecord(cred) : null;
           if (value && cred.host) {
@@ -1628,6 +1655,8 @@ function credLine(
   own: boolean,
 ): string {
   const who = owner.displayName ? `${owner.displayName} (${owner.id})` : owner.id;
+  if (isBackendCredential(c))
+    return `- ${who}: Composio backend access — use the composio skill and /v1/composio; this key cannot be loaded into a computer`;
   let slot = `files ${(c.targets ?? [c.target]).filter(Boolean).join(", ")}`;
   if (c.kind === "env") {
     slot = c.fields ? c.fields.map((f) => `\`${f.envKey}\``).join(" + ") : `\`${c.envKey}\``;

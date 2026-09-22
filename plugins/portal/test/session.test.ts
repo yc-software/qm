@@ -243,3 +243,11 @@ test("sanitizeReturnTo accepts same-origin paths and rejects redirect escapes", 
     assert.equal(sanitizeReturnTo(bad, origin), "/", `expected "/" for ${JSON.stringify(bad)}`);
   }
 });
+
+test("login preserves opaque callback query values while rejecting normalized redirect escapes", () => {
+  const callback =
+    "/api/composio/callback?session_uri=" + encodeURIComponent("https://backend.composio.dev/session/opaque");
+  assert.equal(sanitizeReturnTo(callback, "https://qm.example"), callback);
+  assert.equal(sanitizeReturnTo("/path/..//evil.example", "https://qm.example"), "/");
+  assert.equal(sanitizeReturnTo("/%2f%2fevil.example?session_uri=ok", "https://qm.example"), "/");
+});

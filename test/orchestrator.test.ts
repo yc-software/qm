@@ -534,8 +534,17 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
   }
 });
 
-test("granted env credentials are announced without secrets and disappear after revocation", async () => {
-  const { app, serviceCreds, acl } = freshApp({ apiBaseUrl: "https://core.example.com" });
+test("Composio backend access is announced without delivering the project key", async () => {
+  const { app, serviceCreds, acl, sandbox } = freshApp({
+    apiBaseUrl: "https://core.example.com",
+    signingSecret: "test-secret",
+  });
+  let captured: ProvisionOptions | undefined;
+  const provision = sandbox.provision.bind(sandbox);
+  sandbox.provision = (layers, opts) => {
+    captured = opts;
+    return provision(layers, opts);
+  };
   const org = scopeId("org", "default-org");
   await serviceCreds.setServiceCredential(org, {
     slug: "composio",
@@ -556,9 +565,17 @@ test("granted env credentials are announced without secrets and disappear after 
   assert.doesNotMatch(await prompt("ungranted"), /COMPOSIO_API_KEY/);
   await grantCred(acl, org, "composio");
   const granted = await prompt("granted");
-  assert.match(granted, /## Org credentials on your computer/);
-  assert.match(granted, /`composio`.*`COMPOSIO_API_KEY`/);
+  assert.match(granted, /## Connected app access/);
+  assert.match(granted, /Composio is configured in the backend/);
+  assert.doesNotMatch(granted, /COMPOSIO_API_KEY/);
   assert.doesNotMatch(granted, /Do not suggest or offer any app connection/);
+  const result = await app.turn(
+    dm("!run echo backend-only", { conversation: { kind: "dm", threadRef: "dm:U1:composio-backend" } }),
+  );
+  assert.equal(result.status, "ok");
+  assert.equal(captured?.env?.COMPOSIO_API_KEY, undefined);
+  const claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(claims?.ownerConnections, true);
   await acl.revoke(org, encodeRef(serviceCredRef("composio")), org, "admin@default-org");
   assert.doesNotMatch(await prompt("revoked"), /COMPOSIO_API_KEY/);
   await grantCred(acl, org, "composio");
