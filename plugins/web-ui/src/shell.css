@@ -1588,23 +1588,20 @@ a.chat-row-open {
 }
 .pinned-item {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
   font-size: 13px;
 }
 .pinned-item-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .pinned-item-preview {
   color: var(--muted-foreground, #888);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
-  min-width: 0;
 }
 .pinned-strip a {
   color: var(--primary);

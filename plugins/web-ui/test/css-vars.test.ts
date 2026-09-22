@@ -108,6 +108,16 @@ test("every drop zone the canvas renders has a positioning rule in shell.css", (
   assert.deepEqual(missing, [], "drop zones rendered with no .zone-<edge> rule (they collapse to 0×0)");
 });
 
+test("expanded pins wrap their full text instead of truncating to one line", () => {
+  const item = shellCss.match(/\.pinned-item \{[^}]+\}/)?.[0] ?? "";
+  assert.match(item, /flex-direction:\s*column;/);
+  const text = shellCss.match(/\.pinned-item-text \{[^}]+\}/)?.[0] ?? "";
+  assert.match(text, /white-space:\s*pre-wrap;/);
+  assert.match(text, /overflow-wrap:\s*anywhere;/);
+  assert.doesNotMatch(text, /text-overflow|nowrap/);
+  assert.doesNotMatch(tsSource, /class="pinned-item" title=/);
+});
+
 test("chat shadows stay limited to elevated surfaces and subtle activity hover glow", () => {
   const elevated = [".pinned-strip", ".message-stack .user-row.stuck > .user-bubble"];
   const rules = shellCss.replace(/\/\*[\s\S]*?\*\//g, "");

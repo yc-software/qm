@@ -1248,7 +1248,7 @@ export function createChatSurface(
         expanded
           ? pins.map(
               (p) =>
-                html`<div class="pinned-item" title=${p.text ?? p.preview ?? ""}>
+                html`<div class="pinned-item">
                   <span class="pinned-item-text">${linkifiedText(p.text ?? p.preview ?? `entry #${p.entrySeq}`)}</span>
                   ${p.text && p.preview ? html`<span class="pinned-item-preview">${linkifiedText(p.preview)}</span>` : nothing}
                 </div>`,
