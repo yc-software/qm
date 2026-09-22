@@ -11,6 +11,18 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  core:
+    name: Core
+    runs-on: ubuntu-latest
+    needs: [core-typecheck, core-tests]
+    if: always()
+    steps:
+      - name: Require every core check
+        env:
+          TYPECHECK_RESULT: ${{ needs.core-typecheck.result }}
+          TEST_RESULT: ${{ needs.core-tests.result }}
+        run: test "$TYPECHECK_RESULT" = success && test "$TEST_RESULT" = success
+
   core-typecheck:
     name: Core typecheck
     runs-on: ubuntu-latest
