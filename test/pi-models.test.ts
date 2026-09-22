@@ -106,6 +106,7 @@ test("the curated catalog contains only current model families", () => {
     [
       "claude-fable-5-1",
       "claude-fable-5",
+      "claude-opus-5-5",
       "claude-opus-5",
       "claude-opus-4-8",
       "claude-sonnet-5",
@@ -127,6 +128,7 @@ test("auxiliary models come from the configured base model's own provider", () =
     "claude-haiku-4-5",
     "the deployment default resolves an Anthropic auxiliary",
   );
+  assert.equal(auxiliaryModelFor("claude-opus-5-5"), "claude-haiku-4-5");
   assert.equal(auxiliaryModelFor("claude-opus-4-8"), "claude-haiku-4-5");
   assert.equal(auxiliaryModelFor("claude-fable-5-1"), "claude-haiku-4-5");
   assert.equal(auxiliaryModelFor("claude-fable-5"), "claude-haiku-4-5");
@@ -193,6 +195,12 @@ test("context token budget is half of each model's real input room", () => {
     tiers: undefined,
   });
   assert.equal(contextTokenBudgetForModel("claude-fable-5-1"), 150_000, "a 1M window is capped, not halved");
+  const opus55 = getRequiredModel("claude-opus-5-5");
+  assert.equal(opus55.contextWindow, 1_000_000);
+  assert.equal(opus55.maxTokens, 128_000);
+  assert.equal(String(opus55.provider), "anthropic");
+  assert.deepEqual(opus55.cost, { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, tiers: undefined });
+  assert.equal(contextTokenBudgetForModel("claude-opus-5-5"), 150_000);
   assert.equal(getRequiredModel("claude-fable-5").contextWindow, 1_000_000);
   assert.equal(contextTokenBudgetForModel("claude-fable-5"), 150_000);
   assert.equal(contextTokenBudgetForModel("gpt-5.6-sol"), 150_000);

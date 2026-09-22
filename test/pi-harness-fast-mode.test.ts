@@ -18,7 +18,7 @@ import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import { defaultInteractiveThinkingLevel, getRequiredModel } from "../src/model/pi-models.ts";
 
 test("modelSupportsFastMode allows only the documented direct Opus ids", () => {
-  for (const id of ["claude-opus-5", "claude-opus-4-8"]) {
+  for (const id of ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"]) {
     assert.equal(modelSupportsFastMode(id), true, `${id} should support fast mode`);
   }
   for (const id of [
