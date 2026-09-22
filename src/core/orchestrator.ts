@@ -74,6 +74,7 @@ import {
   CAPABILITY_TTL_MS,
   SANDBOX_CAPABILITY_TTL_MS,
   CONTROL_PLANE_AUD,
+  BROWSER_MODEL_AUD,
   OAUTH_CONSENT_AUD,
   CREDENTIAL_BROKER_AUD,
   EGRESS_PROXY_AUD,
@@ -1551,6 +1552,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           connectorEnv.BROWSE_LAB_MODEL_PROVIDER = browseChoice.provider;
         }
       }
+      const gatewayBrowseModel =
+        !strictReadOnly && allInternal && deps.browserModelGateway
+          ? (deps.config?.getBrowseModel(toScopeId("org", orgId())) ?? deps.resolveBaseModelId?.())
+          : undefined;
+      if (!strictReadOnly && allInternal && deps.browserModelGateway) {
+        connectorEnv.BROWSE_LAB_MODEL_PROVIDER = "gateway";
+        if (gatewayBrowseModel) connectorEnv.BROWSE_LAB_MODEL = gatewayBrowseModel;
+      }
       let actorIsOrgAdmin = false;
       let orgMemoryWrite: ScopeId | undefined;
       let controlClaims: CapabilityClaims | undefined;
@@ -1621,6 +1630,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.capabilitySecret ?? deps.signingSecret,
           deps.capabilityTokenCompression,
         );
+        if (gatewayBrowseModel) {
+          connectorEnv.BROWSE_LAB_BASE_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}/v1/browser-model`;
+          connectorEnv.BROWSE_LAB_MODEL_TOKEN = await mintCapabilityToken(
+            {
+              ...scopeAttestation,
+              aud: BROWSER_MODEL_AUD,
+              browserModel: gatewayBrowseModel,
+              exp: Date.now() + CAPABILITY_TTL_MS,
+            },
+            deps.capabilitySecret ?? deps.signingSecret,
+          );
+        }
         connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
           {
             ...scopeAttestation,
