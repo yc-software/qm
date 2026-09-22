@@ -386,9 +386,9 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     });
   }
 
-  async function factoryShipDeps(): Promise<{ context: FactoryContext; ship: ShipDeps }> {
+  async function factoryShipDeps(loop: Loop): Promise<{ context: FactoryContext; ship: ShipDeps }> {
     if (!deps.factory) throw new Error("factory loop has no factory deps");
-    const context = await loadFactoryContext(deps.factory);
+    const context = await loadFactoryContext(deps.factory, loop.owner);
     return {
       context,
       ship: {
@@ -565,10 +565,10 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     return { status: fireNeedsAttention(summary) ? "ok" : "silent", note, summary };
   }
 
-  async function runFactoryShip(output: LoopOutput, item: LoopItem): Promise<ShipStepResult[]> {
+  async function runFactoryShip(output: LoopOutput, item: LoopItem, loop: Loop): Promise<ShipStepResult[]> {
     if (output.shipAction !== "open_pr" && output.shipAction !== "close_already_fixed")
       throw new Error(`factory_ship_action_unknown: ${output.shipAction}`);
-    const { context, ship } = await factoryShipDeps();
+    const { context, ship } = await factoryShipDeps(loop);
     if (output.shipAction === "close_already_fixed")
       return shipFactoryAlreadyFixed(item.sourceKey, output.summary, ship);
     const ref = factoryForgeRef(context.config, output.externalRef);
@@ -612,7 +612,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       const fireKey = `loop:${loopId}:ship:${outputId}`;
       if (!(await deps.outputs.beginShipAttempt(outputId, claimToken, fireKey))) return null;
       if (isFactoryLoop(loop)) {
-        const steps = await runFactoryShip(claimed, item).catch(async (e: unknown) => {
+        const steps = await runFactoryShip(claimed, item, loop).catch(async (e: unknown) => {
           await deps.outputs.failShipping(outputId, claimToken);
           throw e;
         });
@@ -683,7 +683,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         const item = await deps.items.returnToWork(returned.itemId, note);
         const loop = await deps.loops.get(loopId);
         if (item && loop && isFactoryLoop(loop)) {
-          const { context, ship } = await factoryShipDeps();
+          const { context, ship } = await factoryShipDeps(loop);
           await returnFactoryPullRequest(
             returned.shipAction === "open_pr" ? factoryForgeRef(context.config, returned.externalRef) : null,
             item.sourceKey,

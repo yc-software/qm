@@ -2,11 +2,8 @@ import type { DecryptedServiceCredential, ServiceCredentialReader } from "../../
 import type { ScopeId } from "../../types.ts";
 
 export const FACTORY_LINEAR_SLUG = "factory-linear";
-export const FACTORY_GITHUB_SLUG = "factory-github";
 
-export type FactoryCredentials =
-  | { ok: true; linearApiKey: string; githubToken: string }
-  | { ok: false; missing: string[] };
+export type FactoryCredentials = { ok: true; linearApiKey: string } | { ok: false; missing: string[] };
 
 function usableSecret(rec: DecryptedServiceCredential | null): string | null {
   if (!rec || !rec.enabled) return null;
@@ -18,17 +15,7 @@ export async function readFactoryCredentials(
   reader: ServiceCredentialReader,
   orgScopeId: ScopeId,
 ): Promise<FactoryCredentials> {
-  const [linearRec, githubRec] = await Promise.all([
-    reader.getServiceCredentialSecret(orgScopeId, FACTORY_LINEAR_SLUG),
-    reader.getServiceCredentialSecret(orgScopeId, FACTORY_GITHUB_SLUG),
-  ]);
-  const linearApiKey = usableSecret(linearRec);
-  const githubToken = usableSecret(githubRec);
-  if (linearApiKey === null || githubToken === null) {
-    const missing: string[] = [];
-    if (linearApiKey === null) missing.push(FACTORY_LINEAR_SLUG);
-    if (githubToken === null) missing.push(FACTORY_GITHUB_SLUG);
-    return { ok: false, missing };
-  }
-  return { ok: true, linearApiKey, githubToken };
+  const linearApiKey = usableSecret(await reader.getServiceCredentialSecret(orgScopeId, FACTORY_LINEAR_SLUG));
+  if (linearApiKey === null) return { ok: false, missing: [FACTORY_LINEAR_SLUG] };
+  return { ok: true, linearApiKey };
 }

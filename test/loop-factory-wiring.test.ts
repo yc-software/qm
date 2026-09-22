@@ -1,12 +1,13 @@
 import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { FACTORY_LOOP_SURFACE } from "../src/loops/factory/effects.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
+import { FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
+import { LINEAR_GRAPHQL_URL } from "../src/loops/factory/linear-intake.ts";
 import type { Config } from "../src/config.ts";
 
 const FACTORY_CONFIG = {
@@ -25,6 +26,8 @@ const FACTORY_CONFIG = {
 };
 
 const MODEL_AUTH_NOTE = /model auth: core has no Anthropic credential configured/;
+const GITHUB_NOTE = /github: the loop owner has not connected GitHub/;
+const GITHUB_HOST = "api.github.com";
 
 async function factoryLoopId(built: BuiltApp, name = "factory"): Promise<string> {
   const { loop } = await built.loops.store.create({
@@ -41,12 +44,13 @@ async function factoryLoopId(built: BuiltApp, name = "factory"): Promise<string>
 }
 
 async function seedFactoryCredentials(built: BuiltApp, org: ScopeId): Promise<void> {
-  for (const [slug, secret, host] of [
-    [FACTORY_LINEAR_SLUG, "lin_FAKE", "api.linear.app"],
-    [FACTORY_GITHUB_SLUG, "ghp_FAKE", "api.github.com"],
-  ] as const) {
-    await built.serviceCreds.setServiceCredential(org, { slug, name: slug, secret, host });
-  }
+  await built.serviceCreds.setServiceCredential(org, {
+    slug: FACTORY_LINEAR_SLUG,
+    name: FACTORY_LINEAR_SLUG,
+    secret: "lin_FAKE",
+    host: "api.linear.app",
+  });
+  await built.connectorTokens.setConnectorToken(GITHUB_HOST, "josh", { accessToken: "gho_WIRED" });
 }
 
 test("a booted instance drives a factory loop through the factory dependencies it wired", async () => {
@@ -61,7 +65,73 @@ test("a booted instance drives a factory loop through the factory dependencies i
 
   const uncredentialed = await built.loops.fire!.fire(loopId, "f2");
   assert.equal(uncredentialed.status, "failed");
-  assert.match(uncredentialed.note ?? "", /factory_credentials_missing: factory-linear, factory-github/);
+  assert.match(uncredentialed.note ?? "", /factory_credentials_missing: factory-linear/);
+});
+
+function stubEmptyLinearIntake(t: TestContext): string[] {
+  const original = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: Parameters<typeof globalThis.fetch>[0]) => {
+    urls.push(String(input));
+    const page = { nodes: [], pageInfo: { hasNextPage: false } };
+    return new Response(JSON.stringify({ data: { team: { issues: page } } }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  return urls;
+}
+
+test("the wired factory resolves GitHub from the loop owner's connector store, not from a pasted credential", async (t) => {
+  const config = testConfig({ anthropicApiKey: "cfg-key" });
+  const built = buildApp(config);
+  const loopId = await factoryLoopId(built);
+  built.loops.config.setFactoryConfig(FACTORY_CONFIG);
+  await built.serviceCreds.setServiceCredential(scopeId("org", config.orgId), {
+    slug: FACTORY_LINEAR_SLUG,
+    name: FACTORY_LINEAR_SLUG,
+    secret: "lin_FAKE",
+    host: "api.linear.app",
+  });
+
+  const intakeUrls = stubEmptyLinearIntake(t);
+
+  const unconnected = await built.loops.fire!.fire(loopId, "f1");
+  assert.equal(unconnected.status, "failed");
+  assert.match(unconnected.note ?? "", GITHUB_NOTE);
+  assert.deepEqual(intakeUrls, []);
+
+  await built.connectorTokens.setConnectorToken(GITHUB_HOST, "josh", { accessToken: "gho_WIRED" });
+  const connected = await built.loops.fire!.fire(loopId, "f2");
+
+  assert.equal(GITHUB_NOTE.test(connected.note ?? ""), false, connected.note ?? "");
+  assert.deepEqual(intakeUrls, [LINEAR_GRAPHQL_URL]);
+});
+
+test("the wired connector store keeps its operator token fallback, so VAULT_TOKEN_API_GITHUB_COM satisfies the GitHub gate", async (t) => {
+  const config = testConfig({ anthropicApiKey: "cfg-key", egressServiceHosts: [GITHUB_HOST] });
+  const built = buildApp(config);
+  const loopId = await factoryLoopId(built);
+  built.loops.config.setFactoryConfig(FACTORY_CONFIG);
+  await built.serviceCreds.setServiceCredential(scopeId("org", config.orgId), {
+    slug: FACTORY_LINEAR_SLUG,
+    name: FACTORY_LINEAR_SLUG,
+    secret: "lin_FAKE",
+    host: "api.linear.app",
+  });
+  process.env.VAULT_TOKEN_API_GITHUB_COM = "gho_OPERATOR";
+  t.after(() => {
+    delete process.env.VAULT_TOKEN_API_GITHUB_COM;
+  });
+  const intakeUrls = stubEmptyLinearIntake(t);
+
+  const fired = await built.loops.fire!.fire(loopId, "f1");
+
+  assert.equal(GITHUB_NOTE.test(fired.note ?? ""), false, fired.note ?? "");
+  assert.deepEqual(intakeUrls, [LINEAR_GRAPHQL_URL]);
 });
 
 test("the wired modelAuthEnv comes from core's own Anthropic configuration, so an unconfigured deployment is named and a configured one gets past the gate", async () => {

@@ -16,6 +16,7 @@ import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
 import { shq } from "../../util/shell.ts";
 import { pollProcess } from "../../sandbox/process-poll.ts";
 import { enumerateFactoryCandidates } from "./linear-intake.ts";
+import { tokenFor, type ConnectorTokenSource } from "../sources/adapter.ts";
 import { readFactoryCredentials } from "./credentials.ts";
 import { preflightFactorySandbox, type PreflightResult } from "./preflight.ts";
 import {
@@ -35,6 +36,8 @@ const DEFAULT_PAUSE_POLL_MS = 30_000;
 const FACTORY_SOURCE_CLONE_DIR = "/workspace/qm-source";
 const FACTORY_SOURCE_CLONE_URL = "https://github.com/yc-software/qm.git";
 const FACTORY_SOURCE_BOOTSTRAP_TIMEOUT_MS = 300_000;
+
+const GITHUB_CONNECTOR_HOST = "api.github.com";
 
 const SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage";
 const SLACK_POST_TIMEOUT_MS = 10_000;
@@ -94,6 +97,7 @@ export interface FactoryEffectsDeps {
   orgScopeId: ScopeId;
   loops: Pick<LoopStore, "get">;
   slackInstallation: Pick<SlackInstallationStore, "get">;
+  connectorTokens: ConnectorTokenSource;
   buildSha?: string;
   repoDir?: string;
   fetch?: typeof globalThis.fetch;
@@ -250,7 +254,7 @@ async function openFactorySlackThread(input: {
   }
 }
 
-export async function loadFactoryContext(deps: FactoryEffectsDeps): Promise<FactoryContext> {
+export async function loadFactoryContext(deps: FactoryEffectsDeps, owner: string): Promise<FactoryContext> {
   const config = deps.config.getFactoryConfig();
   if (!config) throw new Error("factory_config_missing");
   const credentials = await readFactoryCredentials(deps.credentials, deps.orgScopeId);
@@ -259,11 +263,13 @@ export async function loadFactoryContext(deps: FactoryEffectsDeps): Promise<Fact
   if (modelAuthSecrets(modelAuth).length === 0) {
     throw new Error("model auth: core has no Anthropic credential configured");
   }
+  const githubToken = (await tokenFor(deps.connectorTokens, GITHUB_CONNECTOR_HOST, owner))?.trim() ?? "";
+  if (githubToken === "") throw new Error("github: the loop owner has not connected GitHub");
   const slackBotToken = await factorySlackBotToken(deps, config);
   return {
     config,
     linearApiKey: credentials.linearApiKey,
-    githubToken: credentials.githubToken,
+    githubToken,
     modelAuth,
     ...(slackBotToken !== undefined ? { slackBotToken } : {}),
   };
@@ -293,14 +299,17 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
   };
 
   return {
-    async enumerate() {
-      const { config, linearApiKey } = await loadFactoryContext(deps);
+    async enumerate(loop) {
+      const { config, linearApiKey } = await loadFactoryContext(deps, loop.owner);
       return enumerateFactoryCandidates({ teamId: config.linearTeamId, apiKey: linearApiKey, fetch: deps.fetch });
     },
 
     async work({ loop, item, guidance }) {
       if (!isFactoryTicketId(item.sourceKey)) throw new Error("factory_ticket_invalid");
-      const { config, linearApiKey, githubToken, modelAuth, slackBotToken } = await loadFactoryContext(deps);
+      const { config, linearApiKey, githubToken, modelAuth, slackBotToken } = await loadFactoryContext(
+        deps,
+        loop.owner,
+      );
 
       const preflightHandle = await provisionWorkspace(loop.ownerScopeId);
       let preflight: PreflightResult;
@@ -379,7 +388,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
       return artifactsFor(item, runId);
     },
 
-    async evaluate({ item, runId }) {
+    async evaluate({ loop, item, runId }) {
       try {
         const artifacts = artifactsFor(item, runId);
         if (artifacts.some((artifact) => artifact.shipAction === "close_already_fixed"))
@@ -388,7 +397,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
         if (!run) return noPrVerdict();
         const target = prTarget(artifacts, run.config);
         if (!target) return noPrVerdict(run);
-        const { githubToken } = await loadFactoryContext(deps);
+        const { githubToken } = await loadFactoryContext(deps, loop.owner);
         return await evaluateFactoryForge({
           fetch: deps.fetch,
           forge: run.config.forge,
