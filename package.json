@@ -74,7 +74,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1061.0",
     "@earendil-works/pi-ai": "0.82.0",
     "@earendil-works/pi-coding-agent": "https://github.com/yc-software/pi/releases/download/qm-pi-coding-agent-0.82.0-security.3/earendil-works-pi-coding-agent-0.82.0-qm-security.3.tgz",
-    "@fly/sprites": "0.0.1",
+    "@fly/sprites": "0.2.3",
     "@openai/codex": "0.144.5",
     "@opencode-ai/plugin": "1.17.18",
     "@opencode-ai/sdk": "1.17.18",
@@ -99,7 +99,6 @@
     "socks-proxy-agent": "10.1.0",
     "tar-stream": "^3.2.0",
     "typebox": "^1.1.38",
-    "undici": "^8.9.0",
     "zod": "4.4.3"
   },
   "overrides": {
@@ -115,7 +114,7 @@
     "fast-json-stringify": {
       "fast-uri": "4.1.4"
     },
-    "undici": "$undici",
+    "undici": "8.9.0",
     "protobufjs": "7.6.5"
   },
   "devDependencies": {
