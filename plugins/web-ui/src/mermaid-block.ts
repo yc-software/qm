@@ -96,15 +96,12 @@ export class MermaidBlock extends LitElement {
     pending: { type: Boolean, reflect: true },
     image: { state: true },
     error: { state: true },
-    fit: { state: true },
   };
 
   declare code: string;
   declare pending: boolean;
   private image = "";
   private error = false;
-  private fit = true;
-  private sizeChosen = false;
   private themeObserver?: MutationObserver;
   private revision = 0;
   private width = 0;
@@ -118,45 +115,13 @@ export class MermaidBlock extends LitElement {
       position: relative;
     }
     .viewport {
-      overflow: auto;
-      max-height: min(600px, 70vh);
       padding: 24px 0;
     }
     img {
       display: block;
-      max-width: none;
-      margin: auto;
-    }
-    .fit img {
       max-width: 100%;
       height: auto;
-    }
-    .toolbar {
-      position: absolute;
-      right: 0;
-      top: 0;
-      opacity: 0;
-      transition: opacity 120ms;
-    }
-    .toolbar.oversized,
-    :host(:hover) .toolbar,
-    :host(:focus-within) .toolbar {
-      opacity: 1;
-    }
-    @media (hover: none) {
-      .toolbar {
-        opacity: 1;
-      }
-    }
-    button {
-      color: inherit;
-      background: transparent;
-      border: none;
-      border-radius: 6px;
-      padding: 4px 8px;
-      font: 12px var(--app-font, system-ui);
-      color: var(--muted-foreground, #858b95);
-      cursor: pointer;
+      margin: auto;
     }
     details {
       padding: 4px 0;
@@ -167,10 +132,11 @@ export class MermaidBlock extends LitElement {
       color: var(--muted-foreground, #858b95);
     }
     pre {
+      max-height: 600px;
       overflow: auto;
-      max-height: 320px;
       font: 13px/1.5 monospace;
-      white-space: pre;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
     p {
       margin: 12px 14px;
@@ -228,7 +194,7 @@ export class MermaidBlock extends LitElement {
       const viewBox = document.documentElement.getAttribute("viewBox")?.split(/[ ,]+/).map(Number);
       this.width = viewBox?.[2] || 640;
       this.height = viewBox?.[3] || 480;
-      if (!this.sizeChosen) this.fit = this.width <= Math.max(this.clientWidth, 320) * 2;
+      if (this.height > 12000 || this.width > 20000) throw new Error("Diagram dimensions are too large");
       this.image = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
     } catch {
       if (revision === this.revision) this.error = true;
@@ -245,22 +211,7 @@ export class MermaidBlock extends LitElement {
     if (this.pending) status = "Diagram will render when the reply finishes.";
     else if (this.error) status = "Unable to render this diagram. Its source is shown below.";
     return html`
-      ${
-        this.image
-          ? html`<div class=${this.fit ? "toolbar" : "toolbar oversized"}>
-              <button
-                @click=${() => {
-                  this.sizeChosen = true;
-                  this.fit = !this.fit;
-                }}
-                aria-label=${this.fit ? "Show diagram at actual size" : "Fit diagram to width"}
-              >
-                ${this.fit ? "Actual size" : "Fit to width"}
-              </button>
-            </div>`
-          : null
-      }
-      ${this.image ? html`<div class=${this.fit ? "viewport fit" : "viewport"} tabindex="0" role="region" aria-label="Mermaid diagram; scroll to explore"><img src=${this.image} width=${this.width} height=${this.height} alt="Mermaid diagram. Diagram source is available below." /></div>` : html`<p role="status">${status}</p>`}
+      ${this.image ? html`<div class="viewport"><img src=${this.image} width=${this.width} height=${this.height} alt="Mermaid diagram. Diagram source is available below." /></div>` : html`<p role="status">${status}</p>`}
       <details ?open=${!this.image}>
         <summary>Source</summary>
         <pre><code>${this.code}</code></pre>
