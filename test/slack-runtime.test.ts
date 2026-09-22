@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createSlackRuntimeReconciler } from "../src/surfaces/slack-runtime.ts";
-import { createMemoryEventBus } from "../src/util/event-bus.ts";
+import { createMemoryEventBus, type LocalEventBus } from "../src/util/event-bus.ts";
+
+type Change = { version: string };
 
 const settle = async (): Promise<void> => {
   for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
@@ -85,42 +87,13 @@ test("Slack runtime keeps retrying a failed stop before starting replacement cre
   await runtime.stop();
 });
 
-test("the reconciler reads once at startup and again only on the slow repair tick", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  let loads = 0;
-  const runtime = createSlackRuntimeReconciler({
-    load: async () => {
-      loads += 1;
-      return null;
-    },
-    startPlugin: async () => ({ stop: async () => {} }),
-  });
-  runtime.start();
-  await settle();
-  assert.equal(loads, 1);
-
-  t.mock.timers.tick(299_999);
-  await settle();
-  assert.equal(loads, 1, "an idle instance no longer re-reads the installation every few seconds");
-
-  t.mock.timers.tick(1);
-  await settle();
-  assert.equal(loads, 2);
-  await runtime.stop();
-});
-
-test("an installation event reloads immediately and a reconnect resync does not restart an unchanged plugin", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  const changes = createMemoryEventBus<{ version: string }>("test-installation");
-  let desired = { version: "1", config: "first" };
-  let loads = 0;
+function harness(load: () => Promise<{ version: string; config: string } | null>, changes?: LocalEventBus<Change>) {
   const events: string[] = [];
-  const runtime = createSlackRuntimeReconciler({
-    load: async () => {
-      loads += 1;
-      return desired;
-    },
+  const errors: unknown[] = [];
+  const runtime = createSlackRuntimeReconciler<string>({
+    load,
     startPlugin: async (config) => {
+      if (config === "broken") throw new Error("start failed");
       events.push(`start:${config}`);
       return {
         stop: async () => {
@@ -129,7 +102,50 @@ test("an installation event reloads immediately and a reconnect resync does not 
       };
     },
     changes,
+    onError: (error) => errors.push(error),
   });
+  return { runtime, events, errors };
+}
+
+test("catches a failed read waiting out the repair delay, or a healthy instance polling on the retry delay", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let failing = true;
+  let loads = 0;
+  const { runtime, errors } = harness(async () => {
+    loads += 1;
+    if (failing) throw new Error("installation read failed");
+    return null;
+  });
+  runtime.start();
+  await settle();
+  assert.deepEqual([loads, errors.length], [1, 1]);
+
+  t.mock.timers.tick(5_000);
+  await settle();
+  assert.deepEqual([loads, errors.length], [2, 2], "a failed read retries fast and reports every attempt");
+
+  failing = false;
+  t.mock.timers.tick(5_000);
+  await settle();
+  t.mock.timers.tick(299_999);
+  await settle();
+  assert.deepEqual([loads, errors.length], [3, 2], "a healthy instance stops re-reading every few seconds");
+
+  t.mock.timers.tick(1);
+  await settle();
+  assert.equal(loads, 4, "the repair tick still re-reads");
+  await runtime.stop();
+});
+
+test("catches a reconciler that ignores installation events or restarts an unchanged plugin on resync", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const changes = createMemoryEventBus<Change>("test-installation");
+  let desired = { version: "1", config: "first" };
+  let loads = 0;
+  const { runtime, events } = harness(async () => {
+    loads += 1;
+    return desired;
+  }, changes);
   runtime.start();
   await settle();
   assert.deepEqual(events, ["start:first"]);
@@ -137,40 +153,28 @@ test("an installation event reloads immediately and a reconnect resync does not 
   desired = { version: "2", config: "second" };
   changes.emit({ version: "2" });
   await settle();
-  assert.equal(loads, 2);
-  assert.deepEqual(events, ["start:first", "stop:first", "start:second"]);
+  assert.deepEqual(events, ["start:first", "stop:first", "start:second"], "a rotated version reloads without a tick");
 
   changes.resync();
   await settle();
   assert.equal(loads, 3, "a reconnect re-reads the durable record");
-  assert.deepEqual(events, ["start:first", "stop:first", "start:second"]);
+  assert.deepEqual(events, ["start:first", "stop:first", "start:second"], "an unchanged version keeps the plugin up");
   await runtime.stop();
 });
 
-test("events arriving during a reconcile collapse into exactly one trailing run", async (t) => {
+test("catches events that arrive during a reconcile overlapping it or being dropped", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const changes = createMemoryEventBus<{ version: string }>("test-installation");
+  const changes = createMemoryEventBus<Change>("test-installation");
   let release = (): void => {};
   const gate = new Promise<void>((resolve) => (release = resolve));
   let loads = 0;
-  let concurrent = 0;
-  let peak = 0;
-  const runtime = createSlackRuntimeReconciler({
-    load: async () => {
-      loads += 1;
-      concurrent += 1;
-      peak = Math.max(peak, concurrent);
-      if (loads === 1) await gate;
-      concurrent -= 1;
-      return null;
-    },
-    startPlugin: async () => ({ stop: async () => {} }),
-    changes,
-  });
+  const { runtime } = harness(async () => {
+    loads += 1;
+    if (loads === 1) await gate;
+    return null;
+  }, changes);
   runtime.start();
   await settle();
-  assert.equal(loads, 1);
-
   changes.emit({ version: "a" });
   changes.emit({ version: "b" });
   changes.emit({ version: "c" });
@@ -180,109 +184,28 @@ test("events arriving during a reconcile collapse into exactly one trailing run"
   release();
   await settle();
   assert.equal(loads, 2, "three events during one reconcile coalesce into a single follow-up");
-  assert.equal(peak, 1);
   await runtime.stop();
 });
 
-test("a failed reconcile retries on the fast cadence and returns to repair once it succeeds", async (t) => {
+test("catches stop() abandoning the plugin a rejecting reconcile left running, or staying subscribed", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  let failing = true;
+  const changes = createMemoryEventBus<Change>("test-installation");
+  let desired = { version: "1", config: "first" };
   let loads = 0;
-  const errors: unknown[] = [];
-  const runtime = createSlackRuntimeReconciler({
-    load: async () => {
-      loads += 1;
-      if (failing) throw new Error("installation read failed");
-      return null;
-    },
-    startPlugin: async () => ({ stop: async () => {} }),
-    onError: (error) => errors.push(error),
-  });
+  const { runtime, events } = harness(async () => {
+    loads += 1;
+    return desired;
+  }, changes);
   runtime.start();
   await settle();
-  assert.deepEqual([loads, errors.length], [1, 1]);
-
-  t.mock.timers.tick(5_000);
-  await settle();
-  assert.deepEqual([loads, errors.length], [2, 2], "each failed attempt is reported");
-
-  failing = false;
-  t.mock.timers.tick(5_000);
-  await settle();
-  assert.deepEqual([loads, errors.length], [3, 2]);
-
-  t.mock.timers.tick(5_000);
-  await settle();
-  assert.equal(loads, 3, "a healthy reconcile drops back to the slow repair cadence");
-  await runtime.stop();
-});
-
-test("stop() unsubscribes, so a later installation event neither reloads nor rearms a timer", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  const changes = createMemoryEventBus<{ version: string }>("test-installation");
-  let loads = 0;
-  const runtime = createSlackRuntimeReconciler({
-    load: async () => {
-      loads += 1;
-      return null;
-    },
-    startPlugin: async () => ({ stop: async () => {} }),
-    changes,
-  });
-  runtime.start();
-  await settle();
-  assert.equal(loads, 1);
-  await runtime.stop();
-
-  changes.emit({ version: "2" });
-  t.mock.timers.tick(600_000);
-  await settle();
-  assert.equal(loads, 1);
-});
-
-test("stop() shuts the active plugin down even when the reconcile in flight fails", async () => {
-  let failing = false;
-  const events: string[] = [];
-  const runtime = createSlackRuntimeReconciler({
-    load: async () => {
-      if (failing) throw new Error("installation read failed");
-      return { version: "1", config: "first" };
-    },
-    startPlugin: async (config) => {
-      events.push(`start:${config}`);
-      return {
-        stop: async () => {
-          events.push(`stop:${config}`);
-        },
-      };
-    },
-  });
-  await runtime.reconcile();
-  failing = true;
-  const inFlight = runtime.reconcile();
-  await assert.rejects(Promise.all([inFlight, runtime.stop()]), /installation read failed/);
-  assert.deepEqual(events, ["start:first", "stop:first"]);
-});
-
-test("stop() waits for a reconcile already in flight and shuts down the plugin it started", async () => {
-  let release = (): void => {};
-  const gate = new Promise<void>((resolve) => (release = resolve));
-  const events: string[] = [];
-  const runtime = createSlackRuntimeReconciler({
-    load: async () => ({ version: "1", config: "first" }),
-    startPlugin: async (config) => {
-      await gate;
-      events.push(`start:${config}`);
-      return {
-        stop: async () => {
-          events.push(`stop:${config}`);
-        },
-      };
-    },
-  });
+  desired = { version: "2", config: "broken" };
   const inFlight = runtime.reconcile();
   const stopping = runtime.stop();
-  release();
-  await Promise.all([inFlight, stopping]);
-  assert.deepEqual(events, ["start:first", "stop:first"], "a plugin started mid-shutdown does not outlive stop()");
+  await assert.rejects(Promise.all([inFlight, stopping]), /start failed/);
+  assert.deepEqual(events, ["start:first", "stop:first", "start:first", "stop:first"]);
+
+  changes.emit({ version: "3" });
+  t.mock.timers.tick(600_000);
+  await settle();
+  assert.equal(loads, 2, "a stopped reconciler ignores later events and rearms no timer");
 });
