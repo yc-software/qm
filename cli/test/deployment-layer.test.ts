@@ -612,7 +612,14 @@ function fakeFlyStatus(dir: string, extra = ""): string {
 const args = process.argv.slice(2);
 ${extra}
 if (args[0] === "status") {
-  console.log(JSON.stringify({ Machines: [{ id: "machine-core" }] }));
+  console.log(
+    JSON.stringify({
+      Machines: [
+        { id: "machine-stale", state: "stopped" },
+        { id: "machine-core", state: "started" },
+      ],
+    }),
+  );
   process.exit(0);
 }
 process.exit(1);

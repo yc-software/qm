@@ -87,13 +87,14 @@ function flyCoreMachineId(app: string): string {
     classifyFlyReachability(app, errMessage(error));
   }
   if (FLY_APP_NOT_FOUND.test(raw)) classifyFlyReachability(app, raw);
-  let parsed: { Machines?: Array<{ id?: string; ID?: string }> };
+  let parsed: { Machines?: Array<{ id?: string; ID?: string; state?: string }> };
   try {
     parsed = JSON.parse(raw) as typeof parsed;
   } catch {
     throw new CoreUnreachableError(`could not reach the Fly core: fly status returned invalid JSON`);
   }
-  const machineId = parsed.Machines?.[0]?.id ?? parsed.Machines?.[0]?.ID;
+  const machine = parsed.Machines?.find((entry) => entry.state === "started") ?? parsed.Machines?.[0];
+  const machineId = machine?.id ?? machine?.ID;
   if (!machineId) throw new CoreUnreachableError(`could not reach the Fly core: no machine on ${app}`);
   return machineId;
 }
@@ -109,11 +110,8 @@ function flyApiAuthorization(): string {
 }
 
 function flyExecOutput(payload: unknown): string {
-  if (!payload || typeof payload !== "object") return "";
-  const record = payload as Record<string, unknown>;
-  const stdout = [record.stdout, record.StdOut].find((value): value is string => typeof value === "string") ?? "";
-  const stderr = [record.stderr, record.StdErr].find((value): value is string => typeof value === "string") ?? "";
-  return [stdout, stderr].filter(Boolean).join("\n");
+  const { stdout, stderr } = (payload ?? {}) as { stdout?: unknown; stderr?: unknown };
+  return [stdout, stderr].filter((value): value is string => typeof value === "string" && value !== "").join("\n");
 }
 
 async function flyRequest(
