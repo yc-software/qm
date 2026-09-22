@@ -23,11 +23,11 @@ repository and exact branch in the generated config and Terraform variables.
 Never trust the upstream QM repository.
 
 The account must permit the selected RDS class and backup retention in the
-configured region and account plan. Set `aws.dbInstanceClass` or
-`aws.backupRetentionDays` before `qm infra render` to override the defaults of
-`db.t4g.small` and 35 days; these render as `db_instance_class` and
-`backup_retention_days`. `aws.dbRetentionMinDays` only sets the minimum that
-`qm up` accepts during its restore-point check and does not configure RDS.
+configured region and account plan. Set `aws.dbInstanceClass` before
+`qm infra render` to override the `db.t4g.small` default. Set
+`db_backup_retention_days` in `infra/terraform.tfvars` to override the 35-day
+retention default. `aws.dbRetentionMinDays` only sets the minimum that `qm up`
+accepts during its restore-point check and does not configure RDS.
 Confirm all other billable AWS resources separately; this deployment does not
 promise whole-stack free-tier compatibility.
 

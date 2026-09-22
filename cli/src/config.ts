@@ -94,7 +94,6 @@ export interface AwsConfig {
   backgroundWorkControl?: boolean;
   rdsInstance?: string;
   dbInstanceClass?: string;
-  backupRetentionDays?: number;
   predeployDbSnapshot?: boolean;
   dbRetentionMinDays?: number;
   deployBranch?: string;
@@ -1204,14 +1203,6 @@ function validateAws(
       throw new CliError(`${path}: "aws.dbInstanceClass" must be a valid RDS DB instance class such as db.t4g.small`);
     }
   }
-  let backupRetentionDays: number | undefined;
-  if (raw["backupRetentionDays"] !== undefined) {
-    const days = raw["backupRetentionDays"];
-    if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > 35) {
-      throw new CliError(`${path}: "aws.backupRetentionDays" must be an integer between 1 and 35`);
-    }
-    backupRetentionDays = days;
-  }
   if (raw["predeployDbSnapshot"] !== undefined) {
     if (typeof raw["predeployDbSnapshot"] !== "boolean") {
       throw new CliError(
@@ -1504,7 +1495,6 @@ function validateAws(
     );
   if (rdsInstance) out.rdsInstance = rdsInstance;
   if (dbInstanceClass) out.dbInstanceClass = dbInstanceClass;
-  if (backupRetentionDays !== undefined) out.backupRetentionDays = backupRetentionDays;
   if (predeployDbSnapshot !== undefined) out.predeployDbSnapshot = predeployDbSnapshot;
   if (dbRetentionMinDays !== undefined) out.dbRetentionMinDays = dbRetentionMinDays;
   if (deployBranch) out.deployBranch = deployBranch;

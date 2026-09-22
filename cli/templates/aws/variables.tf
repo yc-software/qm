@@ -93,21 +93,12 @@ variable "db_instance_class" {
     error_message = "db_instance_class must be a valid RDS DB instance class such as db.t4g.small"
   }
 }
-variable "backup_retention_days" {
-  type     = number
-  default  = null
-  nullable = true
-  validation {
-    condition     = var.backup_retention_days == null || (floor(var.backup_retention_days) == var.backup_retention_days && var.backup_retention_days >= 1 && var.backup_retention_days <= 35)
-    error_message = "backup_retention_days must be an integer between 1 and 35"
-  }
-}
 variable "db_backup_retention_days" {
   type    = number
   default = 35
   validation {
-    condition     = floor(var.db_backup_retention_days) == var.db_backup_retention_days && var.db_backup_retention_days >= 1 && var.db_backup_retention_days <= 35
-    error_message = "db_backup_retention_days must be an integer between 1 and 35"
+    condition     = var.db_backup_retention_days >= 1 && var.db_backup_retention_days <= 35
+    error_message = "db_backup_retention_days must be between 1 and 35"
   }
 }
 variable "db_multi_az" {

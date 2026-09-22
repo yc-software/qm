@@ -2153,7 +2153,7 @@ function assertPredeployDbRestorePoint(config: QmConfig): string {
   const minimumRetention = aws.dbRetentionMinDays ?? 1;
   if (retention < minimumRetention) {
     throw new CliError(
-      `database ${database} keeps ${retention} day(s) of automated backups, below the required ${minimumRetention}; raise aws.backupRetentionDays (backup_retention_days in the reference module) or lower aws.dbRetentionMinDays before deploying`,
+      `database ${database} keeps ${retention} day(s) of automated backups, below the required ${minimumRetention}; raise its backup retention (db_backup_retention_days in the reference module) or lower aws.dbRetentionMinDays before deploying`,
     );
   }
   const latestRestorable = Date.parse(instance.LatestRestorableTime ?? "");
