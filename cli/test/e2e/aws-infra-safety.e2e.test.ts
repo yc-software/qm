@@ -148,11 +148,6 @@ test(
       assert.equal(placeholderRender.code, 1, placeholderRender.out);
       assert.match(placeholderRender.out, /replace the scaffolded aws\.accountId "000000000000"/);
 
-      const configPath = join(deployment, CONFIG_FILENAME);
-      writeFileSync(configPath, readFileSync(configPath, "utf8").replaceAll("000000000000", "123456789012"));
-      const rendered = runCli(["infra", "render"], { cwd: deployment });
-      assert.equal(rendered.code, 0, rendered.out);
-
       const infra = join(deployment, "infra");
       const tfvarsPath = join(infra, "terraform.tfvars");
       writeFileSync(tfvarsPath, readFileSync(tfvarsPath, "utf8").replace("replace-me/repository", "acme/deploy"));
@@ -176,6 +171,18 @@ run "plan" {
       );
       const initializedTerraform = terraform(["init", "-backend=false", "-input=false", "-no-color"], infra);
       assert.equal(initializedTerraform.code, 0, initializedTerraform.out);
+      const placeholderPlan = terraform(["test", "-no-color"], infra);
+      assert.equal(placeholderPlan.code, 1, placeholderPlan.out);
+      assert.match(placeholderPlan.out, /var\.account_id is "000000000000"/);
+      assert.match(
+        placeholderPlan.out,
+        /account_id must replace the scaffold value 000000000000 before planning or\s+applying infrastructure/,
+      );
+
+      const configPath = join(deployment, CONFIG_FILENAME);
+      writeFileSync(configPath, readFileSync(configPath, "utf8").replaceAll("000000000000", "123456789012"));
+      const rendered = runCli(["infra", "render"], { cwd: deployment });
+      assert.equal(rendered.code, 0, rendered.out);
       const scaffoldPlan = terraform(["test", "-no-color"], infra);
       assert.equal(scaffoldPlan.code, 0, scaffoldPlan.out);
       assert.match(scaffoldPlan.out, /Success! 1 passed, 0 failed/);

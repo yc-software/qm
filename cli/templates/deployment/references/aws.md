@@ -46,10 +46,9 @@ For an existing deployment, first pin its current bucket name before changing
 terraform -chdir=infra output -raw object_store_bucket
 ```
 
-Copy that exact value to `aws.objectStoreBucket` in `qm.config.jsonc`, run
-`npm exec qm -- infra render`, and verify the plan does not replace
-`aws_s3_bucket.objects`. Do not infer the name from the corrected coordinates.
-Then make the minimal manual update by adding this block inside the existing
+Copy that exact value to `aws.objectStoreBucket` in `qm.config.jsonc`. Do not
+infer the name from corrected coordinates. Before rendering, make the minimal
+manual update by adding this block inside the existing
 `aws_s3_bucket.objects` resource:
 
 ```hcl
@@ -65,6 +64,13 @@ validation {
   error_message = "account_id must replace the scaffold value 000000000000 before planning or applying infrastructure"
 }
 ```
+
+After the bucket is pinned and both Terraform guards are present, correct
+`aws.accountId` and related account-derived coordinates such as
+`aws.deployRoleArn`. Then run `npm exec qm -- infra render` and verify the plan
+does not replace `aws_s3_bucket.objects` or any other unintended resource. Pin
+the existing bucket first, but do not render until after correcting the
+placeholder account.
 
 Pinning and `prevent_destroy` are the controls that protect the existing
 bucket. `object_store_force_destroy=true` only allows
