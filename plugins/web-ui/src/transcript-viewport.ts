@@ -121,8 +121,6 @@ export function createTranscriptViewport() {
       prompt.getBoundingClientRect().top <=
         scroller.getBoundingClientRect().top + scroller.clientTop + paddingTop + top + 0.5;
     prompt?.classList.toggle("stuck", stuck);
-    // The stuck prompt condenses (see shell.css); remembering its collapsed resting height keeps
-    // the row's slot in the transcript constant so nothing below shifts when the bubble shrinks.
     if (prompt && promptStyle && !stuck && !expanded) {
       const inner =
         prompt.getBoundingClientRect().height -
