@@ -109,3 +109,35 @@ test("a deployment whose only model auth is its CLAUDE_AUTH_CREDENTIAL keychain 
     assert.equal(MODEL_AUTH_NOTE.test(fired.note ?? ""), false, `${envKey}: ${fired.note ?? ""}`);
   }
 });
+
+const PINGS_SKIPPED_NOTE = "slack: no installation for this org, pings skipped";
+
+async function firePingsSkipped(built: BuiltApp, loopId: string, fireId: string): Promise<boolean> {
+  const original = console.warn;
+  const warnings: string[] = [];
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.join(" "));
+  };
+  try {
+    await built.loops.fire!.fire(loopId, fireId);
+  } finally {
+    console.warn = original;
+  }
+  return warnings.some((warning) => warning.includes(PINGS_SKIPPED_NOTE));
+}
+
+test("the wired factory reads the org's Slack installation store live, so seeding and deleting the installation flips the pings-skipped note", async () => {
+  const config = testConfig({ anthropicApiKey: "cfg-key" });
+  const built = buildApp(config);
+  const loopId = await factoryLoopId(built);
+  built.loops.config.setFactoryConfig({ ...FACTORY_CONFIG, slackChannel: "#factory-runs" });
+  await seedFactoryCredentials(built, scopeId("org", config.orgId));
+
+  const uninstalled = await firePingsSkipped(built, loopId, "f1");
+  await built.slackInstallation.set({ botToken: "xoxb-FAKE", appToken: "xapp-FAKE", updatedBy: "josh" });
+  const installed = await firePingsSkipped(built, loopId, "f2");
+  await built.slackInstallation.delete("josh");
+  const removed = await firePingsSkipped(built, loopId, "f3");
+
+  assert.deepEqual([uninstalled, installed, removed], [true, false, true]);
+});

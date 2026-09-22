@@ -16,7 +16,7 @@ import {
   factorySessionIdFor,
 } from "../src/loops/factory/effects.ts";
 import { FACTORY_REQUIRED_TOOLS } from "../src/loops/factory/preflight.ts";
-import { FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG, FACTORY_SLACK_SLUG } from "../src/loops/factory/credentials.ts";
+import { FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
 import { FACTORY_WRAPPER, renderFactoryEnv } from "../src/loops/factory/process-work.ts";
 import { shq } from "../src/util/shell.ts";
 import { LINEAR_GRAPHQL_URL } from "../src/loops/factory/linear-intake.ts";
@@ -37,11 +37,12 @@ const ORG_SCOPE = "org:acme";
 const LINEAR_KEY = "lin_FAKE_KEY";
 const GITHUB_TOKEN = "ghp_FAKE_TOKEN";
 const ANTHROPIC_KEY = "sk-ant-FAKE_KEY";
-const SLACK_TOKEN = "xoxb-FAKE_SLACK_TOKEN";
+const INSTALLATION_TOKEN = "xoxb-FAKE_ORG_INSTALLATION_TOKEN";
+const PASTED_SLACK_TOKEN = "xoxb-FAKE_PASTED_FACTORY_TOKEN";
 const SECRET_BY_SLUG: Record<string, string> = {
   [FACTORY_LINEAR_SLUG]: LINEAR_KEY,
   [FACTORY_GITHUB_SLUG]: GITHUB_TOKEN,
-  [FACTORY_SLACK_SLUG]: SLACK_TOKEN,
+  "factory-slack": PASTED_SLACK_TOKEN,
 };
 const REPO_DIR = "/workspace/repo";
 const CLONE_DIR = "/workspace/qm-source";
@@ -366,6 +367,37 @@ function fakeModelAuthEnv(...envs: NodeJS.ProcessEnv[]): {
   return stub;
 }
 
+type SlackInstallationDep = FactoryEffectsDeps["slackInstallation"];
+type StoredInstallation = Awaited<ReturnType<SlackInstallationDep["get"]>>;
+
+const orgInstallation = (botToken: string): StoredInstallation => ({
+  botToken,
+  appToken: "xapp-FAKE_APP_TOKEN",
+  teamId: "T1",
+  teamName: "Acme",
+  updatedAt: 1_000,
+  updatedBy: "josh",
+  version: "1000:0",
+});
+
+function fakeSlackInstallation(...outcomes: (StoredInstallation | Error)[]): {
+  slackInstallation: SlackInstallationDep;
+  calls: number;
+} {
+  const stub = {
+    calls: 0,
+    slackInstallation: {
+      get: async (): Promise<StoredInstallation> => {
+        const outcome = outcomes[Math.min(stub.calls, outcomes.length - 1)] ?? null;
+        stub.calls += 1;
+        if (outcome instanceof Error) throw outcome;
+        return outcome;
+      },
+    },
+  };
+  return stub;
+}
+
 function deps(over: Partial<FactoryEffectsDeps> = {}): FactoryEffectsDeps {
   return {
     sandbox: fakeSandbox().sandbox,
@@ -373,6 +405,7 @@ function deps(over: Partial<FactoryEffectsDeps> = {}): FactoryEffectsDeps {
     credentials: healthyCredentials(),
     orgScopeId: ORG_SCOPE,
     loops: fakeLoops(["enabled"]).loops,
+    slackInstallation: fakeSlackInstallation(null).slackInstallation,
     modelAuthEnv: fakeModelAuthEnv({ ANTHROPIC_API_KEY: ANTHROPIC_KEY }).modelAuthEnv,
     ...over,
   };
@@ -1119,11 +1152,11 @@ const SLACK_RESOLVED_CHANNEL = "C0RESOLVED";
 const SLACK_TS = "1730000000.000100";
 const SLACK_CONFIG: FactoryConfig = { ...CONFIG, slackChannel: SLACK_CHANNEL };
 
-const slackCredentials = (over: Partial<DecryptedServiceCredential> | null = {}): ServiceCredentialReader =>
+const pastedSlackCredentials = (): ServiceCredentialReader =>
   fakeCredentials([
     credentialRecord(FACTORY_LINEAR_SLUG),
     credentialRecord(FACTORY_GITHUB_SLUG),
-    over === null ? null : credentialRecord(FACTORY_SLACK_SLUG, over),
+    credentialRecord("factory-slack"),
   ]);
 
 interface SlackPost {
@@ -1174,36 +1207,64 @@ const slackRoot =
   () =>
     Response.json(body);
 
-test("work posts one Slack thread root after the bootstrap and threads the returned ts into the wrapper env", async () => {
+test("work posts the thread root as the org's Slack installation, never a pasted factory-slack credential, and threads the returned ts into the wrapper env", async () => {
   const fake = fakeSandbox();
   const posted = slackFetch(fake.calls, [slackRoot({ ok: true, ts: SLACK_TS, channel: SLACK_RESOLVED_CHANNEL })]);
+  const store = fakeSlackInstallation(orgInstallation(INSTALLATION_TOKEN));
   const effects = createFactoryLoopEffects(
     deps({
       sandbox: fake.sandbox,
       config: fakeConfig(SLACK_CONFIG).config,
-      credentials: slackCredentials(),
+      credentials: pastedSlackCredentials(),
+      slackInstallation: store.slackInstallation,
       fetch: posted.fetch,
     }),
   );
 
-  const runId = await workedRunId(effects);
+  const { result: runId, warnings } = await capturingWarnings(() => workedRunId(effects));
 
   assert.equal(posted.posts.length, 1);
   const post = posted.posts[0]!;
   assert.equal(post.url, SLACK_POST_URL);
   assert.equal(post.init?.method, "POST");
-  assert.equal(new Headers(post.init?.headers).get("Authorization"), `Bearer ${SLACK_TOKEN}`);
+  assert.equal(new Headers(post.init?.headers).get("Authorization"), `Bearer ${INSTALLATION_TOKEN}`);
   assert.equal(new Headers(post.init?.headers).get("Content-Type"), "application/json; charset=utf-8");
   assert.deepEqual(JSON.parse(String(post.init?.body)), { channel: SLACK_CHANNEL, text: `Working on ${TICKET}` });
   assert.ok(post.init?.signal instanceof AbortSignal, "the post was unbounded: it carried no abort signal");
   assert.equal(post.bootstraps, 1, "the root was posted before the source bootstrap");
   assert.equal(post.wrapperStarted, false, "the root was posted after the wrapper started");
+  assert.equal(store.calls, 1);
 
   const env = wrapperStart(fake.calls).opts?.env;
-  assert.equal(env?.SLACK_BOT_TOKEN, SLACK_TOKEN);
+  assert.equal(env?.SLACK_BOT_TOKEN, INSTALLATION_TOKEN);
   assert.equal(env?.SLACK_CHANNEL_ID, SLACK_RESOLVED_CHANNEL);
   assert.equal(env?.SLACK_THREAD_TS, SLACK_TS);
   assert.equal(runId, "factory:loop-1:item-1:1");
+
+  const seen = [String(post.init?.body), ...Object.values(env ?? {}), ...warnings].join(" | ");
+  assert.equal(seen.includes(PASTED_SLACK_TOKEN), false, "the pasted factory-slack secret reached the run");
+  assert.deepEqual(warnings, []);
+});
+
+test("the no-PR diagnostic tail redacts the org installation bot token the run was handed", async () => {
+  const fake = fakeSandbox({
+    stdout: `[claude-stderr] chat.postMessage with ${INSTALLATION_TOKEN} rejected\n`,
+  });
+  const posted = slackFetch(fake.calls, [slackRoot({ ok: true, ts: SLACK_TS, channel: SLACK_RESOLVED_CHANNEL })]);
+  const effects = createFactoryLoopEffects(
+    deps({
+      sandbox: fake.sandbox,
+      config: fakeConfig(SLACK_CONFIG).config,
+      slackInstallation: fakeSlackInstallation(orgInstallation(INSTALLATION_TOKEN)).slackInstallation,
+      fetch: posted.fetch,
+    }),
+  );
+
+  const runId = await workedRunId(effects);
+  const verdict = await effects.evaluate({ loop: LOOP, item: ITEM, attempt: 1, runId });
+
+  assert.match(verdict.reason, /\[claude-stderr\] chat\.postMessage with \*\*\* rejected/);
+  assert.equal(verdict.reason.includes(INSTALLATION_TOKEN), false);
 });
 
 test("a thread root whose response names no channel keeps the configured one", async () => {
@@ -1213,7 +1274,7 @@ test("a thread root whose response names no channel keeps the configured one", a
     deps({
       sandbox: fake.sandbox,
       config: fakeConfig(SLACK_CONFIG).config,
-      credentials: slackCredentials(),
+      slackInstallation: fakeSlackInstallation(orgInstallation(INSTALLATION_TOKEN)).slackInstallation,
       fetch: posted.fetch,
     }),
   );
@@ -1239,7 +1300,7 @@ for (const [label, respond, named] of slackFailures) {
       deps({
         sandbox: fake.sandbox,
         config: fakeConfig(SLACK_CONFIG).config,
-        credentials: slackCredentials(),
+        slackInstallation: fakeSlackInstallation(orgInstallation(INSTALLATION_TOKEN)).slackInstallation,
         fetch: posted.fetch,
       }),
     );
@@ -1252,24 +1313,33 @@ for (const [label, respond, named] of slackFailures) {
     assert.equal(warnings.length, 1, warnings.join(" | "));
     assert.ok(warnings[0]?.startsWith("[swallowed] factory slack thread root: slack_post_failed: "), warnings[0]);
     assert.ok(warnings[0]?.includes(named), warnings[0]);
-    assert.equal(warnings[0]?.includes(SLACK_TOKEN), false, "the swallow log leaked the bot token");
+    assert.equal(warnings[0]?.includes(INSTALLATION_TOKEN), false, "the swallow log leaked the bot token");
 
     assert.deepEqual(await effects.captureOutputs({ loop: LOOP, item: ITEM, runId }), [OPEN_PR_ARTIFACT]);
   });
 }
 
-test("a blank or unset slack channel posts nothing, requires no credential, and renders today's env", async () => {
+test("a blank or unset slack channel never reads the installation store, warns about nothing, and renders today's env", async () => {
   for (const slackChannel of [undefined, "", "   "]) {
     const fake = fakeSandbox();
     const posted = slackFetch(fake.calls, []);
+    const store = fakeSlackInstallation(orgInstallation(INSTALLATION_TOKEN));
     const config: FactoryConfig = slackChannel === undefined ? CONFIG : { ...CONFIG, slackChannel };
     const effects = createFactoryLoopEffects(
-      deps({ sandbox: fake.sandbox, config: fakeConfig(config).config, fetch: posted.fetch }),
+      deps({
+        sandbox: fake.sandbox,
+        config: fakeConfig(config).config,
+        slackInstallation: store.slackInstallation,
+        fetch: posted.fetch,
+      }),
     );
 
-    const runId = await workedRunId(effects);
+    const { result: runId, warnings } = await capturingWarnings(() => workedRunId(effects));
 
-    assert.equal(posted.posts.length, 0, `channel ${JSON.stringify(slackChannel)} posted`);
+    const label = `channel ${JSON.stringify(slackChannel)}`;
+    assert.equal(posted.posts.length, 0, `${label} posted`);
+    assert.equal(store.calls, 0, `${label} read the installation store`);
+    assert.deepEqual(warnings, [], label);
     assert.deepEqual(
       wrapperStart(fake.calls).opts?.env,
       renderFactoryEnv({
@@ -1285,38 +1355,70 @@ test("a blank or unset slack channel posts nothing, requires no credential, and 
   }
 });
 
-test("a configured channel with no factory-slack credential fails every entry point before any sandbox call", async () => {
+const NO_INSTALLATION_NOTE = "slack: no installation for this org, pings skipped";
+
+const unusableInstallations: [string, StoredInstallation | Error][] = [
+  ["no installation at all", null],
+  ["an installation the store cannot decrypt", new Error("unable to decrypt secret")],
+  ["an installation whose bot token is blank", orgInstallation("   ")],
+];
+
+for (const [label, outcome] of unusableInstallations) {
+  test(`a configured channel with ${label} notes it and finishes the run instead of failing the fire`, async () => {
+    const fake = fakeSandbox();
+    const posted = slackFetch(fake.calls, []);
+    const store = fakeSlackInstallation(outcome);
+    const base = deps({
+      sandbox: fake.sandbox,
+      config: fakeConfig(SLACK_CONFIG).config,
+      credentials: pastedSlackCredentials(),
+      slackInstallation: store.slackInstallation,
+      fetch: posted.fetch,
+    });
+    const effects = createFactoryLoopEffects(base);
+
+    const { result, warnings } = await capturingWarnings(async () => ({
+      context: await loadFactoryContext(base),
+      runId: await workedRunId(effects),
+    }));
+
+    assert.equal(Object.hasOwn(result.context, "slackBotToken"), false);
+    assert.equal(result.runId, "factory:loop-1:item-1:1");
+    assert.equal(posted.posts.length, 0);
+    const env = wrapperStart(fake.calls).opts?.env ?? {};
+    for (const key of Object.keys(env)) assert.equal(key.startsWith("SLACK_"), false, `${key} survived`);
+    const noted = warnings.filter((warning) => warning.includes(NO_INSTALLATION_NOTE));
+    assert.equal(noted.length, 2, `one note per loadFactoryContext: ${warnings.join(" | ")}`);
+    assert.equal(warnings.join(" | ").includes("factory-slack"), false, "the note named the deleted credential");
+  });
+}
+
+test("each fire re-reads the installation, so a rotated bot token reaches the next run without a restart", async () => {
+  const rotated = "xoxb-FAKE_ROTATED_INSTALLATION_TOKEN";
   const fake = fakeSandbox();
-  const posted = slackFetch(fake.calls, []);
-  const base = deps({
-    sandbox: fake.sandbox,
-    config: fakeConfig(SLACK_CONFIG).config,
-    credentials: slackCredentials(null),
-    fetch: posted.fetch,
-  });
-  const effects = createFactoryLoopEffects(base);
-
-  for (const promise of [loadFactoryContext(base), effects.enumerate(LOOP), workedRunId(effects)]) {
-    assert.equal((await rejection(promise)).message, `factory_credentials_missing: ${FACTORY_SLACK_SLUG}`);
-  }
-  assert.deepEqual(fake.calls, []);
-  assert.equal(posted.posts.length, 0);
-});
-
-test("loadFactoryContext carries the slack bot token as a key only when the credential is usable", async () => {
-  const withChannel = await loadFactoryContext(
-    deps({ config: fakeConfig(SLACK_CONFIG).config, credentials: slackCredentials() }),
+  const posted = slackFetch(fake.calls, [slackRoot({ ok: true, ts: SLACK_TS }), slackRoot({ ok: true, ts: SLACK_TS })]);
+  const store = fakeSlackInstallation(orgInstallation(INSTALLATION_TOKEN), orgInstallation(rotated));
+  const effects = createFactoryLoopEffects(
+    deps({
+      sandbox: fake.sandbox,
+      config: fakeConfig(SLACK_CONFIG).config,
+      slackInstallation: store.slackInstallation,
+      fetch: posted.fetch,
+    }),
   );
-  assert.deepEqual(withChannel, {
-    config: SLACK_CONFIG,
-    linearApiKey: LINEAR_KEY,
-    githubToken: GITHUB_TOKEN,
-    modelAuth: { ANTHROPIC_API_KEY: ANTHROPIC_KEY },
-    slackBotToken: SLACK_TOKEN,
-  });
 
-  const withoutCredential = await loadFactoryContext(deps());
-  assert.equal(Object.hasOwn(withoutCredential, "slackBotToken"), false);
+  await workedRunId(effects);
+  await workedRunId(effects, { ...ITEM, attempts: 1 });
+
+  assert.deepEqual(
+    posted.posts.map((post) => new Headers(post.init?.headers).get("Authorization")),
+    [`Bearer ${INSTALLATION_TOKEN}`, `Bearer ${rotated}`],
+  );
+  assert.deepEqual(
+    wrapperEnvs(fake.calls).map((env) => env.SLACK_BOT_TOKEN),
+    [INSTALLATION_TOKEN, rotated],
+  );
+  assert.equal(store.calls, 2);
 });
 
 test("a preflight or bootstrap failure leaves no orphan thread root", async () => {
@@ -1327,7 +1429,7 @@ test("a preflight or bootstrap failure leaves no orphan thread root", async () =
       deps({
         sandbox: fake.sandbox,
         config: fakeConfig(SLACK_CONFIG).config,
-        credentials: slackCredentials(),
+        slackInstallation: fakeSlackInstallation(orgInstallation(INSTALLATION_TOKEN)).slackInstallation,
         fetch: posted.fetch,
       }),
     );
@@ -1347,7 +1449,7 @@ test("an item whose source key is not a ticket id posts no root and touches no s
       deps({
         sandbox: fake.sandbox,
         config: fakeConfig(SLACK_CONFIG).config,
-        credentials: slackCredentials(),
+        slackInstallation: fakeSlackInstallation(orgInstallation(INSTALLATION_TOKEN)).slackInstallation,
         fetch: posted.fetch,
       }),
     );
