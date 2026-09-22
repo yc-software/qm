@@ -1,3 +1,8 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createE2bSandbox } from "../src/sandbox/e2b-sandbox.ts";
+import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createSdkModalClient } from "../src/sandbox/modal-client.ts";
@@ -33,6 +38,7 @@ mock.module("modal", {
 const e2bCalls: unknown[][] = [];
 let pauseError: Error | undefined;
 let startError: Error | undefined;
+let onDispatch: ((command: string) => void) | undefined;
 let waitError: Error | undefined;
 class FakeSandboxError extends Error {}
 class FakeNotFoundError extends FakeSandboxError {}
@@ -62,6 +68,7 @@ const fakeE2bSandbox = (sandboxId: string) => ({
     async run(cmd: string, options: { background?: boolean }) {
       e2bCalls.push(["run", cmd, options]);
       if (options?.background !== true) throw new Error("the client must start commands in the background");
+      onDispatch?.(cmd);
       if (startError) throw startError;
       return {
         pid: 7,
@@ -111,6 +118,9 @@ mock.module("e2b", {
     TimeoutError: FakeTimeoutError,
     CommandExitError: FakeCommandExitError,
     Sandbox: class {
+      static list() {
+        return { hasNext: false, nextItems: async () => [] };
+      }
       static async create(template: string, options: unknown) {
         e2bCalls.push(["create", template, options]);
         return fakeE2bSandbox("e2b-native");
@@ -228,7 +238,9 @@ test("E2B refuses to re-run a command lost mid-flight and classifies gone sandbo
   const client = createSdkE2bClient({ apiKey: "test" });
   const session = await client.create({ metadata: {}, autoPause: true });
   startError = new FakeSandboxNotFoundError("Sandbox is probably not running anymore");
-  await assert.rejects(session.runCommand("echo"), E2bSandboxGoneError);
+  const beforeDispatch = e2bCalls.filter(([kind]) => kind === "run").length;
+  await assert.rejects(session.runCommand("echo"), E2bCommandLostError);
+  assert.equal(e2bCalls.filter(([kind]) => kind === "run").length, beforeDispatch + 1);
   startError = new Error("upstream returned 410: resource not found");
   await assert.rejects(
     session.runCommand("echo"),
@@ -284,4 +296,22 @@ test("E2B persistent snapshots and metrics map onto the client contract", async 
   });
   await client.deleteSnapshot("snap-old");
   assert.deepEqual(e2bCalls.at(-1), ["deleteSnapshot", "snap-old"]);
+});
+
+test("E2B does not dispatch twice when execution occurs before its start acknowledgment is lost", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "e2b-lost-start-"));
+  t.after(() => {
+    startError = undefined;
+    onDispatch = undefined;
+    rmSync(root, { recursive: true, force: true });
+  });
+  const sandbox = createE2bSandbox(createLocalWorkspaceStore(root), { client: createSdkE2bClient({ apiKey: "test" }) });
+  const handle = await sandbox.provision([{ scopeId: "lost-start", mountPath: "", mode: "rw" }]);
+  let effects = 0;
+  onDispatch = (command) => {
+    if (command.includes("perform-side-effect")) effects++;
+  };
+  startError = new FakeSandboxNotFoundError("start stream unavailable after dispatch");
+  await assert.rejects(sandbox.run(handle, "perform-side-effect"), /may have partially executed and was not retried/);
+  assert.equal(effects, 1);
 });

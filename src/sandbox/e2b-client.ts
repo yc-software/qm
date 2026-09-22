@@ -211,7 +211,8 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
         try {
           handle = await sbx.commands.run(command, { background: true, timeoutMs });
         } catch (err) {
-          throw gone(err);
+          if (isSandboxGone(lib, err)) throw new E2bCommandLostError(sbx.sandboxId, String((err as Error).message));
+          throw err;
         }
         try {
           return commandResultFrom(await handle.wait()) ?? { stdout: "", stderr: "", exitCode: -1 };
