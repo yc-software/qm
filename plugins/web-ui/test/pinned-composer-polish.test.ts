@@ -37,8 +37,14 @@ test("thinking shares input sizing while background activity stays compact", () 
     const blocks = css.matchAll(new RegExp(`${selector.replaceAll(".", "\\.")} \\{([^}]+)\\}`, "g"));
     const declarations = [...blocks].flatMap((match) => [...match[1].matchAll(/font-size: ([^;]+);/g)]);
     assert.ok(declarations.length > 0, selector);
-    for (const declaration of declarations) assert.match(declaration[1], /^var\(--composer-font-size[,)]/);
+    for (const declaration of declarations) {
+      assert.match(declaration[1], /^(?:max\(16px, )?var\(--composer-font-size[,)]/);
+    }
   }
+  assert.match(
+    css,
+    /@media \(max-width: 860px\), \(hover: none\) and \(pointer: coarse\) \{[^@]*\.composer-input,\s*\.live-work-line \{\s*font-size: max\(16px, var\(--composer-font-size, 16px\)\);/,
+  );
 });
 
 test("queued cards tuck beneath the next card just as the queue tucks beneath the composer", () => {

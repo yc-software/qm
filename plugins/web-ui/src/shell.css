@@ -10436,12 +10436,6 @@ h3.ambient-field-label {
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
   }
-  .layout {
-    height: 100dvh;
-    height: var(--vvh, 100dvh);
-
-    transform: translateY(var(--vv-top, 0px));
-  }
 
   .sidebar,
   .layout.sidebar-closed .sidebar {
@@ -11149,6 +11143,27 @@ h3.ambient-field-label {
   height: calc(100vh - 38px - env(safe-area-inset-top));
   height: calc(100dvh - 38px - env(safe-area-inset-top));
   margin-top: calc(38px + env(safe-area-inset-top));
+}
+
+@media (max-width: 860px), (hover: none) and (pointer: coarse) {
+  .layout {
+    position: fixed;
+    inset: 0 0 auto;
+    height: var(--vvh, 100dvh);
+    transform: translateY(var(--vv-top, 0px));
+  }
+  .layout.bannered,
+  .layout.impersonating {
+    height: calc(var(--vvh, 100dvh) - 38px - env(safe-area-inset-top));
+  }
+  .top-banner,
+  .impersonation-banner {
+    transform: translateY(var(--vv-top, 0px));
+  }
+  .composer-input,
+  .live-work-line {
+    font-size: max(16px, var(--composer-font-size, 16px));
+  }
 }
 
 .signin-panel,
