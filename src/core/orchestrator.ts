@@ -207,7 +207,7 @@ import {
 } from "./orchestrator/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
-import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
+import { createSecurityClassifier, localizeSecuritySources } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
@@ -812,7 +812,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           });
         }
       }
-      const externalPromptData = screenInbound
+      const externalScreenSources: Array<{
+        source: string;
+        content: string;
+        overheard?: OverheardEntryPayload;
+      }> = screenInbound
         ? [
             ...(ambientTurn && actor.displayName?.trim()
               ? [{ source: "sender", content: senderNote(actor.displayName) }]
@@ -820,11 +824,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.conversationHeader?.trim()
               ? [{ source: "conversation-header", content: input.conversationHeader }]
               : []),
-            ...screenedOverheard.map((entry) => ({ source: "overheard", content: renderOverheard(entry) })),
+            ...screenedOverheard.map((entry) => ({
+              source: "overheard",
+              content: renderOverheard(entry),
+              overheard: entry,
+            })),
             ...attachmentPromptData,
             ...(input.inboundNotes ?? []).map((note) => ({ source: "inbound-file-note", content: note })),
           ]
         : [];
+      const externalPromptData = externalScreenSources.map(({ source, content }) => ({ source, content }));
       const sessionSender = input.sessionSenderId ? await deps.sessions.get(input.sessionSenderId) : null;
       const verifiedSessionMessage = Boolean(
         sessionSender &&
@@ -868,48 +877,52 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         else if (screenPayload.truncated) unscreenableCause = "oversize-input";
         else if (!deps.securityScreener && !deps.harness.models.screenSecurity) unscreenableCause = "no-screener";
         if (verdict?.decision === "strict") {
-          let turnScreenSource = input.surface ?? "turn";
-          if (verifiedSessionMessage) turnScreenSource = "session-delegation";
-          if (input.swarm && swarmBinding) turnScreenSource = "swarm-delegation";
-          const externalLocalizationPayloads = externalPromptData.flatMap((item, index) => {
-            const payload = securityScreenPayload({ text: "", externalPromptData: [item] });
-            return payload ? [{ source: item.source, content: payload.content, externalIndex: index }] : [];
+          const turnScreenSource = "message";
+          const externalLocalizationPayloads = externalScreenSources.flatMap((item) => {
+            const payload = securityScreenPayload({
+              text: "",
+              externalPromptData: [{ source: item.source, content: item.content }],
+            });
+            return payload
+              ? [
+                  {
+                    source: item.source,
+                    content: payload.content,
+                    ...(item.overheard ? { overheard: item.overheard } : {}),
+                  },
+                ]
+              : [];
           });
           const localizationPayloads = [
             ...(turnScreenPayload ? [{ source: turnScreenSource, content: turnScreenPayload.content }] : []),
             ...externalLocalizationPayloads,
           ];
           let sources = localizationPayloads.map((item) => item.source);
-          if (localizationPayloads.length > 1) {
-            const sourceVerdicts = await Promise.all(
-              localizationPayloads.map((item) =>
-                classifySecurityData(item.content, actor.id, scopeId, recordScreenRequest, {
-                  hook: "user_input",
-                  surface: input.surface,
-                  origin: input.origin.kind,
-                }),
-              ),
+          const sourceVerdicts = await localizeSecuritySources(localizationPayloads, (item) =>
+            classifySecurityData(item.content, actor.id, scopeId, recordScreenRequest, {
+              hook: "user_input",
+              surface: input.surface,
+              origin: input.origin.kind,
+            }),
+          );
+          if (sourceVerdicts) {
+            const localized = [...sourceVerdicts.values()].some(
+              (sourceVerdict) => sourceVerdict?.decision === "strict",
             );
-            const localized = sourceVerdicts.some((sourceVerdict) => sourceVerdict?.decision === "strict");
             if (localized) {
-              sources = localizationPayloads.flatMap((item, index) => {
-                const sourceVerdict = sourceVerdicts[index];
+              sources = localizationPayloads.flatMap((item) => {
+                const sourceVerdict = sourceVerdicts.get(item);
                 return sourceVerdict?.decision !== "auto" || sourceVerdict.unscreened === true ? [item.source] : [];
               });
             }
-            const externalVerdicts = new Map(
-              externalLocalizationPayloads.map((item, index) => [
-                item.externalIndex,
-                sourceVerdicts[index + (turnScreenPayload ? 1 : 0)],
-              ]),
-            );
+            const overheardVerdicts = new Map<OverheardEntryPayload, SecurityScreenVerdict | undefined>();
+            externalLocalizationPayloads.forEach((item) => {
+              if (item.overheard) overheardVerdicts.set(item.overheard, sourceVerdicts.get(item));
+            });
             taintedOverheard = new Set(
               screenedOverheard.filter((entry) => {
                 if (!localized) return true;
-                const index = externalPromptData.findIndex(
-                  (item) => item.source === "overheard" && item.content === renderOverheard(entry),
-                );
-                const sourceVerdict = externalVerdicts.get(index);
+                const sourceVerdict = overheardVerdicts.get(entry);
                 return sourceVerdict?.decision !== "auto" || sourceVerdict.unscreened === true;
               }),
             );
