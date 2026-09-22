@@ -21,7 +21,7 @@ function capturingRunPrompt(reply = "one-shot reply"): {
 test("harness adapters forward tool-result screening into their tool bridge", () => {
   const screenToolResult: NonNullable<HarnessTurnInput["screenToolResult"]> = async () => ({ outcome: "allow" });
   const toolApprovalGate: NonNullable<HarnessTurnInput["toolApprovalGate"]> = () => true;
-  const ref = harnessToolContext({ screenToolResult, toolApprovalGate } as HarnessTurnInput);
+  const ref = harnessToolContext({ screenToolResult, toolApprovalGate, history: [] } as unknown as HarnessTurnInput);
   assert.equal(ref.screenToolResult, screenToolResult);
   assert.equal(ref.toolApprovalGate, toolApprovalGate);
   assert.equal(ref.pausedOnApproval, false);
@@ -145,4 +145,20 @@ test("shared harness security screens use auxiliary coordinates", async () => {
   assert.equal(recorded[0]!.turnSeq, null);
   assert.equal(recorded[0]!.step, SECURITY_SCREEN_STEP);
   assert.equal(recorded[0]!.model, "claude-oneshot");
+});
+
+test("harness adapters rehydrate the open goal from history into the tool context", async () => {
+  const { createGoalRecord } = await import("../src/harness/goal.ts");
+  const goal = createGoalRecord({ objective: "carry the goal across turns", source: "tool" });
+  const history = [
+    { type: "system", payload: { kind: "goal", goal }, seq: 0 },
+  ] as unknown as HarnessTurnInput["history"];
+  assert.equal(harnessToolContext({ history } as unknown as HarnessTurnInput).goal?.objective, goal.objective);
+  const handed = { ...goal, objective: "handed in directly" };
+  assert.equal(harnessToolContext({ history, goal: handed } as unknown as HarnessTurnInput).goal, handed);
+  const done = { ...goal, status: "complete" as const };
+  const closed = [
+    { type: "system", payload: { kind: "goal", goal: done }, seq: 0 },
+  ] as unknown as HarnessTurnInput["history"];
+  assert.equal(harnessToolContext({ history: closed } as unknown as HarnessTurnInput).goal, null);
 });

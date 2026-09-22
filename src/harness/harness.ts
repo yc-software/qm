@@ -13,6 +13,7 @@ import type {
 } from "../sessions/session-store.ts";
 export type { GapWork } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
+import type { GoalRecord } from "./goal.ts";
 import type { ProviderKeys } from "./pi-harness.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import type { SecurityScreenVerdict, ToolResultScreen, ToolResultScreenInput } from "../security/security-posture.ts";
@@ -117,6 +118,7 @@ export interface HarnessTurnInput {
   turnWallClockMs?: number;
   systemPrompt: string;
   history: SessionEntry[];
+  goal?: GoalRecord | null;
   tools: ToolContext;
   credentialExecServices?: readonly { service: string; binary: string }[];
   commandCredentialHandles?: readonly string[];
@@ -206,7 +208,14 @@ export interface HarnessModelUtilities {
 type HarnessControlTransport = "mock" | "in-process" | "sdk" | "http" | "json-rpc" | "api";
 type HarnessToolTransport = "mock" | "in-process" | "plugin" | "dynamic" | "in-process-mcp" | "mcp";
 type HarnessCapability =
-  "abort" | "steer" | "images" | "thinking-level" | "fast-mode" | "provider-sessions" | "native-tape";
+  | "abort"
+  | "steer"
+  | "images"
+  | "thinking-level"
+  | "fast-mode"
+  | "provider-sessions"
+  | "native-tape"
+  | "goal-enforcement";
 
 export interface HarnessAdapterProfile {
   id: string;

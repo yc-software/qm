@@ -482,7 +482,7 @@ rl.on("line", (line) => {
 
 test("Codex forwards tool-result screening into its native tool bridge", () => {
   const screenToolResult: NonNullable<HarnessTurnInput["screenToolResult"]> = async () => ({ outcome: "allow" });
-  const ref = harnessToolContext({ screenToolResult } as HarnessTurnInput);
+  const ref = harnessToolContext({ screenToolResult, history: [] } as unknown as HarnessTurnInput);
   assert.equal(ref.screenToolResult, screenToolResult);
 });
 
