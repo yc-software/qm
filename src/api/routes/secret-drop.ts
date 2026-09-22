@@ -140,7 +140,9 @@ function dropFormHtml(
   }
   const service_ = escapeHtml(rec.service);
   const purpose_ = escapeHtml(rec.purpose);
-  const requested_ = rec.createdAt ? escapeHtml(new Date(rec.createdAt).toISOString().slice(0, 10)) : "";
+  const requested_ = rec.createdAt
+    ? escapeHtml(new Date(rec.createdAt).toISOString().slice(0, 19).replace("T", " ") + " UTC")
+    : "";
   const id_ = JSON.stringify(dropId);
   const fields = formFields(rec.fields);
   const multi = fields.length > 1 || fields[0]!.key !== null;
