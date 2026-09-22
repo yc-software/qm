@@ -88,17 +88,16 @@ test("tabs share the strip evenly down to a legible floor", () => {
   assert.match(multi, /max-width: 220px;/);
 });
 
-test("tab actions overlay the title instead of reserving title space", () => {
+test("tab actions sit in the title's flow so the title truncates around them", () => {
   const actions = css.match(/^\.split-tab-actions \{[^}]*\}/m)?.[0] ?? "";
-  assert.match(actions, /position: absolute;/);
-  assert.match(actions, /right: 0;/);
-  assert.match(actions, /background: color-mix\(in srgb, var\(--background\) 96%, transparent\);/);
-  assert.doesNotMatch(actions, /gradient|blur/);
-  assert.doesNotMatch(actions, /padding(?:-[\w-]+)?\s*:/, "the overlay must hug its action buttons");
-  assert.match(css, /\.dv-tab \.split-pane-title \{[^}]*position: relative;/);
+  assert.doesNotMatch(actions, /position: absolute;|right: 0;|transform:/, "nothing may paint over the title");
+  assert.match(actions, /flex: 0 0 auto;/);
+  assert.doesNotMatch(css, /\.split-pane-title:has\(> \.session-status\) \.split-tab-actions/);
+  assert.match(css, /\.split-pane-title-text \{[^}]*overflow: hidden;/);
   assert.match(css, /\.dv-tab \.split-pane-title \{[^}]*flex: 1 1 auto;/);
   const draw = split.slice(split.indexOf("class PaneTab"), split.indexOf("class StripDrop"));
   assert.equal((draw.match(/class="split-tab-actions"/g) ?? []).length, 2);
+  assert.equal((draw.match(/split-tab-close/g) ?? []).length, 2, "each tab form carries exactly one close control");
 });
 
 test("the tab overflow menu is lifted above the panes and styled", () => {
@@ -125,7 +124,7 @@ test("a pane tab carries the conversation's background chip, from the sidebar's 
   assert.match(css, /\.bg-chip\[role="button"\] \{[^}]*cursor: pointer;/);
 });
 
-test("tab action overlays only fade on hover or keyboard focus", () => {
+test("tab actions only fade on hover or keyboard focus, never shifting the title", () => {
   const actions = css.match(/^\.split-tab-actions \{[^}]*\}/m)?.[0] ?? "";
   assert.match(actions, /transition: opacity 0\.12s ease;/);
   assert.match(actions, /opacity: 0;/);

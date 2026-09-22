@@ -12,20 +12,14 @@ const fn = (src: string, name: string): string => {
   return body;
 };
 
-test("a tab offers an archive button beside close, for real sessions only", () => {
-  assert.match(
-    split,
-    /this\.inStrip[\s\S]*?split-tab-actions[\s\S]*?sessionId \? sessionActions\(sessionId, true, panel\.id\)/,
-  );
+test("a tab offers only close; archive is a header control and a menu item", () => {
+  const tab = split.slice(split.indexOf("class PaneTab"), split.indexOf("class StripDrop"));
+  assert.match(tab, /split-tab-actions[\s\S]*?tip\("Close pane"\)/);
+  assert.doesNotMatch(tab, /split-tab-archive|archiveSessionById/);
   const btn = fn(split, "sessionActions");
-  assert.match(btn, /archiveSessionById\(sessionId\)/);
-  assert.match(btn, /@pointerdown=[\s\S]*?if \(inTab\) e\.stopPropagation\(\)/);
-  assert.match(btn, /@click=[\s\S]*?if \(inTab\) e\.stopPropagation\(\)/);
-  const archiveAt = split.indexOf("split-tab-archive");
-  assert.ok(
-    archiveAt !== -1 && split.indexOf('tip("Close pane")', archiveAt) !== -1,
-    "archive sits before (next to) the close button",
-  );
+  assert.match(btn, /split-tab-archive[\s\S]*?archiveSessionById\(sessionId\)/);
+  const items = fn(split, "sessionMenuItems");
+  assert.match(items, /archiveSessionById\(sessionId\)/);
 });
 
 test("archiveSessionById routes through setArchived so surfaces close and Recents updates at once", () => {
@@ -45,5 +39,5 @@ test("a lone session keeps archive in the group header instead of the tab", () =
   const css = read("shell.css");
   assert.match(css, /\.dv-single-tab \.split-tab-actions\s*\{\s*display: none/);
   assert.match(css, /\.dv-single-tab \.split-group-session-action\s*\{\s*display: inline-flex/);
-  assert.match(split, /sessionId \? sessionActions\(sessionId, false, panel!\.id\) : nothing/);
+  assert.match(split, /sessionId \? sessionActions\(sessionId, panel!\.id\) : nothing/);
 });

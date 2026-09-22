@@ -1075,10 +1075,14 @@ class PaneContent implements IContentRenderer {
   }
 }
 
-function sessionActions(sessionId: string, inTab: boolean, panelId: string): TemplateResult {
-  const cls = inTab ? "split-tab-close" : "split-group-session-action";
+function sessionParent(sessionId: string): CoreSession | undefined {
   const parentId = sessionsState.list.find((row) => row.id === sessionId)?.parentSessionId;
-  const parent = parentId ? sessionsState.list.find((row) => row.id === parentId) : undefined;
+  return parentId ? sessionsState.list.find((row) => row.id === parentId) : undefined;
+}
+
+function sessionActions(sessionId: string, panelId: string): TemplateResult {
+  const cls = "split-group-session-action";
+  const parent = sessionParent(sessionId);
   return html`${
       parent
         ? html`<button
@@ -1086,11 +1090,7 @@ function sessionActions(sessionId: string, inTab: boolean, panelId: string): Tem
             class="icon-btn subtle ${cls}"
             aria-label=${`Back to parent: ${sessionTitle(parent)}`}
             ${tip(`Back to ${sessionTitle(parent)}`)}
-            @pointerdown=${(e: Event) => {
-              if (inTab) e.stopPropagation();
-            }}
-            @click=${(e: Event) => {
-              if (inTab) e.stopPropagation();
+            @click=${() => {
               focusPane(panelId);
               void openSession(parent);
             }}
@@ -1103,11 +1103,7 @@ function sessionActions(sessionId: string, inTab: boolean, panelId: string): Tem
       class="icon-btn subtle ${cls} split-tab-share"
       ${tip("Share conversation")}
       aria-label="Share conversation"
-      @pointerdown=${(e: Event) => {
-        if (inTab) e.stopPropagation();
-      }}
-      @click=${(e: Event) => {
-        if (inTab) e.stopPropagation();
+      @click=${() => {
         void openSessionShare(sessionId);
       }}
     >
@@ -1118,16 +1114,54 @@ function sessionActions(sessionId: string, inTab: boolean, panelId: string): Tem
       type="button"
       title="Archive session"
       aria-label="Archive session"
-      @pointerdown=${(e: Event) => {
-        if (inTab) e.stopPropagation();
-      }}
-      @click=${(e: Event) => {
-        if (inTab) e.stopPropagation();
+      @click=${() => {
         archiveSessionById(sessionId);
       }}
     >
       ${icon(Archive, 13)}
     </button>`;
+}
+
+function sessionMenuItems(sessionId: string, panelId: string, close: () => void): TemplateResult {
+  const parent = sessionParent(sessionId);
+  return html`<button
+      class="session-menu-option"
+      type="button"
+      role="menuitem"
+      @click=${() => {
+        close();
+        void openSessionShare(sessionId);
+      }}
+    >
+      ${icon(Link, 15)}<span>Share conversation</span>
+    </button>
+    <button
+      class="session-menu-option"
+      type="button"
+      role="menuitem"
+      @click=${() => {
+        close();
+        archiveSessionById(sessionId);
+      }}
+    >
+      ${icon(Archive, 15)}<span>Archive session</span>
+    </button>
+    ${
+      parent
+        ? html`<button
+            class="session-menu-option"
+            type="button"
+            role="menuitem"
+            @click=${() => {
+              close();
+              focusPane(panelId);
+              void openSession(parent);
+            }}
+          >
+            ${icon(ArrowUpLeft, 15)}<span>Back to ${sessionTitle(parent)}</span>
+          </button>`
+        : nothing
+    }`;
 }
 
 class PaneTab implements ITabRenderer {
@@ -1219,7 +1253,6 @@ class PaneTab implements ITabRenderer {
         ${
           this.inStrip
             ? html`<span class="split-tab-actions">
-                ${sessionId ? sessionActions(sessionId, true, panel.id) : nothing}
                 <button
                   class="icon-btn subtle split-tab-close"
                   type="button"
@@ -1342,6 +1375,14 @@ class GroupActions implements IHeaderActionsRenderer {
       if (p) openPaneTool(p, tool);
     };
     if (single) this.menuOpen = false;
+    const closeMenu = (): void => {
+      this.menuOpen = false;
+      this.draw();
+    };
+    const splitPane = (): void => {
+      const p = activePanel();
+      if (p) paneSplitWithBlank(p);
+    };
     const menu = this.menuOpen
       ? html`
           <div
@@ -1357,14 +1398,30 @@ class GroupActions implements IHeaderActionsRenderer {
                 </button>
               `,
             )}
+            ${
+              sessionId
+                ? html`<div class="split-tools-menu-sep" role="separator"></div>
+                    ${sessionMenuItems(sessionId, panel!.id, closeMenu)}`
+                : nothing
+            }
             <div class="split-tools-menu-sep" role="separator"></div>
             <button
               class="session-menu-option"
               type="button"
               role="menuitem"
               @click=${() => {
-                this.menuOpen = false;
-                this.draw();
+                closeMenu();
+                splitPane();
+              }}
+            >
+              ${icon(Plus, 15)}<span>Split with a new session</span>
+            </button>
+            <button
+              class="session-menu-option"
+              type="button"
+              role="menuitem"
+              @click=${() => {
+                closeMenu();
                 if (maximized) props.api.exitMaximized();
                 else props.api.maximize();
               }}
@@ -1380,10 +1437,7 @@ class GroupActions implements IHeaderActionsRenderer {
       {
         label: "Split this pane with a new session",
         glyph: icon(Plus, 15),
-        run: () => {
-          const p = activePanel();
-          if (p) paneSplitWithBlank(p);
-        },
+        run: splitPane,
       },
       {
         label: "Open full screen",
@@ -1405,11 +1459,21 @@ class GroupActions implements IHeaderActionsRenderer {
         },
       },
     ];
+    const headerButton = (b: (typeof buttons)[number]): TemplateResult =>
+      html`<button
+        class="icon-btn subtle${b.cls ?? ""}"
+        type="button"
+        ${tip(b.label)}
+        aria-label=${b.label}
+        @click=${b.run}
+      >
+        ${b.glyph}
+      </button>`;
     render(
       html`${
-        single
-          ? html`<span class="split-single-tools">
-              ${PANE_TOOLS.map((t) => {
+          single
+            ? html`<span class="split-single-tools">
+                ${PANE_TOOLS.map((t) => {
                 const count = scope ? scopeToolCount(t.tool, scope, () => this.draw()) : null;
                 return html`<button
                   class="session-tool"
@@ -1421,42 +1485,30 @@ class GroupActions implements IHeaderActionsRenderer {
                   ${icon(t.glyph, 15)}${count ? html`<span class="session-tool-count">${count}</span>` : nothing}
                 </button>`;
               })}
-            </span>`
-          : html`<span class="split-tools">
-              <button
-                class="icon-btn subtle split-tools-btn ${this.menuOpen ? "active" : ""}"
-                type="button"
-                ${tip("Tools")}
-                aria-label="Tools"
-                aria-haspopup="menu"
-                aria-expanded=${this.menuOpen ? "true" : "false"}
-                @click=${() => {
+              </span>`
+            : html`<span class="split-tools">
+                <button
+                  class="icon-btn subtle split-tools-btn ${this.menuOpen ? "active" : ""}"
+                  type="button"
+                  ${tip("Tools")}
+                  aria-label="Tools"
+                  aria-haspopup="menu"
+                  aria-expanded=${this.menuOpen ? "true" : "false"}
+                  @click=${() => {
                   this.menuOpen = !this.menuOpen;
                   this.draw();
                 }}
-              >
-                ${icon(MoreHorizontal, 15)}
-              </button>
-              ${menu}
-            </span>`
-      }
-      ${sessionId ? sessionActions(sessionId, false, panel!.id) : nothing}
-      ${
-        single
-          ? nothing
-          : buttons.map(
-              (b) =>
-                html`<button
-                  class="icon-btn subtle${b.cls ?? ""}"
-                  type="button"
-                  ${tip(b.label)}
-                  aria-label=${b.label}
-                  @click=${b.run}
                 >
-                  ${b.glyph}
-                </button>`,
-            )
-      }`,
+                  ${icon(MoreHorizontal, 15)}
+                </button>
+                ${menu}
+              </span>`
+        }
+        <span class="split-pane-actions-wide">
+          ${sessionId ? sessionActions(sessionId, panel!.id) : nothing}
+          ${single ? nothing : buttons.filter((b) => !b.cls).map(headerButton)}
+        </span>
+        ${single ? nothing : buttons.filter((b) => b.cls).map(headerButton)}`,
       this.element,
     );
   }

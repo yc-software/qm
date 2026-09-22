@@ -627,10 +627,6 @@ a.chat-row-open {
 .split-pane-title > .session-status {
   margin-inline-start: auto;
 }
-.split-pane-title:has(> .session-status) .split-tab-actions {
-  right: 22px;
-}
-
 .working-mark {
   display: inline-flex;
   align-items: center;
@@ -2310,6 +2306,95 @@ qm-markdown .tok-in {
   width: 100%;
   height: 80px;
   object-fit: cover;
+}
+.file-image .file-image-name,
+.file-image .file-image-size {
+  display: none;
+}
+/* In a short pane, or while the message is the pinned prompt riding over the answer, an
+   image folds from the 80px thumbnail to a one-line chip: a 22px thumbnail, the name and
+   the size, the same footprint as a document chip. Hover or focus peeks at the picture. */
+@container split-pane (max-height: 480px) {
+  .user-row > .message-files .file-image {
+    --attachment-compact: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    width: auto;
+    max-width: 100%;
+    min-height: 28px;
+    padding: 3px 8px 3px 3px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--background);
+    color: var(--muted-foreground);
+    font-size: 12px;
+    line-height: 1.2;
+  }
+  .user-row > .message-files .file-image img {
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    object-fit: cover;
+  }
+  .user-row > .message-files .file-image .file-image-name,
+  .user-row > .message-files .file-image .file-image-size {
+    display: inline;
+  }
+}
+.message-stack .user-row.stuck > .message-files .file-image {
+  --attachment-compact: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 3px 8px 3px 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.message-stack .user-row.stuck > .message-files .file-image img {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  object-fit: cover;
+}
+.message-stack .user-row.stuck > .message-files .file-image .file-image-name,
+.message-stack .user-row.stuck > .message-files .file-image .file-image-size {
+  display: inline;
+}
+.file-image .file-image-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.file-image .file-image-size {
+  flex: none;
+  color: var(--muted-foreground);
+}
+.attachment-peek {
+  position: fixed;
+  z-index: 1200;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+  box-shadow: var(--chat-surface-shadow);
+  pointer-events: none;
+}
+.attachment-peek img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  object-fit: contain;
 }
 .file-html-unfurl {
   display: flex;
@@ -8112,6 +8197,7 @@ h3.ambient-field-label {
   border-radius: 0;
   background: var(--background);
   overflow: hidden;
+  container: pane-group / inline-size;
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container {
@@ -8273,16 +8359,15 @@ h3.ambient-field-label {
   background: var(--secondary);
 }
 
+/* The close control sits in the tab's flow after the title, so the title truncates
+   around it instead of being painted over; every tab reserves the slot and only the
+   opacity moves, so hovering never shifts a title. */
 .split-tab-actions {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
   display: flex;
   align-items: center;
   gap: 2px;
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--background) 96%, transparent);
+  flex: 0 0 auto;
+  margin-left: 2px;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.12s ease;
@@ -8334,6 +8419,18 @@ h3.ambient-field-label {
   align-items: center;
   gap: 2px;
   flex: 0 0 auto;
+}
+
+.split-pane-actions-wide {
+  display: contents;
+}
+
+/* A narrow pane keeps only the tools menu and the group close in its header; the split,
+   focus, share and archive controls it dropped are all reachable from the menu. */
+@container pane-group (max-width: 560px) {
+  .split-pane-actions-wide {
+    display: none;
+  }
 }
 
 /* Single-header multiview: the pane title is a scope / title breadcrumb, and the
