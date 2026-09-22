@@ -61,6 +61,7 @@ function fakeApp(state: FakeState): App {
     canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string) {
       return fakeManages(state)(homeScopeId, createdBy, principalId);
     },
+    async deploymentShared() {},
     async grant(g: Grant) {
       await state.acl.grant(g, authorOfGrant(state, g.ownerScopeId, g.ref));
     },

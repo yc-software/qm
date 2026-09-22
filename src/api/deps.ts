@@ -65,6 +65,7 @@ import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { BrowserSessionStore } from "../connectors/browser-session-store.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 import type { DeploymentLayerStore } from "../deployment/deployment-layer-store.ts";
+import type { DeploymentAccessRequests } from "../deploy/access-requests.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import type { ChannelPolicyStore } from "../surface-cache/channel-policy-store.ts";
@@ -178,6 +179,7 @@ export interface ServerDeps {
   brokeredServices?: () => readonly string[];
   deployDialTimeoutMs?: number;
   deployAppsDomain?: string;
+  deploymentAccessRequests?: DeploymentAccessRequests;
   deployGateSecret?: string;
   deployAppsSessionSecret?: string;
   deployAppsLoginUrl?: string;

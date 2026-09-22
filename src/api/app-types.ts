@@ -18,6 +18,7 @@ import type {
   TurnResult,
 } from "../types.ts";
 import type { OutgoingAttachment } from "../types.ts";
+import type { DeploymentSharedEvent } from "../deploy/access-requests.ts";
 import type { SecurityScreenProbe } from "../security/security-screener.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
@@ -571,6 +572,7 @@ export interface App {
     actor: { createdBy: string },
   ): Promise<DeploymentGrantee[]>;
   deploymentGrantees(idOrName: string): Promise<DeploymentGrantee[]>;
+  deploymentShared(event: DeploymentSharedEvent): Promise<void>;
   deploymentGitRepoPath(id: string): Promise<string | null>;
   runDeploymentGitPush<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>): Promise<T>;
   deploymentGitUrlFor(
@@ -630,6 +632,7 @@ export interface AppDeps {
   emailAuthMembers?: DirectoryMember[];
   projects?: ProjectStore;
   deploy: DeployService;
+  onDeploymentShared?: (event: DeploymentSharedEvent) => Promise<void>;
   deploymentLayer?: DeploymentLayerRuntime;
   files: FileArtifactStore;
   approvals?: DurableMap<PendingApprovalRecord>;
