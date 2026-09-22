@@ -514,6 +514,8 @@ test("init --target aws vendors a contract-valid Terraform deployment", () => {
       ),
     );
     config.publicUrl = "https://agents.globex.example";
+    config.aws!.accountId = "123456789012";
+    config.aws!.deployRoleArn = "arn:aws:iam::123456789012:role/globex-qm-github-deploy";
     renderTerraformVars(config, dir);
     const tfvars = readFileSync(tfvarsPath, "utf8");
     assert.match(tfvars, /public_url\s*= "https:\/\/agents\.globex\.example"/);

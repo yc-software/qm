@@ -34,6 +34,18 @@ terraform -chdir=infra apply qm.tfplan
 Set `publicUrl`, `env.core.AWS_PUBLIC_ORIGIN_URL`, and `aws.deployRoleArn` from
 the Terraform outputs. Finish `npm exec qm -- setup .`, render again, and apply.
 
+The object-store bucket contains agent files and is protected from replacement.
+For an existing deployment, pin its current name before changing `aws.accountId`,
+`aws.region`, or `aws.cluster`:
+
+```bash
+terraform -chdir=infra output -raw object_store_bucket
+```
+
+Copy that exact value to `aws.objectStoreBucket` in `qm.config.jsonc`, run
+`npm exec qm -- infra render`, and verify the plan does not replace
+`aws_s3_bucket.objects`. Do not infer the name from the corrected coordinates.
+
 ## Publish the agent computer and deploy
 
 ```bash

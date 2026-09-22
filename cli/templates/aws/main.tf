@@ -629,6 +629,8 @@ resource "aws_s3_bucket" "objects" {
   bucket        = var.object_store_bucket
   force_destroy = var.object_store_force_destroy
   tags          = local.tags
+
+  lifecycle { prevent_destroy = true }
 }
 
 resource "aws_s3_bucket_policy" "objects" {
