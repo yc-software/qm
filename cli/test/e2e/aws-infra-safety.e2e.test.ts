@@ -6,9 +6,8 @@ import { join } from "node:path";
 import { CONFIG_FILENAME } from "../../src/config.ts";
 import { rmDir, runCli, tmp } from "./harness.ts";
 
-const terraformCandidates = [process.env.QM_TERRAFORM_BIN, "terraform"].filter((value): value is string =>
-  Boolean(value),
-);
+const terraformRequested = process.env.QM_TERRAFORM_BIN !== undefined;
+const terraformCandidates = terraformRequested ? [process.env.QM_TERRAFORM_BIN!] : ["terraform"];
 const terraformBin = terraformCandidates.find(
   (candidate) => spawnSync(candidate, ["version"], { stdio: "ignore" }).status === 0,
 );
@@ -136,8 +135,9 @@ test("AWS init refuses to render the scaffold account and renders corrected conf
 
 test(
   "rendered AWS infrastructure passes Terraform validation and blocks bucket replacement",
-  { skip: terraformBin ? false : "Terraform is unavailable" },
+  { skip: !terraformRequested && !terraformBin ? "Terraform is unavailable" : false },
   () => {
+    assert.ok(terraformBin, `QM_TERRAFORM_BIN is not executable: ${process.env.QM_TERRAFORM_BIN}`);
     const root = tmp("aws-infra-safety");
     const deployment = join(root, "deployment");
     try {
