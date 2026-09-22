@@ -340,9 +340,9 @@ export class UsersView {
                       <button
                         type="button"
                         @click=${async () => {
-                  this.copyLabel = (await s.copyText(this.inviteLink)) ? "Copied" : "Copy failed";
-                  this.draw();
-                }}
+                          this.copyLabel = (await s.copyText(this.inviteLink)) ? "Copied" : "Copy failed";
+                          this.draw();
+                        }}
                       >
                         ${this.copyLabel}
                       </button>`
