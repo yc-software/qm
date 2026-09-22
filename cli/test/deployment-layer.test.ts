@@ -681,7 +681,9 @@ test("fly sync succeeds on the response marker, piping the exact bundle over std
         assert.equal(request.body.timeout, 120);
         assert.ok(Array.isArray(request.body.command));
         assert.deepEqual((request.body.command as string[]).slice(0, 2), ["node", "-e"]);
-        assert.match((request.body.command as string[])[2] ?? "", /^eval\(Buffer\.from\('/);
+        const remoteScript = (request.body.command as string[])[2] ?? "";
+        assert.match(remoteScript, /createHmac\("sha256"/, "the signing script is passed to node -e directly");
+        assert.doesNotMatch(remoteScript, /eval\(/, "no eval indirection");
         assert.deepEqual(JSON.parse(readFileSync(argsLog, "utf8")) as string[], [
           "status",
           "-a",
