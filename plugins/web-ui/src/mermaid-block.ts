@@ -7,10 +7,20 @@ let engine: Promise<(typeof import("mermaid"))["default"]> | undefined;
 const diagramConfig: import("mermaid").MermaidConfig = {
   startOnLoad: false,
   securityLevel: "strict",
-  theme: "default",
-  fontFamily: "Arial, sans-serif",
+  theme: "base",
+  look: "classic",
+  layout: "dagre",
+  fontFamily: "ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif",
   htmlLabels: false,
-  flowchart: { htmlLabels: false },
+  flowchart: {
+    htmlLabels: false,
+    curve: "linear",
+    wrappingWidth: 400,
+    minNodeWidth: 32,
+    nodeSpacing: 40,
+    rankSpacing: 40,
+    padding: 16,
+  },
   maxTextSize: 50000,
   maxEdges: 500,
   suppressErrorRendering: true,
@@ -23,6 +33,9 @@ const diagramConfig: import("mermaid").MermaidConfig = {
     "htmlLabels",
     "flowchart",
     "theme",
+    "look",
+    "layout",
+    "fontFamily",
     "themeCSS",
     "themeVariables",
   ],
@@ -46,7 +59,24 @@ export async function renderMermaid(
   if (source.length > 50000) throw new Error("Diagram is too large");
   const mermaid = await loadMermaid();
   const operation = renderQueue.then(async () => {
-    mermaid.initialize({ ...diagramConfig, theme: dark ? "dark" : "default" });
+    mermaid.initialize({
+      ...diagramConfig,
+      themeVariables: {
+        darkMode: dark,
+        background: "transparent",
+        primaryColor: dark ? "#30343b" : "#f4f5f7",
+        primaryTextColor: dark ? "#f1f3f5" : "#24272d",
+        primaryBorderColor: dark ? "#555b64" : "#cbd0d8",
+        secondaryColor: dark ? "#272c34" : "#eef1f5",
+        tertiaryColor: dark ? "#242931" : "#f8f9fb",
+        lineColor: dark ? "#aeb4bf" : "#69717d",
+        textColor: dark ? "#f1f3f5" : "#24272d",
+        edgeLabelBackground: "transparent",
+        fontSize: "16px",
+      },
+      themeCSS:
+        ".node rect { rx: 10px; ry: 10px; } .node rect, .node polygon, .node circle, .node path { filter: none; stroke-width: 1px; } .edgeLabel, .labelBkg { background: transparent; }",
+    });
     const diagram = await mermaid.mermaidAPI.getDiagramFromText(source);
     if (diagram.type.startsWith("flowchart")) {
       const db = diagram.db as unknown as { getData(): { nodes: Array<{ img?: string; shape?: string }> } };
@@ -74,6 +104,7 @@ export class MermaidBlock extends LitElement {
   private image = "";
   private error = false;
   private fit = true;
+  private sizeChosen = false;
   private themeObserver?: MutationObserver;
   private revision = 0;
   private width = 0;
@@ -84,47 +115,56 @@ export class MermaidBlock extends LitElement {
       display: block;
       min-width: 0;
       margin: 1em 0;
-      border: 1px solid #8885;
-      border-radius: 12px;
-      overflow: hidden;
+      position: relative;
     }
     .viewport {
       overflow: auto;
       max-height: min(600px, 70vh);
-      background: #fff;
-      padding: 16px;
+      padding: 24px 0;
     }
     img {
       display: block;
       max-width: none;
       margin: auto;
     }
-    :host([dark]) .viewport {
-      background: #1f252e;
-    }
     .fit img {
       max-width: 100%;
       height: auto;
     }
     .toolbar {
-      display: flex;
-      justify-content: flex-end;
-      padding: 6px 12px;
+      position: absolute;
+      right: 0;
+      top: 0;
+      opacity: 0;
+      transition: opacity 120ms;
+    }
+    .toolbar.oversized,
+    :host(:hover) .toolbar,
+    :host(:focus-within) .toolbar {
+      opacity: 1;
+    }
+    @media (hover: none) {
+      .toolbar {
+        opacity: 1;
+      }
     }
     button {
       color: inherit;
       background: transparent;
-      border: 1px solid #8885;
+      border: none;
       border-radius: 6px;
       padding: 4px 8px;
+      font: 12px var(--app-font, system-ui);
+      color: var(--muted-foreground, #858b95);
       cursor: pointer;
     }
     details {
-      padding: 10px 14px;
+      padding: 4px 0;
     }
     summary {
       cursor: pointer;
-      font: 12px system-ui;
+      font: 12px var(--app-font, system-ui);
+      color: var(--muted-foreground, #858b95);
     }
     pre {
       overflow: auto;
@@ -188,6 +228,7 @@ export class MermaidBlock extends LitElement {
       const viewBox = document.documentElement.getAttribute("viewBox")?.split(/[ ,]+/).map(Number);
       this.width = viewBox?.[2] || 640;
       this.height = viewBox?.[3] || 480;
+      if (!this.sizeChosen) this.fit = this.width <= Math.max(this.clientWidth, 320) * 2;
       this.image = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
     } catch {
       if (revision === this.revision) this.error = true;
@@ -206,9 +247,10 @@ export class MermaidBlock extends LitElement {
     return html`
       ${
         this.image
-          ? html`<div class="toolbar">
+          ? html`<div class=${this.fit ? "toolbar" : "toolbar oversized"}>
               <button
                 @click=${() => {
+                  this.sizeChosen = true;
                   this.fit = !this.fit;
                 }}
                 aria-label=${this.fit ? "Show diagram at actual size" : "Fit diagram to width"}
@@ -220,7 +262,7 @@ export class MermaidBlock extends LitElement {
       }
       ${this.image ? html`<div class=${this.fit ? "viewport fit" : "viewport"} tabindex="0" role="region" aria-label="Mermaid diagram; scroll to explore"><img src=${this.image} width=${this.width} height=${this.height} alt="Mermaid diagram. Diagram source is available below." /></div>` : html`<p role="status">${status}</p>`}
       <details ?open=${!this.image}>
-        <summary>Mermaid source</summary>
+        <summary>Source</summary>
         <pre><code>${this.code}</code></pre>
       </details>
     `;
