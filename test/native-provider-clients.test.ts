@@ -1,11 +1,18 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createE2bSandbox } from "../src/sandbox/e2b-sandbox.ts";
+import { createModalSandbox } from "../src/sandbox/modal-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
-import { createSdkModalClient } from "../src/sandbox/modal-client.ts";
+import {
+  createSdkModalClient,
+  modalEgressAllowlist,
+  MODAL_EXEC_GRACE_MS,
+  MODAL_MAX_EXEC_ARG_BYTES,
+} from "../src/sandbox/modal-client.ts";
 import {
   createSdkE2bClient,
   e2bEgressNetwork,
@@ -15,8 +22,30 @@ import {
 } from "../src/sandbox/e2b-client.ts";
 
 const modalCalls: unknown[][] = [];
+const modalCreateParams: Record<string, unknown>[] = [];
+const modalExecs: { args: string[]; params: Record<string, unknown> }[] = [];
+const modalWrites: { path: string; bytes: number }[] = [];
+const modalRunning = new Map<string, boolean>();
+class SandboxFilesystemFileTooLargeError extends Error {
+  override name = "SandboxFilesystemFileTooLargeError";
+}
 const modalSandbox = {
   sandboxId: "sb-native",
+  async exec(args: string[], params: Record<string, unknown>) {
+    if (typeof params.timeoutMs === "number" && params.timeoutMs % 1000 !== 0)
+      throw new Error(`timeoutMs must be a multiple of 1000ms, got ${params.timeoutMs}`);
+    modalExecs.push({ args, params });
+    return { stdout: { readText: async () => "ok" }, stderr: { readText: async () => "" }, wait: async () => 0 };
+  },
+  filesystem: {
+    async writeBytes(data: Uint8Array, path: string) {
+      modalWrites.push({ path, bytes: data.byteLength });
+    },
+    async readBytes(path: string) {
+      if (path.endsWith("huge.bin")) throw new SandboxFilesystemFileTooLargeError("file too large");
+      return new Uint8Array([1]);
+    },
+  },
   async snapshotDirectory(path: string, options: unknown) {
     modalCalls.push(["snapshot", path, options]);
     return { imageId: "im-native" };
@@ -28,9 +57,18 @@ const modalSandbox = {
 mock.module("modal", {
   namedExports: {
     ModalClient: class {
-      apps = { fromName: async () => ({}) };
+      apps = { fromName: async () => ({ appId: "ap-1" }) };
       images = { fromRegistry: () => ({}), fromId: async (imageId: string) => ({ imageId }) };
-      sandboxes = { create: async () => modalSandbox };
+      sandboxes = {
+        create: async (_app: unknown, _image: unknown, params: Record<string, unknown>) => {
+          modalCreateParams.push(params);
+          return modalSandbox;
+        },
+        list: async function* (params: { appId?: string; tags?: Record<string, string> }) {
+          modalCalls.push(["list", params]);
+          for (const [sandboxId, running] of modalRunning) yield { sandboxId, poll: async () => (running ? null : 0) };
+        },
+      };
     },
   },
 });
@@ -163,6 +201,94 @@ test("Modal native directory snapshot has a ten-minute timeout, finite retention
   await session.restoreHome!(snapshot.imageId);
   assert.deepEqual(modalCalls[1], ["mount", "/root", { imageId: "im-native" }]);
   assert.equal(client.lifetimeMs, 24 * 3600_000);
+});
+
+test("Modal exec deadlines are whole seconds with a single grace margin, even near a snapshot deadline", async () => {
+  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const session = await client.create({});
+  modalExecs.length = 0;
+  await session.runCommand("wc -c < /root/.qm-home.tar", { timeoutMs: 12_345 });
+  await session.runCommand("true", { timeoutMs: 7 });
+  await session.runCommand("true");
+  assert.deepEqual(
+    modalExecs.map((call) => call.params.timeoutMs),
+    [13_000 + MODAL_EXEC_GRACE_MS, 1000 + MODAL_EXEC_GRACE_MS, 3600_000 + MODAL_EXEC_GRACE_MS],
+  );
+  assert.deepEqual(modalExecs[0]!.args, ["timeout", "13", "sh", "-c", "wc -c < /root/.qm-home.tar"]);
+});
+
+test("Modal passes command env through exec and spools oversized commands through the filesystem", async () => {
+  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const session = await client.create({});
+  modalExecs.length = 0;
+  modalWrites.length = 0;
+  await session.runCommand("echo $SECRET_TOKEN", { env: { SECRET_TOKEN: "s3cret" } });
+  assert.deepEqual(modalExecs[0]!.params.env, { SECRET_TOKEN: "s3cret" });
+  assert.ok(!modalExecs[0]!.args[2]!.includes("s3cret"));
+  await session.runCommand("true", { env: {} });
+  assert.equal("env" in modalExecs[1]!.params, false);
+  const huge = `printf '%s' '${"A".repeat(MODAL_MAX_EXEC_ARG_BYTES)}' | base64 -d`;
+  await session.runCommand(huge);
+  assert.equal(modalWrites.length, 1);
+  assert.equal(modalWrites[0]!.bytes, Buffer.byteLength(huge));
+  assert.match(modalWrites[0]!.path, /^\/tmp\/\.qm-exec-[0-9a-f-]{36}\.sh$/);
+  assert.equal(
+    modalExecs[2]!.args[2],
+    `timeout 3600 sh ${modalWrites[0]!.path}; rc=$?; rm -f ${modalWrites[0]!.path}; exit $rc`,
+  );
+  assert.ok(Buffer.byteLength(modalExecs[2]!.args[2]!) < MODAL_MAX_EXEC_ARG_BYTES);
+});
+
+test("Modal creates sandboxes with a real reservation, an idle backstop, tags and the egress allowlist", async () => {
+  modalCreateParams.length = 0;
+  const bare = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  await bare.create({ name: "qm-scope", tags: { "qm-kind": "scope" } });
+  assert.deepEqual(modalCreateParams[0], {
+    name: "qm-scope",
+    tags: { "qm-kind": "scope" },
+    timeoutMs: 24 * 3600_000,
+    idleTimeoutMs: 12 * 3600_000,
+    cpu: 1,
+    memoryMiB: 2048,
+  });
+  const tuned = createSdkModalClient({
+    tokenId: "id",
+    tokenSecret: "secret",
+    appName: "test",
+    image: "ubuntu",
+    cpus: 4,
+    memoryMb: 8192,
+    regions: ["us-west-2"],
+    idleTimeoutMs: 6 * 3600_000 + 1,
+    egressProxyUrl: "https://egress.example.com",
+  });
+  await tuned.create({});
+  assert.deepEqual(modalCreateParams[1], {
+    timeoutMs: 24 * 3600_000,
+    idleTimeoutMs: 6 * 3600_000 + 1000,
+    cpu: 4,
+    memoryMiB: 8192,
+    regions: ["us-west-2"],
+    outboundDomainAllowlist: ["egress.example.com"],
+  });
+  assert.deepEqual(modalEgressAllowlist("http://10.1.2.3:3128"), { outboundCidrAllowlist: ["10.1.2.3/32"] });
+  assert.deepEqual(modalEgressAllowlist("http://[2001:db8::1]:3128"), { outboundCidrAllowlist: ["2001:db8::1/128"] });
+  assert.throws(() => modalEgressAllowlist("http://egress.example.com:3128"), /https URL on port 443/);
+  assert.throws(() => modalEgressAllowlist("https://egress.example.com:8443"), /https URL on port 443/);
+});
+
+test("Modal lists running tagged sandboxes within the app and reports oversized reads clearly", async () => {
+  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  modalRunning.set("sb-live", true);
+  modalRunning.set("sb-done", false);
+  modalCalls.length = 0;
+  const ids: string[] = [];
+  for await (const id of client.listRunning!({ "qm-kind": "scope" })) ids.push(id);
+  assert.deepEqual(ids, ["sb-live"]);
+  assert.deepEqual(modalCalls[0], ["list", { appId: "ap-1", tags: { "qm-kind": "scope" } }]);
+  const session = await client.create({});
+  assert.deepEqual(await session.readFileBytes("/root/small.bin"), new Uint8Array([1]));
+  await assert.rejects(session.readFileBytes("/root/huge.bin"), /exceeds Modal's filesystem read limit/);
 });
 
 test("Modal rejects invalid checkpoint retention", () => {
@@ -314,4 +440,61 @@ test("E2B does not dispatch twice when execution occurs before its start acknowl
   startError = new FakeSandboxNotFoundError("start stream unavailable after dispatch");
   await assert.rejects(sandbox.run(handle, "perform-side-effect"), /may have partially executed and was not retried/);
   assert.equal(effects, 1);
+});
+
+test("Modal executes a one-megabyte payload through the sandbox and SDK without nested oversized arguments", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "modal-large-command-"));
+  const home = join(root, "home");
+  mkdirSync(home);
+  const map = (value: string) =>
+    value
+      .replaceAll("/root", home)
+      .replaceAll("/tmp/.qm-exec-", `${root}/.qm-exec-`)
+      .replaceAll("exec setsid ", process.platform === "darwin" ? "exec " : "exec setsid ");
+  const originalExec = modalSandbox.exec;
+  const originalWrite = modalSandbox.filesystem.writeBytes;
+  t.after(() => {
+    modalSandbox.exec = originalExec;
+    modalSandbox.filesystem.writeBytes = originalWrite;
+    rmSync(root, { recursive: true, force: true });
+  });
+  modalSandbox.filesystem.writeBytes = async (data, path) => {
+    const file = map(path);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, map(Buffer.from(data).toString("utf8")));
+  };
+  modalSandbox.exec = async (args, params) => {
+    const mapped = args.map(map);
+    const result = spawnSync(mapped[0]!, mapped.slice(1), {
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, ...(params.env as Record<string, string> | undefined) },
+      timeout: 30_000,
+    });
+    if (result.error) throw result.error;
+    return {
+      stdout: { readText: async () => result.stdout },
+      stderr: { readText: async () => result.stderr },
+      wait: async () => result.status ?? -1,
+    };
+  };
+  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const session = await client.create({});
+  const sandbox = createModalSandbox(createLocalWorkspaceStore(join(root, "workspace")), {
+    client: {
+      create: async () => session,
+      fromId: async () => session,
+      fromName: async () => null,
+      terminate: async () => {},
+    },
+  });
+  const handle = await sandbox.provision([{ scopeId: "large-command", mountPath: "", mode: "rw" }]);
+  const size = 1024 * 1024;
+  const result = await sandbox.run(handle, `payload='${"x".repeat(size)}'; printf '%s' "${"${#payload}"}"`);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stdout, String(size));
+  const signalled = await sandbox.run(handle, `payload='${"x".repeat(size)}'; printf '%s' "${"${#payload}"}"`, {
+    signal: new AbortController().signal,
+  });
+  assert.equal(signalled.code, 0, signalled.stderr);
+  assert.equal(signalled.stdout, String(size));
 });

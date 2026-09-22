@@ -221,7 +221,7 @@ test("a read-only wake never reaches the sandbox (execute stripped), so no exec 
   const res = await built.app.turn(wake("[wake] glance only", true));
   assert.equal(res.status, "ok");
   assert.ok(
-    !fakeSprites.calls.some((c) => c.method === "POST" && c.path.endsWith("/exec")),
+    !fakeSprites.calls.some((c) => c.method === "WS" && c.path.endsWith("/exec")),
     "a read-only wake spins no sandbox exec",
   );
 });

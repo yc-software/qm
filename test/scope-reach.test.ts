@@ -348,7 +348,7 @@ test("DM + directory + flag: execute(scope:#room) runs on that channel's own com
   assert.equal(res.status, "ok");
   assert.equal(res.reply, "still here");
   assert.ok(
-    fakeSprites.calls.some((c) => c.method === "POST" && /\/sprites\/qm-channel-c-ph-[^/]+\/exec$/.test(c.path)),
+    fakeSprites.calls.some((c) => c.method === "WS" && /\/sprites\/qm-channel-c-ph-[^/]+\/exec$/.test(c.path)),
     "the command landed on the channel's computer",
   );
 });

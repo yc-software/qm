@@ -192,6 +192,19 @@ test("production names a mock harness rather than letting it pass as a real depl
   assert.match(mock[1]!, /HARNESS is "mock"/);
 });
 
+test("Modal without an egress proxy warns that sandboxes run fail-open", () => {
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (msg: unknown) => void warnings.push(String(msg));
+  try {
+    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret" });
+    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret", MODAL_EGRESS_PROXY_URL: "https://egress.test" });
+  } finally {
+    console.warn = original;
+  }
+  assert.equal(warnings.filter((w) => w.includes("MODAL_EGRESS_PROXY_URL")).length, 1);
+});
+
 test("a leftover *=sqlite env throws (no silent downgrade to ephemeral memory)", () => {
   assert.throws(() => loadConfig({ SESSION_STORE: "sqlite" }), /SESSION_STORE=sqlite is no longer supported/);
   assert.throws(() => loadConfig({ RUN_STORE: "sqlite" }), /RUN_STORE=sqlite is no longer supported/);

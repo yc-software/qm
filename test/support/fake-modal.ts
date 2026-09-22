@@ -13,6 +13,7 @@ import {
 interface FakeRecord {
   sandboxId: string;
   name?: string;
+  tags: Record<string, string>;
   state: "running" | "terminated";
   home: string;
   createdAt: number;
@@ -29,6 +30,8 @@ export interface FakeModal {
   terminateAllRunning(): void;
   failTerminateOnce(): void;
   execScripts(): string[];
+  tagsOf(sandboxId: string): Record<string, string>;
+  createUntracked(tags: Record<string, string>): string;
   cleanup(): void;
 }
 
@@ -82,14 +85,14 @@ export function installFakeModal(opts: { native?: boolean } = {}): FakeModal {
           },
         }
       : {}),
-    async runCommand(command): Promise<ModalCommandResult> {
+    async runCommand(command, runOpts): Promise<ModalCommandResult> {
       alive(r);
       execScripts.push(command);
       mkdirSync(join(r.home, "tmp"), { recursive: true });
       const spawned = spawnSync("sh", ["-c", remap(r, command)], {
         encoding: "buffer",
         maxBuffer: 128 * 1024 * 1024,
-        env: { ...process.env, COPYFILE_DISABLE: "1" },
+        env: { ...process.env, ...runOpts?.env, COPYFILE_DISABLE: "1" },
       });
       return {
         stdout: (spawned.stdout ?? Buffer.alloc(0)).toString("utf8"),
@@ -118,6 +121,21 @@ export function installFakeModal(opts: { native?: boolean } = {}): FakeModal {
     },
   });
 
+  const spawn = (name: string | undefined, tags: Record<string, string>): FakeRecord => {
+    const id = `sb-${nextId++}`;
+    const r: FakeRecord = {
+      sandboxId: id,
+      ...(name ? { name } : {}),
+      tags,
+      state: "running",
+      home: join(root, id),
+      createdAt: ++clock,
+    };
+    mkdirSync(r.home, { recursive: true });
+    records.set(id, r);
+    return r;
+  };
+
   const client: ModalClient = {
     nativeSnapshots: opts.native ?? false,
     async create(opts): Promise<ModalSession> {
@@ -127,17 +145,7 @@ export function installFakeModal(opts: { native?: boolean } = {}): FakeModal {
           throw new ModalNameConflictError(opts.name, "sandbox with this name already exists");
         }
       }
-      const id = `sb-${nextId++}`;
-      const r: FakeRecord = {
-        sandboxId: id,
-        ...(opts.name ? { name: opts.name } : {}),
-        state: "running",
-        home: join(root, id),
-        createdAt: ++clock,
-      };
-      mkdirSync(r.home, { recursive: true });
-      records.set(id, r);
-      return session(r);
+      return session(spawn(opts.name, opts.tags ?? {}));
     },
     async fromId(sandboxId): Promise<ModalSession> {
       const r = records.get(sandboxId);
@@ -153,6 +161,12 @@ export function installFakeModal(opts: { native?: boolean } = {}): FakeModal {
       const r = records.get(sandboxId);
       if (!r) return;
       kill(r);
+    },
+    async *listRunning(tags): AsyncIterable<string> {
+      for (const r of records.values()) {
+        if (r.state !== "running") continue;
+        if (Object.entries(tags).every(([k, v]) => r.tags[k] === v)) yield r.sandboxId;
+      }
     },
   };
 
@@ -181,6 +195,12 @@ export function installFakeModal(opts: { native?: boolean } = {}): FakeModal {
       terminateFailures++;
     },
     execScripts: () => [...execScripts],
+    tagsOf: (sandboxId) => {
+      const r = records.get(sandboxId);
+      if (!r) throw new Error(`fake-modal: no sandbox ${sandboxId}`);
+      return { ...r.tags };
+    },
+    createUntracked: (tags) => spawn(undefined, tags).sandboxId,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }

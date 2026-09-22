@@ -839,9 +839,15 @@ export function buildApp(
       ...config.localSandbox,
       onError: sandboxOnError,
     });
-  const buildSprites = (): Sandbox =>
-    createSpritesSandbox(workspace, {
-      ...config.spritesSandbox,
+  const buildSprites = (): Sandbox => {
+    const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;
+    return createSpritesSandbox(workspace, {
+      ...sprites,
+      initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
+      advisoryLock,
+      ...(snapshotS3Bucket
+        ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "sprites-home" }) }
+        : {}),
       blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
@@ -852,6 +858,7 @@ export function buildApp(
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       onError: sandboxOnError,
     });
+  };
   const smolmachinesBodies = artifactMap<StoredSmolmachinesSandbox>("smolmachines_sandbox_bodies");
   const buildSmolmachines = (): Sandbox => {
     const { snapshotS3Bucket, snapshotIntervalSec, ...smol } = config.smolmachinesSandbox;
@@ -926,7 +933,9 @@ export function buildApp(
         ...(modal.memoryMb !== undefined ? { memoryMb: modal.memoryMb } : {}),
         ...(modal.regions?.length ? { regions: modal.regions } : {}),
         ...(modal.sandboxTimeoutSec ? { sandboxTimeoutMs: modal.sandboxTimeoutSec * 1000 } : {}),
+        ...(modal.reapIdleSec ? { idleTimeoutMs: 2 * modal.reapIdleSec * 1000 } : {}),
         ...(modal.snapshotRetentionSec !== undefined ? { snapshotRetentionMs: modal.snapshotRetentionSec * 1000 } : {}),
+        ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
       }),
       ...(modal.namePrefix ? { namePrefix: modal.namePrefix } : {}),
       ...(modal.defaultTimeoutSec ? { defaultTimeoutSec: modal.defaultTimeoutSec } : {}),
@@ -2489,17 +2498,15 @@ export function buildApp(
   const keepWarmSweeper = createSweeper(() => app.keepAlwaysOnWarm(), KEEP_WARM_INTERVAL_MS);
   const deepIdleMachineMs = config.deepIdleMachineMs;
   const devIdleMachineMs = config.devIdleMachineMs;
-  const sweepFractions = [deepIdleMachineMs, devIdleMachineMs]
-    .filter((w): w is number => !!w && w > 0)
-    .map((w) => Math.floor(w / 24));
-  const deepIdleReapEnabled = Boolean(sandbox.reapDeepIdle && sweepFractions.length);
+  const SANDBOX_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
+  const deepIdleReapEnabled = Boolean(sandbox.reapDeepIdle && (deepIdleMachineMs > 0 || devIdleMachineMs > 0));
   const deepIdleSweeper = deepIdleReapEnabled
     ? createSweeper(
         () =>
           leaderLease.hold("sandbox:deep-idle-reaper", () =>
             sandbox.reapDeepIdle!(deepIdleMachineMs, devIdleMachineMs),
           ),
-        Math.max(60_000, Math.min(...sweepFractions)),
+        SANDBOX_MAINTENANCE_INTERVAL_MS,
         { immediate: true },
       )
     : null;
