@@ -115,9 +115,9 @@ or edit the cron; custom task text and schedules are preserved. The global disab
 flag pauses managed jobs. Background work must also be enabled.
 
 Set `SUGGESTED_ACTIVITIES_CONTEXT` on core for rollout guidance (up to 8,000
-characters). For a YC rollout, describe WaaS sourcing, investor CRM, deck review,
-office hours, and Bookface advice there; optionally provide fallback starters on web.
-Guidance updates propagate to unmodified managed tasks. Public QM has no YC context
+characters). Describe the organization’s workflows and available tools there;
+optionally provide fallback starters on web. Guidance updates propagate to
+unmodified managed tasks. Public QM has no organization-specific suggestion context
 by default. Suggestions are private to their owner; generated sessions use the
 same scoped access controls as other personal work.
 

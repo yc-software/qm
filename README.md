@@ -2,8 +2,6 @@
 
 A multiplayer agent harness for work. In Slack and on the web.
 
-![The QM web UI: a conversation about Victor Hugo, with personal sessions and workspace tools in the sidebar](./docs/screenshots/web-ui-hero.png)
-
 ## Setup
 
 Tell your coding agent of choice `Let's deploy https://github.com/yc-software/qm`. From here, it should follow the deployment guide in this repo.

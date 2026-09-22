@@ -33,8 +33,8 @@ import { testConfig } from "./support/test-config.ts";
 
 const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";
-const OIDC = "oidc:11f23f7cabe8a3778c0651be5112f1cd67387728be3d94afe6d758964c05d3c6:NDI3NjQ0";
-const EVIDENCE = "bookface email pavitra@superserve.ai matched the Slack-verified directory email";
+const OIDC = "oidc:1111111111111111111111111111111111111111111111111111111111111111:am9yZGFu";
+const EVIDENCE = "SSO email jordan@acme.test matched the Slack-verified directory email";
 
 describe("principal link service: one person, several sign-ins", () => {
   it("links a sign-in to a canonical principal and resolves both directions", async () => {
