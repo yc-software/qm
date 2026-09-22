@@ -56,6 +56,21 @@ function storeCustomTheme(palette: Palette | null): void {
   }
 }
 
+let themeParentOrigin: string | null = null;
+
+function publishTheme(): void {
+  if (!themeParentOrigin) return;
+  const root = document.documentElement;
+  const style = getComputedStyle(root);
+  const colors = Object.fromEntries(
+    ["--background", "--foreground", "--secondary", "--muted-foreground", "--border", "--brand-accent"].map((key) => [
+      key,
+      style.getPropertyValue(key).trim(),
+    ]),
+  );
+  window.parent.postMessage({ type: "qm:theme", dark: root.classList.contains("dark"), colors }, themeParentOrigin);
+}
+
 export function applyTheme(): void {
   const choice = storedTheme();
   const custom = choice === "custom" ? storedCustomTheme() : null;
@@ -70,11 +85,13 @@ export function applyTheme(): void {
     }
     styleEl.textContent = themeCss(tokens);
     root.classList.toggle("dark", tokens.dark);
+    publishTheme();
     return;
   }
   styleEl?.remove();
   const dark = choice === "system" ? window.matchMedia("(prefers-color-scheme: dark)").matches : choice === "dark";
   root.classList.toggle("dark", dark);
+  publishTheme();
 }
 
 export function setTheme(choice: ThemeChoice): void {
@@ -114,6 +131,15 @@ async function onThemeFileChosen(e: Event): Promise<void> {
 }
 
 export function watchSystemTheme(): void {
+  window.addEventListener("message", (event) => {
+    if (window.parent === window || event.source !== window.parent || event.origin === "null") return;
+    if (event.data?.type !== "qm:theme-request") return;
+    themeParentOrigin = event.origin;
+    publishTheme();
+  });
+  window.addEventListener("storage", (event) => {
+    if (event.key === null || event.key === THEME_KEY || event.key === CUSTOM_THEME_KEY) applyTheme();
+  });
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (storedTheme() === "system") applyTheme();
   });
