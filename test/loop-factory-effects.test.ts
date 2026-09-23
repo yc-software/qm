@@ -10,6 +10,8 @@ import {
   FACTORY_SOURCE_DEFAULT_REF,
   factorySourceRef,
   FACTORY_SOURCE_DIR,
+  FACTORY_STAGES,
+  type FactoryStage,
   type FactoryContext,
   type FactoryEffectsDeps,
   type FactoryWorkEffects,
@@ -407,11 +409,47 @@ function fakeSlackInstallation(...outcomes: (StoredInstallation | Error)[]): {
   return stub;
 }
 
+interface FakeItems {
+  items: FactoryEffectsDeps["items"];
+  writes: { id: string; patch: Record<string, unknown> }[];
+}
+
+function fakeItems(over: { reject?: boolean; delayMs?: (call: number) => number } = {}): FakeItems {
+  const writes: { id: string; patch: Record<string, unknown> }[] = [];
+  let calls = 0;
+  return {
+    writes,
+    items: {
+      annotate: async (id, patch) => {
+        calls += 1;
+        const delay = over.delayMs?.(calls) ?? 0;
+        if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+        if (over.reject) throw new Error("loop_item_ledger_down");
+        writes.push({ id, patch });
+        return { ...ITEM, sourcePayload: { ...patch } };
+      },
+    },
+  };
+}
+
+const trails = (fake: FakeItems): FactoryStage[][] => fake.writes.map((write) => write.patch.stages as FactoryStage[]);
+
+const lastTrail = (fake: FakeItems): [string, string][] =>
+  (trails(fake).at(-1) ?? []).map((stage) => [stage.name, stage.state]);
+
+const trailReads =
+  (...chunks: string[]) =>
+  async (n: number): Promise<ReadProcessResult> =>
+    n <= chunks.length
+      ? { chunks: chunks[n - 1] ?? "", cursor: n, status: { state: "running" } }
+      : { chunks: "", cursor: n, status: { state: "exited", code: 0 } };
+
 function deps(over: Partial<FactoryEffectsDeps> = {}): FactoryEffectsDeps {
   return {
     sandbox: fakeSandbox().sandbox,
     config: fakeConfig(CONFIG).config,
     loops: fakeLoops(["enabled"]).loops,
+    items: fakeItems().items,
     slackInstallation: fakeSlackInstallation(null).slackInstallation,
     connectorTokens: fakeConnectorTokens({ ...linearGrant, ...grant(GITHUB_HOST, GITHUB_TOKEN) }).connectorTokens,
     modelAuthEnv: fakeModelAuthEnv({ ANTHROPIC_API_KEY: ANTHROPIC_KEY }).modelAuthEnv,
@@ -1276,6 +1314,211 @@ test("an enabled loop is never signalled and the pause poll stops when the proce
     false,
   );
   assert.equal(loops.ids.length, polledAtReturn);
+});
+
+test("a stage line split across two chunks still lands, and the exit closes the last stage", async () => {
+  const items = fakeItems();
+  const fake = fakeSandbox({
+    read: trailReads("working\n[trail] [Fetch] a\n[trail] [Anal", "yze] b\nBRANCH:fix/qm-12\nMR:42\n"),
+  });
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox, items: items.items }));
+
+  const runId = await workedRunId(effects);
+
+  assert.deepEqual(lastTrail(items), [
+    ["Fetch", "done"],
+    ["Analyze", "done"],
+  ]);
+  assert.deepEqual(
+    items.writes.map((write) => write.id),
+    [ITEM.id, ITEM.id, ITEM.id],
+  );
+  assert.deepEqual([...new Set(items.writes.flatMap((write) => Object.keys(write.patch)))], ["stages"]);
+  assert.deepEqual(await effects.captureOutputs({ loop: LOOP, item: ITEM, runId }), [OPEN_PR_ARTIFACT]);
+});
+
+test("the write a stage opens marks it active and the one before it done, so a live run shows where it is", async () => {
+  const items = fakeItems();
+  const fake = fakeSandbox({ read: trailReads("[trail] [Fetch] a\n", "[trail] [Analyze] b\n") });
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox, items: items.items }));
+
+  await workedRunId(effects);
+
+  assert.deepEqual(
+    trails(items).map((stages) => stages.map((stage) => [stage.name, stage.state])),
+    [
+      [["Fetch", "active"]],
+      [
+        ["Fetch", "done"],
+        ["Analyze", "active"],
+      ],
+      [
+        ["Fetch", "done"],
+        ["Analyze", "done"],
+      ],
+    ],
+  );
+});
+
+test("trail-channel noise never becomes a stage, and the trail writes once per change, not once per line", async () => {
+  const items = fakeItems();
+  const fake = fakeSandbox({
+    read: trailReads(
+      "[trail] --- streaming /tmp/trail\n[trail] [Setup] a\n[trail] [Setup] b\n[trail] [Fetch] c\n",
+      "[bogus] x\n[Bogus] y\nnote: [trail] [Ship] z\n[trail] [setup] w\n[trail] [Analyze] d\n",
+      "[trail:final] [Review] r\n[trail:final] [Ship] s\n",
+    ),
+  });
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox, items: items.items }));
+
+  await workedRunId(effects);
+
+  assert.deepEqual(lastTrail(items), [
+    ["Setup", "done"],
+    ["Fetch", "done"],
+    ["Analyze", "done"],
+  ]);
+  assert.deepEqual(
+    trails(items).map((stages) => stages.length),
+    [1, 2, 3, 3],
+  );
+});
+
+test("a second Verify after Review appends a third entry instead of reusing the first", async () => {
+  const items = fakeItems();
+  const fake = fakeSandbox({
+    read: trailReads("[trail] [Verify] one\n", "[trail] [Review] two\n", "[trail] [Verify] three\n"),
+  });
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox, items: items.items }));
+
+  await workedRunId(effects);
+
+  assert.deepEqual(lastTrail(items), [
+    ["Verify", "done"],
+    ["Review", "done"],
+    ["Verify", "done"],
+  ]);
+  const first = trails(items)[0]?.[0];
+  assert.equal(typeof first?.ts, "number");
+  assert.equal(trails(items).at(-1)?.[0]?.ts, first?.ts);
+});
+
+test("a run with more stage changes than the cap keeps the newest 40, dropping the oldest", async () => {
+  const changes = Array.from({ length: 45 }, (_, i) => `[trail] [${FACTORY_STAGES[i % 10]}] step ${i}\n`);
+  const items = fakeItems();
+  const fake = fakeSandbox({ read: trailReads(changes.join("")) });
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox, items: items.items }));
+
+  await workedRunId(effects);
+
+  assert.deepEqual(
+    lastTrail(items),
+    Array.from({ length: 40 }, (_, i) => [FACTORY_STAGES[(i + 5) % 10], "done"]),
+  );
+  assert.equal(
+    trails(items).every((stages) => stages.length <= 40),
+    true,
+  );
+});
+
+test("an over-long unterminated line keeps its head, so the stage it opens still matches", async () => {
+  const items = fakeItems();
+  const fake = fakeSandbox({
+    read: trailReads(`[trail] [Ship] ${"x".repeat(20_000)}`, `${"y".repeat(20_000)}\n`),
+  });
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox, items: items.items }));
+
+  await workedRunId(effects);
+
+  assert.deepEqual(lastTrail(items), [["Ship", "done"]]);
+});
+
+test("a trail line the wrapper never terminated with a newline is still recorded at exit", async () => {
+  const items = fakeItems();
+  const fake = fakeSandbox({ read: trailReads("[trail] [Plan] a\n[trail] [Ship] cut off mid-line") });
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox, items: items.items }));
+
+  await workedRunId(effects);
+
+  assert.deepEqual(lastTrail(items), [
+    ["Plan", "done"],
+    ["Ship", "done"],
+  ]);
+});
+
+test("a run whose stdout carries no trail line writes no stages at all", async () => {
+  const items = fakeItems();
+  const effects = createFactoryLoopEffects(deps({ items: items.items }));
+
+  await workedRunId(effects);
+
+  assert.deepEqual(items.writes, []);
+});
+
+test("a ledger that rejects every annotate cannot kill the run", async () => {
+  const items = fakeItems({ reject: true });
+  const fake = fakeSandbox({ stdout: `[trail] [Setup] a\n${WORK_STDOUT}` });
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox, items: items.items }));
+
+  const runId = await workedRunId(effects);
+
+  assert.deepEqual(await effects.captureOutputs({ loop: LOOP, item: ITEM, runId }), [OPEN_PR_ARTIFACT]);
+  assert.deepEqual(items.writes, []);
+});
+
+test("a slow first annotate cannot land after, and overwrite, the longer trail that follows it", async () => {
+  const items = fakeItems({ delayMs: (call) => (call === 1 ? 20 : 0) });
+  const fake = fakeSandbox({ read: trailReads("[trail] [Fetch] a\n", "[trail] [Analyze] b\n") });
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox, items: items.items }));
+
+  await workedRunId(effects);
+
+  assert.deepEqual(
+    trails(items).map((stages) => stages.length),
+    [1, 2, 2],
+  );
+  assert.deepEqual(lastTrail(items), [
+    ["Fetch", "done"],
+    ["Analyze", "done"],
+  ]);
+});
+
+test("an aborted run still persists its trail with the last stage closed", async () => {
+  const items = fakeItems();
+  const fake = fakeSandbox({
+    read: async (n, calls) => {
+      if (n === 1) return { chunks: "[trail] [Implement] a\n", cursor: n, status: { state: "running" } };
+      if (calls.some((call) => call.op === "signalProcess"))
+        return { chunks: "", cursor: n, status: { state: "exited", code: 143 } };
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return { chunks: "", cursor: n, status: { state: "running" } };
+    },
+  });
+  const loops = fakeLoops(["enabled", "paused"]);
+  const effects = createFactoryLoopEffects(
+    deps({ sandbox: fake.sandbox, items: items.items, loops: loops.loops, pausePollMs: 5 }),
+  );
+
+  const error = await rejection(effects.work({ loop: LOOP, item: ITEM }));
+
+  assert.equal(error.message, "factory_run_aborted");
+  assert.deepEqual(lastTrail(items), [["Implement", "done"]]);
+});
+
+test("a wrapper that vanishes mid-run still closes the stage it was on", async () => {
+  const items = fakeItems();
+  const fake = fakeSandbox({
+    read: async (n) => {
+      if (n > 1) throw new Error("no such process p2");
+      return { chunks: "[trail] [Implement] a\n", cursor: n, status: { state: "running" } };
+    },
+  });
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox, items: items.items }));
+
+  const error = await rejection(effects.work({ loop: LOOP, item: ITEM }));
+
+  assert.match(error.message, /no such process/);
+  assert.deepEqual(lastTrail(items), [["Implement", "done"]]);
 });
 
 const SLACK_POST_URL = "https://slack.com/api/chat.postMessage";

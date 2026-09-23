@@ -40,7 +40,10 @@ function service(
   respond: Responder,
   overrides?: {
     grants?: ReturnType<typeof createShipGrantStore>;
-    factory?: (loops: ReturnType<typeof createLoopStore>) => FactoryEffectsDeps;
+    factory?: (
+      loops: ReturnType<typeof createLoopStore>,
+      items: ReturnType<typeof createLoopItemLedger>,
+    ) => FactoryEffectsDeps;
   },
 ) {
   const loops = createLoopStore();
@@ -64,7 +67,7 @@ function service(
         return { status: "ok", reply: respond(req), sessionId: `s${turns.length}` };
       },
     },
-    ...(overrides?.factory ? { factory: overrides.factory(loops) } : {}),
+    ...(overrides?.factory ? { factory: overrides.factory(loops, items) } : {}),
   });
   return { loops, items, outputs, grants, fire, turns, deliveries, idempotency };
 }
@@ -755,7 +758,10 @@ function factoryFetch(
 }
 
 interface FactoryFake {
-  deps: (loops: ReturnType<typeof createLoopStore>) => FactoryEffectsDeps;
+  deps: (
+    loops: ReturnType<typeof createLoopStore>,
+    items: ReturnType<typeof createLoopItemLedger>,
+  ) => FactoryEffectsDeps;
   sandbox: FactorySandbox;
   fetch: FactoryFetch;
   instances: () => number;
@@ -807,10 +813,11 @@ function factoryFake(
     setConfig: (next) => {
       config = next;
     },
-    deps: (loops) => ({
+    deps: (loops, items) => ({
       sandbox: sandbox.sandbox,
       config: { getFactoryConfig: () => config },
       loops,
+      items,
       slackInstallation: { get: async () => null },
       connectorTokens: over.connectorTokens ?? factoryConnectorTokens().connectorTokens,
       fetch: fetched.fetch,
@@ -906,6 +913,35 @@ test("factory surface: a fire drives the factory effects and takes no agent turn
   assert.equal(output?.externalRef, FACTORY_PR_URL);
   assert.equal(output?.capturedBy, "classifier");
   assert.ok(fake.fetch.calls.some((call) => call.url === `${GH_REPO}/pulls/42`));
+});
+
+test("factory surface: a fire records the wrapper's stage trail on the persisted item, keeping its other sourcePayload keys", async () => {
+  const fake = factoryFake({
+    sandbox: factorySandbox({ stdout: `[trail] [Setup] boot\n[trail] [Implement] code\n${WRAPPER_STDOUT}` }),
+  });
+  const s = service(FACTORY_NO_TURNS, { factory: fake.deps });
+  const loop = await makeFactoryLoop(s.loops);
+  const { item } = await s.items.enqueue({ loopId: loop.id, sourceKey: FACTORY_TICKET });
+  await s.items.annotate(item.id, { title: `${FACTORY_TICKET} title` });
+
+  const result = await s.fire.fire(loop.id, "f1");
+
+  assert.equal(result.status, "ok");
+  const worked = await s.items.get(item.id);
+  assert.ok(worked?.sourcePayload);
+  assert.equal(worked.sourcePayload.title, `${FACTORY_TICKET} title`);
+  const stages = worked.sourcePayload.stages as { name: string; state: string }[];
+  assert.deepEqual(
+    stages.map((stage) => [stage.name, stage.state]),
+    [
+      ["Setup", "done"],
+      ["Implement", "done"],
+    ],
+  );
+  assert.deepEqual(
+    (await s.outputs.awaitingReview(loop.id)).map((output) => output.label),
+    [FACTORY_BRANCH],
+  );
 });
 
 test("factory surface: a repeated fire key is silent and re-runs neither intake nor the wrapper", async () => {
