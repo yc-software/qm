@@ -206,7 +206,8 @@ const FAMILIES: AgentApiFamily[] = [
         (p.endsWith("/fire") || p.endsWith("/autopilot") || p.includes("/grants") || p.includes("/outputs/"))) ||
       (p.startsWith("/v1/loops/") &&
         !p.slice("/v1/loops/".length).includes("/") &&
-        (m === "GET" || m === "PATCH" || m === "DELETE")),
+        (m === "GET" || m === "PATCH" || m === "DELETE")) ||
+      (m === "GET" && /^\/v1\/loops\/[^/]+\/board$/.test(p)),
     guidance:
       'A loop is standing autonomous work: a trigger plus a playbook plus a durable work ledger, with finished outputs HELD for a person to ship. Prefer the define-loop skill to author one (it interviews, shadow-runs one item, then creates the loop). New loops should declare every externally-visible ship action at gate "hold"; "auto" is earned through grants after real approvals. Work turns run without surface tools or addressed delivery; final external actions happen in the fenced ship stage. Broader work-stage tool restriction is a known limitation pending turn-runner tool policy.',
     routes: [
@@ -229,6 +230,12 @@ const FAMILIES: AgentApiFamily[] = [
           "inspect a loop (items, held outputs, vitals), edit it (playbook edits are versioned; destinationKey sets escalation delivery and null clears it; state: enabled|paused clears or sets the pause; clearing quarantine or changing destination requires a live human), or delete it and its child cron",
       },
       { method: "POST", path: "/v1/loops/:id/fire", summary: "fire a loop now (intake → work → judge → hold/ship)" },
+      {
+        method: "GET",
+        path: "/v1/loops/:id/board",
+        summary:
+          "the loop's assembly-line snapshot — {updatedAt, tickets:[{id,title,url,project,assignee,status,stages,mr?,terminalKind?}], queue, feed}; poll it and diff against the previous snapshot",
+      },
       {
         method: "POST",
         path: "/v1/loops/:id/outputs/:outputId/decide",

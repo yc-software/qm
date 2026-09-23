@@ -354,3 +354,38 @@ test("draft identity ignores key order, as stored JSON does not preserve it", as
   assert.equal(after.proposal!.at, at);
   assert.equal(after.agentDrafts!.length, 1);
 });
+
+test("enqueue persists the intake sourcePayload, keeps the first-seen one, and lets annotate add the stage trail", async () => {
+  const ledger = createLoopItemLedger();
+  const board = { url: "https://linear.app/x/issue/QM-73", assignee: "Ada", project: "Factory" };
+
+  const first = await ledger.enqueue({
+    loopId: LOOP,
+    sourceKey: "QM-73",
+    sourceSummary: "Board snapshot",
+    sourcePayload: board,
+  });
+  assert.equal(first.created, true);
+  assert.equal(first.item.status, "queued");
+  assert.deepEqual(first.item.sourcePayload, board);
+
+  const bare = await ledger.enqueue({ loopId: LOOP, sourceKey: "QM-99" });
+  assert.equal(bare.created, true);
+  assert.equal("sourcePayload" in bare.item, false);
+
+  const again = await ledger.enqueue({
+    loopId: LOOP,
+    sourceKey: "QM-73",
+    sourceSummary: "Retitled",
+    sourcePayload: { url: board.url, assignee: "Grace", project: "Other" },
+  });
+  assert.equal(again.created, false);
+  assert.deepEqual(again.item.sourcePayload, board);
+
+  const stages = [
+    { name: "Setup", state: "done", ts: 1 },
+    { name: "Implement", state: "active", ts: 2 },
+  ];
+  const annotated = await ledger.annotate(first.item.id, { stages });
+  assert.deepEqual(annotated?.sourcePayload, { ...board, stages });
+});

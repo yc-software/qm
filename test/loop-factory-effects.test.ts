@@ -500,9 +500,10 @@ test("the composed object exposes exactly the four work-side effects and does no
   assert.equal(fetched.calls.length, 0);
 
   const candidates = await effects.enumerate(LOOP);
+  const blankBoardFields = { url: "", assignee: "", project: "" };
   assert.deepEqual(candidates, [
-    { sourceKey: "QM-12", sourceSummary: "QM-12 title" },
-    { sourceKey: "QM-13", sourceSummary: "QM-13 title" },
+    { sourceKey: "QM-12", sourceSummary: "QM-12 title", sourcePayload: blankBoardFields },
+    { sourceKey: "QM-13", sourceSummary: "QM-13 title", sourcePayload: blankBoardFields },
   ]);
   assert.deepEqual(fake.calls, []);
 

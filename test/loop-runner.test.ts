@@ -492,3 +492,21 @@ test("a non-factory loop still works items in parallel with one in progress", as
   assert.equal(summary.worked, 1);
   assert.equal(summary.throttled, undefined);
 });
+
+test("a fire carries the intake candidate's board fields onto the enqueued item", async () => {
+  const s = stores();
+  const loop = await loopIn(s);
+  const sourcePayload = { url: "https://linear.app/x/issue/SENTRY-1", assignee: "Ada", project: "Sentry" };
+  const summary = await runLoopFire(
+    loop,
+    s,
+    effects(s, { enumerate: async () => [{ sourceKey: "SENTRY-1", sourceSummary: "TypeError", sourcePayload }] }),
+  );
+
+  assert.equal(summary.enqueued, 1);
+  const items = await s.items.byLoop(loop.id);
+  assert.deepEqual(
+    items.map((item) => item.sourcePayload),
+    [sourcePayload],
+  );
+});

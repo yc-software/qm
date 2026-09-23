@@ -12,6 +12,7 @@ interface EnqueueItemInput {
   loopId: string;
   sourceKey: string;
   sourceSummary?: string;
+  sourcePayload?: LoopSourcePayload;
 }
 
 interface EnqueueResult {
@@ -195,6 +196,7 @@ export function createLoopItemLedger(
         createdAt: now,
         updatedAt: now,
         ...(input.sourceSummary !== undefined ? { sourceSummary: input.sourceSummary } : {}),
+        ...(input.sourcePayload !== undefined ? { sourcePayload: input.sourcePayload } : {}),
       };
       if (backing.insertIfAbsent) {
         const created = await backing.insertIfAbsent(id, candidate);

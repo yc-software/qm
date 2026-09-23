@@ -13,6 +13,7 @@ const USER_SCOPED: Rule[] = [
   pat("POST", "/v1/loops", { in: "query", name: "principalId" }),
   pat("GET", "/v1/loops", { in: "query", name: "principalId" }),
   pat("GET", "/v1/loops/:id", { in: "query", name: "principalId" }),
+  pat("GET", "/v1/loops/:id/board", { in: "query", name: "principalId" }),
   pat("PATCH", "/v1/loops/:id", { in: "query", name: "principalId" }),
   pat("DELETE", "/v1/loops/:id", { in: "query", name: "principalId" }),
   pat("POST", "/v1/loops/:id/fire", { in: "query", name: "principalId" }),

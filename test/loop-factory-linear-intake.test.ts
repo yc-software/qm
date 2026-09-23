@@ -56,6 +56,12 @@ const page = (nodes: unknown[], hasNextPage = false, endCursor: string | null = 
 
 const keysOf = (candidates: { sourceKey: string }[]): string[] => candidates.map((candidate) => candidate.sourceKey);
 
+const candidate = (identifier: string, payload = { url: "", assignee: "", project: "" }) => ({
+  sourceKey: identifier,
+  sourceSummary: `${identifier} title`,
+  sourcePayload: payload,
+});
+
 const intake = (fake: Fake, overrides: { stateName?: string; maxPages?: number; teamId?: string } = {}) =>
   enumerateFactoryCandidates({ teamId: "QM", apiKey: API_KEY, fetch: fake.fetch, ...overrides });
 
@@ -81,10 +87,7 @@ test("returns Auto-Triage issues as candidates ordered by createdAt ascending", 
 
   const candidates = await intake(fake);
 
-  assert.deepEqual(candidates, [
-    { sourceKey: "QM-19", sourceSummary: "QM-19 title" },
-    { sourceKey: "QM-20", sourceSummary: "QM-20 title" },
-  ]);
+  assert.deepEqual(candidates, [candidate("QM-19"), candidate("QM-20")]);
   assert.equal(fake.calls.length, 1);
 });
 
@@ -194,7 +197,7 @@ test("stops paging when the page cannot supply a next cursor", async () => {
   for (const respond of nonAdvancing) {
     const fake = fakeFetch(respond);
 
-    assert.deepEqual(await intake(fake), [{ sourceKey: "QM-19", sourceSummary: "QM-19 title" }]);
+    assert.deepEqual(await intake(fake), [candidate("QM-19")]);
     assert.equal(fake.calls.length, 1);
     assert.equal("after" in requestBody(callAt(fake, 0)).variables, false);
   }
@@ -292,7 +295,47 @@ test("selects the team through team(id:), passing an id of either shape through 
   }
   assert.match(
     query,
-    /nodes \{\s+identifier\s+title\s+createdAt\s+inverseRelations \{ nodes \{ type issue \{ identifier state \{ type \} \} \} \}/,
+    /nodes \{\s+identifier\s+title\s+createdAt\s+url\s+assignee \{ name \}\s+project \{ name \}\s+inverseRelations \{ nodes \{ type issue \{ identifier state \{ type \} \} \} \}/,
   );
   assert.doesNotMatch(query, /team: \{ (id|key):/);
+});
+
+test("carries url, assignee and project onto the candidate, turning Linear's explicit nulls into empty strings", async () => {
+  const fake = fakeFetch([
+    page(
+      [
+        {
+          identifier: "QM-73",
+          title: "QM-73 title",
+          createdAt: "2026-01-02T00:00:00.000Z",
+          url: "https://linear.app/x/issue/QM-73",
+          assignee: { name: "Ada" },
+          project: { name: "Factory" },
+        },
+      ],
+      true,
+      "cur-1",
+    ),
+    page([
+      {
+        identifier: "QM-70",
+        title: "QM-70 title",
+        createdAt: "2026-01-03T00:00:00.000Z",
+        url: "https://linear.app/x/issue/QM-70",
+        assignee: null,
+        project: null,
+      },
+    ]),
+  ]);
+
+  const candidates = await intake(fake);
+
+  assert.deepEqual(candidates, [
+    candidate("QM-73", {
+      url: "https://linear.app/x/issue/QM-73",
+      assignee: "Ada",
+      project: "Factory",
+    }),
+    candidate("QM-70", { url: "https://linear.app/x/issue/QM-70", assignee: "", project: "" }),
+  ]);
 });

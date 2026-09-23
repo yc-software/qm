@@ -13,6 +13,9 @@ const FACTORY_INTAKE_QUERY = `query FactoryIntake($teamId: String!, $state: Stri
         identifier
         title
         createdAt
+        url
+        assignee { name }
+        project { name }
         inverseRelations { nodes { type issue { identifier state { type } } } }
       }
       pageInfo { hasNextPage endCursor }
@@ -37,6 +40,9 @@ interface IntakeIssue {
   identifier: string;
   title: string;
   createdAt: string;
+  url?: string | null;
+  assignee?: { name?: string | null } | null;
+  project?: { name?: string | null } | null;
   inverseRelations?: { nodes?: IntakeRelation[] | null } | null;
 }
 
@@ -109,5 +115,13 @@ export async function enumerateFactoryCandidates(input: LinearIntakeInput): Prom
   return issues
     .filter((issue) => !isBlocked(issue))
     .sort(byCreatedAt)
-    .map((issue) => ({ sourceKey: issue.identifier, sourceSummary: issue.title }));
+    .map((issue) => ({
+      sourceKey: issue.identifier,
+      sourceSummary: issue.title,
+      sourcePayload: {
+        url: issue.url ?? "",
+        assignee: issue.assignee?.name ?? "",
+        project: issue.project?.name ?? "",
+      },
+    }));
 }
