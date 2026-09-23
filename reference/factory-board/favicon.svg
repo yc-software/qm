@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="13" fill="#0b0d10"/>
+  <!-- factory body -->
+  <path d="M10 52 V34 l10 7 v-7 l10 7 v-7 l10 7 V30 h14 v22 z" fill="#232936" stroke="#3a4250" stroke-width="2"/>
+  <!-- chimney -->
+  <rect x="46" y="16" width="8" height="14" fill="#3a4250"/>
+  <!-- smoke puffs -->
+  <circle cx="50" cy="12" r="3.5" fill="#8b93a1" opacity=".85"/>
+  <circle cx="55" cy="7" r="2.6" fill="#8b93a1" opacity=".55"/>
+  <!-- windows -->
+  <rect x="14" y="42" width="5" height="5" rx="1" fill="#ffb020"/>
+  <rect x="24" y="42" width="5" height="5" rx="1" fill="#ffb020"/>
+  <rect x="34" y="42" width="5" height="5" rx="1" fill="#ffb020"/>
+  <!-- cute gear face -->
+  <g transform="translate(24,20)">
+    <g fill="#ff6b2b">
+      <circle r="8.5"/>
+      <g stroke="#ff6b2b" stroke-width="3.4" stroke-linecap="round">
+        <line x1="0" y1="-10.5" x2="0" y2="-12.5"/><line x1="0" y1="10.5" x2="0" y2="12.5"/>
+        <line x1="-10.5" y1="0" x2="-12.5" y2="0"/><line x1="10.5" y1="0" x2="12.5" y2="0"/>
+        <line x1="-7.4" y1="-7.4" x2="-8.8" y2="-8.8"/><line x1="7.4" y1="7.4" x2="8.8" y2="8.8"/>
+        <line x1="-7.4" y1="7.4" x2="-8.8" y2="8.8"/><line x1="7.4" y1="-7.4" x2="8.8" y2="-8.8"/>
+      </g>
+    </g>
+    <!-- face -->
+    <circle cx="-2.8" cy="-1.5" r="1.3" fill="#0b0d10"/>
+    <circle cx="2.8" cy="-1.5" r="1.3" fill="#0b0d10"/>
+    <path d="M-3 2.2 Q0 5 3 2.2" stroke="#0b0d10" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+  </g>
+</svg>

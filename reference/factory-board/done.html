@@ -1,0 +1,248 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Software Factory — What's Getting Done</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+:root{
+  --bg:#0b0d10; --floor:#0f1115; --panel:#1a1e25; --panel2:#151920; --line:#2a303a;
+  --ink:#e8e6df; --muted:#8b93a1; --dim:#5a6270;
+  --orange:#ff6b2b; --amber:#ffb020; --green:#3ddc84; --blue:#4ea1ff; --red:#ff5d5d;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;padding-bottom:44px;
+  background-image:radial-gradient(#161a20 1px,transparent 1px);background-size:26px 26px}
+header{display:flex;align-items:center;gap:16px;padding:16px 24px 8px;flex-wrap:wrap}
+h1{font-size:19px;font-weight:700;display:flex;align-items:center;gap:10px}
+h1 .logo{color:var(--orange);display:inline-block;font-size:22px}
+#meta{color:var(--muted);font-size:12px;font-family:var(--mono)}
+a.back{font:12px var(--mono);color:var(--blue);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 10px;background:var(--panel2)}
+a.back:hover{border-color:var(--blue)}
+#controls{display:flex;gap:14px;align-items:center;padding:8px 24px;flex-wrap:wrap}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel2)}
+.seg button{background:none;border:0;color:var(--muted);font:12px var(--mono);padding:6px 16px;cursor:pointer}
+.seg button.on{background:var(--orange);color:#0b0d10;font-weight:700}
+#rangebox{display:none;gap:10px;align-items:center;flex-wrap:wrap}
+.dinput{background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--ink);font:12px var(--mono);padding:5px 10px;color-scheme:dark;cursor:pointer}
+.dinput:focus{outline:none;border-color:var(--orange)}
+#rangebox .arrow{color:var(--dim);font:12px var(--mono)}
+#rpresets button{padding:6px 11px}
+#rpresets button.on{background:var(--blue);color:#0b0d10;font-weight:700}
+#periods{display:flex;gap:8px;overflow-x:auto;padding:4px 24px 8px;scrollbar-width:thin}
+#periods button{flex:0 0 auto;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--muted);font:12px var(--mono);padding:6px 12px;cursor:pointer;white-space:nowrap}
+#periods button.on{border-color:var(--orange);color:var(--ink);background:var(--panel)}
+#periods button .n{color:var(--dim);margin-left:6px}
+#periods button.on .n{color:var(--orange)}
+#total{padding:0 24px 4px;font:12px var(--mono);color:var(--muted)}
+.proj{margin:12px 24px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.proj .head{display:flex;align-items:baseline;gap:12px;padding:12px 18px 4px;flex-wrap:wrap}
+.proj .head h2{font-size:14px;font-weight:700;letter-spacing:.04em}
+.proj .head .cnt{font:12px var(--mono);color:var(--orange)}
+.proj .sum{padding:0 18px 10px;color:var(--muted);font-size:13px;max-width:900px}
+.proj .sum.pending{color:var(--dim);font-style:italic}
+.mr{display:flex;align-items:baseline;gap:10px;padding:7px 18px;border-top:1px solid var(--line);font-size:13px;flex-wrap:wrap}
+.mr a.tk{font:12px var(--mono);color:var(--blue);text-decoration:none;flex:0 0 auto;min-width:64px}
+.mr a.tt{color:var(--ink);text-decoration:none;flex:1 1 320px;min-width:0}
+.mr a.tt:hover{color:var(--orange)}
+.mr .when{font:11px var(--mono);color:var(--dim);flex:0 0 auto}
+.mr .lab{font:10px var(--mono);border-radius:4px;padding:1px 6px;flex:0 0 auto}
+.mr .lab.oca{color:var(--orange);border:1px solid var(--orange)}
+.mr .lab.awt{color:var(--blue);border:1px solid var(--blue)}
+.mr .touch{font:10px var(--mono);color:var(--amber);border:1px solid var(--amber);border-radius:4px;padding:1px 6px;flex:0 0 auto}
+.mr .clean{font:10px var(--mono);color:var(--green);flex:0 0 auto}
+#empty{margin:40px 24px;color:var(--muted);font-family:var(--mono)}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="logo">⚙</span> SOFTWARE FACTORY <span style="color:var(--dim);font-weight:400;font-size:13px">// what's getting done</span></h1>
+  <a class="back" href="/">← assembly line</a>
+  <a class="back" href="/stats.html">📊 stats</a>
+  <a class="back" href="https://sf-settings.apps.qm.ycinside.com/" target="_blank">⚙ settings</a>
+  <div id="meta">loading…</div>
+</header>
+<div id="controls">
+  <div class="seg">
+    <button id="segw" class="on">Week</button>
+    <button id="segd">Day</button>
+    <button id="segr">Range</button>
+  </div>
+  <div id="rangebox">
+    <input type="date" id="rfrom" class="dinput" aria-label="from date">
+    <span class="arrow">→</span>
+    <input type="date" id="rto" class="dinput" aria-label="to date">
+    <div class="seg" id="rpresets">
+      <button data-d="7">7d</button>
+      <button data-d="30">30d</button>
+      <button data-d="90">90d</button>
+    </div>
+  </div>
+</div>
+<div id="periods"></div>
+<div id="total"></div>
+<div id="list"></div>
+<div id="empty" style="display:none">no data yet — the poller is still backfilling; check back in a few minutes</div>
+<script>
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const PTZ = { timeZone: 'America/Los_Angeles' };
+const dayOf = iso => new Date(iso).toLocaleDateString('en-CA', PTZ);
+function wkOfDay(day){ const d = new Date(day+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()-(d.getUTCDay()+6)%7); return d.toISOString().slice(0,10); }
+function dayLabel(day){ return new Date(day+'T12:00:00Z').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',timeZone:'UTC'}); }
+function wkLabel(wk){ return 'Wk of ' + new Date(wk+'T12:00:00Z').toLocaleDateString('en-US',{month:'short',day:'numeric',timeZone:'UTC'}); }
+function rangeLabel(day){ return new Date(day+'T12:00:00Z').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'}); }
+const today = () => new Date().toLocaleDateString('en-CA', PTZ);
+function shiftDay(day, delta){ const dt = new Date(day+'T12:00:00Z'); dt.setUTCDate(dt.getUTCDate()+delta); return dt.toISOString().slice(0,10); }
+
+let DATA = null, gran = 'w', period = null, rFrom = null, rTo = null;
+
+function periodsOf(){
+  const m = {};
+  for (const r of DATA.mrs) {
+    const d = dayOf(r.m);
+    const p = gran === 'd' ? d : wkOfDay(d);
+    m[p] = (m[p]||0)+1;
+  }
+  return Object.keys(m).sort().reverse().map(p => ({ p, n: m[p] }));
+}
+
+// one MR row
+function mrRow(r){
+  return `<div class="mr">
+    ${r.k && DATA.proj[r.k] && DATA.proj[r.k].u ? `<a class="tk" target="_blank" href="${esc(DATA.proj[r.k].u)}">${esc(r.k)}</a>` : `<span class="tk" style="color:var(--dim);font:12px var(--mono);min-width:64px">${esc(r.k||'—')}</span>`}
+    <a class="tt" target="_blank" href="https://gitlab.com/yc-software/code/-/merge_requests/${r.i}">${esc(r.t)}</a>
+    <span class="lab ${r.l}">${r.l==='oca'?'OCA':'work-ticket'}</span>
+    ${r.tc>0?`<span class="touch">+${r.tc} touch-up</span>`:'<span class="clean">clean</span>'}
+    <span class="when">${new Date(r.m).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit',...PTZ})}</span>
+  </div>`;
+}
+
+// group a set of MRs by project and render the project cards. sumKey(name)->summary key, or null to skip summaries.
+function renderGroups(rows, sumKey){
+  const groups = {};
+  for (const r of rows) {
+    const pj = (r.k && DATA.proj[r.k] && DATA.proj[r.k].p) || 'No project';
+    (groups[pj] = groups[pj] || []).push(r);
+  }
+  const names = Object.keys(groups).sort((a,b) => groups[b].length - groups[a].length || a.localeCompare(b));
+  const total = names.reduce((s,n) => s + groups[n].length, 0);
+  document.getElementById('list').innerHTML = names.map(name => {
+    const rws = groups[name].sort((a,b) => Date.parse(b.m) - Date.parse(a.m));
+    const sum = sumKey ? DATA.sums[sumKey(name)] : null;
+    const sumLine = sumKey ? `<div class="sum ${sum?'':'pending'}">${sum?esc(sum):'summary pending…'}</div>` : '';
+    return `<div class="proj">
+      <div class="head"><h2>${esc(name)}</h2><span class="cnt">${rws.length} MR${rws.length===1?'':'s'}</span></div>
+      ${sumLine}
+      ${rws.map(mrRow).join('')}
+    </div>`;
+  }).join('');
+  return { total, projects: names.length };
+}
+
+function updateURL(){
+  const q = new URLSearchParams();
+  q.set('view', gran);
+  if (gran==='r'){ if(rFrom) q.set('from', rFrom); if(rTo) q.set('to', rTo); }
+  const acc = new URLSearchParams(location.search).get('access');
+  if (acc) q.set('access', acc);
+  history.replaceState(null, '', location.pathname + '?' + q.toString());
+}
+function render(){
+  updateURL();
+  if (gran === 'r') return renderRange();
+  const pers = periodsOf();
+  if (!pers.length){ document.getElementById('empty').style.display='block'; document.getElementById('periods').innerHTML=''; document.getElementById('total').textContent=''; document.getElementById('list').innerHTML=''; return; }
+  document.getElementById('empty').style.display='none';
+  if (!period || !pers.some(x => x.p === period)) period = pers[0].p;
+  const shown = gran === 'd' ? pers.slice(0, 21) : pers;
+  document.getElementById('periods').innerHTML = shown.map(x =>
+    `<button data-p="${x.p}" class="${x.p===period?'on':''}">${gran==='d'?dayLabel(x.p):wkLabel(x.p)}<span class="n">${x.n}</span></button>`).join('');
+  for (const b of document.querySelectorAll('#periods button'))
+    b.onclick = () => { period = b.dataset.p; render(); };
+
+  const rows = DATA.mrs.filter(r => (gran === 'd' ? dayOf(r.m) : wkOfDay(dayOf(r.m))) === period);
+  const g = renderGroups(rows, name => gran + '|' + period + '|' + name);
+  document.getElementById('total').textContent =
+    `${g.total} MRs merged · ${g.projects} project${g.projects===1?'':'s'} · ${gran==='d'?dayLabel(period):wkLabel(period)}`;
+}
+
+function renderRange(){
+  document.getElementById('periods').innerHTML = '';
+  if (!rTo) rTo = today();
+  if (!rFrom) rFrom = shiftDay(rTo, -29);
+  if (rFrom > rTo) { const t = rFrom; rFrom = rTo; rTo = t; }
+  document.getElementById('rfrom').value = rFrom;
+  document.getElementById('rto').value = rTo;
+  syncPresetHighlight();
+
+  const rows = DATA.mrs.filter(r => { const d = dayOf(r.m); return d >= rFrom && d <= rTo; });
+  const days = Math.round((Date.parse(rTo+'T12:00:00Z') - Date.parse(rFrom+'T12:00:00Z'))/86400000) + 1;
+  if (!rows.length){
+    document.getElementById('total').textContent = `0 MRs merged · ${rangeLabel(rFrom)} → ${rangeLabel(rTo)} (${days} day${days===1?'':'s'})`;
+    document.getElementById('list').innerHTML = '<div id="empty" style="margin:40px 24px;color:var(--muted);font-family:var(--mono)">no MRs merged in this range</div>';
+    document.getElementById('empty').style.display='none';
+    return;
+  }
+  document.getElementById('empty').style.display='none';
+  const g = renderGroups(rows, null);   // custom range → no precomputed summaries
+  const perDay = (g.total/days).toFixed(1);
+  document.getElementById('total').textContent =
+    `${g.total} MRs merged · ${g.projects} project${g.projects===1?'':'s'} · ${rangeLabel(rFrom)} → ${rangeLabel(rTo)} · ${days} day${days===1?'':'s'} (${perDay}/day)`;
+}
+
+function syncPresetHighlight(){
+  const span = rFrom && rTo && rTo === today() ? (Math.round((Date.parse(rTo+'T12:00:00Z') - Date.parse(rFrom+'T12:00:00Z'))/86400000) + 1) : null;
+  for (const b of document.querySelectorAll('#rpresets button'))
+    b.classList.toggle('on', span !== null && String(span) === b.dataset.d);
+}
+
+function setGran(g){
+  gran = g; period = null;
+  document.getElementById('segw').classList.toggle('on', g==='w');
+  document.getElementById('segd').classList.toggle('on', g==='d');
+  document.getElementById('segr').classList.toggle('on', g==='r');
+  document.getElementById('rangebox').style.display = g==='r' ? 'flex' : 'none';
+  document.getElementById('periods').style.display = g==='r' ? 'none' : 'flex';
+  if (g==='r'){ if (!rTo) rTo = today(); if (!rFrom) rFrom = shiftDay(rTo, -29); }
+  if (DATA) render();
+}
+document.getElementById('segw').onclick = () => setGran('w');
+document.getElementById('segd').onclick = () => setGran('d');
+document.getElementById('segr').onclick = () => setGran('r');
+document.getElementById('rfrom').onchange = e => { rFrom = e.target.value || rFrom; render(); };
+document.getElementById('rto').onchange = e => { rTo = e.target.value || rTo; render(); };
+for (const b of document.querySelectorAll('#rpresets button'))
+  b.onclick = () => { rTo = today(); rFrom = shiftDay(rTo, -(parseInt(b.dataset.d,10)-1)); render(); };
+
+async function load(){
+  try {
+    const s = await (await fetch('/api/state')).json();
+    const done = s.stages && s.stages.stats && s.stages.stats.done;
+    document.getElementById('meta').textContent = s.stages && s.stages.updatedAt
+      ? 'updated ' + new Date(s.stages.updatedAt).toLocaleTimeString('en-US', PTZ) + (done && done.pending ? ` · ${done.pending} summaries backfilling` : '')
+      : '';
+    if (!done || !done.mrs || !done.mrs.length) { document.getElementById('empty').style.display='block'; return; }
+    DATA = done;
+    render();
+  } catch (e) { document.getElementById('meta').textContent = 'fetch error — retrying'; }
+}
+// deep-link support: ?view=w|d|r&from=YYYY-MM-DD&to=YYYY-MM-DD
+(function initFromURL(){
+  const q = new URLSearchParams(location.search);
+  const v = q.get('view');
+  if (q.get('from')) rFrom = q.get('from');
+  if (q.get('to'))   rTo   = q.get('to');
+  if (v === 'r' || v === 'd' || v === 'w') gran = v;
+  document.getElementById('segw').classList.toggle('on', gran==='w');
+  document.getElementById('segd').classList.toggle('on', gran==='d');
+  document.getElementById('segr').classList.toggle('on', gran==='r');
+  document.getElementById('rangebox').style.display = gran==='r' ? 'flex' : 'none';
+  document.getElementById('periods').style.display = gran==='r' ? 'none' : 'flex';
+})();
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

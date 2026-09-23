@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Software Factory — Stats</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+:root{
+  --bg:#0b0d10; --floor:#0f1115; --panel:#1a1e25; --panel2:#151920; --line:#2a303a;
+  --ink:#e8e6df; --muted:#8b93a1; --dim:#5a6270;
+  --orange:#ff6b2b; --amber:#ffb020; --green:#3ddc84; --blue:#4ea1ff; --red:#ff5d5d;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;padding-bottom:44px;
+  background-image:radial-gradient(#161a20 1px,transparent 1px);background-size:26px 26px}
+header{display:flex;align-items:center;gap:16px;padding:16px 24px 8px;flex-wrap:wrap}
+h1{font-size:19px;font-weight:700;display:flex;align-items:center;gap:10px}
+h1 .logo{color:var(--orange);display:inline-block;font-size:22px}
+h1 a{color:inherit;text-decoration:none}
+#meta{color:var(--muted);font-size:12px;font-family:var(--mono)}
+a.back{font:12px var(--mono);color:var(--blue);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 10px;background:var(--panel2)}
+a.back:hover{border-color:var(--blue)}
+#legend{display:flex;gap:18px;padding:6px 24px 2px;font:12px var(--mono);color:var(--muted);align-items:center;flex-wrap:wrap}
+#legend .sw{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.chart{margin:14px 24px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px 18px 8px}
+.chart h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink)}
+.chart .sub{font:11px var(--mono);color:var(--dim);margin:2px 0 6px}
+.chart svg{width:100%;height:auto;display:block}
+.bar{transition:opacity .15s}
+.bar:hover{opacity:.8}
+#empty{margin:40px 24px;color:var(--muted);font-family:var(--mono)}
+.chip{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:4px 12px;font:12px var(--mono);color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;transition:opacity .15s,border-color .15s}
+.chip:hover{border-color:var(--blue)}
+.chip.off{opacity:.4;text-decoration:line-through}
+#legend .hint{color:var(--dim);font-size:11px}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="logo">⚙</span> SOFTWARE FACTORY <span style="color:var(--dim);font-weight:400;font-size:13px">// stats — weekly MR throughput &amp; touch-up</span></h1>
+  <a class="back" href="/">← assembly line</a>
+  <a class="back" href="/done.html">✅ done</a>
+  <a class="back" href="https://sf-settings.apps.qm.ycinside.com/" target="_blank">⚙ settings</a>
+  <div id="meta">loading…</div>
+</header>
+<div id="legend">
+  <button class="chip on" data-k="oca"><span class="sw" style="background:var(--orange)"></span>OrchestratedCodingAgent</button>
+  <button class="chip on" data-k="awt"><span class="sw" style="background:var(--blue)"></span>agent:work-ticket</button>
+  <span class="hint">← click a label to isolate it across all charts</span>
+</div>
+<div id="charts"></div>
+<div id="empty" style="display:none">no weekly stats yet — the poller is still backfilling; check back in a few minutes</div>
+<script src="/stats.js"></script>
+</body>
+</html>

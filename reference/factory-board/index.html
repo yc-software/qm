@@ -1,0 +1,838 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Software Factory — Assembly Line</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+:root{
+  --bg:#0b0d10; --floor:#0f1115; --panel:#1a1e25; --panel2:#151920; --line:#2a303a;
+  --ink:#e8e6df; --muted:#8b93a1; --dim:#5a6270;
+  --orange:#ff6b2b; --amber:#ffb020; --green:#3ddc84; --blue:#4ea1ff; --red:#ff5d5d;
+  --steel:#3a4250; --hazard1:#e8b426; --hazard2:#15171c;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;padding-bottom:44px;
+  background-image:radial-gradient(#161a20 1px,transparent 1px);background-size:26px 26px}
+
+header{display:flex;align-items:center;gap:16px;padding:16px 24px 8px;flex-wrap:wrap}
+h1{font-size:19px;font-weight:700;display:flex;align-items:center;gap:10px}
+h1 .logo{color:var(--orange);display:inline-block;font-size:22px}
+#meta{color:var(--muted);font-size:12px;font-family:var(--mono)}
+#meta .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:5px;animation:blink 2.4s infinite}
+@keyframes blink{50%{opacity:.3}}
+#error{color:var(--red);font-size:12px;display:none;font-family:var(--mono)}
+
+#summary{display:flex;gap:12px;padding:4px 24px 6px;flex-wrap:wrap}
+#filters{display:flex;gap:8px;padding:2px 24px 14px;flex-wrap:wrap;align-items:center}
+#filters .flabel{font:10px var(--mono);color:var(--dim);text-transform:uppercase;letter-spacing:.15em;margin-right:2px}
+.pill{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:4px 13px;font:11px var(--mono);color:var(--muted);cursor:pointer;user-select:none;transition:border-color .15s,background .15s}
+.pill:hover{border-color:var(--orange);color:var(--ink)}
+.pill.on{background:var(--orange);border-color:var(--orange);color:#0d0f12;font-weight:700}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:7px 14px;min-width:104px;position:relative;overflow:hidden}
+.stat::before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:var(--c,var(--dim))}
+.stat b{display:block;font:700 24px var(--mono);color:var(--c,var(--ink))}
+.stat span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}
+.stat .substat{display:block;font:9px var(--mono);color:var(--dim);font-style:normal;margin-top:1px}
+
+/* ============ THE SNAKE LINE ============ */
+#lineWrap{padding:0 24px;overflow-x:auto}
+#line{position:relative;min-width:1100px}
+#beltSvg{position:absolute;inset:0;z-index:0;pointer-events:none}
+#beltSvg .frame{fill:none;stroke:#3a4250;stroke-width:44;stroke-linejoin:miter;stroke-linecap:butt}
+#beltSvg .bed{fill:none;stroke:#171c24;stroke-width:36;stroke-linejoin:miter;stroke-linecap:butt}
+#beltSvg .slat{fill:none;stroke:#2b323e;stroke-width:36;stroke-linejoin:miter;stroke-linecap:butt;stroke-dasharray:4 18;animation:treadmove 1.5s linear infinite}
+@keyframes treadmove{to{stroke-dashoffset:-22}}
+#beltSvg .turnplate{fill:#1a1f27;stroke:#3a4250;stroke-width:3}
+#beltSvg .turnhub{fill:#2b323e;stroke:#454e5e;stroke-width:2}
+#rows{position:relative;z-index:1}
+.srow{display:grid;grid-template-columns:repeat(3,1fr);gap:0 26px;position:relative;padding:0 34px;margin-bottom:34px}
+.srow.rtl{direction:rtl}
+.srow.rtl .station{direction:ltr}
+
+/* a station = machine gantry + crates riding the belt */
+.station{position:relative;min-height:140px}
+
+/* machine gantry over the belt */
+.machine{position:relative;z-index:2;display:flex;align-items:center;gap:8px;background:linear-gradient(#232936,#1a1f28);
+  border:1px solid var(--steel);border-bottom:3px solid var(--c,var(--steel));border-radius:6px 6px 2px 2px;padding:6px 10px;margin-bottom:10px;
+  box-shadow:0 4px 14px rgba(0,0,0,.45)}
+.machine::before,.machine::after{content:"";position:absolute;top:100%;width:5px;height:9px;background:var(--steel)} /* legs */
+.machine::before{left:12px}.machine::after{right:12px}
+.machine .gears{font-size:15px;color:var(--c,var(--muted));width:20px;text-align:center}
+
+.machine h2{flex:1;font:700 11px var(--mono);text-transform:uppercase;letter-spacing:.12em;color:var(--ink)}
+.machine .sub{font:9px var(--mono);color:var(--dim);display:block;letter-spacing:.05em}
+.machine .n{font:700 15px var(--mono);color:var(--c,var(--muted))}
+/* status lamp */
+.machine .lamp{width:8px;height:8px;border-radius:50%;background:#3a4250}
+.machine.busy .lamp{background:var(--c);box-shadow:0 0 8px var(--c);animation:blink 1.1s infinite}
+/* piston that stamps when busy */
+.machine .piston{position:absolute;left:50%;top:100%;width:10px;height:8px;margin-left:-5px;background:var(--steel);border-radius:0 0 3px 3px;opacity:0}
+.machine.busy .piston{opacity:1;animation:stamp 1.8s ease-in-out infinite}
+@keyframes stamp{0%,100%{height:6px}50%{height:16px}}
+
+/* crates sit ON the belt */
+.st-crates{position:relative;z-index:1;display:flex;flex-wrap:wrap;gap:7px;padding:4px 2px 12px;min-height:72px}
+.crate{width:225px;background:linear-gradient(#20242d,#1a1e25);border:1px solid #343b47;border-top:6px solid transparent;border-radius:4px;
+  padding:6px 9px 8px;transition:box-shadow .3s;position:relative;
+  border-image:repeating-linear-gradient(45deg,var(--hazard1) 0 8px,var(--hazard2) 8px 16px) 6;
+  box-shadow:0 5px 10px rgba(0,0,0,.5)}
+.crate:hover{box-shadow:0 0 0 1px var(--c),0 5px 10px rgba(0,0,0,.5)}
+/* rivets */
+.crate i.rv{position:absolute;width:4px;height:4px;border-radius:50%;background:#4a5361;box-shadow:inset 0 -1px 1px #000}
+.crate i.rv.tl{left:3px;top:8px}.crate i.rv.tr{right:3px;top:8px}.crate i.rv.bl{left:3px;bottom:3px}.crate i.rv.br{right:3px;bottom:3px}
+.crate .id{font:600 11.5px var(--mono);display:flex;align-items:center;gap:6px}
+.crate .id a{color:var(--c,var(--orange));text-decoration:none}
+.crate .id .proj{font:500 10px var(--mono);color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px}
+.crate .title{font-size:11px;margin:3px 0 5px;color:var(--ink);opacity:.85;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.crate .foot{display:flex;gap:8px;font:10px var(--mono);color:var(--dim);flex-wrap:wrap}
+.crate .foot a{color:var(--blue);text-decoration:none}
+.gear{display:inline-block;color:var(--c,var(--orange));font-size:12px}
+.crate.failed{border-image:repeating-linear-gradient(45deg,var(--red) 0 8px,var(--hazard2) 8px 16px) 6}
+.crate.failed .id a{color:var(--red)}
+.crate.terminal{border-image:repeating-linear-gradient(45deg,var(--green) 0 8px,var(--hazard2) 8px 16px) 6}
+.prog{display:flex;gap:2px;margin-top:5px}
+.prog i{flex:1;height:3px;border-radius:2px;background:#2a303a}
+.prog i.on{background:var(--c,var(--orange))}
+.machine .clear{font:9px var(--mono);color:var(--dim);letter-spacing:.15em;border:1px solid var(--line);border-radius:3px;padding:1px 6px}
+
+
+/* bins */
+#bins{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:18px 24px 0}
+.bin{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:10px 12px}
+.bin h3{font:700 11px var(--mono);text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:8px;display:flex;justify-content:space-between}
+.bin h3 .n{color:var(--c)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:3px 8px;font:11px var(--mono)}
+.chip a{color:var(--ink);text-decoration:none}
+.chip.fail{border-color:var(--red)} .chip.fail a{color:var(--red)}
+.chip .t{color:var(--dim);margin-left:5px;font-size:10px}
+
+/* FLIP flight + effects */
+.flying{position:fixed;z-index:99;pointer-events:none;transition:transform 1.1s cubic-bezier(.4,.1,.2,1);box-shadow:0 8px 30px rgba(0,0,0,.6);will-change:transform}
+.flash{animation:flash 1.6s ease-out}
+@keyframes flash{0%{box-shadow:0 0 0 3px var(--c);background:#242c26}100%{box-shadow:none}}
+.spark{position:fixed;width:3px;height:3px;background:var(--amber);border-radius:50%;animation:sp .7s ease-out forwards;z-index:100}
+@keyframes sp{to{transform:translate(var(--dx),var(--dy));opacity:0}}
+/* smoke puffs above busy machines */
+.puff{position:fixed;width:6px;height:6px;border-radius:50%;background:#39414e;opacity:.5;animation:puff 2.6s ease-out forwards;z-index:1;pointer-events:none}
+@keyframes puff{to{transform:translateY(-34px) scale(2.6);opacity:0}}
+
+#dayNav{display:flex;gap:8px;padding:0 24px 10px;flex-wrap:wrap;align-items:center}
+#dayNav .flabel{font:10px var(--mono);color:var(--dim);text-transform:uppercase;letter-spacing:.15em;margin-right:2px}
+#rangeBox{display:none;gap:8px;align-items:center;padding:0 24px 12px;flex-wrap:wrap}
+#rangeBox .flabel{font:10px var(--mono);color:var(--dim);text-transform:uppercase;letter-spacing:.15em;margin-right:2px}
+#rangeBox input[type=date]{background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--ink);font:12px var(--mono);padding:4px 8px;color-scheme:dark}
+#rangeBox input[type=date]:focus{border-color:var(--orange);outline:none}
+#rangeBox .rpreset{background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--muted);font:11px var(--mono);padding:4px 10px;cursor:pointer}
+#rangeBox .rpreset:hover{border-color:var(--orange);color:var(--ink)}
+#rangeBox .rpreset.on{border-color:var(--orange);color:var(--orange)}
+#history{display:none;padding:0 24px}
+#histStats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.hbin{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin-bottom:14px}
+.hbin h3{font:700 11px var(--mono);text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:8px;display:flex;justify-content:space-between}
+.hbin h3 .n{color:var(--c)}
+.hrow{display:flex;gap:10px;align-items:baseline;font:11.5px var(--mono);padding:4px 2px;border-bottom:1px dashed #222831;flex-wrap:wrap}
+.hrow:last-child{border-bottom:none}
+.hrow a{color:var(--orange);text-decoration:none;min-width:70px}
+.hrow .ttl{color:var(--ink);opacity:.85;flex:1;min-width:200px;font-family:-apple-system,BlinkMacSystemFont,sans-serif}
+.hrow .st{color:var(--dim)}
+.hrow.fail a{color:var(--red)}
+#stationBars{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.sbar{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 9px;font:10px var(--mono)}
+.sbar b{display:block;font-size:16px;color:var(--c)}
+.sbar span{color:var(--muted);text-transform:uppercase;letter-spacing:.1em}
+#histLoading{display:none;padding:30px 0;text-align:center;font:11px var(--mono);color:var(--muted);letter-spacing:.15em;text-transform:uppercase}
+#histLoading .cog{display:inline-block;font-size:26px;color:var(--orange);animation:spin 1.2s linear infinite;margin-bottom:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
+#ticker{position:fixed;bottom:0;left:0;right:0;background:#0a0c0f;border-top:1px solid var(--line);font:11px var(--mono);color:var(--muted);padding:6px 0;white-space:nowrap;overflow:hidden;z-index:50}
+#ticker span{display:inline-block;padding-left:100%;animation:tick 45s linear infinite}
+@keyframes tick{to{transform:translateX(-100%)}}
+
+/* ===== left drawer: live monitoring feed ===== */
+:root{--drawer-w:360px}
+#drawer{position:fixed;top:0;left:0;bottom:0;width:var(--drawer-w);background:linear-gradient(#0c0f13,#0a0c0f);border-right:1px solid var(--line);z-index:60;display:flex;flex-direction:column;transform:translateX(-100%);transition:transform .28s cubic-bezier(.4,.1,.2,1);box-shadow:6px 0 24px rgba(0,0,0,.5)}
+body.drawer-open #drawer{transform:none}
+body.drawer-resizing #drawer,body.drawer-resizing,body.drawer-resizing #drawerTab,body.drawer-resizing #ticker{transition:none!important}
+#drawerGrip{position:absolute;top:0;right:-3px;bottom:0;width:8px;cursor:col-resize;z-index:61}
+#drawerGrip::after{content:"";position:absolute;top:50%;left:2px;width:3px;height:42px;margin-top:-21px;border-radius:3px;background:var(--line)}
+#drawerGrip:hover::after{background:var(--orange)}
+#drawer .dhead{padding:14px 16px 10px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:9px}
+#drawer .dhead .ttl{font:700 12px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink)}
+#drawer .dhead .sub{font:9px var(--mono);color:var(--dim);display:block;margin-top:2px;letter-spacing:.03em}
+#drawer .dhead .dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:blink 2s infinite;flex:none}
+#drawer .dclose{margin-left:auto;background:none;border:1px solid var(--line);color:var(--muted);border-radius:5px;font:12px var(--mono);cursor:pointer;padding:2px 8px;flex:none}
+#drawer .dclose:hover{border-color:var(--orange);color:var(--ink)}
+#feed{flex:1;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:8px;scrollbar-width:none;-ms-overflow-style:none}
+#feed::-webkit-scrollbar{width:0;height:0;display:none}
+#feed .u{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--c,var(--dim));border-radius:5px;padding:7px 10px 8px}
+#feed .u .utime{font:10px var(--mono);color:var(--muted);display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+#feed .u .utime .clock{color:var(--ink);font-weight:600;letter-spacing:.02em}
+#feed .u .utime .ago{color:var(--muted)}
+#feed .u .utime .lamp{color:var(--c);font-size:9px}
+#feed .u .ubody{font:11px/1.5 var(--mono);color:var(--ink);white-space:pre-wrap;word-break:break-word}
+#feed .u .ubody .act{color:var(--amber)}
+#feed .u .ubody .cc{color:var(--blue)}
+#feed .empty{color:var(--dim);font:11px var(--mono);text-align:center;padding:30px 0}
+#drawerTab{position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:59;background:var(--orange);color:#0d0f12;border:none;font:700 11px var(--mono);letter-spacing:.12em;padding:14px 6px;cursor:pointer;border-radius:0 7px 7px 0;writing-mode:vertical-rl;text-orientation:mixed;box-shadow:2px 0 10px rgba(0,0,0,.4)}
+#drawerTab:hover{background:var(--amber)}
+body.drawer-open #drawerTab{left:var(--drawer-w)}
+body.drawer-open{padding-left:var(--drawer-w)}
+body.drawer-open #ticker{left:var(--drawer-w)}
+#drawer,#drawerTab,#ticker,body{transition:transform .28s,left .28s,padding-left .28s}
+@media(max-width:760px){#drawer{width:86vw}body.drawer-open{padding-left:0}body.drawer-open #drawerTab{left:86vw}body.drawer-open #ticker{left:0}}
+</style>
+</head>
+<body>
+<button id="drawerTab" title="Toggle live feed">▸ FEED</button>
+<aside id="drawer">
+  <div class="dhead">
+    <span class="dot"></span>
+    <div><span class="ttl">Live Feed</span><span class="sub">#investment-ops-software-factory · foreman + concierge</span></div>
+    <button class="dclose" id="drawerClose">✕</button>
+  </div>
+  <div id="feed"><div class="empty">waiting for updates…</div></div>
+  <div id="drawerGrip" title="Drag to resize"></div>
+</aside>
+<header>
+  <h1><span class="logo">⚙</span> SOFTWARE FACTORY <span style="color:var(--dim);font-weight:400;font-size:13px">// assembly line — live stages</span></h1>
+  <a href="/stats.html" style="font:12px ui-monospace,Menlo,monospace;color:var(--blue);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 10px;background:var(--panel2)">📊 stats</a>
+  <a href="/done.html" style="font:12px ui-monospace,Menlo,monospace;color:var(--blue);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 10px;background:var(--panel2)">✅ done</a>
+  <a href="https://sf-settings.apps.qm.ycinside.com/" target="_blank" style="font:12px ui-monospace,Menlo,monospace;color:var(--blue);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 10px;background:var(--panel2)">⚙ settings</a>
+  <div id="meta"><span class="dot"></span>connecting…</div>
+  <div id="error"></div>
+</header>
+<div id="dayNav"></div>
+<div id="rangeBox"></div>
+<div id="summary"></div>
+<div id="history"><div id="histLoading"><span class="cog">⚙</span><br>pulling shift records…</div><div id="histContent"><div id="histStats"></div><div class="hbin" style="--c:var(--blue)"><h3>Stations worked<span class="n" id="hstN"></span></h3><div id="stationBars"></div></div><div id="histBins"></div></div></div>
+<div id="filters"></div>
+<div id="lineWrap"><div id="line"><svg id="beltSvg"></svg><div id="rows"></div></div></div>
+<div id="bins"></div>
+<div id="ticker"><span id="tickertext">…</span></div>
+<script>
+// The factory pipeline, as reported to Slack. Verify appears twice; disambiguate.
+const PIPE = [
+  {key:"Fetch",     label:"Fetch",     c:"#8b93a1", icon:"⛏"},
+  {key:"Analyze",   label:"Analyze",   c:"#4ea1ff", icon:"⚛"},
+  {key:"Verify1",   label:"Verify",    c:"#4ecdc4", icon:"⚖"},
+  {key:"Design",    label:"Design",    c:"#b58cff", icon:"✎"},
+  {key:"Plan",      label:"Plan",      c:"#ffd166", icon:"▤"},
+  {key:"Implement", label:"Implement", c:"#ff6b2b", icon:"⚒"},
+  {key:"Verify2",   label:"Verify",    c:"#4ecdc4", icon:"⚖"},
+  {key:"Review",    label:"Review",    c:"#ffb020", icon:"◉"},
+  {key:"Proof",     label:"Proof",     c:"#f28cb0", icon:"✓"},
+  {key:"Ship",      label:"Ship",      c:"#3ddc84", icon:"⛟"},
+  {key:"ReadyRev",  label:"Ready for Review", c:"#7ef29a", icon:"★", terminal:true},
+  {key:"Done",      label:"Done", c:"#3ddc84", icon:"✔", terminal:true}
+];
+const KIDX = Object.fromEntries(PIPE.map((p,i)=>[p.key,i]));
+const PER_ROW = 3;
+let beltPathEl=null;
+let prevPos = {}, firstRender = true;
+let filterName = null;   // null = show all; "—" = unassigned
+
+function ago(iso){const s=(Date.now()-new Date(iso))/1000;
+  if(s<0)return"0s";if(s<90)return Math.round(s)+"s";if(s<5400)return Math.round(s/60)+"m";
+  if(s<172800)return(s/3600).toFixed(1)+"h";return Math.round(s/86400)+"d";}
+function agoTs(ts){return ago(new Date(parseFloat(ts)*1000).toISOString())}
+function esc(t){return (t||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+
+function slotify(recs){
+  const out = []; let verifySeen = 0;
+  for(const r of recs){
+    let key = r.name;
+    if(key === "Verify"){ verifySeen++; key = verifySeen === 1 ? "Verify1" : "Verify2"; }
+    if(KIDX[key] !== undefined) out.push({slot: KIDX[key], state: r.state, ts: r.ts});
+  }
+  return out;
+}
+function position(slots){
+  let active=-1, done=-1;
+  for(const s of slots){ if(s.state==="active")active=s.slot; if(s.state==="done"&&s.slot>done)done=s.slot; }
+  return active>-1 ? active : done;
+}
+
+function crateHTML(t, slotIdx, stg){
+  const p = PIPE[slotIdx];
+  const li = t.issue||{};
+  const sess = stg.session ? `https://internal.ycinside.com/coding_agent_sessions/${stg.session}` : li.sessionUrl;
+  const mr = stg.mr ? `<a href="${stg.mr}" target="_blank">MR↗</a>` : "";
+  const prog = PIPE.filter(x=>!x.terminal).map((_,k)=>`<i class="${(p.terminal||k<=slotIdx)?'on':''}"></i>`).join("");
+  const since = stg.curTs ? agoTs(stg.curTs) : (li.stageSince?ago(li.stageSince):"");
+  const cls = stg.status==='failed'?'failed':(p.terminal?'terminal':'');
+  return `<div class="crate ${cls}" data-id="${t.id}" style="--c:${p.c}">
+    <i class="rv tl"></i><i class="rv tr"></i><i class="rv bl"></i><i class="rv br"></i>
+    <div class="id">${p.terminal?'<span style="color:var(--green)">✔</span>':'<span class="gear">⚙</span>'}<a href="${li.url||'#'}" target="_blank">${t.id}</a>${li.project?`<span class="proj">${esc(li.project)}</span>`:''}</div>
+    <div class="title">${esc(li.title||"")}</div>
+    <div class="foot">
+      ${li.assignee?`<span>${esc(li.assignee.split(" ")[0])}</span>`:""}
+      ${since?`<span>t+${since}</span>`:""}
+      ${mr}
+      ${sess?`<a href="${sess}" target="_blank">SESSION↗</a>`:""}
+    </div>
+    <div class="prog">${prog}</div>
+  </div>`;
+}
+function stat(n,l,c){return `<div class="stat" style="--c:${c}"><b>${n}</b><span>${l}</span></div>`}
+function chip(t,extra,cls){return `<div class="chip ${cls||''}"><a href="${t.url||'#'}" target="_blank">${t.id}</a>${extra?`<span class="t">${extra}</span>`:''}</div>`}
+
+
+
+function stationHTML(p, idx, items){
+  return `<div class="station" style="--c:${p.c}">
+    <div class="machine ${items.length?'busy':''}">
+      <span class="gears">${p.icon||'⚙'}</span>
+      <h2>${p.label}<span class="sub">station ${String(idx+1).padStart(2,"0")}</span></h2>
+      ${items.length?`<span class="n">${items.length}</span>`:'<span class="clear">LINE CLEAR</span>'}
+      <span class="lamp"></span>
+      <span class="piston"></span>
+
+    </div>
+    <div class="st-crates">${items.map(t=>crateHTML(t,idx,t)).join("")}</div>
+  </div>`;
+}
+
+let lastSnap=null;
+let mode='live', selDay=null; // selDay = 'YYYY-MM-DD' local
+let rFrom=null, rTo=null;      // range mode: 'YYYY-MM-DD' local (inclusive)
+function dayKey(d){const p=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());}
+function shiftKey(day,delta){const d=new Date(day+'T12:00:00');d.setDate(d.getDate()+delta);return dayKey(d);}
+function buildRangeBox(){
+  const box=document.getElementById('rangeBox');
+  const today=dayKey(new Date());
+  const isPreset=n=> rTo===today && rFrom===shiftKey(today,-(n-1));
+  box.innerHTML=
+    '<span class="flabel">range</span>'+
+    `<input type="date" id="rFrom" value="${rFrom||''}" max="${today}">`+
+    '<span style="color:var(--dim)">\u2192</span>'+
+    `<input type="date" id="rTo" value="${rTo||''}" max="${today}">`+
+    [7,30,90].map(n=>`<button class="rpreset ${isPreset(n)?'on':''}" data-n="${n}">${n}d</button>`).join('');
+  document.getElementById('rFrom').onchange=e=>{rFrom=e.target.value; buildRangeBox(); if(mode==='range')loadRange();};
+  document.getElementById('rTo').onchange=e=>{rTo=e.target.value; buildRangeBox(); if(mode==='range')loadRange();};
+  box.querySelectorAll('.rpreset').forEach(b=>b.onclick=()=>{ const n=+b.dataset.n; rTo=dayKey(new Date()); rFrom=shiftKey(rTo,-(n-1)); buildRangeBox(); if(mode==='range')loadRange(); });
+  updateURL();
+}
+function buildDayNav(){
+  const pills=[`<span class="flabel">shift log</span>`,
+    `<span class="pill ${mode==='live'?'on':''}" data-d="">LIVE · 24H</span>`];
+  for(let i=0;i<7;i++){
+    const d=new Date(Date.now()-i*86400e3), k=dayKey(d);
+    const lbl=i===0?'TODAY':i===1?'YESTERDAY':d.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}).toUpperCase();
+    pills.push(`<span class="pill ${mode==='history'&&selDay===k?'on':''}" data-d="${k}">${lbl}</span>`);
+  }
+  pills.push(`<span class="pill ${mode==='range'?'on':''}" data-d="__range">RANGE \u25be</span>`);
+  document.getElementById('dayNav').innerHTML=pills.join('');
+  document.querySelectorAll('#dayNav .pill').forEach(p=>p.onclick=()=>{
+    const d=p.dataset.d;
+    if(d==='__range'){ mode='range'; if(!rFrom||!rTo){ rTo=dayKey(new Date()); rFrom=shiftKey(rTo,-6); } setView(); buildDayNav(); buildRangeBox(); loadRange(); }
+    else if(!d){ mode='live'; selDay=null; setView(); buildDayNav(); if(lastSnap)render(lastSnap); }
+    else { mode='history'; selDay=d; setView(); buildDayNav(); loadHistory(); }
+  });
+}
+function updateURL(){
+  try{
+    const q=new URLSearchParams(location.search);
+    ['view','from','to'].forEach(k=>q.delete(k));
+    if(mode==='range'){ q.set('view','range'); if(rFrom)q.set('from',rFrom); if(rTo)q.set('to',rTo); }
+    const str=q.toString();
+    history.replaceState(null,'',location.pathname+(str?'?'+str:''));
+  }catch(e){}
+}
+function setView(){
+  const live=mode==='live', range=mode==='range', viz=live||range;
+  document.getElementById('summary').style.display=viz?'':'none';
+  document.getElementById('lineWrap').style.display=viz?'':'none';
+  document.getElementById('filters').style.display=live?'':'none';
+  document.getElementById('bins').style.display=live?'':'none';
+  document.getElementById('history').style.display=(mode==='history')?'block':'none';
+  document.getElementById('rangeBox').style.display=range?'flex':'none';
+  updateURL();
+}
+let histPayload=null, histFetchedAt=0, histInflight=null;
+const HIST_TTL=60000;
+function histLoading(on){
+  document.getElementById('histLoading').style.display=on?'block':'none';
+  document.getElementById('histContent').style.display=on?'none':'block';
+}
+function ensureHist(){
+  if(histPayload && Date.now()-histFetchedAt<HIST_TTL) return Promise.resolve(histPayload);
+  if(!histInflight){
+    histInflight=fetch('/api/history').then(r=>r.json()).then(j=>{histPayload=j;histFetchedAt=Date.now();histInflight=null;return j;})
+      .catch(e=>{histInflight=null;throw e;});
+  }
+  return histInflight;
+}
+function histErr(){document.getElementById('histBins').innerHTML='<div class="hbin" style="--c:var(--red)"><h3>Could not load shift records</h3></div>';}
+async function loadHistory(){
+  const day=selDay; histLoading(true);
+  let data; try{ data=await ensureHist(); }catch(e){ if(mode==='history'&&selDay===day){histLoading(false);histErr();} return; }
+  if(mode!=='history'||selDay!==day) return;   // user moved on
+  histLoading(false);
+  const d0=new Date(day+'T00:00:00').getTime(), d1=d0+86400e3;
+  renderShift(data,d0,d1,'shift log \u2014 '+day,false);
+}
+async function loadRange(){
+  if(!rFrom||!rTo) return;
+  const from=rFrom,to=rTo;
+  document.getElementById('meta').innerHTML='<span class="dot"></span>loading range\u2026';
+  let data; try{ data=await ensureHist(); }catch(e){ if(mode==='range')document.getElementById('meta').textContent='range load failed \u2014 retry'; return; }
+  if(mode!=='range'||rFrom!==from||rTo!==to) return;
+  renderRangeLine(data);
+}
+function niceDate(day){return new Date(day+'T12:00:00Z').toLocaleDateString('en-US',{month:'short',day:'numeric',timeZone:'UTC'});}
+function renderRangeLine(data){
+  if(rFrom>rTo){const t=rFrom;rFrom=rTo;rTo=t;buildRangeBox();}
+  const d0=new Date(rFrom+'T00:00:00').getTime();
+  const d1=new Date(rTo+'T00:00:00').getTime()+86400e3;
+  const days=Math.max(1,Math.round((d1-d0)/86400e3));
+  const inR=ms=>ms>=d0&&ms<d1;
+  const linear={}; for(const i of (data.issues||[])) linear[i.id]=i;
+  let runs=(data.runs||[]).filter(r=>{
+    if(r.startedTs&&inR(tsMs(r.startedTs))) return true;
+    if((r.stages||[]).some(st=>st.ts&&inR(tsMs(st.ts)))) return true;
+    return inR(r.lastSeen||0);
+  });
+  // one crate per ticket: keep the latest run per id (dedupe re-runs)
+  const runTs=r=>{const st=r.stages||[];return st.length?tsMs(st[st.length-1].ts):(r.startedTs?tsMs(r.startedTs):(r.lastSeen||0));};
+  const latest={};
+  for(const r of runs){ if(!latest[r.id]||runTs(r)>runTs(latest[r.id])) latest[r.id]=r; }
+  runs=Object.values(latest);
+  // Placement is driven by the Linear ticket state when we have it (authoritative), and
+  // falls back to the run's stage records only when no ticket is matched. This corrects
+  // the stale-stage problem where shipped/merged runs stayed parked in the Ship machine.
+  const bySlot=PIPE.map(()=>[]); const spinup=[], failed=[], doneList=[], shippedList=[], canceledList=[];
+  const SHIP=KIDX['Ship'];
+  for(const r of runs){
+    const li=linear[r.id]||{title:r.title,url:r.url};
+    const item={ id:r.id, issue:li, session:r.session, mr:r.mr, status:r.status,
+      curTs:(r.stages&&r.stages.length)?r.stages[r.stages.length-1].ts:r.startedTs };
+    const slots=slotify(r.stages||[]);
+    let active=-1, done=-1;
+    for(const sl of slots){ if(sl.state==='active') active=sl.slot; if(sl.state==='done'&&sl.slot>done) done=sl.slot; }
+    const st=linear[r.id]&&linear[r.id].state;   // only trust a real matched ticket
+    if(st==='Canceled'){ canceledList.push(item); continue; }
+    if(st==='Merged'||st==='Done'){ bySlot[KIDX['Done']].push(item); doneList.push(item); continue; }
+    if(st==='In Review'){ bySlot[KIDX['ReadyRev']].push(item); shippedList.push(item); continue; }
+    if(st==='In Progress'){ const p=active>-1?active:(done>-1?done:KIDX['Implement']); bySlot[p].push(item); continue; }
+    // Auto-Triage / Up Next / no matched ticket -> fall back to the run's own signals
+    if(r.status==='failed'){ failed.push(item); continue; }
+    if(r.status==='done'){ bySlot[KIDX['Done']].push(item); doneList.push(item); continue; }
+    if(active>-1){ bySlot[active].push(item); continue; }
+    if(done>=SHIP){ bySlot[KIDX['ReadyRev']].push(item); shippedList.push(item); continue; }
+    if(done<0){ spinup.push(item); }
+    else { bySlot[done].push(item); }
+  }
+  bySlot.forEach(a=>a.sort((x,y)=>parseFloat(y.curTs||0)-parseFloat(x.curTs||0)));
+  const inflight=bySlot.reduce((n,a,ix)=>PIPE[ix].terminal?n:n+a.length,0)+spinup.length;
+  const shippedTotal=doneList.length+shippedList.length;
+  document.getElementById('summary').innerHTML=
+    stat(runs.length,'tickets touched','var(--blue)')+
+    stat(inflight,'on the line','var(--orange)')+
+    stat(shippedList.length,'ready for review','#7ef29a')+
+    stat(doneList.length,'done / merged','var(--green)')+
+    stat(failed.length,'failed','var(--red)')+
+    (canceledList.length?stat(canceledList.length,'canceled','var(--dim)'):'')+
+    stat((shippedTotal/days).toFixed(1),'shipped / day','var(--amber)');
+  let html='';
+  for(let r0=0; r0*PER_ROW<PIPE.length; r0++){
+    const start=r0*PER_ROW, rowStations=PIPE.slice(start,start+PER_ROW), rtl=r0%2===1;
+    html+=`<div class="srow ${rtl?'rtl':''}">`+rowStations.map((p,k)=>stationHTML(p,start+k,bySlot[start+k])).join('')+`</div>`;
+  }
+  document.getElementById('rows').innerHTML=html;
+  firstRender=true;              // range is a static snapshot; no FLIP animations
+  drawBelt();
+  const niceR=`${niceDate(rFrom)} \u2192 ${niceDate(rTo)}`;
+  document.getElementById('meta').innerHTML=`<span class="dot" style="background:var(--amber);animation:none"></span>RANGE \u00b7 ${niceR} \u00b7 ${days}d \u00b7 ${shippedTotal} shipped \u00b7 ${(shippedTotal/days).toFixed(1)}/day`;
+  document.getElementById('tickertext').textContent=`range ${niceR}: ${shippedList.length} ready for review \u00b7 ${doneList.length} done/merged \u00b7 ${failed.length} failed`+(canceledList.length?` \u00b7 ${canceledList.length} canceled`:'')+` \u00b7 ${inflight} in flight \u00b7 ${(shippedTotal/days).toFixed(1)} shipped/day`;
+}
+function tsMs(ts){const f=parseFloat(ts);return f>1e12?f:f*1000;}
+function renderShift(data, d0, d1, labelText, isRange){
+  const inR=ms=>ms>=d0&&ms<d1;
+  const linear={}; for(const i of (data.issues||[])) linear[i.id]=i;
+  const runs=(data.runs||[]).filter(r=>{
+    if(r.startedTs&&inR(tsMs(r.startedTs))) return true;
+    if((r.stages||[]).some(st=>st.ts&&inR(tsMs(st.ts)))) return true;
+    return inR(r.lastSeen||0);
+  });
+  const lastTs=r=>{const st=r.stages||[];return st.length?tsMs(st[st.length-1].ts):(r.startedTs?tsMs(r.startedTs):r.lastSeen);};
+  runs.sort((a,b)=>lastTs(b)-lastTs(a));
+  const done=runs.filter(r=>r.status==='done'), failed=runs.filter(r=>r.status==='failed'), working=runs.filter(r=>r.status==='working');
+  const days=Math.max(1,Math.round((d1-d0)/86400e3));
+  document.getElementById('histStats').innerHTML=
+    stat(runs.length,'runs touched','var(--blue)')+
+    stat(done.length,'completed','var(--green)')+
+    stat(failed.length,'failed','var(--red)')+
+    stat(working.length,'still working','var(--orange)')+
+    (isRange?stat((done.length/days).toFixed(1),'completed / day','var(--amber)'):'');
+  const perStation={};
+  for(const r of runs){let v=0;
+    for(const st of (r.stages||[])){
+      if(st.state==='done'&&st.ts&&inR(tsMs(st.ts))){
+        let k=st.name; if(k==='Verify'){v++;k=v===1?'Verify1':'Verify2';}
+        perStation[k]=(perStation[k]||0)+1;
+      }}}
+  document.getElementById('stationBars').innerHTML=PIPE.filter(p=>!p.terminal).map(p=>
+    `<div class="sbar" style="--c:${p.c}"><b>${perStation[p.key]||0}</b><span>${p.icon} ${p.label}</span></div>`).join('');
+  document.getElementById('hstN').textContent=Object.values(perStation).reduce((a,b)=>a+b,0)+' stage passes';
+  const row=(r,cls)=>{
+    const li=linear[r.id]||{title:r.title,url:r.url};
+    const st=r.stages||[]; const last=st.length?st[st.length-1]:null;
+    const dt=new Date(lastTs(r));
+    const t=isRange?dt.toLocaleDateString([],{month:'short',day:'numeric'})+' '+dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    return `<div class="hrow ${cls||''}"><a href="${li.url||'#'}" target="_blank">${r.id}</a>`+
+      `<span class="ttl">${esc(li.title||'')}</span>`+
+      (last?`<span class="st">last: ${esc(last.name)}</span>`:'')+
+      `<span class="st">${t}</span>`+
+      (r.mr?`<a href="${r.mr}" target="_blank" style="min-width:0">MR\u2197</a>`:'')+
+      `</div>`;
+  };
+  const bin=(title,c,items,cls)=>`<div class="hbin" style="--c:${c}"><h3>${title}<span class="n">${items.length}</span></h3>${items.map(r=>row(r,cls)).join('')||'<span style="font:11px var(--mono);color:var(--dim)">none</span>'}</div>`;
+  document.getElementById('histBins').innerHTML=
+    bin('Completed runs','var(--green)',done)+
+    bin('Failed runs','var(--red)',failed,'fail')+
+    bin('Still on the line at last sight','var(--orange)',working);
+  document.getElementById('tickertext').textContent=`${labelText}: ${done.length} completed \u00b7 ${failed.length} failed \u00b7 ${working.length} in flight`+(isRange&&days>1?` \u00b7 ${(done.length/days).toFixed(1)}/day`:'');
+}
+buildDayNav();
+(function initRangeFromURL(){
+  try{
+    const q=new URLSearchParams(location.search);
+    if(q.get('view')==='range'){
+      rTo=q.get('to')||dayKey(new Date());
+      rFrom=q.get('from')||shiftKey(rTo,-6);
+      mode='range'; setView(); buildDayNav(); buildRangeBox(); loadRange();
+    }
+  }catch(e){}
+})();
+
+function render(snap){
+  lastSnap=snap;
+  renderUpdates(snap);
+  if(mode!=='live') return;
+  const stats = (snap.stages&&snap.stages.stats)||null;
+  const statsTxt = stats? ' · '+["24h","7d","30d","all"].map(k=>{
+    const v=stats[k]||{done:0,failed:0};
+    return `${k==='all'?'all time':k} ${v.done}✓ ${v.failed}✗`;
+  }).join(' · '):'';
+  document.getElementById("meta").innerHTML='<span class="dot"></span>LIVE · updated '+new Date(snap.updatedAt).toLocaleTimeString()+statsTxt;
+  const err=document.getElementById("error");
+  err.style.display=snap.error?"block":"none";
+  if(snap.error)err.textContent="⚠ "+snap.error;
+
+  const linear = {}; for(const i of snap.issues) linear[i.id]=i;
+  const stg = (snap.stages&&snap.stages.tickets)||{};
+
+  const oldPos = {};
+  document.querySelectorAll(".crate[data-id]").forEach(el=>{oldPos[el.dataset.id]=el.getBoundingClientRect();});
+
+  const bySlot = PIPE.map(()=>[]);
+  const spinup = [], shipped = [], failed = [], doneList = [];
+  const cur = {};
+
+  for(const [id,t] of Object.entries(stg)){
+    const slots = slotify(t.stages||[]);
+    const pos = position(slots);
+    const item = { id, issue: linear[id], session: t.session, notes: t.notes, mr: t.mr,
+                   status: t.status, curTs: (t.stages&&t.stages.length)?t.stages[t.stages.length-1].ts:t.startedTs };
+    if(t.status==="working"){
+      if(pos<0){ spinup.push(item); }
+      else { bySlot[pos].push(item); cur[id]=pos; }
+    } else if(t.status==="failed"){ failed.push(item); }
+    else if(t.status==="done"){
+      const st=(item.issue&&item.issue.state)||"";
+      const isDone=/^(done|merged|shipped|completed|closed)$/i.test(st);
+      const ti=KIDX[isDone?"Done":"ReadyRev"];
+      bySlot[ti].push(item); cur[id]=ti;
+      if(isDone) doneList.push(item); else shipped.push(item);
+    }
+  }
+  bySlot.forEach(a=>a.sort((x,y)=>parseFloat(y.curTs||0)-parseFloat(x.curTs||0)));
+
+  // ---- assignee filter pills (names present on the line only)
+  const names = new Set(); let hasUnassigned=false;
+  bySlot.flat().concat(spinup).forEach(t=>{
+    const a=t.issue&&t.issue.assignee;
+    if(a) names.add(a); else hasUnassigned=true;
+  });
+  if(filterName && filterName!=="—" && !names.has(filterName)) filterName=null;
+  document.getElementById("filters").innerHTML =
+    '<span class="flabel">crew</span>'+
+    `<span class="pill ${filterName===null?'on':''}" data-f="">ALL</span>`+
+    [...names].sort().map(n=>`<span class="pill ${filterName===n?'on':''}" data-f="${esc(n)}">${esc(n.split(" ")[0])}</span>`).join("")+
+    (hasUnassigned?`<span class="pill ${filterName==='—'?'on':''}" data-f="—">unassigned</span>`:"");
+  document.querySelectorAll("#filters .pill").forEach(p=>p.onclick=()=>{
+    const f=p.dataset.f;
+    filterName = (f==="")?null:(filterName===f?null:f);
+    render(lastSnap);
+  });
+  const match = t => filterName===null ? true :
+    filterName==="—" ? !(t.issue&&t.issue.assignee) : (t.issue&&t.issue.assignee)===filterName;
+  const fSlot = bySlot.map(a=>a.filter(match));
+
+  const mIssue = i => filterName===null ? true :
+    filterName==="—" ? !i.assignee : i.assignee===filterName;
+  const inflight = fSlot.reduce((n,a,ix)=>PIPE[ix].terminal?n:n+a.length,0)+spinup.filter(match).length;
+  const queue = snap.issues.filter(i=>(i.state==="Auto-Triage"||i.state==="Up Next") && mIssue(i));
+
+  document.getElementById("summary").innerHTML =
+    stat(queue.length,"in queue","var(--dim)")+
+    stat(inflight,"on the line","var(--orange)")+
+    stat(shipped.filter(match).length,"ready for review","var(--green)")+
+    stat(doneList.filter(match).length,"done","#3ddc84")+
+    stat(failed.filter(match).length,"failed","var(--red)");
+
+  // ---- snake layout: rows of PER_ROW stations, alternating direction
+  let html = "";
+  for(let r0=0; r0*PER_ROW < PIPE.length; r0++){
+    const start = r0*PER_ROW;
+    const rowStations = PIPE.slice(start, start+PER_ROW);
+    const rtl = r0 % 2 === 1;
+    html += `<div class="srow ${rtl?'rtl':''}">` +
+      rowStations.map((p,k)=>stationHTML(p, start+k, fSlot[start+k])).join("") + `</div>`;
+  }
+  document.getElementById("rows").innerHTML = html;
+  drawBelt();
+
+  // smoke puffs over busy machines
+  document.querySelectorAll(".machine.busy").forEach(m=>{
+    if(Math.random()<0.5){
+      const r=m.getBoundingClientRect();
+      const s=document.createElement("div");s.className="puff";
+      s.style.left=(r.left+10+Math.random()*20)+"px";s.style.top=(r.top-2)+"px";
+      document.body.appendChild(s);setTimeout(()=>s.remove(),2700);
+    }
+  });
+
+  // ---- FLIP flights for stage moves
+  if(!firstRender){
+    for(const [id,pos] of Object.entries(cur)){
+      if(prevPos[id]!==undefined && prevPos[id]!==pos){
+        const el=document.querySelector(`.crate[data-id="${CSS.escape(id)}"]`);
+        const from=oldPos[id];
+        if(el&&from){
+          const to=el.getBoundingClientRect();
+          rideBelt(el,from,to);
+        } else if(el){ el.classList.add("flash"); }
+      }
+    }
+  }
+  prevPos=cur; firstRender=false;
+
+  // ---- bins
+  const binQ = queue.slice(0,30).map(i=>chip(i, i.assignee?i.assignee.split(" ")[0]:"", "")).join("");
+  const binS = failed.slice(0,15).map(t=>chip({id:t.id,url:(t.issue||{}).url}, "FAILED", "fail")).join("");
+  const spin = spinup.map(t=>chip({id:t.id,url:(t.issue||{}).url},"spinning up","")).join("");
+  document.getElementById("bins").innerHTML =
+    `<div class="bin" style="--c:var(--amber)"><h3>Intake queue (auto-triage / up next)<span class="n">${queue.length}</span></h3><div class="chips">${binQ||'<span class="empty">empty</span>'}${spin?'<span style="width:100%"></span>'+spin:''}</div></div>`+
+    `<div class="bin" style="--c:var(--red)"><h3>Rejects — failed runs<span class="n">${failed.length}</span></h3><div class="chips">${binS||'<span class="empty">none</span>'}</div></div>`;
+
+  // ---- ticker
+  const tick = [];
+  PIPE.forEach((p,idx)=>{ if(!p.terminal) bySlot[idx].forEach(t=>tick.push(`⚙ ${t.id} @ ${p.label}`)); });
+  shipped.slice(0,6).forEach(t=>tick.push(`✔ ${t.id} ready for review`));
+  failed.slice(0,4).forEach(t=>tick.push(`✗ ${t.id} failed`));
+  document.getElementById("tickertext").textContent = tick.join("   ·   ") || "line idle";
+}
+
+function sparks(el){
+  const r=el.getBoundingClientRect();
+  for(let k=0;k<8;k++){
+    const s=document.createElement("div");s.className="spark";
+    s.style.left=(r.left+r.width/2)+"px";s.style.top=(r.top+r.height/2)+"px";
+    s.style.setProperty("--dx",(Math.random()*60-30)+"px");
+    s.style.setProperty("--dy",(Math.random()*40-20)+"px");
+    document.body.appendChild(s);setTimeout(()=>s.remove(),800);
+  }
+}
+function drawBelt(){
+  const line=document.getElementById("line"), svg=document.getElementById("beltSvg");
+  const rows=[...document.querySelectorAll("#rows .srow")];
+  if(!rows.length){svg.innerHTML="";return;}
+  const lr=line.getBoundingClientRect();
+  const W=line.clientWidth, H=line.clientHeight;
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  svg.setAttribute("width",W); svg.setAttribute("height",H);
+  const xL=52, xR=W-52;
+  const ys=rows.map(row=>{
+    const rr=row.getBoundingClientRect();
+    // belt runs through the crate zone: just below the machine bar
+    const mach=row.querySelector(".machine");
+    const mb=mach?mach.getBoundingClientRect().bottom - lr.top:rr.top-lr.top+40;
+    const bot=rr.bottom-lr.top;
+    return Math.min(mb+46,(mb+bot)/2);
+  });
+  let d=""; const turns=[];
+  for(let i=0;i<ys.length;i++){
+    const y=ys[i], ltr=i%2===0;
+    const x1=ltr?xL:xR, x2=ltr?xR:xL;
+    if(i===0) d+=`M ${x1} ${y}`;
+    d+=` L ${x2} ${y}`;
+    if(i<ys.length-1){
+      d+=` L ${x2} ${ys[i+1]}`;
+      turns.push([x2,ys[i]],[x2,ys[i+1]]);
+    }
+  }
+  const plates=turns.map(([cx,cy])=>`<circle class="turnplate" cx="${cx}" cy="${cy}" r="27"/><circle class="turnhub" cx="${cx}" cy="${cy}" r="7"/>`).join("");
+  svg.innerHTML=`<path class="frame" d="${d}"/><path class="bed" d="${d}"/><path class="slat" d="${d}"/>${plates}`;
+  beltPathEl=svg.querySelector('.bed');
+}
+window.addEventListener("resize",()=>drawBelt());
+
+// animate a crate along the conveyor path from one station to the next
+function rideBelt(el,from,to){
+  const line=document.getElementById("line");
+  const g=el.cloneNode(true); g.classList.add("flying"); g.style.transition="none";
+  g.style.left="0px"; g.style.top="0px"; g.style.width=from.width+"px";
+  document.body.appendChild(g); el.style.visibility="hidden";
+  const DUR=1600;
+  const finish=()=>{g.remove();el.style.visibility="";el.classList.add("flash");sparks(el);};
+  if(!beltPathEl){ // fallback: straight glide
+    g.style.transition="transform 1.1s cubic-bezier(.4,.1,.2,1)";
+    g.style.transform=`translate(${from.left}px,${from.top}px)`;
+    requestAnimationFrame(()=>{g.style.transform=`translate(${to.left}px,${to.top}px)`;});
+    setTimeout(finish,1150); return;
+  }
+  const lr=line.getBoundingClientRect();
+  const total=beltPathEl.getTotalLength();
+  // nearest path length to a local point, sampled coarsely then refined
+  const nearest=(x,y)=>{
+    let best=0,bd=1e12;
+    for(let l=0;l<=total;l+=14){
+      const p=beltPathEl.getPointAtLength(l);
+      const d=(p.x-x)**2+(p.y-y)**2;
+      if(d<bd){bd=d;best=l;}
+    }
+    for(let l=Math.max(0,best-14);l<=Math.min(total,best+14);l+=2){
+      const p=beltPathEl.getPointAtLength(l);
+      const d=(p.x-x)**2+(p.y-y)**2;
+      if(d<bd){bd=d;best=l;}
+    }
+    return best;
+  };
+  const L1=nearest(from.left+from.width/2-lr.left, from.top+from.height/2-lr.top);
+  const L2=nearest(to.left+to.width/2-lr.left, to.top+to.height/2-lr.top);
+  const ease=t=>t<.5?2*t*t:1-((-2*t+2)**2)/2;
+  const dist=Math.abs(L2-L1);
+  const DUR2=Math.max(1100,Math.min(3400,dist*2.4));
+  const t0=performance.now();
+  const w=from.width,h=from.height;
+  (function step(now){
+    const t=Math.min(1,(now-t0)/DUR2);
+    const L=L1+(L2-L1)*ease(t);
+    const p=beltPathEl.getPointAtLength(Math.max(0,Math.min(total,L)));
+    const cl=line.getBoundingClientRect(); // track scroll
+    g.style.transform=`translate(${p.x+cl.left-w/2}px,${p.y+cl.top-h/2}px)`;
+    if(t<1) requestAnimationFrame(step); else finish();
+  })(t0);
+}
+
+function debugReport(){
+  const bw=document.documentElement.clientWidth;
+  const bleed=[...document.querySelectorAll("body *")].filter(e=>{
+    const r=e.getBoundingClientRect();
+    return r.width>0 && (r.right>bw+2 || r.left<-2) && !e.closest("#lineWrap") ;
+  }).slice(0,8).map(e=>e.className&&e.className.baseVal!==undefined?"svg":e.className||e.tagName);
+  const lw=document.getElementById("lineWrap");
+  const inner=[...lw.querySelectorAll("*")].filter(e=>e.getBoundingClientRect().right>lw.getBoundingClientRect().right+3).length;
+  const pre=document.createElement("pre");pre.id="debugout";
+  pre.textContent=JSON.stringify({clientWidth:bw,bleedOutsideLine:bleed,overflowInsideLineWrap:inner,
+    rows:[...document.querySelectorAll('#rows .srow')].map(r=>r.querySelectorAll('.station').length),
+    beltPath:!!document.querySelector('#beltSvg path')});
+  document.body.appendChild(pre);
+}
+function fmtClock(ts){return new Date(parseFloat(ts)*1000).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});}
+function updHealth(txt){
+  const first=(txt.split("\n")[0]||"");
+  if(/healthy/i.test(first)) return "var(--green)";
+  if(/fail|error|down|wedged|stall|unable|revive|cannot|\u274c/i.test(txt)) return "var(--red)";
+  return "var(--amber)";
+}
+const EMOJI={
+  left_right_arrow:"\u2194\uFE0F", arrow_right:"\u27A1\uFE0F", arrow_left:"\u2B05\uFE0F",
+  arrows_counterclockwise:"\uD83D\uDD04", repeat:"\uD83D\uDD01",
+  white_check_mark:"\u2705", heavy_check_mark:"\u2714\uFE0F", ballot_box_with_check:"\u2611\uFE0F",
+  x:"\u274C", warning:"\u26A0\uFE0F", rotating_light:"\uD83D\uDEA8", no_entry:"\u26D4",
+  no_entry_sign:"\uD83D\uDEAB", hourglass_flowing_sand:"\u23F3", hourglass:"\u231B",
+  hammer:"\uD83D\uDD28", hammer_and_wrench:"\uD83D\uDEE0\uFE0F", wrench:"\uD83D\uDD27",
+  gear:"\u2699\uFE0F", rocket:"\uD83D\uDE80", fire:"\uD83D\uDD25", tada:"\uD83C\uDF89",
+  merged:"\uD83D\uDD00", twisted_rightwards_arrows:"\uD83D\uDD00", eyes:"\uD83D\uDC40",
+  bell:"\uD83D\uDD14", zap:"\u26A1", sparkles:"\u2728",
+  large_green_circle:"\uD83D\uDFE2", red_circle:"\uD83D\uDD34", large_yellow_circle:"\uD83D\uDFE1",
+  white_circle:"\u26AA", black_circle:"\u26AB", green_circle:"\uD83D\uDFE2",
+  ok:"\uD83C\uDD97", stopwatch:"\u23F1\uFE0F",
+  bangbang:"\u203C\uFE0F", exclamation:"\u2757", question:"\u2753", thumbsup:"\uD83D\uDC4D",
+  thumbsdown:"\uD83D\uDC4E", memo:"\uD83D\uDCDD", link:"\uD83D\uDD17", lock:"\uD83D\uDD12"
+};
+function emojify(t){ return t.replace(/:([a-z0-9_+-]{2,}):/g,(m,n)=>EMOJI[n]||m); }
+function updBody(txt){
+  return esc(emojify(txt)).split("\n").map(l=>{
+    if(/^\s*(Actions?:|\u2022|-\s)/.test(l)) return `<span class="act">${l}</span>`;
+    if(/concierge|conflict/i.test(l)) return `<span class="cc">${l}</span>`;
+    return l;
+  }).join("<br>");
+}
+function renderUpdates(snap){
+  const ups=(snap&&snap.stages&&snap.stages.updates)||[];
+  const feed=document.getElementById("feed");
+  if(!feed) return;
+  if(!ups.length){feed.innerHTML='<div class="empty">no updates yet</div>';return;}
+  // was the user pinned near the bottom before this repaint? if so, keep them there
+  const stick = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60 || !feed.dataset.painted;
+  // newest at the BOTTOM (chronological), so reverse the newest-first payload
+  feed.innerHTML=ups.slice().reverse().map(u=>{
+    const c=updHealth(u.text||"");
+    return `<div class="u" style="--c:${c}"><div class="utime"><span><span class="clock">${fmtClock(u.ts)}</span> \u00b7 <span class="ago">${agoTs(u.ts)} ago</span></span><span class="lamp">\u25cf</span></div><div class="ubody">${updBody(u.text||"")}</div></div>`;
+  }).join("");
+  feed.dataset.painted="1";
+  if(stick) feed.scrollTop=feed.scrollHeight;
+}
+function setDrawer(open){
+  document.body.classList.toggle("drawer-open",open);
+  try{localStorage.setItem("sf_drawer",open?"1":"0");}catch(e){}
+  const tab=document.getElementById("drawerTab");
+  if(tab) tab.textContent=open?"\u25c2 FEED":"\u25b8 FEED";
+  setTimeout(()=>{ if(lastSnap&&mode==="live"){ drawBelt(); } if(open){const f=document.getElementById("feed"); if(f) f.scrollTop=f.scrollHeight;} },320);
+}
+document.getElementById("drawerTab").onclick=()=>setDrawer(!document.body.classList.contains("drawer-open"));
+document.getElementById("drawerClose").onclick=()=>setDrawer(false);
+setDrawer((()=>{try{return localStorage.getItem("sf_drawer")!=="0";}catch(e){return true;}})());
+
+// restore saved drawer width, then wire drag-to-resize
+const DRAWER_MIN=240, DRAWER_MAX=Math.min(760, Math.round(window.innerWidth*0.9));
+function setDrawerWidth(px){
+  const w=Math.max(DRAWER_MIN,Math.min(DRAWER_MAX,Math.round(px)));
+  document.documentElement.style.setProperty("--drawer-w",w+"px");
+  try{localStorage.setItem("sf_drawer_w",String(w));}catch(e){}
+  if(lastSnap&&mode==="live") drawBelt();
+}
+(()=>{try{const w=parseInt(localStorage.getItem("sf_drawer_w"),10);if(w)setDrawerWidth(w);}catch(e){}})();
+(function(){
+  const grip=document.getElementById("drawerGrip");
+  if(!grip) return;
+  let dragging=false;
+  const onMove=e=>{ if(!dragging)return; const x=(e.touches?e.touches[0].clientX:e.clientX); setDrawerWidth(x); e.preventDefault(); };
+  const onUp=()=>{ if(!dragging)return; dragging=false; document.body.classList.remove("drawer-resizing"); window.removeEventListener("mousemove",onMove); window.removeEventListener("mouseup",onUp); window.removeEventListener("touchmove",onMove); window.removeEventListener("touchend",onUp); };
+  const onDown=e=>{ dragging=true; document.body.classList.add("drawer-resizing"); window.addEventListener("mousemove",onMove); window.addEventListener("mouseup",onUp); window.addEventListener("touchmove",onMove,{passive:false}); window.addEventListener("touchend",onUp); e.preventDefault(); };
+  grip.addEventListener("mousedown",onDown);
+  grip.addEventListener("touchstart",onDown,{passive:false});
+})();
+
+function connect(){
+  if(location.search.includes("debug")){
+    fetch("/api/state").then(r=>r.json()).then(j=>{render(j);setTimeout(debugReport,300);});
+    return;
+  }
+  const es=new EventSource("/api/stream");
+  es.onmessage=e=>render(JSON.parse(e.data));
+  es.onerror=()=>{es.close();setTimeout(connect,5000);};
+}
+connect();
+// re-render periodically so timers and smoke keep moving even without new data
+setInterval(()=>{ if(!firstRender){ const m=document.querySelectorAll(".machine.busy"); m.forEach(x=>{ if(Math.random()<0.35){ const r=x.getBoundingClientRect(); const s=document.createElement("div"); s.className="puff"; s.style.left=(r.left+10+Math.random()*20)+"px"; s.style.top=(r.top-2)+"px"; document.body.appendChild(s); setTimeout(()=>s.remove(),2700);} }); } }, 1800);
+</script>
+</body>
+</html>
