@@ -493,7 +493,10 @@ function credExpired(rec: { kind: CredentialKind; expiresAt?: number }, now: num
 
 function toMeta(rec: Omit<KeychainCredential, "secretEnc"> & { secretEnc?: string }): KeychainCredentialMeta {
   const { secretEnc: _, ...meta } = rec;
-  return { ...meta, ...(rec.kind === "env" ? { credentialHandle: credentialHandle(rec.id) } : {}) };
+  return {
+    ...meta,
+    ...(rec.kind === "env" && !isBackendCredential(rec) ? { credentialHandle: credentialHandle(rec.id) } : {}),
+  };
 }
 
 function byOwners(ownerIds: string[]): { field: "ownerId"; anyOfFold: string[] } {

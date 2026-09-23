@@ -1687,7 +1687,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           principalEntitledToScope,
         );
         const granted = new Set(grants.map((grant) => parseRef(grant.ref).id));
-        const available = records.filter((record) => !isBackendCredential(record) && record.enabled && record.hasSecret && granted.has(record.slug));
+        const available = records.filter(
+          (record) => !isBackendCredential(record) && record.enabled && record.hasSecret && granted.has(record.slug),
+        );
         const brokerSlugs = available
           .filter((record) => record.delivery !== "env" && requestedHandles.includes(`service_${record.slug}`))
           .map((record) => record.slug)

@@ -569,6 +569,15 @@ test("Composio backend access is announced without delivering the project key", 
   const granted = await prompt("granted");
   assert.match(granted, /## Connected app access/);
   assert.match(granted, /Composio is configured in the backend/);
+  assert.doesNotMatch(granted, /service_composio/);
+  await assert.rejects(
+    app.turn(
+      dm(`!execute ${JSON.stringify({ command: "true", credentials: ["service_composio"] })}`, {
+        conversation: { kind: "dm", threadRef: "dm:U1:composio-explicit" },
+      }),
+    ),
+    /not available/,
+  );
   assert.doesNotMatch(granted, /COMPOSIO_API_KEY/);
   assert.doesNotMatch(granted, /Do not suggest or offer any app connection/);
   const result = await app.turn(

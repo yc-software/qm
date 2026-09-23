@@ -1724,6 +1724,8 @@ test("Composio keys remain backend-only across all materialization paths includi
   ]) {
     const k = kc();
     const c = await k.save({ ownerId: "U1", service: "composio", ...input });
+    assert.equal(c.credentialHandle, undefined);
+    assert.equal((await k.getCredential(c.id))?.credentialHandle, undefined);
     const grant = await k.createGrant({
       credentialId: c.id,
       ownerId: "U1",
