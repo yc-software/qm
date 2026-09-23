@@ -21,6 +21,7 @@ export interface FakeSprites {
   client: SpritesClientLike;
   fetchImpl: typeof fetch;
   calls: SpritesCall[];
+  createSpriteCalls(): readonly (readonly unknown[])[];
   /** Host-side dir standing in for the sprite's disk — wipe it to simulate a replaced computer. */
   homeDir(name: string): string;
   names(): string[];
@@ -45,6 +46,7 @@ export function installFakeSprites(): FakeSprites {
   const policies = new Map<string, NetworkRule[]>();
   const execScripts: string[] = [];
   const calls: SpritesCall[] = [];
+  const createSpriteCalls: (readonly unknown[])[] = [];
   const gateway502 = new Set<string>();
   const stallAfterRun = new Set<string>();
   const refusedRestart = new Set<string>();
@@ -188,9 +190,10 @@ export function installFakeSprites(): FakeSprites {
       if (!sprites.has(name)) throw new Error(`sprite ${name} not found (404)`);
       return { name };
     },
-    async createSprite(name: string) {
-      ensureDir(name);
-      return { name };
+    async createSprite(...args: Parameters<SpritesClientLike["createSprite"]>) {
+      createSpriteCalls.push(args);
+      ensureDir(args[0]);
+      return { name: args[0] };
     },
     async deleteSprite(name: string) {
       deleteSprite(name);
@@ -201,6 +204,7 @@ export function installFakeSprites(): FakeSprites {
     client,
     fetchImpl,
     calls,
+    createSpriteCalls: () => [...createSpriteCalls],
     homeDir: (name) => ensureDir(name),
     names: () => [...sprites.keys()],
     policy: (name) => policies.get(name) ?? null,
@@ -230,6 +234,7 @@ export function installFakeSprites(): FakeSprites {
       for (const name of Array.from(sprites.keys())) deleteSprite(name);
       execScripts.length = 0;
       calls.length = 0;
+      createSpriteCalls.length = 0;
       stallAfterRun.clear();
       gateway502.clear();
       refusedRestart.clear();

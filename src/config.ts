@@ -325,9 +325,13 @@ interface SpritesSandboxEnv {
   namePrefix?: string;
   egressProxyUrl?: string;
   defaultTimeoutSec?: number;
+  ramMB?: number;
+  cpus?: number;
 }
 
 function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
+  const ramMB = posIntEnvStrict("SPRITES_RAM_MB", env.SPRITES_RAM_MB);
+  const cpus = posIntEnvStrict("SPRITES_CPUS", env.SPRITES_CPUS);
   return {
     ...(env.SPRITES_TOKEN ? { token: env.SPRITES_TOKEN } : {}),
     ...(env.SPRITES_BASE_URL ? { baseUrl: env.SPRITES_BASE_URL } : {}),
@@ -336,6 +340,8 @@ function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
       : {}),
+    ...(ramMB !== undefined ? { ramMB } : {}),
+    ...(cpus !== undefined ? { cpus } : {}),
   };
 }
 
@@ -817,6 +823,13 @@ function numEnvStrict(name: string, value: string | undefined): number | undefin
   if (parsed === undefined) {
     throw new Error(`${name}=${JSON.stringify(value)} is not a number — set a finite numeric value, or unset it.`);
   }
+  return parsed;
+}
+
+function posIntEnvStrict(name: string, value: string | undefined): number | undefined {
+  const parsed = numEnvStrict(name, value);
+  if (parsed === undefined) return undefined;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
   return parsed;
 }
 
