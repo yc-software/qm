@@ -226,7 +226,6 @@ test("every boolean knob accepts the shared vocabulary (off means off)", () => {
     SEED_SKILLS: "off",
     EXECUTE_SCRATCH: "off",
     REACH_EXEC: "off",
-    COMMAND_SCOPED_CREDENTIALS: "off",
     PI_CAPTURE_REQUESTS: "off",
     EAGER_PROVISION: "off",
   });

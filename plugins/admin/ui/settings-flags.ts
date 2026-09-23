@@ -8,7 +8,7 @@ const state = {
   scope: "",
   available: false,
   selected: new Set<string>(),
-  feature: "command_scoped_credentials",
+  feature: "persistent_subagents",
   saving: false,
   message: "",
   choices: [] as any[],
@@ -133,7 +133,6 @@ function template() {
               selector();
             }}
           >
-            <option value="command_scoped_credentials">Command-scoped credentials</option>
             <option value="persistent_subagents">Persistent subagents</option>
             <option value="inbox_loops">Inbox Loops</option>
           </select></label
