@@ -6,7 +6,7 @@ import { createTranscriptViewport } from "../src/transcript-viewport.ts";
 
 function fixture() {
   const dom = new JSDOM(
-    `<section class="chat-scroll"><div class="pinned-strip"></div><div class="message-stack"><article class="user-row" data-index="1"><div class="user-bubble"><div class="pin-content" style="line-height: 20px">Example prompt</div><button class="pin-toggle" hidden>Show more</button></div></article></div></section>`,
+    `<section class="chat-scroll"><div class="pinned-strip"></div><div class="message-stack"><article class="user-row" data-index="1"><div class="user-bubble"><div class="pin-content" style="line-height: 20px">Example prompt</div><button class="pin-toggle" hidden><span class="pin-toggle-label">Show more</span><svg class="icon"></svg></button></div></article></div></section>`,
   );
   const scroller = dom.window.document.querySelector<HTMLElement>("section")!;
   const stack = scroller.querySelector<HTMLElement>(".message-stack")!;
@@ -359,6 +359,10 @@ test("the disclosure rides the last visible line while clamped and drops to a ro
     )?.[0] ?? "";
   assert.match(row, /position: static/);
   assert.match(row, /margin: 6px 0 0 auto/);
+  assert.match(
+    css,
+    /\.user-row\.pin-expanded > \.user-bubble > \.pin-toggle > \.icon \{\s*transform: rotate\(180deg\);/,
+  );
 });
 
 test("the condensed strip is a css contract on the condensed class, with a scroll-driven height on stuck", () => {
@@ -430,16 +434,17 @@ test("an expanded prompt stays in flow when its chrome alone cannot fit", () => 
 test("repeated prompt measurement preserves the disclosure text node", () => {
   const f = fixture();
   try {
-    const label = f.toggle.firstChild;
+    const text = f.toggle.querySelector(".pin-toggle-label")!;
+    const label = text.firstChild;
     for (const height of [300, 200, 500]) {
       f.resize(height);
-      assert.equal(f.toggle.firstChild, label);
+      assert.equal(text.firstChild, label);
     }
     f.toggle.click();
-    const expandedLabel = f.toggle.firstChild;
+    const expandedLabel = text.firstChild;
     assert.notEqual(expandedLabel, label);
     f.resize(400);
-    assert.equal(f.toggle.firstChild, expandedLabel);
+    assert.equal(text.firstChild, expandedLabel);
   } finally {
     f.close();
   }

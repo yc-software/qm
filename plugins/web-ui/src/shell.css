@@ -2085,7 +2085,12 @@ qm-markdown .tok-in {
   cursor: pointer;
 }
 .message-stack .user-row:not(:has(~ .user-row)) > .user-bubble > .pin-toggle:not([hidden]) {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.message-stack .user-row.pin-expanded > .user-bubble > .pin-toggle > .icon {
+  transform: rotate(180deg);
 }
 .message-stack .user-row.pin-expanded > .user-bubble > .pin-toggle,
 .message-stack

@@ -1659,7 +1659,9 @@ export function createChatSurface(
               ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
               ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
             </div>
-            <button class="pin-toggle" type="button" hidden aria-expanded="false">Show more</button>
+            <button class="pin-toggle" type="button" hidden aria-expanded="false">
+              <span class="pin-toggle-label">Show more</span>${icon(ChevronDown, 14)}
+            </button>
           </div>
           ${
             sendFailure

@@ -93,7 +93,8 @@ export function createTranscriptViewport() {
     if (toggle) {
       toggle.hidden = !clipped && !expanded;
       const label = expanded ? "Show less" : "Show more";
-      if (toggle.textContent !== label) toggle.textContent = label;
+      const text = toggle.querySelector<HTMLElement>(".pin-toggle-label") ?? toggle;
+      if (text.textContent !== label) text.textContent = label;
       toggle.setAttribute("aria-expanded", String(expanded));
     }
   }
