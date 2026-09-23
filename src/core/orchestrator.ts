@@ -53,12 +53,7 @@ import { createBackgroundBroker } from "../connectors/background-exec-broker.ts"
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
 import { isPollSurface, isSilentPollReply } from "../triggers/run-trigger.ts";
 import { envKey } from "../credentials/connector-token.ts";
-import {
-  credentialHandle,
-  renderKeychainManifest,
-  type MaterializedEnvCred,
-  type PublicServiceCredential,
-} from "../credentials/keychain.ts";
+import { credentialHandle, renderKeychainManifest, type PublicServiceCredential } from "../credentials/keychain.ts";
 import {
   captureDeviceFlowLogins,
   deviceFlowCredOwner,
@@ -1379,75 +1374,121 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         openSpeakerKeychain ||
         (conversation.kind !== "dm" && input.origin.kind === "automation" && input.origin.useOwnerKeychain === true);
       let ownerAuthAvailable = isolateOwnerKeychain;
-      if (
-        conversation.kind !== "dm" &&
-        brokeredTools.some((tool) => cutoverModeOf(tool.service) !== "legacy" && deps.layerBrokerFor?.(tool))
-      ) {
+      if (brokeredTools.some((tool) => cutoverModeOf(tool.service) !== "legacy" && deps.layerBrokerFor?.(tool))) {
         ownerAuthAvailable = true;
       }
       const connectorEnv: Record<string, string> = {};
-      const ownerAuthEnv: Record<string, string> = {};
-      const ownerEnvCredentialIds: string[] = [];
-      const keychainInjected: MaterializedEnvCred[] = [];
-      const commandCredentials: CommandCredential[] = [];
-      const credentialEnvFields: MaterializedEnvCred["env"] = [];
       const credsStart = Date.now();
-      const commandScopedCredentials =
-        !strictReadOnly && (await deps.featureFlags?.enabled("command_scoped_credentials", scopeId)) === true;
-      if (!strictReadOnly && deps.keychain) {
-        const own =
-          scopeId === personalScope(actor.id) ||
-          (input.origin.kind === "automation" && input.origin.useOwnerKeychain && !isolateOwnerKeychain)
-            ? await deps.keychain.materializeOwn(actor.id)
-            : [];
-        if (isolateOwnerKeychain) {
-          for (const materialized of await deps.keychain.materializeOwn(actor.id)) {
-            credentialEnvFields.push(...materialized.env);
-            for (const { key, value } of materialized.env) if (!(key in ownerAuthEnv)) ownerAuthEnv[key] = value;
-            ownerEnvCredentialIds.push(materialized.credentialId);
+      const commandCredentials: CommandCredential[] = [];
+      const credentialDescriptions: string[] = [];
+      const credentialIdentities = new Map<string, string>();
+
+      const authorizeOwnerCredentials = async (): Promise<void> => {
+        if (
+          openSpeakerKeychain &&
+          (!(await isCurrentSharedScopeMember(actor.id, scopeId)) ||
+            (await deps.config?.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open")
+        ) {
+          throw new Error("Open speaker keychain access is no longer authorized");
+        }
+      };
+      const resolvedCredential = (materialized: import("../credentials/keychain.ts").MaterializedCred) => {
+        if (materialized.kind !== "env") throw new Error("File credentials require the supervised execution route");
+        return { env: materialized.env };
+      };
+      const addCredentialToCatalog = (
+        credential: CommandCredential,
+        description: string,
+        identity = credential.handle,
+      ): void => {
+        const existing = credentialIdentities.get(credential.handle);
+        if (existing !== undefined) {
+          if (existing !== identity) throw new Error(`credential handle collision: ${credential.handle}`);
+          return;
+        }
+        credentialIdentities.set(credential.handle, identity);
+        commandCredentials.push(credential);
+        credentialDescriptions.push(
+          `- \`${credential.handle}\` — ${description}; execute scope \`${credential.scope ?? "scoped"}\`.`,
+        );
+      };
+      const registerKeychainCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
+        if (strictReadOnly || !deps.keychain) return;
+        const keychain = deps.keychain;
+        for (const { grant, credential } of await keychain.grantsForScope(scopeId)) {
+          if (credential.kind !== "env" || isBackendCredential(credential)) continue;
+          addCredential(
+            {
+              handle: credentialHandle(credential.id),
+              resolve: async () => {
+                const prepared = await keychain.prepareMaterialize(grant.id, scopeId, actor.id);
+                return {
+                  ...resolvedCredential(prepared.materialized),
+                  commit: prepared.commit,
+                  singleUse: prepared.singleUse,
+                };
+              },
+            },
+            `${credential.service}, owner ${credential.ownerId}, grant ${grant.id}`,
+            credential.id,
+          );
+        }
+        const ownAllowed =
+          (liveAuthorTurn && scopeId === personalScope(actor.id)) ||
+          isolateOwnerKeychain ||
+          (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true);
+        if (ownAllowed) {
+          for (const credential of await keychain.listByOwner(actor.id)) {
+            if (credential.kind !== "env" || isBackendCredential(credential)) continue;
+            addCredential(
+              {
+                handle: credentialHandle(credential.id),
+                scope: isolateOwnerKeychain ? "owner" : "scoped",
+                resolve: async () => {
+                  await authorizeOwnerCredentials();
+                  return resolvedCredential(
+                    await keychain.materializeOwnById(actor.id, credential.id, personalScope(actor.id)),
+                  );
+                },
+              },
+              `${credential.service}, owner ${credential.ownerId}`,
+              credential.id,
+            );
           }
         }
-        for (const m of [...own, ...(await deps.keychain.materializeStanding(scopeId))]) {
-          if (!commandScopedCredentials) {
-            const injected = m.env.filter(({ key }) => !(key in connectorEnv));
-            credentialEnvFields.push(...injected);
-            for (const { key, value } of injected) connectorEnv[key] = value;
-            if (m.grantId && injected.length) {
-              keychainInjected.push({ ...m, env: injected });
-              deps.auditLog.record({
-                at: Date.now(),
-                principalId: actor.id,
-                action: "keychain.materialize",
-                resource: `${m.credentialId} (grant ${m.grantId})`,
-                scopeLabel: scopeId,
-              });
+      };
+      await registerKeychainCredentials(addCredentialToCatalog);
+      const registerConnectorCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
+        if (
+          !strictReadOnly &&
+          deps.connectorTokens &&
+          ((conversation.kind === "dm" && liveAuthorTurn) || openSpeakerKeychain)
+        ) {
+          const tokens = deps.connectorTokens;
+          for (const host of CONNECTOR_HOSTS) {
+            for (const accountType of ["personal", undefined, "company"]) {
+              const status = await tokens.connectorTokenStatus(host, actor.id, accountType);
+              if (!status.connected || status.needsReconnect) continue;
+              addCredential(
+                {
+                  handle: `connector_${host.replace(/[^a-zA-Z0-9]/g, "_")}_${accountType ?? "default"}`,
+                  scope: openSpeakerKeychain ? "owner" : "scoped",
+                  resolve: async () => {
+                    await authorizeOwnerCredentials();
+                    const token = await tokens.connectorAccessToken(host, actor.id, accountType);
+                    if (!token) throw new Error(`Connector is no longer available: ${host}`);
+                    return { env: [{ key: envKey(host), value: token }] };
+                  },
+                },
+                `${host} connector, owner ${actor.id}, account ${accountType ?? "default"}`,
+              );
             }
-            continue;
           }
-          const handle = credentialHandle(m.credentialId);
-          const existing = commandCredentials.find((credential) => credential.handle === handle);
-          if (existing) {
-            if (JSON.stringify(existing.env) !== JSON.stringify(m.env)) {
-              throw new Error(`credential handle collision: ${handle}`);
-            }
-            continue;
-          }
-          commandCredentials.push({ handle, env: m.env });
-          keychainInjected.push(m);
         }
-      }
-      if (!strictReadOnly && deps.connectorTokens && (conversation.kind === "dm" || openSpeakerKeychain)) {
-        for (const host of CONNECTOR_HOSTS) {
-          const token =
-            (await deps.connectorTokens.connectorAccessToken(host, actor.id, "personal")) ??
-            (await deps.connectorTokens.connectorAccessToken(host, actor.id)) ??
-            (await deps.connectorTokens.connectorAccessToken(host, actor.id, "company"));
-          if (token) (openSpeakerKeychain ? ownerAuthEnv : connectorEnv)[envKey(host)] = token;
-        }
-      }
+      };
+      await registerConnectorCredentials(addCredentialToCatalog);
       perf.credsMs += Date.now() - credsStart;
       let sharedCredsBlock = "";
-      const envCredLines: string[] = [];
       let egressTokenForTurn: string | undefined;
       // Service credentials: one read of the org's credential list and one grant scan feed both
       // the env-delivery gate (below) and the broker token mint (further down). Same grants gate both.
@@ -1469,29 +1510,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
         }
       }
+      const authorizeServiceCredential = async (slug: string): Promise<void> => {
+        const grants = await deps.acl.grantsOfKind(
+          "service-cred",
+          conversation.audience,
+          scopeId,
+          resolution.orgScopeId,
+          principalEntitledToScope,
+        );
+        if (!grants.some((grant) => parseRef(grant.ref).id === slug)) {
+          throw new Error(`Service credential is no longer authorized: ${slug}`);
+        }
+      };
       if (!strictReadOnly && allInternal && deps.serviceCreds) {
-        const orgScope = toScopeId("org", orgId());
         // Env delivery is gated by the same service-cred grants as the broker: the env var rides
         // only when every internal participant in this conversation is entitled to the credential.
 
-        for (const cred of serviceCredRecords) {
-          if (
-            isBackendCredential(cred) ||
-            cred.delivery !== "env" ||
-            !cred.envKey ||
-            !cred.enabled ||
-            !cred.hasSecret ||
-            !grantedCredSlugs.has(cred.slug) ||
-            cred.envKey in connectorEnv
-          )
-            continue;
-          const rec = await deps.serviceCreds.getServiceCredentialSecret(orgScope, cred.slug);
-          if (rec?.secret && rec.delivery === "env" && rec.enabled && rec.envKey === cred.envKey) {
-            connectorEnv[cred.envKey] = rec.secret;
-            credentialEnvFields.push({ key: cred.envKey, value: rec.secret });
-            envCredLines.push(`- \`${cred.slug}\` → \`${cred.envKey}\``);
-          }
-        }
         const browseSteps = deps.config?.getBrowseMaxSteps(toScopeId("org", orgId()));
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
@@ -1588,15 +1622,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (enabled.size > 0) {
             const slugs = [...grantedCredSlugs].filter((s) => enabled.has(s));
             if (slugs.length > 0) {
-              connectorEnv.AGENT_CREDENTIAL_TOKEN = await mintCapabilityToken(
-                {
-                  ...scopeAttestation,
-                  aud: CREDENTIAL_BROKER_AUD,
-                  credentials: slugs,
-                  exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
-                },
-                deps.capabilitySecret ?? deps.signingSecret,
-              );
               const usable = records.filter((r) => slugs.includes(r.slug));
               const lines = usable.map((r) => {
                 const methods = r.allowedMethods?.length ? r.allowedMethods.join("/") : "GET";
@@ -1605,7 +1630,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               });
               sharedCredsBlock =
                 "\n\n## Shared org credentials available to you\n" +
-                "The org vended these shared credentials to this conversation. You CANNOT see the secret — call the " +
+                "Select the corresponding `service_<slug>` handle in execute.credentials. You CANNOT see the secret — call the " +
                 "target BY PROXY through the broker, which injects it server-side. Use exactly this (with the " +
                 "$AGENT_CREDENTIAL_TOKEN env var, NOT $AGENT_API_TOKEN):\n" +
                 "```\n" +
@@ -1648,44 +1673,135 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           egressSecret,
         );
       }
+      const registerServiceCredentials = async (
+        addCredential: typeof addCredentialToCatalog,
+        requestedHandles: readonly string[],
+      ): Promise<void> => {
+        if (strictReadOnly || !deps.serviceCreds) return;
+        const records = await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId);
+        const grants = await deps.acl.grantsOfKind(
+          "service-cred",
+          conversation.audience,
+          scopeId,
+          resolution.orgScopeId,
+          principalEntitledToScope,
+        );
+        const granted = new Set(grants.map((grant) => parseRef(grant.ref).id));
+        const available = records.filter((record) => !isBackendCredential(record) && record.enabled && record.hasSecret && granted.has(record.slug));
+        const brokerSlugs = available
+          .filter((record) => record.delivery !== "env" && requestedHandles.includes(`service_${record.slug}`))
+          .map((record) => record.slug)
+          .sort();
+        let brokerToken: Promise<string> | undefined;
+        const resolveBrokerToken = (): Promise<string> =>
+          (brokerToken ??= (async () => {
+            const current = await deps.serviceCreds!.listServiceCredentials(resolution.orgScopeId);
+            for (const slug of brokerSlugs) {
+              await authorizeServiceCredential(slug);
+              const record = current.find((candidate) => candidate.slug === slug);
+              if (!record?.enabled || !record.hasSecret || record.delivery === "env") {
+                throw new Error(`Service credential is no longer available: ${slug}`);
+              }
+            }
+            return mintCapabilityToken(
+              {
+                ...scopeAttestation,
+                aud: CREDENTIAL_BROKER_AUD,
+                credentials: brokerSlugs,
+                exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
+              },
+              (deps.capabilitySecret ?? deps.signingSecret)!,
+            );
+          })());
+        for (const credential of available) {
+          if (credential.delivery === "env") {
+            if (!allInternal || !credential.envKey) continue;
+            addCredential(
+              {
+                handle: `service_${credential.slug}`,
+                resolve: async () => {
+                  await authorizeServiceCredential(credential.slug);
+                  const current = await deps.serviceCreds!.getServiceCredentialSecret(
+                    resolution.orgScopeId,
+                    credential.slug,
+                  );
+                  if (
+                    !current?.enabled ||
+                    isBackendCredential(current) ||
+                    !current.secret ||
+                    current.delivery !== "env" ||
+                    current.envKey !== credential.envKey
+                  ) {
+                    throw new Error(`Service credential is no longer available: ${credential.slug}`);
+                  }
+                  return { env: [{ key: credential.envKey!, value: current.secret }] };
+                },
+              },
+              `${credential.name}, org credential, provides ${credential.envKey}`,
+            );
+          } else if (deps.signingSecret && deps.apiBaseUrl) {
+            addCredential(
+              {
+                handle: `service_${credential.slug}`,
+                resolve: async () => ({ env: [{ key: "AGENT_CREDENTIAL_TOKEN", value: await resolveBrokerToken() }] }),
+              },
+              `org credential ${credential.slug}, provides scoped broker capability`,
+            );
+          }
+        }
+      };
+      await registerServiceCredentials(addCredentialToCatalog, []);
       if (!strictReadOnly && actor.type === "internal") {
         for (const tool of brokeredTools) {
-          const mode = cutoverModeOf(tool.service);
-          if (mode !== "legacy") continue;
           const broker = deps.layerBrokerFor?.(tool);
-          if (!broker) {
-            continue;
-          }
-          const aws = await broker
-            .credsForActor(actor.id)
-            .catch(swallowAs(`orchestrator: ${tool.service} broker assume-role`, undefined));
-          const awsEnv = aws
-            ? {
-                AWS_ACCESS_KEY_ID: aws.accessKeyId,
-                AWS_SECRET_ACCESS_KEY: aws.secretAccessKey,
-                AWS_SESSION_TOKEN: aws.sessionToken,
-                AWS_REGION: aws.region,
-                AWS_DEFAULT_REGION: aws.region,
-              }
-            : null;
-          if (awsEnv) {
-            Object.assign(connectorEnv, awsEnv);
-            deps.credentialUsage?.record({
-              slug: tool.service,
-              host: "sts.amazonaws.com",
-              status: "legacy_vended",
-              scopeLabel: scopeId,
-              principalId: actor.id,
-            });
-          } else {
-            deps.credentialUsage?.record({
-              slug: tool.service,
-              host: "sts.amazonaws.com",
-              status: "legacy_unavailable",
-              scopeLabel: scopeId,
-              principalId: actor.id,
-            });
-          }
+          if (!broker) continue;
+          const brokerScope = cutoverModeOf(tool.service) === "legacy" ? "scoped" : "owner";
+          addCredentialToCatalog(
+            {
+              handle: `broker_${tool.service}`,
+              scope: brokerScope,
+              resolve: async () => {
+                const policy = await deps.deviceFlowCutover?.resolvePolicy(memoryScopeId, tool.service);
+                const currentScope = !policy || policy.mode === "legacy" ? "scoped" : "owner";
+                if (currentScope !== brokerScope)
+                  throw new Error(`Broker credential scope changed: ${tool.service}; retry on the next turn`);
+                let aws;
+                try {
+                  aws = await broker.credsForActor(actor.id);
+                } catch {
+                  deps.credentialUsage?.record({
+                    slug: tool.service,
+                    host: "sts.amazonaws.com",
+                    status: brokerScope === "owner" ? "ephemeral_failed_closed" : "legacy_unavailable",
+                    scopeLabel: scopeId,
+                    principalId: actor.id,
+                  });
+                  throw new Error(`Could not vend credentials for ${tool.service}`);
+                }
+                deps.credentialUsage?.record({
+                  slug: tool.service,
+                  host: "sts.amazonaws.com",
+                  status: brokerScope === "owner" ? "ephemeral_vended" : "legacy_vended",
+                  scopeLabel: scopeId,
+                  principalId: actor.id,
+                });
+                return {
+                  env: Object.entries({
+                    AWS_ACCESS_KEY_ID: aws.accessKeyId,
+                    AWS_SECRET_ACCESS_KEY: aws.secretAccessKey,
+                    AWS_SESSION_TOKEN: aws.sessionToken,
+                    AWS_REGION: aws.region,
+                    AWS_DEFAULT_REGION: aws.region,
+                  }).map(([key, value]) => ({
+                    key,
+                    value,
+                    secret: key !== "AWS_REGION" && key !== "AWS_DEFAULT_REGION",
+                  })),
+                };
+              },
+            },
+            `${tool.service}, role broker for ${actor.id}`,
+          );
         }
       }
       let toolCalls = 0;
@@ -1699,13 +1815,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           swallow("gap-work emit", e);
         }
       };
-      const ephemeralOnlyDenyRules = brokeredTools
-        .filter((candidate) => cutoverModeOf(candidate.service) === "ephemeral_only")
-        .map((tool) => ({
-          pattern: `(^|[\\s;&|()])${tool.binary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[\\s;&|()])`,
-          decision: "deny" as const,
-          reason: `credential-bearing service ${tool.service} is disabled by its credential isolation policy`,
-        }));
+      const ephemeralOnlyTools = brokeredTools.filter((tool) => cutoverModeOf(tool.service) === "ephemeral_only");
+      const ephemeralOnlyDenyRules = ephemeralOnlyTools.map((tool) => ({
+        pattern: `(^|[\\s;&|()])${tool.binary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[\\s;&|()])`,
+        decision: "deny" as const,
+        reason: `credential-bearing service ${tool.service} requires execute with its broker credential and scope:owner`,
+      }));
       const commandPolicy = ephemeralOnlyDenyRules.length
         ? { ...resolution.commandPolicy, rules: [...ephemeralOnlyDenyRules, ...resolution.commandPolicy.rules] }
         : resolution.commandPolicy;
@@ -1742,8 +1857,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         isolateOwnerKeychain,
         openSpeakerKeychain,
         ownerAuthAvailable,
-        ownerAuthEnv,
-        ownerEnvCredentialIds,
         credentialTools,
         credentialServices,
         credentialCutoverServices,
@@ -1944,7 +2057,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         }
 
-        systemPrompt += sharedCredsBlock;
         if (
           serviceCredRecords.some(
             (cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret && grantedCredSlugs.has(cred.slug),
@@ -1952,13 +2064,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         )
           systemPrompt +=
             "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
-        if (envCredLines.length) {
+        if (credentialDescriptions.length)
           systemPrompt +=
-            "\n\n## Org credentials on your computer\n" +
-            "These credentials are authorized for this conversation and supplied to commands on its scoped computer, not scratch computers. " +
-            "Use the matching access skill.\n" +
-            envCredLines.join("\n");
-        }
+            "\n\n## Execution credentials\nRequest exact handles in execute.credentials:\n" +
+            credentialDescriptions.join("\n");
+        systemPrompt += sharedCredsBlock;
         if (actorIsOrgAdmin) {
           systemPrompt +=
             "\n\n## Acting for an org admin\n" +
@@ -2053,7 +2163,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             entriesByOwner,
             connectorsByOwner,
             scopeGrants,
-            injected: keychainInjected,
+            injected: [],
             scopeAsks,
             ownerAsks,
           });
@@ -2342,6 +2452,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
           layers: resolution.layers,
           commandPolicy: () => commandPolicy,
+          commandPolicyForCredentials: (handles, ownerAuth) => ({
+            ...resolution.commandPolicy,
+            rules: [
+              ...ephemeralOnlyDenyRules.filter(
+                (_, index) => !ownerAuth || !handles.includes(`broker_${ephemeralOnlyTools[index]!.service}`),
+              ),
+              ...resolution.commandPolicy.rules,
+            ],
+          }),
           layerCommandRules: () => layerCommandRules,
           authorizeCommand,
           grantedHandles: resolution.grantedHandles,
@@ -2353,9 +2472,26 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           files: deps.files,
           auditLog: deps.auditLog,
           createdBy: actor.id,
-          credentialEnvFields,
-          ownerAuthEnv,
-          ...(commandCredentials.length ? { commandCredentials } : {}),
+          commandCredentials,
+          resolveCommandCredentials: async (handles) => {
+            const refreshed = new Map<string, CommandCredential>();
+            const identities = new Map<string, string>();
+            const add: typeof addCredentialToCatalog = (credential, _description, identity = credential.handle) => {
+              const prior = identities.get(credential.handle);
+              if (prior !== undefined) {
+                if (prior !== identity) throw new Error(`credential handle collision: ${credential.handle}`);
+                return;
+              }
+              identities.set(credential.handle, identity);
+              refreshed.set(credential.handle, credential);
+            };
+            await registerKeychainCredentials(add);
+            await registerConnectorCredentials(add);
+            await registerServiceCredentials(add, handles);
+            for (const credential of commandCredentials.filter((candidate) => candidate.handle.startsWith("broker_")))
+              add(credential, "");
+            return [...refreshed.values()];
+          },
           ...(deps.publicWebUrl ? { publicWebUrl: deps.publicWebUrl } : {}),
           publishContext: {
             conversationKind: conversation.kind,

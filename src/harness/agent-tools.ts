@@ -387,7 +387,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const ownerAuthExec = !!opts?.ownerAuthExec;
   const reachExec = !!opts?.reachExec;
   const controlTools = !!opts?.controlTools;
-  const commandCredentialHandles = opts?.commandCredentialHandles ?? ref.current?.commandCredentialHandles ?? [];
   const surfaceTools = !!opts?.surfaceTools;
   const delegateWork = opts?.delegateWork === true;
   const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000) / 1000);
@@ -605,15 +604,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }),
     ),
 
-    ...(commandCredentialHandles.length
-      ? {
-          credentials: Type.Optional(
-            Type.Array(Type.String({ enum: [...commandCredentialHandles] }), {
-              description: "Exact credential handles to expose to this command only.",
-            }),
-          ),
-        }
-      : {}),
+    credentials: Type.Optional(
+      Type.Array(Type.String(), {
+        description:
+          "Exact authorized credential handles to materialize for this command only. Newly granted handles are accepted.",
+      }),
+    ),
   };
 
   const blockOnApproval = (callId: string, e: NeedsApproval, purpose?: string, tool = "execute") => {

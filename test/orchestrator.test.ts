@@ -9,7 +9,7 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { loadConfig, type Config } from "../src/config.ts";
-import type { ProvisionOptions, Sandbox } from "../src/sandbox/sandbox.ts";
+import type { SandboxHandle, ProvisionOptions, Sandbox } from "../src/sandbox/sandbox.ts";
 import {
   verifyCapabilityToken,
   EGRESS_PROXY_AUD,
@@ -36,6 +36,7 @@ function freshApp(overrides: Partial<Config> = {}, securityScreener?: SecuritySc
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     ...overrides,
   });
+  config.spritesSandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
   return buildApp(config, securityScreener ? { securityScreener } : {});
 }
 
@@ -312,9 +313,10 @@ test(
   async (t) => {
     t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
     const built = freshApp();
-    const { app, connectorTokens } = built;
+    const { app, keychain } = built;
+    assert.ok(keychain);
 
-    const realConnectorAccessToken = connectorTokens.connectorAccessToken.bind(connectorTokens);
+    const realGrantsForScope = keychain.grantsForScope.bind(keychain);
     const attempted: string[] = [];
     const claimForSession = built.runs.claimForSession.bind(built.runs);
     built.runs.claimForSession = async (...args) => {
@@ -323,12 +325,12 @@ test(
       return run;
     };
     let injectFailure = true;
-    connectorTokens.connectorAccessToken = async (...args: Parameters<typeof realConnectorAccessToken>) => {
+    keychain.grantsForScope = async (...args: Parameters<typeof realGrantsForScope>) => {
       if (injectFailure) {
         injectFailure = false;
         throw new Error("injected setup failure");
       }
-      return realConnectorAccessToken(...args);
+      return realGrantsForScope(...args);
     };
 
     await assert.rejects(app.turn(dm("hi")), /injected setup failure/);
@@ -474,7 +476,8 @@ test("a per-turn egress-proxy token is minted and passed to provision, carrying 
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox } = buildApp(config);
+  const { app, sandbox, config: scopedConfig } = buildApp(config);
+  await scopedConfig.setSecurityPosture(scopeId("personal", "U1"), "dangerous");
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
@@ -489,6 +492,8 @@ test("a per-turn egress-proxy token is minted and passed to provision, carrying 
   const claims = await verifyCapabilityToken(captured!.egressToken!, TEST_CAPABILITY_SECRET);
   assert.ok(claims, "the egress token must verify with the capability secret");
   assert.equal(claims!.aud, EGRESS_PROXY_AUD);
+  assert.equal(claims!.egress?.denyPrivateNetworks, true);
+  assert.deepEqual(claims!.egress?.privateNetworkAllowedHosts, []);
   assert.deepEqual(captured!.egress, { allowedHosts: [], deniedHosts: [] });
 });
 
@@ -591,7 +596,7 @@ test("Composio backend access is announced without delivering the project key", 
   assert.doesNotMatch(await prompt("disabled"), /COMPOSIO_API_KEY/);
 });
 
-test("org env-delivery credentials ride provision env under their envKey — read live, so a rotation applies next turn", async () => {
+test("org credentials are delivered only when requested and read live after rotation", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     signingSecret: "test-secret",
@@ -618,16 +623,27 @@ test("org env-delivery credentials ride provision env under their envKey — rea
     host: "",
   });
   const captures: ProvisionOptions[] = [];
+  const executions: SandboxHandle[] = [];
+  const realRun = sandbox.run.bind(sandbox);
+  sandbox.run = (handle, command, opts) => {
+    executions.push(handle);
+    return realRun(handle, command, opts);
+  };
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
     if (opts) captures.push(opts);
     return realProvision(layers, opts);
   };
 
-  let res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:env1" } }));
+  const request = `!execute ${JSON.stringify({ command: "echo keys", credentials: ["service_browse-steel", "service_browse-model-key"] })}`;
+  let res = await app.turn(dm(request, { conversation: { kind: "dm", threadRef: "dm:U1:env1" } }));
   assert.equal(res.status, "ok");
-  assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, "steel-org-key");
-  assert.equal(captures.at(-1)?.env?.BROWSE_LAB_ANTHROPIC_KEY, "model-org-key");
+  assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined);
+  assert.equal(executions.findLast((handle) => handle.env?.STEEL_API_KEY)?.env?.STEEL_API_KEY, "steel-org-key");
+  assert.equal(
+    executions.findLast((handle) => handle.env?.BROWSE_LAB_ANTHROPIC_KEY)?.env?.BROWSE_LAB_ANTHROPIC_KEY,
+    "model-org-key",
+  );
 
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
@@ -637,9 +653,13 @@ test("org env-delivery credentials ride provision env under their envKey — rea
     secret: "steel-rotated",
     host: "",
   });
-  res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:env2" } }));
+  res = await app.turn(dm(request, { conversation: { kind: "dm", threadRef: "dm:U1:env2" } }));
   assert.equal(res.status, "ok");
-  assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, "steel-rotated", "keychain is read at provision time, not boot");
+  assert.equal(
+    executions.findLast((handle) => handle.env?.STEEL_API_KEY)?.env?.STEEL_API_KEY,
+    "steel-rotated",
+    "secret is read for each execution",
+  );
 });
 
 test("a disabled or broker-delivery credential never rides provision env", async () => {
@@ -676,7 +696,7 @@ test("a disabled or broker-delivery credential never rides provision env", async
 
   const res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:env3" } }));
   assert.equal(res.status, "ok");
-  assert.doesNotMatch(res.reply ?? "", /## Org credentials on your computer/);
+  assert.doesNotMatch(res.reply ?? "", /service_browse-steel/g);
   const env = captures.at(-1)?.env ?? {};
   assert.equal(env.STEEL_API_KEY, undefined, "disabled env credential stays home");
   assert.ok(
@@ -714,13 +734,18 @@ test("a credential flipped away from env between the metadata read and the secre
     return realProvision(layers, opts);
   };
 
-  const res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:env4" } }));
-  assert.equal(res.status, "ok");
-  assert.doesNotMatch(res.reply ?? "", /## Org credentials on your computer/);
-  assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "a mid-flight env→broker flip never rides the env");
+  await assert.rejects(
+    app.turn(
+      dm(`!execute ${JSON.stringify({ command: "echo keys", credentials: ["service_browse-steel"] })}`, {
+        conversation: { kind: "dm", threadRef: "dm:U1:env4" },
+      }),
+    ),
+    /Service credential is no longer available/,
+  );
+  assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined);
 });
 
-test("env-delivery injection is all-internal only, and an existing env key (keychain grant) is never overwritten", async () => {
+test("env-delivery credentials are not offered to an external audience", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     signingSecret: "test-secret",
@@ -756,7 +781,7 @@ test("env-delivery injection is all-internal only, and an existing env key (keyc
     }),
   );
   assert.equal(externalRoom.status, "ok");
-  assert.doesNotMatch(externalRoom.reply ?? "", /## Org credentials on your computer/);
+  assert.doesNotMatch(externalRoom.reply ?? "", /service_browse-steel/g);
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "a room with externals gets no org env credentials");
 });
 
@@ -778,6 +803,12 @@ test("a channel cron receives env credentials only when the directory proves an 
   });
   await grantCred(acl, org, "browse-steel");
   const captures: ProvisionOptions[] = [];
+  const executions: SandboxHandle[] = [];
+  const realRun = sandbox.run.bind(sandbox);
+  sandbox.run = (handle, command, opts) => {
+    executions.push(handle);
+    return realRun(handle, command, opts);
+  };
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
     if (opts) captures.push(opts);
@@ -818,13 +849,21 @@ test("a channel cron receives env credentials only when the directory proves an 
       {
         owner: "U1",
         ownerScopeId: scopeId("channel", channelId),
-        input: "!run echo keys",
+        input:
+          channelId === "C-internal"
+            ? `!execute ${JSON.stringify({ command: "echo keys", credentials: ["service_browse-steel"] })}`
+            : "!sysprompt",
         fireKey: `cron:${channelId}:1`,
         surface: "cron",
       },
     );
     assert.equal(out.status, "ok", `the ${channelId} cron turn runs`);
-    return captures.at(-1)?.env?.STEEL_API_KEY;
+    assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined);
+    if (channelId !== "C-internal") {
+      assert.doesNotMatch(out.reply ?? "", /service_browse-steel/);
+      return undefined;
+    }
+    return executions.findLast((handle) => handle.env?.STEEL_API_KEY)?.env?.STEEL_API_KEY;
   };
   assert.equal(await fire("C-internal"), "steel-org-key", "an all-internal synced roster admits the env credential");
   assert.equal(await fire("C-unsynced"), undefined, "a channel with no synced roster stays fail-closed");
@@ -849,6 +888,12 @@ test("env-delivery credentials are gated by service-cred grants — no grant, no
     host: "",
   });
   const captures: ProvisionOptions[] = [];
+  const executions: SandboxHandle[] = [];
+  const realRun = sandbox.run.bind(sandbox);
+  sandbox.run = (handle, command, opts) => {
+    executions.push(handle);
+    return realRun(handle, command, opts);
+  };
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
     if (opts) captures.push(opts);
@@ -857,20 +902,24 @@ test("env-delivery credentials are gated by service-cred grants — no grant, no
 
   let res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:gate1" } }));
   assert.equal(res.status, "ok");
-  assert.doesNotMatch(res.reply ?? "", /## Org credentials on your computer/);
+  assert.doesNotMatch(res.reply ?? "", /service_browse-steel/g);
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "ungranted env credential stays home");
 
   await grantCred(acl, org, "browse-steel", scopeId("personal", "somebody-else"));
   res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:gate2" } }));
   assert.equal(res.status, "ok");
-  assert.doesNotMatch(res.reply ?? "", /## Org credentials on your computer/);
+  assert.doesNotMatch(res.reply ?? "", /service_browse-steel/g);
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "a grant to someone else does not admit this actor");
 
   await grantCred(acl, org, "browse-steel", scopeId("personal", "U1"));
-  res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:gate3" } }));
+  res = await app.turn(
+    dm(`!execute ${JSON.stringify({ command: "echo keys", credentials: ["service_browse-steel"] })}`, {
+      conversation: { kind: "dm", threadRef: "dm:U1:gate3" },
+    }),
+  );
   assert.equal(res.status, "ok");
   assert.equal(
-    captures.at(-1)?.env?.STEEL_API_KEY,
+    executions.findLast((handle) => handle.env?.STEEL_API_KEY)?.env?.STEEL_API_KEY,
     "steel-org-key",
     "a personal grant to the actor admits the env var",
   );

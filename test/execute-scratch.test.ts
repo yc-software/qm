@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -84,7 +86,7 @@ const schemaRequired = (tool: ReturnType<typeof createAgentTools>[number]): stri
 test("flag OFF: the execute surface is exactly the legacy one (no scope/durable, scoped box)", async () => {
   const { tc, seen } = sinkToolContext();
   const [execute] = createAgentTools({ current: tc });
-  assert.deepEqual(schemaProps(execute!), ["command", "sandbox_id", "purpose", "timeout_seconds"]);
+  assert.deepEqual(schemaProps(execute!), ["command", "sandbox_id", "purpose", "timeout_seconds", "credentials"]);
   assert.deepEqual(schemaRequired(execute!), ["command", "purpose"]);
   await call(execute, { command: "echo hi" });
   assert.deepEqual(seen, [{ command: "echo hi", opts: undefined }]);
@@ -94,7 +96,15 @@ test("flag ON: scope defaults to the durable scoped box; scratch is an explicit 
   const { tc, seen } = sinkToolContext();
   const ref: ToolContextRef = { current: tc };
   const [execute] = createAgentTools(ref, { scratchExec: true });
-  assert.deepEqual(schemaProps(execute!), ["command", "sandbox_id", "purpose", "timeout_seconds", "scope", "durable"]);
+  assert.deepEqual(schemaProps(execute!), [
+    "command",
+    "sandbox_id",
+    "purpose",
+    "timeout_seconds",
+    "credentials",
+    "scope",
+    "durable",
+  ]);
 
   await call(execute, { command: "echo hi" });
   assert.deepEqual(
@@ -268,7 +278,10 @@ test("execute rejects unavailable, conflicting, and scratch credential requests"
     ctx.execute("true", { credentials: ["kc_one12345678", "kc_two12345678"] }),
     /conflicting environment key/,
   );
-  await assert.rejects(ctx.execute("true", { scratch: true, credentials: ["kc_one12345678"] }), /scoped computer/);
+  await assert.rejects(
+    ctx.execute("true", { scratch: true, credentials: ["kc_one12345678"] }),
+    /scoped or owner computer/,
+  );
 });
 
 test("execute schema lists exact command credential handles", async () => {
@@ -474,10 +487,10 @@ test("execute respects secret metadata even for configuration-named credentials"
   assert.equal((await ctx.execute("diagnose", { credentials: ["kc_config1234"] })).stdout, "<redacted:credential>");
 });
 
-test("owner execute checks the credentials injected by its command wrapper", async () => {
+test("owner execute masks selected credentials and inherited proxy credentials", async () => {
   const { ctx } = routingCtx({
     provisionOwnerAuth: async () => ({ ...scopedHandle, env: { HTTPS_PROXY: "https://user:proxy-secret@proxy.test" } }),
-    ownerAuthEnv: { TOKEN: "owner-secret" },
+    commandCredentials: [{ handle: "owner-token", scope: "owner", env: [{ key: "TOKEN", value: "owner-secret" }] }],
     sandbox: {
       async run() {
         return { stdout: "owner-secret https://user:proxy-secret@proxy.test", stderr: "", code: 0, timedOut: false };
@@ -485,7 +498,34 @@ test("owner execute checks the credentials injected by its command wrapper", asy
     } as unknown as Sandbox,
   });
   assert.equal(
-    (await ctx.execute("diagnose", { ownerAuth: true })).stdout,
+    (await ctx.execute("diagnose", { ownerAuth: true, credentials: ["owner-token"] })).stdout,
     "<redacted:credential> <redacted:credential>",
   );
+});
+
+test("scoped command wrappers preserve selected AWS credentials and clear unselected ambient keys", async () => {
+  const boxes = createTurnSandboxes({
+    deps: {},
+    input: {},
+    connectorEnv: {},
+    credentialCutoverServices: ["role-service"],
+  } as unknown as TurnSandboxContext);
+  const { ctx } = routingCtx({
+    scopedCommand: boxes.scopedCommand,
+    commandCredentials: [{ handle: "selected-aws", env: [{ key: "AWS_ACCESS_KEY_ID", value: "selected-key" }] }],
+    sandbox: {
+      async run(handle: SandboxHandle, command: string) {
+        const stdout = execFileSync("/bin/sh", ["-c", command], {
+          env: { AWS_SECRET_ACCESS_KEY: "stale", ...handle.env },
+          encoding: "utf8",
+        });
+        return { stdout, stderr: "", code: 0, timedOut: false };
+      },
+    } as unknown as Sandbox,
+  });
+  const result = await ctx.execute(
+    'test "$AWS_ACCESS_KEY_ID" = selected-key && test "${AWS_SECRET_ACCESS_KEY-unset}" = unset && printf passed',
+    { credentials: ["selected-aws"] },
+  );
+  assert.equal(result.stdout, "passed");
 });

@@ -199,7 +199,6 @@ test("turn default changes invalidate cached provisioning while explicit calls d
     turnFilesDir: "turn/s/t",
     connectorEnv: { AGENT_API_TOKEN: "scope-token" },
     ownerAuthAvailable: false,
-    ownerEnvCredentialIds: [],
     credentialCutoverServices: [],
     visibleSkills: [],
     visibleSkillsForTurn: async () => [],
@@ -428,7 +427,6 @@ for (const shared of [false, true])
       connectorEnv: {},
       isolateOwnerKeychain: shared,
       ownerAuthAvailable: false,
-      ownerEnvCredentialIds: [],
       credentialTools: [
         { service: "aws", roots: [".aws"] },
         { service: "gh", roots: [".config/gh"] },

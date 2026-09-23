@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
+import { credentialHandle } from "../src/credentials/keychain.ts";
 import { DEVICE_FLOW_ORIGIN } from "../src/credentials/device-flow-persist.ts";
 import { scopeId } from "../src/types.ts";
 import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
@@ -76,7 +77,10 @@ test("a scope allow rule cannot override the ephemeral_only direct-execution den
   await built.deviceFlowCutover.set(personal, "acmecli", "ephemeral_only", "security@example.com");
 
   const direct = await built.app.turn({ surface: "slack", actor, conversation, text: "!run env" });
-  assert.match(`${direct.reason ?? ""} ${direct.reply ?? ""}`, /credential isolation policy/);
+  assert.match(
+    `${direct.reason ?? ""} ${direct.reply ?? ""}`,
+    /requires execute with its broker credential and scope:owner/,
+  );
 });
 
 const actor = { externalId: "U1" };
@@ -112,8 +116,8 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     channelRef: "C-owner-auth",
     audience: [bob, alice],
   };
-  await built.keychain!.save({ ownerId: "BOB", service: "npm", secret: "npm_BOB", envKey: "NPM_TOKEN" });
-  await built.keychain!.save({
+  const npm = await built.keychain!.save({ ownerId: "BOB", service: "npm", secret: "npm_BOB", envKey: "NPM_TOKEN" });
+  const aws = await built.keychain!.save({
     ownerId: "BOB",
     service: "aws",
     secret: "AKIA_BOB_GENERAL",
@@ -132,16 +136,25 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     origin: DEVICE_FLOW_ORIGIN,
   });
   await built.deviceFlowCutover.set(room, "acmecli", "prefer_ephemeral", "security@example.com");
+  const ambientOwner = await built.app.turn({
+    surface: "cron",
+    actor: bob,
+    conversation: { ...conversation, threadRef: "ch:C-owner-auth:ambient" },
+    text: '!owner printf "%s|%s" "${NPM_TOKEN-unset}" "${AWS_ACCESS_KEY_ID-unset}"',
+    triggered: true,
+    ownerKeychainUnion: true,
+  });
+  assert.equal(ambientOwner.reply, "unset|unset");
   const owner = await built.app.turn({
     surface: "cron",
     actor: bob,
     conversation,
-    text: '!owner printf \'%s|%s|%s|%s|%s\' "$NPM_TOKEN" "$AWS_ACCESS_KEY_ID" "$(cat ~/.config/acmecorp/auth.json)" "${AGENT_API_TOKEN-unset}" "$(env | grep -q secret_BOB && echo leaked || echo clean)"; printf poisoned > ~/.config/acmecorp/auth.json',
+    text: `!execute ${JSON.stringify({ command: `test "$NPM_TOKEN" = npm_BOB && test "$AWS_ACCESS_KEY_ID" = AKIA_BOB_GENERAL && printf 'selected|%s|%s' "$(cat ~/.config/acmecorp/auth.json)" "\${AGENT_API_TOKEN-unset}"; printf poisoned > ~/.config/acmecorp/auth.json`, credentials: [credentialHandle(npm.id), credentialHandle(aws.id)], ownerAuth: true })}`,
     triggered: true,
     ownerKeychainUnion: true,
   });
   assert.equal(owner.status, "ok", owner.reason);
-  assert.equal(owner.reply, "<redacted:credential>|<redacted:credential>|file_BOB|unset|clean");
+  assert.equal(owner.reply, "selected|file_BOB|unset");
   assert.equal(
     ff.names().some((n) => n.includes("scratch")),
     false,
@@ -152,14 +165,14 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     surface: "cron",
     actor: bob,
     conversation: { ...conversation, threadRef: "ch:C-owner-auth:brokered-acmecli" },
-    text: "!owner mkdir -p /tmp/bin; printf '%s\\n' '#!/bin/sh' 'printf \"%s\" \"$AWS_ACCESS_KEY_ID\"' > /tmp/bin/acmecli; chmod +x /tmp/bin/acmecli; export PATH=\"/tmp/bin:$PATH\"; printf '%s|' \"$AWS_ACCESS_KEY_ID\"; acmecli",
+    text: `!execute ${JSON.stringify({ command: 'test -n "$AWS_ACCESS_KEY_ID" && test "$AWS_ACCESS_KEY_ID" != AKIA_BOB_GENERAL && test -z "${NPM_TOKEN-}" && test -z "${AGENT_API_TOKEN-}" && echo broker-only', credentials: ["broker_acmecli"], ownerAuth: true })}`,
     triggered: true,
     ownerKeychainUnion: true,
   });
   assert.equal(
     brokeredAcmecli.reply,
-    "<redacted:credential>|<redacted:credential>",
-    "prefer-ephemeral direct execution retains the owner's legacy fallback without broker vending",
+    "broker-only",
+    "selected broker credentials replace ambient owner env and never carry a core API token",
   );
 
   const unpoisoned = await built.app.turn({
@@ -171,6 +184,7 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     ownerKeychainUnion: true,
   });
   assert.equal(unpoisoned.reply, "file_BOB", "owner-box mutations never capture back into Bob's durable keychain");
+  assert.deepEqual(await built.keychain!.grantsForScope(room), []);
   const ownerAudit = await built.auditLog.events();
   assert.ok(
     ownerAudit.some((event) => event.action === "keychain.materialize" && event.resource.includes("owner-auth box")),
@@ -263,7 +277,7 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
   const acmecliUsage = await built.credentialUsage.list({ slug: "acmecli" });
   assert.equal(
     acmecliUsage.some((row) => row.status === "ephemeral_vended"),
-    false,
+    true,
   );
   const legacyUsage = await built.credentialUsage.list({ slug: "keychain:acmecli" });
   assert.ok(
@@ -420,6 +434,15 @@ test("cutover policy retains legacy files only in prefer-ephemeral mode", async 
     text: "!run cat ~/.acmecli/session.json",
   });
   assert.equal(fallback.reply, "legacy_ok");
+  await assert.rejects(
+    built.app.turn({
+      surface: "slack",
+      actor,
+      conversation: { ...conversation, threadRef: "ch:C-acmecli-fallback:broker-prefer" },
+      text: `!execute ${JSON.stringify({ command: "true", credentials: ["broker_acmecli"], ownerAuth: true })}`,
+    }),
+    /Could not vend credentials/,
+  );
 
   await built.deviceFlowCutover.set(room, "acmecli", "ephemeral_only", "security@example.com");
   const closed = await built.app.turn({
@@ -429,6 +452,19 @@ test("cutover policy retains legacy files only in prefer-ephemeral mode", async 
     text: '!run printf \'%s|%s\' "${AWS_ACCESS_KEY_ID-unset}" "$(test -e ~/.acmecli && echo found || echo absent)"',
   });
   assert.equal(closed.reply, "unset|absent");
+  await assert.rejects(
+    built.app.turn({
+      surface: "slack",
+      actor,
+      conversation: { ...conversation, threadRef: "ch:C-acmecli-fallback:broker-only" },
+      text: `!execute ${JSON.stringify({ command: "true", credentials: ["broker_acmecli"], ownerAuth: true })}`,
+    }),
+    /Could not vend credentials/,
+  );
+  assert.ok(
+    (await built.credentialUsage.list({ slug: "acmecli" })).some((row) => row.status === "ephemeral_failed_closed"),
+  );
+
   const ownerClosed = await built.app.turn({
     surface: "cron",
     actor,
@@ -499,4 +535,77 @@ test("a nonlegacy policy never places brokered STS on a shared room", async () =
     text: '!run printf \'%s|%s\' "${AWS_ACCESS_KEY_ID-unset}" "$(test -e ~/.acmecli && echo found || echo absent)"',
   });
   assert.equal(only.reply, "unset|absent");
+});
+
+test("selected broker execute honors deployment approval rules before vending credentials", async () => {
+  let assumes = 0;
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "dfp-credexec-approval-")),
+      signingSecret: "device-flow-test-secret",
+      deploymentLayerDir: acmecliBrokeredLayer("env", [
+        { pattern: "\\benv\\b\\s+tool\\b", reason: "mutating subcommand" },
+      ]),
+    }),
+    {
+      credentialBrokers: {
+        acmecli: createAwsRoleBroker({
+          roleArn: "arn:aws:iam::123456789012:role/acmecli-broker",
+          region: "us-west-2",
+          sessionActions: ["execute-api:Invoke"],
+          assumeRole: async () => {
+            assumes++;
+            return {
+              Credentials: {
+                AccessKeyId: "AKIA_APPROVAL_GATE",
+                SecretAccessKey: "approval_gate_secret_value",
+                SessionToken: "approval_gate_session_token",
+                Expiration: new Date(Date.now() + 3_600_000),
+              },
+            };
+          },
+        }),
+      },
+    },
+  );
+  const personal = scopeId("personal", actor.externalId);
+  const conversation = { kind: "dm" as const, threadRef: "dm:credexec-approval", audience: [actor] };
+  await built.deviceFlowCutover.set(personal, "acmecli", "ephemeral_only", "security@example.com");
+
+  const gated = await built.app.turn({
+    surface: "slack",
+    actor,
+    conversation,
+    text: `!execute ${JSON.stringify({ command: "env tool delete", credentials: ["broker_acmecli"], ownerAuth: true })}`,
+  });
+  assert.equal(gated.status, "pending_approval");
+  assert.equal(assumes, 0, "no AssumeRole call happens for a blocked command");
+  const pending = gated.pendingApprovals![0]!;
+  assert.match(pending.reason, /mutating subcommand/);
+
+  const approved = await built.app.turn({
+    surface: "slack",
+    actor,
+    conversation,
+    text: `!execute ${JSON.stringify({ command: "env tool delete", credentials: ["broker_acmecli"], ownerAuth: true })}`,
+    approval: { requestId: pending.requestId, approved: true },
+  });
+  assert.equal(approved.status, "ok", approved.reason);
+  assert.equal(assumes, 1, "approval unblocks exactly one vended invocation");
+
+  const unrelated = await built.app.turn({
+    surface: "slack",
+    actor,
+    conversation: { ...conversation, threadRef: "dm:credexec-approval-3" },
+    text: `!execute ${JSON.stringify({ command: "env", credentials: ["broker_acmecli"], ownerAuth: true })}`,
+  });
+  assert.equal(unrelated.status, "ok", "subcommands without approval rules run without a grant");
+  assert.equal(assumes, 1, "the broker's per-actor credential cache is reused within its TTL");
+  assert.match(unrelated.reply ?? "", /<redacted:credential>/);
+  const durable = JSON.stringify(await built.sessions.getEntries(unrelated.sessionId!));
+  for (const value of ["AKIA_APPROVAL_GATE", "approval_gate_secret_value", "approval_gate_session_token"]) {
+    assert.ok(!(unrelated.reply ?? "").includes(value));
+    assert.ok(!durable.includes(value));
+  }
+  assert.deepEqual(await built.keychain!.grantsForScope(personal), []);
 });

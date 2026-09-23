@@ -12,6 +12,7 @@ import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
 import {
   createKeychain,
+  credentialHandle,
   renderKeychainManifest,
   renderUseScript,
   KeychainError,
@@ -1552,7 +1553,18 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
     }),
   );
   assert.ok(built.keychain, "buildApp with a signing secret wires the keychain");
-  await built.featureFlags.setEnabled("command_scoped_credentials", "channel:C1", true, "test");
+  built.keychain.materializeOwn = async () => {
+    throw new Error("eager owner materialization is forbidden");
+  };
+  built.keychain.materializeStanding = async () => {
+    throw new Error("eager standing materialization is forbidden");
+  };
+  const resolved: string[] = [];
+  const materializeOwnById = built.keychain.materializeOwnById.bind(built.keychain);
+  built.keychain.materializeOwnById = async (...args) => {
+    resolved.push(args[1]);
+    return materializeOwnById(...args);
+  };
   const cred = await built.keychain!.save({
     ownerId: "U_OWNER",
     service: "github",
@@ -1593,11 +1605,75 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   const dm: TurnRequest = {
     surface: "test",
     actor: { externalId: "U_OWNER" },
-    conversation: { kind: "dm", threadRef: "dm:U_OWNER" },
+    conversation: { kind: "dm", threadRef: "dm:U_OWNER", audience: [{ externalId: "U_OWNER" }] },
+    origin: { kind: "human" },
     text: "!run true",
   } as TurnRequest;
   assert.equal((await built.app.turn(dm)).status, "ok");
-  assert.ok(execScriptsMention("ghp_e2e", mark), "an unlisted scope keeps legacy behavior");
+  assert.ok(!execScriptsMention("ghp_e2e", mark), "unrequested secrets are never materialized");
+  const selected = await built.app.turn({
+    ...dm,
+    text: `!execute ${JSON.stringify({ command: 'test "$GITHUB_TOKEN" = ghp_e2e && echo selected', credentials: [credentialHandle(cred.id)] })}`,
+  });
+  assert.equal(selected.reply, "selected");
+  assert.deepEqual(resolved, [cred.id]);
+});
+
+test("prepared grants reject credential rotation without consuming a single use", async () => {
+  const k = kc();
+  const credential = await k.save(GH);
+  const grant = await k.createGrant({
+    credentialId: credential.id,
+    ownerId: GH.ownerId,
+    audienceScopeId: "channel:C1",
+    mode: "once",
+    purpose: "rotation regression",
+  });
+  const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
+  await k.save({ ...GH, secret: "rotated-execution-token" });
+  await assert.rejects(prepared.commit(), /credential changed/);
+  assert.equal((await k.getGrant(grant.id))?.status, "active");
+  const fresh = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
+  assert.equal(fresh.materialized.kind, "env");
+  if (fresh.materialized.kind === "env") assert.equal(fresh.materialized.env[0]?.value, "rotated-execution-token");
+  await fresh.commit();
+  assert.equal((await k.getGrant(grant.id))?.status, "used");
+});
+
+test("connector refresh during preparation binds the refreshed version and later rotation invalidates it", async () => {
+  let refreshes = 0;
+  const k = createKeychain({
+    creds: createMemoryMap(),
+    grants: createMemoryMap(),
+    asks: createMemoryMap(),
+    key: KEY,
+    refreshConnector: async () => {
+      refreshes++;
+      return { accessToken: "refreshed-token", expiresAt: Date.now() + 3600000 };
+    },
+  });
+  await k.setConnectorToken("gmail.googleapis.com", "U1", {
+    accessToken: "expired-token",
+    refreshToken: "refresh",
+    expiresAt: Date.now() - 1000,
+  });
+  const connector = (await k.listConnectorsByOwners(["U1"])).get("U1")![0]!;
+  const grant = await k.createGrant({
+    credentialId: connector.credentialId,
+    ownerId: "U1",
+    audienceScopeId: "channel:C1",
+    mode: "standing",
+    purpose: "refresh regression",
+  });
+  const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
+  assert.equal(refreshes, 1);
+  await prepared.commit();
+  await k.setConnectorToken("gmail.googleapis.com", "U1", {
+    accessToken: "replacement-token",
+    expiresAt: Date.now() + 3600000,
+  });
+  await assert.rejects(prepared.commit(), /credential changed/);
+  await (await k.prepareMaterialize(grant.id, "channel:C1", "U2")).commit();
 });
 
 test("Composio keys remain backend-only across all materialization paths including multi-field records", async () => {

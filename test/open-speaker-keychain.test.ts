@@ -42,8 +42,6 @@ test("Open owner computer rechecks revocation before reuse and is destroyed, nev
     isolateOwnerKeychain: true,
     openSpeakerKeychain: true,
     ownerAuthAvailable: true,
-    ownerAuthEnv: { TEST_TOKEN: "synthetic-secret" },
-    ownerEnvCredentialIds: ["synthetic-id"],
     connectorEnv: {},
     credentialTools: [],
     credentialServices: [],
