@@ -87,6 +87,7 @@ export interface ExecResult {
 }
 
 export interface ExecOptions {
+  credentials?: { env: Record<string, string>; files: Array<{ path: string; data: Uint8Array }> };
   timeoutMs?: number;
   signal?: AbortSignal;
 }
@@ -184,7 +185,18 @@ export interface TeardownOptions {
   homeUnchanged?: boolean;
 }
 
+export interface SupervisorTransport {
+  acceptTrusted?(handle: SandboxHandle): Promise<void>;
+  processStarted?(handle: SandboxHandle, processId: string): Promise<void>;
+  ensureDependencies(handle: SandboxHandle): Promise<void>;
+  identity(handle: SandboxHandle): Promise<string>;
+  isFresh(handle: SandboxHandle): Promise<boolean>;
+  run(handle: SandboxHandle, command: string, opts?: ExecOptions): Promise<ExecResult>;
+  writeFile(handle: SandboxHandle, absPath: string, data: Uint8Array): Promise<void>;
+}
+
 export interface Sandbox {
+  readonly supervisorTransport?: SupervisorTransport;
   readonly profile: AgentComputerProfile;
   profileFor?(scopeId: string, sandboxId?: string): Promise<AgentComputerProfile>;
   provision(layers: WorkspaceLayer[], opts?: ProvisionOptions): Promise<SandboxHandle>;

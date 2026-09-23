@@ -24,6 +24,8 @@ export interface ExecProcessSessions {
   listProcesses(handle: SandboxHandle): Promise<ProcessSession[]>;
 }
 
+export const SUPERVISOR_PROCESS_ROOT = "/run/qm-supervisor/processes";
+
 const PROC_BASE = "${HOME:-/root}/.agent-proc";
 export const processSessionDir = (processId: string): string => `${PROC_BASE}/${processId}`;
 const REBOOT_RC = 137;
@@ -74,7 +76,8 @@ export function redactCommand(command: string, env?: Record<string, string>): st
     .slice(0, 500);
 }
 
-export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSessions {
+export function createExecProcessSessions(io: ExecProcessIo, processRoot = PROC_BASE): ExecProcessSessions {
+  const sessionDir = (processId: string): string => `${processRoot}/${processId}`;
   return {
     async startProcess(handle, command, opts): Promise<{ processId: string }> {
       const processId = randomUUID();
@@ -84,7 +87,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
         .map(([k, v]) => `export ${k}=${shq(v)}`)
         .join("; ");
       const script = [
-        `P="${processSessionDir(processId)}"`,
+        `P="${sessionDir(processId)}"`,
         `mkdir -p "$P"`,
         `printf '%s' '${b64(command)}' | base64 -d > "$P/cmd"`,
         ...(envExports ? [`printf '%s' '${b64(envExports)}' | base64 -d > "$P/env"`] : []),
@@ -111,7 +114,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
       const waitMs = Math.max(0, opts?.waitMs ?? 0);
       const iters = Math.ceil(waitMs / 100);
       const script = [
-        `P="${processSessionDir(processId)}"`,
+        `P="${sessionDir(processId)}"`,
         `[ -d "$P" ] || { echo "MISSING=1"; exit 0; }`,
         REAP_SH,
         `_reap "$P"`,
@@ -148,7 +151,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
     async writeStdin(handle, processId, data): Promise<void> {
       assertId(processId);
       const script = [
-        `P="${processSessionDir(processId)}"`,
+        `P="${sessionDir(processId)}"`,
         `[ -p "$P/in" ] || { echo "MISSING=1"; exit 1; }`,
         `printf '%s' '${b64(data)}' | base64 -d > "$P/in"`,
       ].join("\n");
@@ -165,7 +168,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
           ? `[ -f "$P/code" ] || echo 137 > "$P/code"`
           : `if ! kill -0 -"$pid" 2>/dev/null && ! kill -0 "$pid" 2>/dev/null; then [ -f "$P/code" ] || echo 143 > "$P/code"; fi`;
       const script = [
-        `P="${processSessionDir(processId)}"`,
+        `P="${sessionDir(processId)}"`,
         `pid=$(cat "$P/pid" 2>/dev/null) || exit 0`,
         `kill -${sig} -"$pid" 2>/dev/null || kill -${sig} "$pid" 2>/dev/null || true`,
         sentinelLine,
@@ -175,7 +178,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
 
     async listProcesses(handle): Promise<ProcessSession[]> {
       const script = [
-        `B="${PROC_BASE}"`,
+        `B="${processRoot}"`,
         `[ -d "$B" ] || exit 0`,
         REAP_SH,
         `for d in "$B"/*; do`,

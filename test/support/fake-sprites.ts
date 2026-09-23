@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import {
   chmodSync,
   cpSync,
@@ -6,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -64,7 +66,7 @@ interface Engine {
 }
 
 interface FakeExec {
-  run(stdin: Buffer): { frames: Buffer[]; dropAfterRun: boolean };
+  run(stdin: Buffer): Promise<{ frames: Buffer[]; dropAfterRun: boolean }>;
   refused: boolean;
 }
 
@@ -108,16 +110,18 @@ class FakeWebSocket extends EventTarget {
     const frame = Buffer.from(data);
     if (frame[0] === 0) this.stdin.push(frame.subarray(1));
     if (frame[0] !== 4) return;
-    const { frames, dropAfterRun } = this.exec.run(Buffer.concat(this.stdin));
-    setImmediate(() => {
-      if (this.closed) return;
-      if (dropAfterRun) {
-        this.fail("connection reset by peer");
-        return;
-      }
-      for (const f of frames) this.dispatchEvent(new MessageEvent("message", { data: toArrayBuffer(f) }));
-      this.finish(1000, "");
-    });
+    void this.exec
+      .run(Buffer.concat(this.stdin))
+      .then(({ frames, dropAfterRun }) => {
+        if (this.closed) return;
+        if (dropAfterRun) {
+          this.fail("connection reset by peer");
+          return;
+        }
+        for (const f of frames) this.dispatchEvent(new MessageEvent("message", { data: toArrayBuffer(f) }));
+        this.finish(1000, "");
+      })
+      .catch((error) => this.fail(String(error)));
   }
 
   close(code = 1000, reason = ""): void {
@@ -163,8 +167,8 @@ function installRouter(): void {
 
 export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin}.invalid`): FakeSprites {
   installRouter();
-  const root = mkdtempSync(join(tmpdir(), "fake-sprites-"));
-  const sprites = new Map<string, { home: string }>();
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "fake-sprites-")));
+  const sprites = new Map<string, { home: string; id: string; created_at: string }>();
   const policies = new Map<string, NetworkRule[]>();
   const resources = new Map<string, { limitMB: number }>();
   const checkpoints = new Map<string, Array<{ id: string; createTime: string; dir: string }>>();
@@ -185,7 +189,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
   const ensureDir = (name: string): string => {
     let s = sprites.get(name);
     if (!s) {
-      s = { home: join(root, name) };
+      s = { id: randomUUID(), created_at: new Date().toISOString(), home: join(root, name) };
       mkdirSync(s.home, { recursive: true });
       sprites.set(name, s);
     }
@@ -209,10 +213,13 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       `export HOME=${JSON.stringify(home)}; ` +
       script
         .replace(/\btimeout \d+ /g, "")
+        .replace(/exec setsid sh/g, "exec sh")
         .replace(/\bsha256sum -c --status\b/g, "shasum -a 256 -c --status")
         .replace(/\/proc\/pressure\/io/g, `${home}/.proc-pressure-io`)
         .replace(/\/proc\/loadavg/g, `${home}/.proc-loadavg`)
         .replace(/\/usr\/local/g, `${home}/.usr-local`)
+        .replace(/\/opt\/qm-supervisor/g, `${home}/opt/qm-supervisor`)
+        .replace(/\/dev\/shm\/qm-supervisor/g, `${home}/dev/shm/qm-supervisor`)
         .replace(/\/home\/sprite/g, home)
         .replace(remapPath, (m) => (m.startsWith(home) ? m : `${home}/tmp/`))
     );
@@ -225,25 +232,100 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     return Buffer.alloc(0);
   };
 
-  const runExec = (name: string, argv: string[], stdin: Buffer): Buffer[] => {
+  const fakeSupervisorData = (name: string, path: string, data: Buffer): Buffer => {
+    if (path.startsWith("/opt/qm-supervisor/execution-supervisor.py.")) {
+      return readFileSync(new URL("./fake-execution-supervisor.py", import.meta.url));
+    }
+    if (path.startsWith("/dev/shm/qm-supervisor/") && path.endsWith(".json")) {
+      const request = JSON.parse(data.toString());
+      if (
+        typeof request.command !== "string" ||
+        typeof request.workspace !== "string" ||
+        typeof request.cwd !== "string" ||
+        typeof request.env !== "object" ||
+        !Array.isArray(request.files)
+      ) {
+        throw new Error("Invalid fake supervisor request");
+      }
+      execScripts.push(request.command);
+      const remapped = remap(name, request.command);
+      request.command = remapped.slice(remapped.indexOf("; ") + 2);
+      request.workspace = hostPath(name, request.workspace);
+      request.cwd = hostPath(name, request.cwd);
+      return Buffer.from(JSON.stringify(request));
+    }
+    return data;
+  };
+
+  const runExec = async (name: string, argv: string[], stdin: Buffer): Promise<Buffer[]> => {
     mkdirSync(join(ensureDir(name), "tmp"), { recursive: true });
     const viaBody = argv[argv.length - 1] === SCRIPT_RUNNER;
     const script = viaBody ? stdin.toString("utf8") : (argv[argv.length - 1] ?? "");
     execScripts.push(script);
-    const r = viaBody
-      ? spawnSync("sh", ["-c", SCRIPT_RUNNER], {
+    if (script.includes("/.sprite/api.sock") && script.includes("/run/qm-supervisor/processes")) {
+      return [Buffer.concat([Buffer.from([1]), Buffer.from("OK\n")]), Buffer.from([2]), Buffer.from([3, 0])];
+    }
+    if (
+      script.includes("command -v bwrap && command -v setpriv") ||
+      (script.includes("probe()") && script.includes("libseccomp.so.2")) ||
+      script.includes("os.chown(path,-1,61001") ||
+      ((script.includes("sleep 60; rm -f") || script.includes("sleep 300; rm -f")) && script.includes("qm-supervisor/"))
+    ) {
+      return [Buffer.from([1]), Buffer.from([2]), Buffer.from([3, 0])];
+    }
+    if (script.includes("sha256sum /opt/qm-supervisor/execution-supervisor.py")) {
+      return [
+        Buffer.from([1]),
+        Buffer.from([2]),
+        Buffer.from([3, existsSync(hostPath(name, "/opt/qm-supervisor/execution-supervisor.py")) ? 0 : 1]),
+      ];
+    }
+    if (argv[0] === "sudo" && argv.includes("python3") && argv.some((arg) => arg.includes("os.O_EXCL"))) {
+      const target = hostPath(name, argv.at(-1)!);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, stdin);
+      return [Buffer.from([1]), Buffer.from([2]), Buffer.from([3, 0])];
+    }
+    if (script.includes("assert os.geteuid()==0") && script.includes("target.parent.stat()")) {
+      const path = /'(\/(?:opt|run|dev\/shm)\/qm-supervisor\/[^']+)'\s*$/.exec(script)?.[1];
+      if (!path) throw new Error("Invalid fake supervisor staging path");
+      mkdirSync(dirname(hostPath(name, path)), { recursive: true });
+      return [Buffer.from([1]), Buffer.from([2]), Buffer.from([3, 0])];
+    }
+    if (script.includes("source,target=sys.argv[1:]") && script.includes("os.replace(source,target)")) {
+      const paths =
+        /'(\/(?:opt|run|dev\/shm)\/qm-supervisor\/[^']+)' '(\/(?:opt|run|dev\/shm)\/qm-supervisor\/[^']+)'\s*$/.exec(
+          script,
+        );
+      if (!paths) throw new Error("Invalid fake supervisor commit paths");
+      const source = hostPath(name, paths[1]!);
+      const target = hostPath(name, paths[2]!);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, fakeSupervisorData(name, paths[2]!, readFileSync(source)));
+      rmSync(source);
+      return [Buffer.from([1]), Buffer.from([2]), Buffer.from([3, 0])];
+    }
+    const r = await new Promise<{ stdout: Buffer; stderr: Buffer; code: number }>((resolve, reject) => {
+      const child = execFile(
+        "sh",
+        ["-c", viaBody ? SCRIPT_RUNNER : remap(name, script)],
+        {
           encoding: "buffer",
           maxBuffer: 128 * 1024 * 1024,
           env: { ...process.env, COPYFILE_DISABLE: "1" },
-          input: Buffer.from(remap(name, script), "utf8"),
-        })
-      : spawnSync("sh", ["-c", remap(name, script)], {
-          encoding: "buffer",
-          maxBuffer: 128 * 1024 * 1024,
-          env: { ...process.env, COPYFILE_DISABLE: "1" },
-          input: stdin,
-        });
-    const code = r.status ?? (r.signal ? 137 : -1);
+        },
+        (error, stdout, stderr) => {
+          let code = 0;
+          if (error) code = typeof error.code === "number" ? error.code : 137;
+          resolve({ stdout, stderr, code });
+        },
+      );
+      child.stdin!.on("error", (error: NodeJS.ErrnoException) => {
+        if (error.code !== "EPIPE") reject(error);
+      });
+      child.stdin!.end(viaBody ? Buffer.from(remap(name, script), "utf8") : stdin);
+    });
+    const code = r.code;
     const frame = (id: number, payload: Buffer): Buffer => Buffer.concat([Buffer.from([id]), payload]);
     return [
       frame(1, r.stdout ?? Buffer.alloc(0)),
@@ -308,13 +390,14 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       const body = JSON.parse(toBuf(init?.body).toString() || "{}") as { name?: string };
       const name = body.name ?? "unnamed";
       ensureDir(name);
-      return Response.json({ name, status: "running" });
+      return Response.json({ name, ...sprites.get(name), status: "running" });
     }
     if (!one) return notFound("route");
     const name = decodeURIComponent(one[1]!);
     const sub = one[2] ?? "";
     if (!sub) {
-      if (method === "GET") return sprites.has(name) ? Response.json({ name, status: "warm" }) : notFound("sprite");
+      if (method === "GET")
+        return sprites.has(name) ? Response.json({ name, ...sprites.get(name), status: "warm" }) : notFound("sprite");
       if (method === "DELETE") {
         if (refuseDeleteStatus !== undefined)
           return Response.json({ error: "upstream" }, { status: refuseDeleteStatus });
@@ -400,12 +483,13 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       return new Response(readFileSync(target), { status: 200 });
     }
     if (sub === "fs/write" && method === "PUT") {
-      const target = hostPath(name, url.searchParams.get("path") ?? "");
+      const path = url.searchParams.get("path") ?? "";
+      const target = hostPath(name, path);
       const data = toBuf(init?.body);
       const mode = url.searchParams.get("mode");
       return fsResult(target, () => {
         if (url.searchParams.get("mkdirParents") === "true") mkdirSync(dirname(target), { recursive: true });
-        writeFileSync(target, data);
+        writeFileSync(target, fakeSupervisorData(name, path, data));
         if (mode) chmodSync(target, Number.parseInt(mode, 8));
         return { path: target, size: data.length, mode: mode ?? "0644" };
       });
@@ -429,9 +513,9 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     const call = calls[calls.length - 1]!;
     return {
       refused: !sprites.has(name) || gateway502.has(name),
-      run: (stdin) => {
-        const frames = runExec(name, argv, stdin);
-        call.script = execScripts[execScripts.length - 1];
+      run: async (stdin) => {
+        call.script = argv[argv.length - 1] === SCRIPT_RUNNER ? stdin.toString("utf8") : argv[argv.length - 1];
+        const frames = await runExec(name, argv, stdin);
         const dropAfterRun = stallAfterRun.delete(name);
         return { frames, dropAfterRun };
       },

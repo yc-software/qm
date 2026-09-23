@@ -1,3 +1,4 @@
+import { createSupervisedSandbox, type SupervisorTrust } from "./sandbox/supervised-sandbox.ts";
 import { createKeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
 import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
@@ -1073,6 +1074,18 @@ export function buildApp(
   };
   for (const name of Object.keys(buildBackend) as Array<Config["sandboxBackend"]>) {
     if (name !== config.sandboxBackend && enabledBackends.has(name)) sandboxBackends[name] = buildBackend[name]();
+  }
+  const supervisorTrust = artifactMap<SupervisorTrust>("sandbox_supervisor_trust");
+  for (const name of Object.keys(sandboxBackends) as SandboxBackendName[]) {
+    sandboxBackends[name] = createSupervisedSandbox(sandboxBackends[name]!, {
+      workspace,
+      trust: supervisorTrust,
+      lock: advisoryLock,
+      blobTransfer,
+      apiBaseUrl: config.apiBaseUrl,
+      signingSecret: config.signingSecret,
+      capabilitySecret: config.capabilitySecret,
+    });
   }
   for (const backend of Object.values(config.sandboxScopeDefaults ?? {})) {
     if (backend && !sandboxBackends[backend]) throw new Error(`Scope sandbox backend ${backend} is not configured`);

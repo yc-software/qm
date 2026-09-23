@@ -5,6 +5,7 @@ export interface E2bCommandResult {
 }
 
 interface E2bRunOpts {
+  user?: string;
   timeoutMs?: number;
 }
 
@@ -22,7 +23,7 @@ export interface E2bSession {
   runCommand(command: string, opts?: E2bRunOpts): Promise<E2bCommandResult>;
 
   readFileBytes(absPath: string): Promise<Uint8Array | null>;
-  writeFileBytes(absPath: string, data: Uint8Array): Promise<void>;
+  writeFileBytes(absPath: string, data: Uint8Array, user?: string): Promise<void>;
   keepAlive(ms: number): Promise<void>;
   pause(): Promise<void>;
   createSnapshot(): Promise<{ snapshotId: string }>;
@@ -209,7 +210,11 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
         await cover(timeoutMs);
         let handle: Awaited<ReturnType<SdkSandbox["commands"]["run"]>>;
         try {
-          handle = await sbx.commands.run(command, { background: true, timeoutMs });
+          handle = await sbx.commands.run(command, {
+            background: true,
+            timeoutMs,
+            ...(runOpts?.user ? { user: runOpts.user } : {}),
+          });
         } catch (err) {
           if (isSandboxGone(lib, err)) throw new E2bCommandLostError(sbx.sandboxId, String((err as Error).message));
           throw err;
@@ -232,11 +237,11 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
           throw gone(err);
         }
       },
-      async writeFileBytes(absPath, data): Promise<void> {
+      async writeFileBytes(absPath, data, user): Promise<void> {
         const buf = new ArrayBuffer(data.byteLength);
         new Uint8Array(buf).set(data);
         try {
-          await sbx.files.write(absPath, buf);
+          await sbx.files.write(absPath, buf, user ? { user } : undefined);
         } catch (err) {
           throw gone(err);
         }

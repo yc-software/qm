@@ -65,6 +65,7 @@ async function main(): Promise<void> {
         s3Uri: `s3://${bucket}/${key}`,
         baseImageArn,
         buildRoleArn,
+        additionalOsCapabilities: ["ALL"],
         clientToken: `${imageName}-${Date.now()}`,
       })
     : await api.createImage({
@@ -72,6 +73,7 @@ async function main(): Promise<void> {
         s3Uri: `s3://${bucket}/${key}`,
         baseImageArn,
         buildRoleArn,
+        additionalOsCapabilities: ["ALL"],
         clientToken: `${imageName}-${Date.now()}`,
       });
   console.log(`[build] ${existing ? "update" : "create"}-microvm-image -> ${operation.imageArn} (building...)`);

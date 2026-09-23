@@ -180,10 +180,10 @@ test("scratch sandboxes are ephemeral and killed at release", async () => {
   assert.equal(fake.current(h.id), null);
 });
 
-test("teardown pauses the sandbox; destroy kills it", async () => {
+test("teardown retains a warm sandbox without saving process memory; destroy kills it", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h);
-  assert.equal(fake.current(h.id)?.state, "paused");
+  assert.equal(fake.current(h.id)?.state, "running");
   await sandbox.teardown(h, { destroy: true });
   assert.equal(fake.current(h.id), null);
 });
@@ -199,10 +199,11 @@ test("keepWarm teardown leaves the sandbox running for background work", async (
   assert.equal(await sandbox.readFile(b, "keep.txt"), "resident\n");
 });
 
-test("expired pause falls back to a fresh sandbox with home hydrated from the snapshot", async () => {
+test("expired sandbox falls back to a fresh sandbox with home hydrated from the snapshot", async () => {
   const a = await sandbox.provision(layers);
   await sandbox.writeFile(a, "keep.txt", "survives expiry\n");
   await sandbox.teardown(a);
+  fake.pause(scopeName());
   fake.expirePaused();
   const b = await sandbox.provision(layers);
   assert.equal(fake.createdCount(scopeName()), 2);
@@ -214,6 +215,7 @@ test("expired pause falls back to a fresh sandbox with home hydrated from the sn
 test("a sandbox that dies mid-turn is revived transparently for the next command", async () => {
   const h = await sandbox.provision(layers);
   fake.pause(h.id);
+  fake.pause(scopeName());
   fake.expirePaused();
   const r = await sandbox.run(h, "echo back");
   assert.equal(r.code, 0);
@@ -243,6 +245,7 @@ test("computerStatus probes the guest", async () => {
 test("computerStatus reports a gone sandbox as unprovisioned, not wedged", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h);
+  fake.pause(scopeName());
   fake.expirePaused();
   const status = await sandbox.computerStatus!(scope);
   assert.equal(status.guestResponsive, false);
@@ -260,10 +263,12 @@ test("file reads and writes revive a sandbox that died mid-turn", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.writeFile(h, "pre.txt", "before death\n");
   await sandbox.teardown(h);
+  fake.pause(scopeName());
   fake.expirePaused();
 
   const h2 = await sandbox.provision(layers);
   fake.pause(h2.id);
+  fake.pause(scopeName());
   fake.expirePaused();
   await sandbox.writeFile(h2, "post.txt", "after revival\n");
   assert.equal(await sandbox.readFile(h2, "post.txt"), "after revival\n");
@@ -283,6 +288,7 @@ test("computerStatus never provisions a sandbox", async () => {
 test("a scratch sandbox that dies mid-turn is revived as scratch, not as a durable scope sandbox", async () => {
   const h = await sandbox.provision(layers, { scratch: { key: "job-revive" } });
   fake.pause(h.id);
+  fake.pause(scopeName());
   fake.expirePaused();
   const r = await sandbox.run(h, "echo scratch-back");
   assert.equal(r.stdout.trim(), "scratch-back");
@@ -296,6 +302,7 @@ test("a failing snapshot store fails the fallback provision instead of cold-star
   const a = await s.provision(layers);
   await s.writeFile(a, "precious.txt", "irreplaceable\n");
   await s.teardown(a);
+  fake.pause(scopeName());
   fake.expirePaused();
   flaky.failReads(true);
   await assert.rejects(() => s.provision(layers), /hydration failed/);
@@ -313,13 +320,13 @@ test("adoptHomeSnapshot promotes a staged blob to the snapshot store and resets 
   await s.writeFile(a, "old.txt", "stale sprite-era sandbox\n");
   await s.teardown(a, { keepWarm: true });
 
-  const tar = await makeTar([{ path: "migrated.txt", data: Buffer.from("came from sprites\n") }]);
+  const tar = await makeTar([{ path: "workspace/migrated.txt", data: Buffer.from("came from sprites\n") }]);
   const { blobId } = await blobs.put(Readable.from([Buffer.from(tar)]));
   assert.ok(s.adoptHomeSnapshot);
   await s.adoptHomeSnapshot!(scope, blobId);
 
   const b = await s.provision(layers);
-  const migrated = await s.run(b, "cat ~/migrated.txt");
+  const migrated = await s.run(b, "cat ~/workspace/migrated.txt");
   assert.equal(migrated.stdout, "came from sprites\n", "hydrates from the adopted snapshot");
   assert.notEqual((await s.run(b, "cat ~/old.txt")).code, 0, "the pre-adopt sandbox was discarded, not reused");
 });
@@ -370,159 +377,63 @@ test("stageIn pulls a blob into the guest atomically (temp then mv)", async () =
   assert.match(script, /curl -fsS/, "-f so an HTTP error fails loudly instead of writing the error body");
 });
 
-test("native pause skips tar checkpoints and status does not wake a paused sandbox", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
+test("even a pause-capable provider uses portable snapshots and kill-on-expiry allocations", async () => {
   const portable = instrumentedSnapshotStore();
+  const options: Array<Parameters<typeof fake.client.create>[0]> = [];
+  let paused = 0;
+  let captured = 0;
   const client = {
     ...fake.client,
     nativePause: true,
-    async info() {
-      const current = fake.current(scopeName())!;
-      return { state: current.state, expiresAtMs: Date.now() + 60_000, onTimeout: "pause" };
-    },
-  };
-  const first = make({ client, store, snapshots: portable.store });
-  const handle = await first.provision(layers);
-  await first.writeFile(handle, "work.txt", "keep");
-  await first.teardown(handle);
-  assert.equal(portable.puts(), 0);
-  assert.equal((await store.get(scope))?.preservationState, "paused");
-  const status = await first.computerStatus!(scope);
-  assert.equal(status.lifecycleState, "paused");
-  assert.equal(fake.current(scopeName())?.state, "paused");
-  const restarted = make({ client, store, snapshots: portable.store });
-  const resumed = await restarted.provision(layers);
-  assert.equal(await restarted.readFile(resumed, "work.txt"), "keep");
-});
-
-test("legacy metadata adopts paused native state without reading a broken portable snapshot", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
-  const portable = instrumentedSnapshotStore();
-  const first = make({ store, snapshots: portable.store });
-  const handle = await first.provision(layers);
-  await first.writeFile(handle, "unpublished.txt", "newest native contents");
-  await first.teardown(handle);
-  const legacy = (await store.get(scope))!;
-  await store.put(scope, { sandboxId: legacy.sandboxId, createdAtMs: legacy.createdAtMs });
-  portable.failReads(true);
-  portable.failWrites(true);
-  const client = {
-    ...fake.client,
-    nativePause: true,
-    async info() {
-      return { state: fake.current(scopeName())!.state, expiresAtMs: Date.now() + 60_000, onTimeout: "pause" };
-    },
-  };
-  const restarted = make({ client, store, snapshots: portable.store });
-  const resumed = await restarted.provision(layers);
-  assert.equal(await restarted.readFile(resumed, "unpublished.txt"), "newest native contents");
-  await restarted.teardown(resumed);
-  assert.equal(fake.createdCount(scopeName()), 1);
-  assert.equal((await store.get(scope))?.nativePause, true);
-  assert.equal((await store.get(scope))?.preservationState, "paused");
-});
-
-test("pause failures are durable and visible and leave the source available for retry", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
-  let fail = true;
-  const client = {
-    ...fake.client,
-    nativePause: true,
-    async create(options: Parameters<typeof fake.client.create>[0]) {
-      const session = await fake.client.create(options);
+    async create(input: Parameters<typeof fake.client.create>[0]) {
+      options.push(input);
+      const session = await fake.client.create(input);
       return {
         ...session,
         async pause() {
-          if (fail) throw new Error("provider pause unavailable");
-          await session.pause();
+          paused++;
+        },
+        async createSnapshot() {
+          captured++;
+          return { snapshotId: "unexpected" };
         },
       };
     },
   };
-  const first = make({ client, store });
-  const handle = await first.provision(layers);
-  await assert.rejects(first.teardown(handle), /pause unavailable/);
-  assert.equal((await store.get(scope))?.preservationState, "pause_failed");
-  assert.equal(fake.current(scopeName())?.state, "running");
-  fail = false;
-  await first.teardown(handle);
-  assert.equal((await store.get(scope))?.preservationState, "paused");
-  assert.equal((await store.get(scope))?.preservationError, undefined);
+  const adapter = make({ client, snapshots: portable.store });
+  const handle = await adapter.provision(layers);
+  await adapter.writeFile(handle, "work.txt", "workspace survives");
+  await adapter.teardown(handle);
+  assert.equal(options[0]?.autoPause, false);
+  assert.equal(paused, 0);
+  assert.equal(captured, 0);
+  assert.equal(portable.puts(), 1);
+  assert.equal(fake.current(handle.id)?.state, "running");
+  fake.pause(handle.id);
+  fake.pause(scopeName());
+  fake.expirePaused();
+  const restored = await adapter.provision(layers);
+  assert.equal(await adapter.readFile(restored, "work.txt"), "workspace survives");
 });
 
-test("a lost native E2B sandbox without a recovery snapshot requires explicit recovery instead of a blank replacement", async () => {
+test("legacy native recovery refuses to load a memory snapshot and preserves its reference", async () => {
   const store = createMemoryMap<StoredE2bSandbox>();
-  const errors: string[] = [];
-  const client = {
-    ...nativeClient(),
-    async create(options: Parameters<typeof fake.client.create>[0]) {
-      const session = await fake.client.create(options);
-      return {
-        ...session,
-        async createSnapshot(): Promise<{ snapshotId: string }> {
-          throw new Error("snapshot quota exhausted");
-        },
-      };
-    },
-  };
-  const first = make({ client, store, onError: (e: { code: string }) => errors.push(e.code) });
-  const handle = await first.provision(layers);
-  await first.teardown(handle);
-  assert.equal(fake.current(scopeName())?.state, "paused", "a failed snapshot still lets the pause proceed");
-  assert.equal((await store.get(scope))?.recoveryError, "snapshot quota exhausted");
-  assert.deepEqual(errors, ["recovery_snapshot_failed"]);
-  const status = await first.computerStatus!(scope);
-  assert.equal(status.recovery?.error, "snapshot quota exhausted");
+  const session = await fake.client.create({ metadata: { name: scopeName() }, autoPause: true });
+  const checkpoint = await session.createSnapshot();
+  await store.put(scope, {
+    sandboxId: session.sandboxId,
+    createdAtMs: Date.now(),
+    nativePause: true,
+    recoverySnapshotId: checkpoint.snapshotId,
+    supervisorVersion: "1",
+  });
+  fake.pause(scopeName());
+  fake.pause(scopeName());
   fake.expirePaused();
-  const restarted = make({ client, store });
-  await assert.rejects(restarted.provision(layers), /explicitly import a recovery snapshot/);
+  const adapter = make({ store });
+  await assert.rejects(adapter.provision(layers), /workspace-only migration/);
+  assert.equal((await store.get(scope))?.recoverySnapshotId, checkpoint.snapshotId);
   assert.equal(fake.createdCount(scopeName()), 1);
-});
-
-test("a lost native E2B sandbox is replaced from its persistent recovery snapshot", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
-  const client = nativeClient();
-  const first = make({ client, store });
-  const handle = await first.provision(layers);
-  await first.writeFile(handle, "work.txt", "captured before the pause\n");
-  await first.teardown(handle);
-  const captured = (await store.get(scope))!;
-  assert.ok(captured.recoverySnapshotId, "used-turn teardown captures a provider snapshot");
-  assert.deepEqual(fake.snapshots(), [captured.recoverySnapshotId]);
-  const paused = await first.computerStatus!(scope);
-  assert.equal(paused.recovery?.checkpointId, captured.recoverySnapshotId);
-  assert.equal(paused.recovery?.checkpointExpiresAtMs, null);
-  fake.expirePaused();
-  const restarted = make({ client, store });
-  const revived = await restarted.provision(layers);
-  assert.equal(revived.coldStart, false);
-  assert.equal(fake.createdCount(scopeName()), 2);
-  assert.equal(fake.restoredFrom(scopeName()), captured.recoverySnapshotId);
-  assert.equal(await restarted.readFile(revived, "work.txt"), "captured before the pause\n");
-  assert.equal((await store.get(scope))?.sandboxId, fake.current(scopeName())?.sandboxId);
-  assert.equal((await store.get(scope))?.preservationState, "running");
-});
-
-test("recovery snapshots follow the native interval and supersede the previous capture", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
-  const client = { ...fake.client, nativePause: true };
-  const throttled = make({ client, store, nativeSnapshotIntervalMs: 60 * 60_000 });
-  const a = await throttled.provision(layers);
-  await throttled.teardown(a);
-  const b = await throttled.provision(layers);
-  await throttled.teardown(b);
-  assert.equal(fake.snapshots().length, 1, "second teardown inside the interval skips the capture");
-  const firstId = (await store.get(scope))!.recoverySnapshotId!;
-
-  const eager = make({ client, store, nativeSnapshotIntervalMs: 0 });
-  const c = await eager.provision(layers);
-  await eager.teardown(c);
-  const secondId = (await store.get(scope))!.recoverySnapshotId!;
-  assert.notEqual(secondId, firstId);
-  assert.deepEqual(fake.snapshots(), [secondId], "only the newest snapshot is retained");
-
-  await eager.destroyScope!(scope);
-  assert.deepEqual(fake.snapshots(), [], "destroying the scope deletes its snapshot");
 });
 
 test("legacy keepWarm teardown still takes its portable checkpoint", async () => {
@@ -545,7 +456,7 @@ test("a failing snapshot delete never wedges destroy", async () => {
   const s = make({ client, store });
   const h = await s.provision(layers);
   await s.teardown(h);
-  assert.ok((await store.get(scope))?.recoverySnapshotId);
+  await store.merge(scope, { recoverySnapshotId: "legacy-snapshot" });
   await s.destroyScope!(scope);
   assert.equal(await store.get(scope), null);
   assert.equal(fake.current(scopeName()), null);
@@ -700,4 +611,16 @@ test("repeated destroy teardown never targets an unrelated default scope", async
   await backend.teardown(handle, { destroy: true });
   assert.deepEqual(await store.get("default"), defaultRecord);
   assert.equal(await store.get(scope), null);
+});
+
+test("supervisor freshness belongs to the physical allocation and is not inferred when another adapter adopts it", async () => {
+  const handle = await sandbox.provision(layers);
+  const transport = sandbox.supervisorTransport!;
+  const identity = await transport.identity(handle);
+  assert.notEqual(identity, handle.id);
+  assert.equal(await transport.isFresh(handle), true);
+  const adopted = make();
+  const adoptedHandle = await adopted.provision(layers);
+  assert.equal(await adopted.supervisorTransport!.identity(adoptedHandle), identity);
+  assert.equal(await adopted.supervisorTransport!.isFresh(adoptedHandle), false);
 });

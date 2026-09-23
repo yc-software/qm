@@ -1012,11 +1012,17 @@ function buildWithCapture() {
     captured = opts?.env;
     return realProvision(layers, opts);
   };
-  return { built, env: () => captured };
+  let requested: Record<string, string> | undefined;
+  const realRun = built.sandbox.run.bind(built.sandbox);
+  built.sandbox.run = async (handle, command, opts) => {
+    if (opts?.credentials) requested = opts.credentials.env;
+    return realRun(handle, command, opts);
+  };
+  return { built, env: () => captured, requested: () => requested };
 }
 
-test("orchestrator stamps AGENT_CREDENTIAL_TOKEN with an org-wide credential's slug", async () => {
-  const { built, env } = buildWithCapture();
+test("orchestrator mints a broker capability only for the explicitly requested service", async () => {
+  const { built, env, requested } = buildWithCapture();
   await built.serviceCreds.setServiceCredential("org:default-org", {
     slug: "x-firehose",
     name: "X",
@@ -1033,8 +1039,12 @@ test("orchestrator stamps AGENT_CREDENTIAL_TOKEN with an org-wide credential's s
 
   const res = await built.app.turn(dm("!run echo hi"));
   assert.equal(res.status, "ok", res.reason);
-  const token = env()?.AGENT_CREDENTIAL_TOKEN;
-  assert.ok(token, "expected a credential-broker token in the sandbox env");
+  assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined);
+  assert.equal(requested(), undefined, "unrequested execution has no broker capability");
+  const selected = await built.app.turn(dm('!execute {"command":"true","credentials":["service_x-firehose"]}'));
+  assert.equal(selected.status, "ok", selected.reason);
+  const token = requested()?.AGENT_CREDENTIAL_TOKEN;
+  assert.ok(token, "only the requested execution receives the broker capability");
   const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
   assert.equal(claims?.aud, CREDENTIAL_BROKER_AUD);
   assert.deepEqual(claims?.credentials, ["x-firehose"]);
@@ -1053,12 +1063,44 @@ test("orchestrator stamps AGENT_CREDENTIAL_TOKEN with an org-wide credential's s
       audience: [actor],
       publishMembers: [actor],
     },
-    text: "!run echo bot",
+    text: '!execute {"command":"true","credentials":["service_x-firehose"]}',
   });
-  const botClaims = await verifyCapabilityToken(env()!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET);
+  const botClaims = await verifyCapabilityToken(requested()!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(botClaims?.botActor, true);
   assert.equal(botClaims?.liveActor, true);
   assert.deepEqual(botClaims?.members, [{ id: "B-LEGACY", type: "internal" }]);
+});
+
+test("service credential revocation after catalog discovery blocks secret resolution", async (t) => {
+  const { built, requested } = buildWithCapture();
+  await built.serviceCreds.setServiceCredential("org:default-org", {
+    slug: "late-revocation",
+    host: "late.example.com",
+    name: "Late revocation",
+    secret: "never-decrypt-me",
+    delivery: "env",
+    envKey: "LATE_TOKEN",
+  });
+  await built.acl.grant({
+    ownerScopeId: "org:default-org",
+    ref: "service-cred:late-revocation",
+    granteeScopeId: "org:default-org",
+    permission: "read",
+    grantedBy: "admin",
+  });
+  const secrets = t.mock.method(built.serviceCreds, "getServiceCredentialSecret");
+  const provision = built.sandbox.provision.bind(built.sandbox);
+  built.sandbox.provision = async (layers, opts) => {
+    const handle = await provision(layers, opts);
+    await built.acl.revoke("org:default-org", "service-cred:late-revocation", "org:default-org", "admin");
+    return handle;
+  };
+  await assert.rejects(
+    built.app.turn(dm('!execute {"command":"true","credentials":["service_late-revocation"]}')),
+    /no longer authorized/,
+  );
+  assert.equal(secrets.mock.callCount(), 0, "revoked grants never reach the decrypting store method");
+  assert.equal(requested(), undefined);
 });
 
 test("orchestrator does NOT stamp a credential granted only to someone else", async () => {
@@ -1082,8 +1124,8 @@ test("orchestrator does NOT stamp a credential granted only to someone else", as
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "an unentitled session must get no credential token");
 });
 
-test("a channel grantee stamps the credential in that channel's conversations and nowhere else", async () => {
-  const { built, env } = buildWithCapture();
+test("a channel grant exposes a requested handle only inside its authorized channel", async () => {
+  const { built, env, requested } = buildWithCapture();
   await built.serviceCreds.setServiceCredential("org:default-org", {
     slug: "x-firehose",
     name: "X",
@@ -1113,8 +1155,14 @@ test("a channel grantee stamps the credential in that channel's conversations an
 
   let res = await built.app.turn(channelTurn("C1"));
   assert.equal(res.status, "ok", res.reason);
-  const token = env()?.AGENT_CREDENTIAL_TOKEN;
-  assert.ok(token, "the granted channel's conversation should get a credential token");
+  assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined);
+  const selected = await built.app.turn({
+    ...channelTurn("C1"),
+    text: '!execute {"command":"true","credentials":["service_x-firehose"]}',
+  });
+  assert.equal(selected.status, "ok", selected.reason);
+  const token = requested()?.AGENT_CREDENTIAL_TOKEN;
+  assert.ok(token, "the authorized channel can request its credential");
   const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
   assert.deepEqual(claims?.credentials, ["x-firehose"]);
 
@@ -1125,6 +1173,10 @@ test("a channel grantee stamps the credential in that channel's conversations an
   res = await built.app.turn(dm("!run echo hi"));
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "a member's DM must not get a channel-granted credential");
+  await assert.rejects(
+    built.app.turn({ ...channelTurn("C2"), text: '!execute {"command":"true","credentials":["service_x-firehose"]}' }),
+    /credential handle is not available/i,
+  );
 });
 
 test("orchestrator stamps nothing when the org has no service credentials (zero-cost common path)", async () => {
@@ -1298,4 +1350,29 @@ test("usage summaries authorize before reads and include only the requested scop
   assert.deepEqual(body.summaries[0]!.recentUsagePrincipals, ["U1"]);
   assert.deepEqual(summarize.mock.calls[0]!.arguments, [["summary"]]);
   assert.doesNotMatch(JSON.stringify(body), /private|unlisted|U2/);
+});
+
+test("one execution composes selected broker credentials without authorizing other services", async () => {
+  const { built, requested } = buildWithCapture();
+  for (const slug of ["first", "second", "unrequested"]) {
+    await built.serviceCreds.setServiceCredential("org:default-org", {
+      slug,
+      name: slug,
+      secret: `secret-${slug}`,
+      host: `${slug}.example.com`,
+    });
+    await built.acl.grant({
+      ownerScopeId: "org:default-org",
+      ref: `service-cred:${slug}`,
+      granteeScopeId: "org:default-org",
+      permission: "read",
+      grantedBy: "admin",
+    });
+  }
+  const result = await built.app.turn(
+    dm('!execute {"command":"true","credentials":["service_first","service_second"]}'),
+  );
+  assert.equal(result.status, "ok", result.reason);
+  const claims = await verifyCapabilityToken(requested()!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.deepEqual(claims?.credentials, ["first", "second"]);
 });

@@ -81,10 +81,10 @@ const schemaProps = (tool: ReturnType<typeof createAgentTools>[number]): string[
 const schemaRequired = (tool: ReturnType<typeof createAgentTools>[number]): string[] =>
   (tool as unknown as { parameters: { required?: string[] } }).parameters.required ?? [];
 
-test("flag OFF: the execute surface is exactly the legacy one (no scope/durable, scoped box)", async () => {
+test("flag OFF: execute exposes credentials without scratch scope/durable routing", async () => {
   const { tc, seen } = sinkToolContext();
   const [execute] = createAgentTools({ current: tc });
-  assert.deepEqual(schemaProps(execute!), ["command", "sandbox_id", "purpose", "timeout_seconds"]);
+  assert.deepEqual(schemaProps(execute!), ["command", "sandbox_id", "purpose", "timeout_seconds", "credentials"]);
   assert.deepEqual(schemaRequired(execute!), ["command", "purpose"]);
   await call(execute, { command: "echo hi" });
   assert.deepEqual(seen, [{ command: "echo hi", opts: undefined }]);
@@ -94,7 +94,15 @@ test("flag ON: scope defaults to the durable scoped box; scratch is an explicit 
   const { tc, seen } = sinkToolContext();
   const ref: ToolContextRef = { current: tc };
   const [execute] = createAgentTools(ref, { scratchExec: true });
-  assert.deepEqual(schemaProps(execute!), ["command", "sandbox_id", "purpose", "timeout_seconds", "scope", "durable"]);
+  assert.deepEqual(schemaProps(execute!), [
+    "command",
+    "sandbox_id",
+    "purpose",
+    "timeout_seconds",
+    "credentials",
+    "scope",
+    "durable",
+  ]);
 
   await call(execute, { command: "echo hi" });
   assert.deepEqual(
@@ -233,16 +241,16 @@ test("a scratch-only turn still reclaims its box (reset + suspend) when the turn
 test("execute exposes only requested keychain environment values to one command", async () => {
   const seen: Array<Record<string, string> | undefined> = [];
   const sandbox = {
-    async run(handle: SandboxHandle) {
-      seen.push(handle.env);
+    async run(_handle: SandboxHandle, _command: string, opts?: import("../src/sandbox/sandbox.ts").ExecOptions) {
+      seen.push(opts?.credentials?.env);
       return { stdout: "ok", stderr: "", code: 0, timedOut: false };
     },
   } as unknown as Sandbox;
   const { ctx } = routingCtx({
     sandbox,
     commandCredentials: [
-      { handle: "kc_github12345", env: [{ key: "GITHUB_TOKEN", value: "secret" }] },
-      { handle: "kc_npm123456789", env: [{ key: "NPM_TOKEN", value: "other" }] },
+      { handle: "kc_github12345", resolve: async () => ({ env: [{ key: "GITHUB_TOKEN", value: "secret" }] }) },
+      { handle: "kc_npm123456789", resolve: async () => ({ env: [{ key: "NPM_TOKEN", value: "other" }] }) },
     ],
   });
 
@@ -258,8 +266,8 @@ test("execute exposes only requested keychain environment values to one command"
 test("execute rejects unavailable, conflicting, and scratch credential requests", async () => {
   const { ctx } = routingCtx({
     commandCredentials: [
-      { handle: "kc_one12345678", env: [{ key: "TOKEN", value: "one" }] },
-      { handle: "kc_two12345678", env: [{ key: "TOKEN", value: "two" }] },
+      { handle: "kc_one12345678", resolve: async () => ({ env: [{ key: "TOKEN", value: "one" }] }) },
+      { handle: "kc_two12345678", resolve: async () => ({ env: [{ key: "TOKEN", value: "two" }] }) },
     ],
   });
 

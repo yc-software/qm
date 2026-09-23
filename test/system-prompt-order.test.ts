@@ -80,10 +80,10 @@ const connectorStatusCache: ConnectorStatusCache = {
   put: async () => {},
 };
 const connectorTokens = {
-  connectorAccessToken: async () => null,
-  connectorTokenStatus: () => {
-    throw new Error("connector tokens must not be swept when the status cache is fresh");
+  connectorAccessToken: async () => {
+    throw new Error("prompt construction must never decrypt or refresh connector credentials");
   },
+  connectorTokenStatus: async () => ({ connected: false }),
 } as unknown as ConnectorTokenStore;
 
 const skills = {

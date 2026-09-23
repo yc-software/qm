@@ -1,7 +1,6 @@
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
 import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { createDeviceFlowCutoverStore } from "../src/credentials/device-flow-cutover.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -347,11 +346,10 @@ for (const fail of [false, true])
   });
 
 for (const shared of [false, true])
-  test(`explicit target receives the same credential cleanup and restore as default (${shared ? "isolated shared automation" : "personal"})`, async () => {
+  test(`explicit target removes resident credentials without restoring secrets like the default (${shared ? "isolated shared automation" : "personal"})`, async () => {
     const scripts: Array<{ id: string; script: string }> = [];
     const restoredTars: Array<{ id: string; bytes: Uint8Array }> = [];
     const scope = shared ? "channel:team" : "personal:alice";
-    const owner = shared ? scope : "alice";
     let failCleanupFor: string | undefined;
     const { resources, router } = fixture(
       (backend) => {
@@ -371,10 +369,6 @@ for (const shared of [false, true])
     );
     const record = await resources.create("admin", scope, "local");
     const owners: string[] = [];
-    const resetMarks: unknown[][] = [];
-    const cutover = createDeviceFlowCutoverStore(createMemoryMap(), { resets: createMemoryMap() });
-    await cutover.set(scope, "aws", "ephemeral_only", "admin");
-    await cutover.set(scope, "aws", "legacy", "admin");
     const turn = createTurnSandboxes({
       deps: {
         sandbox: router,
@@ -387,33 +381,7 @@ for (const shared of [false, true])
               { kind: "file", service: "gh", origin: "device-flow-auto-capture", targets: [".config/gh/hosts.yml"] },
             ];
           },
-          materializeOwnFiles: async (id: string) => {
-            owners.push(id);
-            return [
-              {
-                service: "aws",
-                origin: "device-flow-auto-capture",
-                files: [{ path: ".aws/config", contentBase64: Buffer.from("allowed-token").toString("base64") }],
-              },
-              {
-                service: "gh",
-                origin: "device-flow-auto-capture",
-                files: [
-                  {
-                    path: ".config/gh/hosts.yml",
-                    contentBase64: Buffer.from("quarantined-token").toString("base64"),
-                  },
-                ],
-              },
-            ];
-          },
-        },
-        deviceFlowCutover: {
-          ...cutover,
-          markResidentReset: async (...args: Parameters<typeof cutover.markResidentReset>) => {
-            resetMarks.push(args);
-            await cutover.markResidentReset(...args);
-          },
+          materializeOwnFiles: async () => assert.fail("provisioning cannot decrypt saved file credentials"),
         },
       },
       input: { origin: shared ? { kind: "automation", useOwnerKeychain: true } : { kind: "user" } },
@@ -453,8 +421,8 @@ for (const shared of [false, true])
     await assert.rejects(turn.provisionResource(record.id), /quarantine failed/);
     const explicit = await turn.provisionResource(record.id);
     assert.ok(owners.length >= 6);
-    assert.ok(owners.every((id) => id === owner));
-    assert.equal(resetMarks.length, 2);
+    assert.deepEqual(new Set(owners), new Set(shared ? [scope, "alice"] : ["alice"]));
+    assert.equal(restoredTars.length, 0, "provisioning must not materialize any saved credential");
     for (const handle of [defaultHandle, explicit]) {
       assert.ok(
         scripts.some(
@@ -465,10 +433,6 @@ for (const shared of [false, true])
             script.includes(".aws"),
         ),
       );
-      const tar = restoredTars.find(({ id }) => id === handle.id);
-      assert.ok(tar);
-      assert.ok(Buffer.from(tar.bytes).includes(Buffer.from("allowed-token")));
-      assert.ok(!Buffer.from(tar.bytes).includes(Buffer.from("quarantined-token")));
     }
   });
 

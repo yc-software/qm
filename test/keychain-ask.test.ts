@@ -1,4 +1,4 @@
-import "./support/auto-fake-sprites.ts";
+import { installGlobalFakeSprites } from "./support/fake-sprites.ts";
 
 import { test, describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -10,6 +10,7 @@ import type { Server } from "node:http";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
 import {
+  credentialHandle,
   createKeychain,
   renderKeychainManifest,
   KeychainError,
@@ -29,8 +30,10 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
-import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
+
+const sprites = installGlobalFakeSprites();
+after(() => sprites.cleanup());
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -642,6 +645,25 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
       body: JSON.stringify(body),
     });
   const get = (path: string, cap: string) => fetch(`${base}${path}`, { headers: { "x-agent-capability": cap } });
+  let executionSequence = 0;
+  const executeCredential = (scope: string, actorId: string, handle: string, envKey: string) => {
+    let kind: "dm" | "channel" | "group" = "group";
+    if (scope.startsWith("personal:")) kind = "dm";
+    else if (scope.startsWith("channel:")) kind = "channel";
+    return built.app.turn({
+      surface: "cron",
+      triggered: true,
+      actor: { externalId: actorId },
+      conversation: {
+        kind,
+        threadRef: `credential-execution:${scope}:${++executionSequence}`,
+        ...(kind !== "dm" ? { channelRef: scope.slice(scope.indexOf(":") + 1) } : {}),
+        audience: kind === "dm" ? [{ externalId: actorId }] : [{ externalId: "U_ALICE" }, { externalId: "U_BOB" }],
+      },
+      text: `!execute ${JSON.stringify({ command: `test -n "$${envKey}" && echo authenticated`, credentials: [handle] })}`,
+    });
+  };
+
   const waitFor = async <T>(probe: () => Promise<T[]>, ms = 5_000): Promise<T[]> => {
     const start = Date.now();
     for (;;) {
@@ -882,8 +904,16 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
       403,
     );
     const used = await post("/v1/keychain/use", { grant: body.grant.id }, await bobInInfra());
-    assert.equal(used.status, 200);
-    assert.equal(await used.text(), "export GITHUB_TOKEN='ghp_alice'\n");
+    assert.equal(used.status, 410);
+    assert.equal((await built.keychain!.getGrant(body.grant.id))?.status, "active");
+    assert.equal(
+      (await executeCredential("channel:C_INFRA", "U_BOB", body.use.credentialHandle, "GITHUB_TOKEN")).reply,
+      "authenticated",
+    );
+    await assert.rejects(
+      executeCredential("channel:C_INFRA", "U_BOB", body.use.credentialHandle, "GITHUB_TOKEN"),
+      /not available/,
+    );
   });
 
   it("decline flips the ask and fires exactly one resolution turn into the asking channel", async () => {
@@ -1026,7 +1056,11 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
         assert.equal(seed.status, "ok");
         const session = await built.sessions.getByThread(threadRef);
         assert.ok(session);
-        assert.equal((await post("/v1/keychain/use", { credential: credential.id }, token)).status, 403);
+        assert.equal((await post("/v1/keychain/use", { credential: credential.id }, token)).status, 410);
+        await assert.rejects(
+          executeCredential(scope, requesterId, credentialHandle(credential.id), "SHARED_QA_TOKEN"),
+          /not available/,
+        );
         const made = await post(
           "/v1/keychain/asks",
           { credential: credential.id, purpose: "run the synthetic shared check" },
@@ -1074,9 +1108,21 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
           ),
         );
         assert.equal(resumed.length, 1);
-        assert.equal((await post("/v1/keychain/use", { grant: grant.id }, await capFor(requesterId))).status, 403);
-        assert.equal((await post("/v1/keychain/use", { grant: grant.id }, token)).status, 200);
+        assert.equal((await post("/v1/keychain/use", { grant: grant.id }, await capFor(requesterId))).status, 410);
+        await assert.rejects(
+          executeCredential(`personal:${requesterId}`, requesterId, use.credentialHandle, "SHARED_QA_TOKEN"),
+          /not available/,
+        );
         assert.equal((await post("/v1/keychain/use", { grant: grant.id }, token)).status, 410);
+        assert.equal((await built.keychain!.getGrant(grant.id))?.status, "active");
+        assert.equal(
+          (await executeCredential(scope, requesterId, use.credentialHandle, "SHARED_QA_TOKEN")).reply,
+          "authenticated",
+        );
+        await assert.rejects(
+          executeCredential(scope, requesterId, use.credentialHandle, "SHARED_QA_TOKEN"),
+          /not available/,
+        );
       });
     }
   }
@@ -1159,8 +1205,12 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
       const session = await built.sessions.getByThread(threadRef);
       assert.ok(session);
       const denied = await post("/v1/keychain/use", { credential: credential.id }, token);
-      assert.equal(denied.status, 403);
-      assert.match(((await denied.json()) as any).message, /keychain\/asks/);
+      assert.equal(denied.status, 410);
+      assert.equal(((await denied.json()) as any).error, "execute_credentials_required");
+      await assert.rejects(
+        executeCredential(personal, "U_ALICE", credential.credentialHandle, "CRON_QA_TOKEN"),
+        /not available/,
+      );
       const requested = await post(
         "/v1/keychain/asks",
         { credential: credential.id, purpose: "read-only dummy scheduled check", requestedMode: mode },
@@ -1212,14 +1262,28 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
         ),
       );
       assert.equal(resumed.length, 1);
-      assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, await capFor("U_BOB"))).status, 403);
-      assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, token)).status, 200);
-      const second = await post("/v1/keychain/use", { grant: approved.grant.id }, token);
-      assert.equal(second.status, mode === "standing" ? 200 : 410);
+      assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, await capFor("U_BOB"))).status, 410);
+      await assert.rejects(
+        executeCredential("personal:U_BOB", "U_BOB", approved.use.credentialHandle, "CRON_QA_TOKEN"),
+        /not available/,
+      );
+      assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, token)).status, 410);
+      assert.equal((await built.keychain!.getGrant(approved.grant.id))?.status, "active");
+      assert.equal(
+        (await executeCredential(personal, "U_ALICE", approved.use.credentialHandle, "CRON_QA_TOKEN")).reply,
+        "authenticated",
+      );
       if (mode === "standing") {
+        assert.equal(
+          (await executeCredential(personal, "U_ALICE", approved.use.credentialHandle, "CRON_QA_TOKEN")).reply,
+          "authenticated",
+        );
         assert.equal((await post(`/v1/keychain/grants/${approved.grant.id}/revoke`, {}, live)).status, 200);
-        assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, token)).status, 410);
       }
+      await assert.rejects(
+        executeCredential(personal, "U_ALICE", approved.use.credentialHandle, "CRON_QA_TOKEN"),
+        /not available/,
+      );
     });
   }
 
@@ -1239,7 +1303,11 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
     assert.equal((await post(`/v1/keychain/asks/${ask.id}/decline`, {}, token)).status, 403);
     assert.equal((await post(`/v1/keychain/asks/${ask.id}/decline`, { note: "no" }, live)).status, 200);
     assert.equal((await built.keychain!.getAsk(ask.id))?.status, "declined");
-    assert.equal((await post("/v1/keychain/use", { credential: credential.id }, token)).status, 403);
+    assert.equal((await post("/v1/keychain/use", { credential: credential.id }, token)).status, 410);
+    await assert.rejects(
+      executeCredential("personal:U_ALICE", "U_ALICE", credential.credentialHandle, "CRON_QA_TOKEN"),
+      /not available/,
+    );
     assert.equal(
       (
         await post(
@@ -1294,19 +1362,16 @@ test("turn e2e: trigger-fired turns mint `triggered` into the capability token; 
       apiBaseUrl: "http://core.test",
     }),
   );
-  // The recorded script is the backend's OUTER `sh -c` wrapper, so the export's single quotes
-  // arrive shell-escaped — match the token's own alphabet instead of the quoting around it.
-  const extractToken = (since: number): CapabilityClaims | null => {
-    for (const script of fakeSprites.execScripts().slice(since)) {
-      const m = /export AGENT_API_TOKEN=\W*([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)/.exec(script);
-      if (!m) continue;
-      const token = m[1]!;
-      return JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString("utf8")) as CapabilityClaims;
-    }
-    return null;
+  let captured: string | undefined;
+  const provision = built.sandbox.provision.bind(built.sandbox);
+  built.sandbox.provision = async (layers, options) => {
+    captured = options?.env?.AGENT_API_TOKEN;
+    return provision(layers, options);
   };
-
-  let mark = fakeSprites.execScripts().length;
+  const extractToken = (): CapabilityClaims | null =>
+    captured
+      ? (JSON.parse(Buffer.from(captured.split(".")[1]!, "base64url").toString("utf8")) as CapabilityClaims)
+      : null;
   const turn = (triggered: boolean): TurnRequest =>
     ({
       surface: triggered ? "keychain-ask" : "slack",
@@ -1317,14 +1382,14 @@ test("turn e2e: trigger-fired turns mint `triggered` into the capability token; 
     }) as TurnRequest;
 
   assert.equal((await built.app.turn(turn(false))).status, "ok");
-  const human = extractToken(mark);
+  const human = extractToken();
   assert.ok(human, "the turn exported a capability token into the sandbox");
   assert.equal(human!.triggered, undefined, "a surface-authenticated human turn carries no triggered claim");
   assert.equal(human!.threadRef, "ch:C9-t", "the token carries the conversation threadRef for ask continuity");
 
-  mark = fakeSprites.execScripts().length;
+  captured = undefined;
   assert.equal((await built.app.turn(turn(true))).status, "ok");
-  const fired = extractToken(mark);
+  const fired = extractToken();
   assert.ok(fired);
   assert.equal(fired!.triggered, true, "a trigger-fired turn's token says so — consent routes refuse it");
 });

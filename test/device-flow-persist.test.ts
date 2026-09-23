@@ -19,7 +19,11 @@ import {
 } from "../src/credentials/device-flow-persist.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
-import { testConfig } from "./support/test-config.ts";
+import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
+import { createServer } from "../src/api/server.ts";
+import type { AddressInfo } from "node:net";
+import { shq } from "../src/util/shell.ts";
+import { credentialHandle } from "../src/credentials/keychain.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -312,7 +316,7 @@ test("a browser profile under ~/.config no longer trips the capture — neither 
   assert.ok(!(await k.listByOwner("U1")).some((c) => c.service === "chromium-headless"), "and never stored");
 });
 
-test("materialize round-trip: login → machine replaced → files restored 0600 behind the symlinks", async () => {
+test("legacy materialize round-trip restores private regular files without persistent home symlinks", async () => {
   const sb = sprites();
   const k = kc();
   const layers = rw(scopeId("personal", "U1"));
@@ -334,8 +338,8 @@ test("materialize round-trip: login → machine replaced → files restored 0600
   assert.equal(restored.code, 0, restored.stderr);
   assert.match(restored.stdout, /glpat_SECRET/);
   assert.match(restored.stdout, /600/);
-  const link = await sb.run(h2, "readlink ~/.config/glab >/dev/null && echo islink");
-  assert.match(link.stdout, /islink/);
+  const regular = await sb.run(h2, "test ! -L ~/.config/glab && test -f ~/.config/glab/config.yml && echo regular");
+  assert.equal(regular.stdout.trim(), "regular");
 });
 
 test("materialize never overwrites a file already on disk — the live machine's login wins", async () => {
@@ -415,11 +419,12 @@ test("ACMECLI quarantine removes the canonical root even with no record or a sta
   );
 });
 
-function freshApp() {
+function freshApp(apiBaseUrl?: string) {
   return buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "dfp-app-")),
-      signingSecret: "device-flow-test-secret",
+      ...(apiBaseUrl ? { apiBaseUrl } : {}),
+      signingSecret: "device-flow-test-secret".repeat(3),
     }),
   );
 }
@@ -427,7 +432,7 @@ function freshApp() {
 const actor = { externalId: "U1" };
 
 function dm(text: string): TurnRequest {
-  return { surface: "test", actor, conversation: { kind: "dm", threadRef: "dm:U1:t1" }, text };
+  return { surface: "test", actor, conversation: { kind: "dm", threadRef: "dm:U1:t1" }, liveActor: true, text };
 }
 
 function channel(text: string): TurnRequest {
@@ -439,56 +444,89 @@ function channel(text: string): TurnRequest {
   };
 }
 
-test("a DM turn auto-captures a device-flow login under the PERSON, and a fresh machine gets it back", async () => {
-  const { app, keychain } = freshApp();
-  const res = await app.turn(
-    dm("!run mkdir -p ~/.config/gh && printf 'oauth_token: gho_E2E' > ~/.config/gh/hosts.yml && echo done"),
+async function loginApi(built: ReturnType<typeof freshApp>) {
+  const server = createServer(built.app, {
+    signingSecret: "device-flow-test-secret".repeat(3),
+    capabilitySecret: TEST_CAPABILITY_SECRET,
+    keychain: built.keychain,
+    auditLog: built.auditLog,
+    identity: built.identity,
+  });
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const provision = built.sandbox.provision.bind(built.sandbox);
+  built.sandbox.provision = (layers, options) =>
+    provision(layers, { ...options, env: { ...options?.env, AGENT_API_URL: base } });
+  return () => new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
+const saveLogin = () =>
+  "mkdir -p ~/.config/gh && printf 'oauth_token: gho_E2E' > ~/.config/gh/hosts.yml && " +
+  `python3 -c ${shq(`import os,json,base64,urllib.request,urllib.error
+p=os.path.join(os.environ["HOME"],".config/gh/hosts.yml")
+data=json.dumps({"service":"gh","files":[{"path":".config/gh/hosts.yml","contentBase64":base64.b64encode(open(p,"rb").read()).decode()}]}).encode()
+request=urllib.request.Request(os.environ["AGENT_API_URL"]+"/v1/keychain/credentials",data=data,headers={"content-type":"application/json","x-agent-capability":os.environ["AGENT_API_TOKEN"]})
+try:
+ response=urllib.request.urlopen(request)
+ print(json.load(response)["credential"]["credentialHandle"])
+except urllib.error.HTTPError as error:
+ print("save-failed:"+str(error.code))
+ raise SystemExit(1)`)} `;
+
+test("a DM explicitly saves login files before execution ends and restores only when requested", async (t) => {
+  const built = freshApp("http://core.test");
+  t.after(await loginApi(built));
+  const saved = await built.app.turn(dm(`!run ${saveLogin()}`));
+  assert.equal(saved.status, "ok", saved.reason);
+  const handle = saved.reply!;
+  assert.match(handle, /^kc_[a-f0-9]{12}$/);
+  const records = await built.keychain!.listByOwner("U1");
+  assert.equal(records.find((credential) => credential.service === "gh")?.kind, "file");
+  const absent = "!run test ! -e ~/.config/gh/hosts.yml && echo absent";
+  assert.equal((await built.app.turn(dm(absent))).reply, "absent");
+  const selected = `!execute ${JSON.stringify({ command: 'test "$(cat ~/.config/gh/hosts.yml)" = "oauth_token: gho_E2E" && echo authenticated', credentials: [handle] })}`;
+  assert.equal((await built.app.turn(dm(selected))).reply, "authenticated");
+  assert.equal((await built.app.turn(dm(absent))).reply, "absent");
+  const computer = await built.sandbox.provision(rw("personal:U1"));
+  await built.sandbox.teardown(computer, { destroy: true });
+  assert.equal(ff.names().includes(computer.id), false, "the physical computer was destroyed");
+  assert.equal((await built.app.turn(dm(absent))).reply, "absent");
+  assert.equal(
+    (await built.app.turn(dm(selected))).reply,
+    "authenticated",
+    "the registered bundle survives machine replacement",
   );
-  assert.equal(res.status, "ok");
-
-  const records = await keychain!.listByOwner("U1");
-  const gh = records.find((c) => c.service === "gh");
-  assert.ok(gh, "post-turn capture persisted the login under the actor");
-  assert.equal(gh!.kind, "file");
-
-  for (const name of ff.names()) rmSync(ff.homeDir(name), { recursive: true, force: true });
-  const back = await app.turn(dm("!run cat ~/.config/gh/hosts.yml"));
-  assert.equal(back.status, "ok");
-  assert.match(back.reply ?? "", /gho_E2E/, "auth survived machine replacement");
+  assert.equal((await built.app.turn(dm(absent))).reply, "absent");
 });
 
-test("a login performed on a shared channel box is keyed to the SCOPE, like its workspace", async () => {
+test("an unregistered shared login disappears without creating personal or scope credentials", async () => {
   const { app, keychain } = freshApp();
-  const res = await app.turn(
-    channel("!run mkdir -p ~/.config/glab && printf 'token: glpat_CH' > ~/.config/glab/config.yml && echo done"),
+  assert.equal(
+    (
+      await app.turn(
+        channel("!run mkdir -p ~/.config/glab && printf 'token: glpat_CH' > ~/.config/glab/config.yml && echo done"),
+      )
+    ).reply,
+    "done",
   );
-  assert.equal(res.status, "ok", res.reason);
-
-  assert.equal((await keychain!.listByOwner("U1")).length, 0, "no personal record from a channel turn");
-  const scoped = await keychain!.listByOwner(scopeId("channel", "C1"));
-  assert.equal(scoped.find((c) => c.service === "glab")?.kind, "file");
+  assert.deepEqual(await keychain!.listByOwner("U1"), []);
+  assert.deepEqual(await keychain!.listByOwner(scopeId("channel", "C1")), []);
+  assert.equal((await app.turn(channel("!run test ! -e ~/.config/glab/config.yml && echo absent"))).reply, "absent");
 });
 
-test("a capture failure is logged as an error event and does NOT fail the turn", async () => {
-  const { app, keychain, errors } = freshApp();
-  const realSave = keychain!.save.bind(keychain!);
-  keychain!.save = async () => {
+test("a failed explicit login save is visible and the private files never survive for an implicit retry", async (t) => {
+  const built = freshApp("http://core.test");
+  t.after(await loginApi(built));
+  t.mock.method(built.keychain!, "save", async () => {
     throw new Error("injected keychain outage");
-  };
-  const res = await app.turn(
-    dm("!run mkdir -p ~/.config/gh && printf 'oauth_token: gho_X' > ~/.config/gh/hosts.yml && echo done"),
-  );
-  assert.equal(res.status, "ok", "capture is best-effort — the turn still succeeds");
-  const logged = (await errors.list()).find((e) => e.code === "device_flow_capture_failed");
-  assert.ok(logged, "the failure is durably visible to operators");
-
-  keychain!.save = realSave;
-  const retry = await app.turn(dm("!run echo retry"));
-  assert.equal(retry.status, "ok");
-  assert.ok((await keychain!.listByOwner("U1")).some((c) => c.service === "gh"));
+  });
+  const failed = await built.app.turn(dm(`!run ${saveLogin()}`));
+  assert.equal(failed.reply, "save-failed:500");
+  assert.deepEqual(await built.keychain!.listByOwner("U1"), []);
+  assert.equal((await built.app.turn(dm("!run test ! -e ~/.config/gh/hosts.yml && echo absent"))).reply, "absent");
 });
 
-test("removing platform credential vending preserves stored quarantine on personal and shared sandboxes", async () => {
+test("cutover policies never restore unrequested file credentials on personal or shared computers", async () => {
   for (const shared of [false, true]) {
     const built = buildApp(
       testConfig({
@@ -500,14 +538,14 @@ test("removing platform credential vending preserves stored quarantine on person
     const request = shared ? channel("!run echo ready") : dm("!run echo ready");
     const ownerId = shared ? scopeId("channel", "C1") : "U1";
     const targetScope = shared ? scopeId("channel", "C1") : scopeId("personal", "U1");
-    await built.keychain!.save({
+    const credential = await built.keychain!.save({
       ownerId,
       service: "acmecli",
       files: [{ path: ".acmecli/session.json", contentBase64: Buffer.from("stored-login").toString("base64") }],
       origin: DEVICE_FLOW_ORIGIN,
     });
-    const read = "!run cat ~/.acmecli/session.json";
-    assert.equal((await built.app.turn({ ...request, text: read })).reply, "stored-login");
+    const read = `!execute ${JSON.stringify({ command: 'test "$(cat ~/.acmecli/session.json)" = stored-login && echo authenticated', credentials: [credentialHandle(credential.id)] })}`;
+    assert.equal((await built.app.turn({ ...request, text: read })).reply, "authenticated");
     await built.deviceFlowCutover.set(targetScope, "acmecli", "ephemeral_only", "security@example.com");
     const hidden = await built.app.turn({
       ...request,
@@ -515,8 +553,9 @@ test("removing platform credential vending preserves stored quarantine on person
     });
     assert.equal(hidden.reply, "absent");
     assert.ok((await built.keychain!.listByOwner(ownerId)).some((record) => record.service === "acmecli"));
+    assert.equal((await built.app.turn({ ...request, text: read })).reply, "authenticated");
     await built.deviceFlowCutover.set(targetScope, "acmecli", "legacy", "security@example.com");
-    assert.equal((await built.app.turn({ ...request, text: read })).reply, "stored-login");
+    assert.equal((await built.app.turn({ ...request, text: read })).reply, "authenticated");
   }
 });
 
@@ -1091,40 +1130,44 @@ test("a concurrent-save race skips that service and retries it on the next captu
   assert.deepEqual(second, ["racy"], "the raced service re-ships and saves on the next capture");
 });
 
-test("removed layer tools retain quarantine, capture exclusion and reset-to-legacy", async () => {
+test("removed tools remain on-demand across cutover changes and execution mutations never replace stored files", async () => {
   for (const shared of [false, true]) {
     const built = buildApp(
       testConfig({ dataDir: mkdtempSync(join(tmpdir(), "dfp-removed-tool-")), signingSecret: "test" }),
     );
     assert.equal(built.credentialTools.length, 0);
-    const request = shared ? channel("!run echo ready") : dm("!run echo ready");
+    const request = shared ? channel("!run true") : dm("!run true");
     const ownerId = shared ? scopeId("channel", "C1") : "U1";
     const targetScope = shared ? scopeId("channel", "C1") : scopeId("personal", "U1");
-    await built.keychain!.save({
+    const credential = await built.keychain!.save({
       ownerId,
       service: "retired",
       files: [{ path: ".retired/session", contentBase64: Buffer.from("stored-login").toString("base64") }],
       origin: DEVICE_FLOW_ORIGIN,
     });
-    const read = "!run cat ~/.retired/session";
-    assert.equal((await built.app.turn({ ...request, text: read })).reply, "stored-login");
-    await built.deviceFlowCutover.set(targetScope, "retired", "ephemeral_only", "admin");
+    const credentials = [credentialHandle(credential.id)];
+    for (const mode of ["ephemeral_only", "prefer_ephemeral", "legacy"] as const) {
+      await built.deviceFlowCutover.set(targetScope, "retired", mode, "admin");
+      assert.equal(
+        (await built.app.turn({ ...request, text: "!run test ! -e ~/.retired/session && echo absent" })).reply,
+        "absent",
+      );
+      const command =
+        'test "$(cat ~/.retired/session)" = stored-login && printf tampered > ~/.retired/session && echo authenticated';
+      assert.equal(
+        (await built.app.turn({ ...request, text: `!execute ${JSON.stringify({ command, credentials })}` })).reply,
+        "authenticated",
+      );
+    }
+    await built.deviceFlowCutover.clear(targetScope, "retired");
+    const command = 'test "$(cat ~/.retired/session)" = stored-login && echo unchanged';
     assert.equal(
-      (await built.app.turn({ ...request, text: "!run test -e ~/.retired/session && echo found || echo absent" }))
-        .reply,
+      (await built.app.turn({ ...request, text: `!execute ${JSON.stringify({ command, credentials })}` })).reply,
+      "unchanged",
+    );
+    assert.equal(
+      (await built.app.turn({ ...request, text: "!run test ! -e ~/.retired/session && echo absent" })).reply,
       "absent",
     );
-    await built.app.turn({ ...request, text: "!run mkdir -p ~/.retired && printf tampered > ~/.retired/session" });
-    const stored = (await built.keychain!.listByOwner(ownerId)).find((record) => record.service === "retired")!;
-    const files = await built.keychain!.materializeOwn(ownerId);
-    assert.equal(files.length, 0);
-    assert.ok(stored);
-    await built.deviceFlowCutover.set(targetScope, "retired", "prefer_ephemeral", "admin");
-    assert.equal((await built.app.turn({ ...request, text: read })).reply, "tampered");
-    await built.deviceFlowCutover.clear(targetScope, "retired");
-    assert.equal((await built.app.turn({ ...request, text: read })).reply, "stored-login");
-    await built.deviceFlowCutover.set(targetScope, "retired", "ephemeral_only", "admin");
-    await built.deviceFlowCutover.set(targetScope, "retired", "legacy", "admin");
-    assert.equal((await built.app.turn({ ...request, text: read })).reply, "stored-login");
   }
 });

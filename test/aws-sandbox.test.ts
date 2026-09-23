@@ -59,7 +59,7 @@ test("an already-aborted command neither resumes the body nor executes", async (
   assert.equal(fake.commands.length, commandCount);
 });
 
-test("declared credential paths are symlinked outside the snapshotted home", async () => {
+test("provision does not materialize declared credentials and excludes legacy paths from snapshots", async () => {
   const fake = installFakeMicrovm();
   const sb = makeSandbox(fake, {
     snapshotIntervalMs: 0,
@@ -70,8 +70,7 @@ test("declared credential paths are symlinked outside the snapshotted home", asy
   });
   const handle = await sb.provision(rw(scopeId("personal", "U-creds")));
   const setup = fake.commands.find((command) => command.includes("/tmp/agent-creds/.acmecli"));
-  assert.ok(setup);
-  assert.match(setup, /ln -s '\/tmp\/agent-creds\/\.acmecli' '\/root\/\.acmecli'/);
+  assert.equal(setup, undefined);
   await sb.teardown(handle);
   const snapshot = fake.commands.find((command) => command.includes("agent-home.tar"));
   assert.match(snapshot ?? "", /-path '\.\/\.acmecli'/);
@@ -285,7 +284,7 @@ test("destructive teardown of a stale AWS handle preserves a replacement scope",
   await sb.teardown(replacement);
   await sb.teardown(old, { destroy: true });
   assert.equal(fake.bodies.get(replacement.id)!.state, "SUSPENDED");
-  assert.equal(fake.s3store.size, 1);
+  assert.equal(fake.s3store.size, 2, "current workspace snapshot and preserved pre-migration home");
   assert.equal((await sb.provision(layers)).id, replacement.id);
 });
 

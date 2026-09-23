@@ -68,6 +68,32 @@ test("streams and exit codes are exact", async () => {
   assert.equal(r.stderr.trim(), "err");
 });
 
+test("fake exec preserves child output and status when the child closes stdin early", async () => {
+  const h = await sandbox.provision(layers);
+  for (const code of [0, 7]) {
+    const url = new URL(`/v1/sprites/${h.id}/exec`, fake.baseUrl.replace(/^http/, "ws"));
+    for (const arg of ["sh", "-c", `exec 0<&-; echo out; echo err >&2; exit ${code}`])
+      url.searchParams.append("cmd", arg);
+    const frames = await new Promise<Buffer[]>((resolve, reject) => {
+      const received: Buffer[] = [];
+      const socket = new WebSocket(url);
+      socket.binaryType = "arraybuffer";
+      socket.addEventListener("error", reject);
+      socket.addEventListener("message", (event) => received.push(Buffer.from(event.data as ArrayBuffer)));
+      socket.addEventListener("close", () => resolve(received));
+      socket.addEventListener("open", () => {
+        socket.send(Buffer.concat([Buffer.from([0]), Buffer.alloc(8 * 1024 * 1024, 120)]));
+        socket.send(Buffer.from([4]));
+      });
+    });
+    assert.deepEqual(frames, [
+      Buffer.from([1, ...Buffer.from("out\n")]),
+      Buffer.from([2, ...Buffer.from("err\n")]),
+      Buffer.from([3, code]),
+    ]);
+  }
+});
+
 test("commands run over the WebSocket exec endpoint with the script in the stream, never the URL", async () => {
   const h = await sandbox.provision(layers);
   const huge = `echo start; : ${"x".repeat(1024 * 1024)}; echo end`;
@@ -580,7 +606,7 @@ test("destroying a scope exports the home to the snapshot store first and a repl
   const snapshots = createMemorySnapshotStore();
   const s = make({ snapshots });
   const h = await s.provision(layers);
-  await s.run(h, 'printf survivor > "$HOME/notes.txt"');
+  await s.run(h, 'printf survivor > "$HOME/workspace/notes.txt"');
   assert.equal(await snapshots.open(scope), null);
 
   await s.destroyScope!(scope);
@@ -590,7 +616,7 @@ test("destroying a scope exports the home to the snapshot store first and a repl
 
   const again = await s.provision(layers);
   assert.equal(again.coldStart, false, "the replacement is hydrated, not cold");
-  const back = await s.run(again, 'cat "$HOME/notes.txt"');
+  const back = await s.run(again, 'cat "$HOME/workspace/notes.txt"');
   assert.equal(back.stdout, "survivor");
   assert.equal(typeof s.persistHomeSnapshot, "function", "explicit export is offered when a store is wired");
   assert.equal(typeof make().persistHomeSnapshot, "undefined");
@@ -709,4 +735,14 @@ test("failed hydration and failed deletion remain pending across adapters withou
   const restored = await make(options).provision(layers);
   assert.equal(await b.readFile(restored, "ledger"), "saved");
   assert.equal(await initializationStore.get(h.id), null);
+});
+
+test("trusted supervised process hold watches the private supervisor process root", async () => {
+  const h = await sandbox.provision(layers);
+  const id = "00000000-0000-0000-0000-000000000000";
+  await sandbox.supervisorTransport!.processStarted!(h, id);
+  const keepalive = fake.execScripts().find((command) => command.includes(`/run/qm-supervisor/processes/${id}`));
+  assert.ok(keepalive);
+  assert.ok(keepalive.includes(`/v1/tasks/qm-proc-${id}`));
+  assert.ok(keepalive.includes("|| exit 1"));
 });

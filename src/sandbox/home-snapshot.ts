@@ -17,6 +17,37 @@ import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persisten
 import { displacedPruneGlobs } from "../credentials/resident-paths.ts";
 import type { TeardownOptions } from "./sandbox.ts";
 
+const RESTORE_WORKSPACE = [
+  "import os,pathlib,shutil,stat,sys,tarfile,tempfile",
+  "home=pathlib.Path(sys.argv[1])",
+  "archive=sys.argv[2]",
+  "for parent in [home,*home.parents]:",
+  " info=parent.lstat()",
+  " assert stat.S_ISDIR(info.st_mode) and info.st_uid in (0,os.geteuid()) and (not info.st_mode & 0o022 or str(parent) in ['/tmp','/private/tmp']), 'Unsafe snapshot home'",
+  "stage=pathlib.Path(tempfile.mkdtemp(prefix='.qm-workspace-restore-',dir=home))",
+  "try:",
+  " with tarfile.open(archive,'r:') as tar:",
+  "  for item in tar:",
+  "   path=pathlib.PurePosixPath(item.name)",
+  "   if path.is_absolute() or '..' in path.parts: raise ValueError('Unsafe snapshot member')",
+  "   if not path.parts or path.parts[0]!='workspace': continue",
+  "   relative=path.parts[1:]",
+  "   if not relative: continue",
+  "   destination=stage.joinpath(*relative)",
+  "   if item.isdir(): destination.mkdir(parents=True,exist_ok=True); continue",
+  "   if not item.isfile(): continue",
+  "   destination.parent.mkdir(parents=True,exist_ok=True)",
+  "   with tar.extractfile(item) as source, open(destination,'wb') as output: shutil.copyfileobj(source,output)",
+  "   destination.chmod(item.mode & 0o777 & ~0o022)",
+  " target=home/'workspace'",
+  " if target.exists() or target.is_symlink():",
+  "  assert target.is_dir() and not target.is_symlink() and not any(target.iterdir()), 'Workspace already populated; refusing snapshot overwrite'",
+  "  target.rmdir()",
+  " os.replace(stage,target)",
+  "finally:",
+  " if stage.exists(): shutil.rmtree(stage)",
+].join("\n");
+
 const SNAPSHOT_PART_BYTES = 64 * 1024 * 1024;
 const SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const SNAPSHOT_TIMEOUT_MS = 10 * 60_000;
@@ -367,6 +398,9 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
       if (!stored) return false;
       if (!Number.isSafeInteger(stored.size) || stored.size <= 0)
         throw new Error(`${label} hydrate: invalid snapshot size ${stored.size}`);
+      const backupScope = `${scope}/pre-supervisor-home`;
+      const backup = (await store.open(backupScope)) ? undefined : await store.createUpload(backupScope);
+      let backupComplete = false;
       try {
         const started = await run(session, `mkdir -p ${shq(homeDir)} && : > ${shq(homeTarPath)}`, 30_000, left);
         if (started.exitCode !== 0)
@@ -377,10 +411,15 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
           total += piece.length;
           if (total > stored.size)
             throw new Error(`${label} hydrate: received ${total} bytes, expected ${stored.size}`);
+          if (backup) await backup.addPart(piece);
           await writePart(session, i++, piece, left);
         }
         if (total !== stored.size)
           throw new Error(`${label} hydrate: received ${total} bytes, expected ${stored.size}`);
+        if (backup) {
+          await backup.complete();
+          backupComplete = true;
+        }
         const written = await tarSize(session, left);
         if (written !== stored.size)
           throw new Error(`${label} hydrate: wrote ${written} bytes, expected ${stored.size}`);
@@ -389,13 +428,15 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
           throw new Error(`${label} hydrate archive invalid: ${validated.stderr.slice(0, 200)}`);
         const r = await run(
           session,
-          `cd ${shq(homeDir)} && tar -xf ${shq(homeTarPath)}; rc=$?; rm -f ${shq(homeTarPath)}; exit $rc`,
+          `python3 -I -c ${shq(RESTORE_WORKSPACE)} ${shq(homeDir)} ${shq(homeTarPath)}`,
           180_000,
           left,
         );
         if (r.exitCode !== 0) throw new Error(`${label} hydrate extract failed: ${r.stderr.slice(0, 200)}`);
         return true;
       } finally {
+        if (backup && !backupComplete)
+          await backup.abort().catch(swallowAs(`${label}-sandbox: migration backup abort`, undefined));
         await removeScratch(session, "hydrate cleanup");
       }
     },

@@ -1,3 +1,4 @@
+import { createSupervisorTransport } from "./supervisor-transport.ts";
 import { randomUUID } from "node:crypto";
 import { setTimeout as wait } from "node:timers/promises";
 import type { Readable } from "node:stream";
@@ -8,7 +9,12 @@ import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { jitteredBackoffMs, retryAfterMs, withAbort, withTimeout } from "../util/async.ts";
 import { swallow, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { createExecProcessSessions, processSessionDir, type ExecProcessIo } from "./exec-process-session.ts";
+import {
+  createExecProcessSessions,
+  processSessionDir,
+  SUPERVISOR_PROCESS_ROOT,
+  type ExecProcessIo,
+} from "./exec-process-session.ts";
 import {
   createBackendBlobStaging,
   createExecExport,
@@ -102,11 +108,11 @@ const isMissing = (e: unknown): boolean => e instanceof APIError && e.statusCode
 
 const describeCheck = (check: SpriteCheck): string => `${check.status}${check.reason ? ` (${check.reason})` : ""}`;
 
-export function processKeepaliveScript(processId: string): string {
+export function processKeepaliveScript(processId: string, processRoot?: string): string {
   const task = `qm-proc-${processId}`;
   const api = "curl -sf --unix-socket /.sprite/api.sock -H 'Content-Type: application/json'";
   const loop = [
-    `P="${processSessionDir(processId)}"`,
+    `P="${processRoot ? `${processRoot}/${processId}` : processSessionDir(processId)}"`,
     `while [ ! -f "$P/code" ] && kill -0 "$(cat "$P/pid" 2>/dev/null)" 2>/dev/null; do`,
     `  ${api} -X PUT -d '{"expire":"${KEEPALIVE_EXPIRE}"}' http://sprite/v1/tasks/${task} >/dev/null 2>&1 || true`,
     `  i=0; while [ $i -lt ${KEEPALIVE_RENEW_SEC} ] && [ ! -f "$P/code" ]; do sleep 1; i=$((i+1)); done`,
@@ -142,7 +148,18 @@ interface RawExec {
 
 export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSandboxOptions = {}): Sandbox {
   if (!opts.token) throw new Error("SANDBOX_BACKEND=sprites requires SPRITES_TOKEN");
+  const supervisorFresh = new Set<string>();
   const client = new SpritesClient(opts.token, opts.baseUrl ? { baseURL: opts.baseUrl } : {});
+  async function supervisorIdentity(name: string): Promise<string> {
+    const current = await client.getSprite(name);
+    if (!current.id || !current.createdAt) throw new Error("Sprites returned no physical generation identity");
+    return `${current.id}:${current.createdAt.toISOString()}`;
+  }
+  async function createFreshSprite(name: string): Promise<void> {
+    await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
+    supervisorFresh.add(await supervisorIdentity(name));
+  }
+
   const sprite = (name: string) => client.sprite(name);
   const prefix = opts.namePrefix ?? "qm";
   const initializationStore = opts.initializationStore ?? createMemoryMap<{ pending: boolean }>();
@@ -441,7 +458,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         }
         const scope = base.scopeFor(name);
         try {
-          if (!exists) await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
+          if (!exists) await createFreshSprite(name);
           await applyResources(name);
           const hydrated = homeSnapshots && scope ? await homeSnapshots.hydrateHome(scope, name) : false;
           await initializationStore.delete(name);
@@ -460,7 +477,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     isProvisioned: (name) => ensured.has(name),
     async recreateScratch(name) {
       if (await spriteExists(name)) await deleteSprite(name);
-      await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
+      await createFreshSprite(name);
       await applyResources(name);
       ensured.add(name);
     },
@@ -537,6 +554,57 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   }
 
   return {
+    supervisorTransport: createSupervisorTransport(
+      {
+        async processStarted(handle, processId) {
+          if (!/^[a-zA-Z0-9-]+$/.test(processId)) throw new Error("Invalid supervisor process identity");
+          const firstHold = `curl -sf --unix-socket /.sprite/api.sock -H 'Content-Type: application/json' -X PUT -d '{"expire":"${KEEPALIVE_EXPIRE}"}' http://sprite/v1/tasks/qm-proc-${processId} >/dev/null || exit 1`;
+          const command = `${firstHold}; ${processKeepaliveScript(processId, SUPERVISOR_PROCESS_ROOT)}`;
+          const result = await spawnExec(
+            handle.id,
+            ["sudo", "-n", "sh", "-c", command],
+            Buffer.alloc(0),
+            KEEPALIVE_TIMEOUT_SEC * 1000,
+          );
+          if (result.rc !== 0 || !result.stdout.toString("utf8").includes("OK"))
+            throw new Error("Sprites supervised process keepalive failed");
+        },
+        async writeBytes(handle, path, data) {
+          const result = await spawnExec(
+            handle.id,
+            [
+              "sudo",
+              "-n",
+              "python3",
+              "-I",
+              "-c",
+              "import os,sys; fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600); stream=os.fdopen(fd,'wb'); stream.write(sys.stdin.buffer.read()); stream.close()",
+              path,
+            ],
+            Buffer.from(data),
+            120_000,
+          );
+          if (result.rc !== 0) throw new Error("Sprites supervisor upload failed");
+        },
+        identity: (handle) => supervisorIdentity(handle.id),
+        async run(handle, command, options) {
+          const timeout = options?.timeoutMs ?? 600_000;
+          const result = await spawnExec(
+            handle.id,
+            ["sudo", "-n", "timeout", String(Math.ceil(timeout / 1000)), "sh", "-c", command],
+            Buffer.alloc(0),
+            timeout + 30_000,
+          );
+          return {
+            stdout: result.stdout.toString("utf8"),
+            stderr: result.stderr.toString("utf8"),
+            code: result.rc,
+            timedOut: result.rc === 124,
+          };
+        },
+      },
+      supervisorFresh,
+    ),
     profile,
     startProcess,
     readProcess: procSessions.readProcess,

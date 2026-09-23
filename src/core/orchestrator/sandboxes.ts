@@ -3,14 +3,7 @@ import { personalScope } from "../../types.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions } from "../../sandbox/sandbox.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
-import {
-  deviceFlowCredOwner,
-  materializeDeviceFlowLogins,
-  removeDeviceFlowLogins,
-} from "../../credentials/device-flow-persist.ts";
-import type { DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
-import { expandServiceAliases } from "../../credentials/resident-paths.ts";
-import { shq } from "../../util/shell.ts";
+import { deviceFlowCredOwner, removeDeviceFlowLogins } from "../../credentials/device-flow-persist.ts";
 import {
   materializeSkillTree as laySkillTree,
   packRoot,
@@ -46,13 +39,7 @@ export interface TurnSandboxContext {
   isolateOwnerKeychain: boolean;
   openSpeakerKeychain?: boolean;
   ownerAuthAvailable: boolean;
-  ownerAuthEnv: Record<string, string>;
-  ownerEnvCredentialIds: string[];
   credentialTools: readonly import("../../deployment/load-layer.ts").LayerCredentialTool[];
-  credentialServices: string[];
-  credentialCutoverServices: string[];
-  quarantinedServices: string[];
-  cutoverModeOf: (service: string) => DeviceFlowCutoverMode;
   visibleSkillsForTurn: () => Promise<SkillResolution[]>;
   emitGapWork: (phase: GapPhase, start: number, end: number) => void;
   perf: { credsMs: number };
@@ -75,33 +62,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     isolateOwnerKeychain,
     openSpeakerKeychain,
     ownerAuthAvailable,
-    ownerAuthEnv,
-    ownerEnvCredentialIds,
     credentialTools,
-    credentialServices,
-    credentialCutoverServices,
-    quarantinedServices,
-    cutoverModeOf,
     visibleSkillsForTurn,
     emitGapWork,
     perf,
   } = ctx;
 
   let ownerAuthCommand: ((command: string) => string) | undefined;
-  const brokerEnvKeys = [
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_SESSION_TOKEN",
-    "AWS_REGION",
-    "AWS_DEFAULT_REGION",
-  ];
-  const unsetBrokerEnv = (env: Record<string, string>): string => {
-    const keys = brokerEnvKeys.filter((key) => !(key in env));
-    return keys.length ? `unset ${keys.join(" ")}; ` : "";
-  };
-  const scopedCommand = credentialCutoverServices.length
-    ? (command: string): string => `${unsetBrokerEnv(connectorEnv)}${command}`
-    : undefined;
+  const scopedCommand = undefined;
   if (ownerAuthAvailable) {
     ownerAuthCommand = (command) => {
       if (openSpeakerKeychain)
@@ -112,19 +80,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           resource: "isolated owner execution",
           scopeLabel: scopeId,
         });
-      for (const credentialId of ownerEnvCredentialIds) {
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: actor.id,
-          action: "keychain.materialize",
-          resource: `${credentialId} (owner-auth command)`,
-          scopeLabel: scopeId,
-        });
-      }
-      const exports = Object.entries(ownerAuthEnv)
-        .map(([key, value]) => `${key}=${shq(value)}`)
-        .join(" ");
-      return `unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN AGENT_CREDENTIAL_TOKEN; ${unsetBrokerEnv(ownerAuthEnv)}${exports ? `export ${exports}; ` : ""}${command}`;
+      return command;
     };
   }
   const box: {
@@ -197,82 +153,28 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     return provisionInFlight;
   };
   const prepareCredentials = async (handle: SandboxHandle, emit: typeof emitGapWork): Promise<void> => {
-    if (deps.keychain) {
-      const deviceFlowStart = Date.now();
-      const restoreOwnerId =
-        input.origin.kind === "automation" && input.origin.useOwnerKeychain && !isolateOwnerKeychain
-          ? actor.id
-          : deviceFlowCredOwner(memoryScopeId, actor.id);
-      const resetGenerations = new Map<string, string>();
-      for (const service of credentialServices) {
-        if (cutoverModeOf(service) !== "legacy") continue;
-        const generation = await deps.deviceFlowCutover?.residentResetGeneration(
-          memoryScopeId,
-          service,
-          handle.resourceId,
-        );
-        if (generation) resetGenerations.set(service, generation);
-      }
-      const owned = resetGenerations.size ? await deps.keychain.listByOwner(restoreOwnerId) : [];
-      const resetServices = [...resetGenerations.keys()].filter((service) =>
-        owned.some((record) => expandServiceAliases([service]).includes(record.service)),
-      );
-      const removeServices = [...new Set([...quarantinedServices, ...resetServices])];
-      if (removeServices.length) {
-        await removeDeviceFlowLogins({
-          sandbox: deps.sandbox,
-          handle,
-          keychain: deps.keychain,
-          ownerId: restoreOwnerId,
-          services: removeServices,
-          canonicalRoots: credentialTools
-            .filter((tool) => removeServices.includes(tool.service))
-            .flatMap((tool) => tool.roots),
-        });
-      }
-      try {
-        const restoredServices = await materializeDeviceFlowLogins({
-          sandbox: deps.sandbox,
-          handle,
-          keychain: deps.keychain,
-          ownerId: restoreOwnerId,
-          ...(quarantinedServices.length ? { excludeServices: quarantinedServices } : {}),
-          onAnomaly: (service, detail) =>
-            deps.errors?.record({
-              category: "keychain",
-              code: "device_flow_restore_failed",
-              message: `${service}: ${detail}`,
-              scopeLabel: scopeId,
-              sessionId: session.id,
-            }),
-        });
-        for (const service of restoredServices) {
-          deps.credentialUsage?.record({
-            slug: `keychain:${service}`,
-            host: "local",
-            status: cutoverModeOf(service) === "prefer_ephemeral" ? "legacy_retained" : "legacy_restored",
-            scopeLabel: scopeId,
-            principalId: actor.id,
-          });
-        }
-        for (const [service, generation] of resetGenerations) {
-          await deps.deviceFlowCutover?.markResidentReset(memoryScopeId, service, generation, handle.resourceId);
-        }
-      } catch (err) {
-        deps.errors?.record(
-          {
-            category: "keychain",
-            code: "device_flow_restore_failed",
-            message: errMessage(err),
-            scopeLabel: scopeId,
-            sessionId: session.id,
-          },
-          err,
-        );
-      }
-      emit("creds", deviceFlowStart, Date.now());
-      perf.credsMs += Date.now() - deviceFlowStart;
+    if (!deps.keychain) return;
+    const start = Date.now();
+    for (const ownerId of new Set([deviceFlowCredOwner(memoryScopeId, actor.id), actor.id])) {
+      const records = await deps.keychain.listByOwner(ownerId);
+      const services = [
+        ...new Set([
+          ...records.filter((record) => record.kind === "file").map((record) => record.service),
+          ...credentialTools.map((tool) => tool.service),
+        ]),
+      ];
+      await removeDeviceFlowLogins({
+        sandbox: deps.sandbox,
+        handle,
+        keychain: deps.keychain,
+        ownerId,
+        services,
+        allOrigins: true,
+        canonicalRoots: credentialTools.flatMap((tool) => tool.roots),
+      });
     }
+    emit("creds", start, Date.now());
+    perf.credsMs += Date.now() - start;
   };
   const doProvision = async (emit: typeof emitGapWork): Promise<SandboxHandle> => {
     const provisionStart = Date.now();
@@ -447,33 +349,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           );
           ownerAuthBox.pending = handle;
           ownerAuthBox.provisionMs = Date.now() - provisionStart;
-          if (deps.keychain && isolateOwnerKeychain) {
-            const restoredServices = await materializeDeviceFlowLogins({
-              sandbox: deps.sandbox,
-              handle,
-              keychain: deps.keychain,
-              ownerId: actor.id,
-              ...(openSpeakerKeychain ? { allOrigins: true } : {}),
-              ...(credentialCutoverServices.length ? { excludeServices: credentialCutoverServices } : {}),
-              onAnomaly: (service, detail) =>
-                deps.errors?.record({
-                  category: "keychain",
-                  code: "device_flow_restore_failed",
-                  message: `${service} (owner-auth box): ${detail}`,
-                  scopeLabel: scopeId,
-                  sessionId: session.id,
-                }),
-            });
-            for (const service of restoredServices) {
-              deps.auditLog.record({
-                at: Date.now(),
-                principalId: actor.id,
-                action: "keychain.materialize",
-                resource: `${service} (owner-auth box)`,
-                scopeLabel: scopeId,
-              });
-            }
-          }
           ownerAuthBox.handle = handle;
           return handle;
         })().catch(async (err) => {

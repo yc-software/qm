@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { realpathSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -49,7 +49,7 @@ export const FAKE_AGENT37_API_KEY = "sk_live_test_key";
 const OUTPUT_CAP = 512 * 1024;
 
 export function installFakeAgent37(): FakeAgent37 {
-  const root = mkdtempSync(join(tmpdir(), "fake-a37-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "fake-a37-")));
   const instances = new Map<string, FakeInstance>();
   const execScripts: string[] = [];
   const calls: Agent37Call[] = [];

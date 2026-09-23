@@ -227,7 +227,20 @@ for (const storage of ["memory", "postgres"] as const) {
           await mixed.runtime.stop();
         }
       }
+      const issuedTokens = new Map<string, string>();
+      const captureIssuedTokens = (app: ReturnType<typeof buildApp>) => {
+        const run = app.sandbox.run.bind(app.sandbox);
+        app.sandbox.run = async (handle, command, options) => {
+          const token = handle.env?.AGENT_API_TOKEN;
+          if (token) {
+            const claims = await verifyCapabilityToken(token, config.capabilitySecret!);
+            if (claims?.sessionId) issuedTokens.set(claims.sessionId, token);
+          }
+          return run(handle, command, options);
+        };
+      };
       let built = buildApp(config);
+      captureIssuedTokens(built);
       const { serverDeps } = await import("../src/wiring.ts");
       let server = createServer(built.app, serverDeps(config, built));
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -237,9 +250,10 @@ for (const storage of ["memory", "postgres"] as const) {
       const issued: Array<{ sessionId: string; attempt: number }> = [];
       exerciseTurn = async (turn) => {
         if (turn.input !== "http-swarm-root" && !turn.input.includes("http-swarm-worker")) return;
-        const result = await turn.tools.execute("printf '%s' \"$AGENT_API_TOKEN\"");
+        const result = await turn.tools.execute("true");
         assert.equal(result.code, 0, result.stderr);
-        const token = result.stdout.trim();
+        const token = issuedTokens.get(turn.session.id);
+        assert.ok(token, "the trusted sandbox dispatch received an orchestrator-issued capability");
         const claims = await verifyCapabilityToken(token, config.capabilitySecret!);
         assert.equal(claims?.sessionId, turn.session.id);
         assert.equal(claims?.runId, turn.runId);
@@ -328,6 +342,7 @@ for (const storage of ["memory", "postgres"] as const) {
           await new Promise<void>((resolve) => server.close(() => resolve()));
           await built.runtime.stop();
           built = buildApp(config);
+          captureIssuedTokens(built);
           server = createServer(built.app, serverDeps(config, built));
           await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
           base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

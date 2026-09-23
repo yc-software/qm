@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { realpathSync, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -36,7 +36,7 @@ export interface FakeModal {
 }
 
 export function installFakeModal(opts: { native?: boolean } = {}): FakeModal {
-  const root = mkdtempSync(join(tmpdir(), "fake-modal-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "fake-modal-")));
   const records = new Map<string, FakeRecord>();
   const execScripts: string[] = [];
   let nextId = 1;
@@ -55,6 +55,7 @@ export function installFakeModal(opts: { native?: boolean } = {}): FakeModal {
       `export HOME=${JSON.stringify(r.home)}; ` +
       script
         .replace(/\btimeout \d+ /g, "")
+        .replace(/\/run\/qm-supervisor/g, `${r.home}/.trusted-supervisor`)
         .replace(/\/root(?![A-Za-z0-9_-])/g, r.home)
         .replace(remapPath, (mm) => (mm.startsWith(r.home) ? mm : `${r.home}/tmp/`))
     );
