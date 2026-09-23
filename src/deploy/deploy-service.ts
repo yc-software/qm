@@ -64,6 +64,7 @@ export interface DeployOrUpdateInput {
   createdInScope?: ScopeId;
   alwaysOn?: boolean;
   embedAncestors?: string[];
+  public?: boolean;
   defaultAudience?: { contextScopeId: ScopeId; granteeScopeIds: ScopeId[]; snapshotAt: number; force?: boolean };
 }
 
@@ -84,6 +85,7 @@ export interface DeployService {
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
   setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
+  setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
 
   keepAlwaysOnWarm(): Promise<number>;
   reachDeployment(idOrName: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
@@ -568,6 +570,23 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
+    async setDeploymentPublic(idOrName, isPublic, actor) {
+      const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
+      if (!d) throw new Error(`no such app: ${idOrName}`);
+      if (d.ownerScopeId !== scopeId("personal", actor.createdBy)) {
+        throw new Error(`only the owner can change who can reach "${d.name ?? d.id}"`);
+      }
+      await deps.deployStore.setPublic(d.id, isPublic);
+      deps.auditLog.record({
+        at: Date.now(),
+        principalId: actor.createdBy,
+        action: isPublic ? "deploy_public_enable" : "deploy_public_disable",
+        resource: deploymentRef(d.id),
+        scopeLabel: d.ownerScopeId,
+      });
+      return (await deps.deployStore.get(d.id))!;
+    },
+
     async keepAlwaysOnWarm() {
       const result = await leaderLease.hold("deployments:keep-warm", async () => {
         let warmed = 0;
@@ -711,6 +730,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         } else if (input.alwaysOn !== undefined) await this.setDeploymentAlwaysOn(existing.id, input.alwaysOn);
         if (input.embedAncestors !== undefined)
           await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
+        if (input.public !== undefined) await this.setDeploymentPublic(existing.id, input.public, { createdBy });
         if (input.share?.length) await issueShares((await deps.deployStore.get(existing.id))!, createdBy, input.share);
         return (await deps.deployStore.get(existing.id))!;
       }
@@ -728,6 +748,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         );
         if (input.embedAncestors !== undefined)
           await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
+        if (input.public !== undefined) await this.setDeploymentPublic(existing.id, input.public, { createdBy });
         if (input.share?.length) await issueShares((await deps.deployStore.get(existing.id))!, createdBy, input.share);
         return (await deps.deployStore.get(existing.id))!;
       }
@@ -769,6 +790,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         });
         isCreate = true;
       }
+      if (input.public !== undefined) await this.setDeploymentPublic(d.id, input.public, { createdBy });
       if (input.defaultAudience)
         await reconcileDefaultAudience(
           (await deps.deployStore.get(d.id))!,

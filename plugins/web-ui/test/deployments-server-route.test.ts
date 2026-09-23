@@ -115,10 +115,21 @@ test("deployment sharing uses the signed-in capability and drops caller identity
     ).status,
     200,
   );
+  assert.equal(
+    (
+      await fetch(`${base}/api/deployments/d1/share`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ public: true, actorId: "mallory", principalId: "mallory" }),
+      })
+    ).status,
+    200,
+  );
   const requests = calls.slice(before).filter((call) => call.url === "/v1/deployments/d1/share");
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 3);
   assert.ok(requests.every((call) => call.capability === "signed-in-user-capability"));
   assert.deepEqual(requests[1]?.body, { scope: "personal:bob", access: "view" });
+  assert.deepEqual(requests[2]?.body, { public: true });
 });
 
 test("embed-ancestors relays the origin list and never invents one", async () => {

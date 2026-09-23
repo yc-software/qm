@@ -1,6 +1,6 @@
 import { html, render, nothing } from "lit";
 import { live } from "lit/directives/live.js";
-import { Search, X } from "lucide";
+import { Globe, Lock, Search, X } from "lucide";
 import { api } from "./core-bridge";
 import { closeFormMenus, icon, initials, menuSelect } from "./ui";
 import { scopeChip } from "./contexts";
@@ -20,6 +20,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
   dialog.setAttribute("aria-labelledby", "deployment-permissions-heading");
   document.body.append(dialog);
   let grantees: Grant[] = [];
+  let publicAccess = false;
   let matches: DirectoryMatch[] = [];
   let query = "";
   let access = "view";
@@ -53,10 +54,11 @@ export async function openDeploymentPermissions(id: string, title: string, owner
     error = "";
     draw();
     try {
-      const response = await api<{ grantees: Grant[] }>(endpoint, {
+      const response = await api<{ public: boolean; grantees: Grant[] }>(endpoint, {
         method: "POST",
         body: JSON.stringify({ scope, access: value }),
       });
+      publicAccess = response.public;
       grantees = response.grantees;
       selected = null;
       query = "";
@@ -65,6 +67,26 @@ export async function openDeploymentPermissions(id: string, title: string, owner
       matches = [];
     } catch (e) {
       error = errMessage(e, "Could not update permissions.");
+    } finally {
+      busy = false;
+      if (dialog.isConnected) draw();
+    }
+  };
+  const changePublic = async (value: string) => {
+    if (busy) return;
+    closeFormMenus();
+    busy = true;
+    error = "";
+    draw();
+    try {
+      const response = await api<{ public: boolean; grantees: Grant[] }>(endpoint, {
+        method: "POST",
+        body: JSON.stringify({ public: value === "public" }),
+      });
+      publicAccess = response.public;
+      grantees = response.grantees;
+    } catch (e) {
+      error = errMessage(e, "Could not update public access.");
     } finally {
       busy = false;
       if (dialog.isConnected) draw();
@@ -220,6 +242,34 @@ export async function openDeploymentPermissions(id: string, title: string, owner
           </div>
           ${grantees.map((grant) => html`<div class="permission-row"><span class="project-member-avatar" aria-hidden="true">${initials(grant.scope.replace("personal:", ""))}</span><span class="permission-person-label">${names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
         </div>
+        <div class="permission-section-label permission-general-label">General access</div>
+        <div class="project-member-list">
+          <div class="permission-row">
+            <span class="project-member-avatar" aria-hidden="true">${icon(publicAccess ? Globe : Lock, 16)}</span>
+            <span class="permission-person-label"
+              >${publicAccess ? "Anyone with the link" : "Restricted"}<small
+                >${publicAccess ? "No sign-in required" : "Only people with access can open"}</small
+              ></span
+            <fieldset class="permission-control" ?disabled=${busy}>
+              ${menuSelect({
+                value: publicAccess ? "public" : "restricted",
+                ariaLabel: "General access",
+                options: [
+                  { value: "restricted", label: "Restricted" },
+                  { value: "public", label: "Anyone with the link" },
+                ],
+                onSelect: (next) => {
+                  if (next) void changePublic(next);
+                },
+              })}
+            </fieldset>
+          </div>
+        </div>
+        ${
+          publicAccess
+            ? html`<p class="share-external-warning" role="status">⚠️ Public. Anyone can open this app.</p>`
+            : nothing
+        }
         ${busy ? html`<p role="status">Loading…</p>` : nothing}
         ${error ? html`<p class="composer-error" role="alert">${error}</p>` : nothing}
         <div class="project-dialog-actions actions"><button class="btn" @click=${close}>Done</button></div>
@@ -229,7 +279,9 @@ export async function openDeploymentPermissions(id: string, title: string, owner
   draw();
   dialog.showModal();
   try {
-    grantees = (await api<{ grantees: Grant[] }>(endpoint)).grantees;
+    const response = await api<{ public: boolean; grantees: Grant[] }>(endpoint);
+    publicAccess = response.public;
+    grantees = response.grantees;
     loaded = true;
   } catch (e) {
     error = errMessage(e, "Could not load permissions.");

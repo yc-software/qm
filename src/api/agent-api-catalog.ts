@@ -462,7 +462,7 @@ const FAMILIES: AgentApiFamily[] = [
       (m === "POST" &&
         /^\/v1\/deployments\/[^/]+\/(share|archive|restore|name|display-name|always-on|embed-ancestors)$/.test(p)),
     guidance:
-      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. To widen or narrow that — "share it with everyone" or "share it with <teammate>" — POST /v1/deployments/:id/share with `scope:"org"` or `recipient:"<name>"`; no redeploy. To rename or take down an app, use name / display-name / archive. POST /v1/deployments/:id/always-on with `{alwaysOn:true|false}` keeps an app permanently warm (no idle cold starts) or returns it to sleep-when-idle. POST /v1/deployments/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites show the app inside their own page (an iframe); list every frame between the app and the browser tab, and pass `[]` to forbid embedding again. Anyone who manages the app can change these: its owner from any conversation, a current member of the channel/team it was published from, or someone granted "manage" access.',
+      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. To widen or narrow authenticated access — "share it with everyone in the organization" or "share it with <teammate>" — POST /v1/deployments/:id/share with `scope:"org"` or `recipient:"<name>"`; no redeploy. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` makes it restricted again. Public access is never the default. To rename or take down an app, use name / display-name / archive. POST /v1/deployments/:id/always-on with `{alwaysOn:true|false}` keeps an app permanently warm (no idle cold starts) or returns it to sleep-when-idle. POST /v1/deployments/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites show the app inside their own page (an iframe); list every frame between the app and the browser tab, and pass `[]` to forbid embedding again. Public access and embed settings remain owner-controlled; other app managers can change ordinary management settings.',
     routes: [
       {
         method: "GET",
@@ -497,13 +497,13 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "GET",
         path: "/v1/deployments/:id/share",
-        summary: "list access grants for an app you own (:id is its name or id) — returns {grantees}; owner-only",
+        summary: "inspect access for an app you own (:id is its name or id) — returns {public, grantees}; owner-only",
       },
       {
         method: "POST",
         path: "/v1/deployments/:id/share",
         summary:
-          'change who can reach a published app you own (:id is its name or id). Target ONE of: `scope` — "org" (everyone in the org) or a scope id like personal:<id>; or `recipient` — a teammate\'s name (resolved in the directory). `access`: view (reach, default), manage (reach + redeploy/rollback), or none (stop sharing). Owner-only (from any conversation), no redeploy',
+          'change who can reach a published app you own (:id is its name or id). For anonymous link access, pass only `public` (boolean). Otherwise target ONE of: `scope` — "org" (everyone in the org) or a scope id like personal:<id>; or `recipient` — a teammate\'s name (resolved in the directory). `access`: view (reach, default), manage (reach + redeploy/rollback), or none (stop sharing). Owner-only (from any conversation), no redeploy',
       },
       {
         method: "POST",

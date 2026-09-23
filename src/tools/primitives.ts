@@ -87,6 +87,7 @@ export interface PublishInput {
   rollbackTo?: number;
   alwaysOn?: boolean;
   embedAncestors?: string[];
+  public?: boolean;
   share?: Array<{ scope: ScopeId; permission: Permission }>;
 }
 
@@ -108,6 +109,7 @@ interface PublishResult {
   dataDir?: string;
   alwaysOn?: boolean;
   embedAncestors?: string[];
+  public?: boolean;
 }
 
 export class NeedsApproval extends Error {
@@ -215,6 +217,7 @@ export interface ToolContext extends SurfaceToolDeps {
   skill(name: string, opts?: { path?: string; sandboxId?: string; signal?: AbortSignal }): Promise<SkillResult>;
   write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult>;
   publish(input: PublishInput): Promise<PublishResult>;
+  setDeploymentPublic(id: string, isPublic: boolean): Promise<{ id: string; name?: string; public: boolean }>;
   createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
   memorySearch(q: string, limit?: number): Promise<string[] | null>;
   memoryRead(): Promise<string | null>;
@@ -1066,6 +1069,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ...(input.rollbackTo !== undefined ? { rollbackTo: input.rollbackTo } : {}),
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
           ...(input.embedAncestors !== undefined ? { embedAncestors: input.embedAncestors } : {}),
+          ...(input.public !== undefined ? { public: input.public } : {}),
           ...(doReconcile
             ? {
                 defaultAudience: {
@@ -1100,8 +1104,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ...(dataDir ? { dataDir } : {}),
           ...(d.alwaysOn ? { alwaysOn: true } : {}),
           ...(d.embedAncestors?.length ? { embedAncestors: d.embedAncestors } : {}),
+          ...(d.public ? { public: true } : {}),
         };
       });
+    },
+
+    async setDeploymentPublic(id: string, isPublic: boolean) {
+      const d = await deps.deploy.setDeploymentPublic(id, isPublic, { createdBy: deps.createdBy });
+      return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
 
     async memorySearch(q: string, limit?: number): Promise<string[] | null> {

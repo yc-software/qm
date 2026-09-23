@@ -1108,13 +1108,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "publish",
     label: "publish",
     description:
-      "Publish a directory from the workspace as a durable, scope-bound internal web app " +
+      "Publish a directory from the workspace as a durable, private-by-default web app " +
       "(it keeps running after the turn ends and gets a stable link). Before publishing, verify the " +
       "directory exists and contains files. For a new app or a code/file update, always pass `entrypoint`; " +
       "the app must listen on the PORT env var. `dir` is workspace-relative: use `app`, never a path " +
       "beginning with `/` or a redundant `workspace/app`. `renameFrom` takes an existing " +
       "deployment name, not its ID. Set audience to [] to suppress default audience grants, or supply " +
-      "publication-time grants. Use apps action share for subsequent grants. Share the full absolute URL " +
+      "publication-time grants. `public: true` makes the app reachable without sign-in; it is never the default. " +
+      "Use apps action share for subsequent grants. Share the full absolute URL " +
       "returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, " +
       "stable link /d/<name>/; `renameFrom` to rename; `rollbackTo` to flip back to an earlier version. " +
       "Egress is open, " +
@@ -1170,6 +1171,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       rollbackTo: Type.Optional(
         Type.Integer({ description: "Flip the deployment named `name` back to this version number." }),
       ),
+      public: Type.Optional(
+        Type.Boolean({
+          description:
+            "Explicitly set whether anyone with the link can open the app without signing in. Defaults to private for new apps; omit to preserve the current setting on updates.",
+        }),
+      ),
       alwaysOn: Type.Optional(
         Type.Boolean({
           description:
@@ -1198,6 +1205,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const reach = describePublishAudience(r.audience);
         const alwaysOnNote = r.alwaysOn ? "\nAlways-on: the app is kept warm — no idle cold starts." : "";
         const embedNote = r.embedAncestors?.length ? `\nEmbeddable by: ${r.embedAncestors.join(", ")}` : "";
+        const publicNote = r.public ? "\nAccess: public — anyone with the link can open it without signing in." : "";
         const dataNote = r.dataDir
           ? `\nDurable data: runtime state written under ${r.dataDir} ($DATA_DIR) survives restarts and redeploys — keep SQLite at ${r.dataDir}/app.db (it gets the strongest durability the runtime offers). If this app writes runtime state anywhere else on disk, migrate it there (data deliberately baked into the repo stays where it is).`
           : "";
@@ -1214,7 +1222,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(r.dataDir ? { dataDir: r.dataDir } : {}),
           },
           text(
-            `Published ${r.name ?? r.id} (v${r.version}) → ${r.url}\n${reach}${alwaysOnNote}${embedNote}${dataNote}`,
+            `Published ${r.name ?? r.id} (v${r.version}) → ${r.url}\n${reach}${publicNote}${alwaysOnNote}${embedNote}${dataNote}`,
           ),
         );
       } catch (e) {
@@ -2952,17 +2960,41 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   function sharingTool(type: "file" | "skill" | "deploy" | "cron", move = false): ToolDefinition {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
     const action = move ? "move" : "share";
+    let description =
+      "Grant access to an artifact you own while keeping it in its current home. Only the owner can share; grantees cannot reshare.";
+    if (move)
+      description =
+        "Transfer the artifact to another context. Moving an app transfers ownership; existing shares survive. Moving a skill to the org requires an org admin in a user-started turn.";
+    else if (type === "deploy")
+      description =
+        "Change access to an app you own while keeping it in its current home. Set public to true or false for anonymous link access, or use toScope for authenticated access. Only the owner can share; grantees cannot reshare.";
     return defineTool({
       name: action,
       label: action,
-      description: move
-        ? "Transfer the artifact to another context. Moving an app transfers ownership; existing shares survive. Moving a skill to the org requires an org admin in a user-started turn."
-        : "Grant access to an artifact you own while keeping it in its current home. Only the owner can share; grantees cannot reshare.",
+      description,
       parameters: Type.Object({
         id: Type.String({ description: "Artifact ID; an app may also be named by its handle." }),
-        toScope: Type.String({
-          description: 'Destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name.',
-        }),
+        toScope:
+          type === "deploy" && !move
+            ? Type.Optional(
+                Type.String({
+                  description:
+                    'Authenticated destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name. Omit when setting public.',
+                }),
+              )
+            : Type.String({
+                description: 'Destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name.',
+              }),
+        ...(type === "deploy" && !move
+          ? {
+              public: Type.Optional(
+                Type.Boolean({
+                  description:
+                    "true lets anyone with the link open the app without signing in; false makes it restricted again. Never enabled by default.",
+                }),
+              ),
+            }
+          : {}),
         ...(!move
           ? {
               permission: Type.Optional(
@@ -2974,11 +3006,38 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           : {}),
       }),
       async execute(callId, args) {
-        const params = args as { id: string; toScope: string; permission?: "read" | "write" };
+        const params = args as {
+          id: string;
+          toScope?: string;
+          public?: boolean;
+          permission?: "read" | "write";
+        };
         const tc = ref.current;
         if (!tc) return text("[error] no active tool context");
         const id = params.id;
         await recordCall(callId, { tool, action, type, id });
+        if (type === "deploy" && !move && params.public !== undefined) {
+          if (params.toScope !== undefined)
+            return recordResult(
+              callId,
+              { tool, action, error: "bad_request" },
+              text("[error] set public or toScope, not both"),
+              true,
+            );
+          const d = await tc.setDeploymentPublic(id, params.public);
+          return recordResult(
+            callId,
+            { tool, action, type, id: d.id, public: d.public },
+            text(`${d.name ?? d.id} is now ${d.public ? "public — anyone with the link can open it" : "restricted"}.`),
+          );
+        }
+        if (!params.toScope)
+          return recordResult(
+            callId,
+            { tool, action, error: "bad_request" },
+            text("[error] toScope is required unless public is set"),
+            true,
+          );
         const r = await tc.shareArtifact({
           type,
           id,

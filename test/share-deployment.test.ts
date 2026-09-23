@@ -291,6 +291,12 @@ test("share endpoint: unknown app → 404; no capability → 403; bad/ambiguous/
     "bad access → 400",
   );
   assert.equal((await callShare(app, cap("U1"), "a", {})).status, 400, "no target → 400");
+  assert.equal((await callShare(app, cap("U1"), "a", { public: "yes" })).status, 400, "public is boolean");
+  assert.equal(
+    (await callShare(app, cap("U1"), "a", { public: true, scope: "org" })).status,
+    400,
+    "public and authenticated targets change separately",
+  );
   assert.equal(
     (await callShare(app, cap("U1"), "a", { scope: "org", recipient: "carol" })).status,
     400,
@@ -404,6 +410,17 @@ test('publish share:[{scope:"org"}] resolves to the org — truthful readback, r
   assert.equal((await deploy.reachDeployment("wide", "U2")).status, "ok");
 });
 
+test("publish keeps apps private by default and requires an explicit public opt-in", async () => {
+  const { deploy } = makeDeploy();
+  const privateApp = await toolCtx(deploy).publish({ entrypoint: "x", name: "private-app" });
+  assert.equal(privateApp.public, undefined);
+  assert.equal((await deploy.getDeployment("private-app"))?.public, undefined);
+
+  const publicApp = await toolCtx(deploy).publish({ entrypoint: "x", name: "public-app", public: true });
+  assert.equal(publicApp.public, true);
+  assert.equal((await deploy.getDeployment("public-app"))?.public, true);
+});
+
 test("publish rejects a garbage share target instead of silently creating a dead grant", async () => {
   const { deploy } = makeDeploy();
   await assert.rejects(
@@ -445,6 +462,31 @@ test("transferDeploymentOwner re-homes the app to the teammate: they own it, pri
   );
 });
 
+test("a manage grantee may redeploy but cannot make the owner's app public", async () => {
+  const { deploy } = makeDeploy();
+  const d = await deploy.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    name: "managed-private",
+  });
+  await deploy.shareDeployment(d.id, scopeId("personal", "U2"), "write", { createdBy: "U1" });
+  await assert.rejects(
+    () =>
+      deploy.deployOrUpdate({
+        ownerScopeId: scopeId("personal", "U2"),
+        createdBy: "U2",
+        name: "managed-private",
+        entrypoint: "x",
+        files: [],
+        public: true,
+      }),
+    /only the owner/,
+  );
+  assert.equal((await deploy.getDeployment(d.id))?.public, undefined);
+});
+
 test("transferDeploymentOwner is home authority — a write ('manage') grantee cannot give the app away", async () => {
   const { deploy } = makeDeploy();
   const d = await deploy.deploy({
@@ -477,6 +519,40 @@ test("transferDeploymentOwner to the current home is a no-op", async () => {
   const after = (await deploy.listDeployments()).find((x) => x.id === d.id)!;
   assert.equal(after.ownerScopeId, scopeId("personal", "U1"));
   assert.equal((await acl.list()).length, 0, "no self-grant sprayed by a no-op transfer");
+});
+
+test("deployment public access is explicit, owner-only, and reversible", async () => {
+  const { app } = apiHarness();
+  await app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    name: "public-toggle",
+  });
+
+  const initial = await callManage(getDeploymentShares, app, cap("U1"), "public-toggle", {});
+  assert.equal(initial.status, 200);
+  assert.equal(initial.body.public, false, "apps are private by default");
+
+  const denied = await callShare(app, cap("U2"), "public-toggle", { public: true });
+  assert.equal(denied.status, 403, "only the owner may make an app public");
+
+  const enabled = await callShare(app, cap("U1"), "public-toggle", { public: true });
+  assert.equal(enabled.status, 200);
+  assert.equal(enabled.body.public, true);
+  assert.equal((await app.getDeployment("public-toggle"))?.public, true);
+
+  const sharedWhilePublic = await callShare(app, cap("U1"), "public-toggle", {
+    scope: "personal:U2",
+    access: "view",
+  });
+  assert.equal(sharedWhilePublic.body.public, true, "person changes preserve and return general access");
+
+  const disabled = await callShare(app, cap("U1"), "public-toggle", { public: false });
+  assert.equal(disabled.status, 200);
+  assert.equal(disabled.body.public, false);
+  assert.equal((await app.getDeployment("public-toggle"))?.public, undefined);
 });
 
 test("deployment permissions are visible only to the owner, including for managers", async () => {

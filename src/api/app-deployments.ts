@@ -27,6 +27,7 @@ export function createDeploymentMethods(
   | "setDeploymentDisplayName"
   | "setDeploymentAlwaysOn"
   | "setDeploymentEmbedAncestors"
+  | "setDeploymentPublic"
   | "keepAlwaysOnWarm"
   | "reachDeployment"
   | "deploymentLogsFor"
@@ -100,6 +101,9 @@ export function createDeploymentMethods(
     },
     setDeploymentEmbedAncestors(id, embedAncestors) {
       return deps.deploy.setDeploymentEmbedAncestors(id, embedAncestors);
+    },
+    setDeploymentPublic(idOrName, isPublic, actor) {
+      return deps.deploy.setDeploymentPublic(idOrName, isPublic, actor);
     },
     keepAlwaysOnWarm() {
       return deps.deploy.keepAlwaysOnWarm();

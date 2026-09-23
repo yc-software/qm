@@ -14,6 +14,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
+import { PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
 import { portalSessionSub } from "../src/deploy/viewer-session.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -94,13 +95,16 @@ function httpGet(
 }
 
 test("app sign-in uses the configured trusted entry and preserves the app return address", async () => {
-  const server = createInsecureTestServer({} as Parameters<typeof createInsecureTestServer>[0], {
-    deployAppsDomain: "apps.example.com",
-    deployGateSecret: "gate",
-    deployAppsSessionSecret: SESSION_SECRET,
-    deployAppsLoginUrl: LOGIN_URL,
-    deployAppsLoginPath: "/auth/trusted/login",
-  });
+  const server = createInsecureTestServer(
+    { getDeployment: async () => null } as unknown as Parameters<typeof createInsecureTestServer>[0],
+    {
+      deployAppsDomain: "apps.example.com",
+      deployGateSecret: "gate",
+      deployAppsSessionSecret: SESSION_SECRET,
+      deployAppsLoginUrl: LOGIN_URL,
+      deployAppsLoginPath: "/auth/trusted/login",
+    },
+  );
   server.listen(0);
   try {
     const result = await httpGet((server.address() as AddressInfo).port, "/counter?x=1", {
@@ -135,9 +139,11 @@ function httpPost(
 
 test("subdomain ingress: portal sign-in admits the owner, denies strangers, bounces the signed-out", async () => {
   let upstreamCookie: string | undefined = "unset";
+  let upstreamIdentity: string | undefined = "unset";
   let upstreamUrl = "";
   const upstream = createHttpServer((req, res) => {
     upstreamCookie = req.headers.cookie as string | undefined;
+    upstreamIdentity = req.headers[PORTAL_IDENTITY_HEADER] as string | undefined;
     upstreamUrl = req.url ?? "";
     res.writeHead(200, {
       "content-type": "text/plain",
@@ -207,6 +213,26 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     const xhr = await httpGet(port, "/api/data", { Host: host, Accept: "application/json" });
     assert.equal(xhr.status, 401, "a non-HTML request never gets a login redirect");
     assert.match(xhr.body, /loginUrl/, "…but is told where sign-in lives");
+
+    await app.setDeploymentPublic("mysite", true, { createdBy: "alice@example.com" });
+    const publicVisitor = await httpGet(port, "/consultants?x=1", { Host: host, Accept: "text/html,*/*" });
+    assert.equal(publicVisitor.status, 200, "a public app is reachable without a portal session");
+    assert.equal(publicVisitor.body, "UPSTREAM OK");
+    assert.equal(upstreamCookie, undefined, "an anonymous request forwards no gateway cookies");
+    assert.equal(upstreamIdentity, undefined, "an anonymous request forwards no viewer identity");
+
+    const signedInPublicVisitor = await httpGet(port, "/consultants", {
+      Host: host,
+      Accept: "text/html",
+      Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
+    });
+    assert.equal(signedInPublicVisitor.status, 200);
+    assert.equal(
+      upstreamIdentity,
+      undefined,
+      "a link-only public visitor stays anonymous even when a portal session cookie is present",
+    );
+    await app.setDeploymentPublic("mysite", false, { createdBy: "alice@example.com" });
 
     const backFromLogin = await httpGet(port, "/consultants?x=1&dpl_signin=1", {
       Host: host,
