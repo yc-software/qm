@@ -178,3 +178,24 @@ test("history tool seq mode reopens an entry, reports a missing seq, and rejects
   assert.match((await run({ seq: "5" })).content[0]!.text, /full text$/);
   assert.match((await run({ seq: "5.5" })).content[0]!.text, /must be an integer/);
 });
+
+test("history view excludes tool results from search and reopening while retaining tool calls", () => {
+  const entries: SessionEntry[] = [
+    entry(1, "user", { text: "check the forecast" }),
+    entry(2, "tool_call", { tool: "forecast", city: "Oakland" }),
+    entry(3, "tool_result", { text: "forecast output: sunny" }),
+    entry(4, "tool_result", { result: { weather: "clear" } }),
+    entry(5, "assistant", { text: "forecast checked" }),
+  ];
+  const view = forSearchView(entries);
+  assert.deepEqual(
+    searchSessionEntries(view, "forecast", 3).map((hit) => hit.split(" ")[0]),
+    ["assistant#5", "tool_call#2", "user#1"],
+  );
+  assert.deepEqual(searchSessionEntries(view, "sunny"), []);
+  assert.deepEqual(searchSessionEntries(view, "clear"), []);
+  assert.equal(openSessionEntry(view, 3), null);
+  assert.equal(openSessionEntry(view, 4), null);
+  assert.match(openSessionEntry(view, 2)!, /Oakland/);
+  assert.deepEqual(forModelContext(entries), entries);
+});

@@ -49,7 +49,9 @@ export function forModelContext(
 export function forSearchView(entries: SessionEntry[]): SessionEntry[] {
   const replayable = modelReplayable(entries);
   const latest = replayable.findLast((e) => contextSummaryPayload(e));
-  return replayable.filter((e) => !entrySecurityTainted(e) && (!contextSummaryPayload(e) || e === latest));
+  return replayable.filter(
+    (e) => e.type !== "tool_result" && !entrySecurityTainted(e) && (!contextSummaryPayload(e) || e === latest),
+  );
 }
 
 const entryTokenCache = new Map<string, number>();

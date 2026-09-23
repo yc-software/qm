@@ -103,6 +103,13 @@ test("app.searchSessions decorates hits with session metadata and enforces visib
     "let's plan the zanzibar trip",
     "Zanzibar it is — I drafted an itinerary.",
   ]);
+  const { lease } = await sessions.acquireLease(id);
+  await sessions.append(lease!, {
+    type: "tool_result",
+    payload: { text: "zanzibar weather outputonly" },
+    scopeLabel: scopeId("personal", "U1"),
+  });
+  await sessions.releaseLease(lease!);
   await sessions.updateTitle(id, "Trip planning");
   await seed(sessions, "web:U2:other", "U2", ["zanzibar for U2 only"]);
 
@@ -112,6 +119,7 @@ test("app.searchSessions decorates hits with session metadata and enforces visib
   sessions.getForParticipant = async () => {
     throw new Error("search must not read legacy message activity");
   };
+  assert.deepEqual(await app.searchSessions("U1", "outputonly"), []);
   const hits = await app.searchSessions("U1", "zanzibar");
   assert.equal(hits.length, 2, "only U1's own conversation is searched");
   assert.ok(hits.every((h) => h.sessionId === id));
