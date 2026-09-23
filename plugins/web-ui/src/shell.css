@@ -3540,7 +3540,7 @@ qm-markdown .tok-in {
   z-index: 60;
   display: flex;
   flex-direction: column;
-  width: min(360px, calc(100vw - 24px));
+  width: min(280px, calc(100vw - 24px));
   max-width: calc(100vw - 24px);
   box-sizing: border-box;
   margin: 0;
