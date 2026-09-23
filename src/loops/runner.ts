@@ -1,4 +1,4 @@
-import type { Loop, LoopItem, LoopOutput } from "../types.ts";
+import type { Loop, LoopItem, LoopOutput, LoopSourcePayload } from "../types.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
 import { unresolvedOutput, type CaptureOutputInput, type LoopOutputStore } from "./output-store.ts";
 import type { LoopStore } from "./loop-store.ts";
@@ -11,6 +11,7 @@ import type { ShipGrant } from "../types.ts";
 export interface IntakeCandidate {
   sourceKey: string;
   sourceSummary?: string;
+  sourcePayload?: LoopSourcePayload;
 }
 
 export type CapturedArtifact = Omit<CaptureOutputInput, "loopId" | "itemId" | "attemptId">;

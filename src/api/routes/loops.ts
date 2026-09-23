@@ -15,6 +15,7 @@ import { consentRequiredRecipient } from "../../triggers/trigger-store.ts";
 import { errMessage, swallow } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj, isOrgAdmin, resolveCapabilityDestination } from "./shared.ts";
+import { getLoopBoard } from "./loop-board.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 export interface LoopServiceDeps {
@@ -574,6 +575,7 @@ export const loopRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/loops", auth: "either", handle: createLoop },
   { method: "GET", path: "/v1/loops", auth: "either", handle: listLoops },
   { method: "GET", path: "/v1/loops/:id", auth: "either", handle: getLoop },
+  { method: "GET", path: "/v1/loops/:id/board", auth: "either", handle: getLoopBoard },
   { method: "PATCH", path: "/v1/loops/:id", auth: "either", handle: patchLoop },
   { method: "DELETE", path: "/v1/loops/:id", auth: "either", handle: deleteLoop },
   { method: "POST", path: "/v1/loops/:id/fire", auth: "either", handle: fireLoopNow },
