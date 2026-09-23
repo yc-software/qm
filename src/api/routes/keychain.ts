@@ -1,5 +1,6 @@
 import {
   KeychainError,
+  isBackendCredential,
   renderAskNotice,
   renderUseScript,
   type CredentialFieldInput,
@@ -205,6 +206,10 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       }
       const useBlock = async (grant: { id: string; credentialId: string }) => {
         const credential = await kc.getCredential(grant.credentialId);
+        if (credential && isBackendCredential(credential))
+          return {
+            note: "Composio keys stay in the backend. Use the composio skill and /v1/composio through the authenticated agent API.",
+          };
         return {
           command: keychainUseCommand({ grant: grant.id }),
           ...(credential?.credentialHandle

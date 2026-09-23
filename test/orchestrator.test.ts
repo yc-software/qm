@@ -587,6 +587,15 @@ test("Composio backend access is announced without delivering the project key", 
   assert.equal(captured?.env?.COMPOSIO_API_KEY, undefined);
   const claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims?.ownerConnections, true);
+  const listServiceCredentials = serviceCreds.listServiceCredentials.bind(serviceCreds);
+  serviceCreds.listServiceCredentials = async (...args) =>
+    (await listServiceCredentials(...args)).map((record) =>
+      record.slug === "composio" ? { ...record, delivery: "broker" } : record,
+    );
+  const brokerDelivery = await prompt("backend-broker-delivery");
+  assert.match(brokerDelivery, /Composio is configured in the backend/);
+  assert.doesNotMatch(brokerDelivery, /service_composio|Shared org credentials available to you/);
+  serviceCreds.listServiceCredentials = listServiceCredentials;
   await acl.revoke(org, encodeRef(serviceCredRef("composio")), org, "admin@default-org");
   assert.doesNotMatch(await prompt("revoked"), /COMPOSIO_API_KEY/);
   await grantCred(acl, org, "composio");

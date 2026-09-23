@@ -1110,6 +1110,37 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.deepEqual(other.credentials, []);
   });
 
+  it("backend-only grants offer backend guidance while file grants retain shell commands", async () => {
+    const owner = "BACKEND_HANDLE_OWNER";
+    const cap = await capFor(owner, scopeId("personal", owner), { liveActor: true });
+    for (const backend of [true, false]) {
+      const input = backend
+        ? { service: "composio", envKey: "COMPOSIO_API_KEY", secret: "backend-project-sentinel" }
+        : {
+            service: "test-files",
+            files: [{ path: ".test/token", contentBase64: Buffer.from("file-sentinel").toString("base64") }],
+          };
+      const saved = (await (await post("/v1/keychain/credentials", input, cap)).json()) as any;
+      const response = await post(
+        "/v1/keychain/grants",
+        { credential: saved.credential.id, mode: "once", purpose: "authorized access" },
+        cap,
+      );
+      assert.equal(response.status, 200);
+      const granted = (await response.json()) as any;
+      assert.equal(granted.use.credentialHandle, undefined);
+      assert.equal(granted.use.credentials, undefined);
+      if (backend) {
+        assert.equal(granted.use.command, undefined);
+        assert.match(granted.use.note, /\/v1\/composio/);
+      } else {
+        assert.match(granted.use.command, /keychain\/use/);
+        assert.match(granted.use.note, /same shell/);
+      }
+      assert.ok(!JSON.stringify([saved, granted]).includes("backend-project-sentinel"));
+    }
+  });
+
   it("new env grants return immediately usable execution handles without secrets", async () => {
     const owner = "HANDLE_OWNER";
     const cap = await capFor(owner, scopeId("personal", owner), { liveActor: true });

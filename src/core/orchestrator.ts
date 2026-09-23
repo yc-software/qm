@@ -1617,7 +1617,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (deps.serviceCreds) {
           const records = serviceCredRecords;
           const enabled = new Set(
-            records.filter((r) => r.enabled && r.hasSecret && r.delivery !== "env").map((r) => r.slug),
+            records
+              .filter((r) => !isBackendCredential(r) && r.enabled && r.hasSecret && r.delivery !== "env")
+              .map((r) => r.slug),
           );
           if (enabled.size > 0) {
             const slugs = [...grantedCredSlugs].filter((s) => enabled.has(s));
