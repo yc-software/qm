@@ -258,7 +258,13 @@ class ExecutionTests(unittest.TestCase):
             self.assertEqual(direct["code"], 0, direct)
             wrong_scheme = self.execute(f"curl -sS -o /dev/null https://127.0.0.1:{server.server_port}/", trustedHttpOrigins=[origin])
             self.assertNotEqual(wrong_scheme["code"], 0, wrong_scheme)
-            self.assertIn("403", wrong_scheme["stderr"])
+            tunneled = self.execute(f"curl -sS --proxytunnel -X POST --data-binary payload {origin}/", trustedHttpOrigins=[origin])
+            self.assertEqual(tunneled["code"], 0, tunneled)
+            self.assertEqual(tunneled["stdout"], f"127.0.0.1:{server.server_port}:payload", tunneled)
+            other_port = 1 if server.server_port != 1 else 2
+            denied_tunnel = self.execute(f"curl -sS --proxytunnel http://127.0.0.1:{other_port}/", trustedHttpOrigins=[origin])
+            self.assertNotEqual(denied_tunnel["code"], 0, denied_tunnel)
+            self.assertIn("403", denied_tunnel["stderr"])
         finally:
             server.shutdown()
             server.server_close()

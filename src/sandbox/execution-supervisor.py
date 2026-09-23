@@ -263,6 +263,7 @@ class Broker:
                 parsed, origin = parse_origin("https://" + target)
                 if parsed.path or parsed.query or parsed.fragment or parsed.port is None:
                     raise ValueError("Invalid CONNECT authority")
+                origin = next((trusted for trusted in self.trusted if trusted[1:] == origin[1:]), origin)
                 upstream = self.connect(origin)
                 connection.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             else:

@@ -305,7 +305,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       rmSync(source);
       return [Buffer.from([1]), Buffer.from([2]), Buffer.from([3, 0])];
     }
-    const r = await new Promise<{ stdout: Buffer; stderr: Buffer; code: number }>((resolve) => {
+    const r = await new Promise<{ stdout: Buffer; stderr: Buffer; code: number }>((resolve, reject) => {
       const child = execFile(
         "sh",
         ["-c", viaBody ? SCRIPT_RUNNER : remap(name, script)],
@@ -320,6 +320,9 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
           resolve({ stdout, stderr, code });
         },
       );
+      child.stdin!.on("error", (error: NodeJS.ErrnoException) => {
+        if (error.code !== "EPIPE") reject(error);
+      });
       child.stdin!.end(viaBody ? Buffer.from(remap(name, script), "utf8") : stdin);
     });
     const code = r.code;

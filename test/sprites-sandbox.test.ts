@@ -68,6 +68,32 @@ test("streams and exit codes are exact", async () => {
   assert.equal(r.stderr.trim(), "err");
 });
 
+test("fake exec preserves child output and status when the child closes stdin early", async () => {
+  const h = await sandbox.provision(layers);
+  for (const code of [0, 7]) {
+    const url = new URL(`/v1/sprites/${h.id}/exec`, fake.baseUrl.replace(/^http/, "ws"));
+    for (const arg of ["sh", "-c", `exec 0<&-; echo out; echo err >&2; exit ${code}`])
+      url.searchParams.append("cmd", arg);
+    const frames = await new Promise<Buffer[]>((resolve, reject) => {
+      const received: Buffer[] = [];
+      const socket = new WebSocket(url);
+      socket.binaryType = "arraybuffer";
+      socket.addEventListener("error", reject);
+      socket.addEventListener("message", (event) => received.push(Buffer.from(event.data as ArrayBuffer)));
+      socket.addEventListener("close", () => resolve(received));
+      socket.addEventListener("open", () => {
+        socket.send(Buffer.concat([Buffer.from([0]), Buffer.alloc(8 * 1024 * 1024, 120)]));
+        socket.send(Buffer.from([4]));
+      });
+    });
+    assert.deepEqual(frames, [
+      Buffer.from([1, ...Buffer.from("out\n")]),
+      Buffer.from([2, ...Buffer.from("err\n")]),
+      Buffer.from([3, code]),
+    ]);
+  }
+});
+
 test("commands run over the WebSocket exec endpoint with the script in the stream, never the URL", async () => {
   const h = await sandbox.provision(layers);
   const huge = `echo start; : ${"x".repeat(1024 * 1024)}; echo end`;
