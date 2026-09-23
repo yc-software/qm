@@ -8,3 +8,4 @@ test/live-slack/out/
 deploy/stacks/.generated/
 deploy/helm/templates/
 factory/
+.io-agent-*/
