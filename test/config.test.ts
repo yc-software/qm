@@ -702,3 +702,24 @@ test("sandbox resource rollout requires explicit activation", () => {
     /not a recognized boolean/,
   );
 });
+
+test("SPRITES_RAM_MB/SPRITES_CPUS reach the sprites sandbox options, and stay absent when unset or blank — catches spreading the keys in unconditionally", () => {
+  const sized = loadConfig({ SPRITES_RAM_MB: "16384", SPRITES_CPUS: "4", SPRITES_TOKEN: "sp_test" });
+  assert.equal(sized.spritesSandbox.ramMB, 16384);
+  assert.equal(sized.spritesSandbox.cpus, 4);
+  assert.equal(sized.spritesSandbox.token, "sp_test");
+  const unset = loadConfig({ SPRITES_RAM_MB: "", SPRITES_CPUS: "   " }).spritesSandbox;
+  assert.ok(!("ramMB" in unset));
+  assert.ok(!("cpus" in unset));
+  const ramOnly = loadConfig({ SPRITES_RAM_MB: "16384" }).spritesSandbox;
+  assert.equal(ramOnly.ramMB, 16384);
+  assert.ok(!("cpus" in ramOnly));
+});
+
+test("a sprites size that is not a positive integer fails startup, naming the variable — catches validating with numEnvStrict alone, which accepts 0, negatives and fractions", () => {
+  for (const name of ["SPRITES_RAM_MB", "SPRITES_CPUS"]) {
+    for (const value of ["0", "-1", "1.5", "abc", "16384mb", "1e999", "9007199254740993"]) {
+      assert.throws(() => loadConfig({ [name]: value }), new RegExp(name), `${name}=${value}`);
+    }
+  }
+});

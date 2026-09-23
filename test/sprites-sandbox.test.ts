@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
+import { createSpritesSandbox, type SpritesSandboxOptions } from "../src/sandbox/sprites-sandbox.ts";
+import { loadConfig } from "../src/config.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { execFailureDetail, supportsProcessSessions, supportsBlobStaging } from "../src/sandbox/sandbox.ts";
@@ -19,7 +20,7 @@ let sandbox: Sandbox;
 const scope = scopeId("personal", "tester");
 const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 
-function make(extra: Record<string, unknown> = {}): Sandbox {
+function make(extra: SpritesSandboxOptions = {}): Sandbox {
   return createSpritesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "sprites-ws-"))), {
     token: FAKE_SPRITES_TOKEN,
     namePrefix: "qmt",
@@ -587,4 +588,42 @@ test("a 503 that isn't the not-ready signal fails on the first response", async 
     await assert.rejects(s.run(h, "echo ok"), (e: Error) => e.message.includes(`http 503 ${body}`));
     assert.equal(intercept.attempts.length, 1, body);
   }
+});
+
+test("a sized deployment sends { ramMB, cpus } as createSprite's second argument — catches threading the options in but never passing them to the client", async () => {
+  const s = make({ ramMB: 16384, cpus: 4 });
+  const h = await s.provision(layers);
+  assert.equal(h.coldStart, true);
+  assert.deepEqual(fake.createSpriteCalls(), [[h.id, { ramMB: 16384, cpus: 4 }]]);
+  assert.equal((await s.run(h, "echo ok")).code, 0);
+});
+
+test("the scratch sprite is sized too — catches sizing the resident create and leaving the scratch create bare", async () => {
+  const s = make({ ramMB: 16384, cpus: 4 });
+  const h = await s.provision(layers, { scratch: { key: "job-size" } });
+  assert.match(h.id, /^qmt-scratch-/);
+  assert.deepEqual(fake.createSpriteCalls(), [[h.id, { ramMB: 16384, cpus: 4 }]]);
+});
+
+test("an unsized deployment calls createSprite with the name alone — catches always sending a config object, which changes the default wire payload", async () => {
+  const resident = await sandbox.provision(layers);
+  const scratch = await sandbox.provision(layers, { scratch: { key: "job-default" } });
+  assert.deepEqual(fake.createSpriteCalls(), [[resident.id], [scratch.id]]);
+});
+
+test("only the size that was set travels, and zero counts as unset — catches sending an undefined or zero key alongside the one the operator configured", async () => {
+  const ramOnly = await make({ ramMB: 16384 }).provision(layers);
+  assert.deepEqual(fake.createSpriteCalls(), [[ramOnly.id, { ramMB: 16384 }]]);
+  fake.reset();
+  const cpusOnly = await make({ cpus: 4 }).provision(layers);
+  assert.deepEqual(fake.createSpriteCalls(), [[cpusOnly.id, { cpus: 4 }]]);
+  fake.reset();
+  const zeroed = await make({ ramMB: 0, cpus: 0 }).provision(layers);
+  assert.deepEqual(fake.createSpriteCalls(), [[zeroed.id]]);
+});
+
+test("the sizes an operator set in the environment survive the config-to-options seam — catches renaming the sandbox option without renaming the config key that is spread into it", async () => {
+  const s = make(loadConfig({ SPRITES_RAM_MB: "16384", SPRITES_CPUS: "4" }).spritesSandbox);
+  const h = await s.provision(layers);
+  assert.deepEqual(fake.createSpriteCalls(), [[h.id, { ramMB: 16384, cpus: 4 }]]);
 });

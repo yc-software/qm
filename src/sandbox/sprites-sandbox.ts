@@ -55,9 +55,14 @@ function parsePressure(ioFull10Raw: string, ioFull60Raw: string, load1Raw: strin
   };
 }
 
+interface SpriteResources {
+  ramMB?: number;
+  cpus?: number;
+}
+
 export interface SpritesClientLike {
   getSprite(name: string): Promise<unknown>;
-  createSprite(name: string): Promise<unknown>;
+  createSprite(name: string, config?: SpriteResources): Promise<unknown>;
   deleteSprite(name: string): Promise<void>;
 }
 
@@ -66,6 +71,8 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   baseUrl?: string;
   namePrefix?: string;
   defaultTimeoutSec?: number;
+  ramMB?: number;
+  cpus?: number;
   egressProxyUrl?: string;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
@@ -86,6 +93,13 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   const baseUrl = (opts.baseUrl ?? DEFAULT_SPRITES_BASE_URL).replace(/\/+$/, "");
   const prefix = opts.namePrefix ?? "qm";
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
+  const resources: SpriteResources = {
+    ...(opts.ramMB ? { ramMB: opts.ramMB } : {}),
+    ...(opts.cpus ? { cpus: opts.cpus } : {}),
+  };
+  const spriteResources = Object.keys(resources).length > 0 ? resources : undefined;
+  const createSprite = (name: string): Promise<unknown> =>
+    spriteResources ? client.createSprite(name, spriteResources) : client.createSprite(name);
 
   const ensured = new Set<string>();
 
@@ -301,7 +315,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
           void error;
         }
         try {
-          await client.createSprite(name);
+          await createSprite(name);
           ensured.add(name);
           return { coldStart: true };
         } catch (createErr) {
@@ -324,7 +338,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         stale = false;
       }
       if (stale) await client.deleteSprite(name).catch(swallowAs("sprites-sandbox: stale scratch delete", undefined));
-      await client.createSprite(name);
+      await createSprite(name);
       ensured.add(name);
     },
     deleteInstance: (name) => client.deleteSprite(name),
