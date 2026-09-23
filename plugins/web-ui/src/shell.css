@@ -3589,41 +3589,8 @@ qm-markdown .tok-in {
 .loadout-row:focus-within {
   background: var(--secondary);
 }
-.loadout-row.dragging {
-  opacity: 0.45;
-}
-.loadout-list:has(.dragging) .loadout-row {
-  background: transparent;
-}
-.loadout-row.drop-target::before {
-  content: "";
-  position: absolute;
-  inset: -4px 8px auto;
-  height: 2px;
-  background: #93c5fd;
-  pointer-events: none;
-}
-.loadout-row.drop-target.drop-after::before {
-  top: auto;
-  bottom: -4px;
-}
-.loadout-drag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 20px;
-  align-self: stretch;
-  margin-left: 3px;
-  padding: 0;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--muted-foreground);
-  cursor: grab;
-  touch-action: none;
-}
-.loadout-drag:active {
-  cursor: grabbing;
+.loadout-row.active {
+  background: color-mix(in srgb, var(--secondary) 94%, var(--foreground));
 }
 .loadout-pick {
   display: flex;
@@ -3632,7 +3599,7 @@ qm-markdown .tok-in {
   gap: 7px;
   min-width: 0;
   min-height: 34px;
-  padding: 3px 8px;
+  padding: 3px 34px 3px 8px;
   border: 0;
   border-radius: 8px;
   background: transparent;

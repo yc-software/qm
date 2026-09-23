@@ -7,7 +7,6 @@ import {
   modelLoadoutOptions,
   parseLoadout,
   reconcileLoadout,
-  reorderLoadout,
   upsertLoadout,
   type LoadoutEntry,
 } from "../src/composer-loadout.ts";
@@ -194,17 +193,6 @@ test("the model catalog falls back from unavailable saved harnesses using only c
   assert.deepEqual(modelLoadoutOptions(options, saved, "claude"), [options[2], options[1]]);
   assert.deepEqual(modelLoadoutOptions(options, saved, "unavailable"), [options[0], options[1]]);
   assert.deepEqual(modelLoadoutOptions([], saved, "claude"), []);
-});
-
-test("drag ordering moves a setup into the target position without separating its settings", () => {
-  const saved = [entry("pi:first", "max", true), entry("codex:second", "xhigh"), entry("pi:third", "low")];
-  const snapshot = structuredClone(saved);
-  assert.deepEqual(reorderLoadout(saved, "pi:first", "pi:third"), [saved[1], saved[2], saved[0]]);
-  assert.deepEqual(reorderLoadout(saved, "pi:third", "pi:first"), [saved[2], saved[0], saved[1]]);
-  assert.deepEqual(reorderLoadout(saved, "pi:first", "pi:first"), saved);
-  assert.deepEqual(reorderLoadout(saved, "missing", "pi:first"), saved);
-  assert.deepEqual(reorderLoadout(saved, "pi:first", "missing"), saved);
-  assert.deepEqual(saved, snapshot);
 });
 
 test("harness effort choices exclude unsupported settings and label extra high clearly", () => {
