@@ -3564,12 +3564,12 @@ qm-markdown .tok-in {
   min-height: 0;
 }
 .loadout-head {
-  padding: 8px 12px 5px;
+  padding: 4px 8px;
   font-size: 12.5px;
   color: var(--muted-foreground);
 }
 .loadout-list {
-  padding-block: 4px;
+  padding-block: 0;
   flex: 1 1 auto;
   min-height: 0;
   max-height: 304px;
@@ -3578,7 +3578,7 @@ qm-markdown .tok-in {
   scrollbar-width: thin;
 }
 .loadout-row {
-  margin-block: 6px;
+  margin-block: 2px;
   position: relative;
   display: flex;
   align-items: center;
@@ -3632,7 +3632,7 @@ qm-markdown .tok-in {
   gap: 7px;
   min-width: 0;
   min-height: 34px;
-  padding: 7px 8px;
+  padding: 3px 8px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -3901,9 +3901,9 @@ qm-markdown .tok-in {
   flex: none;
   gap: 9px;
   width: 100%;
-  min-height: 34px;
+  min-height: 28px;
   box-sizing: border-box;
-  padding: 7px 8px;
+  padding: 3px 8px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -3956,7 +3956,7 @@ qm-markdown .tok-in {
 .loadout-divider {
   flex: none;
   height: 1px;
-  margin: 4px 0;
+  margin: 3px 0;
   background: var(--border);
 }
 .loadout-setting-label {
@@ -4009,15 +4009,23 @@ qm-markdown .tok-in {
   display: none;
 }
 .loadout-submenu .menu-option {
-  min-height: 42px;
+  min-height: 30px;
+  align-items: center;
   gap: 9px;
+  padding: 4px 8px;
   border: 0;
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 20px;
 }
 .loadout-submenu .menu-option-copy {
   display: flex;
-  flex-direction: column;
-  gap: 0;
+  flex: 1;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+}
+.loadout-submenu .loadout-meta {
+  font-size: 11px;
 }
 .loadout-submenu .menu-option-copy > span {
   overflow: hidden;
@@ -4088,9 +4096,9 @@ qm-markdown .tok-in {
   align-items: center;
   flex: none;
   gap: 8px;
-  min-height: 32px;
-  margin-top: 4px;
-  padding: 8px 8px 2px;
+  min-height: 28px;
+  margin-top: 3px;
+  padding: 3px 8px 0;
   border-top: 1px solid var(--border);
   color: var(--muted-foreground);
   font-size: 12px;
@@ -4121,9 +4129,9 @@ qm-markdown .tok-in {
 .loadout-search input {
   width: 100%;
   min-width: 0;
-  height: 34px;
+  height: 30px;
   box-sizing: border-box;
-  padding: 6px 9px;
+  padding: 4px 9px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--background);
@@ -4184,7 +4192,8 @@ qm-markdown .tok-in {
   .loadout-add,
   .loadout-setting,
   .loadout-effort,
-  .loadout-back {
+  .loadout-back,
+  .loadout-submenu .menu-option {
     min-height: 44px;
   }
 }
