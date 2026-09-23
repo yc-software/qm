@@ -3882,10 +3882,8 @@ qm-markdown .tok-in {
   cursor: pointer;
 }
 .loadout-add {
+  gap: 7px;
   color: var(--muted-foreground);
-}
-.loadout-add > svg:last-child {
-  margin-left: auto;
 }
 .loadout-add:hover,
 .loadout-add.open,

@@ -522,7 +522,8 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                       openLoadoutSection("add", e.detail === 0);
                     }}
                   >
-                    ${icon(Plus, 16)}<span>Add models</span><span class="loadout-end">${icon(ChevronRight, 14)}</span>
+                    <span class="loadout-icon" aria-hidden="true">${icon(Plus, 16)}</span><span>Add models</span
+                    ><span class="loadout-end">${icon(ChevronRight, 14)}</span>
                   </button>
                 </div>
                 ${
