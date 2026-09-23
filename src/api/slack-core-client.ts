@@ -38,6 +38,7 @@ import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
 
 interface SlackRunHooks {
+  onEngaged?(): void;
   onFirstBlock?(text: string): void;
   onSurfacePosted?(): void;
   onTasks?(tasks: Array<{ id: string; title: string; status: TaskStatus }>): void | Promise<void>;
@@ -313,16 +314,24 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async waitRun(runId, hooks = {}) {
+      let engagedSignaled = false;
       let firstBlockSignaled = false;
       let surfaceSignaled = false;
+      const signalEngaged = (): void => {
+        if (engagedSignaled) return;
+        engagedSignaled = true;
+        hooks.onEngaged?.();
+      };
       const signalFirstBlock = (text: string): void => {
         if (firstBlockSignaled || !text.trim()) return;
         firstBlockSignaled = true;
+        signalEngaged();
         hooks.onFirstBlock?.(text);
       };
       const signalSurface = (): void => {
         if (surfaceSignaled) return;
         surfaceSignaled = true;
+        signalEngaged();
         hooks.onSurfacePosted?.();
       };
       const waiters = terminalWaiters.get(runId) ?? new Set();
@@ -368,6 +377,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
           }
           if (run !== undefined) {
             if (!run) throw new Error(`run ${runId} not found`);
+            if (deps.turnStream.replying(runId)) signalEngaged();
             if (deps.turnStream.surfacePosted(runId)) signalSurface();
             if (isTerminal(run.status)) {
               const view = await deps.app.getRun(runId);

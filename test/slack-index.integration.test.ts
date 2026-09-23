@@ -3,6 +3,9 @@ import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { SlackAgentRequestContext } from "../src/api/slack-core-client.ts";
 import type { TurnResult } from "../src/types.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
+import { createTaskAcknowledgements, type TaskAckState } from "../src/slack/task-ack.ts";
 
 type Handler = (args: any) => Promise<void>;
 
@@ -241,6 +244,11 @@ class FakeCore implements SlackCoreClient {
   readonly polled: string[] = [];
   private runGate: Promise<void> | undefined;
   private releaseRun: (() => void) | undefined;
+  private heldHooks: { onEngaged?(): void } | undefined;
+  taskAcknowledgements: SlackCoreClient["taskAcknowledgements"];
+  enableTaskAcks(): void {
+    this.taskAcknowledgements = createTaskAcknowledgements(createMemoryMap<TaskAckState>(), createNoopLeaderLease());
+  }
   readonly modelChangeListeners: Array<(scope: any) => void> = [];
   readonly headerPinChangeListeners: Array<(scope: any) => void> = [];
   readonly headerPinScopes = new Set<string>();
@@ -299,10 +307,14 @@ class FakeCore implements SlackCoreClient {
     }
     return this.result;
   }
-  async waitRun(runId: string): Promise<TurnResult | null> {
+  async waitRun(runId: string, hooks?: { onEngaged?(): void }): Promise<TurnResult | null> {
     this.polled.push(runId);
+    this.heldHooks = hooks;
     if (this.runGate) await this.runGate;
     return this.result;
+  }
+  engage(): void {
+    this.heldHooks?.onEngaged?.();
   }
   /** Enqueue `runId` on the first submit and hold waitRun open; every later submit is a
    *  mid-turn STEER answered with that same live run's id. `finishRun` releases the waiters. */
@@ -406,10 +418,12 @@ async function fixture(
     allowFrom?: string[];
     denyMessage?: string;
     coreSingleton?: boolean;
+    taskAcks?: boolean;
   } = {},
 ) {
   const core = new FakeCore();
   core.externalParticipants = options.externalParticipants ?? false;
+  if (options.taskAcks) core.enableTaskAcks();
   const started = startSlackPlugin(
     {
       botToken: "xoxb-test",
@@ -1305,6 +1319,92 @@ test("a group-DM thread-follow runs unprompted yet attests its author's liveness
     assert.equal(f.core.turns[0].liveActor, true, "a member's own verbatim follow-up is a live act");
     assert.equal(f.core.turns[0].conversation.kind, "group");
     assert.equal(f.core.turns[0].conversation.threadRef, "grp:G1:300.1");
+  } finally {
+    await f.stop();
+  }
+});
+
+function groupThreadWithBotStake(f: Awaited<ReturnType<typeof fixture>>): void {
+  f.client.channelsById.set("G1", { id: "G1", name: "", is_member: true, is_private: true, is_mpim: true });
+  f.client.membersByChannel.set("G1", ["U1", "U2", "UBOT"]);
+  f.client.messagesByChannel.set("G1", [
+    { channel: "G1", user: "U1", text: "kick off", ts: "300.1" },
+    { channel: "G1", user: "UBOT", text: "on it", ts: "300.2", thread_ts: "300.1" },
+  ]);
+}
+
+test("a channel mention is acknowledged durably as soon as core queues it, and the mark clears after the reply", async () => {
+  const f = await fixture({ taskAcks: true });
+  try {
+    f.core.holdRun("r-mention");
+    const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> status?", ts: "104.1" };
+    f.client.messagesByChannel.set("C1", [event]);
+    const turn = f.app.emitEvent("app_mention", event);
+    await waitFor(() => f.client.reactionsAdded.length === 1);
+    assert.deepEqual(f.client.reactionsAdded, [{ channel: "C1", timestamp: "104.1", name: "eyes" }]);
+    assert.equal(f.client.reactionsRemoved.length, 0);
+    f.core.finishRun({ status: "ok", reply: "all green" });
+    await turn;
+    assert.deepEqual(
+      f.client.posts.map((p) => p.text),
+      ["all green"],
+    );
+    assert.deepEqual(f.client.reactionsRemoved, [{ channel: "C1", timestamp: "104.1", name: "eyes" }]);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a thread-follow is acknowledged only once core decides to answer it", async () => {
+  const f = await fixture({ taskAcks: true });
+  try {
+    groupThreadWithBotStake(f);
+    f.core.holdRun("r-follow");
+    const turn = f.app.emitMessage({
+      channel: "G1",
+      channel_type: "mpim",
+      user: "U2",
+      text: "also update the skill",
+      ts: "300.3",
+      thread_ts: "300.1",
+    });
+    await waitFor(() => f.core.polled.includes("r-follow"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(f.client.reactionsAdded.length, 0, "no mark before core commits to a reply");
+    f.core.engage();
+    await waitFor(() => f.client.reactionsAdded.length === 1);
+    assert.deepEqual(f.client.reactionsAdded, [{ channel: "G1", timestamp: "300.3", name: "eyes" }]);
+    f.core.finishRun({ status: "ok", reply: "updated" });
+    await turn;
+    assert.deepEqual(
+      f.client.posts.map((p) => p.text),
+      ["updated"],
+    );
+    assert.deepEqual(f.client.reactionsRemoved, [{ channel: "G1", timestamp: "300.3", name: "eyes" }]);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a thread-follow core declines never touches reactions", async () => {
+  const f = await fixture({ taskAcks: true });
+  try {
+    groupThreadWithBotStake(f);
+    f.core.holdRun("r-declined");
+    const turn = f.app.emitMessage({
+      channel: "G1",
+      channel_type: "mpim",
+      user: "U2",
+      text: "lunch?",
+      ts: "300.4",
+      thread_ts: "300.1",
+    });
+    await waitFor(() => f.core.polled.includes("r-declined"));
+    f.core.finishRun({ status: "silent" });
+    await turn;
+    assert.equal(f.client.reactionsAdded.length, 0);
+    assert.equal(f.client.reactionsRemoved.length, 0);
+    assert.equal(f.client.posts.length, 0);
   } finally {
     await f.stop();
   }

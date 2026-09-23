@@ -336,9 +336,11 @@ export function createTurnHandler(deps: {
       return;
     }
 
-    const taskManaged = !inc.unprompted && !actor.isBot && inc.kind === "dm" && !!core.taskAcknowledgements;
+    const taskManaged = !actor.isBot && !!core.taskAcknowledgements;
+    let taskAcked = false;
     const moveTaskAck = async (runId: string, ts: string, pick = false) => {
       if (!taskManaged) return;
+      taskAcked = true;
       await core
         .taskAcknowledgements!.move(
           client,
@@ -353,7 +355,7 @@ export function createTurnHandler(deps: {
         .catch(swallowAs("slack: task ack move", undefined));
     };
     const finishTaskAck = async () => {
-      if (taskManaged && queuedRunId) await core.taskAcknowledgements!.finish(client, queuedRunId);
+      if (taskAcked && queuedRunId) await core.taskAcknowledgements!.finish(client, queuedRunId);
     };
     if (!inc.unprompted) {
       const intercepted = await maybeInterceptStop({
@@ -554,15 +556,22 @@ export function createTurnHandler(deps: {
             inFlightRunByThread.set(threadRef, runId);
             accepted = true;
             inc.ackGate?.persisted();
-            await moveTaskAck(runId, inc.ts, true);
+            if (!inc.unprompted) await moveTaskAck(runId, inc.ts, true);
           },
           // Folded into a live run: the envelope is durably accepted just the same, but the run
           // stays pinned to its own handler — claiming it here would unpin it on the way out.
           onSteered: async (runId) => {
             accepted = true;
             inc.ackGate?.persisted();
-            await moveTaskAck(runId, inc.ts);
+            if (!inc.unprompted) await moveTaskAck(runId, inc.ts);
           },
+          ...(inc.unprompted
+            ? {
+                onEngaged: () => {
+                  if (queuedRunId) void moveTaskAck(queuedRunId, inc.ts, true);
+                },
+              }
+            : {}),
           ...(ack
             ? {
                 onFirstBlock: (blockText: string) => {
