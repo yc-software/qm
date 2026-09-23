@@ -496,6 +496,14 @@ test("sandbox advertises available management actions and retires migrate", asyn
   await assert.rejects(() => call(execute, { command: "", computer: "migrate" }), /migrate has been retired/);
 });
 
+test("sandbox tells the agent to provision a missing default before reporting a blocker", () => {
+  const ref: ToolContextRef = { current: fakeToolContext(), emit: () => {}, scopeLabel: "group:C1" };
+  const sandbox = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
+  assert.match(sandbox.description, /needs a computer and this scope has no default/i);
+  assert.match(sandbox.description, /list.*create.*set_default.*retry/is);
+  assert.match(sandbox.description, /report.*blocked.*creation fails/is);
+});
+
 test("sandbox creation and default routing remain independent", async () => {
   const calls: unknown[] = [];
   const ref: ToolContextRef = {

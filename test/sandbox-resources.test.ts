@@ -118,7 +118,10 @@ test("unset defaults remain unset durably while explicit execution remains usabl
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.setDefault("alice", "personal:alice", null);
   assert.equal((await defaults.get("personal:alice"))?.sandboxId, null);
-  await assert.rejects(router.provision(layers), /no default sandbox/);
+  await assert.rejects(
+    router.provision(layers),
+    /sandbox list, create, set_default, then retry before reporting blocked/,
+  );
   const explicit = await router.provision(layers, { sandboxId: record.id });
   assert.equal(explicit.resourceId, record.id);
   const listed = await resources.list("alice", "personal:alice");

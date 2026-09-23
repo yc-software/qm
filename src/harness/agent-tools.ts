@@ -889,7 +889,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "sandbox",
     label: "sandbox",
     description:
-      "Manage sandbox resources. list returns providers, supported actions, inventory, and this scope's optional default. create provisions a blank sandbox without changing the default or copying files. set_default changes routing only; pass sandbox_id:null to clear it. status reports health and recovery expiry without provisioning. restart recovers working state where supported and stops running processes. retire deletes the named sandbox after its default and jobs are cleared. Durable outputs belong in Files or git. Select an exact sandbox_id for status/restart or omit it to use the stored default.",
+      "Manage sandbox resources. list returns providers, supported actions, inventory, and this scope's optional default. If work needs a computer and this scope has no default, do not report blocked: list providers, create a sandbox, set_default to it, and retry. Only report blocked if creation fails. create provisions a blank sandbox without changing the default or copying files. set_default changes routing only; pass sandbox_id:null to clear it. status reports health and recovery expiry without provisioning. restart recovers working state where supported and stops running processes. retire deletes the named sandbox after its default and jobs are cleared. Durable outputs belong in Files or git. Select an exact sandbox_id for status/restart or omit it to use the stored default.",
     parameters: Type.Object({
       action: Type.String({ enum: sandboxActions }),
       sandbox_id: Type.Optional(
