@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createLogin, loginCallback } from "./login.mjs";
-import { instanceUrl, externalUrl, browserLoginUrl } from "./url.mjs";
+import { instanceUrl, externalUrl, browserLoginUrl, loginDestination } from "./url.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const setupUrl = pathToFileURL(path.join(directory, "setup.html")).href;
@@ -128,7 +128,7 @@ async function finishBrowserSignIn(url) {
 async function showInstance(url) {
   pendingLogin?.controller.abort();
   pendingLogin = undefined;
-  if (browserLoginUrl(url, new URL(url).origin)) url = new URL("/", url).href;
+  if (browserLoginUrl(url, new URL(url).origin)) url = loginDestination(url, url);
   if (mainWindow) mainWindow.destroy();
   const window = new BrowserWindow({
     title: "QM",
@@ -158,7 +158,7 @@ async function showInstance(url) {
     if (browserLoginUrl(destination, origin)) {
       event.preventDefault();
       handedOff = true;
-      void beginBrowserSignIn(url);
+      void beginBrowserSignIn(loginDestination(destination, url, window.webContents.getURL()));
     } else if (destinationUrl.origin !== origin) {
       event.preventDefault();
       handedOff = true;
@@ -171,7 +171,7 @@ async function showInstance(url) {
   window.webContents.setWindowOpenHandler(({ url: destination }) => {
     if (browserLoginUrl(destination, origin)) {
       handedOff = true;
-      void beginBrowserSignIn(url);
+      void beginBrowserSignIn(loginDestination(destination, url, window.webContents.getURL()));
     } else if (new URL(destination).origin === origin) {
       window.loadURL(destination).catch((error) => {
         if (error.code !== "ERR_ABORTED") dialog.showErrorBox("Could not open page", error.message);

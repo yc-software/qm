@@ -44,6 +44,7 @@ test(
         this.options = options;
         this.webContents = Object.assign(new EventEmitter(), {
           session,
+          getURL: () => this.url,
           send() {},
           setWindowOpenHandler: (handler) => {
             this.popup = handler;
@@ -127,7 +128,12 @@ test(
       assert.equal(windows[2].url, "https://new.example/");
       assert.equal(windows[2].isDestroyed(), false);
       assert.equal(flushes, 0);
-      assert.deepEqual(windows[2].popup({ url: "https://new.example/auth/trusted/login" }), { action: "deny" });
+      assert.deepEqual(
+        windows[2].popup({
+          url: "https://new.example/auth/trusted/login?returnTo=%2Fdrop%2Ftest%2Fform%3Ft%3Dtest-token",
+        }),
+        { action: "deny" },
+      );
       assert.equal(opened.length, 2);
       app.emit("open-url", event, callback(1));
       assert.equal(requests.length, 2);
@@ -135,7 +141,9 @@ test(
       requests[1].resolve({ ok: true });
       await tick();
       assert.equal(flushes, 1);
-      assert.equal(windows.at(-1).url, "https://new.example/");
+      assert.equal(windows.at(-1).url, "https://new.example/drop/test/form?t=test-token");
+      assert.equal(new URL(opened[1]).searchParams.has("returnTo"), false);
+      assert.equal(opened[1].includes("test-token"), false);
       assert.equal(windows[3].isDestroyed(), true);
       assert.deepEqual(errors, []);
     } finally {
