@@ -1406,6 +1406,24 @@ export function createChatSurface(
     const tier = ctx.density();
     const glanceTier = tier === "card" || tier === "strip" ? tier : null;
     const emptyChat = !messages.length && (showWelcome || !chatState.forkSession);
+    const showSuggestions =
+      emptyChat &&
+      !editingApp &&
+      !(isNewUser && appState.me?.welcomeCohort) &&
+      !glanceTier &&
+      (!ctx.pane || tier === "full") &&
+      !chatState.sessionId &&
+      (chatState.scopeId === null || chatState.scopeId === `personal:${appState.me?.user}`) &&
+      !agent.state.isStreaming;
+    const suggestions = showSuggestions
+      ? suggestedActivities(
+          appState.me?.suggestedActivities,
+          (activity) => ctx.composer.fillSuggestedPrompt(activity.prompt, agent),
+          Boolean(
+            ctx.composer.state.draft || ctx.composer.state.attachments.length || ctx.composer.state.processingFiles,
+          ),
+        )
+      : nothing;
     render(
       html`
         <div
@@ -1433,32 +1451,13 @@ export function createChatSurface(
               ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
               ${glanceTier ? nothing : liveWorkStatus(agent)}
               ${emptyChat && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
+              ${ctx.pane ? suggestions : nothing}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>
           </section>
           <div class="chat-bottom-dock">
             ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${backgroundActivityStrip()}
-            ${ctx.composer.composerForm(agent)}
-            ${
-              emptyChat &&
-              !editingApp &&
-              !(isNewUser && appState.me?.welcomeCohort) &&
-              !glanceTier &&
-              (!ctx.pane || tier === "full") &&
-              !chatState.sessionId &&
-              (chatState.scopeId === null || chatState.scopeId === `personal:${appState.me?.user}`) &&
-              !agent.state.isStreaming
-                ? suggestedActivities(
-                    appState.me?.suggestedActivities,
-                    (activity) => ctx.composer.fillSuggestedPrompt(activity.prompt, agent),
-                    Boolean(
-                      ctx.composer.state.draft ||
-                      ctx.composer.state.attachments.length ||
-                      ctx.composer.state.processingFiles,
-                    ),
-                  )
-                : nothing
-            }
+            ${ctx.composer.composerForm(agent)} ${ctx.pane ? nothing : suggestions}
           </div>
         </div>
       `,
