@@ -2613,13 +2613,17 @@ export function createChatSurface(
   }
 
   function toolDetail(tool: string, call: ToolPayload, result: ToolPayload): string {
+    if (typeof call.purpose === "string" && call.purpose.trim()) return call.purpose.trim();
     switch (toolCategory({ ...result, ...call, tool })) {
       case "execute":
         return call.command ? firstLine(call.command) : "";
       case "read":
         return call.path ?? result.path ?? "";
-      case "skill":
-        return `${call.name ?? result.name ?? ""}/${call.path ?? result.path ?? "SKILL.md"}`;
+      case "skill": {
+        const name = call.name ?? result.name ?? "";
+        const path = call.path ?? result.path ?? "SKILL.md";
+        return path === "SKILL.md" ? name : `${name}/${path}`;
+      }
       case "write": {
         const path = call.path ?? result.path ?? "";
         const bytes = result.bytes ?? call.bytes;

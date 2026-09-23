@@ -33,7 +33,8 @@ export function activityDescription(
   if (tool === "read") return { category: "read", target: compactPath(call.path ?? result.path ?? "") };
   if (tool === "skill") {
     const name = call.name ?? result.name ?? "";
-    return { category: "read", target: `${name}/${compactPath(call.path ?? result.path ?? "SKILL.md")}` };
+    const path = call.path ?? result.path ?? "SKILL.md";
+    return { category: "read", target: path === "SKILL.md" ? name : `${name}/${compactPath(path)}` };
   }
   if (tool !== "execute") return { category: "other", target: "" };
   const command = call.command ?? "";
@@ -81,7 +82,14 @@ export function activityLabel(row: ToolRowModel, status: WorkBlock["status"]): s
   const result = (row.result?.payload ?? {}) as ToolPayload;
   const { category, target } = activityDescription(call, result);
   const state = toolRowKind(row, status);
-  if (category === "other" || state === "approval") return null;
+  if (state === "approval") return null;
+  const purpose = typeof call.purpose === "string" ? call.purpose.trim() : "";
+  if (purpose) {
+    if (state === "failed") return `${purpose} · Failed`;
+    if (state === "attempted") return `${purpose} · Unconfirmed`;
+    return purpose;
+  }
+  if (category === "other") return null;
   const verbs = {
     read: { ok: "Read", running: "Reading", failed: "Failed to read", attempted: "Tried reading" },
     search: {

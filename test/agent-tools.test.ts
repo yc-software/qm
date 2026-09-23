@@ -3542,3 +3542,26 @@ test("the retired credential tool is absent and execute accepts credential handl
   );
   assert.ok(tools.some((tool) => tool.name === "execute"));
 });
+
+test("sandbox call traces preserve purpose across execution, management, processes, and invalid routes", async () => {
+  const calls: Record<string, unknown>[] = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    scopeLabel: "personal:U1",
+    emit: (event) => {
+      if (event.type === "tool_call") calls.push(event.payload as Record<string, unknown>);
+    },
+  };
+  const sandbox = createAgentTools(ref, { sandboxResources: true }).find((tool) => tool.name === "sandbox")!;
+  for (const params of [
+    { action: "exec", command: "pwd" },
+    { action: "status" },
+    { action: "start_process", command: "echo ready" },
+    { action: "exec", command: "pwd", scope: "scratch" },
+    { action: "exec" },
+  ]) {
+    await call(sandbox, { ...params, purpose: "Inspect the demo workspace" });
+  }
+  assert.equal(calls.length, 5);
+  assert.ok(calls.every((entry) => entry.purpose === "Inspect the demo workspace"));
+});

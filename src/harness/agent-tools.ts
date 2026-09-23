@@ -589,10 +589,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ),
     purpose: Type.String({
       description:
-        "One short sentence on what this command accomplishes and why you're running it now — " +
-        "the intent, not a restatement of the command. Required on every call: keep it terse for " +
-        "routine commands, but never skip it, because you can't tell in advance which command will " +
-        "trip human approval, and if one does this is the ONLY context the approver sees before deciding.",
+        "A human-readable intent label, at most 4 words (e.g. 'Check Python version'). " +
+        "Describe the purpose, not the code. Required on every call; shown in tool activity and approval requests.",
     }),
     timeout_seconds: Type.Optional(
       Type.Integer({
@@ -660,6 +658,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     await recordCall(callId, {
       tool: "execute",
       command: params.command,
+      purpose: params.purpose,
       ...scopeNote,
       ...(params.sandbox_id ? { sandbox_id: params.sandbox_id } : {}),
     });
@@ -783,14 +782,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     const durable = params.durable;
     if (keyword === "scoped") {
       if ((scratchExec || ownerAuthExec) && durable === false) {
-        await recordCall(callId, { tool: "execute", command: params.command, scope, durable });
+        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
         return invalidExecute(callId, { tool: "execute", invalid: "scoped_ephemeral" }, SCOPED_EPHEMERAL_ERROR);
       }
       return runExecute(callId, params, { scratch: false });
     }
     if (keyword === "scratch") {
       if (!scratchExec) {
-        await recordCall(callId, { tool: "execute", command: params.command, scope });
+        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope });
         return invalidExecute(
           callId,
           { tool: "execute", invalid: "scratch_unavailable" },
@@ -798,14 +797,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         );
       }
       if (durable === true) {
-        await recordCall(callId, { tool: "execute", command: params.command, scope, durable });
+        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
         return invalidExecute(callId, { tool: "execute", invalid: "scratch_durable" }, SCRATCH_DURABLE_ERROR);
       }
       return runExecute(callId, params, { scratch: true });
     }
     if (keyword === "owner") {
       if (!ownerAuthExec) {
-        await recordCall(callId, { tool: "execute", command: params.command, scope });
+        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope });
         return invalidExecute(
           callId,
           { tool: "execute", invalid: "owner_unavailable" },
@@ -813,7 +812,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         );
       }
       if (durable === true) {
-        await recordCall(callId, { tool: "execute", command: params.command, scope, durable });
+        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
         return invalidExecute(
           callId,
           { tool: "execute", invalid: "owner_durable" },
@@ -897,7 +896,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
       backend: Type.Optional(Type.String({ description: "create only: provider from list." })),
       name: Type.Optional(Type.String({ description: "create only: human-readable name." })),
-      purpose: Type.String({ description: "Briefly explain why this action is needed." }),
+      purpose: Type.String({ description: "Human-readable purpose, at most 4 words (e.g. 'Check sandbox health')." }),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -905,6 +904,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       await recordCall(callId, {
         tool: "sandbox",
         action: params.action,
+        purpose: params.purpose,
         ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
         ...(params.backend ? { backend: params.backend } : {}),
         ...(params.name ? { name: params.name } : {}),
@@ -1670,7 +1670,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         },
       ),
       purpose: Type.Optional(
-        Type.String({ description: "Brief intent for a process operation that may require approval." }),
+        Type.String({ description: "Human-readable purpose, at most 4 words (e.g. 'Start preview server')." }),
       ),
       command: Type.Optional(Type.String({ description: "start only: the shell command to run in the background." })),
       process_id: Type.Optional(Type.String({ description: "poll/write/stop/watch only: the id start returned." })),
@@ -1736,6 +1736,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       await recordCall(callId, {
         tool: "background",
         action: params.action,
+        purpose: params.purpose,
         command: params.command,
         process_id: params.process_id,
         ...(params.sandbox_id ? { sandbox_id: params.sandbox_id } : {}),
@@ -2012,7 +2013,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     command: Type.Optional(executeBaseParams.command),
     purpose: Type.Optional(
       Type.String({
-        description: "Required for exec and management actions: briefly explain why. Optional for process actions.",
+        description:
+          "Human-readable intent label, at most 4 words (e.g. 'Check Python version'). Describe the purpose, not the code. Required for exec and management actions; optional for process actions.",
       }),
     ),
     timeout_seconds: Type.Optional(
@@ -2109,7 +2111,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               !Check(schema, params) ||
               ((params as Record<string, unknown>).sandbox_id === null && action !== "set_default")
             ) {
-              await recordCall(callId, { tool: "sandbox", action });
+              await recordCall(callId, { tool: "sandbox", action, purpose: params.purpose });
               return recordResult(
                 callId,
                 { tool: "sandbox", action, invalid: true },
@@ -4025,6 +4027,7 @@ function withToolApprovalGate(
         await rec.recordCall(callId, {
           tool: tool.name,
           ...(resourceAction ? { action: resourceAction } : {}),
+          ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
           blocked: "needs_approval",
           reason: STRICT_TOOL_APPROVAL_REASON,
         });
