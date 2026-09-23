@@ -174,7 +174,10 @@ export function resyncModelSelection(): void {
 }
 
 export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
-  const refreshAccount = () => ctx.chat.drawActiveChat();
+  const refreshAccount = () => {
+    loadoutRestored = false;
+    void refreshRuntimeSelection(ctx.chat.state.scopeId, ctx.chat.state.agent ?? undefined, true);
+  };
   window.addEventListener("model-account-changed", refreshAccount);
   let runtimeRequest = 0;
   let runtimeIdentity = "";
@@ -485,7 +488,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     }
 
     const compact = Boolean(ctx.pane) || isPhone();
-    const showRuntimeControls = !appState.me?.individualModelAuth;
     const runtimeControls = modelPicker.render(agent, selectedModel, inputBlocked);
     return html`
       <form
@@ -617,7 +619,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
             >
               ${icon(Paperclip, 18)}
             </button>
-            ${showRuntimeControls ? runtimeControls : nothing}
+            ${runtimeControls}
           </div>
           <div class="composer-right">${sendControls(agent)}</div>
         </div>

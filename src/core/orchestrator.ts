@@ -2958,8 +2958,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const routing = resolveIndividualAuthRouting(
               anthCred ?? null,
               oaiCred ?? null,
-              account === "personal" ? (runtime.modelId ?? input.model) : runtime.modelId,
-              account === "personal" ? preferredHarness : runtime.harnessId,
+              account === "personal" || input.surface === "web" ? (runtime.modelId ?? input.model) : runtime.modelId,
+              account === "personal" || input.surface === "web" ? preferredHarness : runtime.harnessId,
             );
             if (routing?.kind === "apikey") {
               userHarnessOverride = "pi";
@@ -3007,6 +3007,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
         let { userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken, codexTurnAuth } =
           await loadRuntimeAuth({});
+        if (
+          input.surface === "web" &&
+          userHarnessOverride &&
+          ((input.model && input.model !== userModelOverride) ||
+            (input.harness && input.harness !== userHarnessOverride))
+        )
+          throw new NonRetryableTurnError("Your connected AI account cannot serve this model on that harness.");
         const effectiveModel = userModelOverride ?? input.model;
         const effectiveHarness = userHarnessOverride ?? input.harness;
         if (userHarnessOverride) {

@@ -1,6 +1,6 @@
 import { isSessionStatus } from "../../sessions/session-status.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
-import { runtimeFallback, runtimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
+import { runtimeFallback, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
@@ -1218,7 +1218,7 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   await ctx.deps.refreshModels?.();
-  return sendJson(ctx.res, 200, await runtimeConfigBody(ctx, target.scope));
+  return sendJson(ctx.res, 200, await userRuntimeConfigBody(ctx, target.scope, target.actorId));
 }
 
 async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
@@ -1262,6 +1262,11 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
     const fastMode = ctx.body.fastMode ?? false;
     if (typeof fastMode !== "boolean") return sendJson(ctx.res, 400, { error: "fast_mode_invalid" });
     const choice = { harnessId, modelId, effortLevel, fastMode: fastMode && fastModeModelIds().includes(modelId) };
+    if ((await config.getModelAccountDurable(target.actorId)) !== "company") {
+      const available = await userRuntimeConfigBody(ctx, target.scope, target.actorId);
+      if (!available.modelsByHarness[harnessId]?.includes(modelId))
+        return sendJson(ctx.res, 400, { error: "account_runtime_unavailable" });
+    }
     await config.setRuntimeSelectionLatest(target.scope, choice);
   }
   audit(ctx.deps, {
@@ -1270,7 +1275,7 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
     resource: "runtime-config",
     scopeLabel: target.scope,
   });
-  return sendJson(ctx.res, 200, await runtimeConfigBody(ctx, target.scope));
+  return sendJson(ctx.res, 200, await userRuntimeConfigBody(ctx, target.scope, target.actorId));
 }
 
 async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {
