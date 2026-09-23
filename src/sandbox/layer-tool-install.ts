@@ -52,6 +52,21 @@ export function createLayerToolInstaller(files: () => readonly LayerInstallFile[
     if (prepare && result.code !== 0 && result.code !== 1)
       throw new Error(`sandbox provision prep failed (rc=${result.code}): ${result.stderr.slice(0, 200)}`);
     if (result.code === 0) return;
+    const validate = [
+      "import os,pathlib,stat,sys",
+      "for value in sys.argv[1:]:",
+      " path=pathlib.Path(value)",
+      " assert path.is_absolute() and '..' not in path.parts",
+      " for parent in reversed(path.parents):",
+      "  if not parent.exists() and not parent.is_symlink(): continue",
+      "  info=parent.lstat()",
+      "  assert stat.S_ISDIR(info.st_mode) and info.st_uid in (0,os.geteuid()) and not info.st_mode & 0o022, 'Unsafe tool directory: '+str(parent)",
+    ].join("\n");
+    const checked = await io.exec(
+      `python3 -I -c ${shq(validate)} ${wanted.map((file) => shq(file.to)).join(" ")}`,
+      STEP_TIMEOUT_SEC,
+    );
+    if (checked.code !== 0) throw new Error("Layer tool install refused an unsafe destination directory");
     const dirs = [...new Set(wanted.map((file) => dirname(file.to)))];
     const prep = await io.exec(`mkdir -p ${dirs.map(shq).join(" ")}`, STEP_TIMEOUT_SEC);
     if (prep.code !== 0) {

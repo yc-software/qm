@@ -1,7 +1,7 @@
 import {
   KeychainError,
+  credentialHandle,
   renderAskNotice,
-  renderUseScript,
   type CredentialFieldInput,
   type CredentialFile,
   type GrantMode,
@@ -15,7 +15,6 @@ import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
 import { swallow, swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
-import { keychainUseCommand } from "../contract.ts";
 
 const CONSENT_ON_TRIGGERED_TURN =
   "consent can only be recorded on a turn its owner themself sent — this turn was fired by a trigger, not a person";
@@ -154,11 +153,16 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         resource: `${meta.service}:${meta.id}`,
         scopeLabel: capability.scopeId,
       });
-      return sendJson(res, 200, { credential: meta });
+      return sendJson(res, 200, { credential: { ...meta, credentialHandle: credentialHandle(meta.id) } });
     }
 
     if (method === "GET" && pathname === "/v1/keychain/credentials") {
-      return sendJson(res, 200, { credentials: await kc.listByOwner(actorId) });
+      return sendJson(res, 200, {
+        credentials: (await kc.listByOwner(actorId)).map((credential) => ({
+          ...credential,
+          credentialHandle: credentialHandle(credential.id),
+        })),
+      });
     }
 
     if (method === "GET" && pathname === "/v1/keychain/overview") {
@@ -170,7 +174,16 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         ...grants.map((grant) => grant.audienceScopeId),
         ...asks.map((ask) => ask.requesterScopeId),
       ]);
-      return sendJson(res, 200, { credentials, connectorCredentials, grants, asks, scopeNames });
+      return sendJson(res, 200, {
+        credentials: credentials.map((credential) => ({
+          ...credential,
+          credentialHandle: credentialHandle(credential.id),
+        })),
+        connectorCredentials,
+        grants: grants.map((grant) => ({ ...grant, credentialHandle: credentialHandle(grant.credentialId) })),
+        asks,
+        scopeNames,
+      });
     }
 
     if (method === "DELETE" && pathname.startsWith("/v1/keychain/credentials/")) {
@@ -203,9 +216,11 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
           message: 'expected { credential | ask, mode: "once"|"standing", purpose }',
         });
       }
-      const useBlock = (grant: { id: string }) => ({
-        command: keychainUseCommand({ grant: grant.id }),
-        note: "Run the task in that same shell. The secret never appears in output — do not cat the file.",
+      const useBlock = (grant: { credentialId: string }) => ({
+        credentialHandle: credentialHandle(grant.credentialId),
+        credentials: [credentialHandle(grant.credentialId)],
+        command: `execute.credentials: ${JSON.stringify([credentialHandle(grant.credentialId)])}`,
+        note: "Request the granted credential in execute.credentials for the command that needs it.",
       });
       if (typeof b.ask === "string") {
         if (typeof b.onBehalfOf === "string" && b.onBehalfOf.trim() && !samePerson(b.onBehalfOf, actorId)) {
@@ -233,9 +248,10 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
           .then(() => kc.markAskNotified(ask.id, ask.status))
           .catch((e) => swallow("keychain: ask resolution fire failed (sweep will retry)", e));
         return sendJson(res, 200, {
-          grant,
+          grant: { ...grant, credentialHandle: credentialHandle(grant.credentialId) },
           ask,
           use: {
+            credentialHandle: credentialHandle(grant.credentialId),
             note: `Grant is active in ${grant.audienceScopeId} — the asking conversation resumes automatically. Do not load or consume the grant on this approval turn.`,
           },
         });
@@ -277,14 +293,22 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
           scopeLabel: capability.scopeId,
         });
       }
-      return sendJson(res, 200, { grant, use: useBlock(grant) });
+      return sendJson(res, 200, {
+        grant: { ...grant, credentialHandle: credentialHandle(grant.credentialId) },
+        use: useBlock(grant),
+      });
     }
 
     if (method === "GET" && pathname === "/v1/keychain/grants") {
       const mine = await kc.listGrants({ ownerId: actorId });
       const here = await kc.listGrants({ audienceScopeId: capability.scopeId });
       const byId = new Map([...mine, ...here].map((g) => [g.id, g]));
-      return sendJson(res, 200, { grants: [...byId.values()] });
+      return sendJson(res, 200, {
+        grants: [...byId.values()].map((grant) => ({
+          ...grant,
+          credentialHandle: credentialHandle(grant.credentialId),
+        })),
+      });
     }
 
     if (method === "POST" && pathname.startsWith("/v1/keychain/grants/") && pathname.endsWith("/revoke")) {
@@ -408,42 +432,11 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
     }
 
     if (method === "POST" && pathname === "/v1/keychain/use") {
-      const b = body as { grant?: unknown; credential?: unknown };
-      if (typeof b.grant !== "string" && typeof b.credential !== "string") {
-        return sendJson(res, 400, {
-          error: "bad_request",
-          message: "expected { grant } or { credential } (your own, personal conversation only)",
-        });
-      }
-      let m;
-      if (typeof b.grant === "string") {
-        m = await kc.materialize(b.grant, capability.scopeId, actorId);
-      } else {
-        if (capability.liveActor !== true) {
-          return sendJson(res, 403, {
-            error: "forbidden",
-            message:
-              "own-credential use is implied only on a turn its owner themself sent live — this turn wasn't; use an existing grant or POST /v1/keychain/asks to request owner approval, then wait",
-          });
-        }
-        m = await kc.materializeOwnById(actorId, b.credential as string, capability.scopeId);
-      }
-      deps.credentialUsage?.record({
-        slug: `keychain:${m.service}:${m.credentialId}`,
-        host: m.service,
-        status: "materialized",
-        scopeLabel: capability.scopeId,
-        principalId: actorId,
+      return sendJson(res, 410, {
+        error: "execute_credentials_required",
+        message:
+          "Credentials are delivered only to execute. Request the credential handle in execute.credentials; this endpoint does not release secrets or consume grants.",
       });
-      audit(deps, {
-        principalId: actorId,
-        action: "keychain.use",
-        resource: m.grantId ? `${m.credentialId} (grant ${m.grantId})` : `${m.credentialId} (own)`,
-        scopeLabel: capability.scopeId,
-      });
-      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-      res.end(renderUseScript(m));
-      return;
     }
   } catch (e) {
     if (e instanceof KeychainError) return sendJson(res, e.status, { error: "keychain", message: e.message });

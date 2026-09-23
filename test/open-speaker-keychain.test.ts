@@ -64,7 +64,8 @@ test("Open owner computer rechecks revocation before reuse and is destroyed, nev
   await assert.rejects(boxes.provisionOwnerAuth!(), /no longer authorized/);
   posture = "open";
   const command = boxes.ownerAuthCommand!("true");
-  assert.match(command, /unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN AGENT_CREDENTIAL_TOKEN/);
+  assert.equal(command, "true");
+  assert.ok(!command.includes("synthetic-secret"));
   assert.ok(!JSON.stringify(audits).includes("synthetic-secret"));
   await boxes.reclaimBox();
   assert.deepEqual(releases, [[handle, { destroy: true }]]);

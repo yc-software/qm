@@ -130,11 +130,12 @@ export function installFakeMicrovm(): FakeMicrovm {
       body.fs.set("/tmp/agent-home.tar", enc(JSON.stringify(dump)));
       return ok;
     }
-    if (cmd.includes("tar -xf '/tmp/agent-home.tar'")) {
+    if (cmd.includes("Workspace already populated; refusing snapshot overwrite")) {
       const blob = body.fs.get("/tmp/agent-home.tar");
       if (blob) {
         const dump = JSON.parse(Buffer.from(blob).toString("utf8")) as Record<string, string>;
-        for (const [p, b64] of Object.entries(dump)) body.fs.set(p, Buffer.from(b64, "base64"));
+        for (const [p, b64] of Object.entries(dump))
+          if (p.startsWith("/root/workspace/")) body.fs.set(p, Buffer.from(b64, "base64"));
       }
       body.fs.delete("/tmp/agent-home.tar");
       return ok;

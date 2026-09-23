@@ -580,7 +580,7 @@ test("destroying a scope exports the home to the snapshot store first and a repl
   const snapshots = createMemorySnapshotStore();
   const s = make({ snapshots });
   const h = await s.provision(layers);
-  await s.run(h, 'printf survivor > "$HOME/notes.txt"');
+  await s.run(h, 'printf survivor > "$HOME/workspace/notes.txt"');
   assert.equal(await snapshots.open(scope), null);
 
   await s.destroyScope!(scope);
@@ -590,7 +590,7 @@ test("destroying a scope exports the home to the snapshot store first and a repl
 
   const again = await s.provision(layers);
   assert.equal(again.coldStart, false, "the replacement is hydrated, not cold");
-  const back = await s.run(again, 'cat "$HOME/notes.txt"');
+  const back = await s.run(again, 'cat "$HOME/workspace/notes.txt"');
   assert.equal(back.stdout, "survivor");
   assert.equal(typeof s.persistHomeSnapshot, "function", "explicit export is offered when a store is wired");
   assert.equal(typeof make().persistHomeSnapshot, "undefined");
@@ -709,4 +709,14 @@ test("failed hydration and failed deletion remain pending across adapters withou
   const restored = await make(options).provision(layers);
   assert.equal(await b.readFile(restored, "ledger"), "saved");
   assert.equal(await initializationStore.get(h.id), null);
+});
+
+test("trusted supervised process hold watches the private supervisor process root", async () => {
+  const h = await sandbox.provision(layers);
+  const id = "00000000-0000-0000-0000-000000000000";
+  await sandbox.supervisorTransport!.processStarted!(h, id);
+  const keepalive = fake.execScripts().find((command) => command.includes(`/run/qm-supervisor/processes/${id}`));
+  assert.ok(keepalive);
+  assert.ok(keepalive.includes(`/v1/tasks/qm-proc-${id}`));
+  assert.ok(keepalive.includes("|| exit 1"));
 });

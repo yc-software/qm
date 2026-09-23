@@ -1,3 +1,4 @@
+import { createSupervisorTransport } from "./supervisor-transport.ts";
 import { DeleteObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { orgId as configOrgId } from "../config.ts";
 import type { WorkspaceLayer } from "../types.ts";
@@ -30,11 +31,7 @@ import type {
 } from "./sandbox.ts";
 import { execFailureDetail, visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createHomeSnapshotOps, createS3SnapshotStore, HOME_SNAPSHOT_PRUNE, snapshotDue } from "./home-snapshot.ts";
-import {
-  ephemeralCredLinkPaths,
-  ephemeralCredLinkScript,
-  type CredentialPathSpec,
-} from "../credentials/resident-paths.ts";
+import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 
 const HOME_DIR = "/root";
 const WORKSPACE_BASENAME = "workspace";
@@ -119,6 +116,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
   const egress = opts.egressConnectorArns?.length ? opts.egressConnectorArns : [DEFAULT_EGRESS(region)];
   const s3Prefix = (opts.s3Prefix ?? "sandbox-home").replace(/\/+$/, "");
   const agentPort = opts.agentPort ?? 8080;
+  const supervisorFresh = new Set<string>();
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const maximumDurationInSeconds = opts.maximumDurationInSeconds ?? 28_800;
   const rotateAfterMs = (opts.rotateAfterSeconds ?? 27_000) * 1000;
@@ -235,6 +233,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       if (!endpoint) throw new Error(`microVM ${run.microvmId} has no endpoint`);
       endpointById.set(run.microvmId, endpoint);
       await client.waitDaemon(run.microvmId, endpoint);
+      supervisorFresh.add(run.microvmId);
       return { id: run.microvmId, endpoint };
     } catch (error) {
       try {
@@ -404,6 +403,15 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
   }
 
   const sandbox: Sandbox = {
+    supervisorTransport: createSupervisorTransport(
+      {
+        writeBytes: (handle, path, data) => writeAbsBytes(handle.id, path, data),
+        identity: async (handle) => handle.id,
+        run: (handle, command, options) =>
+          execRaw(handle.id, command, Math.ceil((options?.timeoutMs ?? 600_000) / 1000)),
+      },
+      supervisorFresh,
+    ),
     destroyScope: (scopeId) => destroyStoredScope(scopeId),
     profile,
     startProcess: procSessions.startProcess,
@@ -423,11 +431,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       endpointById.set(id, body.endpoint);
       const coldStart = body.coldStart;
 
-      const prepared = await execRaw(
-        id,
-        `mkdir -p ${shq(WORKSPACE_DIR)} && ${ephemeralCredLinkScript(HOME_DIR, credentialPaths)}`,
-        PREP_TIMEOUT_SEC,
-      );
+      const prepared = await execRaw(id, `mkdir -p ${shq(WORKSPACE_DIR)}`, PREP_TIMEOUT_SEC);
       if (prepared.code !== 0)
         throw new Error(
           `AWS sandbox credential setup failed: ${execFailureDetail(prepared, PREP_TIMEOUT_SEC).slice(0, 200)}`,

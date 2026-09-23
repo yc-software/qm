@@ -1994,8 +1994,11 @@ test("background dispatches each action and emits tool_call/tool_result", async 
   };
   const background = createAgentTools(ref).find((t) => t.name === "background");
   assert.ok(background);
-  assert.match(background.description, /same environment a foreground `execute` does/);
-  assert.match(background.description, /\$AGENT_CREDENTIAL_TOKEN all work/);
+  assert.match(
+    background.description,
+    /credentials and shared-credential broker tokens must be requested through execute.credentials/,
+  );
+  assert.match(background.description, /no automatic capture after the command ends/);
   assert.match(background.description, /expire 48 hours after the turn/);
 
   const started = textOf(await call(background, { action: "start", command: "npm run build" }));

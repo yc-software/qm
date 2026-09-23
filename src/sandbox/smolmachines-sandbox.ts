@@ -1,3 +1,4 @@
+import { createSupervisorTransport } from "./supervisor-transport.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -107,6 +108,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   const egressProxyHost = opts.egressProxyUrl ? new URL(opts.egressProxyUrl).hostname : undefined;
   const network: MachineNetwork = egressProxyHost ? { mode: "allowCidrs", hosts: [egressProxyHost] } : { mode: "open" };
 
+  const supervisorFresh = new Set<string>();
   const idByName = new Map<string, string>();
   const egressVerified = new Set<string>();
 
@@ -188,6 +190,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     }
     const info = (await res.json()) as MachineInfo;
     await startMachine(info.id);
+    supervisorFresh.add(info.id);
     return { info, created: true };
   }
 
@@ -519,6 +522,15 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   }
 
   return {
+    supervisorTransport: createSupervisorTransport(
+      {
+        writeBytes: (handle, path, data) => writeAbsBytes(handle.id, path, data),
+        identity: (handle) => machineIdFor(handle.id),
+        run: (handle, command, options) =>
+          execRaw(handle.id, command, Math.ceil((options?.timeoutMs ?? 600_000) / 1000)),
+      },
+      supervisorFresh,
+    ),
     profile,
     startProcess: procSessions.startProcess,
     readProcess: procSessions.readProcess,

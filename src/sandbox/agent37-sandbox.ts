@@ -1,3 +1,5 @@
+import { runAgent37Supervisor } from "./agent37-supervisor.ts";
+import { createSupervisorTransport } from "./supervisor-transport.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -8,11 +10,7 @@ import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
 import { createExecExport, createBackendBlobStaging, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
-import {
-  ephemeralCredLinkScript,
-  ephemeralCredLinkPaths,
-  type CredentialPathSpec,
-} from "../credentials/resident-paths.ts";
+import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -104,6 +102,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
   const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
   const provisionQueue = createKeyedQueue<string>();
 
+  const supervisorFresh = new Set<string>();
   const idByName = new Map<string, string>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
@@ -176,6 +175,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     if (!res.ok) throw new Error(`agent37 create ${name}: ${await httpFailure(res)}`);
     const info = (await res.json()) as InstanceInfo;
     await ensureRunning(info.id);
+    supervisorFresh.add(info.id);
     return info;
   }
 
@@ -459,6 +459,37 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
   });
 
   const sandbox: Sandbox = {
+    supervisorTransport: createSupervisorTransport(
+      {
+        async writeBytes(handle, path, data) {
+          const id = await instanceIdFor(handle.id);
+          const script =
+            "import os,sys; fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600); stream=os.fdopen(fd,'wb'); stream.write(sys.stdin.buffer.read()); stream.close()";
+          const result = await runAgent37Supervisor(
+            id,
+            `python3 -I -c ${shq(script)} ${shq(path)}`,
+            { timeoutMs: 120_000, input: data },
+            opts.apiKey ?? "",
+            async (method, route, body) => {
+              const response = await api(method, route, body);
+              if (!response.ok) throw new Error(`Agent37 supervisor transport failed (${response.status})`);
+              return method === "DELETE" ? undefined : response.json();
+            },
+          );
+          if (result.code !== 0) throw new Error("Agent37 supervisor upload failed");
+        },
+        identity: (handle) => instanceIdFor(handle.id),
+        async run(handle, command, options) {
+          const id = await instanceIdFor(handle.id);
+          return runAgent37Supervisor(id, command, options, opts.apiKey ?? "", async (method, path, body) => {
+            const response = await api(method, path, body);
+            if (!response.ok) throw new Error(`Agent37 supervisor transport failed (${response.status})`);
+            return method === "DELETE" ? undefined : response.json();
+          });
+        },
+      },
+      supervisorFresh,
+    ),
     profile,
     startProcess: procSessions.startProcess,
     readProcess: procSessions.readProcess,
@@ -500,8 +531,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       };
 
       try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
+        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}`, 60);
         if (prep.code !== 0)
           throw new Error(`agent37 provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
 

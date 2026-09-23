@@ -1,3 +1,4 @@
+import { createSupervisorTransport } from "./supervisor-transport.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
@@ -20,11 +21,7 @@ import {
   posixJoin,
   type BlobStagingOptions,
 } from "./exec-file-ops.ts";
-import {
-  ephemeralCredLinkScript,
-  ephemeralCredLinkPaths,
-  type CredentialPathSpec,
-} from "../credentials/resident-paths.ts";
+import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
@@ -154,6 +151,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
   const lockKey = (scope: string): string => `superserve-provision:${scope}`;
   const provisionQueue = createKeyedQueue<string>();
 
+  const supervisorFresh = new Set<string>();
   const liveByName = new Map<string, Live>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
@@ -362,6 +360,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
       autoDeleteSeconds: retentionSec,
       ...(network ? { network } : {}),
     });
+    supervisorFresh.add(session.id);
     const live = await adopt(name, session, { scope });
     return { live, coldStart: true };
   }
@@ -375,6 +374,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
       autoDeleteSeconds: SCRATCH_RETENTION_SEC,
       ...(network ? { network } : {}),
     });
+    supervisorFresh.add(session.id);
     return adopt(name, session);
   }
 
@@ -542,6 +542,15 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
   }
 
   const sandbox: Sandbox = {
+    supervisorTransport: createSupervisorTransport(
+      {
+        writeBytes: (handle, path, data) => pinnedToHandle(handle, () => writeAbsBytes(handle.id, path, data)),
+        identity: (handle) => pinnedToHandle(handle, () => withLive(handle.id, async ({ session }) => session.id)),
+        run: (handle, command, options) =>
+          pinnedToHandle(handle, () => execRaw(handle.id, command, Math.ceil((options?.timeoutMs ?? 600_000) / 1000))),
+      },
+      supervisorFresh,
+    ),
     destroyScope(scopeId: string): Promise<void> {
       return provisionQueue(scopeId, () => advisoryLock.withLock(lockKey(scopeId), () => destroyStoredScope(scopeId)));
     },
@@ -592,8 +601,8 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
           const prepare = async (): Promise<SandboxHandle> => {
             assertCurrent(handle);
             if (!(await ownsGuest(name))) return handle;
-            const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, opts.credentialPaths ?? [])}`;
-            const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, PREP_TIMEOUT_SEC);
+
+            const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}`, PREP_TIMEOUT_SEC);
             if (prep.code !== 0)
               throw new Error(`superserve provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
             await materializeRoLayers(

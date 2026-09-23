@@ -70,6 +70,7 @@ export interface AwsMicrovmApi {
     s3Uri: string;
     baseImageArn: string;
     buildRoleArn: string;
+    additionalOsCapabilities?: string[];
     clientToken?: string;
   }): Promise<MicrovmImageSummary>;
   updateImage(input: {
@@ -77,6 +78,7 @@ export interface AwsMicrovmApi {
     s3Uri: string;
     baseImageArn: string;
     buildRoleArn: string;
+    additionalOsCapabilities?: string[];
     clientToken?: string;
   }): Promise<MicrovmImageSummary>;
   runMicrovm(input: RunMicrovmInput): Promise<MicrovmDescription>;
@@ -150,17 +152,18 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
     async findImage(name) {
       return (await api.listImages()).find((i) => i.name === name) ?? null;
     },
-    async createImage({ name, s3Uri, baseImageArn, buildRoleArn, clientToken }) {
+    async createImage({ name, s3Uri, baseImageArn, buildRoleArn, additionalOsCapabilities, clientToken }) {
       const { json } = await call<MicrovmImageSummary>("POST", `${API}/microvm-images`, {
         name,
         codeArtifact: { uri: s3Uri },
         baseImageArn,
         buildRoleArn,
+        ...(additionalOsCapabilities ? { additionalOsCapabilities } : {}),
         ...(clientToken ? { clientToken } : {}),
       });
       return json;
     },
-    async updateImage({ imageIdentifier, s3Uri, baseImageArn, buildRoleArn, clientToken }) {
+    async updateImage({ imageIdentifier, s3Uri, baseImageArn, buildRoleArn, additionalOsCapabilities, clientToken }) {
       const { json } = await call<MicrovmImageSummary>(
         "PUT",
         `${API}/microvm-images/${encodeURIComponent(imageIdentifier)}`,
@@ -168,6 +171,7 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
           codeArtifact: { uri: s3Uri },
           baseImageArn,
           buildRoleArn,
+          ...(additionalOsCapabilities ? { additionalOsCapabilities } : {}),
           ...(clientToken ? { clientToken } : {}),
         },
       );

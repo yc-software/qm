@@ -314,3 +314,27 @@ test("containerized core joins each sandbox network and reaches the daemon by co
   await sb.teardown(h, { destroy: true });
   assert.equal(fake.connections.has(`${localNetworkName(h.id)}|qm-test-core`), false);
 });
+
+test("a new container with a legacy home volume is not eligible for initial supervisor trust", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const scope = scopeId("personal", "legacy-volume-trust");
+  fake.volumes.add(localVolumeName(scope));
+  const adapter = makeSandbox(fake);
+  const handle = await adapter.provision(rw(scope));
+  assert.equal(await adapter.supervisorTransport!.isFresh(handle), false);
+  assert.equal(fake.volumes.has(localVolumeName(scope)), true);
+});
+
+test("new supervisor volumes retain trusted provenance after container replacement", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const layers = rw(scopeId("personal", "trusted-volume"));
+  const first = makeSandbox(fake);
+  const original = await first.provision(layers);
+  assert.equal(await first.supervisorTransport!.isFresh(original), true);
+  const identity = await first.supervisorTransport!.identity(original);
+  fake.imageId = "sha256:upgraded-image";
+  const next = makeSandbox(fake);
+  const replacement = await next.provision(layers);
+  assert.notEqual(await next.supervisorTransport!.identity(replacement), identity);
+  assert.equal(await next.supervisorTransport!.isFresh(replacement), true);
+});

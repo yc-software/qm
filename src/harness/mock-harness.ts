@@ -21,6 +21,7 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!preamble",
   "!speakpost ",
   "!run ",
+  "!execute ",
   "!scratch ",
   "!owner ",
   "!credential ",
@@ -377,6 +378,20 @@ export function createMockHarness(): Harness {
             scopeLabel: turn.scopeLabel,
           });
           const result = await turn.tools.credentialExec(service, args);
+          await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
+          turn.onProgress?.({ toolCalls: 1 });
+          usedTool = true;
+          reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
+        } else if (command0.startsWith("!execute ")) {
+          const params = JSON.parse(cmd.slice(cmd.indexOf("!execute ") + 9)) as {
+            command: string;
+            credentials?: string[];
+            ownerAuth?: boolean;
+          };
+          const result = await turn.tools.execute(params.command, {
+            credentials: params.credentials,
+            ownerAuth: params.ownerAuth,
+          });
           await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
           turn.onProgress?.({ toolCalls: 1 });
           usedTool = true;

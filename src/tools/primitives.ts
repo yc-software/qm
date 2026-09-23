@@ -160,7 +160,13 @@ interface ReachedProvenance {
 
 export interface CommandCredential {
   handle: string;
-  env: Array<{ key: string; value: string }>;
+  scope?: "scoped" | "owner";
+  resolve(): Promise<{
+    commit?: () => Promise<void>;
+    singleUse?: boolean;
+    env: Array<{ key: string; value: string }>;
+    files?: Array<{ path: string; data: Uint8Array }>;
+  }>;
 }
 
 interface AttachedFileMeta {
@@ -423,6 +429,7 @@ export interface ToolContextDeps {
   credentialExec?: ToolContext["credentialExec"];
   registerLogin?: ToolContext["registerLogin"];
   commandCredentials?: readonly CommandCredential[];
+  getCommandCredentials?: (requestedHandles: readonly string[]) => Promise<readonly CommandCredential[]>;
   provision: () => Promise<SandboxHandle>;
   provisionScratch?: () => Promise<SandboxHandle>;
   provisionResource?: (id: string) => Promise<SandboxHandle>;
@@ -690,38 +697,22 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const scratch = execOpts?.scratch === true;
       const ownerAuth = execOpts?.ownerAuth === true;
       const requestedCredentials = execOpts?.credentials ?? [];
-      if (
-        requestedCredentials.length &&
-        (scratch || ownerAuth || execOpts?.reachTarget !== undefined || !writableScopeId)
-      ) {
+      if (requestedCredentials.length && (scratch || execOpts?.reachTarget !== undefined || !writableScopeId)) {
         throw new Error("command credentials are available only on the scoped computer");
       }
       const availableCredentials = new Map(
-        (deps.commandCredentials ?? []).map((credential) => [credential.handle, credential] as const),
+        ((await deps.getCommandCredentials?.(requestedCredentials)) ?? deps.commandCredentials ?? []).map(
+          (credential) => [credential.handle, credential] as const,
+        ),
       );
       const requested = requestedCredentials.map((handle) => {
         const credential = availableCredentials.get(handle);
         if (!credential) throw new Error(`credential handle is not available on this turn: ${handle}`);
+        if ((credential.scope ?? "scoped") !== (ownerAuth ? "owner" : "scoped")) {
+          throw new Error(`credential ${handle} requires scope:${credential.scope ?? "scoped"}`);
+        }
         return credential;
       });
-      const commandEnv: Record<string, string> = {};
-      for (const credential of requested) {
-        for (const { key, value } of credential.env) {
-          if (key in commandEnv && commandEnv[key] !== value) {
-            throw new Error(`requested credentials provide conflicting environment key: ${key}`);
-          }
-          commandEnv[key] = value;
-        }
-      }
-      for (const credential of requested) {
-        deps.auditLog?.record({
-          at: Date.now(),
-          principalId: deps.createdBy,
-          action: "keychain.materialize",
-          resource: `${credential.handle} (command)`,
-          scopeLabel: writableScopeId!,
-        });
-      }
       const reachTarget = execOpts?.reachTarget;
       if (
         [scratch, ownerAuth, reachTarget !== undefined, execOpts?.sandboxId !== undefined].filter(Boolean).length > 1
@@ -793,10 +784,47 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           const sandboxCommand = ownerAuth
             ? (deps.ownerAuthCommand?.(command) ?? command)
             : (deps.scopedCommand?.(command) ?? command);
-          const commandHandle = Object.keys(commandEnv).length
-            ? { ...handle, env: { ...handle.env, ...commandEnv } }
-            : handle;
-          const r = await deps.sandbox.run(commandHandle, sandboxCommand, opts);
+          execOpts?.signal?.throwIfAborted();
+          const commandEnv: Record<string, string> = {};
+          const commandFiles: Array<{ path: string; data: Uint8Array }> = [];
+          const prepared: Array<{ commit?: () => Promise<void>; singleUse?: boolean }> = [];
+          for (const credential of [...new Set(requested)]) {
+            const materialized = await credential.resolve();
+            prepared.push(materialized);
+            for (const { key, value } of materialized.env) {
+              if (key in commandEnv && commandEnv[key] !== value) {
+                throw new Error(`requested credentials provide conflicting environment key: ${key}`);
+              }
+              commandEnv[key] = value;
+            }
+            for (const file of materialized.files ?? []) {
+              const prior = commandFiles.find((entry) => entry.path === file.path);
+              if (prior && !Buffer.from(prior.data).equals(file.data)) {
+                throw new Error(`requested credentials provide conflicting file: ${file.path}`);
+              }
+              if (!prior) commandFiles.push(file);
+            }
+            deps.auditLog?.record({
+              at: Date.now(),
+              principalId: deps.createdBy,
+              action: "keychain.materialize",
+              resource: `${credential.handle} (command)`,
+              scopeLabel: writableScopeId!,
+            });
+          }
+          execOpts?.signal?.throwIfAborted();
+          const onceGrants = prepared.filter((credential) => credential.singleUse);
+          if (onceGrants.length > 1)
+            throw new Error(
+              "An execution may use at most one single-use grant; request standing grants to combine these credentials.",
+            );
+          for (const credential of prepared.filter((credential) => !credential.singleUse)) await credential.commit?.();
+          execOpts?.signal?.throwIfAborted();
+          for (const credential of onceGrants) await credential.commit?.();
+          const r = await deps.sandbox.run(handle, sandboxCommand, {
+            ...opts,
+            ...(requested.length ? { credentials: { env: commandEnv, files: commandFiles } } : {}),
+          });
           return reached ? { ...r, reached } : r;
         });
       });
