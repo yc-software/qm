@@ -74,6 +74,7 @@ describe("canAdminister: owner checks are same-person, not raw id equality", () 
       membershipControlsScope: async () => false,
       managesScope: async () => false,
       isCurrentSharedScopeMember: async () => false,
+      isOpenScopeMember: async () => false,
       samePerson: (a: string, b: string) => samePersonInDirectory(dir, a, b),
     };
   }

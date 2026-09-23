@@ -1908,12 +1908,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 always: (p.grantModes?.always ?? true) && (currentModes?.always ?? false),
               };
             }
+            const quarantineRelease = p.approvalKey?.startsWith("security-screen-release:") === true;
             const recordDisallowsScope =
               scope !== "once" &&
               p.grantModes?.[scope] === false &&
-              (p.approvalKey?.startsWith("security-screen-release:") === true ||
-                p.approvalKey?.startsWith("sandbox:") === true);
+              (quarantineRelease || p.approvalKey?.startsWith("sandbox:") === true);
             if (scope !== "once" && (!resolution.approvalGrantModes[scope] || recordDisallowsScope)) {
+              let reason = `the "${scope}" approval option is disabled by an admin here — approve once or deny`;
+              if (recordDisallowsScope) {
+                reason = quarantineRelease
+                  ? `quarantined content can only be released once — approve once or deny`
+                  : `this approval does not allow the "${scope}" option — approve once or deny`;
+              }
               deps.auditLog.record({
                 at: Date.now(),
                 principalId: actor.id,
@@ -1926,9 +1932,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               return {
                 status: "pending_approval",
                 sessionId: session.id,
-                reason: recordDisallowsScope
-                  ? `this approval does not allow the "${scope}" option — approve once or deny`
-                  : `the "${scope}" approval option is disabled by an admin here — approve once or deny`,
+                reason,
                 pendingApprovals: [
                   {
                     requestId: input.approval.requestId,

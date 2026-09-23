@@ -901,7 +901,7 @@ test("the orchestrator sandbox path selects worker storage without changing auth
   const forum = await sandboxes.create("alice", root.scopeId, "modal", "Forum");
   assert.equal((await turn.provisionResource(forum.id)).resourceId, forum.id);
   const foreign = await sandboxes.create("bob", "personal:bob", "modal", "Other scope");
-  await assert.rejects(turn.provisionResource(foreign.id), /does not belong/);
+  await assert.rejects(turn.provisionResource(foreign.id), /requires permission to use its owning scope/);
 });
 
 test("durable worker rejects excessive swarm claims before calling the harness", async () => {

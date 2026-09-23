@@ -175,16 +175,20 @@ export interface ControlService {
 }
 
 export async function canAdministerCron(
-  app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson" | "isCurrentSharedScopeMember">,
+  app: Pick<
+    App,
+    "membershipControlsScope" | "managesScope" | "samePerson" | "isCurrentSharedScopeMember" | "isOpenScopeMember"
+  >,
   cron: Cron,
   actorId: string,
-  _callerScopeId?: ScopeId,
+  callerScopeId?: ScopeId,
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
   if (await app.membershipControlsScope(cron.ownerScopeId)) return app.managesScope(actorId, cron.ownerScopeId);
+  if (await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId))) return true;
   const team = cron.runAs === "scopeFloor" || cron.runAs === "scopeShared";
-  if (!team && (await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId)))) return true;
-  if (team) return app.isCurrentSharedScopeMember(actorId, cron.ownerScopeId);
+  if (team && cron.ownerScopeId === callerScopeId) return app.isCurrentSharedScopeMember(actorId, cron.ownerScopeId);
+  if (team && (await app.isOpenScopeMember(actorId, cron.ownerScopeId))) return true;
   return app.managesScope(actorId, cron.ownerScopeId);
 }
 

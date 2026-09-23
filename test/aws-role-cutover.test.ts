@@ -255,6 +255,7 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     kind: "channel" as const,
     threadRef: "ch:C-owner-auth:cron",
     channelRef: "C-owner-auth",
+    isPrivate: true,
     audience: [bob, alice],
   };
   await built.keychain!.save({ ownerId: "BOB", service: "npm", secret: "npm_BOB", envKey: "NPM_TOKEN" });
@@ -555,6 +556,7 @@ test("prefer-isolated keeps legacy ACMECLI when STS vending fails; isolated-only
   const conversation = {
     kind: "channel" as const,
     channelRef: "C-acmecli-fallback",
+    isPrivate: true,
     audience: [actor],
   };
 
