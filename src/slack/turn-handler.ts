@@ -363,6 +363,7 @@ export function createTurnHandler(deps: {
           (await core.activeRunForThread(ref).catch(swallowAs("slack: active-run lookup", undefined))) ??
           inFlightRunByThread.get(ref),
         signalAbort: (runId) => core.signalRunAbort(runId),
+        stopConversation: (ref) => core.stopConversation(ref),
       }).catch(swallowAs("slack: abort signal", true));
       if (intercepted) return;
     }

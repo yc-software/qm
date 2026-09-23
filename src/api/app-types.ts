@@ -300,6 +300,7 @@ export interface App {
     startedAt: number | null;
     finishedAt: number | null;
   } | null>;
+  stopConversation(threadRef: string, viewer?: string): Promise<boolean>;
   activeRunForThread(
     threadRef: string,
     viewer?: string,

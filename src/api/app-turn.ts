@@ -1,5 +1,6 @@
+import type { Run } from "../runs/run-store.ts";
 import { userRuntimeConfigBody } from "./runtime-config.ts";
-import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
+import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscalls.ts";
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { scopeId } from "../types.ts";
@@ -60,6 +61,7 @@ export function createTurnMethods(
   | "subscribeRun"
   | "syncRunStream"
   | "activeRunForThread"
+  | "stopConversation"
   | "withdrawRun"
   | "editQueuedRun"
   | "signalRun"
@@ -79,6 +81,18 @@ export function createTurnMethods(
     replayOrphanedRunSignals,
   } = h;
   const { shouldRouteToSpine, markTriggerHandled, addressedWakeText } = ambient;
+  async function stopRunTree(run: Run): Promise<boolean> {
+    if (!deps.signals) return false;
+    const signals = deps.signals;
+    const stop = async () => {
+      const session = await deps.sessions.getByThread(run.sessionId);
+      if (session) return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals }, session);
+      await signals.send(run.id, { kind: "abort" });
+      if (run.status === "pending") await deps.runs.withdraw(run.id);
+      return true;
+    };
+    return deps.advisoryLock ? deps.advisoryLock.withLock("session-tree-admission", stop) : stop();
+  }
   return {
     async turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult> {
       const startedAt = performance.now();
@@ -462,7 +476,9 @@ export function createTurnMethods(
             const steerTs = origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs;
             let redelivered = false;
             const routedRunId = await withCurrentProjectRoster(async () => {
-              if (route.kind === "steer")
+              if (route.kind === "steer" && route.signal === "abort") {
+                await stopRunTree(targetRun);
+              } else if (route.kind === "steer")
                 redelivered = !(await deps.signals!.send(targetRun.id, {
                   kind: route.signal,
                   ...(route.text ? { text: route.text } : {}),
@@ -690,6 +706,15 @@ export function createTurnMethods(
       };
     },
 
+    async stopConversation(threadRef, viewer) {
+      const stop = async () => {
+        const session = await deps.sessions.getByThread(threadRef);
+        if (!session || !deps.signals || (viewer && !(await sessionForViewer(session.id, viewer)))) return false;
+        return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals: deps.signals }, session);
+      };
+      return deps.advisoryLock ? deps.advisoryLock.withLock("session-tree-admission", stop) : stop();
+    },
+
     async activeRunForThread(threadRef, viewer) {
       const inFlight = await deps.runs.inFlightForThread(threadRef);
       const visible: typeof inFlight = [];
@@ -740,6 +765,10 @@ export function createTurnMethods(
         : undefined;
       if (queuedKey && (await deps.signals.hasDedupeKey(queuedKey))) return { accepted: true };
       if (isTerminal(run.status)) return { accepted: false, reason: "terminal" };
+      if (signal.kind === "abort") {
+        const accepted = await stopRunTree(run);
+        return accepted ? { accepted: true } : { accepted: false, reason: "terminal" };
+      }
       if (signal.queuedRunId) {
         const queued = await deps.runs.get(signal.queuedRunId);
         if (!queued || (viewer && !(await viewerMayUseRun(queued, viewer))))

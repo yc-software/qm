@@ -1,3 +1,4 @@
+import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { slackFailureClause, slackFailureText } from "./turn-flow.ts";
 import { randomUUID } from "node:crypto";
@@ -686,12 +687,13 @@ export function createApprovals(deps: {
       settled = true;
     };
 
+    const delegated = isSubagentThreadRef(ctx.turn.conversation.threadRef);
     const cardChannel = ctx.approvalChannel;
     const cardIsRemote = cardChannel !== ctx.channel;
     try {
       const approver = await directory.classifyActor(client, clickerId);
       const onQueued =
-        messageTs && !cardIsRemote
+        messageTs && !cardIsRemote && !delegated
           ? (runId: string): void => {
               void core
                 .reportRunEditRef(runId, messageTs)
@@ -749,6 +751,18 @@ export function createApprovals(deps: {
       settle();
 
       if (await sealedOut(result)) return;
+
+      if (delegated) {
+        await updateSlackMessage(
+          client,
+          cardChannel,
+          messageTs,
+          result.status === "failed" || result.status === "refused"
+            ? `Approved; the delegated task could not continue: ${result.reason ?? "execution failed"}`
+            : `Approved ${inlineCode(ctx.command)}. Results will return to the original conversation.`,
+        );
+        return;
+      }
 
       if (ctx.agentRequest) {
         await handleAgentRequestResult(client, ctx.agentRequest, ctx.turn, result, {

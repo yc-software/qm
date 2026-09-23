@@ -10,8 +10,9 @@ type ActionHandler = (args: any) => Promise<void>;
 
 function fixture() {
   const submitted: any[] = [];
+  const posts: any[] = [];
   const state: {
-    stored: { requesterId: string; text: string } | null;
+    stored: { requesterId: string; text: string; threadRef?: string } | null;
     result: TurnResult;
     hold: Promise<void> | null;
     fetchFails: boolean;
@@ -39,7 +40,12 @@ function fixture() {
             reason: "destructive",
             request: {
               actor: { externalId: state.stored.requesterId },
-              conversation: { kind: "channel", threadRef: "ch:C1:1.0", channelRef: "C1", audience: [] },
+              conversation: {
+                kind: "channel",
+                threadRef: state.stored.threadRef ?? "ch:C1:1.0",
+                channelRef: "C1",
+                audience: [],
+              },
               deliveryTarget: "C1:1.0",
               text: state.stored.text,
             },
@@ -64,7 +70,10 @@ function fixture() {
         updates.push(body);
         return { ok: true };
       },
-      postMessage: async () => ({ ok: true, ts: "9.9" }),
+      postMessage: async (body: any) => {
+        posts.push(body);
+        return { ok: true, ts: "9.9" };
+      },
       postEphemeral: async (body: any) => {
         ephemerals.push(body);
         return { ok: true };
@@ -94,7 +103,7 @@ function fixture() {
       },
     });
   };
-  return { state, submitted, ephemerals, updates, click, rememberStale };
+  return { state, submitted, ephemerals, updates, posts, click, rememberStale };
 }
 
 test("a click resumes from the stored record, not from whatever the card registry last cached", async () => {
@@ -198,4 +207,15 @@ test("a sealed-out deny never claims the command was denied", async () => {
   await f.click("U2", "hilo_deny");
   assert.equal(f.submitted.length, 2, "the restored card still denies once the conversation is unblocked");
   assert.match(String(f.updates.at(-1)?.text ?? ""), /Denied/);
+});
+
+test("cold delegated approval resumes the child without posting its reply a second time", async () => {
+  const f = fixture();
+  f.state.stored = { requesterId: "U2", text: "run delegated command", threadRef: "agent:main:subagent:child" };
+  f.state.result = { status: "ok", reply: "delegated result" };
+  await f.click("U2");
+  assert.equal(f.submitted.length, 1);
+  assert.equal(f.submitted[0].conversation.threadRef, "agent:main:subagent:child");
+  assert.equal(f.posts.length, 0);
+  assert.match(JSON.stringify(f.updates), /original conversation/);
 });

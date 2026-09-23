@@ -1,4 +1,6 @@
 import { deployAccessMessage } from "./deploy-access.ts";
+import { samePerson } from "../directory/person.ts";
+import { approvalMessage } from "./approval-cards.ts";
 import { keychainApprovalMessage, keychainApprovalOrigin } from "./keychain-approvals.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { performance } from "node:perf_hooks";
@@ -367,6 +369,15 @@ export function createDeliveryPoller(deps: {
                 d.destination.keychainAskId && core.keychainApprovals
                   ? await core.keychainApprovals.get(d.destination.keychainAskId, d.destination.target)
                   : null;
+              const commandApproval = d.destination.commandApprovalId
+                ? await core.getApproval(d.destination.commandApprovalId)
+                : null;
+              const requester = commandApproval?.request?.actor as { externalId?: string } | undefined;
+              if (
+                d.destination.commandApprovalId &&
+                (!commandApproval || !requester?.externalId || !samePerson(requester.externalId, d.destination.target))
+              )
+                return undefined;
               let card: { text: string; blocks: Array<Record<string, unknown>> } | null = null;
               if (approval)
                 card = keychainApprovalMessage(
@@ -375,6 +386,8 @@ export function createDeliveryPoller(deps: {
                 );
               else if (d.destination.deploymentAccess)
                 card = deployAccessMessage(d.destination.deploymentAccess, d.text);
+              if (commandApproval)
+                card = approvalMessage([{ ...commandApproval, reason: commandApproval.reason ?? "Approval required" }]);
               const text = card?.text ?? toSlackMrkdwn(stripReactionDirectives(d.text));
               if (!text.trim() && !d.attachments?.length) return undefined;
               const channel = await openConversationFor(client, [d.destination.target]);
