@@ -180,7 +180,6 @@ export interface OrchestratorDeps {
   connectorStatusCache?: ConnectorStatusCache;
   resolveConnectorClient?: OAuthClientResolver;
   scratchExec?: boolean;
-  sharedOwnerAuthIsolation?: boolean;
   deviceFlowCutover?: DeviceFlowCutoverStore;
   featureFlags?: FeatureFlagStore;
   credentialUsage?: CredentialUsageSink;

@@ -425,7 +425,6 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
     signingSecret: "open-keychain-test-signing-key",
     apiBaseUrl: "http://core.test",
     maxAttempts: 1,
-    sharedOwnerAuthIsolation: false,
   });
   assert.ok(b.keychain);
   for (const id of ["U1", "U2"]) {
@@ -447,12 +446,18 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   assert.ok(!prompt.includes("npm_U1"));
   await b.workspace.write("channel:C1", "room-only.txt", "room_data");
   const probe = `python3 -c 'import os,pathlib; p=pathlib.Path.home()/".custom-cli/auth"; print("|".join([os.getenv("NPM_TOKEN","unset"),os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset"),p.read_text() if p.exists() else "absent",os.getenv("AGENT_API_TOKEN","unset"),"room" if pathlib.Path("room-only.txt").exists() else "isolated"]))'`;
-  assert.equal(await b.turn(`!owner ${probe}`, true), "npm_U1|gmail_U1|file_U1|unset|isolated");
-  assert.equal(await b.turn(`!owner ${probe}`, true, "U2"), "npm_U2|gmail_U2|file_U2|unset|isolated");
+  assert.equal(
+    await b.turn(`!owner ${probe}`, true),
+    "<redacted:credential>|<redacted:credential>|file_U1|unset|isolated",
+  );
+  assert.equal(
+    await b.turn(`!owner ${probe}`, true, "U2"),
+    "<redacted:credential>|<redacted:credential>|file_U2|unset|isolated",
+  );
   for (const id of ["U1", "U2", "U1"]) {
     assert.equal(
       await b.turn(`!owner ${probe}`, true, id, { origin: { kind: "ambient", live: true } }),
-      `npm_${id}|gmail_${id}|file_${id}|unset|isolated`,
+      `<redacted:credential>|<redacted:credential>|file_${id}|unset|isolated`,
     );
   }
   const ambientPrompt = await b.turn("!sysprompt", true, "U2", { origin: { kind: "ambient", live: true } });
@@ -475,7 +480,7 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
           publishMembers: [{ externalId: "U1" }, { externalId: "U2" }],
         },
       }),
-      "npm_U1|gmail_U1|file_U1|unset|isolated",
+      "<redacted:credential>|<redacted:credential>|file_U1|unset|isolated",
     );
   }
   assert.deepEqual(await b.keychain.grantsForScope("group:G1"), []);
@@ -525,10 +530,10 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
         publishMembers: [{ externalId: "U1" }, { externalId: "U2" }],
       },
     });
-  assert.equal(await firstTurn("C-unsynced"), "npm_U1|gmail_U1|file_U1|unset|isolated");
+  assert.equal(await firstTurn("C-unsynced"), "<redacted:credential>|<redacted:credential>|file_U1|unset|isolated");
   assert.equal(
     await firstTurn("C-unsynced", { kind: "ambient", live: true }),
-    "npm_U1|gmail_U1|file_U1|unset|isolated",
+    "<redacted:credential>|<redacted:credential>|file_U1|unset|isolated",
   );
   await b.remove("U1");
   const removed = (origin: TurnRequest["origin"] = { kind: "human" }) =>

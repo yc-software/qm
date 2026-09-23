@@ -804,8 +804,8 @@ test("multi-input login: each field becomes its own env var, values never in met
 
   const [own] = await k.materializeOwn("U1");
   assert.deepEqual(own!.env, [
-    { key: "DOORDASH_EMAIL", value: "alice@acme.co" },
-    { key: "DOORDASH_PASSWORD", value: "hunter2" },
+    { key: "DOORDASH_EMAIL", value: "alice@acme.co", secret: false },
+    { key: "DOORDASH_PASSWORD", value: "hunter2", secret: true },
   ]);
   const script = renderUseScript({ kind: "env", ...own! });
   assert.match(script, /export DOORDASH_EMAIL='alice@acme.co'\nexport DOORDASH_PASSWORD='hunter2'/);
@@ -880,7 +880,7 @@ test("back-compat: a legacy record carrying a plaintext username still materiali
   const [own] = await k.materializeOwn("U1");
   assert.deepEqual(own!.env, [
     { key: "ACME_PORTAL_PASSWORD", value: "hunter2" },
-    { key: "ACME_PORTAL_USERNAME", value: "alice@acme.co" },
+    { key: "ACME_PORTAL_USERNAME", value: "alice@acme.co", secret: false },
   ]);
 });
 

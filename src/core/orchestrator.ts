@@ -10,9 +10,6 @@ import {
 } from "./document-inputs.ts";
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
 import { createCanWriteScope, withLiveTurnMembership } from "../resolution/scope-membership.ts";
-import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
-import { createSecretValueMasker } from "../security/secret-masking.ts";
-import { shq } from "../util/shell.ts";
 import { goalViewFromEntry } from "../runs/turn-stream.ts";
 import type {
   CommandApprovalGrant,
@@ -1380,13 +1377,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
       const isolateOwnerKeychain =
         openSpeakerKeychain ||
-        (deps.sharedOwnerAuthIsolation === true &&
-          conversation.kind !== "dm" &&
-          input.origin.kind === "automation" &&
-          input.origin.useOwnerKeychain === true);
+        (conversation.kind !== "dm" && input.origin.kind === "automation" && input.origin.useOwnerKeychain === true);
       let ownerAuthAvailable = isolateOwnerKeychain;
       if (
-        deps.sharedOwnerAuthIsolation === true &&
         conversation.kind !== "dm" &&
         brokeredTools.some((tool) => cutoverModeOf(tool.service) !== "legacy" && deps.layerBrokerFor?.(tool))
       ) {
@@ -1397,6 +1390,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const ownerEnvCredentialIds: string[] = [];
       const keychainInjected: MaterializedEnvCred[] = [];
       const commandCredentials: CommandCredential[] = [];
+      const credentialEnvFields: MaterializedEnvCred["env"] = [];
       const credsStart = Date.now();
       const commandScopedCredentials =
         !strictReadOnly && (await deps.featureFlags?.enabled("command_scoped_credentials", scopeId)) === true;
@@ -1408,6 +1402,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : [];
         if (isolateOwnerKeychain) {
           for (const materialized of await deps.keychain.materializeOwn(actor.id)) {
+            credentialEnvFields.push(...materialized.env);
             for (const { key, value } of materialized.env) if (!(key in ownerAuthEnv)) ownerAuthEnv[key] = value;
             ownerEnvCredentialIds.push(materialized.credentialId);
           }
@@ -1415,6 +1410,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         for (const m of [...own, ...(await deps.keychain.materializeStanding(scopeId))]) {
           if (!commandScopedCredentials) {
             const injected = m.env.filter(({ key }) => !(key in connectorEnv));
+            credentialEnvFields.push(...injected);
             for (const { key, value } of injected) connectorEnv[key] = value;
             if (m.grantId && injected.length) {
               keychainInjected.push({ ...m, env: injected });
@@ -1492,6 +1488,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const rec = await deps.serviceCreds.getServiceCredentialSecret(orgScope, cred.slug);
           if (rec?.secret && rec.delivery === "env" && rec.enabled && rec.envKey === cred.envKey) {
             connectorEnv[cred.envKey] = rec.secret;
+            credentialEnvFields.push({ key: cred.envKey, value: rec.secret });
             envCredLines.push(`- \`${cred.slug}\` → \`${cred.envKey}\``);
           }
         }
@@ -1707,7 +1704,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         .map((tool) => ({
           pattern: `(^|[\\s;&|()])${tool.binary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[\\s;&|()])`,
           decision: "deny" as const,
-          reason: `credential-bearing service ${tool.service} must be run with credential_exec`,
+          reason: `credential-bearing service ${tool.service} is disabled by its credential isolation policy`,
         }));
       const commandPolicy = ephemeralOnlyDenyRules.length
         ? { ...resolution.commandPolicy, rules: [...ephemeralOnlyDenyRules, ...resolution.commandPolicy.rules] }
@@ -2356,132 +2353,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           files: deps.files,
           auditLog: deps.auditLog,
           createdBy: actor.id,
-          ...(() => {
-            const available =
-              strictReadOnly || actor.type !== "internal"
-                ? []
-                : brokeredTools.filter(
-                    (tool) => cutoverModeOf(tool.service) !== "legacy" && deps.layerBrokerFor?.(tool),
-                  );
-            if (!available.length) return {};
-            return {
-              credentialExecServices: available.map(({ service, binary }) => ({ service, binary })),
-              credentialExec: async (
-                service: string,
-                args: string[],
-                opts?: { timeoutSeconds?: number; signal?: AbortSignal },
-              ) => {
-                const tool = available.find((candidate) => candidate.service === service);
-                if (!tool || cutoverModeOf(service) === "legacy") {
-                  throw new Error(`credential_exec service is unavailable: ${service}`);
-                }
-                const broker = deps.layerBrokerFor?.(tool);
-                if (!broker) throw new Error(`credential_exec broker is unavailable: ${service}`);
-                const composed = [shq(tool.binary), ...args.map(shq)].join(" ");
-                const gate = evaluateCommandWithLayer(
-                  composed,
-                  resolution.commandPolicy,
-                  deps.deploymentLayer?.commandRules ?? [],
-                );
-                if (gate.decision === "deny") throw new CommandDenied(composed, gate.reason ?? "denied by policy");
-                if (gate.decision === "require_approval" && !authorizeCommand(composed, gate.approvalKey)) {
-                  throw new NeedsApproval(
-                    composed,
-                    gate.reason ?? "requires approval",
-                    "approval",
-                    gate.matched,
-                    gate.approvalKey,
-                  );
-                }
-                let aws;
-                try {
-                  aws = await broker.credsForActor(actor.id);
-                } catch {
-                  deps.credentialUsage?.record({
-                    slug: service,
-                    host: "sts.amazonaws.com",
-                    status: cutoverModeOf(service) === "ephemeral_only" ? "ephemeral_failed_closed" : "legacy_fallback",
-                    scopeLabel: scopeId,
-                    principalId: actor.id,
-                  });
-                  throw new Error(`credential_exec could not vend credentials for ${service}`);
-                }
-                const awsEnv = {
-                  AWS_ACCESS_KEY_ID: aws.accessKeyId,
-                  AWS_SECRET_ACCESS_KEY: aws.secretAccessKey,
-                  AWS_SESSION_TOKEN: aws.sessionToken,
-                  AWS_REGION: aws.region,
-                  AWS_DEFAULT_REGION: aws.region,
-                };
-                const mask = createSecretValueMasker(awsEnv);
-                let handle;
-                let result: Awaited<ReturnType<typeof deps.sandbox.run>> | undefined;
-                let runError: unknown;
-                let cleanupError: unknown;
-                try {
-                  handle = await deps.sandbox.provision(
-                    resolution.layers.filter((layer) => layer.mode === "ro" && layer.mountPath === "global"),
-                    {
-                      env: awsEnv,
-                      egress: resolution.egress,
-                      ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
-                      scratch: { key: `credential-exec:${session.id}:${randomUUID()}` },
-                      routeScopeId: memoryScopeId,
-                    },
-                  );
-                  deps.credentialUsage?.record({
-                    slug: service,
-                    host: "sts.amazonaws.com",
-                    status: "ephemeral_vended",
-                    scopeLabel: scopeId,
-                    principalId: actor.id,
-                  });
-                  deps.auditLog.record({
-                    at: Date.now(),
-                    principalId: actor.id,
-                    action: "credential.materialize",
-                    resource: `${service} (ephemeral broker)`,
-                    scopeLabel: scopeId,
-                  });
-                  const requestedMs = opts?.timeoutSeconds == null ? deps.execTimeoutMs : opts.timeoutSeconds * 1000;
-                  const timeoutMs =
-                    requestedMs != null && deps.execTimeoutCeilingMs != null
-                      ? Math.min(requestedMs, deps.execTimeoutCeilingMs)
-                      : requestedMs;
-                  result = await deps.sandbox.run(
-                    handle,
-                    composed,
-                    timeoutMs !== undefined || opts?.signal
-                      ? {
-                          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-                          ...(opts?.signal ? { signal: opts.signal } : {}),
-                        }
-                      : undefined,
-                  );
-                } catch (error) {
-                  runError = error;
-                } finally {
-                  if (handle) {
-                    let lastError: unknown;
-                    for (let attempt = 1; attempt <= 3; attempt++) {
-                      try {
-                        await deps.sandbox.teardown(handle, { destroy: true });
-                        lastError = undefined;
-                        break;
-                      } catch (error) {
-                        lastError = error;
-                        if (attempt < 3) await sleep(50 * attempt);
-                      }
-                    }
-                    cleanupError = lastError;
-                  }
-                }
-                if (cleanupError) throw new Error(`credential_exec cleanup failed for ${service}`);
-                if (runError || !result) throw new Error(`credential_exec failed while running ${service}`);
-                return { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
-              },
-            };
-          })(),
+          credentialEnvFields,
+          ownerAuthEnv,
           ...(commandCredentials.length ? { commandCredentials } : {}),
           ...(deps.publicWebUrl ? { publicWebUrl: deps.publicWebUrl } : {}),
           publishContext: {
@@ -3394,7 +3267,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             systemPrompt,
             history: continuation?.history ?? history,
             tools,
-            ...(tools.credentialExecServices ? { credentialExecServices: tools.credentialExecServices } : {}),
             ...(tools.commandCredentialHandles ? { commandCredentialHandles: tools.commandCredentialHandles } : {}),
             ...(selectedTape
               ? {

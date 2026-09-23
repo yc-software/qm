@@ -129,7 +129,6 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
       piSystemCacheSplit: true,
       sandboxResourcesEnabled: true,
       scratchExecEnabled: true,
-      sharedOwnerAuthIsolation: true,
       reachExecEnabled: true,
       signingSecret: "sek",
       apiBaseUrl: "https://core.test",

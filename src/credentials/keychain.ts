@@ -356,7 +356,7 @@ export interface MaterializedEnvCred {
   credentialId: string;
   ownerId: string;
   service: string;
-  env: Array<{ key: string; value: string }>;
+  env: Array<{ key: string; value: string; secret?: boolean }>;
   grantId?: string;
   purpose?: string;
 }
@@ -533,15 +533,15 @@ export function createKeychain(deps: {
 
   function decryptToEnv(rec: KeychainCredential, extra?: { grantId: string; purpose: string }): MaterializedEnvCred {
     const raw = decryptSecret(rec.secretEnc, deps.key);
-    let env: Array<{ key: string; value: string }>;
+    let env: Array<{ key: string; value: string; secret?: boolean }>;
     if (rec.fields) {
       const values = JSON.parse(raw) as Record<string, string>;
-      env = rec.fields.map((f) => ({ key: f.envKey, value: values[f.envKey] ?? "" }));
+      env = rec.fields.map((f) => ({ key: f.envKey, value: values[f.envKey] ?? "", secret: f.secret }));
     } else {
       const envKey = rec.envKey ?? defaultEnvKey(rec.service);
       env = [{ key: envKey, value: raw }];
       const legacyUsername = (rec as { username?: string }).username;
-      if (legacyUsername) env.push({ key: legacyUsernameEnvKey(envKey), value: legacyUsername });
+      if (legacyUsername) env.push({ key: legacyUsernameEnvKey(envKey), value: legacyUsername, secret: false });
     }
     return {
       credentialId: rec.id,

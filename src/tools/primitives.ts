@@ -1,3 +1,4 @@
+import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort } from "../util/async.ts";
 import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-types.ts";
 import { readContextFile } from "../resolution/context-files.ts";
@@ -160,7 +161,7 @@ interface ReachedProvenance {
 
 export interface CommandCredential {
   handle: string;
-  env: Array<{ key: string; value: string }>;
+  env: Array<{ key: string; value: string; secret?: boolean }>;
 }
 
 interface AttachedFileMeta {
@@ -179,12 +180,6 @@ export interface ToolContext extends SurfaceToolDeps {
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
   commandCredentialHandles?: readonly string[];
-  credentialExecServices?: readonly { service: string; binary: string }[];
-  credentialExec?(
-    service: string,
-    args: string[],
-    opts?: { timeoutSeconds?: number; signal?: AbortSignal },
-  ): Promise<ExecResult>;
   registerLogin?(
     service: string,
     paths: readonly CredentialPathSpec[],
@@ -419,10 +414,10 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 
 export interface ToolContextDeps {
   sandbox: Sandbox;
-  credentialExecServices?: readonly { service: string; binary: string }[];
-  credentialExec?: ToolContext["credentialExec"];
   registerLogin?: ToolContext["registerLogin"];
   commandCredentials?: readonly CommandCredential[];
+  credentialEnvFields?: readonly { key: string; value: string; secret?: boolean }[];
+  ownerAuthEnv?: Record<string, string>;
   provision: () => Promise<SandboxHandle>;
   provisionScratch?: () => Promise<SandboxHandle>;
   provisionResource?: (id: string) => Promise<SandboxHandle>;
@@ -544,8 +539,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   }
 
   return {
-    ...(deps.credentialExecServices ? { credentialExecServices: deps.credentialExecServices } : {}),
-    ...(deps.credentialExec ? { credentialExec: deps.credentialExec } : {}),
     ...(deps.registerLogin ? { registerLogin: deps.registerLogin } : {}),
     ...(deps.commandCredentials?.length
       ? { commandCredentialHandles: deps.commandCredentials.map((credential) => credential.handle) }
@@ -796,7 +789,21 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           const commandHandle = Object.keys(commandEnv).length
             ? { ...handle, env: { ...handle.env, ...commandEnv } }
             : handle;
-          const r = await deps.sandbox.run(commandHandle, sandboxCommand, opts);
+          const secretEnv = executionSecretEnv(
+            ownerAuth ? { ...commandHandle.env, ...deps.ownerAuthEnv } : commandHandle.env,
+            [...(deps.credentialEnvFields ?? []), ...requested.flatMap((credential) => credential.env)],
+          );
+          const mask = createExactSecretValueMasker(Object.values(secretEnv));
+          let r: ExecResult;
+          try {
+            const result = await deps.sandbox.run(commandHandle, sandboxCommand, opts);
+            r = { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
+          } catch (error) {
+            const message = errMessage(error);
+            const masked = mask(message);
+            if (masked !== message) throw new MaskedExecutionError(masked);
+            throw error;
+          }
           return reached ? { ...r, reached } : r;
         });
       });

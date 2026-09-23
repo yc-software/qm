@@ -1,3 +1,4 @@
+import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { createGrindMeter, grindState } from "./grind.ts";
@@ -311,7 +312,6 @@ function fmtCronRunLine(entry: CronFireLogEntry): string {
 
 export interface AgentToolsOptions {
   sessionTools?: boolean;
-  credentialExecServices?: readonly { service: string; binary: string }[];
   commandCredentialHandles?: readonly string[];
   scratchExec?: boolean;
   ownerAuthExec?: boolean;
@@ -387,7 +387,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const ownerAuthExec = !!opts?.ownerAuthExec;
   const reachExec = !!opts?.reachExec;
   const controlTools = !!opts?.controlTools;
-  const credentialExecServices = opts?.credentialExecServices ?? ref.current?.credentialExecServices ?? [];
   const commandCredentialHandles = opts?.commandCredentialHandles ?? ref.current?.commandCredentialHandles ?? [];
   const surfaceTools = !!opts?.surfaceTools;
   const delegateWork = opts?.delegateWork === true;
@@ -706,6 +705,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         r.reached ? { provenance: "external", source: "reached room" } : undefined,
       );
     } catch (e) {
+      if (e instanceof MaskedExecutionError) {
+        return recordResult(callId, { tool: "execute", ...scopeNote }, text(e.message), true);
+      }
       if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose);
       if (e instanceof CommandDenied) {
         return recordResult(
@@ -3576,75 +3578,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
-  const credentialExec = defineTool({
-    name: "credential_exec",
-    label: "Credential exec",
-    description:
-      "Run a configured credential-bearing CLI in a one-shot isolated box. Shell operators and pipelines are not supported; args are passed literally. Available services: " +
-      credentialExecServices.map(({ service, binary }) => `${service} (${binary})`).join(", "),
-    parameters: Type.Object({
-      service: Type.String({ enum: credentialExecServices.map(({ service }) => service) }),
-      args: Type.Array(Type.String()),
-      timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: execCeilingSec })),
-    }),
-    async execute(callId, params: { service: string; args: string[]; timeout_seconds?: number }) {
-      const tc = ref.current;
-      await recordCall(callId, { tool: "credential_exec", service: params.service, args: params.args });
-      if (!tc?.credentialExec) {
-        return recordResult(
-          callId,
-          { tool: "credential_exec", unavailable: true },
-          text("[error] credential_exec is unavailable on this turn"),
-          true,
-        );
-      }
-      try {
-        const result = await tc.credentialExec(params.service, params.args, {
-          ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
-          ...(ref.abortSignal ? { signal: ref.abortSignal } : {}),
-        });
-        const parts = [result.stdout, result.stderr ? `[stderr]\n${result.stderr}` : ""].filter(Boolean).join("\n");
-        return recordResult(
-          callId,
-          { tool: "credential_exec", service: params.service, ...result },
-          text(`${parts}\n[exit ${result.code}${result.timedOut ? " timed-out" : ""}]`),
-          result.code !== 0,
-        );
-      } catch (error) {
-        if (error instanceof NeedsApproval) {
-          ref.pendingApprovals?.push({
-            command: error.command,
-            reason: error.approvalReason,
-            kind: error.kind,
-            matched: error.matched,
-            ...(error.approvalKey ? { approvalKey: error.approvalKey } : {}),
-          });
-          ref.pausedOnApproval = true;
-          return recordResult(
-            callId,
-            { tool: "credential_exec", blocked: "needs_approval", reason: error.approvalReason },
-            { ...text(`[blocked: needs human approval] ${error.approvalReason}`), terminate: true },
-            true,
-          );
-        }
-        if (error instanceof CommandDenied) {
-          return recordResult(
-            callId,
-            { tool: "credential_exec", denied: true, reason: error.message },
-            text(`[denied by policy] ${error.message}`),
-            true,
-          );
-        }
-        return recordResult(
-          callId,
-          { tool: "credential_exec", service: params.service, failed: true },
-          text(`[error] ${errMessage(error)}`),
-          true,
-        );
-      }
-    },
-  });
-
   const registerLogin = defineTool({
     name: "register_login",
     label: "register_login",
@@ -4009,7 +3942,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const tools = [
     ...(!opts?.sandboxResources && !delegateWork ? [execute] : []),
-    ...(credentialExecServices.length && !delegateWork ? [credentialExec] : []),
     resourceTool("skills", {
       read: skill,
       ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),

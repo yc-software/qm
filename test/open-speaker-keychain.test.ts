@@ -4,9 +4,8 @@ import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orches
 import { coreToolOptions } from "../src/harness/agent-tools.ts";
 import { loadConfig } from "../src/config.ts";
 
-test("Open owner execution is discoverable even when automation isolation defaults off", () => {
+test("Open owner execution is discoverable without an isolation flag", () => {
   const config = loadConfig({});
-  assert.equal(config.sharedOwnerAuthIsolation, false);
   assert.equal(coreToolOptions(config).ownerAuthExec, true);
 });
 
