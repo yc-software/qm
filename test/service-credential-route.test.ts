@@ -1102,6 +1102,10 @@ test("orchestrator does NOT stamp a credential granted only to someone else", as
     grantedBy: "admin",
   });
 
+  await assert.rejects(
+    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["service_x-firehose"] })}`)),
+    /not available/,
+  );
   const res = await built.app.turn(dm("!run echo hi"));
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "an unentitled session must get no credential token");
@@ -1160,6 +1164,10 @@ test("a channel grantee stamps the credential in that channel's conversations an
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "another channel must not get the credential");
 
+  await assert.rejects(
+    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["service_x-firehose"] })}`)),
+    /not available/,
+  );
   res = await built.app.turn(dm("!run echo hi"));
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "a member's DM must not get a channel-granted credential");
