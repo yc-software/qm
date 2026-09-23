@@ -1,3 +1,4 @@
+import type { DeployStore } from "../deploy/deploy-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { BackgroundOwnershipStore } from "../runs/background-ownership.ts";
 import type { LoopIngressService } from "../loops/ingress.ts";
@@ -188,6 +189,7 @@ export interface ServerDeps {
   identity?: IdentityService;
   principalLinks?: PrincipalLinkService;
   keychain?: Keychain;
+  deployStore?: DeployStore;
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;
   fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;

@@ -55,12 +55,23 @@ interface DefaultAudienceSnapshot {
   snapshotAt: number;
 }
 
+export interface DeploymentCredentialBinding {
+  credentialId: string;
+  ownerId: string;
+  host: string;
+  allowedMethods: string[];
+  allowedPathPrefixes: string[];
+  headers: Array<{ name: string; field?: string; scheme?: string }>;
+}
+
 export interface Deployment {
   id: string;
   ownerScopeId: ScopeId;
   createdBy: string;
   createdInScope?: ScopeId;
   defaultAudience?: DefaultAudienceSnapshot;
+  credentialBindings?: DeploymentCredentialBinding[];
+  credentialBindingRevision?: string;
   name?: string;
   displayName?: string;
   currentVersion: number;
@@ -105,6 +116,11 @@ export interface DeployStore {
   setStatus(id: string, status: DeploymentStatus): Promise<void>;
   setEndpoint(id: string, endpoint: DeployEndpoint | null): Promise<void>;
   setName(id: string, name: string): Promise<void>;
+  setCredentialBindings(
+    id: string,
+    bindings: DeploymentCredentialBinding[],
+    expected: Pick<Deployment, "createdBy" | "ownerScopeId" | "credentialBindingRevision">,
+  ): Promise<boolean>;
   setOwnerScope(id: string, ownerScopeId: ScopeId): Promise<void>;
   setDisplayName(id: string, displayName: string | undefined): Promise<void>;
   setAlwaysOn(id: string, alwaysOn: boolean): Promise<void>;
@@ -334,9 +350,7 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
       const version = d.versions.length + 1;
       const parentCommit = currentVersionOf(d)?.commit;
       const v = await makeVersion(id, version, input, parentCommit);
-      d.versions.push(v);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
+      await backingMap.merge(id, { versions: [...d.versions, v], currentVersion: version });
       await updateVersionRef(id, v);
       return v;
     },
@@ -356,9 +370,7 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
         commit,
         ...(current?.commit ? { parentCommit: current.commit } : {}),
       };
-      d.versions.push(v);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
+      await backingMap.merge(id, { versions: [...d.versions, v], currentVersion: version });
       await updateVersionRef(id, v);
       return v;
     },
@@ -381,70 +393,66 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
       if (!d) return;
       const v = d.versions.find((x) => x.version === version);
       if (!v) throw new Error(`no such version ${version}`);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
+      await backingMap.merge(id, { currentVersion: version });
     },
     async setVersionImage(id, version, image) {
       const d = await backingMap.get(id);
       if (!d) return;
       const v = d.versions.find((x) => x.version === version);
       if (!v) throw new Error(`no such version ${version}`);
-      v.image = image;
-      await backingMap.put(id, d);
+      await backingMap.merge(id, { versions: d.versions.map((v) => (v.version === version ? { ...v, image } : v)) });
     },
     async setStatus(id, status) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.status = status;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, {
+        status,
+        ...(status === "archived" ? { credentialBindings: [], credentialBindingRevision: randomUUID() } : {}),
+      });
     },
     async setEndpoint(id, endpoint) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.endpoint = endpoint;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { endpoint });
     },
     async setName(id, name) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.name = name;
-        await putNamed(d);
+      try {
+        await backingMap.merge(id, { name });
+      } catch (e) {
+        if (isNameConflict(e)) throw new Error(`deployment name taken: ${name}`, { cause: e });
+        throw e;
       }
+    },
+    async setCredentialBindings(id, credentialBindings, expected) {
+      if (!backingMap.update) throw new Error("deployment store requires atomic binding updates");
+      let changed = false;
+      await backingMap.update(id, (current) => {
+        if (
+          current.status === "archived" ||
+          current.credentialBindingRevision !== expected.credentialBindingRevision ||
+          current.ownerScopeId !== expected.ownerScopeId ||
+          current.createdBy !== expected.createdBy
+        )
+          return current;
+        changed = true;
+        return { ...current, credentialBindings, credentialBindingRevision: randomUUID() };
+      });
+      return changed;
     },
     async setOwnerScope(id, ownerScopeId) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.ownerScopeId = ownerScopeId;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { ownerScopeId, credentialBindings: [], credentialBindingRevision: randomUUID() });
     },
     async setDisplayName(id, displayName) {
-      const d = await backingMap.get(id);
-      if (d) {
-        if (displayName) d.displayName = displayName;
-        else delete d.displayName;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { displayName: displayName || undefined } as Partial<Deployment>);
     },
     async setAlwaysOn(id, alwaysOn) {
-      await backingMap.merge(id, { alwaysOn } as Partial<Deployment>);
+      await backingMap.merge(id, { alwaysOn });
     },
-    async setDefaultAudience(id, snapshot) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.defaultAudience = snapshot;
-        await backingMap.put(id, d);
-      }
+    async setDefaultAudience(id, defaultAudience) {
+      await backingMap.merge(id, { defaultAudience });
     },
     async setAppliedVersion(id, version) {
       const d = await backingMap.get(id);
       if (!d) return;
       const v = d.versions.find((x) => x.version === version);
       if (!v) throw new Error(`no such version ${version}`);
-      d.appliedVersion = version;
-      await backingMap.put(id, d);
+      await backingMap.merge(id, { appliedVersion: version });
       await updateAppliedRef(id, v);
     },
     async touch(id, at) {

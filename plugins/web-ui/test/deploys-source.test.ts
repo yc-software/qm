@@ -113,6 +113,7 @@ function renderHarness(requestedId: string | null = null) {
   const context = createContext({
     appState: { currentView: "deploys", viewRenderSeq: 1 },
     pendingDeployId: requestedId,
+    deployCredentials: null,
     archiveCandidate: null,
     restoreArchiveFocus: false,
     scopedSession: { active: null },
@@ -292,6 +293,7 @@ test("detail redraws reuse the scroll container and retain focus", () => {
       document: dom.window.document,
       d: deployment,
       activeDeploy: deployment,
+      deployCredentials: null,
       editingDeploy: null,
       deployNotices: {},
       archiveCandidate: null,
@@ -327,4 +329,15 @@ test("detail redraws reuse the scroll container and retain focus", () => {
   } finally {
     dom.window.close();
   }
+});
+
+test("credential controls are only loaded for the original publisher owning the personal home", () => {
+  const open = bodyOf("openDeploy");
+  assert.match(open, /!appState.me\?\.impersonatedBy/);
+  assert.match(open, /activeDeploy.createdBy === viewer/);
+  assert.match(open, /activeDeploy.ownerScopeId === `personal:\$\{viewer\}`/);
+  assert.match(open, /activeDeploy.status !== "archived"/);
+  assert.match(open, /deployCredentials === credentials/);
+  assert.match(source, /deployCredentials\?\.section\(\)/);
+  assert.match(source, /\.inert=\$\{deployCredentials\?\.isDialogOpen\(\)/);
 });
