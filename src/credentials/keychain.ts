@@ -14,7 +14,7 @@ import { homeRelativePath } from "./paths.ts";
 import type { CredentialPathSpec } from "./resident-paths.ts";
 import { envKey } from "./connector-token.ts";
 
-export const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
+const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
 
 export function isBackendCredential(c: { envKey?: string; fields?: ReadonlyArray<{ envKey: string }> }): boolean {
   return c.envKey === COMPOSIO_ENV_KEY || c.fields?.some((f) => f.envKey === COMPOSIO_ENV_KEY) === true;
