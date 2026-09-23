@@ -165,7 +165,6 @@ import {
   type OverheardEntryPayload,
 } from "../harness/replay.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
-import { renderDeploymentAccessRequests } from "../deploy/access-requests.ts";
 import { isObj } from "../util/objects.ts";
 import { absoluteAppLinks, headSlice, jsonbSafeStringify } from "../util/text.ts";
 import { NonRetryableTurnError, TitleRejected, turnFailureMessage, type TurnFailurePayload } from "./turn-error.ts";
@@ -2047,13 +2046,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ownerAsks,
           });
           if (keychainBlock) systemPrompt += `\n\n${keychainBlock}`;
-        }
-        if (!strictReadOnly && deps.deploymentAccessRequests && conversation.kind === "dm" && deps.apiBaseUrl) {
-          const pending = await deps.deploymentAccessRequests
-            .pendingFor(actor.id)
-            .catch(swallowAs("orchestrator: app access requests", []));
-          const block = renderDeploymentAccessRequests(pending);
-          if (block) systemPrompt += `\n\n${block}`;
         }
         if (!strictReadOnly && deps.resolveConnectorClient && conversation.kind === "dm") {
           let status = null;

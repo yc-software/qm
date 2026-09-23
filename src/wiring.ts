@@ -1,9 +1,4 @@
 import { createKeychainApprovals } from "./credentials/keychain-approval.ts";
-import {
-  createDeploymentAccessRequests,
-  type DeploymentAccessRequest,
-  type DeploymentAccessRequests,
-} from "./deploy/access-requests.ts";
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
 import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
@@ -470,7 +465,6 @@ export interface BuiltApp {
   credentialTools: readonly LayerCredentialTool[];
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
-  deploymentAccessRequests: DeploymentAccessRequests;
   deploymentLayerReady: Promise<unknown>;
   deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
@@ -1670,7 +1664,14 @@ export function buildApp(
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
+  const deliveries = withWebTranscriptDeliveries(
+    config.databaseUrl ? createPostgresDeliveryStore(config.databaseUrl) : createDeliveryStore(),
+    sessions,
+  );
   const deployService = createDeployService({
+    deliveries,
+    deployAppsDomain: config.awsDeploy.appsDomain,
+    publicWebUrl: config.publicWebUrl,
     appPublished: productAnalytics.appPublished,
     deployStore,
     provider: deployProvider,
@@ -1773,10 +1774,6 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const deliveries = withWebTranscriptDeliveries(
-    config.databaseUrl ? createPostgresDeliveryStore(config.databaseUrl) : createDeliveryStore(),
-    sessions,
-  );
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreenBackend === "proxy") {
     securityScreener = createSecurityScreenProxy({
@@ -2083,7 +2080,7 @@ export function buildApp(
     projects,
     environments,
     deploy: deployService,
-    onDeploymentShared: (event) => deploymentAccessRequests.shared(event),
+    deployAppsDomain: config.awsDeploy.appsDomain,
     deploymentLayer,
     ...(processes ? { processes } : {}),
     monitors,
@@ -2111,24 +2108,13 @@ export function buildApp(
     modelProviders: modelProviderAvailabilityFor(config.harness, providerKeys),
     runWaitMs: config.runWaitMs,
   });
-  const deploymentAccessRequests = createDeploymentAccessRequests({
-    requests: artifactMap<DeploymentAccessRequest>("deployment_access_requests"),
-    app,
-    deliveries,
-    identity,
-    audit: auditLog,
-    appUrl: (d) => {
-      const slug = d.name ?? d.id;
-      if (config.awsDeploy.appsDomain) return `https://${slug}.${config.awsDeploy.appsDomain}/`;
-      return config.publicUrl ? `${config.publicUrl.replace(/\/+$/, "")}/d/${slug}/` : undefined;
-    },
-  });
   const inboxRealtime = createInboxRealtime({
     loops: loopStore,
     items: loopItems,
     requestFire: (loopId) => void loopFire.fire(loopId, `loop:${loopId}:slack-event:${Date.now()}`).catch(() => {}),
   });
   const slackCore = createSlackCoreClient({
+    identity,
     ...(keychain
       ? {
           keychainApprovals: createKeychainApprovals({
@@ -2141,7 +2127,6 @@ export function buildApp(
           }),
         }
       : {}),
-    deploymentAccessRequests,
     surfaceCache,
     taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
@@ -2388,7 +2373,6 @@ export function buildApp(
   );
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
   orchestratorDeps.control = createControlService(app, scheduler, admin);
-  orchestratorDeps.deploymentAccessRequests = deploymentAccessRequests;
   orchestratorDeps.runtime = createRuntimeService(
     {
       config: configStore,
@@ -2659,7 +2643,6 @@ export function buildApp(
     ...(screenSecurity ? { screenSecurity } : {}),
     deploymentLayer,
     deploymentLayerStore,
-    deploymentAccessRequests,
     credentialTools,
     brokeredTools,
     deploymentLayerReady,
@@ -2834,7 +2817,6 @@ export function serverDeps(
     deploymentLayer: built.deploymentLayerStore,
     deployDialTimeoutMs: config.deployDialTimeoutMs,
     ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),
-    deploymentAccessRequests: built.deploymentAccessRequests,
     ...(config.awsDeploy.gateSecret ? { deployGateSecret: config.awsDeploy.gateSecret } : {}),
     ...(config.deployAppsSessionSecret ? { deployAppsSessionSecret: config.deployAppsSessionSecret } : {}),
     ...(config.deployAppsLoginUrl ? { deployAppsLoginUrl: config.deployAppsLoginUrl } : {}),

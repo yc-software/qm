@@ -1,5 +1,7 @@
+import { decideDeploymentAccess } from "../slack/deploy-access.ts";
+import type { IdentityService } from "../identity/identity-service.ts";
+import type { ActorAssertion } from "../types.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
-import type { DeploymentAccessRequests } from "../deploy/access-requests.ts";
 import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgements } from "../slack/task-ack.ts";
 import { orgId as configOrgId } from "../config.ts";
 import type { StagedEnvelope } from "../slack/envelope-staging.ts";
@@ -90,8 +92,8 @@ interface DirectoryPush {
 }
 
 export interface SlackCoreClient {
+  decideDeploymentAccess(value: string, actor: ActorAssertion, approve: boolean): Promise<string>;
   keychainApprovals?: KeychainApprovals;
-  deploymentAccessRequests?: DeploymentAccessRequests;
   taskAcknowledgements?: TaskAcknowledgements;
   externalSlackParticipants(): Promise<boolean>;
   internalMemberOverrides(): Promise<string[]>;
@@ -158,8 +160,8 @@ type AckPickInput = {
 export type { SurfaceContextRequest };
 
 export interface SlackCoreClientDeps {
+  identity: IdentityService;
   keychainApprovals?: KeychainApprovals;
-  deploymentAccessRequests?: DeploymentAccessRequests;
   taskAcknowledgements?: DurableMap<TaskAckState>;
   app: App;
   config: ScopedConfigStore;
@@ -234,8 +236,9 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
   });
 
   return {
+    decideDeploymentAccess: (value, actor, approve) =>
+      decideDeploymentAccess(deps.app, deps.identity, value, actor, approve),
     ...(deps.keychainApprovals ? { keychainApprovals: deps.keychainApprovals } : {}),
-    ...(deps.deploymentAccessRequests ? { deploymentAccessRequests: deps.deploymentAccessRequests } : {}),
     ...(deps.taskAcknowledgements
       ? { taskAcknowledgements: createTaskAcknowledgements(deps.taskAcknowledgements, lease, deps) }
       : {}),

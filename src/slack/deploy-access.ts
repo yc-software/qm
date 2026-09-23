@@ -1,63 +1,97 @@
+import type { App } from "../api/app-types.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
-import type { DeploymentAccessRequest } from "../deploy/access-requests.ts";
+import type { IdentityService } from "../identity/identity-service.ts";
+import { principalDestination } from "../reach/reach.ts";
+import { parseScopeId, scopeId, type ActorAssertion, type Destination } from "../types.ts";
 import type { Directory } from "./directory.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import { updateSlackMessage } from "./messaging.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
 const ACTIONS = ["deploy_access_approve", "deploy_access_decline"] as const;
-const escape = (text: string): string => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+type Request = NonNullable<Destination["deploymentAccess"]>;
 
-export function deployAccessMessage(req: DeploymentAccessRequest): {
-  text: string;
-  blocks: Array<Record<string, unknown>>;
-} {
-  const label = escape(req.appLabel.slice(0, 150));
-  const app = /^https?:\/\//.test(req.appUrl)
-    ? `<${req.appUrl.replaceAll("|", "%7C").replaceAll(">", "%3E")}|${label}>`
-    : label;
-  const who = escape(req.requesterId);
-  let status = "";
-  if (req.status === "approved") status = `Approved. ${who} can now open ${app}.`;
-  if (req.status === "declined") status = `Declined. ${who} was told.`;
-  const pending = req.status === "pending";
-  const text = pending
-    ? `${req.requesterId} is asking for access to your app "${req.appLabel}" (${req.appUrl}).`
-    : status.replaceAll(/<[^|>]+\|([^>]+)>/g, "$1");
-  const blocks: Array<Record<string, unknown>> = [
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: pending
-          ? `:key: *Access request.*\n*${who}* is asking to open your app ${app}. They signed in, but it isn't shared with them.`
-          : `*${status}*`,
+export function parseDeployAccess(value: string): Request {
+  if (value.length > 2000) throw new Error("Invalid access request.");
+  const r = JSON.parse(value) as Request;
+  if (
+    !r ||
+    Object.keys(r).length !== 2 ||
+    typeof r.deploymentId !== "string" ||
+    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(r.deploymentId) ||
+    typeof r.requesterId !== "string" ||
+    !/^[^\s\p{Cc}<>|:]{1,320}$/u.test(r.requesterId)
+  )
+    throw new Error("Invalid access request.");
+  return r;
+}
+
+export function deployAccessMessage(
+  request: Request,
+  text: string,
+): { text: string; blocks: Array<Record<string, unknown>> } {
+  const value = JSON.stringify(request);
+  parseDeployAccess(value);
+  return {
+    text,
+    blocks: [
+      { type: "section", text: { type: "plain_text", text: text.slice(0, 3000) } },
+      {
+        type: "actions",
+        elements: ACTIONS.map((action_id, i) => ({
+          type: "button",
+          action_id,
+          value,
+          text: { type: "plain_text", text: i === 0 ? "Approve" : "Decline" },
+          style: i === 0 ? "primary" : "danger",
+        })),
       },
-    },
-  ];
-  if (pending) {
-    blocks.push({
-      type: "actions",
-      block_id: `deploy_access:${req.id}`,
-      elements: [
-        {
-          type: "button",
-          text: { type: "plain_text", text: "Approve" },
-          action_id: ACTIONS[0],
-          value: req.id,
-          style: "primary",
-        },
-        {
-          type: "button",
-          text: { type: "plain_text", text: "Decline" },
-          action_id: ACTIONS[1],
-          value: req.id,
-          style: "danger",
-        },
-      ],
+    ],
+  };
+}
+
+export async function decideDeploymentAccess(
+  app: App,
+  identity: IdentityService,
+  value: string,
+  assertion: ActorAssertion,
+  approve: boolean,
+): Promise<string> {
+  const { deploymentId, requesterId } = parseDeployAccess(value);
+  await identity.refresh(true);
+  const actor = identity.resolve(assertion);
+  if (!identity.isInternal(actor)) throw new Error("Only the app's owner can decide this request.");
+  const home = await app.getArtifactHome("deploy", deploymentId);
+  if (
+    !home ||
+    !(await (parseScopeId(home.ownerScopeId).kind === "personal"
+      ? app.belongsToScope(actor.id, home.ownerScopeId)
+      : app.canManageArtifactHome(home.ownerScopeId, home.createdBy, actor.id)))
+  )
+    throw new Error("Only the app's owner can decide this request.");
+  const d = await app.getDeployment(deploymentId);
+  if (!d) throw new Error("That app no longer exists.");
+  const label = d.displayName ?? d.name ?? d.id;
+  if (approve) {
+    const grantee = scopeId("personal", requesterId);
+    const existing = (await app.deploymentGrantees(deploymentId)).find(
+      (g) => g.scope === grantee && g.permission === "write",
+    );
+    await app.grant({
+      ownerScopeId: home.ownerScopeId,
+      ref: home.grantRef,
+      granteeScopeId: grantee,
+      permission: existing?.permission ?? "read",
+      grantedBy: actor.id,
     });
+    return `Approved. ${requesterId} can now open "${label}".`;
   }
-  return { text, blocks };
+  await app.enqueueDelivery({
+    destination: principalDestination(requesterId, actor.id),
+    text: `${actor.id} declined your request for access to "${label}".`,
+    idempotencyKey: `deploy-declined:${deploymentId}:${requesterId.toLowerCase()}:${Math.floor(Date.now() / 86_400_000)}`,
+  });
+  return `Declined. ${requesterId} was told.`;
 }
 
 export function registerDeployAccessActions(
@@ -68,13 +102,13 @@ export function registerDeployAccessActions(
     await ack();
     const parsed = parseBlockAction(action, ACTIONS);
     const { clickerId, channel, messageTs } = parseInteractionBody(body);
-    if (!parsed || !clickerId || !channel || !messageTs || !deps.core.deploymentAccessRequests) return;
+    if (!parsed || !clickerId || !channel || !messageTs) return;
     try {
       const actor = await deps.directory.classifyActor(client, clickerId);
-      const decision = parsed.actionId === "deploy_access_approve" ? "approve" : "decline";
-      const request = await deps.core.deploymentAccessRequests.decide(parsed.value, actor, decision);
-      const card = deployAccessMessage(request);
-      await updateSlackMessage(client, channel, messageTs, card.text, card.blocks);
+      const text = await deps.core.decideDeploymentAccess(parsed.value, actor, parsed.actionId === ACTIONS[0]);
+      await updateSlackMessage(client, channel, messageTs, text, [
+        { type: "section", text: { type: "plain_text", text } },
+      ]);
     } catch (error) {
       await client.chat
         .postEphemeral({

@@ -22,7 +22,6 @@ import { resolveShareTarget as resolveShareTargetGrammar } from "../artifact-sha
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import { principalDestination } from "../../reach/reach.ts";
-import { DeploymentAccessError } from "../../deploy/access-requests.ts";
 import { portalSessionSub } from "../../deploy/viewer-session.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
 
@@ -892,28 +891,17 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     const [ownerKind, ownerRef] = String(d.ownerScopeId).split(":", 2);
     const ownerId = ownerKind === "personal" && ownerRef ? ownerRef : d.createdBy;
     const label = d.displayName ?? d.name ?? slug;
-    const appUrl = `https://${rawHost}/`;
     // One request per visitor per app per day — the idempotent outbox absorbs button mashing.
     const day = Math.floor(Date.now() / 86_400_000);
     try {
-      const request = await deps.deploymentAccessRequests?.open({
-        deploymentId: d.id,
-        appLabel: label,
-        appUrl,
-        requesterId: sub,
-        ownerId,
-      });
       await app.enqueueDelivery({
         destination: {
           ...principalDestination(ownerId, sub),
-          ...(request ? { deploymentAccessRequestId: request.id } : {}),
+          deploymentAccess: { deploymentId: d.id, requesterId: sub },
         },
         text:
-          `${sub} is asking for access to your app "${label}" (${appUrl}). ` +
-          `They signed in but the app isn't shared with them. ` +
-          (request
-            ? `Approve to share it with them (view access), or decline.`
-            : `To grant it, share the deployment with personal:${sub}.`),
+          `${sub} is asking for access to your app "${label}" (https://${rawHost}/). ` +
+          `They signed in but the app isn't shared with them. To grant it, share the deployment with personal:${sub}.`,
         idempotencyKey: `deploy-access-request:${slug}:${sub}:${day}`,
       });
       sendJson(res, 200, { ok: true });
@@ -1521,38 +1509,6 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
   }
 }
 
-async function listDeploymentAccessRequests(ctx: ApiCtx): Promise<void> {
-  const { res, capability, deps } = ctx;
-  if (!capability) return sendJson(res, 403, { error: "forbidden" });
-  const requests = deps.deploymentAccessRequests
-    ? await deps.deploymentAccessRequests.pendingFor(capability.actorId)
-    : [];
-  return sendJson(res, 200, { requests });
-}
-
-async function decideDeploymentAccessRequest(ctx: ApiCtx): Promise<void> {
-  const { res, params, body, capability, deps } = ctx;
-  if (!capability) return sendJson(res, 403, { error: "forbidden" });
-  if (!deps.deploymentAccessRequests) return sendJson(res, 404, { error: "not_found" });
-  const decision = isObj(body) ? (body as { decision?: unknown }).decision : undefined;
-  if (decision !== "approve" && decision !== "decline")
-    return sendJson(res, 400, { error: "bad_request", message: 'decision must be "approve" or "decline"' });
-  if (capability.liveActor !== true) {
-    return sendJson(res, 403, {
-      error: "forbidden",
-      message: "an access request is decided only on a turn the app's owner themself sent live — this turn wasn't",
-    });
-  }
-  try {
-    const request = await deps.deploymentAccessRequests.decideAs(params.id!, capability.actorId, decision);
-    return sendJson(res, 200, { ok: true, request });
-  } catch (e) {
-    if (e instanceof DeploymentAccessError)
-      return sendJson(res, e.status, { error: e.status === 404 ? "not_found" : "forbidden", message: e.message });
-    return sendJson(res, 400, { error: "decision_failed", message: errMessage(e) });
-  }
-}
-
 export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   { match: isDeploymentGitRoute, auth: "public", handle: serveDeploymentGit },
   {
@@ -1582,11 +1538,4 @@ export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/deployments/:id/name", auth: "either", handle: renameDeployment },
   { method: "POST", path: "/v1/deployments/:id/display-name", auth: "either", handle: setDeploymentDisplayName },
   { method: "POST", path: "/v1/deployments/:id/always-on", auth: "either", handle: setDeploymentAlwaysOn },
-  { method: "GET", path: "/v1/deployment-access-requests", auth: "either", handle: listDeploymentAccessRequests },
-  {
-    method: "POST",
-    path: "/v1/deployment-access-requests/:id/decide",
-    auth: "either",
-    handle: decideDeploymentAccessRequest,
-  },
 ];

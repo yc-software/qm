@@ -938,14 +938,6 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           permission,
           grantedBy: capability.actorId,
         });
-        if (req.type === "deploy") {
-          await app.deploymentShared({
-            deploymentId: home.id,
-            granteeScopeId: toScope,
-            permission,
-            by: capability.actorId,
-          });
-        }
         return {
           ok: true,
           verb: "share",

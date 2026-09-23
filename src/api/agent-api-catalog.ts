@@ -437,9 +437,7 @@ const FAMILIES: AgentApiFamily[] = [
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/fetch$/.test(p)) ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/logs$/.test(p)) ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/(git-url|share)$/.test(p)) ||
-      (m === "POST" && /^\/v1\/deployments\/[^/]+\/(share|archive|restore|name|display-name|always-on)$/.test(p)) ||
-      (m === "GET" && p === "/v1/deployment-access-requests") ||
-      (m === "POST" && /^\/v1\/deployment-access-requests\/[^/]+\/decide$/.test(p)),
+      (m === "POST" && /^\/v1\/deployments\/[^/]+\/(share|archive|restore|name|display-name|always-on)$/.test(p)),
     guidance:
       'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. To widen or narrow that — "share it with everyone" or "share it with <teammate>" — POST /v1/deployments/:id/share with `scope:"org"` or `recipient:"<name>"`; no redeploy. To rename or take down an app, use name / display-name / archive. POST /v1/deployments/:id/always-on with `{alwaysOn:true|false}` keeps an app permanently warm (no idle cold starts) or returns it to sleep-when-idle. Anyone who manages the app can change these: its owner from any conversation, a current member of the channel/team it was published from, or someone granted "manage" access.',
     routes: [
@@ -509,17 +507,6 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/deployments/:id/restore",
         summary: "restore an archived app you manage by reapplying its current saved version",
-      },
-      {
-        method: "GET",
-        path: "/v1/deployment-access-requests",
-        summary: "list pending requests from signed-in people asking to open one of your apps",
-      },
-      {
-        method: "POST",
-        path: "/v1/deployment-access-requests/:id/decide",
-        summary:
-          'decide a pending access request to your app — body {decision:"approve"|"decline"}; approve shares the app (view access) and notifies the requester, decline tells them it was declined; only the app owner\'s own words count as the decision',
       },
     ],
   },

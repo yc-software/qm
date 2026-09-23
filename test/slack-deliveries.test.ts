@@ -276,3 +276,14 @@ for (const type of ["group", "principal"]) {
     assert.equal(blocks.filter((block) => block.type === "context").length, 1);
   });
 }
+
+test("principal delivery metadata renders an actionable deployment card", async () => {
+  const request = { deploymentId: "00000000-0000-4000-8000-000000000001", requesterId: "bob@example.com" };
+  const { posts } = await deliver(
+    JSON.parse(JSON.stringify({ type: "principal", target: "U1", deploymentAccess: request })),
+  );
+  const blocks = posts[0]!.blocks as Array<{ type: string; elements?: Array<{ value: string }> }>;
+  const actions = blocks.find((b) => b.type === "actions")!;
+  assert.equal(actions.elements!.length, 2);
+  assert.deepEqual(JSON.parse(actions.elements![0]!.value), request);
+});

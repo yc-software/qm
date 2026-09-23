@@ -200,7 +200,7 @@ export interface TriggerBase {
 
 export interface Destination {
   keychainAskId?: string;
-  deploymentAccessRequestId?: string;
+  deploymentAccess?: { deploymentId: string; requesterId: string };
   type: string;
   target: string;
   audienceScopeId?: ScopeId;

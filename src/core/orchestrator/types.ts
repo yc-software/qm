@@ -30,7 +30,6 @@ import type { MonitorStore } from "../../monitors/monitor-store.ts";
 import type { CronStore } from "../../cron/cron-store.ts";
 import type { WebhookStore } from "../../webhooks/webhook-store.ts";
 import type { ConnectorTokenStore, Keychain, ServiceCredentialStore } from "../../credentials/keychain.ts";
-import type { DeploymentAccessRequests } from "../../deploy/access-requests.ts";
 import type { DeviceFlowCutoverStore } from "../../credentials/device-flow-cutover.ts";
 import type { FeatureFlagStore } from "../../feature-flags.ts";
 import type { CredentialUsageSink } from "../../admin/credential-usage-sink.ts";
@@ -186,7 +185,6 @@ export interface OrchestratorDeps {
   featureFlags?: FeatureFlagStore;
   credentialUsage?: CredentialUsageSink;
   keychain?: Keychain;
-  deploymentAccessRequests?: DeploymentAccessRequests;
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;
   directory?: DirectoryStore;

@@ -1,6 +1,4 @@
 import type { Reach } from "../deploy/deploy-service.ts";
-import type { DeploymentSharedEvent } from "../deploy/access-requests.ts";
-import { swallowAs } from "../util/errors.ts";
 import { mintDeployGitAccess } from "../deploy/access-token.ts";
 
 import type { App, AppDeps, ViewerDeployment } from "./app-types.ts";
@@ -18,7 +16,6 @@ export function createDeploymentMethods(
   | "getDeployment"
   | "shareDeployment"
   | "deploymentGrantees"
-  | "deploymentShared"
   | "listDeploymentsForViewer"
   | "effectiveDeploymentPermission"
   | "deploymentGitPermissionFor"
@@ -43,9 +40,6 @@ export function createDeploymentMethods(
   | "attachScope"
 > {
   const { effectiveDeploymentPermission, principalCanReadDeployment, principalGitPermission } = h;
-  const deploymentShared = async (event: DeploymentSharedEvent): Promise<void> => {
-    await deps.onDeploymentShared?.(event).catch(swallowAs("deploy: share notice", undefined));
-  };
   return {
     deploy(input) {
       return deps.deploy.deploy(input);
@@ -59,18 +53,12 @@ export function createDeploymentMethods(
     getDeployment(idOrName) {
       return deps.deploy.getDeployment(idOrName);
     },
-    async shareDeployment(idOrName, grantee, permission, actor) {
-      const grantees = await deps.deploy.shareDeployment(idOrName, grantee, permission, actor);
-      const d = permission === null ? null : await deps.deploy.getDeployment(idOrName);
-      if (d && permission) {
-        await deploymentShared({ deploymentId: d.id, granteeScopeId: grantee, permission, by: actor.createdBy });
-      }
-      return grantees;
+    shareDeployment(idOrName, grantee, permission, actor) {
+      return deps.deploy.shareDeployment(idOrName, grantee, permission, actor);
     },
     deploymentGrantees(idOrName) {
       return deps.deploy.deploymentGrantees(idOrName);
     },
-    deploymentShared,
     async listDeploymentsForViewer(principalId) {
       const deployments = await deps.deploy.listDeployments();
       const enriched = await Promise.all(
