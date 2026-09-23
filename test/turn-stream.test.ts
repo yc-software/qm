@@ -56,6 +56,15 @@ test("begin() marks a run replying BEFORE any token, without producing a partial
   assert.equal(s.snapshot("r1"), "Hi", "the deferred text streams into the same entry");
 });
 
+test("begin() notifies current and late subscribers", () => {
+  const s = createTurnStream();
+  let replies = 0;
+  s.subscribe("r1", { onReplying: () => replies++ });
+  s.begin("r1");
+  s.subscribe("r1", { onReplying: () => replies++ });
+  assert.equal(replies, 2);
+});
+
 test("a streamed delta implies replying even without an explicit begin()", () => {
   const s = createTurnStream();
   s.publish("r1", "Hello");

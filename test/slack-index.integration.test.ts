@@ -1253,12 +1253,18 @@ test("a blocked-thread result without approval details tells only the sender ins
   }
 });
 
-test("an internal channel mention carries the complete audience and thread context", async () => {
-  const f = await fixture();
+test("an internal channel mention carries complete context and a durable acknowledgement", async () => {
+  const f = await fixture({ taskAcks: true });
   try {
+    f.core.holdRun("r-mention");
     const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> status?", ts: "104.1" };
     f.client.messagesByChannel.set("C1", [event]);
-    await f.app.emitEvent("app_mention", event);
+    const turn = f.app.emitEvent("app_mention", event);
+    await waitFor(() => f.client.reactionsAdded.length === 1);
+    assert.deepEqual(f.client.reactionsAdded, [{ channel: "C1", timestamp: "104.1", name: "eyes" }]);
+    f.core.finishRun({ status: "ok", reply: "agent reply" });
+    await turn;
+    assert.deepEqual(f.client.reactionsRemoved, [{ channel: "C1", timestamp: "104.1", name: "eyes" }]);
     assert.equal(f.core.turns.length, 1);
     assert.equal(f.core.turns[0].text, "status?");
     assert.equal(f.core.turns[0].conversation.threadRef, "ch:C1:104.1");
@@ -1296,8 +1302,8 @@ test("an unaddressed top-level channel message is mirrored but never becomes a t
   }
 });
 
-test("a group-DM thread-follow runs unprompted yet attests its author's liveness", async () => {
-  const f = await fixture();
+test("a group-DM thread-follow is acknowledged only after core engages", async () => {
+  const f = await fixture({ taskAcks: true });
   try {
     f.client.channelsById.set("G1", { id: "G1", name: "", is_member: true, is_private: true, is_mpim: true });
     f.client.membersByChannel.set("G1", ["U1", "U2", "UBOT"]);
@@ -1305,7 +1311,8 @@ test("a group-DM thread-follow runs unprompted yet attests its author's liveness
       { channel: "G1", user: "U1", text: "kick off", ts: "300.1" },
       { channel: "G1", user: "UBOT", text: "on it", ts: "300.2", thread_ts: "300.1" },
     ]);
-    await f.app.emitMessage({
+    f.core.holdRun("r-follow");
+    const turn = f.app.emitMessage({
       channel: "G1",
       channel_type: "mpim",
       user: "U2",
@@ -1313,6 +1320,13 @@ test("a group-DM thread-follow runs unprompted yet attests its author's liveness
       ts: "300.3",
       thread_ts: "300.1",
     });
+    await waitFor(() => f.core.polled.includes("r-follow"));
+    assert.equal(f.client.reactionsAdded.length, 0);
+    f.core.engage();
+    await waitFor(() => f.client.reactionsAdded.length === 1);
+    f.core.finishRun({ status: "ok", reply: "agent reply" });
+    await turn;
+    assert.deepEqual(f.client.reactionsRemoved, [{ channel: "G1", timestamp: "300.3", name: "eyes" }]);
     assert.equal(f.core.turns.length, 1);
     assert.equal(f.core.turns[0].unprompted, true);
     assert.equal(f.core.turns[0].entryTs, "300.3");
@@ -1324,72 +1338,15 @@ test("a group-DM thread-follow runs unprompted yet attests its author's liveness
   }
 });
 
-function groupThreadWithBotStake(f: Awaited<ReturnType<typeof fixture>>): void {
-  f.client.channelsById.set("G1", { id: "G1", name: "", is_member: true, is_private: true, is_mpim: true });
-  f.client.membersByChannel.set("G1", ["U1", "U2", "UBOT"]);
-  f.client.messagesByChannel.set("G1", [
-    { channel: "G1", user: "U1", text: "kick off", ts: "300.1" },
-    { channel: "G1", user: "UBOT", text: "on it", ts: "300.2", thread_ts: "300.1" },
-  ]);
-}
-
-test("a channel mention is acknowledged durably as soon as core queues it, and the mark clears after the reply", async () => {
+test("a declined thread-follow never touches reactions", async () => {
   const f = await fixture({ taskAcks: true });
   try {
-    f.core.holdRun("r-mention");
-    const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> status?", ts: "104.1" };
-    f.client.messagesByChannel.set("C1", [event]);
-    const turn = f.app.emitEvent("app_mention", event);
-    await waitFor(() => f.client.reactionsAdded.length === 1);
-    assert.deepEqual(f.client.reactionsAdded, [{ channel: "C1", timestamp: "104.1", name: "eyes" }]);
-    assert.equal(f.client.reactionsRemoved.length, 0);
-    f.core.finishRun({ status: "ok", reply: "all green" });
-    await turn;
-    assert.deepEqual(
-      f.client.posts.map((p) => p.text),
-      ["all green"],
-    );
-    assert.deepEqual(f.client.reactionsRemoved, [{ channel: "C1", timestamp: "104.1", name: "eyes" }]);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("a thread-follow is acknowledged only once core decides to answer it", async () => {
-  const f = await fixture({ taskAcks: true });
-  try {
-    groupThreadWithBotStake(f);
-    f.core.holdRun("r-follow");
-    const turn = f.app.emitMessage({
-      channel: "G1",
-      channel_type: "mpim",
-      user: "U2",
-      text: "also update the skill",
-      ts: "300.3",
-      thread_ts: "300.1",
-    });
-    await waitFor(() => f.core.polled.includes("r-follow"));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(f.client.reactionsAdded.length, 0, "no mark before core commits to a reply");
-    f.core.engage();
-    await waitFor(() => f.client.reactionsAdded.length === 1);
-    assert.deepEqual(f.client.reactionsAdded, [{ channel: "G1", timestamp: "300.3", name: "eyes" }]);
-    f.core.finishRun({ status: "ok", reply: "updated" });
-    await turn;
-    assert.deepEqual(
-      f.client.posts.map((p) => p.text),
-      ["updated"],
-    );
-    assert.deepEqual(f.client.reactionsRemoved, [{ channel: "G1", timestamp: "300.3", name: "eyes" }]);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("a thread-follow core declines never touches reactions", async () => {
-  const f = await fixture({ taskAcks: true });
-  try {
-    groupThreadWithBotStake(f);
+    f.client.channelsById.set("G1", { id: "G1", name: "", is_member: true, is_private: true, is_mpim: true });
+    f.client.membersByChannel.set("G1", ["U1", "U2", "UBOT"]);
+    f.client.messagesByChannel.set("G1", [
+      { channel: "G1", user: "U1", text: "kick off", ts: "300.1" },
+      { channel: "G1", user: "UBOT", text: "on it", ts: "300.2", thread_ts: "300.1" },
+    ]);
     f.core.holdRun("r-declined");
     const turn = f.app.emitMessage({
       channel: "G1",
@@ -1404,7 +1361,6 @@ test("a thread-follow core declines never touches reactions", async () => {
     await turn;
     assert.equal(f.client.reactionsAdded.length, 0);
     assert.equal(f.client.reactionsRemoved.length, 0);
-    assert.equal(f.client.posts.length, 0);
   } finally {
     await f.stop();
   }

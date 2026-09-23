@@ -565,13 +565,7 @@ export function createTurnHandler(deps: {
             inc.ackGate?.persisted();
             if (!inc.unprompted) await moveTaskAck(runId, inc.ts);
           },
-          ...(inc.unprompted
-            ? {
-                onEngaged: () => {
-                  if (queuedRunId) void moveTaskAck(queuedRunId, inc.ts, true);
-                },
-              }
-            : {}),
+          onEngaged: inc.unprompted ? () => void moveTaskAck(queuedRunId!, inc.ts, true) : undefined,
           ...(ack
             ? {
                 onFirstBlock: (blockText: string) => {
