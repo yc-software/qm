@@ -1,3 +1,4 @@
+import { createIsolatedTestComputer } from "./support/isolated-test-computer.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -170,7 +171,13 @@ function turn(kind: "dm" | "channel", text: string): TurnRequest {
 }
 
 test("F1/F3 — a live DM receives only its requested connector; a channel receives none", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "floor-")) }));
+  const built = buildApp(testConfig({ sandboxResourcesEnabled: true, dataDir: mkdtempSync(join(tmpdir(), "floor-")) }));
+  await createIsolatedTestComputer(built, "U1", "personal:U1");
+  await built.directory.replaceChannels(
+    [{ channelId: "C1", name: "shared", isPrivate: false }],
+    [{ channelId: "C1", principalId: "U1" }],
+  );
+  await createIsolatedTestComputer(built, "U1", "channel:C1");
   await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
   const key = envKey("gmail.googleapis.com");
   const absent = `!run test -z "$${key}" && echo absent`;
@@ -195,7 +202,10 @@ function wake(text: string, readOnly: boolean): TurnRequest {
 }
 
 test("a triggered wake needs a grant and an explicit request for a connector", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-conn-")) }));
+  const built = buildApp(
+    testConfig({ sandboxResourcesEnabled: true, dataDir: mkdtempSync(join(tmpdir(), "wake-conn-")) }),
+  );
+  await createIsolatedTestComputer(built, "U1", "personal:U1");
   await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
   const key = envKey("gmail.googleapis.com");
   const absent = `!run test -z "$${key}" && echo absent`;

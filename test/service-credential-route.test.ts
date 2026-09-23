@@ -1,3 +1,4 @@
+import { createIsolatedTestComputer } from "./support/isolated-test-computer.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -998,14 +999,22 @@ const dm = (text: string): TurnRequest => ({
   text,
 });
 
-function buildWithCapture() {
+async function buildWithCapture() {
   const built = buildApp(
     testConfig({
+      sandboxResourcesEnabled: true,
       dataDir: mkdtempSync(join(tmpdir(), "svc-cred-stamp-")),
       signingSecret: SECRET,
       apiBaseUrl: "http://core.internal",
     }),
   );
+  await built.directory.replaceChannels(
+    ["C1", "C2"].map((channelId) => ({ channelId, name: channelId, isPrivate: true })),
+    ["C1", "C2"].flatMap((channelId) => ["U1", "U2", "B-LEGACY"].map((principalId) => ({ channelId, principalId }))),
+  );
+  await createIsolatedTestComputer(built, "U1", "personal:U1");
+  await createIsolatedTestComputer(built, "U1", "channel:C1");
+  await createIsolatedTestComputer(built, "U1", "channel:C2");
   let captured: Record<string, string> | undefined;
   const realProvision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = async (layers, opts) => {
@@ -1022,7 +1031,7 @@ function buildWithCapture() {
 }
 
 test("orchestrator mints a broker capability only for the explicitly requested service", async () => {
-  const { built, env, requested } = buildWithCapture();
+  const { built, env, requested } = await buildWithCapture();
   await built.serviceCreds.setServiceCredential("org:default-org", {
     slug: "x-firehose",
     name: "X",
@@ -1072,7 +1081,7 @@ test("orchestrator mints a broker capability only for the explicitly requested s
 });
 
 test("service credential revocation after catalog discovery blocks secret resolution", async (t) => {
-  const { built, requested } = buildWithCapture();
+  const { built, requested } = await buildWithCapture();
   await built.serviceCreds.setServiceCredential("org:default-org", {
     slug: "late-revocation",
     host: "late.example.com",
@@ -1097,14 +1106,14 @@ test("service credential revocation after catalog discovery blocks secret resolu
   };
   await assert.rejects(
     built.app.turn(dm('!execute {"command":"true","credentials":["service_late-revocation"]}')),
-    /no longer authorized/,
+    /credential handle is not available/,
   );
   assert.equal(secrets.mock.callCount(), 0, "revoked grants never reach the decrypting store method");
   assert.equal(requested(), undefined);
 });
 
 test("orchestrator does NOT stamp a credential granted only to someone else", async () => {
-  const { built, env } = buildWithCapture();
+  const { built, env } = await buildWithCapture();
   await built.serviceCreds.setServiceCredential("org:default-org", {
     slug: "x-firehose",
     name: "X",
@@ -1125,7 +1134,7 @@ test("orchestrator does NOT stamp a credential granted only to someone else", as
 });
 
 test("a channel grant exposes a requested handle only inside its authorized channel", async () => {
-  const { built, env, requested } = buildWithCapture();
+  const { built, env, requested } = await buildWithCapture();
   await built.serviceCreds.setServiceCredential("org:default-org", {
     slug: "x-firehose",
     name: "X",
@@ -1180,7 +1189,7 @@ test("a channel grant exposes a requested handle only inside its authorized chan
 });
 
 test("orchestrator stamps nothing when the org has no service credentials (zero-cost common path)", async () => {
-  const { built, env } = buildWithCapture();
+  const { built, env } = await buildWithCapture();
   const res = await built.app.turn(dm("!run echo hi"));
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined);
@@ -1188,7 +1197,7 @@ test("orchestrator stamps nothing when the org has no service credentials (zero-
 });
 
 test("the system prompt advertises an entitled credential (host/methods/paths) so the agent can use the broker", async () => {
-  const { built } = buildWithCapture();
+  const { built } = await buildWithCapture();
   await built.serviceCreds.setServiceCredential("org:default-org", {
     slug: "x-firehose",
     name: "X firehose",
@@ -1218,7 +1227,7 @@ test("the system prompt advertises an entitled credential (host/methods/paths) s
 });
 
 test("the system prompt does NOT advertise a credential the session isn't entitled to", async () => {
-  const { built } = buildWithCapture();
+  const { built } = await buildWithCapture();
   await built.serviceCreds.setServiceCredential("org:default-org", {
     slug: "x-firehose",
     name: "X firehose",
@@ -1353,7 +1362,7 @@ test("usage summaries authorize before reads and include only the requested scop
 });
 
 test("one execution composes selected broker credentials without authorizing other services", async () => {
-  const { built, requested } = buildWithCapture();
+  const { built, requested } = await buildWithCapture();
   for (const slug of ["first", "second", "unrequested"]) {
     await built.serviceCreds.setServiceCredential("org:default-org", {
       slug,

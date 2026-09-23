@@ -9,7 +9,7 @@ import { DROPPED_PROXY_ENV, forceThroughProxyEnv, nonInteractiveShellPrefix } fr
 import { materializeRoLayers } from "./ro-layers.ts";
 import type { LayerToolInstaller } from "./layer-tool-install.ts";
 import { posixJoin } from "./exec-file-ops.ts";
-import { type CredentialPathSpec } from "../credentials/resident-paths.ts";
+import { ephemeralCredLinkScript, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { execFailureDetail } from "./sandbox.ts";
 import type { ExecOptions, ExecResult, ProvisionOptions, SandboxHandle, TeardownOptions } from "./sandbox.ts";
@@ -164,7 +164,11 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
       };
       if (Object.keys(env).length) handle.env = env;
 
-      const prepare = `mkdir -p ${shq(workspaceDir)}`;
+      const credLinks =
+        scratch || provOpts?.executionMode === "isolated"
+          ? ""
+          : ` && ${ephemeralCredLinkScript(homeDir, deps.credentialPaths)}`;
+      const prepare = `mkdir -p ${shq(workspaceDir)}${credLinks}`;
       const toolIo = {
         exec: (script: string, t: number) => deps.exec(name, script, t),
         writeAbs: (abs: string, data: Uint8Array) => deps.writeAbsBytes(name, abs, data),

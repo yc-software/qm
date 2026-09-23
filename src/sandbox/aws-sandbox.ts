@@ -1,3 +1,4 @@
+import type { SandboxExecutionModeOptions } from "./sandbox.ts";
 import { createSupervisorTransport } from "./supervisor-transport.ts";
 import { DeleteObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { orgId as configOrgId } from "../config.ts";
@@ -31,7 +32,11 @@ import type {
 } from "./sandbox.ts";
 import { execFailureDetail, visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createHomeSnapshotOps, createS3SnapshotStore, HOME_SNAPSHOT_PRUNE, snapshotDue } from "./home-snapshot.ts";
-import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
+import {
+  ephemeralCredLinkScript,
+  ephemeralCredLinkPaths,
+  type CredentialPathSpec,
+} from "../credentials/resident-paths.ts";
 
 const HOME_DIR = "/root";
 const WORKSPACE_BASENAME = "workspace";
@@ -59,7 +64,7 @@ export interface StoredMicrovm {
   orgId?: string;
 }
 
-export interface AwsSandboxOptions extends BlobStagingOptions {
+export interface AwsSandboxOptions extends BlobStagingOptions, SandboxExecutionModeOptions {
   region: string;
   profile?: string;
   imageIdentifier: string;
@@ -173,6 +178,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
   }
 
   const homeSnapshots = createHomeSnapshotOps<string>({
+    executionModeForScope: opts.executionModeForScope,
     label: "aws",
     homeDir: HOME_DIR,
     homeTarPath: HOME_TAR,
@@ -431,7 +437,9 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       endpointById.set(id, body.endpoint);
       const coldStart = body.coldStart;
 
-      const prepared = await execRaw(id, `mkdir -p ${shq(WORKSPACE_DIR)}`, PREP_TIMEOUT_SEC);
+      const credLinks =
+        provOpts?.executionMode === "isolated" ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, credentialPaths)}`;
+      const prepared = await execRaw(id, `mkdir -p ${shq(WORKSPACE_DIR)}${credLinks}`, PREP_TIMEOUT_SEC);
       if (prepared.code !== 0)
         throw new Error(
           `AWS sandbox credential setup failed: ${execFailureDetail(prepared, PREP_TIMEOUT_SEC).slice(0, 200)}`,

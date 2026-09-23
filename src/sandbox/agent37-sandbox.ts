@@ -1,3 +1,4 @@
+import type { SandboxExecutionModeOptions } from "./sandbox.ts";
 import { runAgent37Supervisor } from "./agent37-supervisor.ts";
 import { createSupervisorTransport } from "./supervisor-transport.ts";
 import { randomUUID } from "node:crypto";
@@ -10,7 +11,11 @@ import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
 import { createExecExport, createBackendBlobStaging, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
-import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
+import {
+  ephemeralCredLinkScript,
+  ephemeralCredLinkPaths,
+  type CredentialPathSpec,
+} from "../credentials/resident-paths.ts";
 import { DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -65,7 +70,7 @@ interface InstanceExecResponse {
   truncated: boolean;
 }
 
-export interface Agent37SandboxOptions {
+export interface Agent37SandboxOptions extends SandboxExecutionModeOptions {
   apiKey?: string;
   baseUrl?: string;
   namePrefix?: string;
@@ -531,7 +536,11 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       };
 
       try {
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}`, 60);
+        const credLinks =
+          scratch || provOpts?.executionMode === "isolated"
+            ? ""
+            : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
+        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
         if (prep.code !== 0)
           throw new Error(`agent37 provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
 

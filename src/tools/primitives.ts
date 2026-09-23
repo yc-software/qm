@@ -1,4 +1,5 @@
 import { withAbort } from "../util/async.ts";
+import { createSecretValueMasker } from "../security/secret-masking.ts";
 import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-types.ts";
 import { readContextFile } from "../resolution/context-files.ts";
 import { contextMemory, type TurnContext } from "../resolution/turn-context.ts";
@@ -429,7 +430,10 @@ export interface ToolContextDeps {
   credentialExec?: ToolContext["credentialExec"];
   registerLogin?: ToolContext["registerLogin"];
   commandCredentials?: readonly CommandCredential[];
-  getCommandCredentials?: (requestedHandles: readonly string[]) => Promise<readonly CommandCredential[]>;
+  getCommandCredentials?: (
+    requestedHandles: readonly string[],
+    handle: SandboxHandle,
+  ) => Promise<readonly CommandCredential[]>;
   provision: () => Promise<SandboxHandle>;
   provisionScratch?: () => Promise<SandboxHandle>;
   provisionResource?: (id: string) => Promise<SandboxHandle>;
@@ -700,19 +704,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (requestedCredentials.length && (scratch || execOpts?.reachTarget !== undefined || !writableScopeId)) {
         throw new Error("command credentials are available only on the scoped computer");
       }
-      const availableCredentials = new Map(
-        ((await deps.getCommandCredentials?.(requestedCredentials)) ?? deps.commandCredentials ?? []).map(
-          (credential) => [credential.handle, credential] as const,
-        ),
-      );
-      const requested = requestedCredentials.map((handle) => {
-        const credential = availableCredentials.get(handle);
-        if (!credential) throw new Error(`credential handle is not available on this turn: ${handle}`);
-        if ((credential.scope ?? "scoped") !== (ownerAuth ? "owner" : "scoped")) {
-          throw new Error(`credential ${handle} requires scope:${credential.scope ?? "scoped"}`);
-        }
-        return credential;
-      });
       const reachTarget = execOpts?.reachTarget;
       if (
         [scratch, ownerAuth, reachTarget !== undefined, execOpts?.sandboxId !== undefined].filter(Boolean).length > 1
@@ -758,6 +749,19 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       else if (scratch) handle = await deps.provisionScratch!();
       else if (ownerAuth) handle = await deps.provisionOwnerAuth!();
       else handle = await deps.provision();
+      const availableCredentials = new Map(
+        ((await deps.getCommandCredentials?.(requestedCredentials, handle)) ?? deps.commandCredentials ?? []).map(
+          (credential) => [credential.handle, credential] as const,
+        ),
+      );
+      const requested = requestedCredentials.map((handle) => {
+        const credential = availableCredentials.get(handle);
+        if (!credential) throw new Error(`credential handle is not available on this turn: ${handle}`);
+        if ((credential.scope ?? "scoped") !== (ownerAuth ? "owner" : "scoped")) {
+          throw new Error(`credential ${handle} requires scope:${credential.scope ?? "scoped"}`);
+        }
+        return credential;
+      });
       const resolvedMs = execOpts?.timeoutSeconds != null ? execOpts.timeoutSeconds * 1000 : deps.execTimeoutMs;
       const timeoutMs =
         resolvedMs != null && deps.execTimeoutCeilingMs != null
@@ -813,6 +817,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             });
           }
           execOpts?.signal?.throwIfAborted();
+          const isolated = handle.executionMode === "isolated";
+          if (!isolated && commandFiles.length)
+            throw new Error(
+              "file credential requests require an isolated computer; use the legacy login flow on this computer",
+            );
           const onceGrants = prepared.filter((credential) => credential.singleUse);
           if (onceGrants.length > 1)
             throw new Error(
@@ -821,12 +830,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           for (const credential of prepared.filter((credential) => !credential.singleUse)) await credential.commit?.();
           execOpts?.signal?.throwIfAborted();
           for (const credential of onceGrants) await credential.commit?.();
+          const commandHandle =
+            !isolated && Object.keys(commandEnv).length ? { ...handle, env: { ...handle.env, ...commandEnv } } : handle;
           const r = await deps.sandbox.run(
-            handle,
+            commandHandle,
             sandboxCommand,
-            requested.length ? { ...opts, credentials: { env: commandEnv, files: commandFiles } } : opts,
+            isolated && requested.length ? { ...opts, credentials: { env: commandEnv, files: commandFiles } } : opts,
           );
-          return reached ? { ...r, reached } : r;
+          const mask = createSecretValueMasker(commandEnv);
+          const result = { ...r, stdout: mask(r.stdout), stderr: mask(r.stderr) };
+          return reached ? { ...result, reached } : result;
         });
       });
     },

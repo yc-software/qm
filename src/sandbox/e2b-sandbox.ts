@@ -1,3 +1,4 @@
+import type { SandboxExecutionModeOptions } from "./sandbox.ts";
 import { createSupervisorTransport, SUPERVISOR_TRUST_VERSION } from "./supervisor-transport.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
@@ -20,7 +21,11 @@ import {
   posixJoin,
   type BlobStagingOptions,
 } from "./exec-file-ops.ts";
-import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
+import {
+  ephemeralCredLinkScript,
+  ephemeralCredLinkPaths,
+  type CredentialPathSpec,
+} from "../credentials/resident-paths.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
@@ -58,6 +63,7 @@ const IN_MEMORY_ADOPT_MAX_BYTES = 256 * 1024 * 1024;
 
 const SNAPSHOT_PRUNE = HOME_SNAPSHOT_PRUNE;
 const DEFAULT_KEEP_WARM_SEC = 3600;
+const DEFAULT_NATIVE_SNAPSHOT_INTERVAL_MS = 5 * 60_000;
 
 export interface StoredE2bSandbox {
   supervisorVersion?: string;
@@ -72,7 +78,7 @@ export interface StoredE2bSandbox {
   homeDirty?: boolean;
 }
 
-export interface E2bSandboxOptions extends BlobStagingOptions {
+export interface E2bSandboxOptions extends BlobStagingOptions, SandboxExecutionModeOptions {
   client: E2bClient;
   namePrefix?: string;
   defaultTimeoutSec?: number;
@@ -95,6 +101,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const keepWarmMs = (opts.keepWarmSec ?? DEFAULT_KEEP_WARM_SEC) * 1000;
   const snapshotIntervalMs = opts.snapshotIntervalMs ?? 0;
+  const nativeSnapshotIntervalMs = opts.nativeSnapshotIntervalMs ?? DEFAULT_NATIVE_SNAPSHOT_INTERVAL_MS;
   const observed: { cpus?: number; memoryMb?: number; diskGb?: number } = {};
   const noteInfo = (info: E2bSandboxInfo | undefined): void => {
     if (info?.cpuCount) observed.cpus = info.cpuCount;
@@ -116,6 +123,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
   };
 
   const homeSnapshots = createHomeSnapshotOps<E2bSession>({
+    executionModeForScope: opts.executionModeForScope,
     label: "e2b",
     homeDir: HOME_DIR,
     homeTarPath: HOME_TAR,
@@ -184,17 +192,46 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         }
       }
 
-      if (stored?.nativePause)
-        throw new Error(
-          "E2B native checkpoint recovery requires workspace-only migration before supervised execution; the recovery snapshot is preserved",
-        );
+      const isolated = (await opts.executionModeForScope?.(scope)) === "isolated";
+      if (stored?.nativePause) {
+        if (isolated) throw new Error("Native E2B recovery is unavailable for isolated computers");
+        if (!stored.recoverySnapshotId)
+          throw new Error("e2b sandbox is gone; explicitly import a recovery snapshot before replacing its home");
+        try {
+          onStatus?.("Restoring the sandbox from its recovery snapshot…");
+        } catch (error) {
+          void error;
+        }
+        let session: E2bSession;
+        try {
+          session = await client.create({
+            metadata: { name },
+            autoPause: true,
+            fromSnapshot: stored.recoverySnapshotId,
+          });
+        } catch (e) {
+          await store.merge(scope, { recoveryError: errMessage(e) });
+          reportError("sandbox_hydrate", "snapshot_restore_failed", errMessage(e), scope);
+          throw new Error(`e2b provision: restore from recovery snapshot ${stored.recoverySnapshotId} failed`, {
+            cause: e,
+          });
+        }
+        await store.merge(scope, {
+          sandboxId: session.sandboxId,
+          createdAtMs: Date.now(),
+          preservationState: "running",
+          preservationError: undefined,
+          recoveryError: undefined,
+        });
+        return adopt(session);
+      }
       try {
         onStatus?.("Creating the sandbox…");
       } catch (error) {
         void error;
       }
-      const session = await client.create({ metadata: { name }, autoPause: false });
-      supervisorFresh.add(session.sandboxId);
+      const session = await client.create({ metadata: { name }, autoPause: !isolated });
+      if (isolated) supervisorFresh.add(session.sandboxId);
       sessionByName.set(name, session);
       await store.put(scope, {
         sandboxId: session.sandboxId,
@@ -213,7 +250,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
           cause: e,
         });
       }
-      await store.merge(scope, { nativePause: false });
+      await store.merge(scope, { nativePause: isolated ? false : client.nativePause });
       noteInfo(await client.info?.(session.sandboxId).catch(() => undefined));
       return { session, coldStart: !hydrated };
     });
@@ -272,11 +309,11 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
   const profile: AgentComputerProfile = {
     backend: "e2b",
-    writablePersistence: "snapshot_to_workspace",
+    writablePersistence: client.nativePause ? "provider_managed" : "snapshot_to_workspace",
     processSessions: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
-      os: "Linux — E2B Firecracker sandbox (workspace snapshots preserve files; idle guests stay warm until expiry and never save process memory)",
+      os: "Linux — E2B Firecracker sandbox (provider pause preserves legacy state; isolated computers retain workspace snapshots)",
       runtimes: ["Node", "Python 3"],
       get tools() {
         return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);
@@ -350,6 +387,22 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     snapshotId
       ? client.deleteSnapshot(snapshotId).catch(swallowAs("e2b-sandbox: recovery snapshot delete", undefined))
       : Promise.resolve();
+
+  async function captureRecoverySnapshot(scope: string, session: E2bSession, previous?: string): Promise<void> {
+    try {
+      const { snapshotId } = await session.createSnapshot();
+      await store.merge(scope, {
+        recoverySnapshotId: snapshotId,
+        recoveryError: undefined,
+        lastSnapshotMs: Date.now(),
+        homeDirty: false,
+      });
+      if (previous !== snapshotId) await forgetSnapshot(previous);
+    } catch (e) {
+      await store.merge(scope, { recoveryError: errMessage(e) });
+      reportError("sandbox_snapshot", "recovery_snapshot_failed", errMessage(e), scope);
+    }
+  }
 
   const sandbox: Sandbox = {
     supervisorTransport: createSupervisorTransport(
@@ -438,7 +491,11 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       };
 
       try {
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}`, 60);
+        const credLinks =
+          scratch || provOpts?.executionMode === "isolated"
+            ? ""
+            : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
+        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
         if (prep.code !== 0)
           throw new Error(`e2b provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
 
@@ -635,18 +692,33 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     if (!session) return;
 
     const stored = await store.get(scope);
+    const isolated = (await opts.executionModeForScope?.(scope)) === "isolated";
     if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
-    if (snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
+    if ((isolated || !stored?.nativePause) && snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
       try {
         await snapshotHome(scope, session);
       } catch (e) {
         reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
       }
     }
+    if (isolated || tdOpts?.keepWarm) {
+      try {
+        await session.keepAlive(keepWarmMs);
+      } catch (e) {
+        reportError("sandbox_preservation", "keep_warm_failed", errMessage(e), scope);
+      }
+      return;
+    }
+    if (stored?.nativePause && snapshotDue(stored, tdOpts, nativeSnapshotIntervalMs))
+      await captureRecoverySnapshot(scope, session, stored.recoverySnapshotId);
     try {
-      await session.keepAlive(keepWarmMs);
-    } catch (e) {
-      reportError("sandbox_preservation", "keep_warm_failed", errMessage(e), scope);
+      await session.pause();
+      await store.merge(scope, { preservationState: "paused", preservationError: undefined });
+      sessionByName.delete(handle.id);
+    } catch (error) {
+      await store.merge(scope, { preservationState: "pause_failed", preservationError: errMessage(error) });
+      reportError("sandbox_preservation", "pause_failed", errMessage(error), scope);
+      throw error;
     }
   }
 

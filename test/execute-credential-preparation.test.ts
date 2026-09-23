@@ -4,7 +4,7 @@ import { createToolContext, type CommandCredential, type ToolContextDeps } from 
 import type { ExecOptions, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 
-const handle: SandboxHandle = { id: "credential-preparation", rootDir: "/workspace" };
+const handle: SandboxHandle = { id: "credential-preparation", rootDir: "/workspace", executionMode: "isolated" };
 type Materialized = Awaited<ReturnType<CommandCredential["resolve"]>>;
 
 function context(events: string[], credentials: CommandCredential[], extra: Partial<ToolContextDeps> = {}) {
@@ -186,5 +186,103 @@ test("failed standing revalidation preserves the single-use grant and prevents e
   const { ctx, runs } = context(events, credentials);
   await assert.rejects(ctx.execute("echo ready", { credentials: ["once", "revoked"] }), /standing grant revoked/);
   assert.deepEqual(events, ["policy", "provision", "resolve:once", "resolve:revoked", "revalidate:revoked"]);
+  assert.equal(runs.length, 0);
+});
+
+test("credential preparation uses the selected resource rather than the scope default", async () => {
+  const events: string[] = [];
+  const selected: SandboxHandle = { id: "selected-box", resourceId: "selected", rootDir: "/workspace" };
+  const observed: SandboxHandle[] = [];
+  const { ctx } = context(events, [], {
+    sandboxResources: {
+      async access(actorId, id) {
+        assert.equal(actorId, "credential-tester");
+        assert.equal(id, "selected");
+        return { ownerScopeId: "personal:credential-tester" };
+      },
+    } as ToolContextDeps["sandboxResources"],
+    async provisionResource(id) {
+      assert.equal(id, "selected");
+      events.push("provision:selected");
+      return selected;
+    },
+    async getCommandCredentials(requested, target) {
+      assert.deepEqual(requested, ["selected-credential"]);
+      observed.push(target);
+      events.push("catalog");
+      return [credential(events, "selected-credential")];
+    },
+  });
+  await ctx.execute("true", { credentials: ["selected-credential"] });
+  await ctx.execute("true", { sandboxId: "selected", credentials: ["selected-credential"] });
+  assert.deepEqual(observed, [handle, selected]);
+  assert.deepEqual(events, [
+    "policy",
+    "provision",
+    "catalog",
+    "resolve:selected-credential",
+    "commit:selected-credential",
+    "run",
+    "policy",
+    "provision:selected",
+    "catalog",
+    "resolve:selected-credential",
+    "commit:selected-credential",
+    "run",
+  ]);
+});
+
+test("denied commands do not prepare a target's credential catalog", async () => {
+  const events: string[] = [];
+  const { ctx } = context(events, [], {
+    commandPolicy: () => ({ mode: "denylist", rules: [{ pattern: "echo", decision: "deny" }] }),
+    async getCommandCredentials() {
+      assert.fail("denied command reached credential catalog");
+    },
+  });
+  await assert.rejects(ctx.execute("echo denied", { credentials: ["selected"] }), /denied/);
+  assert.deepEqual(events, []);
+});
+
+for (const executionMode of [undefined, "legacy"] as const) {
+  test(`legacy explicit environment credentials preserve handle isolation (${executionMode ?? "missing mode"})`, async () => {
+    const events: string[] = [];
+    const legacy: SandboxHandle = { id: "legacy", rootDir: "/workspace", executionMode, env: { EXISTING: "kept" } };
+    const seen: SandboxHandle[] = [];
+    const { ctx } = context(events, [credential(events, "selected", { env: [{ key: "TOKEN", value: "synthetic" }] })], {
+      provision: async () => legacy,
+      sandbox: {
+        async run(target: SandboxHandle, _command: string, options?: ExecOptions) {
+          seen.push(target);
+          assert.equal(options?.credentials, undefined);
+          return { code: 7, stdout: target.env?.TOKEN ?? "ok", stderr: target.env?.TOKEN ?? "", timedOut: false };
+        },
+      } as Sandbox,
+    });
+    const result = await ctx.execute("true", { credentials: ["selected"] });
+    assert.equal(result.code, 7);
+    assert.equal(result.stdout, "<redacted:TOKEN>");
+    assert.equal(result.stderr, "<redacted:TOKEN>");
+    await ctx.execute("true");
+    assert.deepEqual(seen[0]?.env, { EXISTING: "kept", TOKEN: "synthetic" });
+    assert.deepEqual(seen[1]?.env, { EXISTING: "kept" });
+    assert.deepEqual(legacy.env, { EXISTING: "kept" });
+  });
+}
+
+test("legacy file credential requests fail before consuming a single-use grant", async () => {
+  const events: string[] = [];
+  const { ctx, runs } = context(
+    events,
+    [
+      credential(events, "file", {
+        files: [{ path: ".config/tool/token", data: Buffer.from("synthetic") }],
+        singleUse: true,
+      }),
+    ],
+    { provision: async () => ({ id: "legacy", rootDir: "/workspace" }) },
+  );
+  await assert.rejects(ctx.execute("true", { credentials: ["file"] }), /file credential requests require an isolated/);
+  assert.deepEqual(events, ["policy", "resolve:file"]);
   assert.equal(runs.length, 0);
 });

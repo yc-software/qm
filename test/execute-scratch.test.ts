@@ -12,7 +12,7 @@ import { scopeId, type TurnRequest, type WorkspaceLayer } from "../src/types.ts"
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
 
-const scopedHandle: SandboxHandle = { id: "scoped-box", rootDir: "/workspace" };
+const scopedHandle: SandboxHandle = { id: "scoped-box", rootDir: "/workspace", executionMode: "isolated" };
 const scratchHandle: SandboxHandle = { id: "scratch-box", rootDir: "/workspace", scratch: true };
 
 function routingCtx(extra: Partial<ToolContextDeps> = {}) {

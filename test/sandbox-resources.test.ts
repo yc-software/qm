@@ -15,7 +15,7 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
-function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
+function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"], isolated = false) {
   const records = createMemoryMap<SandboxResource>();
   const defaults = createMemoryMap<SandboxDefault>();
   const routes = createMemoryMap<SandboxRoute>();
@@ -59,6 +59,7 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
     },
   };
   configure?.(backend);
+  const executionBindings = createMemoryMap<import("../src/sandbox/sandbox-routing.ts").SandboxExecutionBinding>();
   const options = {
     enabled: true,
     rollout,
@@ -67,12 +68,15 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
     defaults,
     routes,
     backends: { local: backend },
+    ...(isolated
+      ? { isolatedBackends: { local: backend }, executionBindings, canCreateIsolated: async () => true }
+      : {}),
     defaultBackend: "local",
     lock: createMemoryAdvisoryLock(),
     canUseScope: async (actor: string, scope: string) => actor === "admin" || scope === `personal:${actor}`,
   } satisfies Parameters<typeof createSandboxResources>[0];
   const resources = createSandboxResources(options);
-  const router = createSandboxRouter({ routes, backends: { local: backend }, defaultBackend: "local", resources });
+  const router = createSandboxRouter({ ...options, routes, resources });
   const layers = [{ scopeId: "personal:alice", mode: "rw" as const, mountPath: "/" }];
   return { records, defaults, routes, resources, router, provisioned, layers, backend, options, rollout };
 }
@@ -194,6 +198,9 @@ test("turn default changes invalidate cached provisioning while explicit calls d
     turnSessionDir: "turn/s",
     turnFilesDir: "turn/s/t",
     connectorEnv: { AGENT_API_TOKEN: "scope-token" },
+    legacyEnvironment: async () => ({}),
+    bindControlToken: async () => {},
+    credentialTools: [],
     ownerAuthAvailable: false,
     ownerEnvCredentialIds: [],
     credentialCutoverServices: [],
@@ -363,8 +370,13 @@ for (const shared of [false, true])
         };
       },
       [scope],
+      true,
     );
-    const record = await resources.create("admin", scope, "local");
+    const defaultRecord = await resources.create("admin", scope, "local", undefined, undefined, {
+      executionMode: "isolated",
+    });
+    await resources.setDefault("admin", scope, defaultRecord.id);
+    const record = await resources.create("admin", scope, "local", undefined, undefined, { executionMode: "isolated" });
     const owners: string[] = [];
     const turn = createTurnSandboxes({
       deps: {
@@ -391,6 +403,8 @@ for (const shared of [false, true])
       turnSessionDir: "turn/s",
       turnFilesDir: "turn/s/t",
       connectorEnv: {},
+      legacyEnvironment: async () => ({}),
+      bindControlToken: async () => {},
       isolateOwnerKeychain: shared,
       ownerAuthAvailable: false,
       ownerEnvCredentialIds: [],
@@ -408,7 +422,7 @@ for (const shared of [false, true])
       perf: { credsMs: 0 },
     } as unknown as TurnSandboxContext);
     if (shared) {
-      failCleanupFor = scope;
+      failCleanupFor = defaultRecord.backingScopeId;
       await assert.rejects(turn.provision(), /quarantine failed/);
       turn.invalidateProvision();
     }
@@ -888,4 +902,224 @@ test("Modal provisioning and destructive cleanup wait for active operations", { 
   }
   assert.equal(provisioned, true);
   assert.equal(destroyed, true);
+});
+
+test("execution mode is reserved once, gated by owner scope, and survives retries and flag changes", async () => {
+  const { backend, options, records } = fixture();
+  const bindings = createMemoryMap<import("../src/sandbox/sandbox-routing.ts").SandboxExecutionBinding>();
+  const gated: string[] = [];
+  const modes: Array<string | undefined> = [];
+  let enabled = false;
+  let fail = true;
+  const isolated: Sandbox = {
+    ...backend,
+    async provision(layers, opts) {
+      modes.push(opts?.executionMode);
+      if (fail) throw new Error("provider unavailable");
+      return backend.provision(layers, opts);
+    },
+  };
+  const resources = createSandboxResources({
+    ...options,
+    isolatedBackends: { local: isolated },
+    executionBindings: bindings,
+    canCreateIsolated: async (scope) => {
+      gated.push(scope);
+      return enabled;
+    },
+  });
+  await assert.rejects(
+    resources.create("admin", "channel:team", "local", undefined, "denied", { executionMode: "isolated" }),
+    /command_scoped_credentials/,
+  );
+  assert.equal(await records.get("denied"), null);
+  enabled = true;
+  await assert.rejects(
+    resources.create("admin", "channel:team", "local", "isolated", "reserved", { executionMode: "isolated" }),
+    /provider unavailable/,
+  );
+  assert.equal((await records.get("reserved"))?.executionMode, "isolated");
+  enabled = false;
+  fail = false;
+  const retried = await resources.create("admin", "channel:team", "local", "replacement name", "reserved");
+  assert.equal(retried.executionMode, "isolated");
+  assert.equal(retried.name, "isolated");
+  assert.deepEqual(modes, ["isolated", "isolated"]);
+  assert.deepEqual(gated, ["channel:team", "channel:team"]);
+  await assert.rejects(
+    resources.create("admin", "channel:team", "local", undefined, "reserved", { executionMode: "legacy" }),
+    /cannot change/,
+  );
+  const ordinary = await resources.create("admin", "channel:team", "local");
+  assert.equal(ordinary.executionMode, "legacy");
+  await records.put("old-reservation", {
+    ...ordinary,
+    id: "old-reservation",
+    backingScopeId: "sandbox-old-reservation",
+    executionMode: undefined,
+    state: "failed",
+  });
+  enabled = true;
+  await assert.rejects(
+    resources.create("admin", "channel:team", "local", undefined, "old-reservation", { executionMode: "isolated" }),
+    /cannot change/,
+  );
+  assert.equal(
+    (await resources.create("admin", "channel:team", "local", undefined, "old-reservation")).executionMode,
+    undefined,
+  );
+});
+
+test("durable dispatch keeps isolated computers isolated across handles, restarts, defaults and scratch", async () => {
+  const { backend, options, routes, layers } = fixture();
+  const bindings = createMemoryMap<import("../src/sandbox/sandbox-routing.ts").SandboxExecutionBinding>();
+  const calls: string[] = [];
+  const isolated: Sandbox = {
+    ...backend,
+    profile: { ...backend.profile, processSessions: true },
+    async provision(layers, opts) {
+      assert.equal(opts?.executionMode, "isolated");
+      calls.push("provision");
+      return opts?.scratch
+        ? { id: opts.scratch.key, rootDir: "/scratch", scratch: true }
+        : backend.provision(layers, opts);
+    },
+    async run(handle) {
+      calls.push("run");
+      assert.equal(handle.executionMode, "isolated");
+      return { stdout: "isolated", stderr: "", code: 0, timedOut: false };
+    },
+    async readFile() {
+      calls.push("read");
+      return "isolated";
+    },
+    async writeFile() {
+      calls.push("write");
+    },
+    async readFileBytes() {
+      calls.push("readBytes");
+      return null;
+    },
+    async writeFileBytes() {
+      calls.push("writeBytes");
+    },
+    async listDir() {
+      calls.push("list");
+      return [];
+    },
+    async removeDir() {
+      calls.push("remove");
+    },
+    async teardown() {
+      calls.push("teardown");
+    },
+    async startProcess() {
+      calls.push("start");
+      return { processId: "process" };
+    },
+    async readProcess() {
+      calls.push("poll");
+      return { chunks: "", cursor: 0, status: { state: "running" } };
+    },
+    async writeStdin() {
+      calls.push("stdin");
+    },
+    async signalProcess() {
+      calls.push("signal");
+    },
+    async listProcesses() {
+      calls.push("processes");
+      return [];
+    },
+    async stageIn() {
+      calls.push("stageIn");
+    },
+    async stageOut() {
+      calls.push("stageOut");
+      return "blob";
+    },
+    async importFiles() {
+      calls.push("import");
+    },
+    async exportFiles() {
+      calls.push("export");
+      return [];
+    },
+    async computerStatus() {
+      calls.push("status");
+      return { machine: "isolated", guestResponsive: true };
+    },
+    async restartComputer() {
+      calls.push("restart");
+    },
+  };
+  const resources = createSandboxResources({
+    ...options,
+    isolatedBackends: { local: isolated },
+    executionBindings: bindings,
+    canCreateIsolated: async () => true,
+  });
+  const routing = {
+    backends: { local: backend },
+    isolatedBackends: { local: isolated },
+    executionBindings: bindings,
+    resources,
+    routes,
+    defaultBackend: "local" as const,
+  };
+  const first = createSandboxRouter(routing);
+  const old = await first.provision(layers);
+  assert.equal(old.executionMode, "legacy");
+  await assert.rejects(first.provision(layers, { executionMode: "isolated" }), /cannot change/);
+  const record = await resources.create("alice", "personal:alice", "local", undefined, undefined, {
+    executionMode: "isolated",
+  });
+  const original = await first.provision(layers, { sandboxId: record.id });
+  await resources.setDefault("alice", "personal:alice", record.id);
+  const router = createSandboxRouter(routing);
+  const restored = { ...original, executionMode: "legacy" as const, resourceId: undefined };
+  assert.equal((await router.run(restored, "true")).stdout, "isolated");
+  assert.equal(await router.readFile(restored, "file"), "isolated");
+  await router.writeFile(restored, "file", "value");
+  await router.readFileBytes(restored, "file");
+  await router.writeFileBytes(restored, "file", Buffer.from("value"));
+  await router.listDir(restored, ".");
+  await router.removeDir(restored, "dir");
+  await router.startProcess!(restored, "true");
+  await router.readProcess!(restored, "process");
+  await router.writeStdin!(restored, "process", "input");
+  await router.signalProcess!(restored, "process", "TERM");
+  await router.listProcesses!(restored);
+  await router.stageIn!(restored, "file", "blob");
+  await router.stageOut!(restored, "file");
+  await router.importFiles!(restored, []);
+  await router.exportFiles!(restored);
+  await router.computerStatus!("personal:alice");
+  await router.restartComputer!("personal:alice");
+  const scratch = await router.provision([], { scratch: { key: "owner" }, routeScopeId: "personal:alice" });
+  assert.equal(scratch.executionMode, "isolated");
+  assert.equal((await router.run({ ...scratch, executionMode: undefined }, "true")).stdout, "isolated");
+  await router.teardown(restored);
+  assert.equal((await router.run({ ...old, executionMode: "isolated" }, "true")).stdout, old.id);
+  for (const action of [
+    "read",
+    "write",
+    "readBytes",
+    "writeBytes",
+    "list",
+    "remove",
+    "start",
+    "poll",
+    "stdin",
+    "signal",
+    "processes",
+    "stageIn",
+    "stageOut",
+    "import",
+    "export",
+    "status",
+    "restart",
+    "teardown",
+  ])
+    assert.ok(calls.includes(action), action);
 });

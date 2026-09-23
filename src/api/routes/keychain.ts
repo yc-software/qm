@@ -2,6 +2,7 @@ import {
   KeychainError,
   credentialHandle,
   renderAskNotice,
+  renderUseScript,
   type CredentialFieldInput,
   type CredentialFile,
   type GrantMode,
@@ -14,6 +15,7 @@ import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
 import { swallow, swallowAs } from "../../util/errors.ts";
+import { keychainUseCommand } from "../contract.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 
 const CONSENT_ON_TRIGGERED_TURN =
@@ -216,11 +218,17 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
           message: 'expected { credential | ask, mode: "once"|"standing", purpose }',
         });
       }
-      const useBlock = (grant: { credentialId: string }) => ({
+      const useBlock = (grant: { id: string; credentialId: string }) => ({
         credentialHandle: credentialHandle(grant.credentialId),
         credentials: [credentialHandle(grant.credentialId)],
-        command: `execute.credentials: ${JSON.stringify([credentialHandle(grant.credentialId)])}`,
-        note: "Request the granted credential in execute.credentials for the command that needs it.",
+        command:
+          capability.executionMode === "isolated"
+            ? `execute.credentials: ${JSON.stringify([credentialHandle(grant.credentialId)])}`
+            : keychainUseCommand({ grant: grant.id }),
+        note:
+          capability.executionMode === "isolated"
+            ? "Request the granted credential in execute.credentials for the command that needs it."
+            : "Use this grant in the legacy computer shell; keep secrets out of output.",
       });
       if (typeof b.ask === "string") {
         if (typeof b.onBehalfOf === "string" && b.onBehalfOf.trim() && !samePerson(b.onBehalfOf, actorId)) {
@@ -432,11 +440,70 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
     }
 
     if (method === "POST" && pathname === "/v1/keychain/use") {
-      return sendJson(res, 410, {
-        error: "execute_credentials_required",
-        message:
-          "Credentials are delivered only to execute. Request the credential handle in execute.credentials; this endpoint does not release secrets or consume grants.",
+      let isolated = capability.executionMode === "isolated";
+      if (
+        capability.executionMode !== undefined &&
+        capability.executionMode !== "legacy" &&
+        capability.executionMode !== "isolated"
+      )
+        return sendJson(res, 403, { error: "forbidden", message: "invalid sandbox execution mode" });
+      if (capability.sandboxId !== undefined) {
+        if (typeof capability.sandboxId !== "string" || !capability.sandboxId || !deps.sandboxResources)
+          return sendJson(res, 403, { error: "forbidden", message: "sandbox binding cannot be verified" });
+        const resource = await deps.sandboxResources.get(capability.sandboxId).catch(() => null);
+        if (!resource || resource.ownerScopeId !== capability.scopeId || resource.state === "retired")
+          return sendJson(res, 403, { error: "forbidden", message: "sandbox binding is unavailable" });
+        isolated ||= resource.executionMode === "isolated";
+      } else if (deps.sandbox?.executionModeFor) {
+        try {
+          isolated ||= (await deps.sandbox.executionModeFor(capability.scopeId)) === "isolated";
+        } catch {
+          return sendJson(res, 403, { error: "forbidden", message: "sandbox binding cannot be verified" });
+        }
+      }
+      if (isolated)
+        return sendJson(res, 410, {
+          error: "execute_credentials_required",
+          message:
+            "Isolated computers receive credentials only through execute.credentials; this endpoint does not release secrets or consume grants.",
+        });
+
+      const b = body as { grant?: unknown; credential?: unknown };
+      if (typeof b.grant !== "string" && typeof b.credential !== "string") {
+        return sendJson(res, 400, {
+          error: "bad_request",
+          message: "expected { grant } or { credential } (your own, personal conversation only)",
+        });
+      }
+      let m;
+      if (typeof b.grant === "string") {
+        m = await kc.materialize(b.grant, capability.scopeId, actorId);
+      } else {
+        if (capability.liveActor !== true) {
+          return sendJson(res, 403, {
+            error: "forbidden",
+            message:
+              "own-credential use is implied only on a turn its owner themself sent live — this turn wasn't; use an existing grant or POST /v1/keychain/asks to request owner approval, then wait",
+          });
+        }
+        m = await kc.materializeOwnById(actorId, b.credential as string, capability.scopeId);
+      }
+      deps.credentialUsage?.record({
+        slug: `keychain:${m.service}:${m.credentialId}`,
+        host: m.service,
+        status: "materialized",
+        scopeLabel: capability.scopeId,
+        principalId: actorId,
       });
+      audit(deps, {
+        principalId: actorId,
+        action: "keychain.use",
+        resource: m.grantId ? `${m.credentialId} (grant ${m.grantId})` : `${m.credentialId} (own)`,
+        scopeLabel: capability.scopeId,
+      });
+      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+      res.end(renderUseScript(m));
+      return;
     }
   } catch (e) {
     if (e instanceof KeychainError) return sendJson(res, e.status, { error: "keychain", message: e.message });

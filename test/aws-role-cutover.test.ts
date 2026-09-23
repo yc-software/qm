@@ -1,3 +1,4 @@
+import { createIsolatedTestComputer } from "./support/isolated-test-computer.ts";
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -243,6 +244,7 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
   });
   const built = buildApp(
     testConfig({
+      sandboxResourcesEnabled: true,
       dataDir: mkdtempSync(join(tmpdir(), "dfp-owner-box-")),
       signingSecret: "device-flow-test-secret",
       sharedOwnerAuthIsolation: true,
@@ -253,6 +255,11 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
   const bob = { externalId: "BOB" };
   const alice = { externalId: "ALICE" };
   const room = scopeId("channel", "C-owner-auth");
+  await built.directory.replaceChannels(
+    [{ channelId: "C-owner-auth", name: "shared", isPrivate: false }],
+    [{ channelId: "C-owner-auth", principalId: "BOB" }],
+  );
+  await createIsolatedTestComputer(built, "BOB", room);
   const conversation = {
     kind: "channel" as const,
     threadRef: "ch:C-owner-auth:cron",
@@ -510,6 +517,7 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
 test("all cutover policies leave credentials absent and fail closed when requested broker vending fails", async () => {
   const built = buildApp(
     testConfig({
+      sandboxResourcesEnabled: true,
       dataDir: mkdtempSync(join(tmpdir(), "dfp-acmecli-fallback-")),
       signingSecret: "device-flow-test-secret",
       sharedOwnerAuthIsolation: true,
@@ -529,6 +537,11 @@ test("all cutover policies leave credentials absent and fail closed when request
     },
   );
   const room = scopeId("channel", "C-acmecli-fallback");
+  await built.directory.replaceChannels(
+    [{ channelId: "C-acmecli-fallback", name: "shared", isPrivate: false }],
+    [{ channelId: "C-acmecli-fallback", principalId: "U1" }],
+  );
+  await createIsolatedTestComputer(built, "U1", room);
   await built.keychain!.save({
     ownerId: room,
     service: "acmecli",
@@ -605,6 +618,7 @@ test("all cutover policies leave credentials absent and fail closed when request
 test("a nonlegacy policy never places brokered STS on a shared room when isolation is disabled", async () => {
   const built = buildApp(
     testConfig({
+      sandboxResourcesEnabled: true,
       dataDir: mkdtempSync(join(tmpdir(), "dfp-acmecli-flag-off-")),
       signingSecret: "device-flow-test-secret",
       sharedOwnerAuthIsolation: false,
@@ -629,6 +643,11 @@ test("a nonlegacy policy never places brokered STS on a shared room when isolati
     },
   );
   const room = scopeId("channel", "C-acmecli-flag-off");
+  await built.directory.replaceChannels(
+    [{ channelId: "C-acmecli-flag-off", name: "shared", isPrivate: false }],
+    [{ channelId: "C-acmecli-flag-off", principalId: "U1" }],
+  );
+  await createIsolatedTestComputer(built, "U1", room);
   await built.keychain!.save({
     ownerId: room,
     service: "acmecli",

@@ -1,3 +1,4 @@
+import type { SandboxExecutionModeOptions } from "./sandbox.ts";
 import { createSupervisorTransport, SUPERVISOR_TRUST_VERSION } from "./supervisor-transport.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
@@ -23,7 +24,11 @@ import {
   posixJoin,
   type BlobStagingOptions,
 } from "./exec-file-ops.ts";
-import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
+import {
+  ephemeralCredLinkScript,
+  ephemeralCredLinkPaths,
+  type CredentialPathSpec,
+} from "../credentials/resident-paths.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
@@ -76,7 +81,7 @@ export interface StoredModalSandbox {
   orgId?: string;
 }
 
-export interface ModalSandboxOptions extends BlobStagingOptions {
+export interface ModalSandboxOptions extends BlobStagingOptions, SandboxExecutionModeOptions {
   client: ModalClient;
   advisoryLock?: AdvisoryLock;
   namePrefix?: string;
@@ -144,6 +149,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   };
 
   const homeSnapshots = createHomeSnapshotOps<ModalSession>({
+    executionModeForScope: opts.executionModeForScope,
     label: "modal",
     homeDir: HOME_DIR,
     homeTarPath: HOME_TAR,
@@ -255,7 +261,10 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     let hydrated: boolean;
     try {
       if (previous?.nativeSnapshotId) {
-        if (previous.supervisorVersion !== SUPERVISOR_TRUST_VERSION) {
+        if (
+          (await opts.executionModeForScope?.(scope)) === "isolated" &&
+          previous.supervisorVersion !== SUPERVISOR_TRUST_VERSION
+        ) {
           supervisorFresh.delete(session.sandboxId);
           throw new Error(
             "Modal native checkpoint recovery requires workspace-only migration before supervised execution; the recovery snapshot is preserved",
@@ -503,7 +512,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       return execRaw(handle.id, command, timeoutSec);
     },
   };
-  const procSessions = createExecProcessSessions(procIo, SUPERVISOR_PROCESS_ROOT);
+  const procSessions = createExecProcessSessions(procIo);
 
   const directProcIo = (session: ModalSession): ExecProcessIo => ({
     run(_handle, command, execOpts): Promise<ExecResult> {
@@ -760,12 +769,16 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       };
 
       try {
+        const credLinks =
+          scratch || provOpts?.executionMode === "isolated"
+            ? ""
+            : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
         await installLayerTools(
           {
             exec: (script, t) => execRaw(name, script, t),
             writeAbs: (abs, data) => writeAbsBytes(name, abs, data),
           },
-          `mkdir -p ${shq(workspaceDir)}`,
+          `mkdir -p ${shq(workspaceDir)}${credLinks}`,
         );
 
         await materializeRoLayers(
@@ -1002,9 +1015,10 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           let busy: boolean;
           try {
             const handle: SandboxHandle = { id: name, rootDir: workspaceDir, homeDir: HOME_DIR, coldStart: false };
-            const live = await createExecProcessSessions(directProcIo(session), SUPERVISOR_PROCESS_ROOT).listProcesses(
-              handle,
-            );
+            const live = await createExecProcessSessions(
+              directProcIo(session),
+              (await opts.executionModeForScope?.(scope)) === "isolated" ? SUPERVISOR_PROCESS_ROOT : undefined,
+            ).listProcesses(handle);
             busy = live.some((p) => p.status.state === "running");
           } catch (e) {
             if (e instanceof ModalSandboxGoneError) {

@@ -1059,7 +1059,10 @@ describe("/v1/keychain routes (capability-authed)", () => {
   let built: BuiltApp;
 
   const capFor = async (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
-    await mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
+    await mintCapabilityToken(
+      { actorId, scopeId: scope, executionMode: "isolated", exp: Date.now() + CAPABILITY_TTL_MS, ...extra },
+      SECRET,
+    );
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-routes-")), signingSecret: SECRET }));
@@ -1554,9 +1557,29 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
       dataDir: mkdtempSync(join(tmpdir(), "kc-e2e-")),
       signingSecret: SECRET,
       apiBaseUrl: "http://core.test",
+      sandboxResourcesEnabled: true,
     }),
   );
   assert.ok(built.keychain, "buildApp with a signing secret wires the keychain");
+  await built.directory.replaceChannels(
+    [{ channelId: "C1", name: "shared", isPrivate: false }],
+    [
+      { channelId: "C1", principalId: "U_ASKER" },
+      { channelId: "C1", principalId: "U_OWNER" },
+    ],
+  );
+  for (const [actorId, ownerScope] of [
+    ["U_ASKER", "channel:C1"],
+    ["U_OWNER", "personal:U_OWNER"],
+  ] as const) {
+    await built.featureFlags.setEnabled("command_scoped_credentials", ownerScope, true, "admin");
+    const resource = await built.sandboxResources.create(actorId, ownerScope, "sprites", "isolated", undefined, {
+      executionMode: "isolated",
+    });
+    await built.sandboxResources.setDefault(actorId, ownerScope, resource.id);
+    await built.featureFlags.setEnabled("command_scoped_credentials", ownerScope, false, "admin");
+  }
+
   const materializers = [
     "materializeOwn",
     "materializeOwnFiles",

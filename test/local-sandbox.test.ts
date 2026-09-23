@@ -319,8 +319,8 @@ test("a new container with a legacy home volume is not eligible for initial supe
   const fake = installFakeDocker(daemonPort);
   const scope = scopeId("personal", "legacy-volume-trust");
   fake.volumes.add(localVolumeName(scope));
-  const adapter = makeSandbox(fake);
-  const handle = await adapter.provision(rw(scope));
+  const adapter = makeSandbox(fake, { executionModeForScope: async () => "isolated" });
+  const handle = await adapter.provision(rw(scope), { executionMode: "isolated" });
   assert.equal(await adapter.supervisorTransport!.isFresh(handle), false);
   assert.equal(fake.volumes.has(localVolumeName(scope)), true);
 });
@@ -328,13 +328,13 @@ test("a new container with a legacy home volume is not eligible for initial supe
 test("new supervisor volumes retain trusted provenance after container replacement", async () => {
   const fake = installFakeDocker(daemonPort);
   const layers = rw(scopeId("personal", "trusted-volume"));
-  const first = makeSandbox(fake);
-  const original = await first.provision(layers);
+  const first = makeSandbox(fake, { executionModeForScope: async () => "isolated" });
+  const original = await first.provision(layers, { executionMode: "isolated" });
   assert.equal(await first.supervisorTransport!.isFresh(original), true);
   const identity = await first.supervisorTransport!.identity(original);
   fake.imageId = "sha256:upgraded-image";
-  const next = makeSandbox(fake);
-  const replacement = await next.provision(layers);
+  const next = makeSandbox(fake, { executionModeForScope: async () => "isolated" });
+  const replacement = await next.provision(layers, { executionMode: "isolated" });
   assert.notEqual(await next.supervisorTransport!.identity(replacement), identity);
   assert.equal(await next.supervisorTransport!.isFresh(replacement), true);
 });

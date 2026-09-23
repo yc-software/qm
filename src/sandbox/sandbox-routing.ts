@@ -12,6 +12,7 @@ import {
   type ProvisionOptions,
   type Sandbox,
   type SandboxHandle,
+  type SandboxExecutionMode,
   type StageOptions,
   type TeardownOptions,
 } from "./sandbox.ts";
@@ -41,11 +42,19 @@ export interface SandboxRoute {
 
 export interface RoutingSandboxOptions {
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
+  isolatedBackends?: Partial<Record<SandboxBackendName, Sandbox>>;
+  executionBindings?: DurableMap<SandboxExecutionBinding>;
   routes: DurableMap<SandboxRoute>;
   defaultBackend: SandboxBackendName;
   scopeDefaults?: SandboxScopeDefaults;
   resources?: SandboxResources;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
+}
+
+export interface SandboxExecutionBinding {
+  executionMode: SandboxExecutionMode;
+  resourceId?: string;
+  scopeId?: string;
 }
 
 export const ROUTE_CACHE_TTL_MS = 15_000;
@@ -81,22 +90,56 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     throw new Error(`sandbox backend unavailable: ${name}; refusing to use a substitute computer`);
   }
 
-  const forHandle = (handle: SandboxHandle): Sandbox => {
-    if (!handle.backend) return fallback;
-    const sandbox = backends[handle.backend as SandboxBackendName];
-    if (!sandbox) throw new Error(`sandbox backend unavailable: ${handle.backend}`);
+  const forMode = (name: SandboxBackendName, mode: SandboxExecutionMode): Sandbox => {
+    const sandbox = (mode === "isolated" ? opts.isolatedBackends : backends)?.[name];
+    if (!sandbox) throw new Error(`sandbox backend unavailable: ${name} (${mode})`);
     return sandbox;
   };
 
-  const useHandle = <T>(handle: SandboxHandle, action: () => Promise<T>): Promise<T> =>
-    handle.resourceId && opts.resources ? opts.resources.use(handle.resourceId, action) : action();
+  const useHandle = async <T>(
+    handle: SandboxHandle,
+    action: (sandbox: Sandbox, handle: SandboxHandle) => Promise<T>,
+    exclusive = false,
+  ): Promise<T> => {
+    const name = (handle.backend ?? defaultBackend) as SandboxBackendName;
+    const binding = await opts.executionBindings?.get(`${name}:${handle.id}`);
+    const resourceId = binding?.resourceId ?? handle.resourceId;
+    const resource = resourceId ? await opts.resources?.get(resourceId) : undefined;
+    if (resource && resource.backend !== name) throw new Error("sandbox backend does not match its resource");
+    const mode = binding?.executionMode ?? resource?.executionMode ?? "legacy";
+    if (resource && mode !== (resource.executionMode ?? "legacy"))
+      throw new Error("sandbox execution mode does not match its resource");
+    const resolved = {
+      ...handle,
+      backend: name,
+      executionMode: mode,
+      ...(resourceId ? { resourceId } : {}),
+      ...(binding?.scopeId ? { scopeId: binding.scopeId } : {}),
+    };
+    const run = () => action(forMode(name, mode), resolved);
+    return resourceId && opts.resources ? opts.resources.use(resourceId, run, exclusive) : run();
+  };
+
+  const bind = async (handle: SandboxHandle): Promise<SandboxHandle> => {
+    if (handle.executionMode === "isolated" && !opts.executionBindings)
+      throw new Error("isolated sandbox requires durable execution bindings");
+    if (opts.executionBindings) {
+      const existing = await opts.executionBindings.putIfAbsent(`${handle.backend}:${handle.id}`, {
+        executionMode: handle.executionMode ?? "legacy",
+        ...(handle.resourceId ? { resourceId: handle.resourceId } : {}),
+        ...(handle.scopeId ? { scopeId: handle.scopeId } : {}),
+      });
+      if (existing.executionMode !== handle.executionMode || existing.resourceId !== handle.resourceId)
+        throw new Error("sandbox execution binding cannot change");
+    }
+    return handle;
+  };
 
   async function computerTarget(scopeId: string): Promise<{ sandbox: Sandbox; scopeId: string; resourceId?: string }> {
     const resource = await opts.resources?.resolve(scopeId);
     if (resource === null) throw new Error("this scope has no default sandbox");
     if (resource) {
-      const sandbox = backends[resource.backend];
-      if (!sandbox) throw new Error(`sandbox backend unavailable: ${resource.backend}`);
+      const sandbox = forMode(resource.backend, resource.executionMode ?? "legacy");
       return { sandbox, scopeId: resource.backingScopeId, resourceId: resource.id };
     }
     return { sandbox: await pickStrict(scopeId), scopeId };
@@ -140,17 +183,23 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     }
     return s as Sandbox & Required<Pick<Sandbox, K>>;
   };
-  const some = (pred: (s: Sandbox) => boolean): boolean => constructed(backends).some(pred);
+  const some = (pred: (s: Sandbox) => boolean): boolean =>
+    [...constructed(backends), ...constructed(opts.isolatedBackends ?? {})].some(pred);
 
   const router: Sandbox = {
     profile: fallback.profile,
+
+    async executionModeFor(scopeId, sandboxId) {
+      const resource = sandboxId ? await opts.resources?.get(sandboxId) : await opts.resources?.resolve(scopeId);
+      if (sandboxId && !resource) throw new Error("sandbox inventory unavailable");
+      return resource?.executionMode ?? "legacy";
+    },
 
     async profileFor(scopeId: string, sandboxId?: string): Promise<AgentComputerProfile> {
       const resource = sandboxId ? await opts.resources?.get(sandboxId) : await opts.resources?.resolve(scopeId);
       if (sandboxId && !resource) throw new Error("sandbox inventory unavailable");
       if (resource) {
-        const sandbox = backends[resource.backend];
-        if (!sandbox) throw new Error(`sandbox backend unavailable: ${resource.backend}`);
+        const sandbox = forMode(resource.backend, resource.executionMode ?? "legacy");
         return sandbox.profile;
       }
       if (resource === null) return fallback.profile;
@@ -165,66 +214,90 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       if (provOpts?.sandboxId && !resource) throw new Error("sandbox inventory unavailable");
       if (resource === null) throw new Error("this scope has no default sandbox; create one or specify sandbox_id");
       if (resource) {
-        const sandbox = backends[resource.backend];
-        if (!sandbox) throw new Error(`sandbox backend unavailable: ${resource.backend}`);
+        const executionMode = resource.executionMode ?? "legacy";
+        if (provOpts?.executionMode !== undefined && provOpts.executionMode !== executionMode)
+          throw new Error("sandbox execution mode cannot change");
+        const sandbox = forMode(resource.backend, executionMode);
         const routedLayers = layers.map((layer) =>
           layer.mode === "rw" ? { ...layer, scopeId: resource.backingScopeId } : layer,
         );
-        const handle = await opts.resources!.use(resource.id, () => sandbox.provision(routedLayers, provOpts), true);
-        return { ...handle, backend: resource.backend, scopeId: resource.ownerScopeId, resourceId: resource.id };
+        const handle = await opts.resources!.use(
+          resource.id,
+          () => sandbox.provision(routedLayers, { ...provOpts, executionMode }),
+          true,
+        );
+        return bind({
+          ...handle,
+          executionMode,
+          backend: resource.backend,
+          scopeId: resource.ownerScopeId,
+          resourceId: resource.id,
+        });
       }
-      const { name, sandbox } = await pick(scope);
-      const handle = await sandbox.provision(layers, provOpts);
+      const executionMode = provOpts?.scratch ? await router.executionModeFor!(scope) : "legacy";
+      if (provOpts?.executionMode !== undefined && provOpts.executionMode !== executionMode)
+        throw new Error("sandbox execution mode must match its owning computer");
+      const { name } = await pick(scope);
+      const sandbox = forMode(name, executionMode);
+      const handle = await sandbox.provision(layers, {
+        ...provOpts,
+        executionMode,
+        ...(provOpts?.scratch && executionMode === "isolated"
+          ? { scratch: { key: `isolated:${provOpts.scratch.key}` } }
+          : {}),
+      });
       const resourceId =
         !provOpts?.scratch && scope ? await opts.resources?.recordLegacy(scope, name, handle) : undefined;
-      return { ...handle, backend: name, ...(scope ? { scopeId: scope } : {}), ...(resourceId ? { resourceId } : {}) };
+      return bind({
+        ...handle,
+        executionMode,
+        backend: name,
+        ...(scope ? { scopeId: scope } : {}),
+        ...(resourceId ? { resourceId } : {}),
+      });
     },
 
     run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
-      const run = () => forHandle(handle).run(handle, command, execOpts);
-      return useHandle(handle, run);
+      return useHandle(handle, (sandbox, resolved) => sandbox.run(resolved, command, execOpts));
     },
     readFile(handle, relPath) {
-      return useHandle(handle, () => forHandle(handle).readFile(handle, relPath));
+      return useHandle(handle, (sandbox, resolved) => sandbox.readFile(resolved, relPath));
     },
     writeFile(handle, relPath, data) {
-      const write = () => forHandle(handle).writeFile(handle, relPath, data);
-      return useHandle(handle, write);
+      return useHandle(handle, (sandbox, resolved) => sandbox.writeFile(resolved, relPath, data));
     },
     writeFileBytes(handle, relPath, data) {
-      const write = () => forHandle(handle).writeFileBytes(handle, relPath, data);
-      return useHandle(handle, write);
+      return useHandle(handle, (sandbox, resolved) => sandbox.writeFileBytes(resolved, relPath, data));
     },
     readFileBytes(handle, relPath) {
-      return useHandle(handle, () => forHandle(handle).readFileBytes(handle, relPath));
+      return useHandle(handle, (sandbox, resolved) => sandbox.readFileBytes(resolved, relPath));
     },
     listDir(handle, relDir) {
-      return useHandle(handle, () => forHandle(handle).listDir(handle, relDir));
+      return useHandle(handle, (sandbox, resolved) => sandbox.listDir(resolved, relDir));
     },
     removeDir(handle, relDir) {
-      const remove = () => forHandle(handle).removeDir(handle, relDir);
-      return useHandle(handle, remove);
+      return useHandle(handle, (sandbox, resolved) => sandbox.removeDir(resolved, relDir));
     },
     removeDirAndList(handle, removeRelDir, listRelDir) {
-      return useHandle(handle, async () => {
-        const sandbox = forHandle(handle);
-        if (sandbox.removeDirAndList) return sandbox.removeDirAndList(handle, removeRelDir, listRelDir);
-        await sandbox.removeDir(handle, removeRelDir);
-        return sandbox.listDir(handle, listRelDir);
+      return useHandle(handle, async (sandbox, resolved) => {
+        if (sandbox.removeDirAndList) return sandbox.removeDirAndList(resolved, removeRelDir, listRelDir);
+        await sandbox.removeDir(resolved, removeRelDir);
+        return sandbox.listDir(resolved, listRelDir);
       });
     },
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
-      const action = () => forHandle(handle).teardown(handle, tdOpts);
-      return handle.resourceId && opts.resources
-        ? opts.resources.use(handle.resourceId, action, handle.backend !== "modal" || !!tdOpts?.destroy)
-        : action();
+      return useHandle(
+        handle,
+        (sandbox, resolved) => sandbox.teardown(resolved, tdOpts),
+        handle.backend !== "modal" || !!tdOpts?.destroy,
+      );
     },
 
     ...(some(supportsProcessSessions)
       ? {
           startRegisteredProcess: (handle: SandboxHandle, command: string, register, o?) =>
-            useHandle(handle, async () => {
-              const sandbox = requireCap(forHandle(handle), "startProcess", handle.scopeId);
+            useHandle(handle, async (backend, handle) => {
+              const sandbox = requireCap(backend, "startProcess", handle.scopeId);
               const started = await sandbox.startProcess(handle, command, o);
               try {
                 await register(started.processId);
@@ -245,33 +318,33 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
               return started;
             }),
           startProcess: (handle: SandboxHandle, command: string, o?) => {
-            const start = () =>
-              requireCap(forHandle(handle), "startProcess", handle.scopeId).startProcess(handle, command, o);
-            return useHandle(handle, start);
+            return useHandle(handle, (sandbox, handle) =>
+              requireCap(sandbox, "startProcess", handle.scopeId).startProcess(handle, command, o),
+            );
           },
           readProcess: (handle: SandboxHandle, id: string, o?) =>
-            useHandle(handle, () =>
-              requireCap(forHandle(handle), "readProcess", handle.scopeId).readProcess(handle, id, o),
+            useHandle(handle, (sandbox, handle) =>
+              requireCap(sandbox, "readProcess", handle.scopeId).readProcess(handle, id, o),
             ),
           writeStdin: (handle: SandboxHandle, id: string, data: string) =>
-            useHandle(handle, () =>
-              requireCap(forHandle(handle), "writeStdin", handle.scopeId).writeStdin(handle, id, data),
+            useHandle(handle, (sandbox, handle) =>
+              requireCap(sandbox, "writeStdin", handle.scopeId).writeStdin(handle, id, data),
             ),
           signalProcess: (handle: SandboxHandle, id: string, sig: string) =>
-            useHandle(handle, () =>
-              requireCap(forHandle(handle), "signalProcess", handle.scopeId).signalProcess(handle, id, sig),
+            useHandle(handle, (sandbox, handle) =>
+              requireCap(sandbox, "signalProcess", handle.scopeId).signalProcess(handle, id, sig),
             ),
           listProcesses: (handle: SandboxHandle) =>
-            useHandle(handle, () =>
-              requireCap(forHandle(handle), "listProcesses", handle.scopeId).listProcesses(handle),
+            useHandle(handle, (sandbox, handle) =>
+              requireCap(sandbox, "listProcesses", handle.scopeId).listProcesses(handle),
             ),
         }
       : {}),
     ...(some((s) => typeof s.exportFiles === "function")
       ? {
           exportFiles: (handle: SandboxHandle, o?) =>
-            useHandle(handle, () =>
-              requireCap(forHandle(handle), "exportFiles", handle.scopeId).exportFiles(handle, o),
+            useHandle(handle, (sandbox, handle) =>
+              requireCap(sandbox, "exportFiles", handle.scopeId).exportFiles(handle, o),
             ),
         }
       : {}),
@@ -296,16 +369,16 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     ...(some(supportsBlobStaging)
       ? {
           stageIn: (handle: SandboxHandle, dest: string, blobId: string, opts?: StageOptions) =>
-            useHandle(handle, () =>
-              requireCap(forHandle(handle), "stageIn", handle.scopeId).stageIn(handle, dest, blobId, opts),
+            useHandle(handle, (sandbox, handle) =>
+              requireCap(sandbox, "stageIn", handle.scopeId).stageIn(handle, dest, blobId, opts),
             ),
           stageOut: (handle: SandboxHandle, src: string, opts?: StageOptions) =>
-            useHandle(handle, () =>
-              requireCap(forHandle(handle), "stageOut", handle.scopeId).stageOut(handle, src, opts),
+            useHandle(handle, (sandbox, handle) =>
+              requireCap(sandbox, "stageOut", handle.scopeId).stageOut(handle, src, opts),
             ),
           importFiles: (handle: SandboxHandle, entries) =>
-            useHandle(handle, () =>
-              requireCap(forHandle(handle), "importFiles", handle.scopeId).importFiles(handle, entries),
+            useHandle(handle, (sandbox, handle) =>
+              requireCap(sandbox, "importFiles", handle.scopeId).importFiles(handle, entries),
             ),
         }
       : {}),

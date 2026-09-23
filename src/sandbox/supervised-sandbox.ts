@@ -292,7 +292,7 @@ export function createSupervisedSandbox(raw: Sandbox, deps: SupervisedSandboxDep
     async provision(layers, opts) {
       const handle = await raw.provision(
         layers.filter((layer) => layer.mode === "rw"),
-        opts,
+        { ...opts, executionMode: "isolated" },
       );
       try {
         await prepare(handle);
@@ -307,7 +307,7 @@ export function createSupervisedSandbox(raw: Sandbox, deps: SupervisedSandboxDep
           },
           { manifest: ".ro-layers.manifest", tar: ".ro-layers.tar", label: raw.profile.backend },
         );
-        return handle;
+        return { ...handle, executionMode: "isolated" };
       } catch (error) {
         if (handle.scratch) await raw.teardown(handle, { destroy: true });
         throw error;

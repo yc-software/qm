@@ -881,6 +881,8 @@ test("the orchestrator sandbox path selects worker storage without changing auth
     turnSessionDir: "/tmp/session",
     turnFilesDir: "/tmp/files",
     connectorEnv: {},
+    legacyEnvironment: async () => ({}),
+    bindControlToken: async () => {},
     isolateOwnerKeychain: false,
     ownerAuthAvailable: false,
     ownerAuthEnv: {},

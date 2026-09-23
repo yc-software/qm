@@ -1,3 +1,4 @@
+import { createIsolatedTestComputer } from "./support/isolated-test-computer.ts";
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -316,7 +317,7 @@ test("a browser profile under ~/.config no longer trips the capture — neither 
   assert.ok(!(await k.listByOwner("U1")).some((c) => c.service === "chromium-headless"), "and never stored");
 });
 
-test("legacy materialize round-trip restores private regular files without persistent home symlinks", async () => {
+test("legacy materialize round-trip preserves native credential links and private file modes", async () => {
   const sb = sprites();
   const k = kc();
   const layers = rw(scopeId("personal", "U1"));
@@ -338,8 +339,8 @@ test("legacy materialize round-trip restores private regular files without persi
   assert.equal(restored.code, 0, restored.stderr);
   assert.match(restored.stdout, /glpat_SECRET/);
   assert.match(restored.stdout, /600/);
-  const regular = await sb.run(h2, "test ! -L ~/.config/glab && test -f ~/.config/glab/config.yml && echo regular");
-  assert.equal(regular.stdout.trim(), "regular");
+  const link = await sb.run(h2, "readlink ~/.config/glab >/dev/null && echo islink");
+  assert.match(link.stdout, /islink/);
 });
 
 test("materialize never overwrites a file already on disk — the live machine's login wins", async () => {
@@ -419,14 +420,22 @@ test("ACMECLI quarantine removes the canonical root even with no record or a sta
   );
 });
 
-function freshApp(apiBaseUrl?: string) {
-  return buildApp(
+async function freshApp(apiBaseUrl?: string) {
+  const built = buildApp(
     testConfig({
+      sandboxResourcesEnabled: true,
       dataDir: mkdtempSync(join(tmpdir(), "dfp-app-")),
       ...(apiBaseUrl ? { apiBaseUrl } : {}),
       signingSecret: "device-flow-test-secret".repeat(3),
     }),
   );
+  await built.directory.replaceChannels(
+    [{ channelId: "C1", name: "shared", isPrivate: false }],
+    [{ channelId: "C1", principalId: "U1" }],
+  );
+  await createIsolatedTestComputer(built, "U1", "personal:U1");
+  await createIsolatedTestComputer(built, "U1", "channel:C1");
+  return built;
 }
 
 const actor = { externalId: "U1" };
@@ -444,7 +453,7 @@ function channel(text: string): TurnRequest {
   };
 }
 
-async function loginApi(built: ReturnType<typeof freshApp>) {
+async function loginApi(built: Awaited<ReturnType<typeof freshApp>>) {
   const server = createServer(built.app, {
     signingSecret: "device-flow-test-secret".repeat(3),
     capabilitySecret: TEST_CAPABILITY_SECRET,
@@ -454,9 +463,9 @@ async function loginApi(built: ReturnType<typeof freshApp>) {
   });
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const provision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = (layers, options) =>
-    provision(layers, { ...options, env: { ...options?.env, AGENT_API_URL: base } });
+  const run = built.sandbox.run.bind(built.sandbox);
+  built.sandbox.run = (handle, command, options) =>
+    run({ ...handle, env: { ...handle.env, AGENT_API_URL: base } }, command, options);
   return () => new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
@@ -474,7 +483,7 @@ except urllib.error.HTTPError as error:
  raise SystemExit(1)`)} `;
 
 test("a DM explicitly saves login files before execution ends and restores only when requested", async (t) => {
-  const built = freshApp("http://core.test");
+  const built = await freshApp("http://core.test");
   t.after(await loginApi(built));
   const saved = await built.app.turn(dm(`!run ${saveLogin()}`));
   assert.equal(saved.status, "ok", saved.reason);
@@ -500,7 +509,7 @@ test("a DM explicitly saves login files before execution ends and restores only 
 });
 
 test("an unregistered shared login disappears without creating personal or scope credentials", async () => {
-  const { app, keychain } = freshApp();
+  const { app, keychain } = await freshApp();
   assert.equal(
     (
       await app.turn(
@@ -515,7 +524,7 @@ test("an unregistered shared login disappears without creating personal or scope
 });
 
 test("a failed explicit login save is visible and the private files never survive for an implicit retry", async (t) => {
-  const built = freshApp("http://core.test");
+  const built = await freshApp("http://core.test");
   t.after(await loginApi(built));
   t.mock.method(built.keychain!, "save", async () => {
     throw new Error("injected keychain outage");
@@ -530,6 +539,7 @@ test("cutover policies never restore unrequested file credentials on personal or
   for (const shared of [false, true]) {
     const built = buildApp(
       testConfig({
+        sandboxResourcesEnabled: true,
         dataDir: mkdtempSync(join(tmpdir(), "dfp-quarantine-")),
         signingSecret: "device-flow-test-secret",
         deploymentLayerDir: acmecliCredentialLayer(),
@@ -538,6 +548,12 @@ test("cutover policies never restore unrequested file credentials on personal or
     const request = shared ? channel("!run echo ready") : dm("!run echo ready");
     const ownerId = shared ? scopeId("channel", "C1") : "U1";
     const targetScope = shared ? scopeId("channel", "C1") : scopeId("personal", "U1");
+    if (shared)
+      await built.directory.replaceChannels(
+        [{ channelId: "C1", name: "shared", isPrivate: false }],
+        [{ channelId: "C1", principalId: "U1" }],
+      );
+    await createIsolatedTestComputer(built, "U1", targetScope);
     const credential = await built.keychain!.save({
       ownerId,
       service: "acmecli",
@@ -1133,12 +1149,22 @@ test("a concurrent-save race skips that service and retries it on the next captu
 test("removed tools remain on-demand across cutover changes and execution mutations never replace stored files", async () => {
   for (const shared of [false, true]) {
     const built = buildApp(
-      testConfig({ dataDir: mkdtempSync(join(tmpdir(), "dfp-removed-tool-")), signingSecret: "test" }),
+      testConfig({
+        sandboxResourcesEnabled: true,
+        dataDir: mkdtempSync(join(tmpdir(), "dfp-removed-tool-")),
+        signingSecret: "test",
+      }),
     );
     assert.equal(built.credentialTools.length, 0);
     const request = shared ? channel("!run true") : dm("!run true");
     const ownerId = shared ? scopeId("channel", "C1") : "U1";
     const targetScope = shared ? scopeId("channel", "C1") : scopeId("personal", "U1");
+    if (shared)
+      await built.directory.replaceChannels(
+        [{ channelId: "C1", name: "shared", isPrivate: false }],
+        [{ channelId: "C1", principalId: "U1" }],
+      );
+    await createIsolatedTestComputer(built, "U1", targetScope);
     const credential = await built.keychain!.save({
       ownerId,
       service: "retired",

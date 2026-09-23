@@ -1,3 +1,4 @@
+import type { SandboxExecutionModeOptions } from "./sandbox.ts";
 import { basename } from "node:path/posix";
 import {
   AbortMultipartUploadCommand,
@@ -248,7 +249,7 @@ export interface HomeSnapshotSessionIo<S> {
   writeFileBytes(session: S, absPath: string, data: Uint8Array): Promise<void>;
 }
 
-export interface HomeSnapshotOpsOptions<S> {
+export interface HomeSnapshotOpsOptions<S> extends SandboxExecutionModeOptions {
   label: string;
   homeDir: string;
   homeTarPath: string;
@@ -398,9 +399,7 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
       if (!stored) return false;
       if (!Number.isSafeInteger(stored.size) || stored.size <= 0)
         throw new Error(`${label} hydrate: invalid snapshot size ${stored.size}`);
-      const backupScope = `${scope}/pre-supervisor-home`;
-      const backup = (await store.open(backupScope)) ? undefined : await store.createUpload(backupScope);
-      let backupComplete = false;
+      const isolated = (await opts.executionModeForScope?.(scope)) === "isolated";
       try {
         const started = await run(session, `mkdir -p ${shq(homeDir)} && : > ${shq(homeTarPath)}`, 30_000, left);
         if (started.exitCode !== 0)
@@ -411,15 +410,10 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
           total += piece.length;
           if (total > stored.size)
             throw new Error(`${label} hydrate: received ${total} bytes, expected ${stored.size}`);
-          if (backup) await backup.addPart(piece);
           await writePart(session, i++, piece, left);
         }
         if (total !== stored.size)
           throw new Error(`${label} hydrate: received ${total} bytes, expected ${stored.size}`);
-        if (backup) {
-          await backup.complete();
-          backupComplete = true;
-        }
         const written = await tarSize(session, left);
         if (written !== stored.size)
           throw new Error(`${label} hydrate: wrote ${written} bytes, expected ${stored.size}`);
@@ -428,15 +422,15 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
           throw new Error(`${label} hydrate archive invalid: ${validated.stderr.slice(0, 200)}`);
         const r = await run(
           session,
-          `python3 -I -c ${shq(RESTORE_WORKSPACE)} ${shq(homeDir)} ${shq(homeTarPath)}`,
+          isolated
+            ? `python3 -I -c ${shq(RESTORE_WORKSPACE)} ${shq(homeDir)} ${shq(homeTarPath)}`
+            : `cd ${shq(homeDir)} && tar -xf ${shq(homeTarPath)}; rc=$?; rm -f ${shq(homeTarPath)}; exit $rc`,
           180_000,
           left,
         );
         if (r.exitCode !== 0) throw new Error(`${label} hydrate extract failed: ${r.stderr.slice(0, 200)}`);
         return true;
       } finally {
-        if (backup && !backupComplete)
-          await backup.abort().catch(swallowAs(`${label}-sandbox: migration backup abort`, undefined));
         await removeScratch(session, "hydrate cleanup");
       }
     },

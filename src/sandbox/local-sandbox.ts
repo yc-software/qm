@@ -1,3 +1,4 @@
+import type { SandboxExecutionModeOptions } from "./sandbox.ts";
 import { createSupervisorTransport } from "./supervisor-transport.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { orgId as configOrgId } from "../config.ts";
@@ -14,7 +15,7 @@ import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-se
 import { materializeRoLayers } from "./ro-layers.ts";
 import { createExecExport, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
 import { spawnDockerExec, type DockerExec } from "./docker-exec.ts";
-import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
+import { ephemeralCredLinkScript, ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { shortHash } from "../util/crypto.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { execFailureDetail } from "./sandbox.ts";
@@ -40,7 +41,7 @@ const PREP_TIMEOUT_SEC = 30;
 
 export type { DockerExec };
 
-export interface LocalSandboxOptions {
+export interface LocalSandboxOptions extends SandboxExecutionModeOptions {
   image?: string;
   dockerBin?: string;
   cpus?: number;
@@ -264,15 +265,16 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     name: string,
     scope: string | undefined,
     withVolume: boolean,
+    isolated: boolean,
     freshFilesystem = !withVolume,
   ): Promise<void> {
     const net = await ensureNetwork(name);
     const args = [
       "run",
       "-d",
-      "--cap-add=SYS_ADMIN",
-      "--security-opt=seccomp=unconfined",
-      "--security-opt=systempaths=unconfined",
+      ...(isolated
+        ? ["--cap-add=SYS_ADMIN", "--security-opt=seccomp=unconfined", "--security-opt=systempaths=unconfined"]
+        : []),
       "--name",
       name,
       "--label",
@@ -293,7 +295,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     ];
     const r = await dexec(args, 120_000);
     if (r.code !== 0) throw new Error(`docker run ${name} failed: ${r.stderr.trim()}`);
-    if (freshFilesystem) supervisorFresh.add(r.stdout.trim());
+    if (isolated && freshFilesystem) supervisorFresh.add(r.stdout.trim());
     portByName.delete(name);
     await connectCore(net);
     await waitDaemon(name);
@@ -312,20 +314,21 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
         return { name, coldStart: false };
       }
       if (state) await dexec(["rm", "-f", name]);
+      const isolated = (await opts.executionModeForScope?.(scope)) === "isolated";
       const volume = localVolumeName(scope);
       const hadVolume = (await dexec(["volume", "inspect", volume])).code === 0;
       if (!hadVolume) {
-        const created = await dexec(["volume", "create", "--label", "qm.supervisor=1", volume]);
+        const created = await dexec(["volume", "create", ...(isolated ? ["--label", "qm.supervisor=1"] : []), volume]);
         if (created.code !== 0) throw new Error(`docker volume create ${volume} failed: ${created.stderr.trim()}`);
       }
       const trust = await dexec(["volume", "inspect", "-f", '{{ index .Labels "qm.supervisor" }}', volume]);
-      await runContainer(name, scope, true, trust.code === 0 && trust.stdout.trim() === "1");
+      await runContainer(name, scope, true, isolated, trust.code === 0 && trust.stdout.trim() === "1");
       activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
       return { name, coldStart: !hadVolume };
     });
   }
 
-  async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
+  async function ensureScratch(key: string, isolated: boolean): Promise<{ name: string; coldStart: boolean }> {
     return provisionQueue(`scratch:${key}`, async () => {
       await preflight();
       const name = localScratchName(key);
@@ -337,7 +340,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
         activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
         return { name, coldStart: false };
       }
-      await runContainer(name, undefined, false);
+      await runContainer(name, undefined, false, isolated);
       activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
       return { name, coldStart: true };
     });
@@ -418,7 +421,9 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       const scratch = provOpts?.scratch;
       const writable = layers.find((l) => l.mode === "rw") ?? layers[0];
       const scope = writable?.scopeId ?? "default";
-      const body = scratch ? await ensureScratch(scratch.key) : await ensureContainer(scope);
+      const body = scratch
+        ? await ensureScratch(scratch.key, provOpts?.executionMode === "isolated")
+        : await ensureContainer(scope);
       const name = body.name;
 
       const env = provOpts?.env && Object.keys(provOpts.env).length ? provOpts.env : undefined;
@@ -432,7 +437,8 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       };
 
       try {
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}`, PREP_TIMEOUT_SEC);
+        const credLinks = provOpts?.executionMode === "isolated" ? "" : ` && ${ephemeralCredLinkScript(homeDir)}`;
+        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, PREP_TIMEOUT_SEC);
         if (prep.code !== 0)
           throw new Error(
             `local sandbox provision prep failed: ${execFailureDetail(prep, PREP_TIMEOUT_SEC).slice(0, 200)}`,

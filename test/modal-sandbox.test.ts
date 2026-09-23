@@ -1,3 +1,4 @@
+import { createExecProcessSessions, SUPERVISOR_PROCESS_ROOT } from "../src/sandbox/exec-process-session.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
@@ -425,13 +426,13 @@ test("adoptHomeSnapshot promotes a staged blob to the snapshot store and resets 
   await s.writeFile(a, "old.txt", "stale e2b-era sandbox\n");
   await s.teardown(a, { keepWarm: true });
 
-  const tar = await makeTar([{ path: "workspace/migrated.txt", data: Buffer.from("came from e2b\n") }]);
+  const tar = await makeTar([{ path: "migrated.txt", data: Buffer.from("came from e2b\n") }]);
   const { blobId } = await blobs.put(Readable.from([Buffer.from(tar)]));
   assert.ok(s.adoptHomeSnapshot);
   await s.adoptHomeSnapshot!(scope, blobId);
 
   const b = await s.provision(layers);
-  const migrated = await s.run(b, "cat ~/workspace/migrated.txt");
+  const migrated = await s.run(b, "cat ~/migrated.txt");
   assert.equal(migrated.stdout, "came from e2b\n", "hydrates from the adopted snapshot");
   assert.notEqual((await s.run(b, "cat ~/old.txt")).code, 0, "the pre-adopt sandbox was discarded, not reused");
 });
@@ -514,9 +515,11 @@ test("homes larger than the file chunk size snapshot and hydrate through chunked
   const big = Buffer.alloc(50 * 1024 + 7);
   for (let i = 0; i < big.length; i++) big[i] = (i * 31) % 256;
   await s.writeFileBytes(h, "big.bin", big);
+  await s.run(h, "mv ~/workspace/big.bin ~/big.bin");
   await s.teardown(h);
   fake.terminate(h.id);
   const b = await s.provision(layers);
+  await s.run(b, "cp ~/big.bin ~/workspace/big.bin");
   const back = await s.readFileBytes(b, "big.bin");
   assert.ok(back && Buffer.from(back).equals(big), "chunked snapshot + hydrate round-trips the exact bytes");
 });
@@ -553,8 +556,13 @@ test("native checkpoints restore across rotation and core restarts without trans
   assert.equal(portable.puts(), 0);
   await store.merge(scope, { createdAtMs: 0 });
   const restarted = make({ store, snapshots: portable.store });
-  await assert.rejects(restarted.provision(layers), /workspace-only migration/);
-  assert.ok((await store.get(scope))?.nativeSnapshotId);
+  const next = await restarted.provision(layers);
+  assert.equal(await restarted.readFile(next, "uncommitted.txt"), "keep me");
+  assert.equal(portable.puts(), 0);
+  assert.ok(!fake.execScripts().some((script) => script.includes("tar --null")));
+  const status = await restarted.computerStatus!(scope);
+  assert.equal(status.recovery?.strategy, "provider_snapshot");
+  assert.ok(status.recovery?.checkpointExpiresAtMs);
 });
 
 test("native checkpoint references survive deep-idle reaping", async () => {
@@ -568,8 +576,8 @@ test("native checkpoint references survive deep-idle reaping", async () => {
   assert.equal((await first.reapDeepIdle!(1)).reaped, 1);
   assert.ok((await store.get(scope))?.nativeSnapshotId);
   const restarted = make({ store });
-  await assert.rejects(restarted.provision(layers), /workspace-only migration/);
-  assert.ok((await store.get(scope))?.nativeSnapshotId);
+  const restored = await restarted.provision(layers);
+  assert.equal(await restarted.readFile(restored, "work.txt"), "durable checkpoint");
 });
 
 test("expired native checkpoints block replacement without falling back to stale portable data", async () => {
@@ -632,7 +640,8 @@ test("native scheduling ignores disabled legacy tar intervals and refreshes acti
   assert.notEqual((await store.get(scope))?.nativeSnapshotId, initial);
   fake.terminate(scopeName());
   const restarted = make({ store });
-  await assert.rejects(restarted.provision(layers), /workspace-only migration/);
+  const recovered = await restarted.provision(layers);
+  assert.equal(await restarted.readFile(recovered, "background.txt"), "new background output");
 });
 
 test("a late checkpoint from another core cannot replace a newer committed checkpoint", async () => {
@@ -720,8 +729,16 @@ test("native capture requires activation and adopted native scopes remain native
   fake.terminate(scopeName());
 
   const rollback = make({ store, snapshots: portable.store, nativeSnapshotsEnabled: false });
-  await assert.rejects(rollback.provision(layers), /workspace-only migration/);
-  assert.ok((await store.get(scope))?.nativeSnapshotId);
+  const recovered = await rollback.provision(layers);
+  assert.equal(await rollback.readFile(recovered, "working.txt"), "native generation");
+  await rollback.writeFile(recovered, "working.txt", "reader rollback generation");
+  await store.merge(scope, { lastSnapshotMs: 0 });
+  await rollback.teardown(recovered);
+  assert.equal(portable.puts(), 1);
+  fake.terminate(scopeName());
+  const restarted = make({ store, snapshots: portable.store, nativeSnapshotsEnabled: false });
+  const restored = await restarted.provision(layers);
+  assert.equal(await restarted.readFile(restored, "working.txt"), "reader rollback generation");
 });
 
 test("interrupted hydration cannot expose a partially restored home through stored adoption", async () => {
@@ -752,8 +769,8 @@ test("explicit restart of interrupted hydration retains the checkpoint and retri
   const restarted = make({ store, nativeSnapshotsEnabled: false });
   await restarted.restartComputer!(scope);
   assert.equal((await store.get(scope))!.nativeSnapshotId, checkpoint);
-  await assert.rejects(restarted.provision(layers), /workspace-only migration/);
-  assert.equal((await store.get(scope))?.nativeSnapshotId, checkpoint);
+  const restored = await restarted.provision(layers);
+  assert.equal(await restarted.readFile(restored, "working.txt"), "last complete checkpoint");
 });
 
 for (const path of ["stored", "name-conflict"] as const) {
@@ -1008,11 +1025,9 @@ test("deep idle termination excludes writes from another core until recovery", {
   const reaping = first.reapDeepIdle!(6 * 3600_000);
   await entered.promise;
   let completed = false;
-  const writing = assert
-    .rejects(second.writeFile(two, "after-checkpoint.txt", "must survive"), /workspace-only migration/)
-    .then(() => {
-      completed = true;
-    });
+  const writing = second.writeFile(two, "after-checkpoint.txt", "must survive").then(() => {
+    completed = true;
+  });
   try {
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.equal(completed, false);
@@ -1020,7 +1035,7 @@ test("deep idle termination excludes writes from another core until recovery", {
     release.resolve();
     await Promise.all([reaping, writing]);
   }
-  assert.ok((await store.get(scope))?.nativeSnapshotId);
+  assert.equal(await second.readFile(two, "after-checkpoint.txt"), "must survive");
   assert.equal(fake.createdCount(scopeName()), 2);
 });
 
@@ -1064,9 +1079,15 @@ test("a near-expiry checkpoint of a reaped scope is renewed before Modal deletes
   await store.merge(scope, { nativeSnapshotExpiresAtMs: Date.now() + 3600_000, lastSnapshotMs: Date.now() - 29 * day });
   await s.reapDeepIdle!(1);
   const renewed = (await store.get(scope))!;
-  assert.equal(renewed.nativeSnapshotId, parked.nativeSnapshotId);
-  assert.match(renewed.recoveryError ?? "", /workspace-only migration/);
+  assert.notEqual(renewed.nativeSnapshotId, parked.nativeSnapshotId);
+  assert.ok(renewed.nativeSnapshotExpiresAtMs! > Date.now() + 29 * day);
+  assert.equal(renewed.lastActivityMs, 1, "renewal is maintenance, not user activity");
+  assert.equal(renewed.hydrationPending, false);
+  assert.equal(fake.current(scopeName()), null, "the renewal sandbox is terminated again");
   assert.equal(fake.runningCount(), 0);
+  const restarted = make({ store });
+  const restored = await restarted.provision(layers);
+  assert.equal(await restarted.readFile(restored, "work.txt"), "idle for a month");
 });
 
 test("checkpoint renewal skips expired and short-lived checkpoints instead of looping", async () => {
@@ -1102,8 +1123,9 @@ test("a sandbox approaching Modal's lifetime limit is checkpointed and retired e
   assert.equal((await s.reapDeepIdle!(72 * 3600_000)).reaped, 1);
   assert.equal(fake.current(scopeName()), null);
   assert.ok((await store.get(scope))!.nativeSnapshotId);
-  await assert.rejects(s.provision(layers), /workspace-only migration/);
-  assert.ok((await store.get(scope))?.nativeSnapshotId);
+  const next = await s.provision(layers);
+  assert.equal(await s.readFile(next, "job.txt"), "in flight");
+  assert.ok((await store.get(scope))!.expiresAtMs! > Date.now() + 23 * 3600_000);
 });
 
 test("untracked scope sandboxes are terminated after a grace period while scratch and other deployments are kept", async () => {
@@ -1128,25 +1150,28 @@ test("native recovery accepts a checkpoint whose durable generation has supervis
   fake.cleanup();
   fake = installFakeModal({ native: true });
   const store = createMemoryMap<StoredModalSandbox>();
-  const first = make({ store });
-  const handle = await first.provision(layers);
+  const first = make({ store, executionModeForScope: async () => "isolated" });
+  const handle = await first.provision(layers, { executionMode: "isolated" });
   await first.supervisorTransport!.acceptTrusted!(handle);
   await first.writeFile(handle, "trusted.txt", "preserved workspace");
   await first.teardown(handle);
   fake.terminate(scopeName());
-  const replacement = make({ store });
-  const restored = await replacement.provision(layers);
+  const replacement = make({ store, executionModeForScope: async () => "isolated" });
+  const restored = await replacement.provision(layers, { executionMode: "isolated" });
   assert.equal(await replacement.readFile(restored, "trusted.txt"), "preserved workspace");
   assert.equal(await replacement.supervisorTransport!.isFresh(restored), true);
 });
 
 test("deep idle reaping protects a live job recorded in the supervisor process root", async () => {
   const store = createMemoryMap<StoredModalSandbox>();
-  const adapter = make({ store });
-  const handle = await adapter.provision(layers);
+  const adapter = make({ store, executionModeForScope: async () => "isolated" });
+  const handle = await adapter.provision(layers, { executionMode: "isolated" });
   assert.ok(supportsProcessSessions(adapter));
   if (!supportsProcessSessions(adapter)) return;
-  const started = await adapter.startProcess(handle, "sleep 30");
+  const started = await createExecProcessSessions(
+    { run: adapter.supervisorTransport!.run },
+    SUPERVISOR_PROCESS_ROOT,
+  ).startProcess(handle, "sleep 30");
   try {
     await store.merge(scope, { lastActivityMs: 1 });
     const before = fake.execScripts().length;
@@ -1159,6 +1184,10 @@ test("deep idle reaping protects a live job recorded in the supervisor process r
     );
     assert.equal(fake.current(scopeName())?.sandboxId, (await store.get(scope))?.sandboxId);
   } finally {
-    await adapter.signalProcess(handle, started.processId, "KILL");
+    await createExecProcessSessions({ run: adapter.supervisorTransport!.run }, SUPERVISOR_PROCESS_ROOT).signalProcess(
+      handle,
+      started.processId,
+      "KILL",
+    );
   }
 });

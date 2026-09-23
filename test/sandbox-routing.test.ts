@@ -343,6 +343,7 @@ for (const combined of [true, false]) {
         return ["keep/file"];
       };
     const resources = {
+      get: async () => ({ id: "resource", backend: "sprites", executionMode: "legacy" }),
       use: async (_id: string, action: () => Promise<unknown>) => {
         acquisitions++;
         locked = true;

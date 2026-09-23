@@ -59,6 +59,8 @@ import {
   type MaterializedCred,
   type PublicServiceCredential,
 } from "../credentials/keychain.ts";
+import { deviceFlowCredOwner, registerLoginPaths } from "../credentials/device-flow-persist.ts";
+import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import {
   configuredConnectorProviders,
   connectorStatusIsStale,
@@ -1492,6 +1494,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let sharedCredsBlock = "";
       const envCredLines: string[] = [];
       let egressTokenForTurn: string | undefined;
+      let legacyEgressToken: string | undefined;
       // Service credentials: one read of the org's credential list and one grant scan feed both
       // the env-delivery gate (below) and the broker token mint (further down). Same grants gate both.
       let serviceCredRecords: PublicServiceCredential[] = [];
@@ -1639,7 +1642,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               sharedCredsBlock =
                 "\n\n## Shared org credentials available to you\n" +
                 "The org vended these shared credentials to this conversation. You CANNOT see the secret — call the " +
-                "target BY PROXY through the broker, which injects it server-side. Request service_<slug> in execute.credentials first. Use exactly this (with the " +
+                "target BY PROXY through the broker, which injects it server-side. On isolated computers request service_<slug> in execute.credentials first; legacy computers retain their ambient broker token. Use exactly this (with the " +
                 "$AGENT_CREDENTIAL_TOKEN env var, NOT $AGENT_API_TOKEN):\n" +
                 "```\n" +
                 'curl -fsS -X POST "$AGENT_API_URL/v1/credentials/broker" \\\n' +
@@ -1682,6 +1685,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           egressSecret,
         );
       }
+      if (!strictReadOnly && egressSecret)
+        legacyEgressToken = await mintCapabilityToken(
+          {
+            ...scopeAttestation,
+            aud: EGRESS_PROXY_AUD,
+            egress: egressClaimAllowingControlPlane(
+              resolution.egress,
+              deps.apiBaseUrl ?? "",
+              securityPolicy.denyPrivateNetworks,
+            ),
+            exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
+          },
+          egressSecret,
+        );
       const registerServiceCredentials = async (
         addCredential: typeof addCredentialToCatalog,
         requestedHandles: readonly string[],
@@ -1784,6 +1801,112 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
         }
       }
+      const legacyEnvironment = async (owner: boolean): Promise<Record<string, string>> => {
+        if (strictReadOnly) return {};
+        if (owner) await authorizeOwnerCredentials();
+        const env: Record<string, string> = {};
+        const ownAllowed = owner
+          ? isolateOwnerKeychain
+          : !isolateOwnerKeychain &&
+            ((liveAuthorTurn && scopeId === personalScope(actor.id)) ||
+              (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true));
+        if (deps.keychain) {
+          const own = ownAllowed ? await deps.keychain.materializeOwn(actor.id) : [];
+          const standing = owner ? [] : await deps.keychain.materializeStanding(scopeId);
+          for (const materialized of [...own, ...standing]) {
+            for (const { key, value } of materialized.env) if (!(key in env)) env[key] = value;
+            if (materialized.grantId)
+              deps.auditLog.record({
+                at: Date.now(),
+                principalId: actor.id,
+                action: "keychain.materialize",
+                resource: `${materialized.credentialId} (grant ${materialized.grantId})`,
+                scopeLabel: scopeId,
+              });
+          }
+        }
+        if (
+          deps.connectorTokens &&
+          ((owner && openSpeakerKeychain) || (!owner && conversation.kind === "dm" && liveAuthorTurn))
+        ) {
+          for (const host of CONNECTOR_HOSTS) {
+            const token =
+              (await deps.connectorTokens.connectorAccessToken(host, actor.id, "personal")) ??
+              (await deps.connectorTokens.connectorAccessToken(host, actor.id)) ??
+              (await deps.connectorTokens.connectorAccessToken(host, actor.id, "company"));
+            if (token) env[envKey(host)] = token;
+          }
+        }
+        if (!owner && deps.serviceCreds) {
+          const records = await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId);
+          const grants = await deps.acl.grantsOfKind(
+            "service-cred",
+            conversation.audience,
+            scopeId,
+            resolution.orgScopeId,
+            principalEntitledToScope,
+          );
+          const granted = new Set(grants.map((grant) => parseRef(grant.ref).id));
+          const available = records.filter((record) => record.enabled && record.hasSecret && granted.has(record.slug));
+          for (const record of available) {
+            if (record.delivery !== "env" || !record.envKey || !allInternal || record.envKey in env) continue;
+            await authorizeServiceCredential(record.slug);
+            const credential = await deps.serviceCreds.getServiceCredentialSecret(resolution.orgScopeId, record.slug);
+            if (credential?.enabled && credential.delivery === "env" && credential.envKey === record.envKey)
+              env[record.envKey] = credential.secret;
+          }
+          const slugs = available.filter((record) => record.delivery !== "env").map((record) => record.slug);
+          if (slugs.length && deps.signingSecret && deps.apiBaseUrl) {
+            for (const slug of slugs) await authorizeServiceCredential(slug);
+            env.AGENT_CREDENTIAL_TOKEN = await mintCapabilityToken(
+              {
+                ...scopeAttestation,
+                aud: CREDENTIAL_BROKER_AUD,
+                credentials: slugs,
+                exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
+              },
+              deps.capabilitySecret ?? deps.signingSecret,
+            );
+          }
+        }
+        if (!owner && actor.type === "internal") {
+          for (const tool of brokeredTools) {
+            const mode = (await deps.deviceFlowCutover?.resolvePolicy(memoryScopeId, tool.service))?.mode ?? "legacy";
+            if (mode !== "legacy") continue;
+            const aws = await deps
+              .layerBrokerFor?.(tool)
+              ?.credsForActor(actor.id)
+              .catch(swallowAs(`orchestrator: ${tool.service} broker assume-role`, undefined));
+            if (aws)
+              Object.assign(env, {
+                AWS_ACCESS_KEY_ID: aws.accessKeyId,
+                AWS_SECRET_ACCESS_KEY: aws.secretAccessKey,
+                AWS_SESSION_TOKEN: aws.sessionToken,
+                AWS_REGION: aws.region,
+                AWS_DEFAULT_REGION: aws.region,
+              });
+          }
+        }
+        return env;
+      };
+      const bindControlToken = async (handle: import("../sandbox/sandbox.ts").SandboxHandle): Promise<void> => {
+        if (!controlClaims || !deps.signingSecret) return;
+        handle.env = {
+          ...handle.env,
+          ...(connectorEnv.AGENT_API_URL ? { AGENT_API_URL: connectorEnv.AGENT_API_URL } : {}),
+          ...(connectorEnv.AGENT_OAUTH_CONSENT_TOKEN
+            ? { AGENT_OAUTH_CONSENT_TOKEN: connectorEnv.AGENT_OAUTH_CONSENT_TOKEN }
+            : {}),
+          AGENT_API_TOKEN: await mintCapabilityToken(
+            {
+              ...controlClaims,
+              executionMode: handle.executionMode ?? "legacy",
+              ...(handle.resourceId ? { sandboxId: handle.resourceId } : {}),
+            },
+            deps.capabilitySecret ?? deps.signingSecret,
+          ),
+        };
+      };
       let toolCalls = 0;
       let execMs = 0;
       let execCount = 0;
@@ -1802,6 +1925,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         box,
         scratchBox,
         ownerAuthBox,
+        captureLegacyCredentials,
         ownerAuthCommand,
         scopedCommand,
         provision,
@@ -1825,7 +1949,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         turnSessionDir,
         turnFilesDir,
         connectorEnv,
+        legacyEnvironment,
+        bindControlToken,
         egressTokenForTurn,
+        legacyEgressToken,
         isolateOwnerKeychain,
         openSpeakerKeychain,
         ownerAuthAvailable,
@@ -2028,12 +2155,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         systemPrompt += sharedCredsBlock;
         if (credentialDescriptions.length)
           systemPrompt +=
-            "\n\n## Execution credentials\nPass requested handles in execute.credentials. Credentials exist only inside that execution.\n" +
+            "\n\n## Execution credentials\nOn isolated computers pass requested handles in execute.credentials; credentials exist only inside that execution. Legacy computers retain authorized ambient credentials and resident logins.\n" +
             credentialDescriptions.join("\n");
         if (envCredLines.length) {
           systemPrompt +=
             "\n\n## Available org credentials\n" +
-            "Request these handles explicitly in execute.credentials on the scoped computer. " +
+            "On isolated computers request these handles explicitly in execute.credentials on the scoped computer. " +
             "Use the matching access skill.\n" +
             envCredLines.join("\n");
         }
@@ -2455,7 +2582,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
               : {};
           })(),
-          getCommandCredentials: async (requestedHandles) => {
+          getCommandCredentials: async (requestedHandles, _handle) => {
             const credentials: CommandCredential[] = [];
             const identities = new Map<string, string>();
             const add: typeof addCredentialToCatalog = (credential, _description, identity = credential.handle) => {
@@ -2503,7 +2630,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(strictReadOnly || !deps.keychain
             ? {}
             : {
-                registerLogin: async () => {
+                registerLogin: async (service: string, paths: readonly CredentialPathSpec[]) => {
+                  const handle = await provision();
+                  if (handle.executionMode !== "isolated")
+                    return registerLoginPaths({
+                      sandbox: deps.sandbox,
+                      handle,
+                      keychain: deps.keychain!,
+                      ownerId: deviceFlowCredOwner(memoryScopeId, actor.id),
+                      service,
+                      paths: [...paths],
+                    });
                   throw new Error(
                     "Login files exist only inside their execution. Complete the login and POST selected files to /v1/keychain/credentials in the same execute call before it exits.",
                   );
@@ -3759,6 +3896,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const tail = async (): Promise<void> => {
           try {
+            await captureLegacyCredentials();
             if (!pausing && turnCompleted && !session.title && !fallbackTitleWrite) {
               await generateAndStoreTitle(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`);
             }

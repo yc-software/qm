@@ -1,3 +1,4 @@
+import type { SandboxExecutionModeOptions } from "./sandbox.ts";
 import { createSupervisorTransport } from "./supervisor-transport.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
@@ -21,7 +22,11 @@ import {
   posixJoin,
   type BlobStagingOptions,
 } from "./exec-file-ops.ts";
-import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
+import {
+  ephemeralCredLinkScript,
+  ephemeralCredLinkPaths,
+  type CredentialPathSpec,
+} from "../credentials/resident-paths.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
@@ -101,7 +106,7 @@ export function createConfigEpochResolver(
   };
 }
 
-export interface SuperserveSandboxOptions extends BlobStagingOptions {
+export interface SuperserveSandboxOptions extends BlobStagingOptions, SandboxExecutionModeOptions {
   client: SuperserveClient;
   namePrefix?: string;
   defaultTimeoutSec?: number;
@@ -602,7 +607,11 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
             assertCurrent(handle);
             if (!(await ownsGuest(name))) return handle;
 
-            const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}`, PREP_TIMEOUT_SEC);
+            const credLinks =
+              scratch || provOpts?.executionMode === "isolated"
+                ? ""
+                : ` && ${ephemeralCredLinkScript(homeDir, opts.credentialPaths ?? [])}`;
+            const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, PREP_TIMEOUT_SEC);
             if (prep.code !== 0)
               throw new Error(`superserve provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
             await materializeRoLayers(

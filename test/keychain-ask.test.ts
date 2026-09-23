@@ -631,7 +631,10 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
   let built: BuiltApp;
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
-    mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
+    mintCapabilityToken(
+      { actorId, scopeId: scope, executionMode: "isolated", exp: Date.now() + CAPABILITY_TTL_MS, ...extra },
+      SECRET,
+    );
   const bobInInfra = () =>
     capFor("U_BOB", "channel:C_INFRA", {
       threadRef: "ch:C_INFRA-thread",

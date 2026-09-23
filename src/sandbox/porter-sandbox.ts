@@ -1,3 +1,4 @@
+import type { SandboxExecutionModeOptions } from "./sandbox.ts";
 import { createSupervisorTransport } from "./supervisor-transport.ts";
 import { randomUUID } from "node:crypto";
 import { NotFoundError } from "porter-sandbox";
@@ -23,7 +24,11 @@ import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } fr
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
 import { createExecExport, createBackendBlobStaging, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
-import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
+import {
+  ephemeralCredLinkScript,
+  ephemeralCredLinkPaths,
+  type CredentialPathSpec,
+} from "../credentials/resident-paths.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
@@ -52,7 +57,7 @@ interface BodyEntry {
   sb: PorterSandboxLike;
 }
 
-export interface PorterSandboxOptions {
+export interface PorterSandboxOptions extends SandboxExecutionModeOptions {
   image?: string;
   token?: string;
   baseUrl?: string;
@@ -326,7 +331,11 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
       };
 
       try {
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}`, 60);
+        const credLinks =
+          scratch || provOpts?.executionMode === "isolated"
+            ? ""
+            : ` && ${ephemeralCredLinkScript(homeDir, opts.credentialPaths ?? [])}`;
+        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
         if (prep.code !== 0)
           throw new Error(`porter provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
 

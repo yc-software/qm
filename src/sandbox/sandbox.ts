@@ -1,6 +1,13 @@
 import type { EgressPolicy, WorkspaceLayer } from "../types.ts";
 
+export type SandboxExecutionMode = "legacy" | "isolated";
+
+export interface SandboxExecutionModeOptions {
+  executionModeForScope?: (scopeId: string) => Promise<SandboxExecutionMode>;
+}
+
 export interface SandboxHandle {
+  executionMode?: SandboxExecutionMode;
   resourceId?: string;
   providerSandboxId?: string;
   id: string;
@@ -63,6 +70,7 @@ export function visibleTools(tools: readonly string[]): string[] {
 }
 
 export interface ProvisionOptions {
+  executionMode?: SandboxExecutionMode;
   sandboxId?: string;
   env?: Record<string, string>;
   egress?: EgressPolicy;
@@ -196,6 +204,7 @@ export interface SupervisorTransport {
 }
 
 export interface Sandbox {
+  executionModeFor?(scopeId: string, sandboxId?: string): Promise<SandboxExecutionMode>;
   readonly supervisorTransport?: SupervisorTransport;
   readonly profile: AgentComputerProfile;
   profileFor?(scopeId: string, sandboxId?: string): Promise<AgentComputerProfile>;

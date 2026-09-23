@@ -10,6 +10,7 @@ import {
   readdirSync,
   chmodSync,
   symlinkSync,
+  readlinkSync,
   realpathSync,
   statSync,
 } from "node:fs";
@@ -99,8 +100,8 @@ function recordingStore(): { store: HomeSnapshotStore; parts: number[]; complete
 
 test("snapshot streams the home tar as fixed-size parts and hydrates it back byte for byte", async () => {
   const a = box();
-  const big = fill(a.home, "workspace/project/data.bin", 4096 * 5 + 123);
-  fill(a.home, "workspace/project/node_modules/dep/index.js", 2048);
+  const big = fill(a.home, "project/data.bin", 4096 * 5 + 123);
+  fill(a.home, "project/node_modules/dep/index.js", 2048);
   const rec = recordingStore();
   await ops(a, rec.store).snapshotHome("scope", a);
 
@@ -115,12 +116,8 @@ test("snapshot streams the home tar as fixed-size parts and hydrates it back byt
 
   const b = box();
   assert.equal(await ops(b, rec.store).hydrateHome("scope", b), true);
-  assert.ok(Buffer.from(readFileSync(join(b.home, "workspace/project/data.bin"))).equals(big));
-  assert.equal(
-    existsSync(join(b.home, "workspace/project/node_modules")),
-    false,
-    "node_modules was pruned from the snapshot",
-  );
+  assert.ok(Buffer.from(readFileSync(join(b.home, "project/data.bin"))).equals(big));
+  assert.equal(existsSync(join(b.home, "project/node_modules")), false, "node_modules was pruned from the snapshot");
   assert.equal(existsSync(b.tar), false);
 });
 
@@ -168,8 +165,7 @@ test("hydrate coalesces a stream of small chunks into partBytes writes", async (
   const data = Buffer.alloc(4096 * 2 + 10);
   for (let i = 0; i < data.length; i++) data[i] = i % 253;
   const tarBox = box();
-  fill(tarBox.home, "workspace/placeholder", 0);
-  writeFileSync(join(tarBox.home, "workspace/f.bin"), data);
+  writeFileSync(join(tarBox.home, "f.bin"), data);
   const inner = createMemorySnapshotStore();
   await ops(tarBox, inner).snapshotHome("scope", tarBox);
   const stored = await inner.open("scope");
@@ -207,7 +203,7 @@ test("hydrate coalesces a stream of small chunks into partBytes writes", async (
     writes.slice(0, -1).every((n) => n === 4096),
     `writes were ${writes.join(",")}`,
   );
-  assert.ok(Buffer.from(readFileSync(join(b.home, "workspace/f.bin"))).equals(data));
+  assert.ok(Buffer.from(readFileSync(join(b.home, "f.bin"))).equals(data));
 });
 
 test("the whole snapshot is bounded by one deadline", async () => {
@@ -240,7 +236,7 @@ test("a missing snapshot hydrates nothing", async () => {
 
 test("scratch files that live inside the home never ride the snapshot or survive it", async () => {
   const a = box();
-  fill(a.home, "workspace/f.bin", 4096 * 2 + 5);
+  fill(a.home, "f.bin", 4096 * 2 + 5);
   const inner = createMemorySnapshotStore();
   const at = (b: ReturnType<typeof box>) =>
     createHomeSnapshotOps<Box>({
@@ -253,10 +249,10 @@ test("scratch files that live inside the home never ride the snapshot or survive
       partBytes: 4096,
     });
   await at(a).snapshotHome("scope", a);
-  assert.deepEqual(readdirSync(a.home), ["workspace"], "tar, listing and parts are all cleaned up");
+  assert.deepEqual(readdirSync(a.home), ["f.bin"], "tar, listing and parts are all cleaned up");
   const b = box();
   assert.equal(await at(b).hydrateHome("scope", b), true);
-  assert.deepEqual(readdirSync(b.home), ["workspace"], "no scratch file was archived or left behind");
+  assert.deepEqual(readdirSync(b.home), ["f.bin"], "no scratch file was archived or left behind");
 });
 
 test("an unreadable directory does not fail the snapshot", async () => {
@@ -285,22 +281,21 @@ test("snapshotDue skips an unused turn only when the stored home is known clean"
   assert.equal(snapshotDue(null, { homeUnchanged: true }, 0), true, "never snapshotted counts as dirty");
 });
 
-test("workspace-only restore preserves regular data and directories while retaining skipped links in the migration backup", async () => {
+test("snapshots preserve symlinks and empty directories without following links or archiving pruned contents", async () => {
   const a = box();
-  fill(a.home, "workspace/project/source", 32);
-  fill(a.home, "workspace/project/node_modules/excluded", 32);
-  mkdirSync(join(a.home, "workspace/empty"));
-  symlinkSync("workspace/project/source", join(a.home, "link"));
+  fill(a.home, "project/source", 32);
+  fill(a.home, "project/node_modules/excluded", 32);
+  mkdirSync(join(a.home, "empty"));
+  symlinkSync("project/source", join(a.home, "link"));
   symlinkSync("missing", join(a.home, "dangling"));
   const store = createMemorySnapshotStore();
   await ops(a, store).snapshotHome("scope", a);
   const b = box();
   await ops(b, store).hydrateHome("scope", b);
-  assert.equal(existsSync(join(b.home, "link")), false);
-  assert.equal(existsSync(join(b.home, "dangling")), false);
-  assert.ok(await store.open("scope/pre-supervisor-home"));
-  assert.ok(statSync(join(b.home, "workspace/empty")).isDirectory());
-  assert.equal(existsSync(join(b.home, "workspace/project/node_modules")), false);
+  assert.equal(readlinkSync(join(b.home, "link")), "project/source");
+  assert.equal(readlinkSync(join(b.home, "dangling")), "missing");
+  assert.ok(statSync(join(b.home, "empty")).isDirectory());
+  assert.equal(existsSync(join(b.home, "project/node_modules")), false);
 });
 
 for (const lengthDelta of [-1, 1]) {
@@ -372,7 +367,7 @@ for (const size of [0, -1, NaN, Infinity, 1.5]) {
   });
 }
 
-test("migration restores workspace data without executing or restoring privileged home files", async () => {
+test("isolated recovery restores workspace data without executing or restoring privileged home files", async () => {
   const source = box();
   fill(source.home, "workspace/kept.txt", 32);
   fill(source.home, ".bash_profile", 64);
@@ -383,11 +378,12 @@ test("migration restores workspace data without executing or restoring privilege
   const original = await store.open("scope");
   const originalBytes = Buffer.concat(await Array.fromAsync(original!.parts));
   const target = box();
-  await ops(target, store).hydrateHome("scope", target);
+  await ops(target, store, { executionModeForScope: async () => "isolated" }).hydrateHome("scope", target);
   assert.ok(existsSync(join(target.home, "workspace/kept.txt")));
   assert.equal(existsSync(join(target.home, ".bash_profile")), false);
   assert.equal(existsSync(join(target.home, ".local")), false);
   assert.equal(existsSync(join(target.home, "workspace/escape")), false);
-  const backup = await store.open("scope/pre-supervisor-home");
-  assert.deepEqual(Buffer.concat(await Array.fromAsync(backup!.parts)), originalBytes);
+  assert.equal(await store.open("scope/pre-supervisor-home"), null);
+  const retained = await store.open("scope");
+  assert.deepEqual(Buffer.concat(await Array.fromAsync(retained!.parts)), originalBytes);
 });

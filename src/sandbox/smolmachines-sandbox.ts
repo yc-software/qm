@@ -1,3 +1,4 @@
+import type { SandboxExecutionModeOptions } from "./sandbox.ts";
 import { createSupervisorTransport } from "./supervisor-transport.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -67,7 +68,7 @@ export interface StoredSmolmachinesSandbox {
   snapshotError?: string;
 }
 
-export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
+export interface SmolmachinesSandboxOptions extends BlobStagingOptions, SandboxExecutionModeOptions {
   token?: string;
   baseUrl?: string;
   namePrefix?: string;
@@ -349,6 +350,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
 
   const homeSnapshots = opts.snapshots
     ? createHomeSnapshotOps<string>({
+        executionModeForScope: opts.executionModeForScope,
         label: "smolmachines",
         homeDir: HOME_DIR,
         homeTarPath: HOME_TAR,

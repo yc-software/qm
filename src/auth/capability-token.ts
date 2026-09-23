@@ -25,6 +25,8 @@ export interface CapabilityClaims {
   aud?: string;
   scopeId: ScopeId;
   scopeVersion?: string;
+  executionMode?: "legacy" | "isolated";
+  sandboxId?: string;
   timezone?: string;
   destination?: Destination;
   destinations?: CandidateDestination[];

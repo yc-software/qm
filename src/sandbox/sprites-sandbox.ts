@@ -1,3 +1,4 @@
+import type { SandboxExecutionModeOptions } from "./sandbox.ts";
 import { createSupervisorTransport } from "./supervisor-transport.ts";
 import { randomUUID } from "node:crypto";
 import { setTimeout as wait } from "node:timers/promises";
@@ -122,7 +123,7 @@ export function processKeepaliveScript(processId: string, processRoot?: string):
   return `LOOP=${shq(loop)}; if command -v setsid >/dev/null 2>&1; then setsid sh -c "$LOOP" >/dev/null 2>&1 & else sh -c "$LOOP" >/dev/null 2>&1 & fi; echo OK`;
 }
 
-export interface SpritesSandboxOptions extends BlobStagingOptions {
+export interface SpritesSandboxOptions extends BlobStagingOptions, SandboxExecutionModeOptions {
   token?: string;
   baseUrl?: string;
   namePrefix?: string;
@@ -346,6 +347,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
 
   const homeSnapshots = opts.snapshots
     ? createHomeSnapshotOps<string>({
+        executionModeForScope: opts.executionModeForScope,
         label: "sprites",
         homeDir: HOME_DIR,
         homeTarPath: HOME_TAR,

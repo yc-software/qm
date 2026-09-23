@@ -46,6 +46,8 @@ test("Open owner computer rechecks revocation before reuse and is destroyed, nev
     ownerAuthEnv: { TEST_TOKEN: "synthetic-secret" },
     ownerEnvCredentialIds: ["synthetic-id"],
     connectorEnv: {},
+    legacyEnvironment: async () => ({}),
+    bindControlToken: async () => {},
     credentialTools: [],
     credentialServices: [],
     credentialCutoverServices: [],
