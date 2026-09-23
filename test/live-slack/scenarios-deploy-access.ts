@@ -342,11 +342,7 @@ export const deployAccessScenarios: Scenario[] = [
       });
       assert.equal(actionsOf(settled).length, 0, "buttons are gone once decided");
       const notice = await waitForBotDm(env, bob, bobDm, /gave you access to the app/, since);
-      assert.match(
-        notice.text ?? "",
-        new RegExp(`${slug}\\.${APPS_DOMAIN().replace(/\./g, "\\.")}`),
-        "grantee notice carries the app link",
-      );
+      assert.ok((notice.text ?? "").includes(`${slug}.${APPS_DOMAIN()}`), "grantee notice carries the app link");
       await waitReachable(slug, bobId, marker, "bob");
       const after = await coreAs(aliceId, true, "GET", "/v1/deployment-access-requests");
       assert.equal(
