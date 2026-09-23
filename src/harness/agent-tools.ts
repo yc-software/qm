@@ -1388,7 +1388,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           return recordResult(
             callId,
             { tool: "history", error: "seq must be an integer" },
-            text("[error] history `seq` must be an integer entry number, like the 87 in tool_result#87."),
+            text("[error] history `seq` must be an integer entry number, like the 87 in tool_call#87."),
             true,
           );
         }
