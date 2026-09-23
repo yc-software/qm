@@ -1,6 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -293,13 +294,15 @@ test("strict attachment data does not taint clean overheard attribution", async 
   assert.equal(result.status, "pending_approval");
   const entries = await built.sessions.getEntries(result.sessionId!);
   const clean = entries.find((entry) => (entry.payload as { ts?: string }).ts === "attachment.1");
-  assert.notEqual((clean?.payload as { securityTainted?: boolean }).securityTainted, true);
+  assert.ok(clean);
+  assert.notEqual((clean.payload as { securityTainted?: boolean }).securityTainted, true);
   const trigger = entries.find(
     (entry) =>
       (entry.payload as { securityTainted?: boolean; overheard?: boolean }).securityTainted === true &&
       !(entry.payload as { overheard?: boolean }).overheard,
   );
-  assert.deepEqual((trigger?.payload as { quarantinedAttachmentSourceIds?: string[] }).quarantinedAttachmentSourceIds, [
+  assert.ok(trigger);
+  assert.deepEqual((trigger.payload as { quarantinedAttachmentSourceIds?: string[] }).quarantinedAttachmentSourceIds, [
     "attachment-source-id",
   ]);
 });
@@ -308,9 +311,15 @@ test(
   "mixed source taint stays attributed across Postgres history and later thread imports",
   { skip: databaseUrl ? false : "set DATABASE_URL to a disposable Postgres database" },
   async () => {
+    const pg = (await import("pg")).default;
+    const admin = new pg.Pool({ connectionString: databaseUrl });
+    const schema = `security_taint_${randomUUID().replaceAll("-", "")}`;
+    await admin.query(`CREATE SCHEMA ${schema}`);
+    const isolatedUrl = new URL(databaseUrl!);
+    isolatedUrl.searchParams.set("options", `-c search_path=${schema}`);
     const config = testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "qm-taint-")),
-      databaseUrl,
+      databaseUrl: isolatedUrl.toString(),
       sessionStore: "postgres",
       backgroundWorkEnabled: false,
     });
@@ -334,6 +343,8 @@ test(
       const entries = await built.sessions.getEntries(first.sessionId!);
       const clean = entries.find((entry) => (entry.payload as { ts?: string }).ts === "862.1");
       const flagged = entries.find((entry) => (entry.payload as { ts?: string }).ts === "862.2");
+      assert.ok(clean);
+      assert.ok(flagged);
       assert.deepEqual(clean?.payload, {
         overheard: true,
         ts: "862.1",
@@ -343,7 +354,7 @@ test(
         files: ["F-clean"],
         mentions: { U2: "Bob" },
       });
-      assert.equal((flagged?.payload as { securityTainted?: boolean }).securityTainted, true);
+      assert.equal((flagged.payload as { securityTainted?: boolean }).securityTainted, true);
       const tape = await built.sessions.getTape(first.sessionId!);
       const cleanTape = tape.find((row) => row.meta?.ts === "862.1");
       const flaggedTape = tape.find((row) => row.meta?.ts === "862.2");
@@ -360,24 +371,14 @@ test(
       });
       assert.equal(denied.status, "refused");
       await built.runtime.stop();
-      const reopenedSessions = createPostgresSessionStore(databaseUrl!);
+      const reopenedSessions = createPostgresSessionStore(isolatedUrl.toString());
       const persisted = await reopenedSessions.getEntries(first.sessionId!);
-      assert.notEqual(
-        (
-          persisted.find((entry) => (entry.payload as { ts?: string }).ts === "862.1")?.payload as {
-            securityTainted?: boolean;
-          }
-        ).securityTainted,
-        true,
-      );
-      assert.equal(
-        (
-          persisted.find((entry) => (entry.payload as { ts?: string }).ts === "862.2")?.payload as {
-            securityTainted?: boolean;
-          }
-        ).securityTainted,
-        true,
-      );
+      const persistedClean = persisted.find((entry) => (entry.payload as { ts?: string }).ts === "862.1");
+      const persistedFlagged = persisted.find((entry) => (entry.payload as { ts?: string }).ts === "862.2");
+      assert.ok(persistedClean);
+      assert.ok(persistedFlagged);
+      assert.notEqual((persistedClean.payload as { securityTainted?: boolean }).securityTainted, true);
+      assert.equal((persistedFlagged.payload as { securityTainted?: boolean }).securityTainted, true);
       const persistedTranscript = (await createTranscriptSource(reopenedSessions).forRender(first.sessionId!)).entries;
       built = buildApp(config, { securityScreener: screener });
 
@@ -418,22 +419,12 @@ test(
       const later = await built.app.turn(laterRequest);
       assert.equal(later.status, "pending_approval");
       const laterEntries = await built.sessions.getEntries(later.sessionId!);
-      assert.notEqual(
-        (
-          laterEntries.find((entry) => (entry.payload as { ts?: string }).ts === "862.1")?.payload as {
-            securityTainted?: boolean;
-          }
-        ).securityTainted,
-        true,
-      );
-      assert.equal(
-        (
-          laterEntries.find((entry) => (entry.payload as { ts?: string }).ts === "862.2")?.payload as {
-            securityTainted?: boolean;
-          }
-        ).securityTainted,
-        true,
-      );
+      const laterClean = laterEntries.find((entry) => (entry.payload as { ts?: string }).ts === "862.1");
+      const laterFlagged = laterEntries.find((entry) => (entry.payload as { ts?: string }).ts === "862.2");
+      assert.ok(laterClean);
+      assert.ok(laterFlagged);
+      assert.notEqual((laterClean.payload as { securityTainted?: boolean }).securityTainted, true);
+      assert.equal((laterFlagged.payload as { securityTainted?: boolean }).securityTainted, true);
       const laterDenied = await built.app.turn({
         ...laterRequest,
         approval: { requestId: later.pendingApprovals![0]!.requestId, approved: false },
@@ -459,7 +450,8 @@ test(
       assert.doesNotMatch(triggered.pendingApprovals?.[0]?.reason ?? "", /overheard/);
       const triggeredEntries = await built.sessions.getEntries(triggered.sessionId!);
       const triggeredClean = triggeredEntries.find((entry) => (entry.payload as { ts?: string }).ts === "862.7");
-      assert.notEqual((triggeredClean?.payload as { securityTainted?: boolean }).securityTainted, true);
+      assert.ok(triggeredClean);
+      assert.notEqual((triggeredClean.payload as { securityTainted?: boolean }).securityTainted, true);
 
       for (const [suffix, messages] of [
         [
@@ -489,6 +481,8 @@ test(
       }
     } finally {
       await built.runtime.stop();
+      await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+      await admin.end();
     }
   },
 );
