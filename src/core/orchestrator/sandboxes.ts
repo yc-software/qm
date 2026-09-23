@@ -10,7 +10,6 @@ import {
 } from "../../credentials/device-flow-persist.ts";
 import type { DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
 import { expandServiceAliases } from "../../credentials/resident-paths.ts";
-import { shq } from "../../util/shell.ts";
 import {
   materializeSkillTree as laySkillTree,
   packRoot,
