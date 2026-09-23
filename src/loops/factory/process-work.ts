@@ -26,6 +26,7 @@ export interface FactorySlackTarget {
 export interface FactoryEnvInput {
   config: FactoryConfig;
   guidance?: string;
+  playbook: string;
   linearApiKey: string;
   githubToken: string;
   modelAuth: Record<string, string>;
@@ -39,6 +40,7 @@ export function renderFactoryEnv(input: FactoryEnvInput): Record<string, string>
   const {
     config,
     guidance,
+    playbook,
     linearApiKey,
     githubToken,
     modelAuth,
@@ -49,6 +51,7 @@ export function renderFactoryEnv(input: FactoryEnvInput): Record<string, string>
   } = input;
   return {
     ...(guidance !== undefined ? { IO_FEEDBACK: guidance } : {}),
+    ...(playbook.trim() ? { IO_FACTORY_PLAYBOOK: playbook.trim() } : {}),
     IO_LINEAR_API_KEY: linearApiKey,
     IO_GITHUB_TOKEN: githubToken,
     ...modelAuth,

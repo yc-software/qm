@@ -67,9 +67,12 @@ const MINIMAL_CONFIG: FactoryConfig = {
   followupsEnabled: true,
 };
 
+const PLAYBOOK = "Rules for every stage.\n\nKeep every solution as simple as possible.";
+
 const ENV_INPUT: FactoryEnvInput = {
   config: FULL_CONFIG,
   guidance: "reviewer asked for a smaller diff",
+  playbook: PLAYBOOK,
   linearApiKey: "lin_api_secret",
   githubToken: "ghp_secret",
   modelAuth: { ANTHROPIC_API_KEY: "sk-ant-secret" },
@@ -223,6 +226,7 @@ test("renderFactoryEnv renders no Slack or session key without a slack group, wh
   const env = renderFactoryEnv(ENV_INPUT);
   assert.deepEqual(env, {
     IO_FEEDBACK: "reviewer asked for a smaller diff",
+    IO_FACTORY_PLAYBOOK: PLAYBOOK,
     IO_LINEAR_API_KEY: "lin_api_secret",
     IO_GITHUB_TOKEN: "ghp_secret",
     ANTHROPIC_API_KEY: "sk-ant-secret",
@@ -299,6 +303,7 @@ test("renderFactoryEnv omits every optional key whose source is absent", () => {
   const full = Object.keys(renderFactoryEnv(ENV_INPUT)).sort();
   const env = renderFactoryEnv({
     config: MINIMAL_CONFIG,
+    playbook: "",
     linearApiKey: "lin_min",
     githubToken: "ghp_min",
     modelAuth: { ANTHROPIC_API_KEY: "sk-ant-min" },
@@ -308,13 +313,28 @@ test("renderFactoryEnv omits every optional key whose source is absent", () => {
   });
   assert.deepEqual(
     Object.keys(env).sort(),
-    full.filter((key) => !OPTIONAL_KEYS.includes(key)),
+    full.filter((key) => !OPTIONAL_KEYS.includes(key) && key !== "IO_FACTORY_PLAYBOOK"),
   );
   for (const key of OPTIONAL_KEYS) assert.equal(Object.hasOwn(env, key), false, `${key} should be absent`);
   assert.equal(env.IO_BUGBOT_REQUIRED, "false");
   assert.equal(env.IO_FOLLOWUPS_ENABLED, "true");
   assert.equal(env.IO_PUBLISH_TARGET, "release/2");
   assert.equal(env.IO_SOURCE_BASE_REF, "origin/release/2");
+});
+
+test("renderFactoryEnv trims IO_FACTORY_PLAYBOOK without collapsing the blank lines inside it", () => {
+  const env = renderFactoryEnv({ ...ENV_INPUT, playbook: `\n  ${PLAYBOOK}  \n\t` });
+
+  assert.equal(env.IO_FACTORY_PLAYBOOK, PLAYBOOK);
+  assert.deepEqual(env, renderFactoryEnv(ENV_INPUT));
+});
+
+test("renderFactoryEnv omits IO_FACTORY_PLAYBOOK for a blank playbook rather than setting it empty", () => {
+  for (const playbook of ["", "   \n\n\t "]) {
+    const env = renderFactoryEnv({ ...ENV_INPUT, playbook });
+
+    assert.equal(Object.hasOwn(env, "IO_FACTORY_PLAYBOOK"), false, `${JSON.stringify(playbook)} set the key`);
+  }
 });
 
 test("renderFactoryEnv keeps an empty optional source as an empty value rather than omitting it", () => {

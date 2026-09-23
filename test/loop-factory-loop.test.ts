@@ -2,7 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
-import { ensureFactoryLoop, ensureFactoryLoopCron, findFactoryLoop } from "../src/loops/factory/factory-loop.ts";
+import {
+  FACTORY_DEFAULT_PLAYBOOK,
+  ensureFactoryLoop,
+  ensureFactoryLoopCron,
+  findFactoryLoop,
+} from "../src/loops/factory/factory-loop.ts";
 import { ensureInboxLoop } from "../src/loops/inbox-loop.ts";
 import { FACTORY_LOOP_SURFACE } from "../src/loops/factory/effects.ts";
 import { decideShip, undeclaredShipActions } from "../src/loops/ship-gate.ts";
@@ -41,7 +46,8 @@ test("ensureFactoryLoop mints one org-scoped factory loop the human admin can ad
   assert.equal(loop.cronId, undefined);
   assert.equal(loop.state, "enabled");
   assert.ok((loop.purpose ?? "").trim().length > 0);
-  assert.ok(loop.playbook.trim().length > 0);
+  assert.equal(loop.playbook, FACTORY_DEFAULT_PLAYBOOK);
+  assert.match(loop.playbook, /minimal killing set/);
   assert.ok(loop.successCondition.trim().length > 0);
 
   assert.equal((await findFactoryLoop(store, ORG))?.id, loop.id);
@@ -66,6 +72,21 @@ test("ensureFactoryLoop is idempotent across repeat calls, other admins, and con
   ]);
   assert.equal((await store.list()).length, 1);
   for (const loop of raced) assert.equal(loop.surface, FACTORY_LOOP_SURFACE);
+});
+
+test("ensureFactoryLoop hands back the operator's edited playbook instead of reseeding the default over it", async () => {
+  const store = createLoopStore();
+  const minted = await ensureFactoryLoop(store, { owner: "admin-alice", orgScopeId: ORG });
+  const edited = await store.editPlaybook(minted.id, {
+    playbook: "ship nothing without a screenshot",
+    by: "admin-alice",
+  });
+
+  const again = await ensureFactoryLoop(store, { owner: "admin-alice", orgScopeId: ORG });
+
+  assert.equal(again.id, minted.id);
+  assert.equal(again.playbook, "ship nothing without a screenshot");
+  assert.equal(again.playbookVersion, edited?.playbookVersion);
 });
 
 test("ensureFactoryLoopCron gives the factory loop one fire cron and a repeat save adds no second", async () => {

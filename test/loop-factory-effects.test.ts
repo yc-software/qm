@@ -640,6 +640,7 @@ test("work preflights on a warm-released handle, then runs the wrapper with the 
     renderFactoryEnv({
       config: CONFIG,
       guidance: "smaller diff please",
+      playbook: LOOP.playbook,
       linearApiKey: LINEAR_KEY,
       githubToken: GITHUB_TOKEN,
       modelAuth: { ANTHROPIC_API_KEY: ANTHROPIC_KEY },
@@ -1710,6 +1711,7 @@ test("a blank or unset slack channel never reads the installation store, warns a
       wrapperStart(fake.calls).opts?.env,
       renderFactoryEnv({
         config,
+        playbook: LOOP.playbook,
         linearApiKey: LINEAR_KEY,
         githubToken: GITHUB_TOKEN,
         modelAuth: { ANTHROPIC_API_KEY: ANTHROPIC_KEY },
