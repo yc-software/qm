@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import {
   chmodSync,
   cpSync,
@@ -66,7 +66,7 @@ interface Engine {
 }
 
 interface FakeExec {
-  run(stdin: Buffer): { frames: Buffer[]; dropAfterRun: boolean };
+  run(stdin: Buffer): Promise<{ frames: Buffer[]; dropAfterRun: boolean }>;
   refused: boolean;
 }
 
@@ -110,16 +110,18 @@ class FakeWebSocket extends EventTarget {
     const frame = Buffer.from(data);
     if (frame[0] === 0) this.stdin.push(frame.subarray(1));
     if (frame[0] !== 4) return;
-    const { frames, dropAfterRun } = this.exec.run(Buffer.concat(this.stdin));
-    setImmediate(() => {
-      if (this.closed) return;
-      if (dropAfterRun) {
-        this.fail("connection reset by peer");
-        return;
-      }
-      for (const f of frames) this.dispatchEvent(new MessageEvent("message", { data: toArrayBuffer(f) }));
-      this.finish(1000, "");
-    });
+    void this.exec
+      .run(Buffer.concat(this.stdin))
+      .then(({ frames, dropAfterRun }) => {
+        if (this.closed) return;
+        if (dropAfterRun) {
+          this.fail("connection reset by peer");
+          return;
+        }
+        for (const f of frames) this.dispatchEvent(new MessageEvent("message", { data: toArrayBuffer(f) }));
+        this.finish(1000, "");
+      })
+      .catch((error) => this.fail(String(error)));
   }
 
   close(code = 1000, reason = ""): void {
@@ -255,7 +257,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     return data;
   };
 
-  const runExec = (name: string, argv: string[], stdin: Buffer): Buffer[] => {
+  const runExec = async (name: string, argv: string[], stdin: Buffer): Promise<Buffer[]> => {
     mkdirSync(join(ensureDir(name), "tmp"), { recursive: true });
     const viaBody = argv[argv.length - 1] === SCRIPT_RUNNER;
     const script = viaBody ? stdin.toString("utf8") : (argv[argv.length - 1] ?? "");
@@ -303,20 +305,24 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       rmSync(source);
       return [Buffer.from([1]), Buffer.from([2]), Buffer.from([3, 0])];
     }
-    const r = viaBody
-      ? spawnSync("sh", ["-c", SCRIPT_RUNNER], {
+    const r = await new Promise<{ stdout: Buffer; stderr: Buffer; code: number }>((resolve) => {
+      const child = execFile(
+        "sh",
+        ["-c", viaBody ? SCRIPT_RUNNER : remap(name, script)],
+        {
           encoding: "buffer",
           maxBuffer: 128 * 1024 * 1024,
           env: { ...process.env, COPYFILE_DISABLE: "1" },
-          input: Buffer.from(remap(name, script), "utf8"),
-        })
-      : spawnSync("sh", ["-c", remap(name, script)], {
-          encoding: "buffer",
-          maxBuffer: 128 * 1024 * 1024,
-          env: { ...process.env, COPYFILE_DISABLE: "1" },
-          input: stdin,
-        });
-    const code = r.status ?? (r.signal ? 137 : -1);
+        },
+        (error, stdout, stderr) => {
+          let code = 0;
+          if (error) code = typeof error.code === "number" ? error.code : 137;
+          resolve({ stdout, stderr, code });
+        },
+      );
+      child.stdin!.end(viaBody ? Buffer.from(remap(name, script), "utf8") : stdin);
+    });
+    const code = r.code;
     const frame = (id: number, payload: Buffer): Buffer => Buffer.concat([Buffer.from([id]), payload]);
     return [
       frame(1, r.stdout ?? Buffer.alloc(0)),
@@ -504,9 +510,9 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     const call = calls[calls.length - 1]!;
     return {
       refused: !sprites.has(name) || gateway502.has(name),
-      run: (stdin) => {
-        const frames = runExec(name, argv, stdin);
-        call.script = execScripts[execScripts.length - 1];
+      run: async (stdin) => {
+        call.script = argv[argv.length - 1] === SCRIPT_RUNNER ? stdin.toString("utf8") : argv[argv.length - 1];
+        const frames = await runExec(name, argv, stdin);
         const dropAfterRun = stallAfterRun.delete(name);
         return { frames, dropAfterRun };
       },

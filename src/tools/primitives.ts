@@ -821,10 +821,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           for (const credential of prepared.filter((credential) => !credential.singleUse)) await credential.commit?.();
           execOpts?.signal?.throwIfAborted();
           for (const credential of onceGrants) await credential.commit?.();
-          const r = await deps.sandbox.run(handle, sandboxCommand, {
-            ...opts,
-            ...(requested.length ? { credentials: { env: commandEnv, files: commandFiles } } : {}),
-          });
+          const r = await deps.sandbox.run(
+            handle,
+            sandboxCommand,
+            requested.length ? { ...opts, credentials: { env: commandEnv, files: commandFiles } } : opts,
+          );
           return reached ? { ...r, reached } : r;
         });
       });

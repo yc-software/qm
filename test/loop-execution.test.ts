@@ -51,7 +51,13 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
           else if (stage === "work") command = "printf 'RCA and proposed fix' > loop-proposal.txt && printf prepared";
           else if (stage === "judge") command = `${check} && printf verified`;
           else command = "printf shipped";
-          const result = await built.app.turn({ ...req, text: `!run ${command}` });
+          const result = await built.app.turn({
+            ...req,
+            text:
+              stage === "intake"
+                ? `!execute ${JSON.stringify({ command, credentials: ["service_error-source"] })}`
+                : `!run ${command}`,
+          });
           assert.equal(result.status, "ok");
           if (stage === "intake") {
             assert.equal(result.reply, "source-readable");

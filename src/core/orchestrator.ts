@@ -1372,7 +1372,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const authorizeOwnerCredentials = async (): Promise<void> => {
         if (
           openSpeakerKeychain &&
-          (!(await deps.isCurrentSharedScopeMember?.(actor.id, scopeId)) ||
+          (!(await isCurrentSharedScopeMember(actor.id, scopeId)) ||
             (await deps.config?.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open")
         ) {
           throw new Error("Open speaker keychain access is no longer authorized");
