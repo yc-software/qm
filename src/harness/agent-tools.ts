@@ -1111,9 +1111,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     label: "publish",
     description:
       "Publish a directory from the workspace as a durable, scope-bound internal web app " +
-      "(it keeps running after the turn ends and gets a stable link). The app must listen on " +
-      "the PORT env var. Set audience to [] to suppress default audience grants, or supply publication-time grants. Use apps action share for subsequent grants. Share the full absolute URL returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, stable link /d/<name>/; " +
-      "`renameFrom` to rename; `rollbackTo` to flip back to an earlier version. Egress is open, " +
+      "(it keeps running after the turn ends and gets a stable link). Before publishing, verify the " +
+      "directory exists and contains files. For a new app or a code/file update, always pass `entrypoint`; " +
+      "the app must listen on the PORT env var. `dir` is workspace-relative: use `app`, never a path " +
+      "beginning with `/` or a redundant `workspace/app`. `renameFrom` takes an existing " +
+      "deployment name, not its ID. Set audience to [] to suppress default audience grants, or supply " +
+      "publication-time grants. Use apps action share for subsequent grants. Share the full absolute URL " +
+      "returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, " +
+      "stable link /d/<name>/; `renameFrom` to rename; `rollbackTo` to flip back to an earlier version. " +
+      "Egress is open, " +
       "so bake data in or have the app fetch it. When the runtime sets $DATA_DIR, state the app " +
       "writes there survives restarts and redeploys; keep durable state there. For a database use " +
       "SQLite at exactly $DATA_DIR/app.db — it gets the strongest durability the runtime offers " +
@@ -1135,16 +1141,26 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           },
         ),
       ),
-      dir: Type.Optional(Type.String({ description: "Workspace directory to publish (default: the whole tree)." })),
+      dir: Type.Optional(
+        Type.String({
+          description:
+            "Workspace-relative directory to publish (default: the whole tree). Use `app`, not an absolute path or `workspace/app`.",
+        }),
+      ),
       entrypoint: Type.Optional(
-        Type.String({ description: 'Command the container runs, relative to the app root, e.g. "node server.js".' }),
+        Type.String({
+          description:
+            'Command the container runs, relative to the app root, e.g. "node server.js". Always provide it for a new app or file update.',
+        }),
       ),
       name: Type.Optional(
         Type.String({
           description: "Friendly, globally-unique handle → link is /d/<name>/. Lowercase letters/digits/hyphens.",
         }),
       ),
-      renameFrom: Type.Optional(Type.String({ description: "Rename the deployment currently named this to `name`." })),
+      renameFrom: Type.Optional(
+        Type.String({ description: "Existing deployment name to rename to `name`; this is a name, not an ID." }),
+      ),
       env: Type.Optional(
         Type.Record(Type.String(), Type.String(), {
           description:

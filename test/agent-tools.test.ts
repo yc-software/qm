@@ -1901,6 +1901,15 @@ test('execute scope:"owner" routes only when the owner-auth surface is enabled',
   );
 });
 
+test("publish instructions prevent malformed app configs", () => {
+  const apps = createAgentTools({ current: fakeToolContext() }).find((tool) => tool.name === "apps");
+  assert.ok(apps);
+  assert.match(apps.description, /always pass `entrypoint`/);
+  assert.match(apps.description, /workspace-relative/);
+  assert.match(apps.description, /verify.*directory.*contains files/i);
+  assert.match(apps.description, /`renameFrom`.*deployment name.*not.*ID/i);
+});
+
 test("publish reply states owner + resolved audience in human terms (ADR 0003 D7)", async () => {
   const textOf = (r: unknown): string => (r as { content: Array<{ text: string }> }).content[0]?.text ?? "";
   const withAudience = (audience: unknown): ToolContext => ({
