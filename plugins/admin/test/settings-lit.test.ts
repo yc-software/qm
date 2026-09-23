@@ -64,6 +64,31 @@ test("model chips add and remove with stable keyed rendering", () => {
     dom.window.close();
   }
 });
+test("feature flag entries use a compact row that cannot inherit the card grid", async () => {
+  const dom = setup();
+  try {
+    dom.window.eval(`settingsUI.configureFlags({
+      loadChoices: async () => [],
+      buildSelector: () => document.createElement("button"),
+      save: async () => ({ ok: true }),
+    })`);
+    await dom.window.eval(`settingsUI.loadFlags(
+      { featureFlags: [{ featureName: "persistent_subagents", enabledScopes: ["personal:person-with-a-long-name@example.com"] }] },
+      "org:test",
+    )`);
+    await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
+    const list = dom.window.document.getElementById("feature-flag-list")!;
+    assert.equal(list.querySelectorAll(".feature-flag-row").length, 1);
+    assert.equal(list.querySelector(".setting-row"), null);
+    assert.equal(dom.window.getComputedStyle(list.querySelector(".feature-flag-row")!).display, "grid");
+    const editor = dom.window.document.querySelector("#card-feature-flags .feature-flag-editor")!;
+    assert.ok(editor);
+    assert.equal(editor.classList.contains("editor-grid"), false);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("SOUL conflict keeps draft while replacing saved revision and version", () => {
   const dom = setup();
   try {

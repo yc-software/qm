@@ -112,7 +112,7 @@ function template() {
                 enabled,
                 (r) => r.featureName + ":" + r.scopeId,
                 (r) =>
-                  html`<div class="setting-row">
+                  html`<div class="feature-flag-row">
                     <code>${r.featureName + ": " + r.scopeId}</code
                     ><button class="danger" ?disabled=${state.saving} @click=${() => remove(r.scopeId, r.featureName)}>
                       Disable
@@ -122,7 +122,7 @@ function template() {
             : "No enabled scopes."
         }
       </div>
-      <div class="editor-grid" style="margin-top: 16px">
+      <div class="feature-flag-editor">
         <label
           >Feature<select
             id="feature-flag-name"
