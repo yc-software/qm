@@ -352,7 +352,7 @@ interface AskListFilter {
   requesterScopeId?: ScopeId;
 }
 
-export interface MaterializedEnvCred {
+interface MaterializedEnvCred {
   credentialId: string;
   ownerId: string;
   service: string;
