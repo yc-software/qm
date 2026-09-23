@@ -10,7 +10,8 @@ import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { PROVIDERS, sealOAuthState } from "../src/connectors/oauth.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
-import { envKey } from "../src/credentials/connector-token.ts";
+import { envKey, withOperatorTokenFallback } from "../src/credentials/connector-token.ts";
+import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -226,37 +227,125 @@ test("a read-only wake never reaches the sandbox (execute stripped), so no exec 
   );
 });
 
-for (const expiredPersonal of [false, true]) {
-  test(`connector catalog independently exposes company and ${expiredPersonal ? "expired" : "live"} personal accounts without eager access`, async () => {
-    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "connector-accounts-")), maxAttempts: 1 }));
-    const host = "gmail.googleapis.com";
-    await built.connectorTokens.setConnectorToken(
-      host,
+for (const bulkInventory of [false, true])
+  for (const expiredPersonal of [false, true]) {
+    test(`connector catalog (${bulkInventory ? "bulk" : "independent store"}) exposes company and ${expiredPersonal ? "expired" : "live"} personal accounts without eager access`, async () => {
+      const built = buildApp(
+        testConfig({ dataDir: mkdtempSync(join(tmpdir(), "connector-accounts-")), maxAttempts: 1 }),
+      );
+      if (!bulkInventory) delete built.connectorTokens.listConnectorsByOwners;
+      const host = "gmail.googleapis.com";
+      await built.connectorTokens.setConnectorToken(
+        host,
+        "U1",
+        { accessToken: "personal-token", expiresAt: Date.now() + (expiredPersonal ? -1000 : 3600000) },
+        "personal",
+      );
+      await built.connectorTokens.setConnectorToken(
+        host,
+        "U1",
+        { accessToken: "company-token", expiresAt: Date.now() + 3600000 },
+        "company",
+      );
+      const accesses: Array<string | undefined> = [];
+      const original = built.connectorTokens.connectorAccessToken.bind(built.connectorTokens);
+      built.connectorTokens.connectorAccessToken = async (...args) => {
+        accesses.push(args[2]);
+        return original(...args);
+      };
+      const prompt = await built.app.turn({ ...turn("dm", "!sysprompt"), liveActor: true });
+      assert.deepEqual(accesses, []);
+      assert.match(prompt.reply ?? "", /connector_gmail_googleapis_com_company/);
+      if (expiredPersonal) assert.doesNotMatch(prompt.reply ?? "", /connector_gmail_googleapis_com_personal/);
+      else assert.match(prompt.reply ?? "", /connector_gmail_googleapis_com_personal/);
+      for (const account of expiredPersonal ? ["company"] : ["personal", "company"]) {
+        const text = `!execute ${JSON.stringify({ command: `test "$${envKey(host)}" = ${account}-token && echo selected`, credentials: [`connector_gmail_googleapis_com_${account}`] })}`;
+        assert.equal((await built.app.turn({ ...turn("dm", text), liveActor: true })).reply, "selected");
+      }
+      assert.deepEqual(accesses, expiredPersonal ? ["company"] : ["personal", "company"]);
+    });
+  }
+
+test("operator fallback forwards metadata without reading secret values", async () => {
+  let reads = 0;
+  const inventory = new Map([
+    [
       "U1",
-      { accessToken: "personal-token", expiresAt: Date.now() + (expiredPersonal ? -1000 : 3600000) },
-      "personal",
-    );
-    await built.connectorTokens.setConnectorToken(
-      host,
-      "U1",
-      { accessToken: "company-token", expiresAt: Date.now() + 3600000 },
-      "company",
-    );
-    const accesses: Array<string | undefined> = [];
-    const original = built.connectorTokens.connectorAccessToken.bind(built.connectorTokens);
-    built.connectorTokens.connectorAccessToken = async (...args) => {
-      accesses.push(args[2]);
-      return original(...args);
-    };
-    const prompt = await built.app.turn({ ...turn("dm", "!sysprompt"), liveActor: true });
-    assert.deepEqual(accesses, []);
-    assert.match(prompt.reply ?? "", /connector_gmail_googleapis_com_company/);
-    if (expiredPersonal) assert.doesNotMatch(prompt.reply ?? "", /connector_gmail_googleapis_com_personal/);
-    else assert.match(prompt.reply ?? "", /connector_gmail_googleapis_com_personal/);
-    for (const account of expiredPersonal ? ["company"] : ["personal", "company"]) {
-      const text = `!execute ${JSON.stringify({ command: `test "$${envKey(host)}" = ${account}-token && echo selected`, credentials: [`connector_gmail_googleapis_com_${account}`] })}`;
-      assert.equal((await built.app.turn({ ...turn("dm", text), liveActor: true })).reply, "selected");
-    }
-    assert.deepEqual(accesses, expiredPersonal ? ["company"] : ["personal", "company"]);
+      [{ credentialId: "oauth", ownerId: "U1", host: "api.example.com", connected: true, accountType: "company" }],
+    ],
+  ]);
+  const store = {
+    listConnectorsByOwners: async () => inventory,
+    connectorTokenStatus: async () => ({ connected: false }),
+    connectorAccessToken: async () => null,
+  } as unknown as ConnectorTokenStore;
+  const wrapped = withOperatorTokenFallback(store, ["api.example.com"], {
+    get: async () => {
+      reads++;
+      return "operator-fallback";
+    },
   });
-}
+  assert.equal(await wrapped.listConnectorsByOwners!(["U1"]), inventory);
+  assert.deepEqual(await wrapped.connectorTokenStatus("api.example.com", "U1"), { connected: false });
+  assert.equal(reads, 0);
+  assert.equal(await wrapped.connectorAccessToken("api.example.com", "U1"), "operator-fallback");
+  assert.equal(reads, 1);
+});
+
+test("explicit default OAuth accounts remain discoverable through bulk metadata", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "default-account-")), maxAttempts: 1 }));
+  const host = "gmail.googleapis.com";
+  await built.connectorTokens.setConnectorToken(
+    host,
+    "U1",
+    { accessToken: "explicit-default-token", accountType: "default" },
+    "default",
+  );
+  Object.assign(
+    built.connectorTokens,
+    withOperatorTokenFallback(built.keychain!, [host], {
+      get: async () => {
+        throw new Error("healthy OAuth must not read an operator fallback");
+      },
+    }),
+  );
+  const prompt = await built.app.turn({ ...turn("dm", "!sysprompt"), liveActor: true });
+  assert.match(prompt.reply ?? "", /connector_gmail_googleapis_com_default/);
+  const text = `!execute ${JSON.stringify({ command: `test "$${envKey(host)}" = explicit-default-token && echo selected`, credentials: ["connector_gmail_googleapis_com_default"] })}`;
+  assert.equal((await built.app.turn({ ...turn("dm", text), liveActor: true })).reply, "selected");
+});
+
+for (const mixedOAuth of [false, true, "expired-default"] as const)
+  for (const value of [undefined, "operator-fallback-token"]) {
+    test(`configured operator fallback is lazy with mixedOAuth=${mixedOAuth} and available=${value !== undefined}`, async () => {
+      const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "fallback-catalog-")), maxAttempts: 1 }));
+      const host = "gmail.googleapis.com";
+      if (mixedOAuth === true)
+        await built.connectorTokens.setConnectorToken(host, "U1", { accessToken: "personal-token" }, "personal");
+      if (mixedOAuth === "expired-default")
+        await built.connectorTokens.setConnectorToken(
+          host,
+          "U1",
+          { accessToken: "expired-token", expiresAt: Date.now() - 1000, accountType: "default" },
+          "default",
+        );
+      let reads = 0;
+      Object.assign(
+        built.connectorTokens,
+        withOperatorTokenFallback(built.keychain!, ["googleapis.com"], {
+          get: async () => {
+            reads++;
+            return value;
+          },
+        }),
+      );
+      const prompt = await built.app.turn({ ...turn("dm", "!sysprompt"), liveActor: true });
+      assert.match(prompt.reply ?? "", /connector_gmail_googleapis_com_default.*configured operator fallback/);
+      if (mixedOAuth === true) assert.match(prompt.reply ?? "", /connector_gmail_googleapis_com_personal/);
+      assert.equal(reads, 0);
+      const text = `!execute ${JSON.stringify({ command: `test "$${envKey(host)}" = operator-fallback-token && echo selected`, credentials: ["connector_gmail_googleapis_com_default"] })}`;
+      if (value) assert.equal((await built.app.turn({ ...turn("dm", text), liveActor: true })).reply, "selected");
+      else await assert.rejects(built.app.turn({ ...turn("dm", text), liveActor: true }), /no longer available/);
+      assert.equal(reads, value ? 1 : 2);
+    });
+  }

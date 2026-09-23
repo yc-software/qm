@@ -286,6 +286,8 @@ interface ConnectorMeta {
 }
 
 export interface ConnectorTokenStore {
+  operatorFallbackHosts?: readonly string[];
+  listConnectorsByOwners?(ownerIds: string[]): Promise<Map<string, ConnectorMeta[]>>;
   setConnectorToken(host: string, principalId: string, token: OAuthToken, accountType?: string): Promise<void>;
   deleteConnectorToken(host: string, principalId: string, accountType?: string): Promise<void>;
   connectorTokenStatus(host: string, principalId: string, accountType?: string): Promise<OAuthTokenStatus>;

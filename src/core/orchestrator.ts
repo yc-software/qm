@@ -1465,10 +1465,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ((conversation.kind === "dm" && liveAuthorTurn) || openSpeakerKeychain)
         ) {
           const tokens = deps.connectorTokens;
+          const inventory = tokens.listConnectorsByOwners
+            ? ((await tokens.listConnectorsByOwners([actor.id])).get(actor.id) ?? [])
+            : undefined;
           for (const host of CONNECTOR_HOSTS) {
             for (const accountType of ["personal", undefined, "company"]) {
-              const status = await tokens.connectorTokenStatus(host, actor.id, accountType);
-              if (!status.connected || status.needsReconnect) continue;
+              const status = inventory
+                ? inventory.find(
+                    (credential) =>
+                      credential.host === host && (credential.accountType ?? "default") === (accountType ?? "default"),
+                  )
+                : await tokens.connectorTokenStatus(host, actor.id, accountType);
+              const healthy = status?.connected && !status.needsReconnect;
+              const operatorFallback =
+                accountType === undefined &&
+                tokens.operatorFallbackHosts?.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
+              if (!healthy && !operatorFallback) continue;
               addCredential(
                 {
                   handle: `connector_${host.replace(/[^a-zA-Z0-9]/g, "_")}_${accountType ?? "default"}`,
@@ -1480,7 +1492,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     return { env: [{ key: envKey(host), value: token }] };
                   },
                 },
-                `${host} connector, owner ${actor.id}, account ${accountType ?? "default"}`,
+                !healthy && operatorFallback
+                  ? `${host}, configured operator fallback; availability checked on use`
+                  : `${host} connector, owner ${actor.id}, account ${accountType ?? "default"}`,
               );
             }
           }

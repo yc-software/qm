@@ -80,6 +80,7 @@ const connectorStatusCache: ConnectorStatusCache = {
   put: async () => {},
 };
 const connectorTokens = {
+  listConnectorsByOwners: async () => new Map(),
   connectorAccessToken: async () => null,
   connectorTokenStatus: () => {
     throw new Error("connector tokens must not be swept when the status cache is fresh");
