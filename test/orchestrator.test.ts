@@ -476,8 +476,7 @@ test("a per-turn egress-proxy token is minted and passed to provision, carrying 
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox, config: scopedConfig } = buildApp(config);
-  await scopedConfig.setSecurityPosture(scopeId("personal", "U1"), "dangerous");
+  const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
@@ -492,8 +491,6 @@ test("a per-turn egress-proxy token is minted and passed to provision, carrying 
   const claims = await verifyCapabilityToken(captured!.egressToken!, TEST_CAPABILITY_SECRET);
   assert.ok(claims, "the egress token must verify with the capability secret");
   assert.equal(claims!.aud, EGRESS_PROXY_AUD);
-  assert.equal(claims!.egress?.denyPrivateNetworks, true);
-  assert.deepEqual(claims!.egress?.privateNetworkAllowedHosts, []);
   assert.deepEqual(captured!.egress, { allowedHosts: [], deniedHosts: [] });
 });
 

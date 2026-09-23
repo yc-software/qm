@@ -52,6 +52,7 @@ test("selected broker credential uses isolated execute with policy before vendin
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "dfp-credential-exec-")),
+      maxAttempts: 1,
       signingSecret: "device-flow-test-secret",
       deploymentLayerDir: acmecliBrokeredLayer("env"),
     }),
@@ -93,4 +94,56 @@ test("selected broker credential uses isolated execute with policy before vendin
   assert.equal(selected.reply, "selected");
   assert.equal(assumes, 1);
   assert.ok(ff.names().every((name) => !name.includes("credential-exec")));
+});
+
+test("legacy role broker vends only for explicitly selected scoped execution", async () => {
+  let assumes = 0;
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "legacy-selected-broker-")),
+      signingSecret: "legacy-selected-signing",
+      deploymentLayerDir: acmecliBrokeredLayer(),
+      maxAttempts: 1,
+    }),
+    {
+      credentialBrokers: {
+        acmecli: createAwsRoleBroker({
+          roleArn: "arn:aws:iam::123456789012:role/acmecli-broker",
+          region: "us-west-2",
+          sessionActions: ["execute-api:Invoke"],
+          assumeRole: async () => {
+            assumes++;
+            return {
+              Credentials: {
+                AccessKeyId: "AKIA_LEGACY_SELECTED",
+                SecretAccessKey: "legacy-selected-secret",
+                SessionToken: "legacy-selected-session",
+                Expiration: new Date(Date.now() + 3600000),
+              },
+            };
+          },
+        }),
+      },
+    },
+  );
+  const conversation = { kind: "dm" as const, threadRef: "dm:legacy-selected", audience: [actor] };
+  const run = (text: string) => built.app.turn({ surface: "slack", actor, conversation, text });
+  assert.equal((await run('!run test -z "${AWS_ACCESS_KEY_ID-}" && echo absent')).reply, "absent");
+  assert.equal(assumes, 0);
+  await assert.rejects(
+    run(`!execute ${JSON.stringify({ command: "true", credentials: ["broker_acmecli"], ownerAuth: true })}`),
+    /requires scope:scoped/,
+  );
+  assert.equal(assumes, 0);
+  assert.equal(
+    (
+      await run(
+        `!execute ${JSON.stringify({ command: 'test "$AWS_ACCESS_KEY_ID" = AKIA_LEGACY_SELECTED && echo selected', credentials: ["broker_acmecli"] })}`,
+      )
+    ).reply,
+    "selected",
+  );
+  assert.equal(assumes, 1);
+  assert.equal((await run('!run test -z "${AWS_ACCESS_KEY_ID-}" && echo absent')).reply, "absent");
+  assert.equal(assumes, 1);
 });
