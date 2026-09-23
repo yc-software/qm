@@ -203,10 +203,18 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
           message: 'expected { credential | ask, mode: "once"|"standing", purpose }',
         });
       }
-      const useBlock = (grant: { id: string }) => ({
-        command: keychainUseCommand({ grant: grant.id }),
-        note: "Run the task in that same shell. The secret never appears in output — do not cat the file.",
-      });
+      const useBlock = async (grant: { id: string; credentialId: string }) => {
+        const credential = await kc.getCredential(grant.credentialId);
+        return {
+          command: keychainUseCommand({ grant: grant.id }),
+          ...(credential?.credentialHandle
+            ? { credentialHandle: credential.credentialHandle, credentials: [credential.credentialHandle] }
+            : {}),
+          note: credential?.credentialHandle
+            ? "Pass credentials to execute for the command needing this credential. This handle is available immediately; no keychain/use call is needed."
+            : "Run the task in that same shell. Do not echo or print the credential files.",
+        };
+      };
       if (typeof b.ask === "string") {
         if (typeof b.onBehalfOf === "string" && b.onBehalfOf.trim() && !samePerson(b.onBehalfOf, actorId)) {
           return sendJson(res, 403, {
@@ -232,10 +240,12 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
           .fireAskResolution?.(ask, grant)
           .then(() => kc.markAskNotified(ask.id, ask.status))
           .catch((e) => swallow("keychain: ask resolution fire failed (sweep will retry)", e));
+        const grantedCredential = await kc.getCredential(grant.credentialId);
         return sendJson(res, 200, {
           grant,
           ask,
           use: {
+            ...(grantedCredential?.credentialHandle ? { credentialHandle: grantedCredential.credentialHandle } : {}),
             note: `Grant is active in ${grant.audienceScopeId} — the asking conversation resumes automatically. Do not load or consume the grant on this approval turn.`,
           },
         });
@@ -277,7 +287,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
           scopeLabel: capability.scopeId,
         });
       }
-      return sendJson(res, 200, { grant, use: useBlock(grant) });
+      return sendJson(res, 200, { grant, use: await useBlock(grant) });
     }
 
     if (method === "GET" && pathname === "/v1/keychain/grants") {

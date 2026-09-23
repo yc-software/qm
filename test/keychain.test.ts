@@ -1099,12 +1099,48 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(res.status, 200);
     const { credential } = (await res.json()) as any;
     assert.equal(credential.ownerId, "U1");
+    assert.equal(credential.credentialHandle, credentialHandle(credential.id));
     assert.ok(!JSON.stringify(credential).includes("ghp_u1"));
 
     const mine = (await (await get("/v1/keychain/credentials", await capFor("U1"))).json()) as any;
     assert.equal(mine.credentials.length, 1);
+    assert.equal(mine.credentials[0].credentialHandle, credential.credentialHandle);
+    assert.ok(!JSON.stringify(mine).includes("ghp_u1"));
     const other = (await (await get("/v1/keychain/credentials", await capFor("U2"))).json()) as any;
     assert.deepEqual(other.credentials, []);
+  });
+
+  it("new env grants return immediately usable execution handles without secrets", async () => {
+    const owner = "HANDLE_OWNER";
+    const cap = await capFor(owner, scopeId("personal", owner), { liveActor: true });
+    const saved = (await (
+      await post(
+        "/v1/keychain/credentials",
+        { service: "handle-test", envKey: "HANDLE_TOKEN", secret: "synthetic-handle-secret" },
+        cap,
+      )
+    ).json()) as any;
+    const metadata = (await (await get("/v1/keychain/credentials", cap)).json()) as any;
+    const response = await post(
+      "/v1/keychain/grants",
+      { credential: saved.credential.id, mode: "once", purpose: "use the new execution handle" },
+      cap,
+    );
+    assert.equal(response.status, 200);
+    const granted = (await response.json()) as any;
+    assert.equal(saved.credential.credentialHandle, metadata.credentials[0].credentialHandle);
+    assert.equal(granted.use.credentialHandle, saved.credential.credentialHandle);
+    assert.deepEqual(granted.use.credentials, [saved.credential.credentialHandle]);
+    assert.match(granted.use.note, /available immediately/);
+    assert.ok(!JSON.stringify([saved, metadata, granted]).includes("synthetic-handle-secret"));
+    const current = (await built.keychain!.grantsForScope(scopeId("personal", owner))).find(
+      ({ credential }) => credential.credentialHandle === granted.use.credentialHandle,
+    );
+    assert.ok(current);
+    const prepared = await built.keychain!.prepareMaterialize(current.grant.id, scopeId("personal", owner), owner);
+    assert.equal(prepared.materialized.kind, "env");
+    await prepared.commit();
+    assert.equal((await built.keychain!.getGrant(current.grant.id))?.status, "used");
   });
 
   it("a participant's connector is grantable by its owner, then materialized under the host env var", async () => {
