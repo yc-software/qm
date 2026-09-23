@@ -396,6 +396,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
       const env = renderFactoryEnv({
         config,
         guidance,
+        playbook: loop.playbook,
         linearApiKey,
         githubToken,
         modelAuth,
