@@ -107,7 +107,7 @@ export interface KeychainCredential {
   updatedAt: number;
 }
 
-export type KeychainCredentialMeta = Omit<KeychainCredential, "secretEnc">;
+export type KeychainCredentialMeta = Omit<KeychainCredential, "secretEnc"> & { revision?: string };
 
 export type GrantMode = "once" | "standing";
 
@@ -300,6 +300,7 @@ interface SaveCredentialInput {
   capturePaths?: CredentialPathSpec[];
   origin?: string;
   expectedOrigin?: string;
+  expectedRevision?: string;
   expiresAt?: number;
 }
 
@@ -472,7 +473,7 @@ function credExpired(rec: { kind: CredentialKind; expiresAt?: number }, now: num
 
 function toMeta(rec: KeychainCredential): KeychainCredentialMeta {
   const { secretEnc: _, ...meta } = rec;
-  return meta;
+  return { ...meta, revision: hashId([rec.secretEnc], 64) };
 }
 
 function byOwners(ownerIds: string[]): { field: "ownerId"; anyOfFold: string[] } {
@@ -676,7 +677,8 @@ export function createKeychain(deps: {
     principalId: string,
     token: OAuthToken,
     accountType?: string,
-  ): Promise<KeychainCredential> {
+    expected?: KeychainCredential,
+  ): Promise<KeychainCredential | null> {
     const t = now();
     const id = oauthId(host, principalId, accountType);
     const prior = await deps.creds.get(id);
@@ -705,6 +707,10 @@ export function createKeychain(deps: {
       createdAt: prior?.createdAt ?? t,
       updatedAt: t,
     };
+    if (expected) {
+      if (!deps.creds.update) throw new Error("credential store does not support atomic refresh");
+      return deps.creds.update(id, (current) => (current.secretEnc === expected.secretEnc ? rec : current));
+    }
     await deps.creds.put(id, rec);
     return rec;
   }
@@ -738,12 +744,16 @@ export function createKeychain(deps: {
 
   async function markConnectorRefreshFailure(rec: KeychainCredential, message: string): Promise<void> {
     const t = now();
-    const current = await deps.creds.get(rec.id);
-    if (!current || current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint) return;
-    await deps.creds.merge(rec.id, {
-      refresh: { ...current.refresh, refreshFailedAt: t, refreshError: message },
-      updatedAt: t,
-    });
+    if (!deps.creds.update) throw new Error("credential store does not support atomic refresh");
+    await deps.creds.update(rec.id, (current) =>
+      current.secretEnc !== rec.secretEnc
+        ? current
+        : {
+            ...current,
+            refresh: { ...current.refresh, refreshFailedAt: t, refreshError: message },
+            updatedAt: t,
+          },
+    );
   }
 
   async function refreshAndStore(
@@ -769,15 +779,8 @@ export function createKeychain(deps: {
         ...(stored.accountId ? { accountId: stored.accountId } : {}),
         ...fresh,
       };
-      // Compare-and-set: if another flight already rotated this credential,
-      // keep its result rather than clobbering a newer refresh token.
-      const current = await deps.creds.get(rec.id);
-      if (current && (current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint)) {
-        const latest = tryDecrypt(current, recToOAuthToken);
-        return latest?.accessToken ?? null;
-      }
-      await putConnectorToken(host, principalId, merged, accountType);
-      return merged.accessToken;
+      const saved = await putConnectorToken(host, principalId, merged, accountType, rec);
+      return saved ? (tryDecrypt(saved, recToOAuthToken)?.accessToken ?? null) : null;
     } catch (e) {
       const message = storedRefreshError(e);
       console.error(`[keychain] connector token refresh failed for ${host}: ${message}`);
@@ -894,6 +897,18 @@ export function createKeychain(deps: {
         updatedAt: t,
       };
     };
+    if (input.expectedRevision !== undefined) {
+      if (!deps.creds.update) throw new Error("credential store does not support atomic replacement");
+      const updated = await deps.creds.update(id, (prior) => {
+        if (hashId([prior.secretEnc], 64) !== input.expectedRevision)
+          throw new KeychainError(409, "credential changed during refresh");
+        if (input.expectedOrigin !== undefined && prior.origin !== input.expectedOrigin)
+          throw new KeychainError(409, "credential origin changed during refresh");
+        return { ...buildRec(prior), ...(prior.origin ? { origin: prior.origin } : {}) };
+      });
+      if (!updated) throw new KeychainError(409, "credential disconnected during refresh");
+      return toMeta(updated);
+    }
     const expectedOrigin =
       input.expectedOrigin ?? (input.origin === DEVICE_FLOW_ORIGIN ? DEVICE_FLOW_ORIGIN : undefined);
     if (expectedOrigin === undefined) {
@@ -1375,7 +1390,8 @@ export function createKeychain(deps: {
       const accessToken = await connectorTokenForRecord(rec);
       if (accessToken === null) return null;
       // Re-read: a refresh inside connectorTokenForRecord may have rotated the record.
-      const fresh = (await connectorRecord(host, principalId, accountType)) ?? rec;
+      const fresh = await connectorRecord(host, principalId, accountType);
+      if (!fresh) return null;
       const token = tryDecrypt(fresh, recToOAuthToken);
       if (!token) return null;
       return {

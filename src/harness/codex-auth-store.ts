@@ -177,20 +177,23 @@ export function keychainCodexAuthStore(deps: KeychainCodexAuthStoreDeps): CodexA
   const readCurrent = async (): Promise<{
     ownerId: string;
     service: string;
+    revision: string;
     path: string;
     auth: JsonObject;
   } | null> => {
     const meta = await deps.keychain.getCredential(deps.credentialId);
-    if (!meta || meta.kind !== "file") return null;
+    if (!meta || meta.kind !== "file" || !meta.revision) return null;
     const bundles = await deps.keychain.materializeOwnFiles(meta.ownerId);
     const bundle = bundles.find((b) => b.credentialId === deps.credentialId);
     if (!bundle) return null;
     const found = codexAuthFromFiles(bundle.files);
-    return found ? { ownerId: meta.ownerId, service: meta.service, ...found } : null;
+    const verified = await deps.keychain.getCredential(deps.credentialId);
+    if (verified?.revision !== meta.revision) return null;
+    return found ? { ownerId: meta.ownerId, service: meta.service, revision: meta.revision, ...found } : null;
   };
 
   const persist = async (
-    current: { ownerId: string; service: string; path: string },
+    current: { ownerId: string; service: string; path: string; revision: string },
     replacedRefreshToken: string | undefined,
     next: JsonObject,
   ): Promise<boolean> => {
@@ -200,6 +203,7 @@ export function keychainCodexAuthStore(deps: KeychainCodexAuthStoreDeps): CodexA
     await deps.keychain.save({
       ownerId: current.ownerId,
       service: current.service,
+      expectedRevision: current.revision,
       files: [{ path: current.path, contentBase64: Buffer.from(JSON.stringify(next), "utf8").toString("base64") }],
       ...(codexOAuthAccessTokenExpiresAt(next) !== undefined
         ? { expiresAt: codexOAuthAccessTokenExpiresAt(next) }
@@ -219,8 +223,8 @@ export function keychainCodexAuthStore(deps: KeychainCodexAuthStoreDeps): CodexA
         try {
           const next = await refreshCodexOAuth(current.auth, fetchImpl);
           if (!next) return null;
-          await persist(current, codexOAuthRefreshToken(current.auth), next);
-          return next;
+          const saved = await persist(current, codexOAuthRefreshToken(current.auth), next);
+          return saved ? next : ((await readCurrent())?.auth ?? null);
         } finally {
           refreshing = null;
         }
@@ -232,7 +236,7 @@ export function keychainCodexAuthStore(deps: KeychainCodexAuthStoreDeps): CodexA
         swallow("codex: central oauth refresh", error);
       }
       // A stale access token is still worth handing out: the provider decides.
-      return (await readCurrent())?.auth ?? current.auth;
+      return (await readCurrent())?.auth ?? null;
     },
   };
 }
@@ -279,7 +283,7 @@ export function fileCodexAuthStore(
       } catch (error) {
         swallow("codex: file oauth refresh", error);
       }
-      return readCodexOAuthAuthFile(path) ?? current;
+      return readCodexOAuthAuthFile(path);
     },
   };
 }
