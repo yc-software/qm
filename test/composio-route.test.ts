@@ -241,7 +241,10 @@ test("connections return only this actor's active accounts and strip credentials
   });
   const r = await f.invoke("/v1/composio/connections?user_ids=bob&cursor=page-1");
   assert.equal(r.status, 200);
-  assert.deepEqual(r.data, { items: [{ id: "ca_gmail", toolkit: "gmail", userId: composioUserId(orgId(), "alice") }], nextCursor: "next-page" });
+  assert.deepEqual(r.data, {
+    items: [{ id: "ca_gmail", toolkit: "gmail", userId: composioUserId(orgId(), "alice") }],
+    nextCursor: "next-page",
+  });
   const q = new URL(f.calls[0]!.url).searchParams;
   assert.equal(q.get("user_ids"), composioUserId(orgId(), "alice"));
   assert.equal(q.get("statuses"), "ACTIVE");
@@ -747,7 +750,10 @@ test("linked identities retain provider accounts and Slack status until unlinked
     });
     const identity = { userId: canonical, userIds: [canonical, alias] };
     assert.deepEqual((await f.invoke("/v1/composio/identity")).data, identity);
-    assert.deepEqual((await f.invoke("/v1/composio/identity", undefined, null, { ...privateCap, actorId: "oidc:alice" })).data, identity);
+    assert.deepEqual(
+      (await f.invoke("/v1/composio/identity", undefined, null, { ...privateCap, actorId: "oidc:alice" })).data,
+      identity,
+    );
     f.replies.push({
       items: [
         account,
