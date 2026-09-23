@@ -2,48 +2,43 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { createToolContext, NeedsApproval, type ToolContextDeps } from "../src/tools/primitives.ts";
-import {
-  addCommandApprovalUse,
-  consumeCommandApprovalUse,
-  type CommandApprovalUses,
-} from "../src/policy/command-policy.ts";
 import { intersectEgressPolicies } from "../src/resolution/egress-policy.ts";
 import type { SandboxHandle } from "../src/sandbox/sandbox.ts";
 
 function fixture(source = "group:project", target = "personal:alice", authority = true) {
-  let open = true;
-  let member = true;
-  let allowed = true;
+  const state = {
+    open: true,
+    member: true,
+    allowed: true,
+    cutoverMode: "legacy",
+    liveJobs: [] as Array<{ sandboxId: string; scopeId: string }>,
+    targetPolicy: { mode: "denylist", rules: [] } as import("../src/types.ts").CommandPolicy,
+    targetEgress: { allowedHosts: [], deniedHosts: [] } as import("../src/types.ts").EgressPolicy,
+    sourcePolicy: { mode: "denylist", rules: [] } as import("../src/types.ts").CommandPolicy,
+    provisionGate: null as Promise<void> | null,
+  };
   const provisions: unknown[][] = [];
   const writes: unknown[] = [];
   const runs: SandboxHandle[] = [];
   const commands: string[] = [];
   const released: unknown[][] = [];
-  let ownEnv: Record<string, string> = { OWN_SECRET: "synthetic-own-secret" };
-  let cutoverMode = "legacy";
-  let liveJobs: Array<{ sandboxId: string; scopeId: string }> = [];
   const credentialOwners: string[] = [];
   const restored: Uint8Array[] = [];
   const starts: SandboxHandle[] = [];
   const resource = { id: "personal-box", ownerScopeId: target };
-  let targetPolicy = { mode: "denylist", rules: [] } as import("../src/types.ts").CommandPolicy;
-  let targetEgress = { allowedHosts: [], deniedHosts: [] } as import("../src/types.ts").EgressPolicy;
-  let sourcePolicy = { mode: "denylist", rules: [] } as import("../src/types.ts").CommandPolicy;
-  let targetModes = { session: true, always: true };
-  let sourceModes = { session: true, always: true };
-  const commandUses = new Map<string, CommandApprovalUses>();
+  const commandUses = new Map<string, number>();
   const approvalCalls: unknown[][] = [];
   const egressClaims: unknown[] = [];
   const config = {
-    resolveSharingPostureDurable: async () => (open ? "open" : "isolated"),
+    resolveSharingPostureDurable: async () => (state.open ? "open" : "isolated"),
     refreshSecurity: async () => {},
-    getCommandPolicy: () => targetPolicy,
-    getApprovalGrantModesDurable: async (scope: string) => (scope === target ? targetModes : sourceModes),
-    getEgress: () => targetEgress,
+    getCommandPolicy: () => state.targetPolicy,
+    getEgress: () => state.targetEgress,
   };
   const sandbox = {
     provision: async (...args: unknown[]) => {
       provisions.push(args);
+      if (state.provisionGate) await state.provisionGate;
       return {
         id: "machine",
         resourceId: resource.id,
@@ -91,7 +86,7 @@ function fixture(source = "group:project", target = "personal:alice", authority 
   const resources = {
     get: async () => resource,
     access: async () => {
-      if (!allowed) throw new Error("permission revoked");
+      if (!state.allowed) throw new Error("permission revoked");
       return resource;
     },
     list: async () => ({ sandboxes: [resource], defaultSandboxId: null }),
@@ -103,10 +98,10 @@ function fixture(source = "group:project", target = "personal:alice", authority 
     deps: {
       sandbox,
       sandboxResources: resources,
-      processes: { listLive: async () => liveJobs },
+      processes: { listLive: async () => state.liveJobs },
       deviceFlowCutover: {
         listServices: async () => ["custom-login"],
-        resolvePolicy: async () => ({ mode: cutoverMode }),
+        resolvePolicy: async () => ({ mode: state.cutoverMode }),
         residentResetGeneration: async () => null,
       },
       keychain: {
@@ -127,7 +122,7 @@ function fixture(source = "group:project", target = "personal:alice", authority 
         },
       },
       config,
-      isCurrentSharedScopeMember: async () => member,
+      isCurrentSharedScopeMember: async () => state.member,
     },
     actor: { id: "alice", type: "internal" },
     input: { origin: { kind: "human" } },
@@ -144,7 +139,6 @@ function fixture(source = "group:project", target = "personal:alice", authority 
     memoryScopeId: source,
     openResourceAccess: authority,
     ownerAuthEnv: { OWN_SECRET: "synthetic-own-secret" },
-    ownerEnvForTarget: async () => ownEnv,
     credentialServices: [],
     credentialTools: [],
     quarantinedServices: [],
@@ -169,14 +163,17 @@ function fixture(source = "group:project", target = "personal:alice", authority 
     sandboxResources: resources,
     config,
     provisionResource: turn.provisionResource,
-    canUseSandboxScope: turn.canUseSandboxScope,
+    accessSandboxResource: turn.accessResource,
     provision: turn.provision,
     useSkill: turn.useSkill,
     layers: [{ scopeId: source, mode: "rw", mountPath: "" }],
-    commandPolicy: () => sourcePolicy,
-    authorizeCommand: (command: string, key = command, exact?: boolean, modes?: typeof targetModes) => {
-      approvalCalls.push([key, exact, modes]);
-      return consumeCommandApprovalUse(commandUses, key, modes);
+    commandPolicy: () => state.sourcePolicy,
+    authorizeCommand: (_command: string, key = _command, exact?: boolean) => {
+      approvalCalls.push([key, exact]);
+      const uses = commandUses.get(key) ?? 0;
+      if (uses <= 0) return false;
+      commandUses.set(key, uses - 1);
+      return true;
     },
     grantedHandles: [],
     commandCredentials: [
@@ -204,42 +201,11 @@ function fixture(source = "group:project", target = "personal:alice", authority 
     restored,
     egressClaims,
     approvalCalls,
-    approve: (key: string, mode: "once" | "session" | "always") => addCommandApprovalUse(commandUses, key, mode),
-    setSourcePolicy: (policy: typeof sourcePolicy) => {
-      sourcePolicy = policy;
-    },
-    setTargetModes: (modes: typeof targetModes) => {
-      targetModes = modes;
-    },
-    setSourceModes: (modes: typeof sourceModes) => {
-      sourceModes = modes;
-    },
     released,
     commands,
-    revokeOwnEnv: () => {
-      ownEnv = {};
-    },
-    quarantine: () => {
-      cutoverMode = "ephemeral_only";
-    },
-    setLiveJobs: (jobs: typeof liveJobs) => {
-      liveJobs = jobs;
-    },
-    setTargetPolicy: (policy: typeof targetPolicy) => {
-      targetPolicy = policy;
-    },
-    setTargetEgress: (policy: typeof targetEgress) => {
-      targetEgress = policy;
-    },
-    revoke: () => {
-      member = false;
-    },
-    isolate: () => {
-      open = false;
-    },
-    deny: () => {
-      allowed = false;
-    },
+    approve: (key: string, mode: "once" | "session" | "always" = "once") =>
+      commandUses.set(key, (commandUses.get(key) ?? 0) + (mode === "once" ? 1 : Infinity)),
+    state,
   };
 }
 
@@ -264,9 +230,54 @@ test("Open cross-scope cached handles recheck membership, posture, and target au
   for (const revoke of ["revoke", "isolate", "deny"] as const) {
     const f = fixture();
     await f.turn.provisionResource("personal-box");
-    f[revoke]();
+    if (revoke === "revoke") f.state.member = false;
+    else if (revoke === "isolate") f.state.open = false;
+    else f.state.allowed = false;
     await assert.rejects(f.turn.provisionResource("personal-box"), /authorized|permission/);
   }
+});
+
+test("a command waiting on another provision rechecks the target policy before continuing", async () => {
+  const f = fixture();
+  let release!: () => void;
+  f.state.provisionGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const first = f.turn.provisionResource("personal-box");
+  while (f.provisions.length === 0) await new Promise((resolve) => setImmediate(resolve));
+  const access = await f.turn.accessResource("personal-box");
+  const second = f.turn.provisionResource(access, (current) => {
+    if (current.commandPolicy?.rules.some((rule) => rule.decision === "deny")) throw new Error("policy changed");
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  f.state.targetPolicy = { mode: "denylist", rules: [{ pattern: "blocked", decision: "deny" }] };
+  release();
+  await first;
+  await assert.rejects(second, /policy changed/);
+});
+
+test("a one-shot command approval is consumed once after a pending provision settles", async () => {
+  const f = fixture();
+  f.state.targetPolicy = { mode: "denylist", rules: [{ pattern: "protected", decision: "require_approval" }] };
+  let approvalKey = "";
+  await assert.rejects(f.tools.execute("protected", { sandboxId: "personal-box" }), (error: unknown) => {
+    assert.ok(error instanceof NeedsApproval);
+    approvalKey = error.approvalKey!;
+    return true;
+  });
+  f.approve(approvalKey);
+  let release!: () => void;
+  f.state.provisionGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const first = f.turn.provisionResource("personal-box");
+  while (f.provisions.length === 0) await new Promise((resolve) => setImmediate(resolve));
+  const execute = f.tools.execute("protected", { sandboxId: "personal-box" });
+  await new Promise((resolve) => setImmediate(resolve));
+  release();
+  await first;
+  assert.equal((await execute).stdout, "existing work");
+  await assert.rejects(f.tools.execute("protected", { sandboxId: "personal-box" }), NeedsApproval);
 });
 
 test("Open continuity works from a DM into a currently joined shared scope, not another person's computer", async () => {
@@ -281,7 +292,7 @@ test("Open continuity applies consistently to inventory and explicit management"
   await f.tools.computerStatus("personal-box");
   await f.tools.restartComputer("personal-box");
   await f.tools.sandboxResources!("retire", { sandboxId: "personal-box" });
-  f.isolate();
+  f.state.open = false;
   assert.equal(((await f.tools.sandboxResources!("list")) as { sandboxes: unknown[] }).sandboxes.length, 0);
   await assert.rejects(f.tools.computerStatus("personal-box"), /authorized/);
 });
@@ -300,7 +311,7 @@ test("background starts use the authorized personal target and recheck revocatio
   await f.tools.backgroundStart("node work.js", { sandboxId: "personal-box" });
   assert.equal(f.starts[0]?.scopeId, "personal:alice");
   assert.deepEqual(f.starts[0]?.env, { OWN_SECRET: "synthetic-own-secret" });
-  f.revoke();
+  f.state.member = false;
   await assert.rejects(f.tools.backgroundStart("node work.js", { sandboxId: "personal-box" }), /authorized/);
 });
 
@@ -320,7 +331,7 @@ test("untrusted background authority and copying room command credentials are re
 test("target command denials and approvals apply before either execution path can provision", async () => {
   for (const decision of ["deny", "require_approval"] as const) {
     const f = fixture();
-    f.setTargetPolicy({ mode: "denylist", rules: [{ pattern: "blocked", decision }] });
+    f.state.targetPolicy = { mode: "denylist", rules: [{ pattern: "blocked", decision }] };
     await assert.rejects(f.tools.execute("blocked", { sandboxId: "personal-box" }));
     await assert.rejects(f.tools.backgroundStart("blocked", { sandboxId: "personal-box" }));
     assert.deepEqual(f.provisions, []);
@@ -329,35 +340,39 @@ test("target command denials and approvals apply before either execution path ca
 
 test("cross-target egress policies narrow both provider policy and minted proxy capability", async () => {
   const f = fixture();
-  f.setTargetEgress({ allowedHosts: ["api.example.test"], deniedHosts: ["target-denied.test"] });
+  f.state.targetEgress = { allowedHosts: ["api.example.test"], deniedHosts: ["target-denied.test"] };
   await f.turn.provisionResource("personal-box");
   const policy = { allowedHosts: ["api.example.test"], deniedHosts: ["source-denied.test", "target-denied.test"] };
   assert.deepEqual(f.egressClaims, [policy]);
   const opts = f.provisions[0]![1] as { egress: unknown; egressToken: string };
   assert.deepEqual(opts.egress, policy);
   assert.equal(opts.egressToken, "synthetic-narrow-egress");
-  f.setTargetEgress({ allowedHosts: ["new.example.test"], deniedHosts: [] });
+  f.state.targetEgress = { allowedHosts: ["new.example.test"], deniedHosts: [] };
   await f.turn.provisionResource("personal-box");
   assert.equal(f.egressClaims.length, 2);
+  assert.equal(f.provisions.length, 2);
+  assert.deepEqual((f.provisions[1]![1] as { egress: unknown }).egress, {
+    allowedHosts: ["new.example.test"],
+    deniedHosts: ["source-denied.test"],
+  });
 });
 
-test("cached personal access refreshes removed env credentials and quarantines manually saved files", async () => {
+test("cached personal access reapplies device-flow quarantine while keeping the turn credential snapshot", async () => {
   const f = fixture();
-  await f.turn.provisionResource("personal-box");
+  const first = await f.turn.provisionResource("personal-box");
   const firstRestores = f.restored.length;
-  f.quarantine();
-  await f.turn.provisionResource("personal-box");
+  f.state.cutoverMode = "ephemeral_only";
+  const second = await f.turn.provisionResource("personal-box");
+  assert.equal(second, first);
   assert.ok(f.commands.some((command) => command.includes("rm -rf -- '.custom-login/token'")));
   assert.equal(f.restored.length, firstRestores);
-  f.revokeOwnEnv();
-  const handle = await f.turn.provisionResource("personal-box");
-  assert.deepEqual(handle.env, {});
+  assert.deepEqual(second.env, { OWN_SECRET: "synthetic-own-secret" });
 });
 
 test("cross-scope teardown preserves live jobs regardless of which conversation started them", async () => {
   for (const jobScope of ["personal:alice", "group:project", "group:other"]) {
     const f = fixture();
-    f.setLiveJobs([{ sandboxId: "personal-box", scopeId: jobScope }]);
+    f.state.liveJobs = [{ sandboxId: "personal-box", scopeId: jobScope }];
     await f.turn.provisionResource("personal-box");
     await f.turn.reclaimBox();
     assert.deepEqual(f.released[0]![1], { keepWarm: true });
@@ -378,14 +393,11 @@ test("egress intersection narrows host suffixes and refuses disjoint allowlists"
   );
 });
 
-test("two requiring policies produce one target-qualified one-shot approval without consuming a source grant", async () => {
+test("two requiring policies produce one target-qualified one-shot approval", async () => {
   for (const method of ["execute", "backgroundStart"] as const) {
     const f = fixture();
-    f.setSourcePolicy({ mode: "denylist", rules: [{ pattern: "protected", decision: "require_approval" }] });
-    f.setTargetPolicy({ mode: "denylist", rules: [{ pattern: "command", decision: "require_approval" }] });
-    f.setSourceModes({ session: false, always: true });
-    f.setTargetModes({ session: true, always: false });
-    f.approve("protected", "always");
+    f.state.sourcePolicy = { mode: "denylist", rules: [{ pattern: "protected", decision: "require_approval" }] };
+    f.state.targetPolicy = { mode: "denylist", rules: [{ pattern: "command", decision: "require_approval" }] };
     let approvalKey = "";
     await assert.rejects(f.tools[method]("protected command", { sandboxId: "personal-box" }), (err: unknown) => {
       assert.ok(err instanceof NeedsApproval);
@@ -394,37 +406,17 @@ test("two requiring policies produce one target-qualified one-shot approval with
       assert.deepEqual(JSON.parse(approvalKey.slice("sandbox:".length)), ["personal:alice", "protected", "command"]);
       return true;
     });
-    assert.equal(f.approvalCalls.length, 1);
-    f.approve(approvalKey, "once");
+    assert.deepEqual(f.approvalCalls, [[approvalKey, true]]);
+    f.approve(approvalKey);
     await f.tools[method]("protected command", { sandboxId: "personal-box" });
     await assert.rejects(f.tools[method]("protected command", { sandboxId: "personal-box" }), NeedsApproval);
   }
 });
 
-test("target disables already-issued reusable grants but a fresh once approval still works", async () => {
-  for (const mode of ["session", "always"] as const) {
-    const f = fixture();
-    f.setTargetPolicy({ mode: "denylist", rules: [{ pattern: "protected", decision: "require_approval" }] });
-    let key = "";
-    await assert.rejects(f.tools.execute("protected", { sandboxId: "personal-box" }), (err: unknown) => {
-      assert.ok(err instanceof NeedsApproval);
-      key = err.approvalKey!;
-      return true;
-    });
-    f.approve(key, mode);
-    await f.tools.execute("protected", { sandboxId: "personal-box" });
-    f.setTargetModes({ session: false, always: false });
-    await assert.rejects(f.tools.execute("protected", { sandboxId: "personal-box" }), NeedsApproval);
-    f.approve(key, "once");
-    await f.tools.execute("protected", { sandboxId: "personal-box" });
-    await assert.rejects(f.tools.execute("protected", { sandboxId: "personal-box" }), NeedsApproval);
-  }
-});
-
 test("target denial wins before a source one-shot approval is consumed", async () => {
   const f = fixture();
-  f.setSourcePolicy({ mode: "denylist", rules: [{ pattern: "protected", decision: "require_approval" }] });
-  f.setTargetPolicy({ mode: "denylist", rules: [{ pattern: "protected", decision: "deny" }] });
+  f.state.sourcePolicy = { mode: "denylist", rules: [{ pattern: "protected", decision: "require_approval" }] };
+  f.state.targetPolicy = { mode: "denylist", rules: [{ pattern: "protected", decision: "deny" }] };
   f.approve("protected", "once");
   await assert.rejects(f.tools.execute("protected", { sandboxId: "personal-box" }), /denied/);
   assert.deepEqual(f.approvalCalls, []);

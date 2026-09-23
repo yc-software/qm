@@ -1,4 +1,4 @@
-import type { ApprovalGrantModes, CommandDecision, CommandPolicy, CommandRule } from "../types.ts";
+import type { CommandDecision, CommandPolicy, CommandRule } from "../types.ts";
 import { errMessage } from "../util/errors.ts";
 import { compileSafeRegex } from "../util/safe-regex.ts";
 
@@ -908,34 +908,4 @@ export function evaluateCommandWithLayer(
   const layerMatch = firstMatch(scannable, layerRules);
   if (layerMatch) return layerMatch;
   return { decision: "allow" };
-}
-
-export interface CommandApprovalUses {
-  once: number;
-  session: boolean;
-  always: boolean;
-}
-
-export function addCommandApprovalUse(
-  uses: Map<string, CommandApprovalUses>,
-  key: string,
-  mode: "once" | "session" | "always",
-): void {
-  const grant = uses.get(key) ?? { once: 0, session: false, always: false };
-  if (mode === "once") grant.once++;
-  else grant[mode] = true;
-  uses.set(key, grant);
-}
-
-export function consumeCommandApprovalUse(
-  uses: Map<string, CommandApprovalUses>,
-  key: string,
-  modes: ApprovalGrantModes = { session: true, always: true },
-): boolean {
-  const grant = uses.get(key);
-  if (!grant) return false;
-  if ((modes.session && grant.session) || (modes.always && grant.always)) return true;
-  if (grant.once <= 0) return false;
-  grant.once--;
-  return true;
 }

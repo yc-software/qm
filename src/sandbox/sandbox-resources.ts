@@ -1,7 +1,7 @@
 import { randomUUID, createHash } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { parseScopeId, type ScopeId } from "../types.ts";
+import { parseScopeId, type CommandPolicy, type EgressPolicy, type ScopeId } from "../types.ts";
 import {
   sandboxDefaultForScope,
   type SandboxScopeDefaults,
@@ -25,6 +25,15 @@ export interface SandboxResource {
   cleanupPending?: boolean;
   spec?: AgentComputerSpec;
   error?: string;
+}
+
+export interface SandboxAccessPlan {
+  readonly resource: SandboxResource;
+  readonly crossScope: boolean;
+  readonly egress: EgressPolicy;
+  readonly commandPolicy: CommandPolicy | null;
+  readonly credentialScopeId?: ScopeId;
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 export interface SandboxDefault {

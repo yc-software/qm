@@ -210,12 +210,7 @@ import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
 import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
-import {
-  addCommandApprovalUse,
-  consumeCommandApprovalUse,
-  type CommandApprovalUses,
-} from "../policy/command-policy.ts";
-import type { ApprovalGrantModes, EgressPolicy } from "../types.ts";
+import type { EgressPolicy } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
@@ -1320,27 +1315,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeLabel: scopeId,
       });
 
-      const commandUses = new Map<string, CommandApprovalUses>();
+      const commandUses = new Map<string, number>();
       for (const grant of await approvalGrants.all()) {
         if (!samePerson(grant.actorId, actor.id)) continue;
         if (grant.scope === "session" && grant.sessionId !== session.id) continue;
         if (!resolution.approvalGrantModes[grant.scope]) continue;
-        addCommandApprovalUse(commandUses, grant.approvalKey ?? grant.command, grant.scope);
+        commandUses.set(grant.approvalKey ?? grant.command, Infinity);
       }
-      const authorizeToolCall = (tool: string): boolean => {
-        const key = `tool:${tool}`;
-        return consumeCommandApprovalUse(commandUses, key);
+      const consumeApproval = (key: string): boolean => {
+        const uses = commandUses.get(key) ?? 0;
+        if (uses <= 0) return false;
+        commandUses.set(key, uses - 1);
+        return true;
       };
-      const authorizeCommand = (
-        command: string,
-        approvalKey?: string,
-        exactApprovalKey = false,
-        grantModes?: ApprovalGrantModes,
-      ): boolean => {
+      const authorizeToolCall = (tool: string): boolean => consumeApproval(`tool:${tool}`);
+      const authorizeCommand = (command: string, approvalKey?: string, exactApprovalKey = false): boolean => {
         let key = approvalKey ?? command;
         if (approvalKey !== undefined && commandUses.has(approvalKey)) key = approvalKey;
         else if (!exactApprovalKey && commandUses.has(command)) key = command;
-        return consumeCommandApprovalUse(commandUses, key, grantModes);
+        return consumeApproval(key);
       };
       const quarantineReleaseApprovals: Array<{
         command: string;
@@ -1738,8 +1731,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopedCommand,
         provision,
         provisionScratch,
+        accessResource,
         provisionResource,
-        canUseSandboxScope,
         provisionOwnerAuth,
         useSkill,
         provisionForReach,
@@ -1766,21 +1759,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           liveAuthorTurn || (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true),
         ownerAuthAvailable,
         ownerAuthEnv,
-        ownerEnvForTarget: async () => {
-          const env: Record<string, string> = {};
-          for (const credential of (await deps.keychain?.materializeOwn(actor.id)) ?? [])
-            for (const { key, value } of credential.env) if (!(key in env)) env[key] = value;
-          if (deps.connectorTokens) {
-            for (const host of CONNECTOR_HOSTS) {
-              const token =
-                (await deps.connectorTokens.connectorAccessToken(host, actor.id, "personal")) ??
-                (await deps.connectorTokens.connectorAccessToken(host, actor.id)) ??
-                (await deps.connectorTokens.connectorAccessToken(host, actor.id, "company"));
-              if (token) env[envKey(host)] = token;
-            }
-          }
-          return env;
-        },
         ownerEnvCredentialIds,
         credentialTools,
         credentialServices,
@@ -1900,14 +1878,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             };
           } else {
             const scope = input.approval.scope ?? "once";
-            if (p.approvalKey?.startsWith("sandbox:")) {
-              const targetScope = JSON.parse(p.approvalKey.slice("sandbox:".length))[0] as ScopeId;
-              const currentModes = await deps.config?.getApprovalGrantModesDurable(targetScope);
-              p.grantModes = {
-                session: (p.grantModes?.session ?? true) && (currentModes?.session ?? false),
-                always: (p.grantModes?.always ?? true) && (currentModes?.always ?? false),
-              };
-            }
             const quarantineRelease = p.approvalKey?.startsWith("security-screen-release:") === true;
             const recordDisallowsScope =
               scope !== "once" &&
@@ -1965,7 +1935,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 .catch(swallowAs("clearSecurityTaint on input approval", false));
             }
             const useKey = p.approvalKey ?? p.command;
-            addCommandApprovalUse(commandUses, useKey, scope);
+            commandUses.set(useKey, (commandUses.get(useKey) ?? 0) + (scope === "once" ? 1 : Infinity));
             if (scope === "session" || scope === "always") {
               const grant: CommandApprovalGrant = {
                 actorId: actor.id,
@@ -2371,7 +2341,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           provision,
           provisionScratch,
           provisionResource,
-          canUseSandboxScope,
+          accessSandboxResource: accessResource,
           ...(provisionOwnerAuth ? { provisionOwnerAuth } : {}),
           ...(ownerAuthCommand ? { ownerAuthCommand } : {}),
           ...(scopedCommand ? { scopedCommand } : {}),

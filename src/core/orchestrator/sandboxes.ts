@@ -4,6 +4,7 @@ import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions } from "../../sandbox/sandbox.ts";
+import type { SandboxAccessPlan } from "../../sandbox/sandbox-resources.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
 import {
   deviceFlowCredOwner,
@@ -51,7 +52,6 @@ export interface TurnSandboxContext {
   openResourceAccess?: boolean;
   ownerAuthAvailable: boolean;
   ownerAuthEnv: Record<string, string>;
-  ownerEnvForTarget?: () => Promise<Record<string, string>>;
   ownerEnvCredentialIds: string[];
   credentialTools: readonly import("../../deployment/load-layer.ts").LayerCredentialTool[];
   credentialServices: string[];
@@ -83,7 +83,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     openResourceAccess,
     ownerAuthAvailable,
     ownerAuthEnv,
-    ownerEnvForTarget,
     ownerEnvCredentialIds,
     credentialTools,
     credentialServices,
@@ -399,12 +398,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     if (deps.skills)
       void deps.skills.recordUse(resolution.skill.id).catch((e) => swallow("orchestrator: skill recordUse", e));
     if (!shipsFiles) return { content, sourceScopeId: resolution.skill.scopeId };
-    if (sandboxId) {
-      const target = await deps.sandboxResources?.access(actor.id, sandboxId);
-      if (target && target.ownerScopeId !== writableScopeId && target.ownerScopeId !== scopeId)
-        return { content, sourceScopeId: resolution.skill.scopeId };
-    }
-    const handle = sandboxId ? await provisionResource(sandboxId) : await provision();
+    const access = sandboxId ? await accessResource(sandboxId) : undefined;
+    if (access?.crossScope) return { content, sourceScopeId: resolution.skill.scopeId };
+    const handle = access ? await provisionResource(access) : await provision();
     await materializeSkillTree(handle, resolution, sandboxId);
     const pack = packRoot(skillsRoot, resolution);
     return {
@@ -435,27 +431,40 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     }
     return true;
   };
-  const provisionResource = async (id: string): Promise<SandboxHandle> => {
+  const accessResource = async (id: string): Promise<SandboxAccessPlan> => {
     const resource = await deps.sandboxResources?.access(actor.id, id);
     if (!resource || !(await canUseSandboxScope(resource.ownerScopeId)))
       throw new Error("sandbox access is no longer authorized in this conversation");
     const crossScope = resource.ownerScopeId !== writableScopeId && resource.ownerScopeId !== scopeId;
-    if (crossScope) await deps.config!.refreshSecurity([resource.ownerScopeId]);
-    const egress = crossScope
-      ? intersectEgressPolicies(resolution.egress, deps.config!.getEgress(resource.ownerScopeId))
-      : resolution.egress;
-    const personalTarget = crossScope && resource.ownerScopeId === personalScope(actor.id);
-    const personalEnv = personalTarget ? ((await ownerEnvForTarget?.()) ?? ownerAuthEnv) : undefined;
-    const policyKey = JSON.stringify({ egress, personalEnv });
-    const existing = resourceHandles.get(id);
-    if (existing && resourcePolicy.get(id) === policyKey) {
-      if (personalTarget) await prepareCredentials(existing, emitGapWork, resource.ownerScopeId);
-      return existing;
-    }
+    if (!crossScope) return { resource, crossScope: false, egress: resolution.egress, commandPolicy: null };
+    await deps.config!.refreshSecurity([resource.ownerScopeId]);
+    const credentialScopeId = resource.ownerScopeId === personalScope(actor.id) ? resource.ownerScopeId : undefined;
+    return {
+      resource,
+      crossScope: true,
+      egress: intersectEgressPolicies(resolution.egress, deps.config!.getEgress(resource.ownerScopeId)),
+      commandPolicy: deps.config!.getCommandPolicy(resource.ownerScopeId),
+      ...(credentialScopeId ? { credentialScopeId, env: ownerAuthEnv } : {}),
+    };
+  };
+  const provisionResource = async (
+    input: string | SandboxAccessPlan,
+    authorize?: (access: SandboxAccessPlan) => void,
+  ): Promise<SandboxHandle> => {
+    const access = typeof input === "string" ? await accessResource(input) : input;
+    const { resource, crossScope, egress, credentialScopeId } = access;
+    const id = resource.id;
     const pending = resourcePending.get(id);
     if (pending) {
       await pending;
-      return provisionResource(id);
+      return provisionResource(id, authorize);
+    }
+    authorize?.(access);
+    const policyKey = JSON.stringify({ egress, credentialScopeId });
+    const existing = resourceHandles.get(id);
+    if (existing && resourcePolicy.get(id) === policyKey) {
+      if (credentialScopeId) await prepareCredentials(existing, emitGapWork, credentialScopeId);
+      return existing;
     }
     const provisioned = (async () => {
       const layers = crossScope
@@ -469,12 +478,12 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       const handle = await deps.sandbox.provision(layers, {
         sandboxId: id,
         ...(!crossScope ? { env: connectorEnv } : {}),
-        ...(personalTarget ? { env: personalEnv } : {}),
+        ...(access.env ? { env: { ...access.env } } : {}),
         egress,
         ...(egressToken ? { egressToken } : {}),
       });
       resourcePendingHandles.set(id, handle);
-      if (personalTarget) await prepareCredentials(handle, emitGapWork, resource.ownerScopeId);
+      if (credentialScopeId) await prepareCredentials(handle, emitGapWork, credentialScopeId);
       if (!crossScope) {
         await prepareCredentials(handle, emitGapWork);
         await prepareTurnFiles(handle);
@@ -782,8 +791,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     scopedCommand,
     provision,
     provisionScratch,
+    accessResource,
     provisionResource,
-    canUseSandboxScope,
     provisionOwnerAuth,
     useSkill,
     provisionForReach,
