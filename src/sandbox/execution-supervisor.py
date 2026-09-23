@@ -198,7 +198,9 @@ class Broker:
         connection = self.track(socket.create_connection((proxy.hostname, proxy.port or (443 if proxy.scheme == "https" else 80)), timeout=10))
         try:
             if proxy.scheme == "https":
-                secured = ssl.create_default_context().wrap_socket(connection, server_hostname=proxy.hostname)
+                context = ssl.create_default_context()
+                context.minimum_version = ssl.TLSVersion.TLSv1_2
+                secured = context.wrap_socket(connection, server_hostname=proxy.hostname)
                 with self.lock:
                     self.connections.discard(connection)
                 connection = self.track(secured)

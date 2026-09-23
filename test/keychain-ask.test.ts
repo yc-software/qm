@@ -647,7 +647,9 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
   const get = (path: string, cap: string) => fetch(`${base}${path}`, { headers: { "x-agent-capability": cap } });
   let executionSequence = 0;
   const executeCredential = (scope: string, actorId: string, handle: string, envKey: string) => {
-    const kind = scope.startsWith("personal:") ? "dm" : scope.startsWith("channel:") ? "channel" : "group";
+    let kind: "dm" | "channel" | "group" = "group";
+    if (scope.startsWith("personal:")) kind = "dm";
+    else if (scope.startsWith("channel:")) kind = "channel";
     return built.app.turn({
       surface: "cron",
       triggered: true,
