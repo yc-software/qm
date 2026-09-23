@@ -784,7 +784,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             singleUse?: boolean;
             env: Array<{ key: string; value: string; secret?: boolean }>;
           }> = [];
-          for (const credential of [...new Set(requested)]) {
+          for (const credential of new Set(requested)) {
             const materialized = credential.resolve ? await credential.resolve() : { env: credential.env ?? [] };
             prepared.push(materialized);
             for (const { key, value } of materialized.env) {
