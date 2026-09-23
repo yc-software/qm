@@ -68,6 +68,17 @@ ticket at a time, and the queued tickets are picked up by the first fire after t
    and no review blocks it. A run that ends without a pull request returns the item to work with
    the wrapper's last diagnostic lines as its reason, secrets masked.
 
+## Sandbox size
+
+The sandbox is created at the Sprites account default — 8 GB of RAM, no swap, and an overlayfs
+root that refuses a swapfile. Review and Proof run three review agents at once, and a UI ticket
+also boots core, the web UI, the portal and Chromium on the same machine, which peaks above that
+and gets the VM OOM-killed; the wrapper disappears with exit 137 and the run's work is lost. Set
+`SPRITES_RAM_MB` and `SPRITES_CPUS` to size it — `SPRITES_RAM_MB=16384` and `SPRITES_CPUS=4` on
+the factory deployment. Both are deployment-wide and apply to every Sprite that deployment
+creates. An existing Sprite keeps the size it was created with, so an operator deletes it and the
+next run provisions it at the configured size.
+
 ## Security posture
 
 The wrapper runs as root inside the sandbox with `IS_SANDBOX=1`, which lets `claude` run with
