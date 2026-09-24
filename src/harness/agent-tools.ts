@@ -1,3 +1,4 @@
+import { modelSelectorSchema, type ModelSelector } from "./model-selector.ts";
 import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -1499,7 +1500,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
       name: Type.Optional(Type.String({ description: "open: short title for the subagent (default: from task)." })),
       readOnly: Type.Optional(Type.Boolean({ description: "open: subagent may not change anything." })),
-      model: Type.Optional(Type.String({ description: "open: model override; fails closed if unavailable." })),
+      model: Type.Optional(
+        Type.Union([Type.Literal("inherit"), modelSelectorSchema, Type.String()], {
+          description:
+            "open: inherit the full parent runtime (default), or select {modelId, harnessId?, effortLevel?, fastMode?}. Unavailable choices fail closed. A model-id string remains supported.",
+        }),
+      ),
       harness: Type.Optional(Type.String({ description: "open: harness override." })),
       thinkingLevel: Type.Optional(Type.String({ description: "open: reasoning effort override." })),
       target: Type.Optional(
@@ -1524,7 +1530,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         task?: string;
         name?: string;
         readOnly?: boolean;
-        model?: string;
+        model?: string | ModelSelector;
         target?: string;
         text?: string;
         interrupt?: boolean;

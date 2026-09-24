@@ -84,6 +84,8 @@ export interface SpawnMeta {
   model?: string;
   harness?: string;
   thinkingLevel?: string;
+  fastMode?: boolean;
+  modelAccount?: import("./resolution/config-store.ts").ModelAccount;
 }
 
 export interface SessionStatus {

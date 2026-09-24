@@ -171,9 +171,12 @@ describe("conversation pins self-API", async () => {
       origin: { kind: "human", messageTs: "1723497600.000100" },
       text: "the venue is booked for Sept 4",
     };
-    await built.app.turn(slackTurn);
+    const result = await built.app.turn(slackTurn);
+    const entries = await built.sessions.getEntries(result.sessionId!);
+    const userEntry = entries.find((entry) => entry.type === "user");
+    assert.ok(userEntry);
     const token = await capFor("U9", SLACK_DM);
-    const res = await call("POST", "/v1/pins", { seq: 0 }, token);
+    const res = await call("POST", "/v1/pins", { seq: userEntry.seq }, token);
     assert.equal(res.status, 200);
     const { pin } = (await res.json()) as { pin: { id: string } };
     let queued = await built.deliveries.pending("slack");
@@ -194,7 +197,9 @@ describe("conversation pins self-API", async () => {
     await built.deliveries.ack(queued[0]!.id, Date.now());
 
     const webToken = await capFor("U1", THREAD);
-    const webRes = await call("POST", "/v1/pins", { seq: 0 }, webToken);
+    const webUser = (await built.sessions.getEntries(sessionId)).find((entry) => entry.type === "user");
+    assert.ok(webUser);
+    const webRes = await call("POST", "/v1/pins", { seq: webUser.seq }, webToken);
     assert.equal(webRes.status, 200);
     assert.equal((await built.deliveries.pending("slack")).length, 0, "a web conversation never touches Slack pins");
     const webPin = ((await webRes.json()) as { pin: { id: string } }).pin;

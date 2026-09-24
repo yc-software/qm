@@ -32,12 +32,7 @@ import {
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { BotPolicy } from "../surface-cache/channel-policy-store.ts";
 import type { GapPhase, GapWork } from "../sessions/session-store.ts";
-import type {
-  SessionOpenInput,
-  SessionReadInput,
-  SessionSyscalls,
-  SessionWriteInput,
-} from "../sessions/session-syscalls.ts";
+import type { SessionReadInput, SessionSyscalls, SessionWriteInput } from "../sessions/session-syscalls.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createNullLedger, type ToolLedger } from "../runs/tool-ledger.ts";
 import type {
@@ -1208,7 +1203,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           sessionSyscalls: {
             receive: (timeoutMs?: number) => deps.sessionSyscalls!.receive?.(timeoutMs) ?? Promise.resolve([]),
             acknowledge: (ids: string[]) => deps.sessionSyscalls!.acknowledge?.(ids) ?? Promise.resolve(),
-            open: (input: SessionOpenInput) => once(() => deps.sessionSyscalls!.open(input)),
+            open: (input, active) => once(() => deps.sessionSyscalls!.open(input, active)),
             write: (input: SessionWriteInput) => once(() => deps.sessionSyscalls!.write(input)),
             read: (input: SessionReadInput) => deps.sessionSyscalls!.read(input),
           },

@@ -419,33 +419,40 @@ test("gateway-routed Claude requests carry neither the binding beta nor block_bi
   assert.equal("block_binding" in (payloads[0]!.thinking as object), false);
 });
 
-test("a refusal fallback prices each step on its actual model and tier", async () => {
-  const { rows, payloads } = await runTurn("refusal-fallback-pricing", "claude-sonnet-5", true, (_payload, index) =>
+test("a provider refusal surfaces its error without changing the selected model or price tier", async () => {
+  const payloads: Array<Record<string, unknown>> = [];
+  await assert.rejects(
+    runTurn("refusal-keeps-runtime", "claude-sonnet-5", true, (payload) => {
+      payloads.push(payload);
+      return new Response(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message: "Synthetic fixture: this would violate Anthropic's usage policy.",
+          },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      );
+    }),
+    /violate Anthropic's usage policy/,
+  );
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0]!.model, "claude-sonnet-5");
+  assert.equal("speed" in payloads[0]!, false);
+});
+
+test("a transient provider error still retries the same selected model", async () => {
+  const { payloads } = await runTurn("same-model-retry", "claude-sonnet-5", false, (_payload, index) =>
     index === 0
       ? new Response(
-          JSON.stringify({
-            type: "error",
-            error: {
-              type: "api_error",
-              message: "Output blocked by content filtering policy: this would violate Anthropic's usage policy.",
-            },
-          }),
-          { status: 400, headers: { "content-type": "application/json" } },
+          JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Temporarily overloaded" } }),
+          { status: 503, headers: { "content-type": "application/json", "retry-after": "0" } },
         )
-      : anthropicReply("recovered", ANTHROPIC_WIRE_USAGE),
+      : anthropicReply("retried", ANTHROPIC_WIRE_USAGE),
   );
-  assert.equal(payloads.length, 2);
-  assert.equal(payloads[0]?.model, "claude-sonnet-5");
-  assert.equal("speed" in payloads[0]!, false);
-  assert.equal(payloads[1]?.model, "claude-opus-5");
-  assert.equal(payloads[1]?.speed, "fast");
   assert.deepEqual(
-    rows.map((r) => [r.step, r.model]),
-    [
-      [0, "claude-sonnet-5"],
-      [1, "claude-opus-5"],
-    ],
+    payloads.map((payload) => payload.model),
+    ["claude-sonnet-5", "claude-sonnet-5"],
   );
-  assertUsd(rows[0]!.usage!.costUsd, 0);
-  assertUsd(rows[1]!.usage!.costUsd, 0.15);
 });

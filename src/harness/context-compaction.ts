@@ -27,7 +27,8 @@ function modelReplayable(entries: SessionEntry[]): SessionEntry[] {
       e.type !== "thinking" &&
       e.type !== "text" &&
       e.type !== "soul" &&
-      (e.payload as { kind?: unknown } | null)?.kind !== "turn_failure",
+      (e.payload as { kind?: unknown } | null)?.kind !== "turn_failure" &&
+      (e.type !== "system" || (e.payload as { kind?: unknown } | null)?.kind !== "runtime_active"),
   );
 }
 
@@ -97,6 +98,7 @@ function entryStamp(createdAt: number): string {
 }
 
 export function compactTranscript(history: SessionEntry[]): string {
+  history = modelReplayable(history);
   const resultByCallId = new Map<string, true>();
   for (const entry of history) {
     if (entry.type !== "tool_result") continue;
