@@ -268,6 +268,7 @@ export interface CronFireNote {
 }
 
 export interface Cron extends TriggerBase {
+  computeEstimate?: import("./cron/runtime.ts").CronComputeEstimate | null;
   runtime?: import("./harness/harness.ts").RuntimeChoice | null;
   schedule: CronSchedule;
   nextFireAt?: number;

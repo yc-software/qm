@@ -326,7 +326,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET|PATCH|DELETE",
         path: "/v1/crons/:id",
         summary:
-          "inspect, rename, archive, edit, or delete a cron; create/patch accepts runtime: {harnessId, modelId, effortLevel?, fastMode?} for agent tasks, null clears the override; omitted preserves existing defaults",
+          "inspect, rename, archive, edit, or delete a cron; create/patch accepts runtime: {modelId, harnessId?, effortLevel?, fastMode?} for agent tasks; inherit or null clears the override, omitted preserves it. Optional computeEstimate: {workload: routine|analysis|deep, reason} records the creator’s expected per-fire work without routing; null clears it",
       },
       {
         method: "GET",

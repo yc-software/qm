@@ -940,6 +940,7 @@ test("cron runtime rejects malformed settings and tasks that would ignore them",
   for (const invalid of [
     {},
     { ...runtime, modelId: " " },
+    { modelId: "gpt-6-luna" },
     { ...runtime, effortLevel: "auto" },
     { ...runtime, effortLevel: "garbage" },
     { ...runtime, fastMode: "yes" },
@@ -960,4 +961,43 @@ test("cron runtime rejects malformed settings and tasks that would ignore them",
   );
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000 }, runtime });
   await assert.rejects(store.update(cron.id, { action: "" }), /runtime overrides require/);
+});
+
+test("cron estimates survive reload, preserve omitted patches, and clear independently", async () => {
+  const backing = createMemoryMap<Cron>();
+  const store = createCronStore(backing);
+  const input = { ...base, schedule: { everyMs: 60_000 } };
+  const computeEstimate = { workload: "routine" as const, reason: "One bounded check, including retries" };
+  const cron = await store.create({ ...input, computeEstimate });
+  assert.notEqual(cron.id, (await store.create(input)).id);
+  assert.equal(cron.id, (await store.create({ ...input, computeEstimate })).id);
+  const reloaded = createCronStore(backing);
+  await reloaded.update(cron.id, { title: "Renamed" });
+  assert.deepEqual((await store.get(cron.id))?.computeEstimate, computeEstimate);
+  const cleared = await reloaded.update(cron.id, { computeEstimate: null });
+  assert.equal(cleared?.computeEstimate, null);
+  assert.equal(cleared?.runtime, undefined);
+  assert.equal(cleared?.action, input.action);
+  assert.deepEqual(cleared?.schedule, cron.schedule);
+});
+
+test("invalid estimates and estimates on non-agent crons fail before storage", async () => {
+  const store = createCronStore();
+  const input = { ...base, schedule: { everyMs: 60_000 } };
+  for (const computeEstimate of [
+    false,
+    {},
+    { workload: "cheap", reason: "check" },
+    { workload: "routine", reason: " " },
+    { workload: "routine", reason: "x".repeat(401) },
+    { workload: "routine", reason: "check", price: 1 },
+  ]) {
+    await assert.rejects(store.create({ ...input, computeEstimate: computeEstimate as never }), /computeEstimate/);
+  }
+  const computeEstimate = { workload: "routine" as const, reason: "check" };
+  await assert.rejects(store.create({ ...input, loopId: "loop", computeEstimate }), /agent cron/);
+  await assert.rejects(store.create({ ...input, message: "hello", computeEstimate }), /agent cron/);
+  const cron = await store.create({ ...input, computeEstimate });
+  await assert.rejects(store.update(cron.id, { computeEstimate: { workload: "deep", reason: "" } }), /computeEstimate/);
+  assert.deepEqual((await store.get(cron.id))?.computeEstimate, computeEstimate);
 });

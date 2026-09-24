@@ -355,6 +355,7 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
       createdBy: "U1",
       schedule: { everyMs: 60_000 },
       action: "run the existing script",
+      computeEstimate: { workload: "routine", reason: "Run one bounded status script" },
       unattendedGrants: ["publish"],
       destination: { type: "principal", target: "U1" },
     });
@@ -370,15 +371,16 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
     assert.equal((await put({ runtime: { ...runtime, modelId: "unavailable" } })).status, 400);
     assert.equal((await put({ runtime, action: "replace the task" })).status, 400);
     assert.equal((await put({})).status, 400);
-    const result = await put({ runtime });
+    const result = await put({ runtime: { modelId: runtime.modelId } });
     assert.equal(result.status, 200);
     assert.deepEqual(await result.json(), { cron: { id: cron.id, runtime } });
     const updated = await s.built.app.getCron(cron.id);
     assert.deepEqual(updated, { ...cron, runtime });
     const listed = await json(await fetch(`${s.base}/v1/admin/crons?scope=personal:U1`, { headers: ALICE_ADMIN }));
     assert.deepEqual(listed.crons[0].runtime, runtime);
+    assert.deepEqual(listed.crons[0].computeEstimate, cron.computeEstimate);
     assert.deepEqual(listed.crons[0].unattendedGrants, cron.unattendedGrants);
-    assert.equal((await put({ runtime: null })).status, 200);
+    assert.equal((await put({ runtime: "inherit" })).status, 200);
     assert.deepEqual(await s.built.app.getCron(cron.id), { ...cron, runtime: null });
     const audit = (await s.built.auditLog.events()).filter((event) => event.action === "cron.runtime.update");
     assert.equal(audit.length, 2);

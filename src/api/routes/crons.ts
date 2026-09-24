@@ -1,4 +1,4 @@
-import { isCronRuntime } from "../../cron/runtime.ts";
+import { isCronRuntime, isCronComputeEstimate, type CronRuntimeRequest } from "../../cron/runtime.ts";
 import type { Cron } from "../../types.ts";
 import type { CreateCronInput, CronPatch } from "../../cron/cron-store.ts";
 import { describeRunNowRefusal } from "../../cron/scheduler.ts";
@@ -18,10 +18,11 @@ function defaultTimezoneFor(capability: CapabilityClaims | null): string {
     : DEFAULT_CRON_TIMEZONE;
 }
 
-function isCreateCron(b: unknown): b is CreateCronInput {
+function isCreateCron(b: unknown): b is CronRuntimeRequest<CreateCronInput> {
   return (
     isObj(b) &&
     isCronRuntime(b.runtime) &&
+    isCronComputeEstimate(b.computeEstimate) &&
     userScheduleFromBody(b.schedule) !== null &&
     (typeof b.action === "string" || typeof (b as { message?: unknown }).message === "string") &&
     (b as { unattendedGrants?: unknown }).unattendedGrants === undefined &&
@@ -35,6 +36,7 @@ function isCreateCron(b: unknown): b is CreateCronInput {
 
 type CapabilityCronBody = {
   runtime?: unknown;
+  computeEstimate?: unknown;
   schedule?: unknown;
   title?: unknown;
   task?: unknown;
@@ -98,7 +100,8 @@ async function gateSourceCronRead(ctx: ApiCtx, id: string): Promise<Cron | null>
 }
 
 function isCronPatch(b: unknown): b is {
-  runtime?: Cron["runtime"];
+  runtime?: CronRuntimeRequest<Cron>["runtime"];
+  computeEstimate?: Cron["computeEstimate"];
   title?: string;
   task?: string;
   action?: string;
@@ -109,7 +112,7 @@ function isCronPatch(b: unknown): b is {
   runAs?: "owner" | "scopeFloor" | "scopeShared";
   unattendedGrants?: string[];
 } {
-  if (!isObj(b) || !isCronRuntime(b.runtime)) return false;
+  if (!isObj(b) || !isCronRuntime(b.runtime) || !isCronComputeEstimate(b.computeEstimate)) return false;
   if (!hasCronPatchFields(b)) return true;
   const hasTitle = b.title !== undefined;
   const hasAction = b.action !== undefined;
@@ -139,6 +142,7 @@ function isCronPatch(b: unknown): b is {
 function hasCronPatchFields(b: Record<string, unknown>): boolean {
   return (
     b.runtime !== undefined ||
+    b.computeEstimate !== undefined ||
     b.title !== undefined ||
     b.action !== undefined ||
     b.task !== undefined ||
@@ -193,11 +197,13 @@ async function createCron(ctx: ApiCtx): Promise<void> {
           "schedule.cron (5-field expression) or schedule.everyMs/firstFireAt, plus task (what to do) or text (exact text to send), required",
       });
     }
-    if (!isCronRuntime(b.runtime)) return sendJson(res, 400, { error: "bad_request", message: "invalid cron runtime" });
+    if (!isCronRuntime(b.runtime) || !isCronComputeEstimate(b.computeEstimate))
+      return sendJson(res, 400, { error: "bad_request", message: "invalid cron runtime or computeEstimate" });
     const result = await ctx.deps.control.createCron(
       {
         schedule,
         ...(b.runtime !== undefined ? { runtime: b.runtime } : {}),
+        ...(b.computeEstimate !== undefined ? { computeEstimate: b.computeEstimate } : {}),
         ...(task !== undefined ? { action: task } : {}),
         ...(text !== undefined ? { text } : {}),
         ...(typeof b.title === "string" ? { title: b.title } : {}),
@@ -349,7 +355,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
 }
 
 const CRON_PATCH_BAD_REQUEST =
-  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), runAs (owner/scopeFloor/scopeShared), and/or unattendedGrants (string[])";
+  "expected a cron patch: runtime, computeEstimate, title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), runAs (owner/scopeFloor/scopeShared), and/or unattendedGrants (string[])";
 
 async function cronById(ctx: ApiCtx): Promise<void> {
   const { res, app, pathname, method, body, capability } = ctx;
@@ -378,6 +384,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
       id,
       {
         ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
+        ...(body.computeEstimate !== undefined ? { computeEstimate: body.computeEstimate } : {}),
         ...(body.title !== undefined ? { title: body.title } : {}),
         ...(task !== undefined ? { action: task } : {}),
         ...(schedule !== undefined ? { schedule } : {}),
@@ -427,8 +434,9 @@ async function cronById(ctx: ApiCtx): Promise<void> {
       message: "unfurlLinks can only be set on a cron with a delivery destination",
     });
   }
-  const patch: CronPatch = {
+  const patch: CronRuntimeRequest<CronPatch> = {
     ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
+    ...(body.computeEstimate !== undefined ? { computeEstimate: body.computeEstimate } : {}),
     ...(body.title !== undefined ? { title: body.title } : {}),
     ...(task !== undefined ? { action: task } : {}),
     ...(schedule !== undefined ? { schedule } : {}),

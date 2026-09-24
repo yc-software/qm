@@ -2999,6 +2999,7 @@ const apiRoutes: readonly WebRoute[] = [
         enabled?: boolean;
         archived?: boolean;
         runtime?: unknown;
+        computeEstimate?: unknown;
       } = {};
       try {
         const p = JSON.parse(await readBody(req)) as {
@@ -3008,8 +3009,10 @@ const apiRoutes: readonly WebRoute[] = [
           enabled?: unknown;
           archived?: unknown;
           runtime?: unknown;
+          computeEstimate?: unknown;
         };
         if ("runtime" in p) patch = { ...patch, runtime: p.runtime };
+        if ("computeEstimate" in p) patch = { ...patch, computeEstimate: p.computeEstimate };
         if ("title" in p) {
           if (typeof p.title !== "string")
             return json(res, 400, { error: "bad_request", message: "title must be a string" });
@@ -3038,7 +3041,7 @@ const apiRoutes: readonly WebRoute[] = [
       if (Object.keys(patch).length === 0)
         return json(res, 400, {
           error: "bad_request",
-          message: "expected title, task, schedule, enabled, archived, or runtime",
+          message: "expected title, task, schedule, enabled, archived, runtime, or computeEstimate",
         });
       if (patch.archived === true) patch = { ...patch, enabled: false };
       return relayCore(

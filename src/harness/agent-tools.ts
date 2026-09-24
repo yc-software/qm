@@ -1,3 +1,4 @@
+import { modelSelectorSchema } from "./model-selector.ts";
 import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -205,6 +206,7 @@ function fmtCronSchedule(c: {
 }
 
 interface CronLike {
+  computeEstimate?: import("../cron/runtime.ts").CronComputeEstimate | null;
   runtime?: import("./harness.ts").RuntimeChoice | null;
   id: string;
   title?: string;
@@ -281,7 +283,7 @@ function fmtCronLine(c: CronLike, preview = false): string {
   const runtime = c.runtime
     ? `\n    runtime: ${c.runtime.harnessId}/${c.runtime.modelId}${c.runtime.effortLevel ? ` (${c.runtime.effortLevel})` : ""}`
     : "";
-  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${note}`;
+  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${c.computeEstimate ? `\n    compute estimate: ${c.computeEstimate.workload} — ${c.computeEstimate.reason}` : ""}${note}`;
 }
 
 function fmtCronCreated(r: {
@@ -2344,33 +2346,26 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }),
       ),
       runtime: Type.Optional(
+        Type.Union([Type.Null(), Type.Literal("inherit"), modelSelectorSchema], {
+          description:
+            "create/patch: shared model selector for an agent task. Use runtime get to discover approved models/harnesses. A missing harness uses the scope default; the resolved choice is saved for future fires. Omit to preserve; null or inherit clears. Choose the cheapest suitable model based on the whole task, including failure handling. Use explicit low effort for routine work; legacy auto effort is not supported. Unavailable choices fail closed.",
+        }),
+      ),
+      computeEstimate: Type.Optional(
         Type.Union(
           [
             Type.Null(),
-            Type.Object({
-              harnessId: Type.Union([
-                Type.Literal("pi"),
-                Type.Literal("opencode"),
-                Type.Literal("codex"),
-                Type.Literal("claude"),
-              ]),
-              modelId: Type.String(),
-              effortLevel: Type.Optional(
-                Type.Union([
-                  Type.Literal("low"),
-                  Type.Literal("medium"),
-                  Type.Literal("high"),
-                  Type.Literal("xhigh"),
-                  Type.Literal("max"),
-                  Type.Literal("ultracode"),
-                ]),
-              ),
-              fastMode: Type.Optional(Type.Boolean()),
-            }),
+            Type.Object(
+              {
+                workload: Type.Union([Type.Literal("routine"), Type.Literal("analysis"), Type.Literal("deep")]),
+                reason: Type.String({ minLength: 1, maxLength: 400 }),
+              },
+              { additionalProperties: false },
+            ),
           ],
           {
             description:
-              "create/patch: optional runtime override for an agent task. Omit to preserve defaults; null clears an override. Use runtime get to discover approved models/harnesses. Choose a cheaper model and explicit low effort when the whole task, including failure handling, is simple. Unavailable choices fail closed. Auto effort is not supported here yet.",
+              "create/patch: creator's expected work per fire, including failure handling: routine (bounded checks or relays), analysis (research or judgment), deep (complex investigation or implementation). Give a short reason, then choose a suitable runtime explicitly. Advisory only: this does not select a model or estimate dollars. Omit to preserve; null clears.",
           },
         ),
       ),
@@ -2415,6 +2410,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           const r = await tc.cronCreate({
             schedule: params.schedule,
             ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
+            ...(params.computeEstimate !== undefined ? { computeEstimate: params.computeEstimate } : {}),
             ...(params.title !== undefined ? { title: params.title } : {}),
             ...(params.task !== undefined ? { action: params.task } : {}),
             ...(params.text !== undefined ? { text: params.text } : {}),
@@ -2547,6 +2543,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             );
           const r = await tc.cronPatch(id, {
             ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
+            ...(params.computeEstimate !== undefined ? { computeEstimate: params.computeEstimate } : {}),
             ...(params.title !== undefined ? { title: params.title } : {}),
             ...(params.task !== undefined ? { action: params.task } : {}),
             ...(params.text !== undefined ? { text: params.text } : {}),

@@ -43,6 +43,7 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
         archived: c.archived,
         schedule: c.schedule,
         runtime: c.runtime,
+        computeEstimate: c.computeEstimate,
         loopId: c.loopId,
         runAs: c.runAs,
         unattendedGrants: c.unattendedGrants,

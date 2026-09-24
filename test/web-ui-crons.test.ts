@@ -291,3 +291,26 @@ test("cron runtime patches pass through the web API, validate, and clear", async
   assert.equal((await patch(null)).status, 200);
   assert.equal((await built.app.getCron(cron.id))?.runtime, null);
 });
+
+test("web cron API passes selectors and creator estimates without changing defaults", async () => {
+  built.config.setApprovedHarnesses(["mock"]);
+  const cron = await built.app.createCron({
+    action: "check",
+    schedule: { everyMs: 60_000 },
+    owner: "alice",
+    createdBy: "alice",
+    ownerScopeId: "personal:alice",
+  });
+  const patch = (body: unknown) =>
+    fetch(`${webBase}/api/crons/${cron.id}`, asUser("alice", { method: "PATCH", body: JSON.stringify(body) }));
+  const computeEstimate = { workload: "analysis", reason: "Compare changes across sources" };
+  const selected = await patch({ runtime: { modelId: "claude-sonnet-5" }, computeEstimate });
+  assert.equal(selected.status, 200, await selected.clone().text());
+  assert.deepEqual((await built.app.getCron(cron.id))?.runtime, { harnessId: "mock", modelId: "claude-sonnet-5" });
+  assert.deepEqual((await built.app.getCron(cron.id))?.computeEstimate, computeEstimate);
+  assert.equal((await patch({ computeEstimate: { workload: "analysis", reason: "" } })).status, 400);
+  assert.deepEqual((await built.app.getCron(cron.id))?.computeEstimate, computeEstimate);
+  assert.equal((await patch({ runtime: "inherit", computeEstimate: null })).status, 200);
+  assert.equal((await built.app.getCron(cron.id))?.runtime, null);
+  assert.equal((await built.app.getCron(cron.id))?.computeEstimate, null);
+});

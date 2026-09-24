@@ -1,3 +1,4 @@
+import type { CronRuntimeRequest } from "../cron/runtime.ts";
 import type { InviteMailer } from "../admin/invite-email.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
@@ -430,18 +431,18 @@ export interface App {
     actorId: string,
     opts?: { allowSharedScope?: boolean },
   ): Promise<number>;
-  createCron(input: CreateCronInput): Promise<Cron>;
+  createCron(input: CronRuntimeRequest<CreateCronInput>): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
   listCrons(): Promise<Cron[]>;
   listCronsForViewer(principalId: string): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
-  updateCron(id: string, patch: CronPatch): Promise<Cron | null>;
+  updateCron(id: string, patch: CronRuntimeRequest<CronPatch>): Promise<Cron | null>;
   deleteCron(id: string): Promise<void>;
   setCronEnabled(id: string, enabled: boolean): Promise<void>;
   setCronFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
   listCronFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   cronFiresByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestCronFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
-  setCronRuntime(id: string, runtime: Exclude<Cron["runtime"], undefined>): Promise<Cron | null>;
+  setCronRuntime(id: string, runtime: Exclude<CronRuntimeRequest<Cron>["runtime"], undefined>): Promise<Cron | null>;
   setCronDestination(id: string, destination: Destination | undefined): Promise<Cron | null>;
   setCronRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   createWebhook(input: CreateWebhookInput): Promise<Webhook>;
