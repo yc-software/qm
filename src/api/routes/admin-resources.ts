@@ -644,7 +644,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (!approved.includes(harnessId)) return { error: `harness ${harnessId} is not approved` };
       if (typeof modelId !== "string" || !modelSupportedByHarness(modelId, harnessId))
         return { error: `model ${String(modelId)} is not supported by ${harnessId}` };
-      const thinkingLevels = thinkingLevelsForHarness(harnessId);
+      const thinkingLevels = thinkingLevelsForHarness(harnessId, modelId);
       if (typeof effortLevel !== "string" || !thinkingLevels.includes(effortLevel))
         return { error: `runtime requires effortLevel (${thinkingLevels.join(" | ")}) for ${harnessId}` };
       if (typeof fastMode !== "boolean") return { error: "runtime requires fastMode (boolean)" };

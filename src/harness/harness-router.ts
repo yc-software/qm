@@ -98,10 +98,17 @@ async function runTurnEnforcingGoal(
 }
 
 function normalizeRuntimeChoice(choice: RuntimeChoice): RuntimeChoice {
+  if (
+    (choice.effortLevel === "adaptive" || choice.effortLevel === "default") &&
+    !thinkingLevelsForHarness(choice.harnessId, choice.modelId).includes(choice.effortLevel)
+  )
+    throw new NonRetryableTurnError(
+      `${choice.effortLevel} reasoning is not supported by ${choice.harnessId}/${choice.modelId}`,
+    );
   return {
     harnessId: choice.harnessId,
     modelId: choice.modelId,
-    ...(choice.effortLevel && thinkingLevelsForHarness(choice.harnessId).includes(choice.effortLevel)
+    ...(choice.effortLevel && thinkingLevelsForHarness(choice.harnessId, choice.modelId).includes(choice.effortLevel)
       ? { effortLevel: choice.effortLevel }
       : {}),
     ...(typeof choice.fastMode === "boolean"

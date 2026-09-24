@@ -4022,7 +4022,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       action: Type.Union([Type.Literal("get"), Type.Literal("set"), Type.Literal("inherit")]),
       model: Type.Optional(Type.String({ description: "Model ID or exact display name from get, such as Astra." })),
       harness: Type.Optional(Type.String()),
-      effort: Type.Optional(Type.String()),
+      effort: Type.Optional(
+        Type.String({
+          description:
+            "Use modelCatalog[modelId].effortLevelsByHarness[harnessId] from get. adaptive = native Auto; default = provider default; auto = legacy harness default, not adaptive reasoning.",
+        }),
+      ),
       fastMode: Type.Optional(Type.Boolean()),
       lifetime: Type.Optional(Type.Union([Type.Literal("task"), Type.Literal("scope")])),
     }),

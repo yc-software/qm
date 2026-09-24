@@ -375,7 +375,12 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     harnessOptions: HARNESS_IDS.filter(
       (id) => id !== "mock" && (approvedHarnesses.includes(id) || runtime?.harnessId === id),
     ),
-    modelsByHarness: Object.fromEntries(HARNESS_IDS.map((id) => [id, modelsFor(id)])),
+    modelsByHarness: Object.fromEntries(
+      HARNESS_IDS.map((id) => [
+        id,
+        modelsFor(id).map((model) => ({ ...model, effortLevels: thinkingLevelsForHarness(id, model.id) })),
+      ]),
+    ),
     thinkingLevelsByHarness: Object.fromEntries(
       HARNESS_IDS.filter((id) => id !== "mock").map((id) => [id, thinkingLevelsForHarness(id)]),
     ),

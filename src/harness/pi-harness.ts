@@ -37,6 +37,8 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "max",
   "ultracode",
   "auto",
+  "default",
+  "adaptive",
 ]);
 import type { ConversationTurn, ScopeId, SessionEntry } from "../types.ts";
 import type {
@@ -58,6 +60,8 @@ import {
   auxiliaryModelForProvider,
   defaultModelForHarness,
   defaultInteractiveThinkingLevel,
+  modelSupportsAdaptiveThinking,
+  modelSupportsProviderDefault,
   modelDisplayName,
   resolveModel,
   getRequiredModel,
@@ -415,7 +419,7 @@ export function sanitizeTitle(out = ""): string | undefined {
 
 interface TurnSession {
   agentSession: AgentSession;
-  ref: ToolContextRef;
+  ref: ToolContextRef & { effortLevel?: string };
   composedPromptTokens: number;
   cwd: string;
   agentDir: string;
@@ -1486,6 +1490,10 @@ export function withRequestHeaders(model: Model<Api>, direct: boolean, fast: boo
 
 export function applyTurnEffort(session: AgentSession, level?: string): void {
   if (!level || !TURN_EFFORT_LEVELS.has(level)) return;
+  if (level === "adaptive" || level === "default") {
+    session.setThinkingLevel("off");
+    return;
+  }
   const effectiveLevel =
     level === "auto" && session.state.model ? defaultInteractiveThinkingLevel(session.state.model) : level;
   const normalizedLevel = effectiveLevel === "auto" ? "medium" : effectiveLevel;
@@ -1493,6 +1501,27 @@ export function applyTurnEffort(session: AgentSession, level?: string): void {
   // Normalize UI aliases before Pi clamps to the model's declared capabilities.
   // Mutating thinkingLevelMap would enable efforts the provider explicitly excludes.
   session.setThinkingLevel(providerLevel as ModelThinkingLevel);
+}
+
+export function applyReasoningMode<T>(payload: T, model: Model<Api>, level?: string): T {
+  if (level !== "adaptive" && level !== "default") return payload;
+  if (level === "adaptive" ? !modelSupportsAdaptiveThinking(model) : !modelSupportsProviderDefault(model))
+    throw new NonRetryableTurnError(`${level} reasoning is not supported by ${model.id}`);
+  if (!payload || typeof payload !== "object") return payload;
+  const body = payload as Record<string, unknown>;
+  delete body.thinking;
+  delete body.reasoning;
+  delete body.reasoning_effort;
+  if (body.output_config && typeof body.output_config === "object") {
+    const outputConfig = { ...body.output_config } as Record<string, unknown>;
+    delete outputConfig.effort;
+    if (Object.keys(outputConfig).length) body.output_config = outputConfig;
+    else delete body.output_config;
+  }
+  if (model.reasoning && ["openai-responses", "openai-codex-responses"].includes(model.api))
+    body.include = [...new Set([...(Array.isArray(body.include) ? body.include : []), "reasoning.encrypted_content"])];
+  if (level === "adaptive") body.thinking = { type: "adaptive", display: "summarized" };
+  return payload;
 }
 
 export function createPiHarness(opts?: PiHarnessOptions): Harness {
@@ -1591,7 +1620,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       turnProviderKeys ? undefined : modelGateway,
       systemCacheSplit ? "long" : undefined,
     );
-    const ref: ToolContextRef = { current: null };
+    const ref: TurnSession["ref"] = { current: null };
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
       composedPrompt,
@@ -1676,6 +1705,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ref.pendingPrepareNextTurn = undefined;
           ref.pendingTransformContext = undefined;
           applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
+          applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
           const result = prior ? await prior(payload, model) : payload;
           const capturedPayload = captureRequests ? sanitizeLlmPayload(result ?? payload, model) : undefined;
           let finalPayload = await withDocumentInputs(
@@ -1815,7 +1845,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const defaultThinkingLevel = entry.agentSession.model
             ? defaultInteractiveThinkingLevel(entry.agentSession.model)
             : "auto";
-          applyTurnEffort(entry.agentSession, turn.runtime?.effortLevel ?? defaultThinkingLevel);
+          entry.ref.effortLevel = turn.runtime?.effortLevel ?? defaultThinkingLevel;
+          applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
 
           const toolWallByStep: number[][] = [];
           const gapWork: GapWork[] = [];
@@ -2207,7 +2238,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               withRequestHeaders(fallback, !turnModelGateway?.models[fallbackId], wantFast),
             );
             entry.ref.fast = wantFast;
-            applyTurnEffort(entry.agentSession, turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback));
+            entry.ref.effortLevel = turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback);
+            applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
             const state = entry.agentSession.agent.state;
             for (let i = state.messages.length - 1; i >= messagesBefore; i--) {
               const m = state.messages[i] as { role?: string; stopReason?: string } | undefined;

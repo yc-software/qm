@@ -24,15 +24,48 @@ export function codexSubscriptionModelId(id: string): string {
 export function codexProviderModelId(id: string): string {
   return id.startsWith(CODEX_SUBSCRIPTION_PREFIX) ? id.slice(CODEX_SUBSCRIPTION_PREFIX.length) : id;
 }
-export const THINKING_LEVELS = ["auto", "low", "medium", "high", "xhigh", "max", "ultracode"] as const;
+export const THINKING_LEVELS = [
+  "auto",
+  "default",
+  "adaptive",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultracode",
+] as const;
 export const HARNESS_IDS = ["pi", "opencode", "codex", "claude", "mock"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
-export function thinkingLevelsForHarness(harnessId: HarnessId): readonly string[] {
-  if (harnessId === "pi") return THINKING_LEVELS;
-  if (harnessId === "claude") return THINKING_LEVELS.filter((level) => level !== "ultracode");
-  if (harnessId === "codex") return THINKING_LEVELS.filter((level) => level !== "max" && level !== "ultracode");
-  return ["auto"];
+export function modelSupportsAdaptiveThinking(model: Pick<Model<Api>, "api" | "reasoning" | "compat">): boolean {
+  return (
+    model.api === "anthropic-messages" &&
+    model.reasoning &&
+    (model.compat as { forceAdaptiveThinking?: boolean } | undefined)?.forceAdaptiveThinking === true
+  );
+}
+
+export function modelSupportsProviderDefault(model: Pick<Model<Api>, "api" | "compat">): boolean {
+  return (
+    ["anthropic-messages", "openai-responses", "openai-codex-responses"].includes(model.api) ||
+    (model.api === "openai-completions" &&
+      (model.compat as { thinkingFormat?: string } | undefined)?.thinkingFormat === "openai")
+  );
+}
+
+export function thinkingLevelsForHarness(harnessId: HarnessId, modelId?: string): readonly string[] {
+  const model = modelId ? resolveModel(modelId) : undefined;
+  return THINKING_LEVELS.filter((level) => {
+    if (level === "adaptive")
+      return harnessId === "pi" && (!modelId || (!!model && modelSupportsAdaptiveThinking(model)));
+    if (level === "default")
+      return harnessId === "pi" && (!modelId || (!!model && modelSupportsProviderDefault(model)));
+    if (harnessId === "pi") return true;
+    if (harnessId === "claude") return level !== "ultracode";
+    if (harnessId === "codex") return level !== "max" && level !== "ultracode";
+    return level === "auto";
+  });
 }
 
 export function harnessSupportsFastMode(harnessId: HarnessId): boolean {
@@ -624,5 +657,8 @@ export function safeModelMetadata(id: string) {
     maxTokens: model.maxTokens,
     cost: structuredClone(model.cost),
     fastMode: modelSupportsFastMode(id),
+    effortLevelsByHarness: Object.fromEntries(
+      HARNESS_IDS.map((harness) => [harness, thinkingLevelsForHarness(harness, id)]),
+    ),
   };
 }

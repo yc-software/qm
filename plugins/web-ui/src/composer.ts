@@ -224,8 +224,8 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         (restoredLoadout?.value === selected?.value ? restoredLoadout?.effort : undefined) ??
         (getRuntimeConfig(scopeKey())?.effective.effortLevel as EffortLevel | undefined) ??
         defaultEffortForModel(selected?.model);
-      const levels = effortLevelsForHarness(selected?.harnessId ?? "");
-      return levels.some((level) => level.value === effort) ? effort : "auto";
+      const levels = effortLevelsForHarness(selected?.harnessId ?? "", selected?.model, effort);
+      return levels.some((level) => level.value === effort) ? effort : levels[0]!.value;
     },
     set effortLevel(value: EffortLevel) {
       ++effortSelectionRevision;
@@ -947,9 +947,9 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   function normalizeLoadoutEntry(entry: LoadoutEntry, option: ModelOption): LoadoutEntry {
-    const levels = effortLevelsForHarness(option.harnessId);
+    const levels = effortLevelsForHarness(option.harnessId, option.model, entry.effort);
     const defaultEffort = defaultEffortForModel(option.model);
-    const fallbackEffort = levels.some((level) => level.value === defaultEffort) ? defaultEffort : "auto";
+    const fallbackEffort = levels.some((level) => level.value === defaultEffort) ? defaultEffort : levels[0]!.value;
     return {
       value: option.value,
       effort: levels.some((level) => level.value === entry.effort) ? entry.effort : fallbackEffort,
@@ -1758,7 +1758,13 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
   function selectEffort(level: EffortLevel, agent: Agent): void {
     const selected = currentModelOption();
-    if (!selected || !effortLevelsForHarness(selected.harnessId).some((option) => option.value === level)) return;
+    if (
+      !selected ||
+      !effortLevelsForHarness(selected.harnessId, selected.model, composerState.effortLevel).some(
+        (option) => option.value === level,
+      )
+    )
+      return;
     composerState.effortLevel = level;
     rememberActiveTweaks(selected);
     ctx.chat.drawActiveChat(agent);

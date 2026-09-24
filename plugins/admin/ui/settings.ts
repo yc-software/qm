@@ -19,7 +19,7 @@ import { html } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 
-type Model = { id: string; name?: string };
+type Model = { id: string; name?: string; effortLevels?: string[] };
 type Data = Record<string, any>;
 export class SettingsState extends SettingState {
   context: Data = {};
@@ -46,7 +46,12 @@ export class SettingsState extends SettingState {
     return this.context.harnessOptions?.length ? this.context.harnessOptions : [this.context.harnessDefault || "pi"];
   }
   get efforts(): string[] {
-    return this.context.thinkingLevelsByHarness?.[this.draft.harnessId] || ["auto"];
+    const advertised = this.models.find((model) => model.id === this.draft.modelId)?.effortLevels;
+    const levels: string[] = advertised ?? this.context.thinkingLevelsByHarness?.[this.draft.harnessId] ?? [];
+    const choices = levels.filter(
+      (level) => level !== "auto" && (advertised || (level !== "adaptive" && level !== "default")),
+    );
+    return this.draft.effortLevel === "auto" || !choices.length ? ["auto", ...choices] : choices;
   }
   get fastCapable() {
     return (
@@ -149,7 +154,9 @@ const harnessLabels: Record<string, string> = {
   claude: "Claude Code",
 };
 const effortLabels: Record<string, string> = {
-  auto: "Auto",
+  auto: "Legacy default",
+  adaptive: "Auto",
+  default: "Provider default",
   low: "Low",
   medium: "Medium",
   high: "High",

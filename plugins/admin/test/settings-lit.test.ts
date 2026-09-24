@@ -161,3 +161,45 @@ test("credential save acknowledges its submitted snapshot and retains newer edit
     dom.window.close();
   }
 });
+
+test("runtime reasoning choices follow the selected model and preserve legacy defaults", () => {
+  const dom = setup();
+  try {
+    const data = {
+      ...models,
+      modelsByHarness: {
+        pi: [
+          { id: "a", effortLevels: ["auto", "adaptive", "default", "high"] },
+          { id: "b", effortLevels: ["auto", "high"] },
+        ],
+      },
+      thinkingLevelsByHarness: { pi: ["auto", "adaptive", "default", "high"] },
+      runtime: { harnessId: "pi", modelId: "a", effortLevel: "auto" },
+    };
+    dom.window.eval("settingsUI.load(" + JSON.stringify(data) + ',"org:test","runtime")');
+    const select = () => dom.window.document.getElementById("base-effort") as HTMLSelectElement;
+    const choices = () => [...select().options].map((option) => [option.value, option.textContent]);
+    assert.deepEqual(choices(), [
+      ["auto", "Legacy default"],
+      ["adaptive", "Auto"],
+      ["default", "Provider default"],
+      ["high", "High"],
+    ]);
+    select().value = "adaptive";
+    select().dispatchEvent(new dom.window.Event("change"));
+    assert.equal(dom.window.eval('settingsUI.collect("runtime").effortLevel'), "adaptive");
+    assert.equal(
+      choices().some(([value]) => value === "auto"),
+      false,
+    );
+    dom.window.eval('settingsUI.states.get("runtime").change("modelId", "b")');
+    assert.deepEqual(choices(), [["high", "High"]]);
+    assert.equal(dom.window.eval('settingsUI.collect("runtime").effortLevel'), "high");
+    dom.window.eval(
+      'settingsUI.states.get("runtime").context.modelsByHarness.pi = [{id:"b"}]; settingsUI.states.get("runtime").changed()',
+    );
+    assert.deepEqual(choices(), [["high", "High"]]);
+  } finally {
+    dom.window.close();
+  }
+});

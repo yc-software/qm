@@ -72,7 +72,9 @@ export async function userRuntimeConfigBody(ctx: { deps: RuntimeDeps }, scope: S
       ...snapshot.effective,
       harnessId: route.harness,
       modelId: route.model,
-      effortLevel: thinkingLevelsForHarness(route.harness).includes(snapshot.effective.effortLevel ?? "auto")
+      effortLevel: thinkingLevelsForHarness(route.harness, route.model).includes(
+        snapshot.effective.effortLevel ?? "auto",
+      )
         ? snapshot.effective.effortLevel
         : "auto",
       fastMode:
@@ -217,7 +219,10 @@ export async function runtimeConfigBody(
 
 export function validateRuntimeChoice(choice: RuntimeChoice): string | null {
   if (!modelSupportedByHarness(choice.modelId, choice.harnessId)) return "model_not_supported";
-  if (choice.effortLevel !== undefined && !thinkingLevelsForHarness(choice.harnessId).includes(choice.effortLevel))
+  if (
+    choice.effortLevel !== undefined &&
+    !thinkingLevelsForHarness(choice.harnessId, choice.modelId).includes(choice.effortLevel)
+  )
     return "effort_not_supported";
   if (choice.fastMode !== undefined && typeof choice.fastMode !== "boolean") return "fast_mode_invalid";
   if (choice.fastMode && (!harnessSupportsFastMode(choice.harnessId) || !fastModeModelIds().includes(choice.modelId)))
@@ -249,5 +254,8 @@ export async function availableRuntimeError(
     !(await webuiModelEnabled(ctx, choice.modelId))
   )
     return "runtime is no longer available or enabled on this deployment";
-  return validateRuntimeChoice({ ...choice, effortLevel: undefined });
+  return validateRuntimeChoice({
+    ...choice,
+    effortLevel: choice.effortLevel === "adaptive" || choice.effortLevel === "default" ? choice.effortLevel : undefined,
+  });
 }
