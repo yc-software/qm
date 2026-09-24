@@ -612,7 +612,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   return {
     ...(deps.registerLogin ? { registerLogin: deps.registerLogin } : {}),
     ...(deps.commandCredentials?.length
-      ? { commandCredentialHandles: deps.commandCredentials.map((credential) => credential.handle) }
+      ? { commandCredentialHandles: deps.commandCredentials.map((credential) => credential.handle).sort() }
       : {}),
     ...(deps.sandboxResources && deps.accessSandboxResource
       ? {

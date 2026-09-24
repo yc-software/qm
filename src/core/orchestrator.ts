@@ -1101,6 +1101,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const sharedCore = applyPromptVars(SHARED_CORE_MD, { botName, botHandle, orgName });
       let systemPrompt = `${modeFrame}\n\n${resolution.systemPrompt}\n\n${sharedCore}\n\n${renderSecurityPolicyPrompt(securityPolicy)}`;
+      const turnContextBlocks: string[] = [];
       if (input.privateSessionMessage)
         systemPrompt +=
           "\n\nThis is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.";
@@ -1209,12 +1210,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         hasGlobal: resolution.layers.some((l) => l.mountPath === "global"),
         teamCount: resolution.layers.filter((l) => l.mountPath.startsWith("team-")).length,
       });
-      if (computerBlock) {
-        systemPrompt += `\n\n${computerBlock}`;
-        if (deps.scratchExec) {
-          systemPrompt +=
-            '\nSelect a sandbox explicitly or use a stored default. The opt-in scratch box (scope:"scratch") is separate: same OS and tooling, org-global files only, no logins or tokens, wiped after the turn — prefer it for heavy self-contained runs that need no logins, workspace files, or follow-up; it keeps this computer responsive.';
-        }
+      turnContextBlocks.push(computerBlock);
+      if (deps.scratchExec) {
+        systemPrompt +=
+          '\n\nSelect a sandbox explicitly or use a stored default. The opt-in scratch box (scope:"scratch") is separate: same OS and tooling, org-global files only, no logins or tokens, wiped after the turn — prefer it for heavy self-contained runs that need no logins, workspace files, or follow-up; it keeps this computer responsive.';
       }
       if (deps.deploymentLayer?.hints.length) {
         systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;
@@ -1660,10 +1659,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (enabled.size > 0) {
             const slugs = [...grantedCredSlugs].filter((s) => enabled.has(s));
             if (slugs.length > 0) {
-              const usable = records.filter((r) => slugs.includes(r.slug));
+              const usable = records.filter((r) => slugs.includes(r.slug)).sort((a, b) => a.slug.localeCompare(b.slug));
               const lines = usable.map((r) => {
-                const methods = r.allowedMethods?.length ? r.allowedMethods.join("/") : "GET";
-                const paths = r.allowedPathPrefixes?.length ? `paths ${r.allowedPathPrefixes.join(", ")}` : "any path";
+                const methods = r.allowedMethods?.length ? [...r.allowedMethods].sort().join("/") : "GET";
+                const paths = r.allowedPathPrefixes?.length
+                  ? `paths ${[...r.allowedPathPrefixes].sort().join(", ")}`
+                  : "any path";
                 return `- \`${r.slug}\` (${r.name}; shared org credential) → ${r.host} (${methods}; ${paths})`;
               });
               sharedCredsBlock =
@@ -2172,7 +2173,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (credentialDescriptions.length)
           systemPrompt +=
             "\n\n## Execution credentials\nRequest exact handles in execute.credentials:\n" +
-            credentialDescriptions.join("\n");
+            credentialDescriptions.sort().join("\n");
         systemPrompt += sharedCredsBlock;
         if (actorIsOrgAdmin) {
           systemPrompt +=
@@ -2206,7 +2207,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ),
             )
             .catch(swallowAs("orchestrator: standing-obligations read", null));
-          if (obligations) systemPrompt += `\n\n${obligations}`;
+          turnContextBlocks.push(
+            obligations ??
+              "## Already scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.",
+          );
         }
         if (input.origin.kind === "automation" && input.origin.destination && !input.surfaceTools) {
           systemPrompt +=
@@ -2974,6 +2978,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           sender,
           unscreenedNote,
           input.conversationHeader?.trim(),
+          ...turnContextBlocks,
           volatileContext,
         ]
           .filter((s) => s && s.trim())
