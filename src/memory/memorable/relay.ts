@@ -34,12 +34,9 @@ export function relayRecord(
       ...workflow,
       tool_calls: workflow.tool_calls.map((call) => {
         const action = call.input.action;
-        const name =
-          call.name === "files" && (action === "read" || action === "write")
-            ? action
-            : call.name === "sandbox" && action === "exec"
-              ? "execute"
-              : call.name;
+        let name = call.name;
+        if (name === "files" && (action === "read" || action === "write")) name = action;
+        else if (name === "sandbox" && action === "exec") name = "execute";
         return { ...call, name };
       }),
     }));
