@@ -69,6 +69,7 @@ class EmbeddedComposer extends AsyncDirective {
     }
     this.ctx.pane = compact;
     this.options!.submit = options.submit;
+    this.options!.prepareSubmit = options.prepareSubmit;
     return this.template();
   }
 

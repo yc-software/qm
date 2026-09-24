@@ -908,11 +908,15 @@ export async function setItemStatus(item: InboxItem, status: "open" | "dismissed
   }
 }
 
-export async function askAgent(item: InboxItem, message: string, options?: ComposerSubmission): Promise<boolean> {
+export async function askAgent(
+  item: InboxItem,
+  message: string,
+  options?: ComposerSubmission,
+  snapshot = { draft: effectiveDraft(item), conflictRevision: draftConflicts.get(item.id) ?? 0 },
+): Promise<boolean> {
   const text = message.trim();
   if ((!text && !options?.attachments?.length) || chatting.has(item.id)) return false;
-  const draft = effectiveDraft(item);
-  const conflictRevision = draftConflicts.get(item.id) ?? 0;
+  const { draft, conflictRevision } = snapshot;
   chatting.add(item.id);
   drawAll();
   try {
@@ -1188,6 +1192,16 @@ export function chatTpl(item: InboxItem, compact = false): TemplateResult {
           `inbox:${appState.me?.user ?? "anon"}:${item.loopId}:${item.id}`,
           {
             placeholder: `Ask ${brandName()} for something`,
+            prepareSubmit: () => {
+              const snapshot = {
+                draft: effectiveDraft(inboxItemById(item.id) ?? item),
+                conflictRevision: draftConflicts.get(item.id) ?? 0,
+              };
+              return async (text, options) => {
+                if (!(await askAgent(item, text, options, snapshot)))
+                  throw new Error("Could not complete the request. Your message has been kept.");
+              };
+            },
             submit: async (text, options) => {
               if (!(await askAgent(item, text, options)))
                 throw new Error("Could not complete the request. Your message has been kept.");

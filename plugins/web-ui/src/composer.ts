@@ -189,6 +189,7 @@ export interface ComposerSubmission {
 
 export interface ComposerOptions {
   submit?: (text: string, options: ComposerSubmission) => Promise<void>;
+  prepareSubmit?: () => NonNullable<ComposerOptions["submit"]>;
   placeholder?: string;
   preferenceKey?: string;
   runtimeAccount?: "company";
@@ -1453,7 +1454,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     if (agent.state.isStreaming) return queueDraft(agent);
     const text = composerState.draft.trim();
     if (!text && composerState.attachments.length === 0) return;
-    const submit = options.submit;
+    const submit = options.prepareSubmit?.() ?? options.submit;
     if (submit) {
       const selected = currentModelOption()!;
       const attachments = [...composerState.attachments];
