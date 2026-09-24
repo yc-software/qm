@@ -1013,7 +1013,7 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
     "claude-opus-5",
     "with no override the browse model follows the deployment base model",
   );
-  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "anthropic", "the runner is told which client to build");
+  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed", "the runner uses core model routing");
 
   built.config.setBrowseMaxSteps("org:default-org", 120);
   built.config.setBrowseModel("org:default-org", "claude-sonnet-4-6");
@@ -1022,12 +1022,12 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
   assert.equal(captured?.env?.BROWSE_LAB_MAX_STEPS, "120", "the configured limit rides the provision env");
   assert.equal(
     captured?.env?.BROWSE_LAB_MODEL,
-    "claude-sonnet-4-6",
-    "the configured browse model rides the provision env",
+    "claude-opus-5",
+    "legacy browse-only overrides cannot replace the default model",
   );
 });
 
-test("a stored browse model that no longer resolves falls back to the base model instead of stranding browse", async () => {
+test("a legacy browse-only model cannot strand managed default-model browsing", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     orgId: "acme",
@@ -1051,7 +1051,7 @@ test("a stored browse model that no longer resolves falls back to the base model
     "claude-opus-5",
     "the unresolvable override is ignored in favour of the base model, not propagated",
   );
-  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "anthropic");
+  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed");
 });
 
 test("browse follows a live org base model change, not the process-start default", async () => {
@@ -1081,10 +1081,10 @@ test("browse follows a live org base model change, not the process-start default
     "gpt-5.6-sol",
     "an admin changing the org base model moves browse too, without a restart",
   );
-  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "openai");
+  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed");
 });
 
-test("an OpenAI deployment tells the browse runner to build an OpenAI client", async () => {
+test("an OpenAI deployment provisions managed browser access without its provider key", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     orgId: "acme",
@@ -1104,7 +1104,11 @@ test("an OpenAI deployment tells the browse runner to build an OpenAI client", a
   const res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:oa1" } }));
   assert.equal(res.status, "ok");
   assert.equal(captured?.env?.BROWSE_LAB_MODEL, "gpt-5.6-sol");
-  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "openai", "never hardcoded to anthropic");
+  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed", "core selects the provider");
+  assert.ok(!Object.values(captured?.env ?? {}).includes("openai-org-key"));
+  const claims = await verifyCapabilityToken(captured!.env!.BROWSE_LAB_MODEL_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(claims?.browserModel, "gpt-5.6-sol");
+  assert.equal(claims?.browserAccount, "company");
 });
 
 test("turn timezone rides the prompt and control-plane capability token", async () => {
