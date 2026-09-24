@@ -1,3 +1,5 @@
+import type { InviteMailer } from "../admin/invite-email.ts";
+import type { DeploymentInvitation } from "../deploy/email-access.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
 import type { EventBus } from "../util/event-bus.ts";
 import type { RunStreamEvent } from "../runs/run-stream-events.ts";
@@ -576,6 +578,14 @@ export interface App {
     permission: Permission | null,
     actor: { createdBy: string },
   ): Promise<DeploymentGrantee[]>;
+  inviteToDeployment(
+    idOrName: string,
+    email: string,
+    actorId: string,
+  ): Promise<{
+    grantees: DeploymentGrantee[];
+    invitation: DeploymentInvitation;
+  }>;
   deploymentGrantees(idOrName: string): Promise<DeploymentGrantee[]>;
   deploymentGitRepoPath(id: string): Promise<string | null>;
   runDeploymentGitPush<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>): Promise<T>;
@@ -598,6 +608,8 @@ export interface AppDeps {
   swarms?: SwarmService;
   identity: IdentityService;
   publicWebUrl?: string;
+  deployAppsDomain?: string;
+  inviteMailer?: InviteMailer;
   sessions: SessionStore;
   screenSecurity?: SecurityScreenProbe;
   orchestrator: Orchestrator;

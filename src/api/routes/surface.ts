@@ -1103,6 +1103,7 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
     type?: unknown;
     id?: unknown;
     toScope?: unknown;
+    email?: unknown;
     permission?: unknown;
     move?: unknown;
   };
@@ -1111,7 +1112,15 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   }
   if (typeof b.id !== "string" || !b.id.trim())
     return sendJson(res, 400, { error: "bad_request", message: "id required" });
-  if (typeof b.toScope !== "string" || !b.toScope.trim()) {
+  if (
+    b.email !== undefined &&
+    (typeof b.email !== "string" || b.toScope !== undefined || b.type !== "deploy" || b.move === true)
+  )
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: "email is only supported for app sharing, instead of toScope",
+    });
+  if (b.email === undefined && (typeof b.toScope !== "string" || !b.toScope.trim())) {
     return sendJson(res, 400, {
       error: "bad_request",
       message: 'toScope required ("org", a scope id, or a teammate\'s name)',
@@ -1124,7 +1133,8 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
     {
       type: b.type,
       id: b.id,
-      ...splitToScope(b.toScope),
+      ...(typeof b.toScope === "string" ? splitToScope(b.toScope) : {}),
+      ...(typeof b.email === "string" ? { email: b.email } : {}),
       ...(b.permission === "read" || b.permission === "write" ? { permission: b.permission } : {}),
       ...(b.move === true ? { move: true } : {}),
     },
@@ -1144,6 +1154,7 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
     id: result.id,
     target: result.target,
     permission: result.permission,
+    ...(result.invitation ? { invitation: result.invitation } : {}),
   });
 }
 

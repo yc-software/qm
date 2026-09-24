@@ -24,7 +24,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
   let matches: DirectoryMatch[] = [];
   let query = "";
   let access = "view";
-  let selected: DirectoryMatch | null = null;
+  let selected: (DirectoryMatch & { email?: string }) | null = null;
   let searchSequence = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let searching = false;
@@ -47,19 +47,24 @@ export async function openDeploymentPermissions(id: string, title: string, owner
     if (closeFormMenus()) return;
     close();
   });
-  const change = async (scope: string, value: string) => {
+  const change = async (scope: string, value: string, email?: string) => {
     if (busy) return;
     closeFormMenus();
     busy = true;
     error = "";
     draw();
     try {
-      const response = await api<{ public: boolean; grantees: Grant[] }>(endpoint, {
-        method: "POST",
-        body: JSON.stringify({ scope, access: value }),
-      });
+      const response = await api<{ public: boolean; grantees: Grant[]; invitation?: { emailProblem?: string } }>(
+        endpoint,
+        {
+          method: "POST",
+          body: JSON.stringify({ ...(email ? { email } : { scope }), access: value }),
+        },
+      );
       publicAccess = response.public;
       grantees = response.grantees;
+      if (response.invitation?.emailProblem)
+        error = `Access granted, but no invitation email was sent: ${response.invitation.emailProblem}`;
       selected = null;
       query = "";
       searched = false;
@@ -127,6 +132,17 @@ export async function openDeploymentPermissions(id: string, title: string, owner
       }
     }
   };
+  const emailCandidate = (): string | null => {
+    const email = query.trim().toLowerCase();
+    if (email.length > 254 || !/^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(email)) return null;
+    if (
+      owner.toLowerCase() === `personal:${email}` ||
+      grantees.some((g) => g.scope.toLowerCase() === `personal:${email}`)
+    )
+      return null;
+    if (matches.some((m) => m.principalId.toLowerCase() === email)) return null;
+    return email;
+  };
   const permissionMenu = (value: string, label: string, update: (value: string) => void, removable = false) =>
     html`<fieldset class="permission-control" ?disabled=${busy}>
       ${menuSelect({
@@ -176,16 +192,24 @@ export async function openDeploymentPermissions(id: string, title: string, owner
                           ${icon(X, 14)}
                         </button>
                         <div class="permission-invite-actions">
-                          ${permissionMenu(access, "New person's access", (value) => {
-                            access = value;
-                            draw();
-                          })}<button
+                          ${
+                            selected.email
+                              ? html`<span class="permission-note">Can view</span>`
+                              : permissionMenu(access, "New person's access", (value) => {
+                                  access = value;
+                                  draw();
+                                })
+                          }<button
                             class="btn primary"
                             ?disabled=${busy}
                             @click=${() => {
                               if (selected) {
                                 names.set(`personal:${selected.principalId}`, selected.displayName);
-                                void change(`personal:${selected.principalId}`, access);
+                                void change(
+                                  `personal:${selected.principalId}`,
+                                  selected.email ? "view" : access,
+                                  selected.email,
+                                );
                               }
                             }}
                           >
@@ -204,10 +228,10 @@ export async function openDeploymentPermissions(id: string, title: string, owner
                           ${icon(Search, 16)}<input
                             id="app-people-query"
                             aria-label="Add people"
-                            placeholder="Add people by name or handle"
+                            placeholder="Add people by name or email"
                             type="search"
                             autocomplete="off"
-                            maxlength="80"
+                            maxlength="254"
                             .value=${live(query)}
                             ?disabled=${busy}
                             @input=${(event: Event) => {
@@ -225,8 +249,33 @@ export async function openDeploymentPermissions(id: string, title: string, owner
                           closeFormMenus();
                           draw();
                         })}
+                        ${
+                          !searching && searched && emailCandidate()
+                            ? html`
+                                <button
+                                  class="project-member-result"
+                                  type="button"
+                                  ?disabled=${busy}
+                                  @click=${() => {
+                                    const email = emailCandidate();
+                                    if (!email) return;
+                                    selected = { principalId: email, displayName: email, type: "guest", email };
+                                    access = "view";
+                                    closeFormMenus();
+                                    draw();
+                                  }}
+                                >
+                                  Add ${emailCandidate()} with view access
+                                </button>
+                                <p class="permission-note">
+                                  They receive an app link by email and sign in with this address. This does not add
+                                  them to your organization.
+                                </p>
+                              `
+                            : nothing
+                        }
                         ${searching ? html`<p class="permission-note" role="status">Searching…</p>` : nothing}
-                        ${!searching && searched && !matches.length ? html`<p class="permission-note">No additional people found.</p>` : nothing}
+                        ${!searching && searched && !matches.length && !emailCandidate() ? html`<p class="permission-note">No additional people found.</p>` : nothing}
                       </form>`
                 }
               </div>`

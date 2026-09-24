@@ -1,6 +1,7 @@
 import { notifyDeploymentShared } from "./share-notice.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "./embed-ancestors.ts";
+import { deploymentShareScope } from "./email-access.ts";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -129,6 +130,7 @@ export interface DeployServiceDeps {
   advisoryLock?: AdvisoryLock;
   canReadScope?: (principalId: string, scopeId: ScopeId) => Promise<boolean>;
   canWriteScope?: (principalId: string, scopeId: ScopeId) => Promise<boolean>;
+  canManageEmail?: (email: string) => Promise<boolean>;
   managesArtifactHome?: (homeScopeId: ScopeId, createdBy: string, principalId: string) => Promise<boolean>;
   deploymentEnv?: (deployment: Deployment) => Promise<Record<string, string>>;
 }
@@ -345,7 +347,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const grant: Grant = {
         ownerScopeId: d.ownerScopeId,
         ref: deploymentRef(d.id),
-        granteeScopeId: s.scope,
+        granteeScopeId: await deploymentShareScope(s.scope, s.permission, deps.canManageEmail),
         permission: s.permission,
         grantedBy: createdBy,
       };
@@ -821,6 +823,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       if (d.ownerScopeId !== scopeId("personal", actor.createdBy)) {
         throw new Error(`only the owner can change who can reach "${d.name ?? d.id}"`);
       }
+      grantee = await deploymentShareScope(grantee, permission, deps.canManageEmail);
       const ref = deploymentRef(d.id);
       await deps.acl.revoke(d.ownerScopeId, ref, grantee, actor.createdBy);
       if (permission === null) {

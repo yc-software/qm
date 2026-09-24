@@ -931,16 +931,22 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           };
         }
 
-        await app.grant({
-          ownerScopeId: home.ownerScopeId,
-          ref: home.grantRef,
-          granteeScopeId: toScope,
-          permission,
-          grantedBy: capability.actorId,
-        });
+        const invite =
+          req.type === "deploy" && req.email !== undefined && permission === "read"
+            ? await app.inviteToDeployment(home.id, req.email, capability.actorId)
+            : undefined;
+        if (!invite)
+          await app.grant({
+            ownerScopeId: home.ownerScopeId,
+            ref: home.grantRef,
+            granteeScopeId: toScope,
+            permission,
+            grantedBy: capability.actorId,
+          });
         return {
           ok: true,
           verb: "share",
+          ...(invite ? { invitation: invite.invitation } : {}),
           type: req.type,
           id: home.id,
           target: { scope: toScope, label: target.label },
@@ -965,8 +971,9 @@ type ArtifactTarget =
 async function resolveArtifactTarget(app: App, req: ShareArtifactRequest): Promise<ArtifactTarget> {
   const r = await resolveShareTarget(
     app,
-    { scope: req.scope, recipient: req.recipient },
+    { scope: req.scope, recipient: req.recipient, email: req.email },
     {
+      allowEmail: req.type === "deploy" && !req.move,
       invalidScope: (scope) => `invalid scope "${scope}" — use "org" or a scope id like personal:<id> or channel:<id>`,
       targetRequired: 'a target is required: pass `toScope` ("org", a scope id, or a teammate\'s name)',
     },

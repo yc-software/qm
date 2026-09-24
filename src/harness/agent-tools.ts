@@ -2967,7 +2967,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         "Transfer the artifact to another context. Moving an app transfers ownership; existing shares survive. Moving a skill to the org requires an org admin in a user-started turn.";
     else if (type === "deploy")
       description =
-        "Change access to an app you own while keeping it in its current home. Set public to true or false for anonymous link access, or use toScope for authenticated access. Only the owner can share; grantees cannot reshare.";
+        "Change access to an app you own while keeping it in its current home. Set public to true or false for anonymous link access, or use toScope/email for authenticated access (external emails are view-only). Only the owner can share; grantees cannot reshare.";
     return defineTool({
       name: action,
       label: action,
@@ -2979,7 +2979,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ? Type.Optional(
                 Type.String({
                   description:
-                    'Authenticated destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name. Omit when setting public.',
+                    'Authenticated destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name. Omit when setting public or email.',
                 }),
               )
             : Type.String({
@@ -2987,6 +2987,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               }),
         ...(type === "deploy" && !move
           ? {
+              email: Type.Optional(
+                Type.String({
+                  description:
+                    "Exact email to grant view access, including people outside the directory. Use instead of toScope.",
+                }),
+              ),
               public: Type.Optional(
                 Type.Boolean({
                   description:
@@ -3009,6 +3015,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const params = args as {
           id: string;
           toScope?: string;
+          email?: string;
           public?: boolean;
           permission?: "read" | "write";
         };
@@ -3017,11 +3024,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const id = params.id;
         await recordCall(callId, { tool, action, type, id });
         if (type === "deploy" && !move && params.public !== undefined) {
-          if (params.toScope !== undefined)
+          if (params.toScope !== undefined || params.email !== undefined)
             return recordResult(
               callId,
               { tool, action, error: "bad_request" },
-              text("[error] set public or toScope, not both"),
+              text("[error] set public, email, or toScope, not more than one"),
               true,
             );
           const d = await tc.setDeploymentPublic(id, params.public);
@@ -3031,17 +3038,18 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             text(`${d.name ?? d.id} is now ${d.public ? "public — anyone with the link can open it" : "restricted"}.`),
           );
         }
-        if (!params.toScope)
+        if (!params.toScope && !params.email)
           return recordResult(
             callId,
             { tool, action, error: "bad_request" },
-            text("[error] toScope is required unless public is set"),
+            text("[error] toScope or email is required unless public is set"),
             true,
           );
         const r = await tc.shareArtifact({
           type,
           id,
-          ...splitToScope(params.toScope),
+          ...(params.toScope ? splitToScope(params.toScope) : {}),
+          ...(params.email !== undefined ? { email: params.email } : {}),
           ...(params.permission !== undefined ? { permission: params.permission } : {}),
           ...(move ? { move: true } : {}),
         });
@@ -3052,11 +3060,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             : "";
           return recordResult(callId, { tool, action, error: r.code }, text(`[error] ${r.message}${candidates}`), true);
         }
+        let invitationNote = "";
+        if (r.invitation) {
+          if (r.invitation.emailSent) invitationNote = " App invitation email sent.";
+          else if (r.invitation.alreadyShared) invitationNote = " Already shared; no duplicate email sent.";
+          else
+            invitationNote = ` Access granted, but invitation email was not sent: ${r.invitation.emailProblem ?? "delivery unavailable"}`;
+          if (r.invitation.appUrl) invitationNote += ` App link: ${r.invitation.appUrl}`;
+        }
         return recordResult(
           callId,
           { tool, action, verb: r.verb, type: r.type, id: r.id, target: r.target.scope },
           text(
-            `${r.verb === "move" ? "Moved" : "Shared"} ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.`,
+            `${r.verb === "move" ? "Moved" : "Shared"} ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.${invitationNote}`,
           ),
         );
       },

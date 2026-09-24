@@ -2227,17 +2227,25 @@ const apiRoutes: readonly WebRoute[] = [
     method: "POST",
     path: "/api/deployments/:id/share",
     handle: async ({ req, res, params }) => {
-      const body = await readJson<{ scope?: unknown; recipient?: unknown; access?: unknown; public?: unknown }>(
-        req,
-        res,
-        false,
-      );
+      const body = await readJson<{
+        scope?: unknown;
+        recipient?: unknown;
+        email?: unknown;
+        access?: unknown;
+        public?: unknown;
+      }>(req, res, false);
       if (!body) return;
       return relayCap(
         res,
         "POST",
         `/v1/deployments/${encodeURIComponent(params.id!)}/share`,
-        JSON.stringify({ scope: body.scope, recipient: body.recipient, access: body.access, public: body.public }),
+        JSON.stringify({
+          scope: body.scope,
+          recipient: body.recipient,
+          email: body.email,
+          access: body.access,
+          public: body.public,
+        }),
       );
     },
   },

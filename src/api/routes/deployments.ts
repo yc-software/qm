@@ -1491,8 +1491,12 @@ type ShareTarget =
   | { kind: "ambiguous"; candidates: Array<{ principalId: string; displayName: string }> }
   | { kind: "invalid"; message: string };
 
-export function resolveShareTarget(app: App, input: { scope?: string; recipient?: string }): Promise<ShareTarget> {
+export function resolveShareTarget(
+  app: App,
+  input: { scope?: string; recipient?: string; email?: string },
+): Promise<ShareTarget> {
   return resolveShareTargetGrammar(app, input, {
+    allowEmail: true,
     invalidScope: (scope) => `invalid scope "${scope}" — use "org" or a scope id like personal:<id> or org:<id>`,
     targetRequired: 'a target is required: pass `scope` ("org" or a scope id) or `recipient` (a teammate\'s name)',
   });
@@ -1518,13 +1522,14 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
   const b = (isObj(body) ? body : {}) as {
     scope?: unknown;
     recipient?: unknown;
+    email?: unknown;
     access?: unknown;
     public?: unknown;
   };
   if (b.public !== undefined) {
     if (typeof b.public !== "boolean")
       return sendJson(res, 400, { error: "bad_request", message: "public must be a boolean" });
-    if (b.scope !== undefined || b.recipient !== undefined || b.access !== undefined)
+    if (b.scope !== undefined || b.recipient !== undefined || b.email !== undefined || b.access !== undefined)
       return sendJson(res, 400, {
         error: "bad_request",
         message: "public access and person/scope access must be changed separately",
@@ -1551,6 +1556,10 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       return sendJson(res, status, { error, message: msg });
     }
   }
+  if (b.email !== undefined && typeof b.email !== "string")
+    return sendJson(res, 400, { error: "bad_request", message: "email must be a string" });
+  if (b.email !== undefined && (b.scope !== undefined || b.recipient !== undefined))
+    return sendJson(res, 400, { error: "bad_request", message: "pass only one of email, scope, or recipient" });
   const access = typeof b.access === "string" ? b.access.toLowerCase() : "view";
   if (access !== "view" && access !== "manage" && access !== "none") {
     return sendJson(res, 400, { error: "bad_request", message: 'access must be "view", "manage", or "none"' });
@@ -1561,6 +1570,7 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
   const target = await resolveShareTarget(app, {
     ...(typeof b.scope === "string" ? { scope: b.scope } : {}),
     ...(typeof b.recipient === "string" ? { recipient: b.recipient } : {}),
+    ...(typeof b.email === "string" ? { email: b.email } : {}),
   });
   if (target.kind === "invalid") return sendJson(res, 400, { error: "bad_request", message: target.message });
   if (target.kind === "none")
@@ -1575,7 +1585,13 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       candidates: target.candidates,
     });
   try {
-    const grantees = await app.shareDeployment(params.id!, target.scope, permission, { createdBy: capability.actorId });
+    const invite =
+      typeof b.email === "string" && permission === "read"
+        ? await app.inviteToDeployment(params.id!, b.email, capability.actorId)
+        : undefined;
+    const grantees =
+      invite?.grantees ??
+      (await app.shareDeployment(params.id!, target.scope, permission, { createdBy: capability.actorId }));
     const orgGrant = grantees.find((g) => parseScopeId(g.scope).kind === "org");
     let reach = "owner-only";
     if (orgGrant) reach = `everyone in ${parseScopeId(orgGrant.scope).ref}`;
@@ -1586,6 +1602,7 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       target: { scope: target.scope, label: target.label },
       access,
       reach,
+      ...(invite ? { invitation: invite.invitation } : {}),
       public: deployment?.public === true,
       grantees,
     });

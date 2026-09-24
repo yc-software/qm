@@ -3489,6 +3489,15 @@ test("resource actions preserve sharing targets, transfer semantics and file con
   );
   assert.match(textOut(publicResult), /anyone with the link/);
   assert.deepEqual(publicChanges, [{ id: "artifact", isPublic: true }]);
+  await call(
+    tools.find((tool) => tool.name === "apps"),
+    {
+      action: "share",
+      id: "artifact",
+      email: "guest@example.com",
+    },
+  );
+  assert.deepEqual(shares.at(-1), { type: "deploy", id: "artifact", email: "guest@example.com" });
 
   const before = writes.length;
   await call(files, { action: "read", path: "notes", data: "unexpected" });
