@@ -297,7 +297,20 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     title: origin?.label || "Conversation",
     context:
       s.shortName(session.scopeId || s.scope) + (session.createdAt ? " · created " + s.relTime(session.createdAt) : ""),
-    actions: owner ? [s.webUiAsButton(owner)] : [],
+    actions: [
+      node(
+        html`<a
+          class="button"
+          href=${s.stateToUrl({ view: "history", scope: session.scopeId || s.scope, session: sessionId, turn: "agent" })}
+          @click=${(event: Event) => {
+            event.preventDefault();
+            s.go({ view: "history", scope: session.scopeId || s.scope, session: sessionId, turn: "agent" });
+          }}
+          >View as agent</a
+        >`,
+      ),
+      ...(owner ? [s.webUiAsButton(owner)] : []),
+    ],
   });
   let requests: Row[] = [];
   try {
@@ -307,11 +320,12 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     requests = [];
   }
   if (!current()) return;
-  const { units, dur, principalIds, originPromptSeq } = prepare(data, requests),
+  const { units, principalIds, originPromptSeq } = prepare(data, requests),
     open = new Set<Row>(),
     bodyNodes = new Map<Row, Node>(),
     toolNodes = new Map<Row, Row>(),
     panels = new Map<Row, Node>();
+  let messagesOnly = false;
   let errors: Row[] = [],
     first = 0,
     paused = false;
@@ -329,6 +343,42 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     first = Math.max(0, units.length - 60);
     while (first > 0 && units[first].kind === "llm") first--;
   }
+  const turnSeqs = [
+    ...new Set<number>([
+      ...(data.entries || []).filter((entry: Row) => entry.type === "user").map((entry: Row) => entry.seq),
+      ...requests.filter((request: Row) => Number.isInteger(request.turnSeq)).map((request: Row) => request.turnSeq),
+    ]),
+  ].sort((a, b) => a - b);
+  const sequence = (seq: number, resultSeq?: number) => {
+    const turn = turnSeqs.findLast((value) => value <= seq);
+    return html`#${seq}${resultSeq == null ? nothing : html` → #${resultSeq}`}${
+      turn == null
+        ? nothing
+        : html`<a
+            class="agent-seq-icon"
+            href=${s.stateToUrl({ view: "history", scope: s.scope, session: sessionId, turn: "agent:" + turn + ":" + seq })}
+            aria-label=${"View as agent at sequence #" + seq}
+            title=${"View as agent · sequence #" + seq + " · turn #" + turn}
+            @click=${(event: MouseEvent) => {
+              event.stopPropagation();
+              if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+              event.preventDefault();
+              s.go({ view: "history", scope: s.scope, session: sessionId, turn: "agent:" + turn + ":" + seq });
+            }}
+            ><svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="5" y="7" width="14" height="12" rx="3" />
+              <path d="M12 7V4M3 11v4m18-4v4M9 12h.01M15 12h.01M9 16h6" /></svg
+          ></a>`
+    }`;
+  };
   const contextButton = (turn: any, count: number) =>
     html`<button
       type="button"
@@ -342,16 +392,6 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     >
       ${brain}
     </button>`;
-  const timing = (unit: Row) => {
-    const call = unit.primary.type === "tool_call" ? unit.primary : null,
-      res = unit.primary.type === "tool_result" ? unit.primary : unit.paired;
-    return call && res
-      ? [
-          [dur.get(call.seq), "model"],
-          [(res.createdAt || 0) - (call.createdAt || 0), "exec"],
-        ]
-      : [[dur.get((call || res)?.seq)]];
-  };
   function fullTool(unit: Row) {
     if (!toolNodes.has(unit)) {
       const call = unit.primary.type === "tool_call" ? unit.primary : null,
@@ -362,13 +402,24 @@ export async function show(sessionId: string, limit: number | undefined, expand:
           call,
           res,
           unit.llmReqs?.length ? node(contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length)) : null,
-          s.stepDurEl(timing(unit)),
+          null,
           unit.delivery || null,
         ),
       );
     }
     const built = toolNodes.get(unit)!;
     built.sync?.();
+    const call = unit.primary.type === "tool_call" ? unit.primary : null;
+    const res = unit.primary.type === "tool_result" ? unit.primary : unit.paired;
+    const when = built.block.querySelector(".when");
+    if (when && !built.sequenceRenderer) {
+      when.replaceChildren();
+      built.sequenceRenderer = renderer(when);
+    }
+    if (built.sequenceRenderer)
+      built.sequenceRenderer(
+        html`${sequence((call || res).seq, call && res ? res.seq : undefined)} · ${s.fmtTime((call || res).createdAt)}`,
+      );
     return built.block;
   }
   const cronLink = (cronOrigin: Row | null, ownerScope?: string) =>
@@ -429,10 +480,10 @@ export async function show(sessionId: string, limit: number | undefined, expand:
           title="Toggle full tool card"
           aria-expanded=${String(open.has(unit))}
           @click=${(e: MouseEvent) => {
-            if (!(e.target as Element).closest(".copy")) toggle();
+            if (!(e.target as Element).closest(".copy, a")) toggle();
           }}
           @keydown=${(e: KeyboardEvent) => {
-            if (e.key === "Enter" || e.key === " ") {
+            if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
               e.preventDefault();
               toggle();
             }
@@ -441,8 +492,8 @@ export async function show(sessionId: string, limit: number | undefined, expand:
           <span class="tool-line-caret">${open.has(unit) ? "▾" : "▸"}</span
           ><span class="tool-label">${s.toolLabelText(name, cp, rp)}</span
           ><span class="tool-line-preview">${s.firstLine(s.toolPrimaryText(cp, rp, !!call, !!res) || "", 240)}</span
-          >${s.stepDurEl(timing(unit))}<span class="when"
-            >${call && res ? `#${call.seq}→#${res.seq} · ${s.fmtTime(call.createdAt)}` : `#${e.seq} · ${s.fmtTime(e.createdAt)}`}</span
+          ><span class="when"
+            >${sequence(e.seq, call && res ? res.seq : undefined)} · ${s.fmtTime((call || e).createdAt)}</span
           >
           <div class="meta-row">${s.toolStatusMeta(name, rp, !!res)}</div>
           ${s.copyButton("Copy", () => s.toolCopyText(call, res))}
@@ -517,12 +568,15 @@ export async function show(sessionId: string, limit: number | undefined, expand:
           >${s.copyButton("Copy", () => text)}
         </div>
         ${panels.has(unit) ? panelVisibility(panels.get(unit)!, open.has(unit)) : nothing}
-        <pre>${bodyText}</pre>
+        <details class="session-event-details">
+          <summary>Delivery details</summary>
+          <pre>${bodyText}</pre>
+        </details>
         ${s.deliveryFileBadges(event.attachments)}
       </div>`;
     }
     const e = unit.entry,
-      noise = s.entryIsNoise(e),
+      noise = e.type !== "user" && e.type !== "assistant",
       isOrigin = origin && e.type === "user" && e.seq === originPromptSeq,
       text = s.payloadText(e.payload);
     let label = s.titleCase(e.type || "entry");
@@ -538,21 +592,31 @@ export async function show(sessionId: string, limit: number | undefined, expand:
       e.type === "delivery" || (e.type === "tool_result" && e.payload?.tool === "attach")
         ? s.deliveryFileBadges(e.payload?.files || [])
         : nothing;
-    return html`<div
-      class=${classMap({ entry: true, noise, collapsed: noise && !open.has(unit), "thinking-entry": e.type === "thinking", "message-entry": e.type === "user" || e.type === "assistant", "user-entry": e.type === "user", "assistant-entry": e.type === "assistant", "cron-prompt-entry": !!isOrigin, "system-entry": e.type === "soul" || e.type === "system", filtered: s.entryHidden([e.type], false) })}
+    const contextAction = unit.llmReqs?.length
+      ? html`<button
+          type="button"
+          class="link session-context-link"
+          @click=${() => s.go({ view: "history", scope: s.scope, session: sessionId, turn: unit.llmReqs[0].turnSeq })}
+        >
+          Captured request
+        </button>`
+      : nothing;
+    return html`<article
+      class=${classMap({ entry: true, "session-message": !noise, "session-event": noise, noise, collapsed: noise && !open.has(unit), "thinking-entry": e.type === "thinking", "message-entry": !noise, "user-entry": e.type === "user", "assistant-entry": e.type === "assistant", "cron-prompt-entry": !!isOrigin, "system-entry": e.type === "soul" || e.type === "system", filtered: s.entryHidden([e.type], false) })}
     >
       <div class="who">
-        ${unit.llmReqs?.length ? contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length) : nothing}${noise ? html`<button type="button" class="disclosure" aria-expanded=${String(open.has(unit))} aria-label=${open.has(unit) ? "Collapse entry" : "Expand entry"} title=${open.has(unit) ? "Collapse entry" : "Expand entry"} @click=${toggle}>${open.has(unit) ? "▾" : "▸"}</button>` : nothing}<span
-          class=${"entry-label" + (isOrigin ? " important" : "")}
-          >${label}</span
-        >${isOrigin ? cronLink(origin, session.scopeId) : nothing}${e.type !== "user" ? s.stepDurEl([[dur.get(e.seq)]]) : nothing}<span
-          class="when"
-          >${"#" + e.seq + " · " + s.fmtTime(e.createdAt)}</span
-        >${s.copyButton("Copy", () => text)}
+        ${noise ? html`<button type="button" class="icon-button disclosure" aria-expanded=${String(open.has(unit))} aria-label=${open.has(unit) ? "Collapse entry" : "Expand entry"} @click=${toggle}>${open.has(unit) ? "⌄" : "›"}</button>` : html`<span class="session-avatar" aria-hidden="true">${e.type === "assistant" ? "🤖" : label.slice(0, 1).toUpperCase()}</span>`}
+        <span class="entry-label">${label}</span>
+        ${isOrigin ? cronLink(origin, session.scopeId) : nothing}
+
+        <span class="when">${sequence(e.seq)}<span class="session-timestamp">${s.fmtTime(e.createdAt)}</span></span>
+        <span class="session-copy">${s.copyButton("Copy", () => text)}</span>
       </div>
-      ${body(e)}${files}
-    </div>`;
+      <div class="session-entry-content">${body(e)}${files}</div>
+      ${contextAction === nothing ? nothing : html`<div class="session-message-footer">${contextAction}</div>`}
+    </article>`;
   }
+
   function panelVisibility(panel: Node, visible: boolean) {
     (panel as HTMLElement).classList.add("inline-context");
     (panel as HTMLElement).classList.toggle("collapsed", !visible);
@@ -567,7 +631,40 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     controls();
     const more = first === 0 || paused;
     draw(
-      html`<div class="detail">
+      html`<div class=${"detail session-log" + (messagesOnly ? " messages-only" : "")}>
+        <div class="session-log-heading">
+          <div>
+            <h2>Session activity</h2>
+            <p>
+              ${turnSeqs.length} turns · ${requests.length} captured
+              requests${data.hasMore ? " · earlier events available" : ""}
+            </p>
+          </div>
+          <div class="session-view-switch" role="group" aria-label="Activity view">
+            <button
+              type="button"
+              class="seg"
+              aria-pressed=${String(!messagesOnly)}
+              @click=${() => {
+                messagesOnly = false;
+                paint();
+              }}
+            >
+              All activity
+            </button>
+            <button
+              type="button"
+              class="seg"
+              aria-pressed=${String(messagesOnly)}
+              @click=${() => {
+                messagesOnly = true;
+                paint();
+              }}
+            >
+              Messages
+            </button>
+          </div>
+        </div>
         <div>
           ${errors.length ? s.errorStripBox(errors, s.plural(errors.length, "error") + " logged in this session", 5) : nothing}
         </div>

@@ -16,7 +16,7 @@ function setup() {
   dom.window.scrollTo = () => {};
   dom.window.eval(
     bundle +
-      `;window.ui=transcriptUI;window.data={entries:[]};window.visible={thinking:true,toolResults:true};window.textNode=text=>{const p=document.createElement('pre');p.textContent=text;return p;};window.services={api:async(method,path)=>({ok:true,data:path.includes('/llm?')?{requests:[]}:data}),scope:'org:test',pageSize:60,visibility:visible,current:()=>true,pageShell:()=>{},shortName:x=>x,relTime:x=>x,fmtTime:x=>x,adminErrors:async()=>[],setObserver:()=>{},entryHidden:types=>!visible.thinking&&types.includes('thinking'),payloadText:x=>x,payloadName:()=>'',isXmlishText:()=>false,renderMarkdown:textNode,entryIsNoise:e=>e.type==='thinking',titleCase:x=>x,brandSelfLabel:()=>"QM",stepDurEl:()=>null,copyButton:()=>document.createElement('button'),deliveryFileBadges:()=>null};`,
+      `;window.ui=transcriptUI;window.data={entries:[]};window.visible={thinking:true,toolResults:true};window.textNode=text=>{const p=document.createElement('pre');p.textContent=text;return p;};window.services={api:async(method,path)=>({ok:true,data:path.includes('/llm?')?{requests:[]}:data}),stateToUrl:()=>'/agent-seat',scope:'org:test',pageSize:60,visibility:visible,current:()=>true,pageShell:()=>{},shortName:x=>x,relTime:x=>x,fmtTime:x=>x,adminErrors:async()=>[],setObserver:()=>{},entryHidden:types=>!visible.thinking&&types.includes('thinking'),payloadText:x=>x,payloadName:()=>'',isXmlishText:()=>false,renderMarkdown:textNode,entryIsNoise:e=>e.type==='thinking',titleCase:x=>x,brandSelfLabel:()=>"QM",stepDurEl:()=>null,copyButton:()=>document.createElement('button'),deliveryFileBadges:()=>null};`,
   );
   return dom;
 }
@@ -122,6 +122,77 @@ test("standalone delivery retains destination labels and never renders text as H
     assert.equal(doc.querySelector(".badge")!.textContent, "Web");
     assert.equal(doc.querySelectorAll("img").length, 0);
     assert.match(doc.querySelector("pre")!.textContent!, /<img src=x>/);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("view as agent links open the selected incoming sequence", async () => {
+  const dom = setup();
+  try {
+    dom.window.eval(
+      'window.navigated=null;services.go=s=>navigated=s;data={entries:[{seq:7,type:"user",payload:"hello",createdAt:1},{seq:8,type:"text_start",payload:"start",createdAt:2},{seq:9,type:"assistant",payload:"reply",createdAt:3}]}',
+    );
+    await dom.window.eval('ui.show("session",60,false,services)');
+    const link = dom.window.document.querySelector<HTMLAnchorElement>('[aria-label="View as agent at sequence #7"]')!;
+    assert.ok(link);
+    assert.ok(link.closest(".when"));
+    assert.ok(link.querySelector('svg[aria-hidden="true"]'));
+    for (const seq of [7, 8, 9]) {
+      const icon = dom.window.document.querySelector<HTMLAnchorElement>(
+        `[aria-label="View as agent at sequence #${seq}"]`,
+      )!;
+      assert.ok(icon.closest(".when"));
+      icon.click();
+      assert.equal(dom.window.eval("navigated.turn"), "agent:7:" + seq);
+    }
+    assert.equal(dom.window.eval("navigated.session"), "session");
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("activity view switches without discarding transcript content or disclosure state", async () => {
+  const dom = setup();
+  try {
+    dom.window.eval(
+      'data={entries:[{seq:1,type:"user",payload:"hello",createdAt:1},{seq:2,type:"text_start",payload:"internal phase",createdAt:2},{seq:3,type:"assistant",payload:"reply",createdAt:3}]}',
+    );
+    await dom.window.eval('ui.show("session",60,false,services)');
+    const doc = dom.window.document;
+    const technical = doc.querySelector(".session-event")!;
+    assert.ok(technical.classList.contains("collapsed"));
+    technical.querySelector<HTMLButtonElement>(".disclosure")!.click();
+    const buttons = [...doc.querySelectorAll<HTMLButtonElement>(".session-view-switch button")];
+    buttons.find((b) => b.textContent?.trim() === "Messages")!.click();
+    assert.ok(doc.querySelector(".session-log")!.classList.contains("messages-only"));
+    buttons.find((b) => b.textContent?.trim() === "All activity")!.click();
+    assert.ok(!doc.querySelector(".session-log")!.classList.contains("messages-only"));
+    assert.ok(!doc.querySelector(".session-event")!.classList.contains("collapsed"));
+    assert.equal(doc.querySelectorAll(".message-entry").length, 2);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("tool sequence metadata remains single after repeated repaints", async () => {
+  const dom = setup();
+  try {
+    dom.window.eval(
+      `data={entries:[{seq:1,type:'user',payload:'hello',createdAt:1},{seq:2,type:'tool_call',payload:{callId:'call',tool:'read'},createdAt:2},{seq:3,type:'tool_result',payload:{callId:'call',tool:'read'},createdAt:3}]};Object.assign(services,{toolName:()=> 'read',toolLabelText:()=> 'read',toolPrimaryText:()=> 'result',firstLine:x=>x,toolStatusMeta:()=>[],toolCopyText:()=> 'result',renderToolEntry:()=>{const block=document.createElement('div');block.className='mock-full-tool';block.innerHTML='<div class="who"><span class="when">legacy metadata</span></div>';return {block,sync:()=>{}}}});`,
+    );
+    await dom.window.eval('ui.show("session",60,false,services)');
+    const doc = dom.window.document;
+    const metadata = doc.querySelector(".mock-full-tool .when")!;
+    assert.doesNotMatch(metadata.textContent!, /legacy metadata/);
+    assert.match(metadata.textContent!, /#2 → #3/);
+    assert.equal(doc.querySelectorAll(".tool-line > .when .agent-seq-icon").length, 1);
+    assert.equal(metadata.querySelectorAll(".agent-seq-icon").length, 1);
+    for (let i = 0; i < 3; i++) {
+      doc.querySelector<HTMLInputElement>('[aria-label="Show thinking"]')!.click();
+      assert.equal(metadata.querySelectorAll(".agent-seq-icon").length, 1);
+      assert.equal(metadata.textContent!.match(/#2/g)?.length, 1);
+    }
   } finally {
     dom.window.close();
   }

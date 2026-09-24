@@ -31,6 +31,23 @@ by-type usage rollup, drilling into transcripts with per-turn model-context brea
 org-scope query spans the whole org; a narrower scope is limited to that scope. Every
 action is authorized in the core and audited.
 
+## View as agent
+
+Open **View as agent** beside a turn sequence in a session transcript, or visit
+`/admin/history/s/<session-id>?turn=agent:<turn-seq>` for a particular turn. The
+session header also opens the latest recorded turn with `?turn=agent`. Sequence links
+append `:<event-seq>` to reveal that event and select a capture by timestamp. This
+is an approximation, not an exact event-to-call mapping. The viewer loads
+capture bodies on demand, and lets you inspect each call's instructions and tool
+contracts. Recorded transcript events can be revealed one at a time.
+
+The viewer uses the existing scope-authorized session and model-request APIs.
+It does not run tools or replay model calls. Captured provider requests and native
+harness configurations are labeled separately. Missing history, missing schemas,
+and truncated captures stay explicit: the stored transcript is not proof of the
+exact message input sent to a particular model call. No production examples are
+bundled with the plugin.
+
 ## Run
 
 ```bash

@@ -12,6 +12,7 @@ export * as userDetail from "./user-detail.ts";
 export * as keychain from "./keychain.ts";
 export * as metrics from "./metrics.ts";
 export * as transcript from "./transcript.ts";
+export * as agentSeat from "./agent-seat.ts";
 export * as design from "./design.ts";
 export * as activity from "./activity.ts";
 export * as history from "./history.ts";

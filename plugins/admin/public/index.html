@@ -7386,6 +7386,7 @@
       let transcriptObserver = null;
       function render(st) {
         governanceUI.transcript.cancel();
+        governanceUI.agentSeat.cancel();
         if (transcriptObserver) {
           transcriptObserver.disconnect();
           transcriptObserver = null;
@@ -10703,6 +10704,13 @@
       }
 
       async function showContextPage(sessionId, turnSeq) {
+        if (turnSeq === "agent" || String(turnSeq).startsWith("agent:"))
+          return governanceUI.agentSeat.show(
+            $("view-data"),
+            sessionId,
+            transcriptServices(),
+            turnSeq === "agent" ? undefined : String(turnSeq).slice(6),
+          );
         return governanceUI.transcript.contextPage(sessionId, turnSeq, transcriptServices());
       }
 
