@@ -276,3 +276,14 @@ test("single email pages keep bottom breathing room", () => {
   const surface = css.match(/\.inbox-item-surface \.inbox-scroll \{[^}]*\}/)?.[0] ?? "";
   assert.match(surface, /padding-bottom: calc\(64px \+ env\(safe-area-inset-bottom\)\);/);
 });
+
+test("phone inbox composer gives instructions a full row without shrinking touch controls", () => {
+  const start = css.indexOf("  .inbox-chat-composer .composer-wrap .composer-input,");
+  assert.ok(start >= 0);
+  const phone = css.slice(css.lastIndexOf("@media", start), start + 180);
+  assert.match(phone, /^@media \(max-width: 860px\)/);
+  assert.match(
+    phone,
+    /\.inbox-chat-composer \.composer-wrap \.composer-input,\s*\.inbox-chat-composer \.composer-wrap \.composer-toolbar\s*\{\s*grid-column: 1 \/ -1;/,
+  );
+});

@@ -10937,6 +10937,10 @@ h3.ambient-field-label {
   .composer-wrap .composer-right {
     margin-left: auto;
   }
+  .inbox-chat-composer .composer-wrap .composer-input,
+  .inbox-chat-composer .composer-wrap .composer-toolbar {
+    grid-column: 1 / -1;
+  }
   .composer-toolbar .stop-btn {
     width: 44px;
     height: 44px;
