@@ -62,14 +62,14 @@ test("invalid persistence cannot create a loadout or invent an effort level", ()
   );
 });
 
-test("persistence keeps the first valid model settings and four unique models in order", () => {
+test("persistence keeps the first valid model settings and eight unique models in order", () => {
   const saved = [
     entry("pi:first", "high", true),
     entry("pi:second", "medium"),
     entry("pi:first", "low"),
-    ...["third", "fourth", "fifth", "sixth"].map((id) => entry(`pi:${id}`)),
+    ...["third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth"].map((id) => entry(`pi:${id}`)),
   ];
-  assert.deepEqual(parseLoadout(JSON.stringify(saved)), [saved[0], saved[1], saved[3], saved[4]]);
+  assert.deepEqual(parseLoadout(JSON.stringify(saved)), [saved[0], saved[1], ...saved.slice(3, 9)]);
 });
 
 test("legacy harness pairs merge into one model preference while preserving the first settings", () => {
@@ -124,11 +124,11 @@ test("reconciliation qualifies legacy values and replaces duplicate harness pair
   assert.deepEqual(reconcileLoadout(saved, options, active), [active, saved[1]]);
 });
 
-test("a new active model remains selectable even when four saved models fill the loadout", () => {
-  const saved = ["one", "two", "three", "four"].map((id) => entry(`pi:${id}`));
-  const active = entry("codex:five", "xhigh", true);
+test("a new active model remains selectable even when eight saved models fill the loadout", () => {
+  const saved = ["one", "two", "three", "four", "five", "six", "seven", "eight"].map((id) => entry(`pi:${id}`));
+  const active = entry("codex:nine", "xhigh", true);
   const options = [...saved, active].map(({ value }) => option(value));
-  assert.deepEqual(reconcileLoadout(saved, options, active), [...saved.slice(0, 3), active]);
+  assert.deepEqual(reconcileLoadout(saved, options, active), [...saved.slice(0, 7), active]);
   assert.deepEqual(reconcileLoadout([], options, active), [active]);
 });
 
@@ -144,17 +144,17 @@ test("editing a setup preserves order and other models' independent effort and f
 });
 
 test("adding at capacity preserves the newly selected model and never duplicates an existing setup", () => {
-  const saved = ["one", "two", "three", "four"].map((id) => entry(`pi:${id}`));
-  const active = entry("codex:five", "xhigh", true);
-  assert.deepEqual(upsertLoadout(saved, active), [...saved.slice(0, 3), active]);
-  assert.deepEqual(upsertLoadout([...saved, active], active), [...saved.slice(0, 3), active]);
+  const saved = ["one", "two", "three", "four", "five", "six", "seven", "eight"].map((id) => entry(`pi:${id}`));
+  const active = entry("codex:nine", "xhigh", true);
+  assert.deepEqual(upsertLoadout(saved, active), [...saved.slice(0, 7), active]);
+  assert.deepEqual(upsertLoadout([...saved, active], active), [...saved.slice(0, 7), active]);
   const updated = entry(saved[1]!.value, "max", true);
   assert.deepEqual(upsertLoadout(saved, updated), [saved[0], updated, ...saved.slice(2)]);
   assert.deepEqual(upsertLoadout([saved[0]!, saved[0]!], updated), [saved[0], updated]);
 });
 
 test("changing a model's harness updates its existing slot even at capacity", () => {
-  const saved = ["one", "two", "three", "four"].map((id) => entry(`pi:${id}`));
+  const saved = ["one", "two", "three", "four", "five", "six", "seven", "eight"].map((id) => entry(`pi:${id}`));
   const snapshot = structuredClone(saved);
   const changed = entry("claude:two", "high", true);
   assert.deepEqual(upsertLoadout(saved, changed), [saved[0], changed, ...saved.slice(2)]);

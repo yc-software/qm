@@ -6,7 +6,7 @@ export interface LoadoutEntry {
   fast: boolean;
 }
 
-export const LOADOUT_CAP = 4;
+export const LOADOUT_CAP = 8;
 
 export function loadoutModelId(value: string): string {
   const separator = value.indexOf(":");
