@@ -1,3 +1,4 @@
+import { wireRunResultDeliveries, runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { deliveryCandidatesFor } from "../src/core/orchestrator/turn-helpers.ts";
@@ -1479,3 +1480,73 @@ test("stop still signals a queued child claimed during withdrawal", async () => 
   assert.equal((await r.runs.get(run.id))!.status, "running");
   assert.equal((await r.signals.pending(run.id))[0]!.signal.kind, "abort");
 });
+
+for (const surface of ["slack", "web"] as const) {
+  for (const nested of [false, true]) {
+    test(`${surface}: ${nested ? "nested child" : "child"} results stay internal while files and parent replies deliver once`, async () => {
+      const r = await rig();
+      const deliveries = createDeliveryStore();
+      wireRunResultDeliveries(r.runs, deliveries);
+      const request: OrchestratorInput = {
+        surface,
+        actor,
+        conversation,
+        deliveryTarget: "D1",
+        origin: { kind: "direct" },
+        text: "research this",
+      };
+      const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
+      const open = async (parent: Session) => {
+        const parentRequest = (await r.runs.inFlightForThread(parent.threadRef))[0]?.request ?? request;
+        const out = await factory
+          .forTurn({ session: parent, scopeId: scope, request: parentRequest })
+          .open({ task: "research privately" });
+        assert.ok(out.ok);
+        return freshSession(r.sessions, out.sessionId);
+      };
+      const parent = nested ? await open(r.room) : r.room;
+      const child = await open(parent);
+      const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+      assert.equal(queued.request.deliveryTarget, "D1");
+      const first = await r.runs.claimById(queued.id, "worker", 60_000);
+      await r.runs.fail(queued.id, first!.leaseToken!, "transient", { retry: true });
+      const claimed = await r.runs.claimById(queued.id, "worker", 60_000);
+      const attachment = { name: "report.txt", blobId: "report", mimetype: "text/plain", sizeBytes: 42 };
+      await r.runs.complete(queued.id, claimed!.leaseToken!, {
+        status: "ok",
+        reply: "INTERNAL_CHILD_REPORT: suggested answer for parent",
+        attachments: [attachment],
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.deepEqual(
+        await deliveries.pending(surface),
+        [],
+        "terminal listener must not publish child results or files",
+      );
+      const completed = (await r.runs.get(queued.id))!;
+      assert.equal(
+        runResultDelivery(JSON.parse(JSON.stringify(completed))),
+        null,
+        "serialized terminal runs remain internal",
+      );
+      const deps = { ...r, maxAttempts: 3, deliveries };
+      await deliverSubagentMail(deps, completed);
+      await deliverSubagentMail(deps, completed);
+      const mail = await r.mailbox.pending(parent.id);
+      assert.equal(mail.length, 1);
+      assert.match(mail[0]!.text, /INTERNAL_CHILD_REPORT/);
+      const files = await deliveries.pending(surface);
+      assert.equal(files.length, 1);
+      assert.equal(files[0]!.text, "");
+      assert.deepEqual(files[0]!.attachments, [attachment]);
+      assert.equal(files[0]!.destination.target, "D1");
+      const parentRun = (await r.runs.enqueue({ sessionId: r.room.threadRef, request })).run;
+      const parentClaim = await r.runs.claimById(parentRun.id, "parent", 60_000);
+      await r.runs.complete(parentRun.id, parentClaim!.leaseToken!, { status: "ok", reply: "PUBLIC_PARENT_ANSWER" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const publicResults = await deliveries.pending(surface);
+      assert.deepEqual(publicResults.map((item) => item.text).filter(Boolean), ["PUBLIC_PARENT_ANSWER"]);
+      assert.equal(publicResults.filter((item) => item.attachments?.length).length, 1);
+    });
+  }
+}
