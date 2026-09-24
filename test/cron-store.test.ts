@@ -969,8 +969,16 @@ test("cron estimates survive reload, preserve omitted patches, and clear indepen
   const input = { ...base, schedule: { everyMs: 60_000 } };
   const computeEstimate = { workload: "routine" as const, reason: "One bounded check, including retries" };
   const cron = await store.create({ ...input, computeEstimate });
-  assert.notEqual(cron.id, (await store.create(input)).id);
+  assert.equal(cron.id, (await store.create(input)).id);
   assert.equal(cron.id, (await store.create({ ...input, computeEstimate })).id);
+  const revised = { workload: "analysis" as const, reason: "Rephrased estimate on a retried creation" };
+  const retried = await store.create({ ...input, computeEstimate: revised });
+  assert.equal(retried.id, cron.id);
+  assert.deepEqual(retried.computeEstimate, computeEstimate);
+  assert.equal((await store.list()).length, 1);
+  await store.update(cron.id, { computeEstimate: revised });
+  assert.deepEqual((await store.get(cron.id))?.computeEstimate, revised);
+  await store.update(cron.id, { computeEstimate });
   const reloaded = createCronStore(backing);
   await reloaded.update(cron.id, { title: "Renamed" });
   assert.deepEqual((await store.get(cron.id))?.computeEstimate, computeEstimate);

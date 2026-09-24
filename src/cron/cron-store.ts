@@ -128,7 +128,6 @@ export function createCronStore(
         ...(input.loopId !== undefined ? [contentPart(input.loopId)] : []),
         ...(input.ownerResourcesRequireOpen ? [contentPart("owner-resources-require-open")] : []),
         ...(input.runtime ? [contentPart(input.runtime)] : []),
-        ...(input.computeEstimate ? [contentPart(input.computeEstimate)] : []),
       ]);
       return createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
