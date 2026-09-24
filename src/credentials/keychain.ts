@@ -1745,11 +1745,9 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   for (const member of input.members) {
     const own = (ownPersonal || openSpeaker) && samePerson(member.id, input.actorId);
     for (const c of input.entriesByOwner.get(member.id) ?? []) {
-      const note = own
-        ? ownPersonal && c.kind === "file"
-          ? "their own — raw file loading needs no grant on their live turn; background turns need a grant"
-          : OWN_NOTE
-        : grantNoteFor(c.id);
+      let note = own ? OWN_NOTE : grantNoteFor(c.id);
+      if (own && ownPersonal && c.kind === "file")
+        note = "their own — raw file loading needs no grant on their live turn; background turns need a grant";
       memberLines.push(credLine(member, c, note, now, own));
       hasOwn ||= own;
     }
