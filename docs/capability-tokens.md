@@ -39,10 +39,11 @@ distinct principal assertion once; `participants.scope` and
 `participants.keychain` are ordered index lists reconstructing `members` and
 `keychainMembers`. Compression, when enabled, wraps this envelope.
 
-These audiences are not interchangeable. The turn audience determines scope,
-search, scheduling and publishing constraints. The keychain audience determines
-whether a shared connection is permitted for everyone in the room. An owner-only
-scheduled run can have one execution participant and a larger room roster.
+These audiences are not interchangeable. The publishing roster becomes the
+`members` scope assertion used by scope, search and scheduling checks. The internal
+participants in the current turn become `keychainMembers`, used to check shared
+connection grants. An owner-only scheduled run can therefore have a larger room
+publishing roster while its keychain audience contains only the owner.
 Slack's directory can also withhold a publishing roster for incomplete,
 externally shared or guest-containing rooms.
 
