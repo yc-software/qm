@@ -58,11 +58,11 @@ function session(id: string, steps: Step[]): SessionEntry[] {
         code: step.code ?? (ok ? 0 : 1),
       });
     } else if ("write" in step) {
-      push("tool_call", { tool: "write", callId, path: step.write, data: "…" });
-      push("tool_result", { tool: "write", callId });
+      push("tool_call", { tool: "files", action: "write", callId, path: step.write, data: "…" });
+      push("tool_result", { tool: "files", action: "write", callId });
     } else if ("read" in step) {
-      push("tool_call", { tool: "read", callId, path: step.read });
-      push("tool_result", { tool: "read", callId });
+      push("tool_call", { tool: "files", action: "read", callId, path: step.read });
+      push("tool_result", { tool: "files", action: "read", callId });
     } else {
       push("tool_call", { tool: "history", callId, query: step.search });
       push("tool_result", { tool: "history", callId });
