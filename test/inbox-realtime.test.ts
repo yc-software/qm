@@ -95,6 +95,53 @@ test("someone else's message bumps the card and requests a debounced fire", asyn
   assert.equal(fires.length, 1);
 });
 
+test("new inbound messages clear prior classification and accept same-source sync classification", async () => {
+  for (const initial of [slackEntry(), gmailEntry()]) {
+    const items = createLoopItemLedger();
+    await items.ingest([
+      {
+        ...initial,
+        sourcePayload: { ...initial.sourcePayload, automated: true, probablyResolved: true },
+      },
+    ]);
+    const fires: string[] = [];
+    await realtime(items, (loopId) => fires.push(loopId)).onConversationEvent({
+      source: initial.source!,
+      conversationRef: initial.source === "slack" ? "D123" : "t-1",
+      at: 2_000_000,
+      text: "Can you help with this?",
+      senderEmail: "human@example.com",
+    });
+    const [pending] = await items.byLoop(LOOP.id);
+    assert.equal(pending!.sourcePayload!.automated, undefined);
+    assert.equal(pending!.sourcePayload!.probablyResolved, undefined);
+    assert.equal(pending!.inboxPreview!.automated, undefined);
+    assert.equal(pending!.inboxPreview!.probablyResolved, undefined);
+    assert.equal(pending!.proposal, undefined);
+    assert.equal(pending!.status, "queued");
+    assert.deepEqual(fires, [LOOP.id]);
+    const refreshed = {
+      ...initial,
+      sourceAt: pending!.sourceAt,
+      sourcePayload: { ...pending!.sourcePayload, automated: true, probablyResolved: false },
+    };
+    assert.deepEqual(await items.ingest([refreshed]), { created: 0, updated: 1, skipped: 0 });
+    assert.equal((await items.summaries([LOOP.id]))[0]!.inboxPreview!.automated, true);
+    await items.ingest([
+      {
+        ...refreshed,
+        sourcePayload: { ...refreshed.sourcePayload, automated: false },
+        proposal: { data: { body: "Happy to help" }, by: "agent" },
+      },
+    ]);
+    const [ready] = await items.byLoop(LOOP.id);
+    assert.equal(ready!.status, "ready");
+    assert.equal(ready!.inboxPreview!.automated, false);
+    assert.equal(ready!.inboxPreview!.probablyResolved, false);
+    assert.equal(ready!.proposal!.data.body, "Happy to help");
+  }
+});
+
 test("events in unrelated conversations or other sources leave the ledger alone", async () => {
   const items = createLoopItemLedger();
   await items.ingest([

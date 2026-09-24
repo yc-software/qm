@@ -131,8 +131,8 @@ function withAgentDraft(
 function inboxPreview(payload: LoopSourcePayload | undefined): LoopSourcePayload {
   if (!payload) return {};
   return Object.fromEntries(
-    ["title", "from", "fromDetail", "snippet", "receivedAt", "probablyResolved", "sentChat"].flatMap((key) =>
-      payload[key] === undefined ? [] : [[key, payload[key]]],
+    ["title", "from", "fromDetail", "snippet", "receivedAt", "probablyResolved", "automated", "sentChat"].flatMap(
+      (key) => (payload[key] === undefined ? [] : [[key, payload[key]]]),
     ),
   );
 }
@@ -140,7 +140,12 @@ function inboxPreview(payload: LoopSourcePayload | undefined): LoopSourcePayload
 function mergeIngest(item: LoopItem, entry: IngestEntryInput, now: number): LoopItem | null {
   const newerSource = entry.sourceAt !== undefined && entry.sourceAt > (item.sourceAt ?? 0);
   if (isResolved(item) && !newerSource) return null;
-  if (!isResolved(item) && !newerSource && !entry.proposal) return null;
+  if (!newerSource && !entry.proposal) {
+    if (entry.sourceAt === undefined || entry.sourceAt !== item.sourceAt) return null;
+    const sourcePayload = { ...item.sourcePayload, ...entry.sourcePayload };
+    if (canonicalJson(sourcePayload) === canonicalJson(item.sourcePayload ?? {})) return null;
+    return { ...item, sourcePayload, inboxPreview: inboxPreview(sourcePayload), updatedAt: now };
+  }
   const keepHumanProposal = item.proposal?.by === "human" && !newerSource;
   const incoming = entry.proposal ? { ...entry.proposal, at: now } : item.proposal;
   const proposal =

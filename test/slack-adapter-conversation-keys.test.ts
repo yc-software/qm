@@ -48,3 +48,14 @@ test("probablyResolved and image URLs survive parsing", () => {
   const context = payload.context as Array<Record<string, unknown>>;
   assert.deepEqual(context[0]!.images, ["https://files.slack.com/b.png"]);
 });
+
+test("automated messages are retained without a draft and refreshed classifications can clear the flag", () => {
+  const parsed = slackAdapter.parse(raw({ automated: true }));
+  assert.ok(!("error" in parsed));
+  assert.equal(parsed.sourcePayload.automated, true);
+  assert.equal(parsed.proposal, undefined);
+  const human = slackAdapter.parse(raw({ automated: false, probablyResolved: false }));
+  assert.ok(!("error" in human));
+  assert.equal(human.sourcePayload.automated, false);
+  assert.equal(human.sourcePayload.probablyResolved, false);
+});

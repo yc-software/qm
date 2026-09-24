@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { agentDraftOf, createLoopItemLedger, loopItemId, type IngestEntryInput } from "../src/loops/item-ledger.ts";
 import { ledgerItemView, ledgerState, sortLedgerItems } from "../src/loops/ledger-view.ts";
+import { gmailAdapter } from "../src/loops/sources/gmail.ts";
 
 const LOOP = "loop-1";
 
@@ -48,6 +49,92 @@ test("re-ingesting the same source event with nothing new is skipped", async () 
   const ledger = createLoopItemLedger();
   await ledger.ingest([entry()]);
   assert.deepEqual(await ledger.ingest([entry()]), { created: 0, updated: 0, skipped: 1 });
+});
+
+test("same-source classification enriches push metadata without requiring a draft", async () => {
+  const ledger = createLoopItemLedger();
+  const raw = {
+    sourceKey: "gmail:thread-1",
+    title: "Receipt",
+    from: "Billing",
+    snippet: "Payment received",
+    receivedAt: 1_000,
+    gmail: { threadId: "thread-1" },
+  };
+  const initial = gmailAdapter.parse(raw);
+  assert.ok(!("error" in initial));
+  await ledger.ingest([entry({ ...initial, proposal: undefined })]);
+  const classified = gmailAdapter.parse({ ...raw, automated: true, probablyResolved: true });
+  assert.ok(!("error" in classified));
+  assert.deepEqual(await ledger.ingest([entry({ ...classified, proposal: undefined })]), {
+    created: 0,
+    updated: 1,
+    skipped: 0,
+  });
+  const [item] = await ledger.byLoop(LOOP);
+  assert.equal(item!.status, "queued");
+  assert.equal(item!.proposal, undefined);
+  assert.equal((await ledger.summaries([LOOP]))[0]!.inboxPreview!.automated, true);
+  assert.deepEqual(await ledger.ingest([entry({ ...initial, proposal: undefined })]), {
+    created: 0,
+    updated: 0,
+    skipped: 1,
+  });
+  const human = gmailAdapter.parse({ ...raw, automated: false, probablyResolved: false });
+  assert.ok(!("error" in human));
+  assert.deepEqual(await ledger.ingest([entry({ ...human, proposal: undefined })]), {
+    created: 0,
+    updated: 1,
+    skipped: 0,
+  });
+  const [summary] = await ledger.summaries([LOOP]);
+  assert.equal(summary!.inboxPreview!.automated, false);
+  assert.equal(summary!.inboxPreview!.probablyResolved, false);
+});
+
+test("same-source enrichment preserves human drafts, decisions, and lifecycle fields", async () => {
+  const ledger = createLoopItemLedger();
+  await ledger.ingest([entry({ proposal: { data: { body: "My reply" }, by: "human" } })]);
+  const [item] = await ledger.byLoop(LOOP);
+  await ledger.park(item!.id, "Needs review");
+  await ledger.acquireDecision(item!.id);
+  const before = (await ledger.get(item!.id))!;
+  assert.deepEqual(await ledger.ingest([entry({ sourcePayload: { automated: true } })]), {
+    created: 0,
+    updated: 1,
+    skipped: 0,
+  });
+  const after = (await ledger.get(item!.id))!;
+  assert.deepEqual(after, {
+    ...before,
+    sourcePayload: { ...before.sourcePayload, automated: true },
+    inboxPreview: { ...before.inboxPreview, automated: true },
+    updatedAt: after.updatedAt,
+  });
+});
+
+test("classification enrichment rejects older, missing, and resolved source updates", async () => {
+  const ledger = createLoopItemLedger();
+  await ledger.ingest([entry()]);
+  const [item] = await ledger.byLoop(LOOP);
+  for (const sourceAt of [999, undefined]) {
+    assert.deepEqual(await ledger.ingest([entry({ sourceAt, sourcePayload: { automated: true } })]), {
+      created: 0,
+      updated: 0,
+      skipped: 1,
+    });
+    assert.equal((await ledger.get(item!.id))!.sourcePayload!.automated, undefined);
+  }
+  for (const outcome of ["dismissed", "actioned"] as const) {
+    await ledger.recordAction(item!.id, { kind: outcome, outcome });
+    const before = await ledger.get(item!.id);
+    assert.deepEqual(await ledger.ingest([entry({ sourcePayload: { automated: true } })]), {
+      created: 0,
+      updated: 0,
+      skipped: 1,
+    });
+    assert.deepEqual(await ledger.get(item!.id), before);
+  }
 });
 
 test("a newer source event refreshes the payload and the proposal", async () => {

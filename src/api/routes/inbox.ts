@@ -61,15 +61,23 @@ async function inbox(ctx: ApiCtx): Promise<void> {
       outputs: (await deps.outputs.byItem(item.id)).filter((output) => output.loopId === item.loopId),
     });
   }
+  const savedFilter = (await preferences.get(uiStateId(acting.actorId, "inbox-filter")))?.value;
+  const inboxFilter = savedFilter === "all" || savedFilter === "human" ? savedFilter : "triaged";
   const handled = ctx.url.searchParams.get("view") === "handled";
   const sent = ctx.url.searchParams.get("view") === "sent";
   const filter = ctx.url.searchParams.get("loopId");
-  const attention = summaries.filter(
-    (item) => item.status === "ready" || (item.status === "failed" && item.parkedReason),
-  );
+  const attention = summaries.filter((item) => {
+    if (item.status === "shipped" || item.status === "skipped") return false;
+    if (inboxFilter === "all") return true;
+    if (item.inboxPreview?.automated === true) return false;
+    if (inboxFilter === "human") return true;
+    return (
+      item.inboxPreview?.probablyResolved !== true &&
+      (item.status === "ready" || (item.status === "failed" && Boolean(item.parkedReason)))
+    );
+  });
   const counts = new Map<string, number>();
-  for (const item of attention.filter((entry) => entry.inboxPreview?.probablyResolved !== true))
-    counts.set(item.loopId, (counts.get(item.loopId) ?? 0) + 1);
+  for (const item of attention) counts.set(item.loopId, (counts.get(item.loopId) ?? 0) + 1);
   let candidates = attention;
   if (sent)
     candidates = summaries.filter(
@@ -124,6 +132,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
       selected: selectedIds.includes(loop.id),
     })),
     migrationPending: !migrated,
+    filter: inboxFilter,
     total: [...counts.values()].reduce((sum, count) => sum + count, 0),
     items: page.map((item) =>
       ledgerItemView({
