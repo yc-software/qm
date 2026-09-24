@@ -126,7 +126,7 @@ describe("memorable provider e2e (live Pi + real memorable CLI + Postgres)", { s
       harness?: string;
     };
     assert.equal(sent.harness, "qm");
-    assert.ok(sent.tool_calls.some((c) => c.name === "files" && c.input.action === "write"));
+    assert.ok(sent.tool_calls.some((c) => c.name === "write" && c.input.path === "osprey/config.txt"));
     assert.ok(sent.tool_calls.some((c) => c.name === "execute"));
     assert.ok(
       !JSON.stringify(sent).includes(process.env.ANTHROPIC_API_KEY!),

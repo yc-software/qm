@@ -24,7 +24,7 @@ export function startExtractionStub(): Promise<{ server: Server; url: string; re
         const klass = (name: string) => classes[name] ?? "other";
         const steps = trace.tool_calls.map((call) => ({
           action: call.name,
-          activity_class: klass(call.name === "files" ? String(call.input.action) : call.name),
+          activity_class: klass(call.name),
           ...(typeof call.input.command === "string" ? { command: call.input.command } : {}),
           ...(typeof call.input.path === "string" ? { targets: [call.input.path] } : {}),
           ...(call.result ? { outcome: call.result.ok ? "ok" : "failed" } : {}),

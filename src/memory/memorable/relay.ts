@@ -30,7 +30,19 @@ export function relayRecord(
   opts?: { env: NodeJS.ProcessEnv; apiKey?: string },
 ): Promise<RelayOutcome> {
   return new Promise((resolve) => {
-    const workflows = capture.workflows.filter(worthOffering);
+    const workflows = capture.workflows.filter(worthOffering).map((workflow) => ({
+      ...workflow,
+      tool_calls: workflow.tool_calls.map((call) => {
+        const action = call.input.action;
+        const name =
+          call.name === "files" && (action === "read" || action === "write")
+            ? action
+            : call.name === "sandbox" && action === "exec"
+              ? "execute"
+              : call.name;
+        return { ...call, name };
+      }),
+    }));
     if (!workflows.length) {
       resolve({ ok: true });
       return;
