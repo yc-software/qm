@@ -132,7 +132,13 @@ test("app-only gateway checks exact current personal read grants without inherit
       });
     }
     assert.equal((await get("shared")).status, 403, "scope grants never admit app-only sessions");
-    await app.shareDeployment(shared.id, scopeId("personal", guest), "write", { createdBy: "owner@example.test" });
+    await acl.grant({
+      ownerScopeId,
+      ref: encodeRef(deployRef(shared.id)),
+      granteeScopeId: scopeId("personal", guest),
+      permission: "write",
+      grantedBy: "owner@example.test",
+    });
     assert.equal((await get("shared")).status, 403, "a write grant cannot confer app-only management access");
     assert.equal(upstreamHits, 0);
     await app.shareDeployment(shared.id, scopeId("personal", guest), "read", { createdBy: "owner@example.test" });
