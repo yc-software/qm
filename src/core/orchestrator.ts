@@ -3079,7 +3079,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanTurn, wantsOrgFastMode === true);
         const modelAccount =
           input.modelAccount ??
-          (input.runId && isRetry ? recoveredModelAccount(history, input.runId, actor.id) : undefined) ??
+          (input.runId && isRetry
+            ? recoveredModelAccount(filterHistory(await deps.sessions.getEntries(session.id)), input.runId, actor.id)
+            : undefined) ??
           (humanTurn ? await deps.config?.getModelAccountDurable(actor.id) : undefined) ??
           "company";
         if (

@@ -1,6 +1,12 @@
+import { recoveredRuntime, recoveredModelAccount } from "../src/harness/runtime-recovery.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compactTranscript, INTERRUPTED_TOOL_RESULT } from "../src/harness/context-compaction.ts";
+import {
+  compactTranscript,
+  forModelContext,
+  forSearchView,
+  INTERRUPTED_TOOL_RESULT,
+} from "../src/harness/context-compaction.ts";
 import type { SessionEntry } from "../src/types.ts";
 
 function ent(type: SessionEntry["type"], payload: unknown, seq = 0, createdAt = 0): SessionEntry {
@@ -101,4 +107,25 @@ test("compactTranscript omits the stamp when an entry has no real timestamp", ()
   const out = compactTranscript([ent("user", { text: "hello" }, 1, 0), ent("user", { text: "again" }, 2, Number.NaN)]);
   assert.match(out, /^user#1: hello$/m);
   assert.match(out, /^user#2: again$/m);
+});
+
+test("runtime control records survive compaction durably without entering model context or search", () => {
+  const choice = { harnessId: "pi", modelId: "gpt-5.6-terra", effortLevel: "high", fastMode: true };
+  const entries = [
+    ent("system", { kind: "runtime_active", runId: "run", actorId: "actor", modelAccount: "openai", choice }, 1),
+    ent("user", { text: "work" }, 2),
+    ent("system", { kind: "context_summary", throughSeq: 2, text: "Prior work" }, 3),
+  ];
+  assert.doesNotMatch(compactTranscript(entries), /runtime_active|modelAccount|gpt-5.6-terra/);
+  assert.equal(
+    forModelContext(entries).some((entry) => entry.seq === 1),
+    false,
+  );
+  assert.equal(
+    forSearchView(entries).some((entry) => entry.seq === 1),
+    false,
+  );
+  assert.deepEqual(recoveredRuntime(entries, "run", "actor"), choice);
+  assert.equal(recoveredModelAccount(entries, "run", "actor"), "openai");
+  assert.equal(recoveredModelAccount(entries, "other", "actor"), undefined);
 });
