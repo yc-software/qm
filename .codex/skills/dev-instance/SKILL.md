@@ -47,8 +47,14 @@ below), then spawns a **per-slot supervisor daemon** that owns the production-sh
 Web-only instances need no Slack app or pool credentials. Slack-only instances skip
 web dependencies, builds, and web/portal processes.
 
-The supervisor restarts crashed children with backoff, waits for a port to actually free
-before respawning (no more EADDRINUSE), health-probes everything every 10s, and writes a
+Port slots expand automatically beyond 16, up to the TCP port range (8,207 slots at
+the default base port of 8080); machine resources will usually limit capacity first.
+Slots 1–16 retain their existing ports. Allocation skips occupied port blocks.
+Startup refuses occupied ports without terminating their listeners; if a port is
+taken after allocation, stop the failed instance and retry `up` to select a free block.
+
+The supervisor restarts crashed children with backoff, refuses occupied ports,
+health-probes everything every 10s, and writes a
 heartbeat so slot reclaim can tell "actively in use" from "abandoned".
 
 **When Slack is enabled, `up` only prints success after proving the bot is reachable**: the Slack socket must be
@@ -119,6 +125,10 @@ canary message is deleted right after it round-trips. `CANARY_CHANNEL=<channel i
 slot env overrides. With no eligible channel at all, `up` prints `delivery unverified` (or
 fails under `--strict`).
 
+If its worktree disappears, the supervisor shuts down its children and releases its
+lease on the next heartbeat (within 15 seconds, plus shutdown time). Always run `down`
+before intentionally removing a worktree.
+
 A forgotten instance cleans itself up: after 24 hours with no handled Slack turns,
 interactions, reloads, or restarts, the supervisor tears itself down and frees the slot
 on its next idle check (every 10 minutes). Ambient workspace events, health checks,
@@ -183,8 +193,13 @@ self-API calls can reach your local core. None of that runs on the default local
 
 Report the slot, enabled surfaces, their URLs or Slack handle, and log directory. To test Slack-specific
 behavior, DM the printed `@<handle>` (on Alice's machine that's one of `@bot1 … @bot10`)
-in `example.slack.com`; for admin and web behavior, open the printed portal URL. Tear down
-with `bash scripts/dev-instance.sh down` when QA is finished.
+in `example.slack.com`; for admin and web behavior, open the printed portal URL. Keep
+review instances running until the PR merges. After merge, run
+`bash scripts/dev-instance.sh down` from that worktree with the same pool-store override
+used for `up`, before removing the worktree. Verify the instance's supervisor and children
+have exited and its lease is released. Keep shared Postgres and persistent data intact.
+If the user asks to keep the instance beyond merge, retain its worktree too. For work
+without a PR, tear down when QA is finished unless the user requested a running demo.
 
 ## Troubleshooting
 

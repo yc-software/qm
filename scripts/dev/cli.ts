@@ -14,7 +14,8 @@ import {
   writeSlotFlag,
 } from "./lib/pool.ts";
 import {
-  claimSlotLock,
+  claimPortSlot,
+  claimSlotPorts,
   heartbeatFresh,
   leaseReclaimReason,
   leaseStale,
@@ -172,12 +173,18 @@ async function reclaimReclaimable(): Promise<boolean> {
   return false;
 }
 
-function claimNext(exclude: Set<string>): string | null {
+async function claimNext(exclude: Set<string>): Promise<string | null> {
   const slots = listSlots(store);
   const ordered = [...slots.filter((s) => !slotFlagged(s, store)), ...slots.filter((s) => slotFlagged(s, store))];
   for (const slot of ordered) {
     if (exclude.has(slot)) continue;
-    if (!claimSlotLock(slot, store)) continue;
+    try {
+      if (!(await claimSlotPorts(slot, store))) continue;
+    } catch (error) {
+      out(`skip ${slot}: ${errMessage(error)}`);
+      exclude.add(slot);
+      continue;
+    }
     if (!slotValid(slot, store)) {
       releaseSlotLock(slot, store);
       out(`skip ${slot}: tokens missing/invalid in ${join(store, `${slot}.env`)}`);
@@ -185,22 +192,6 @@ function claimNext(exclude: Set<string>): string | null {
       continue;
     }
     return slot;
-  }
-  return null;
-}
-
-// Slackless instances need only a port/lock slot, not a provisioned Slack app.
-// Prefer slot numbers with no poolN.env so a browser-only instance never squats
-// a slot a Slack-enabled worktree could use; fall back to configured ones.
-const MAX_PORT_SLOTS = 16; // slotPorts spaces port families 16 apart
-
-function claimPortSlot(exclude: Set<string>): string | null {
-  const configured = new Set(listSlots(store));
-  const all = Array.from({ length: MAX_PORT_SLOTS }, (_, i) => `pool${i + 1}`);
-  const ordered = [...all.filter((s) => !configured.has(s)), ...all.filter((s) => configured.has(s))];
-  for (const slot of ordered) {
-    if (exclude.has(slot)) continue;
-    if (claimSlotLock(slot, store)) return slot;
   }
   return null;
 }
@@ -381,11 +372,11 @@ async function cmdUp(): Promise<number> {
 
   const excluded = new Set<string>();
   const waitMax = Number(process.env.DEV_INSTANCE_WAIT || 120);
-  const claim = (): string | null => (withSlack ? claimNext(excluded) : claimPortSlot(excluded));
+  const claim = (): Promise<string | null> => (withSlack ? claimNext(excluded) : claimPortSlot(excluded, store));
   const maxAttempts = withSlack ? Math.max(1, listSlots(store).length) : 1;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    let slot = claim();
-    if (!slot && (await reclaimReclaimable())) slot = claim();
+    let slot = await claim();
+    if (!slot && (await reclaimReclaimable())) slot = await claim();
     if (!slot && waitMax > 0 && attempt === 1) {
       out("");
       out(
@@ -399,8 +390,8 @@ async function cmdUp(): Promise<number> {
         await sleep(5000);
         waited += 5;
         await reapStale();
-        if (await reclaimReclaimable()) slot = claim();
-        if (!slot) slot = claim();
+        if (await reclaimReclaimable()) slot = await claim();
+        if (!slot) slot = await claim();
       }
     }
     if (!slot) {
@@ -506,22 +497,27 @@ async function cmdStatus(): Promise<number> {
   );
   for (const slot of known) {
     const lock = lockDir(slot, store);
-    const ports = slotPorts(slot);
     const flag = readSlotFlag(slot, store);
-    if (!existsSync(lock)) {
-      rows.push({ slot, state: flag && slotFlagged(slot, store) ? `flagged(${flag.reason})` : "free", ports });
-      continue;
-    }
     const lease = leases.find((l) => l.slot === slot);
-    if (!lease) continue;
-    const sock = resolveSocketPath(lock);
-    if (await supervisorReachable(sock)) {
-      const res = await supervisorRequest(sock, "GET", "/status", undefined, 5000).catch(() => null);
+    if (lease && (await supervisorReachable(resolveSocketPath(lock)))) {
+      const res = await supervisorRequest(resolveSocketPath(lock), "GET", "/status", undefined, 5000).catch(() => null);
       if (res?.body) {
         rows.push({ ...res.body, mine: res.body.worktree === worktree, flag });
         continue;
       }
     }
+    let ports;
+    try {
+      ports = slotPorts(slot);
+    } catch (error) {
+      rows.push({ slot, state: "invalid", reason: errMessage(error), worktree: lease?.meta.worktree });
+      continue;
+    }
+    if (!existsSync(lock)) {
+      rows.push({ slot, state: flag && slotFlagged(slot, store) ? `flagged(${flag.reason})` : "free", ports });
+      continue;
+    }
+    if (!lease) continue;
     const meta = lease.meta;
     const alive = CHILD_ORDER.filter((n) => pidAlive(readPidFile(lock, `${n}.pid`)));
     let state = "dead";
@@ -570,17 +566,18 @@ async function cmdStatus(): Promise<number> {
       [
         String(r.slot).padEnd(7),
         state.padEnd(18),
-        `${ports.core}/${ports.web}/${ports.admin}/${ports.portal}`.padEnd(21),
+        (ports ? `${ports.core}/${ports.web}/${ports.admin}/${ports.portal}` : "-").padEnd(21),
         age.padEnd(8),
         (r.mine ? "this" : "").padEnd(5),
         String(r.branch ?? "-").padEnd(28),
-        String(r.worktree ?? "(available)"),
+        String(r.reason ?? r.worktree ?? "(available)"),
       ].join(" "),
     );
   }
-  const taken = rows.filter((r) => r.state !== "free" && !String(r.state).startsWith("flagged")).length;
+  const invalid = rows.filter((r) => r.state === "invalid").length;
+  const free = rows.filter((r) => r.state === "free" || String(r.state).startsWith("flagged")).length;
   console.log("");
-  console.log(`${taken} taken / ${rows.length - taken} free / ${rows.length} slots total`);
+  console.log(`${rows.length - free - invalid} taken / ${free} free / ${invalid} invalid / ${rows.length} known slots`);
   console.log("live = supervised + verified. Reclaim never touches a slot with a fresh supervisor heartbeat.");
   return EXIT.ok;
 }

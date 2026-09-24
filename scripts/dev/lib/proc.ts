@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { openSync } from "node:fs";
-import { connect } from "node:net";
+import { connect, createServer } from "node:net";
 import { bestEffort, sleep } from "./util.ts";
 
 export function run(
@@ -118,10 +118,18 @@ export async function waitPortFree(port: number, timeoutMs = 10_000): Promise<bo
   return false;
 }
 
-export async function freePort(port: number, label: string, log: (msg: string) => void): Promise<void> {
-  const holders = portHolders(port);
-  if (holders.length === 0) return;
-  log(`freeing stale process(es) ${holders.join(",")} on :${port} (${label})`);
-  for (const pid of holders) await killTree(pid, 3000);
-  await waitPortFree(port, 5000);
+export async function portAvailable(port: number): Promise<boolean> {
+  for (const host of ["127.0.0.1", "0.0.0.0", "::1", "::"]) {
+    const available = await new Promise<boolean>((resolve) => {
+      const server = createServer();
+      server.once("error", (error: NodeJS.ErrnoException) => {
+        resolve(host.includes(":") && ["EAFNOSUPPORT", "EADDRNOTAVAIL"].includes(error.code ?? ""));
+      });
+      server.listen({ port, host, ipv6Only: host.includes(":"), exclusive: true }, () =>
+        server.close(() => resolve(true)),
+      );
+    });
+    if (!available) return false;
+  }
+  return true;
 }
