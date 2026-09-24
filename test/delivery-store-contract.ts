@@ -257,6 +257,11 @@ export async function exerciseDeliveryExpiry(makeStore: (opts: { maxAgeMs: numbe
     text: "nobody will ever see this",
     idempotencyKey: "ttl-doomed",
   });
+  const appNotice = await store.enqueue({
+    destination: { type: "app-notice", target: "alice@example.com" },
+    text: "An app access request awaits your decision",
+    idempotencyKey: "ttl-app-notice",
+  });
   const unpolled = await store.enqueue({
     destination: { type: "webhook", target: "https://gone.example" },
     text: "a type nothing ever drains",
@@ -270,6 +275,15 @@ export async function exerciseDeliveryExpiry(makeStore: (opts: { maxAgeMs: numbe
   );
   assert.equal((await store.get(doomed.id))?.expiredAt, undefined);
   assert.deepEqual(await store.claimPending("slack", 60_000), [], "an overaged row is never handed out");
+  assert.equal((await store.get(appNotice.id))?.expiredAt, undefined);
+  assert.deepEqual(
+    (await store.pending("app-notice")).map((row) => row.id),
+    [appNotice.id],
+    "human notices survive transport expiry until explicitly dismissed",
+  );
+  await store.ack(appNotice.id, Date.now());
+  assert.deepEqual(await store.pending("app-notice"), []);
+
   assert.deepEqual(await store.pending("slack"), [], "once swept, pending hides it");
   const expired = await store.get(doomed.id);
   assert.equal(expired?.deliveredAt, null, "an expired row was never delivered");

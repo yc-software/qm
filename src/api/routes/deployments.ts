@@ -1,3 +1,5 @@
+import { enqueueDeploymentNotice } from "../../deploy/share-notice.ts";
+import { listDeploymentNotices, decideDeploymentNotice } from "./deployment-notices.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -950,14 +952,14 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     // One request per visitor per app per day — the idempotent outbox absorbs button mashing.
     const day = Math.floor(Date.now() / 86_400_000);
     try {
-      await app.enqueueDelivery({
+      await enqueueDeploymentNotice((input) => app.enqueueDelivery(input), {
         destination: {
           ...principalDestination(ownerId, viewer),
           deploymentAccess: { deploymentId: d.id, requesterId: viewer },
         },
         text:
           `${viewer} is asking for access to your app "${label}" (https://${rawHost}/). ` +
-          `They signed in but the app isn't shared with them. To grant it, share the deployment with personal:${viewer}.`,
+          `They signed in but the app isn't shared with them. Review this request in QM’s Apps page.`,
         idempotencyKey: `deploy-access-request:${slug}:${viewer}:${day}`,
       });
       sendJson(res, 200, { ok: true });
@@ -1007,7 +1009,7 @@ background:#fafafa;color:#0a0a0a;font:inherit;font-weight:600;cursor:pointer">Re
 <script>document.getElementById("req").addEventListener("click",async function(){
 var b=this;b.disabled=true;b.textContent="Sending\u2026";
 try{var r=await fetch(${JSON.stringify(REQUEST_ACCESS_PATH)},{method:"POST"});
-b.textContent=r.ok?"Request sent \u2713":"Couldn't send \u2014 try again";b.disabled=r.ok;}
+b.textContent=r.ok?"Sent to the owner’s Apps page \u2713":"Couldn't send \u2014 try again";b.disabled=r.ok;}
 catch(e){b.textContent="Couldn't send \u2014 try again";b.disabled=false;}});</script>`,
   );
 }
@@ -1654,6 +1656,8 @@ export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 ];
 
 export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "GET", path: "/v1/deployment-notices", auth: "source", handle: listDeploymentNotices },
+  { method: "POST", path: "/v1/deployment-notices/:id", auth: "source", handle: decideDeploymentNotice },
   { method: "POST", path: "/v1/deployments", auth: "source", handle: createDeployment },
   { method: "GET", path: "/v1/deployments", auth: "either", handle: listDeployments },
   { method: "GET", path: "/v1/deployments/:id", auth: "either", handle: getDeployment },

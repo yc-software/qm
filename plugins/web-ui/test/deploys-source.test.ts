@@ -128,6 +128,8 @@ function renderHarness(requestedId: string | null = null) {
     deployRefreshSeq: 0,
     setDeployBackgroundInert() {},
     async ensureContexts() {},
+    async refreshAppNotices() {},
+    scheduleNoticeRefresh() {},
     withDeploymentListNotice,
     withDeploymentDetailNotice,
     withoutDeploymentDetailNotice,

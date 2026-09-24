@@ -201,6 +201,7 @@ export interface TriggerBase {
 export interface Destination {
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
+  deploymentShared?: { deploymentId: string };
   commandApprovalId?: string;
   type: string;
   target: string;

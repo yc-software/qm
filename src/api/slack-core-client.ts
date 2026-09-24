@@ -1,4 +1,4 @@
-import { decideDeploymentAccess } from "../slack/deploy-access.ts";
+import { decideDeploymentAccess } from "../deploy/access-request.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { ActorAssertion } from "../types.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";

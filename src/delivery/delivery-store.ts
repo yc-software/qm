@@ -67,7 +67,8 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
 
   const expireOveraged = (now: number): void => {
     for (const d of deliveries.values()) {
-      if (d.deliveredAt !== null || d.shadow || d.expiredAt !== undefined) continue;
+      if (d.deliveredAt !== null || d.shadow || d.expiredAt !== undefined || d.destination.type === "app-notice")
+        continue;
       if ((claimedUntil.get(d.id) ?? 0) > now) continue;
       if (now - d.createdAt < maxAgeMs) continue;
       d.expiredAt = now;

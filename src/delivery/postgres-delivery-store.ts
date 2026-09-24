@@ -100,6 +100,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         WHERE id IN (
           SELECT id FROM deliveries
            WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow
+               AND destination->>'type' <> 'app-notice'
              AND created_at <= ${NOW_MS_SQL} - $1
              AND (claim_expires_at IS NULL
                OR claim_expires_at <= ${NOW_MS_SQL})

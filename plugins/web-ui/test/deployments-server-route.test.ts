@@ -185,3 +185,18 @@ test("deployment share bridge forwards an exact email without caller identity", 
   assert.deepEqual(request?.body, { email: "Invitee@Example.com", access: "view" });
   assert.equal(request?.capability, "signed-in-user-capability");
 });
+
+test("app notice bridge forwards only the action, not client-supplied identities", async () => {
+  let before = calls.length;
+  assert.equal((await fetch(`${base}/api/deployment-notices`, { headers })).status, 200);
+  assert.ok(calls.slice(before).some((call) => isNoncedCoreCall(call.url, "/v1/deployment-notices")));
+  before = calls.length;
+  const response = await fetch(`${base}/api/deployment-notices/n1`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ action: "approve", actorId: "mallory", requesterId: "mallory", deploymentId: "other" }),
+  });
+  assert.equal(response.status, 200);
+  const call = calls.slice(before).find((row) => isNoncedCoreCall(row.url, "/v1/deployment-notices/n1"));
+  assert.deepEqual(call?.body, { action: "approve" });
+});

@@ -7715,6 +7715,18 @@ a.connector-widget:focus-visible {
 .action-toast .icon-btn {
   color: inherit;
 }
+.app-notification {
+  top: calc(16px + env(safe-area-inset-top, 0px));
+  bottom: auto;
+}
+.app-notification > span {
+  overflow-wrap: anywhere;
+}
+.app-notification > a {
+  flex-shrink: 0;
+  color: inherit;
+  font-weight: 700;
+}
 @media (max-width: 760px) {
   .deploy-setting-row {
     grid-template-columns: minmax(0, 1fr);
@@ -12895,4 +12907,14 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .split-pane-parent:hover {
   color: var(--foreground);
   text-decoration: underline;
+}
+
+.app-notice {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.app-notice .deploy-row-main {
+  flex: 1 1 240px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
