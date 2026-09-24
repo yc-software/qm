@@ -176,6 +176,10 @@ export interface OrchestratorDeps {
   webhooks?: WebhookStore;
   control?: ControlService;
   runtime?: RuntimeService;
+  validateScheduledRuntime?: (
+    scope: import("../../types.ts").ScopeId,
+    choice: import("../../harness/harness.ts").RuntimeChoice,
+  ) => Promise<string | null>;
   livenessCache?: LivenessCache;
   connectorTokens?: ConnectorTokenStore;
   connectorStatusCache?: ConnectorStatusCache;

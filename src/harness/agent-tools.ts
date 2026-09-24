@@ -204,6 +204,7 @@ function fmtCronSchedule(c: {
 }
 
 interface CronLike {
+  runtime?: import("./harness.ts").RuntimeChoice | null;
   id: string;
   title?: string;
   enabled: boolean;
@@ -276,7 +277,10 @@ function fmtCronLine(c: CronLike, preview = false): string {
     !preview && c.lastFireNote && Number.isFinite(c.lastFireNote.at)
       ? `\n    shift-change note (${utcMinute(c.lastFireNote.at)}${c.lastFireNote.by ? `, by ${c.lastFireNote.by}` : ""}): ${c.lastFireNote.text}`
       : "";
-  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${note}`;
+  const runtime = c.runtime
+    ? `\n    runtime: ${c.runtime.harnessId}/${c.runtime.modelId}${c.runtime.effortLevel ? ` (${c.runtime.effortLevel})` : ""}`
+    : "";
+  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${note}`;
 }
 
 function fmtCronCreated(r: {
@@ -2325,6 +2329,37 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "outcome + anything the next fire must know. Overwrites the previous note.",
         }),
       ),
+      runtime: Type.Optional(
+        Type.Union(
+          [
+            Type.Null(),
+            Type.Object({
+              harnessId: Type.Union([
+                Type.Literal("pi"),
+                Type.Literal("opencode"),
+                Type.Literal("codex"),
+                Type.Literal("claude"),
+              ]),
+              modelId: Type.String(),
+              effortLevel: Type.Optional(
+                Type.Union([
+                  Type.Literal("low"),
+                  Type.Literal("medium"),
+                  Type.Literal("high"),
+                  Type.Literal("xhigh"),
+                  Type.Literal("max"),
+                  Type.Literal("ultracode"),
+                ]),
+              ),
+              fastMode: Type.Optional(Type.Boolean()),
+            }),
+          ],
+          {
+            description:
+              "create/patch: optional runtime override for an agent task. Omit to preserve defaults; null clears an override. Use runtime get to discover approved models/harnesses. Choose a cheaper model and explicit low effort when the whole task, including failure handling, is simple. Unavailable choices fail closed. Auto effort is not supported here yet.",
+          },
+        ),
+      ),
       enabled: Type.Optional(Type.Boolean({ description: "patch only: false pauses the cron, true resumes it." })),
       archived: Type.Optional(Type.Boolean({ description: "patch only: true archives the cron." })),
       limit: Type.Optional(
@@ -2365,6 +2400,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }
           const r = await tc.cronCreate({
             schedule: params.schedule,
+            ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
             ...(params.title !== undefined ? { title: params.title } : {}),
             ...(params.task !== undefined ? { action: params.task } : {}),
             ...(params.text !== undefined ? { text: params.text } : {}),
@@ -2496,6 +2532,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               true,
             );
           const r = await tc.cronPatch(id, {
+            ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
             ...(params.title !== undefined ? { title: params.title } : {}),
             ...(params.task !== undefined ? { action: params.task } : {}),
             ...(params.text !== undefined ? { text: params.text } : {}),

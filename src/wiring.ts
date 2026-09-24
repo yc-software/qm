@@ -1,3 +1,4 @@
+import { availableRuntimeError } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
 import { createKeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
@@ -2388,6 +2389,22 @@ export function buildApp(
   );
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
   orchestratorDeps.control = createControlService(app, scheduler, admin);
+  orchestratorDeps.validateScheduledRuntime = (scope, choice) =>
+    availableRuntimeError(
+      {
+        deps: {
+          config: configStore,
+          harnessId: fallbackHarness,
+          baseModelDefault: fallback.modelId,
+          providerKeys: providerKeysPresent(config),
+          modelCredentials,
+          modelCredentialFetch: overrides.modelCredentialFetch,
+          refreshModels,
+        },
+      },
+      scope,
+      choice,
+    );
   orchestratorDeps.runtime = createRuntimeService(
     {
       config: configStore,

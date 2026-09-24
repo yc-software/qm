@@ -1,3 +1,4 @@
+import { availableRuntimeError, runtimeConfigBody } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
 import { userRuntimeConfigBody } from "./runtime-config.ts";
 import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscalls.ts";
@@ -191,6 +192,20 @@ export function createTurnMethods(
           ? await deps.config.getModelAccountDurable(actor.id)
           : "company";
       const individualAuth = modelAccount !== "company";
+      if (req.triggered && (req.model || req.harness)) {
+        const choices = await runtimeConfigBody({ deps }, conversationScope(req.conversation, actor.id));
+        const harness = req.harness ?? choices.effective.harnessId;
+        const model = req.model ?? choices.effective.modelId;
+        const error = !isHarnessId(harness)
+          ? "harness_not_approved"
+          : await availableRuntimeError({ deps }, conversationScope(req.conversation, actor.id), {
+              harnessId: harness,
+              modelId: model,
+              effortLevel: req.thinkingLevel,
+              fastMode: req.fastMode,
+            });
+        if (error) return { status: "refused", reason: error };
+      }
       let requestedModel = req.model;
       let requestedHarness = req.harness;
       if (req.surface === "web") {

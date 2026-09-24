@@ -1,3 +1,4 @@
+import { isCronRuntime } from "../../cron/runtime.ts";
 import type { Cron } from "../../types.ts";
 import type { CreateCronInput, CronPatch } from "../../cron/cron-store.ts";
 import { describeRunNowRefusal } from "../../cron/scheduler.ts";
@@ -20,6 +21,7 @@ function defaultTimezoneFor(capability: CapabilityClaims | null): string {
 function isCreateCron(b: unknown): b is CreateCronInput {
   return (
     isObj(b) &&
+    isCronRuntime(b.runtime) &&
     userScheduleFromBody(b.schedule) !== null &&
     (typeof b.action === "string" || typeof (b as { message?: unknown }).message === "string") &&
     (b as { unattendedGrants?: unknown }).unattendedGrants === undefined &&
@@ -32,6 +34,7 @@ function isCreateCron(b: unknown): b is CreateCronInput {
 }
 
 type CapabilityCronBody = {
+  runtime?: unknown;
   schedule?: unknown;
   title?: unknown;
   task?: unknown;
@@ -95,6 +98,7 @@ async function gateSourceCronRead(ctx: ApiCtx, id: string): Promise<Cron | null>
 }
 
 function isCronPatch(b: unknown): b is {
+  runtime?: Cron["runtime"];
   title?: string;
   task?: string;
   action?: string;
@@ -105,7 +109,7 @@ function isCronPatch(b: unknown): b is {
   runAs?: "owner" | "scopeFloor" | "scopeShared";
   unattendedGrants?: string[];
 } {
-  if (!isObj(b)) return false;
+  if (!isObj(b) || !isCronRuntime(b.runtime)) return false;
   if (!hasCronPatchFields(b)) return true;
   const hasTitle = b.title !== undefined;
   const hasAction = b.action !== undefined;
@@ -134,6 +138,7 @@ function isCronPatch(b: unknown): b is {
 
 function hasCronPatchFields(b: Record<string, unknown>): boolean {
   return (
+    b.runtime !== undefined ||
     b.title !== undefined ||
     b.action !== undefined ||
     b.task !== undefined ||
@@ -188,9 +193,11 @@ async function createCron(ctx: ApiCtx): Promise<void> {
           "schedule.cron (5-field expression) or schedule.everyMs/firstFireAt, plus task (what to do) or text (exact text to send), required",
       });
     }
+    if (!isCronRuntime(b.runtime)) return sendJson(res, 400, { error: "bad_request", message: "invalid cron runtime" });
     const result = await ctx.deps.control.createCron(
       {
         schedule,
+        ...(b.runtime !== undefined ? { runtime: b.runtime } : {}),
         ...(task !== undefined ? { action: task } : {}),
         ...(text !== undefined ? { text } : {}),
         ...(typeof b.title === "string" ? { title: b.title } : {}),
@@ -370,6 +377,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
     const r = await ctx.deps.control.patchCron(
       id,
       {
+        ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
         ...(body.title !== undefined ? { title: body.title } : {}),
         ...(task !== undefined ? { action: task } : {}),
         ...(schedule !== undefined ? { schedule } : {}),
@@ -420,6 +428,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
     });
   }
   const patch: CronPatch = {
+    ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
     ...(body.title !== undefined ? { title: body.title } : {}),
     ...(task !== undefined ? { action: task } : {}),
     ...(schedule !== undefined ? { schedule } : {}),

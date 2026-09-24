@@ -31,6 +31,7 @@ import { isSharedScope, parseScopeId, type Permission, type ScopeId } from "../t
 import type { App, VisibleCron } from "./app.ts";
 
 export interface CronCreateRequest {
+  runtime?: Cron["runtime"];
   schedule: CronSchedule;
   title?: string;
   action?: string;
@@ -84,6 +85,7 @@ export type WebhookCreateResult =
   | { ok: false; code: "bad_request" | "unknown_destination" | "webhook_create_failed"; message: string };
 
 export interface CronPatchRequest {
+  runtime?: Cron["runtime"];
   title?: string;
   action?: string;
   text?: string;
@@ -212,6 +214,7 @@ function scopeIsMembershipControlled(scope: string, cap: { scopeId: string; priv
 
 function hasCronPatchField(req: CronPatchRequest): boolean {
   return (
+    req.runtime !== undefined ||
     req.title !== undefined ||
     req.action !== undefined ||
     req.text !== undefined ||
@@ -294,6 +297,7 @@ async function patchFromCronPatchRequest(
     };
   }
   return {
+    ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
     ...(req.title !== undefined ? { title: req.title } : {}),
     ...(req.action !== undefined ? { action: req.action } : {}),
     ...(req.text !== undefined ? { message: req.text } : {}),
@@ -505,6 +509,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
       const input: CreateCronInput = {
         schedule: withDefaultTimezone(req.schedule, capability),
+        ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
         ...(req.action !== undefined ? { action: req.action } : {}),
         ...(req.text !== undefined ? { message: req.text } : {}),
         owner: capability.actorId,
@@ -610,6 +615,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         const cron = await app.updateCron(id, patch);
         if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
         const changeSummary: string[] = [];
+        if (req.runtime !== undefined) changeSummary.push("runtime");
         if (req.title !== undefined) changeSummary.push("title");
         if (req.action !== undefined || req.text !== undefined) changeSummary.push("task");
         if (req.schedule !== undefined) changeSummary.push("schedule");
