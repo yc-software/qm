@@ -6604,7 +6604,7 @@
       const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
       const SECTIONS = [
         {
-          views: ["governance", "models", "credentials", "connectors", "slack-settings", "customize", "users"],
+          views: ["governance", "models", "credentials", "connectors", "slack-settings", "customize", "users", "spend"],
         },
         {
           label: "Logs",
@@ -6761,6 +6761,7 @@
         keychain: "Keychain",
         user: "User",
         metrics: "Metrics",
+        spend: "Spend",
         egress: "Egress",
         history: "Sessions",
         files: "Files",
@@ -6795,6 +6796,7 @@
       const ORG_WIDE = new Set([
         "retention",
         "users",
+        "spend",
         "keychain",
         "connectors",
         "judgments",
@@ -7310,6 +7312,7 @@
         if (st.own && SCOPED.has(st.view)) p.set("own", st.own);
         if (st.view === "memory" && st.mem) p.set("mem", st.mem);
         if (st.view === "metrics" && st.phase) p.set("phase", st.phase);
+        if (st.view === "spend" && st.range) p.set("range", st.range);
         if (st.view === "slack" && st.container) p.set("container", st.container);
         if (st.view === "slack" && st.container && st.ts) p.set("ts", st.ts);
         if (st.view === "judgments" && st.container) p.set("container", st.container);
@@ -7374,6 +7377,7 @@
           own: p.get("own") || null,
           mem: p.get("mem") || null,
           phase: p.get("phase") || null,
+          range: p.get("range") || null,
           historyKind: normalizedHistoryKind,
           page: Math.max(1, parseInt(p.get("page"), 10) || 1),
           container: p.get("container") || null,
@@ -7424,6 +7428,7 @@
           "customize",
           "slack-settings",
           "users",
+          "spend",
           "design-system",
         ].includes(view)
           ? "true"
@@ -9239,6 +9244,7 @@
         root.textContent = "";
         ({
           metrics: renderMetrics,
+          spend: renderSpend,
           egress: renderEgress,
           history: renderHistory,
           files: renderFiles,
@@ -9272,6 +9278,7 @@
           if (historyKind === "background") path += "&origin=other_background";
         }
         if (view === "errors") path += `&limit=${ERRORS_PAGE_SIZE}&offset=${(page - 1) * ERRORS_PAGE_SIZE}`;
+        if (view === "spend") path += `?${spendQuery(urlToState())}`;
         const cacheable = view !== "memory";
         const cached = cacheable ? dataCache.get(path) : undefined;
         if (cached !== undefined) {
@@ -9353,10 +9360,10 @@
         if (s.provisioned === false) return "no machine";
         return "";
       }
-      function sparkline(daily) {
+      function sparkline(daily, valueOf = (r) => r.p50) {
         const vals = (daily || [])
           .slice(-14)
-          .map((r) => r.p50)
+          .map(valueOf)
           .filter((v) => v != null);
         if (vals.length < 2) {
           const s = document.createElement("span");
@@ -9400,6 +9407,40 @@
           relTime,
           turnKindWords,
           sparkline,
+        });
+      }
+      const SPEND_RANGES = { "7d": 7, "30d": 30, "90d": 90 };
+      function spendQuery(st) {
+        const DAY = 86400000;
+        const range = SPEND_RANGES[st.range] ? st.range : "30d";
+        const to = Math.floor(Date.now() / DAY) * DAY + DAY;
+        const iso = (t) => new Date(t).toISOString().slice(0, 10);
+        const params = new URLSearchParams({
+          from: iso(to - SPEND_RANGES[range] * DAY),
+          to: iso(to),
+          bucket: range === "90d" ? "week" : "day",
+        });
+        return params.toString();
+      }
+      function renderSpend(root, d) {
+        governanceUI.spend.spend(root, d, {
+          defaultShell,
+          fmtPct,
+          fmtTokens,
+          shortName,
+          plural,
+          sparkline,
+          range: urlToState().range || "30d",
+          openUser: (principal) => go({ view: "user", scope, session: null, principal }),
+          setRange: (range) => go({ ...urlToState(), view: "spend", range }),
+          downloadCsv: () => {
+            const a = document.createElement("a");
+            a.href = API_BASE + "/api/spend?format=csv&" + spendQuery(urlToState());
+            a.rel = "noreferrer";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          },
         });
       }
       function renderErrors(root, d) {

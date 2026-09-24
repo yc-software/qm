@@ -22,6 +22,7 @@ import type {
   SessionStore,
   SessionSummary,
   SessionPin,
+  SpendRow,
   StoreOptions,
   TapeRecord,
 } from "./session-store.ts";
@@ -879,6 +880,44 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         }
       }
       return out;
+    },
+
+    async spendRollup(range): Promise<SpendRow[]> {
+      const DAY = 86_400_000;
+      const buckets = new Map<string, SpendRow>();
+      for (const [sessionId, records] of llmRequests) {
+        const session = sessions.get(sessionId);
+        if (!session) continue;
+        const origin = sessionOrigin(session.threadRef);
+        for (const r of records) {
+          if (!r.usage) continue;
+          if (r.createdAt < range.from || r.createdAt >= range.to) continue;
+          const day = Math.floor(r.createdAt / DAY);
+          const key = `${day}|${session.scopeId}|${origin}`;
+          let row = buckets.get(key);
+          if (!row) {
+            row = {
+              day,
+              scopeId: session.scopeId,
+              origin,
+              calls: 0,
+              costUsd: 0,
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+            };
+            buckets.set(key, row);
+          }
+          row.calls += 1;
+          row.costUsd += r.usage.costUsd;
+          row.input += r.usage.input;
+          row.output += r.usage.output;
+          row.cacheRead += r.usage.cacheRead;
+          row.cacheWrite += r.usage.cacheWrite;
+        }
+      }
+      return [...buckets.values()];
     },
 
     async listParticipants() {

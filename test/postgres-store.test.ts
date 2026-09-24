@@ -16,6 +16,7 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { scopeId, type Principal, type TurnResult } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
+import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
 import { byScopeId, rollupsFromSummaries } from "./support/scope-rollup-oracle.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -69,6 +70,10 @@ test("pg session store: fork provenance survives a store restart", { skip }, asy
 
 test("pg session store: getForParticipant returns exactly the row listByParticipant returns", { skip }, async () => {
   await assertParticipantSessionParity(createPostgresSessionStore(URL!), `pg-parity-${randomUUID()}`);
+});
+
+test("pg session store: spendRollup matches the memory rollup row for row", { skip }, async () => {
+  await assertSpendRollupParity((now) => createPostgresSessionStore(URL!, { now }), `pg-spend-${randomUUID()}`);
 });
 
 test("pg session store: a bare failed acquire means the session is gone, not a lease race", { skip }, async () => {
