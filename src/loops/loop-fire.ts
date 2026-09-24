@@ -277,6 +277,10 @@ function promptText(value: string): string {
 }
 
 function playbookText(loop: Loop): string {
+  if (loop.surface === "inbox") return renderInboxSyncTask(loop.id);
+  if (loop.surface?.startsWith("inbox:")) {
+    return renderSourceInboxTask(loop.id, loop.sources?.[0] ?? loop.surface.slice("inbox:".length));
+  }
   return promptText(loop.playbook.replaceAll("$LOOP_ID", loop.id));
 }
 
@@ -507,12 +511,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       if (!isRunnable(loop)) return { status: "silent", note: "loop is not runnable" };
       let failure: string | undefined;
       try {
-        const outcome = await stageTurn(
-          loop,
-          `${fireKey}:sync`,
-          threadRef,
-          loop.surface === "inbox" ? renderInboxSyncTask(loop.id) : renderSourceInboxTask(loop.id, loop.sources![0]!),
-        );
+        const outcome = await stageTurn(loop, `${fireKey}:sync`, threadRef, playbookText(loop));
         if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
         failure = stageFailure("inbox sync", outcome)?.error.message;
       } catch (error) {

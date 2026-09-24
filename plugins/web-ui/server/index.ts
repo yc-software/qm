@@ -1603,7 +1603,7 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { res, user } = c;
       const qs = new URLSearchParams({ principalId: user });
-      for (const key of ["cursor", "loopId", "view", "itemId"]) {
+      for (const key of ["cursor", "loopId", "view", "itemId", "filter"]) {
         const value = c.url.searchParams.get(key);
         if (value) qs.set(key, value);
       }

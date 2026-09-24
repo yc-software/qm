@@ -378,3 +378,134 @@ test("completed repair keeps conflicting drafts visible while moving unrelated i
     assert.equal((await w.deps.items.byLoop(legacy.id))[0]!.proposal!.data.body, "Human draft");
   }
 });
+
+test("inbox filters retain automated messages and resolved human conversations with matching counts", async () => {
+  const w = world();
+  const [email, slack] = await ensureDefaultInboxLoops(w.deps.store, "alice");
+  for (const [key, payload, draft] of [
+    ["question", {}, true],
+    ["thanks", { probablyResolved: true }, true],
+    ["receipt", { automated: true }, false],
+    ["pending", {}, false],
+    ["handled", {}, true],
+  ] as const) {
+    await w.deps.items.ingest([
+      {
+        loopId: email!.id,
+        dedupeKey: key,
+        source: "gmail",
+        sourcePayload: { title: key, ...payload },
+        ...(draft ? { proposal: { by: "agent" as const, data: { body: "Draft" } } } : {}),
+      },
+    ]);
+  }
+  const receiptItem = (await w.deps.items.byLoop(email!.id)).find((item) => item.sourceKey === "receipt")!;
+  const claimed = await w.deps.items.claim(receiptItem.id);
+  await w.deps.items.markReady(receiptItem.id, [], claimed!.claimToken!);
+  const handled = (await w.deps.items.byLoop(email!.id)).find((item) => item.sourceKey === "handled")!;
+  await w.deps.items.recordAction(handled.id, { kind: "dismiss", outcome: "dismissed" });
+  await w.deps.items.ingest([
+    {
+      loopId: slack!.id,
+      dedupeKey: "bot",
+      source: "slack",
+      sourcePayload: { automated: true },
+    },
+  ]);
+  const keys = (feed: any) => feed.items.map((item: any) => item.dedupeKey).sort();
+  const triaged = (await w.call()).data;
+  assert.equal(triaged.filter, "triaged");
+  assert.deepEqual(keys(triaged), ["question"]);
+  assert.equal(triaged.total, 1);
+  for (const [filter, expected] of [
+    ["human", ["pending", "question", "thanks"]],
+    ["all", ["bot", "pending", "question", "receipt", "thanks"]],
+  ] as const) {
+    await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: filter, updatedAt: Date.now() });
+    const feed = (await w.call()).data;
+    assert.equal(feed.filter, filter);
+    assert.deepEqual(keys(feed), expected);
+    assert.equal(feed.total, expected.length);
+    assert.equal(
+      feed.selected.reduce((sum: number, loop: any) => sum + loop.count, 0),
+      expected.length,
+    );
+    assert.deepEqual(keys((await w.call("GET", null, "view=handled")).data), ["handled"]);
+    assert.deepEqual(
+      keys((await w.call("GET", null, `loopId=${email!.id}`)).data),
+      expected.filter((key) => key !== "bot"),
+    );
+    assert.equal((await w.call("GET", null, "", "mallory")).data.filter, "triaged");
+  }
+  const receipt = (await w.call()).data.items.find((item: any) => item.dedupeKey === "receipt");
+  assert.equal(receipt.sourcePayload.automated, true);
+  assert.equal(receipt.state, "held");
+  assert.equal(receipt.proposal, undefined);
+  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "invalid", updatedAt: Date.now() });
+  assert.equal((await w.call()).data.filter, "triaged");
+});
+
+test("inbox filters apply before pagination even when automated messages fill multiple pages", async () => {
+  const w = world();
+  const [loop] = await ensureDefaultInboxLoops(w.deps.store, "alice");
+  for (let n = 0; n < 85; n++) {
+    await w.deps.items.ingest([
+      {
+        loopId: loop!.id,
+        dedupeKey: String(n),
+        sourcePayload: { automated: n >= 5 },
+        proposal: { by: "agent", data: { body: "Draft" } },
+      },
+    ]);
+  }
+  const triaged = (await w.call()).data;
+  assert.equal(triaged.total, 5);
+  assert.equal(triaged.items.length, 5);
+  assert.equal(triaged.nextCursor, null);
+  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "all", updatedAt: Date.now() });
+  const first = (await w.call()).data;
+  const second = (await w.call("GET", null, `cursor=${first.nextCursor}`)).data;
+  const third = (await w.call("GET", null, `cursor=${second.nextCursor}`)).data;
+  assert.equal(first.total, 85);
+  assert.deepEqual([first.items.length, second.items.length, third.items.length], [40, 40, 5]);
+  assert.equal(new Set([...first.items, ...second.items, ...third.items].map((item: any) => item.id)).size, 85);
+});
+
+test("explicit refresh filters stay consistent across saved preference changes without overwriting them", async () => {
+  const w = world();
+  const [loop] = await ensureDefaultInboxLoops(w.deps.store, "alice");
+  await w.deps.items.ingest([
+    { loopId: loop!.id, dedupeKey: "receipt", source: "gmail", sourcePayload: { automated: true } },
+    { loopId: loop!.id, dedupeKey: "question", source: "gmail", sourcePayload: { automated: false } },
+  ]);
+  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "all", updatedAt: Date.now() });
+  const first = (await w.call()).data;
+  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "human", updatedAt: Date.now() + 1 });
+  const pinned = (await w.call("GET", null, `filter=${first.filter}`)).data;
+  assert.equal(pinned.filter, "all");
+  assert.equal(pinned.total, 2);
+  assert.equal(pinned.items.length, 2);
+  const latest = (await w.call()).data;
+  assert.equal(latest.filter, "human");
+  assert.equal(latest.total, 1);
+  assert.equal((await w.call("GET", null, "filter=invalid")).status, 400);
+});
+
+test("reading the inbox expires untouched automated messages without waiting for another ingest", async () => {
+  const w = world();
+  const [loop] = await ensureDefaultInboxLoops(w.deps.store, "alice");
+  await w.deps.items.ingest([
+    { loopId: loop!.id, dedupeKey: "old", source: "gmail", sourceAt: 1, sourcePayload: { automated: true } },
+    {
+      loopId: loop!.id,
+      dedupeKey: "recent",
+      source: "gmail",
+      sourceAt: Date.now(),
+      sourcePayload: { automated: true },
+    },
+    { loopId: loop!.id, dedupeKey: "human", source: "gmail", sourceAt: 1, sourcePayload: { automated: false } },
+  ]);
+  const feed = (await w.call("GET", null, "filter=all")).data;
+  assert.equal(feed.total, 2);
+  assert.deepEqual((await w.deps.items.byLoop(loop!.id)).map((item) => item.sourceKey).sort(), ["human", "recent"]);
+});

@@ -68,6 +68,30 @@ test("firing twice over the same source never works the item twice", async () =>
   assert.equal((await s.items.byLoop(loop.id)).length, 1);
 });
 
+test("automated inbox messages classified during work stay ready without a draft or outputs", async () => {
+  for (const surface of ["inbox", "inbox:gmail", "inbox:slack", undefined]) {
+    const s = stores();
+    const loop = await loopIn(s, { surface });
+    const summary = await runLoopFire(
+      loop,
+      s,
+      effects(s, {
+        work: async ({ item }) => {
+          await s.items.annotate(item.id, { automated: true });
+          return { runId: "classification" };
+        },
+        captureOutputs: async () => [],
+      }),
+    );
+    const [item] = await s.items.byLoop(loop.id);
+    assert.equal(item!.proposal, undefined);
+    assert.deepEqual(item!.outputIds, []);
+    assert.equal(item!.status, surface ? "ready" : "shipped");
+    assert.deepEqual(summary.ready, surface ? [item!.id] : []);
+    assert.deepEqual(summary.shipped, surface ? [] : [item!.id]);
+  }
+});
+
 test("a paused loop does not run at all", async () => {
   const s = stores();
   const loop = await loopIn(s);
@@ -393,4 +417,25 @@ test("a quiet fire that needs nobody says so", async () => {
   const loop = await loopIn(s, { shipActions: [{ action: "open_pr", gate: "auto" }] });
   const summary = await runLoopFire(loop, s, effects(s));
   assert.equal(fireNeedsAttention(summary), false);
+});
+
+test("already classified automated inbox messages stay visible without model work and newer human messages resume work", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { surface: "inbox:gmail" });
+  await s.items.ingest([
+    { loopId: loop.id, dedupeKey: "receipt", source: "gmail", sourceAt: 1, sourcePayload: { automated: true } },
+  ]);
+  const noWork = effects(s, {
+    enumerate: async () => [],
+    work: async () => assert.fail("Classified automated messages must not consume model work"),
+  });
+  assert.equal((await runLoopFire(loop, s, noWork)).worked, 0);
+  const [retained] = await s.items.byLoop(loop.id);
+  assert.equal(retained!.status, "ready");
+  assert.equal((await runLoopFire(loop, s, noWork)).worked, 0);
+  await s.items.ingest([
+    { loopId: loop.id, dedupeKey: "receipt", source: "gmail", sourceAt: 2, sourcePayload: { automated: false } },
+  ]);
+  const next = await runLoopFire(loop, s, effects(s, { enumerate: async () => [] }));
+  assert.equal(next.worked, 1);
 });

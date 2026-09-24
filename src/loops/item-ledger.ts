@@ -46,6 +46,7 @@ interface IngestOutcome {
 interface PruneOptions {
   maxItems: number;
   retentionMs: number;
+  includeAutomated?: boolean;
   now?: number;
 }
 
@@ -131,8 +132,8 @@ function withAgentDraft(
 function inboxPreview(payload: LoopSourcePayload | undefined): LoopSourcePayload {
   if (!payload) return {};
   return Object.fromEntries(
-    ["title", "from", "fromDetail", "snippet", "receivedAt", "probablyResolved", "sentChat"].flatMap((key) =>
-      payload[key] === undefined ? [] : [[key, payload[key]]],
+    ["title", "from", "fromDetail", "snippet", "receivedAt", "probablyResolved", "automated", "sentChat"].flatMap(
+      (key) => (payload[key] === undefined ? [] : [[key, payload[key]]]),
     ),
   );
 }
@@ -140,7 +141,26 @@ function inboxPreview(payload: LoopSourcePayload | undefined): LoopSourcePayload
 function mergeIngest(item: LoopItem, entry: IngestEntryInput, now: number): LoopItem | null {
   const newerSource = entry.sourceAt !== undefined && entry.sourceAt > (item.sourceAt ?? 0);
   if (isResolved(item) && !newerSource) return null;
-  if (!isResolved(item) && !newerSource && !entry.proposal) return null;
+  if (!newerSource && !entry.proposal) {
+    if (
+      entry.sourceAt === undefined ||
+      entry.sourceAt !== item.sourceAt ||
+      typeof entry.sourcePayload.automated !== "boolean"
+    )
+      return null;
+    const sourcePayload = { ...item.sourcePayload, ...entry.sourcePayload };
+    const clearAgentProposal = sourcePayload.automated === true && item.proposal?.by === "agent";
+    if (!clearAgentProposal && canonicalJson(sourcePayload) === canonicalJson(item.sourcePayload ?? {})) return null;
+    if (clearAgentProposal && item.decisionToken && (item.decisionAt ?? 0) + DECISION_LEASE_MS > now)
+      throw new Error("Item has an active decision; retry the source update");
+    return {
+      ...item,
+      ...(clearAgentProposal ? { proposal: undefined } : {}),
+      sourcePayload,
+      inboxPreview: inboxPreview(sourcePayload),
+      updatedAt: now,
+    };
+  }
   const keepHumanProposal = item.proposal?.by === "human" && !newerSource;
   const incoming = entry.proposal ? { ...entry.proposal, at: now } : item.proposal;
   const proposal =
@@ -338,6 +358,8 @@ export function createLoopItemLedger(
       const after = await update(id, (item) => {
         if (item.status === "shipped") return item;
         if (opts?.expectedClaimToken !== undefined && item.claimToken !== opts.expectedClaimToken) return item;
+        if (opts?.expectedClaimToken !== undefined && proposal.by === "agent" && item.sourcePayload?.automated === true)
+          return item;
         if (opts?.expectedAt !== undefined && item.proposal?.at !== opts.expectedAt) return item;
         applied = true;
         const now = Date.now();
@@ -433,21 +455,34 @@ export function createLoopItemLedger(
       return applied ? after : null;
     },
     async prune(loopId, options) {
+      if (!backing.deleteIf) return 0;
       const now = options.now ?? Date.now();
       const items = await forLoop(loopId);
-      const expired = items.filter(
-        (item) => isResolved(item) && now - (item.actedAt ?? item.updatedAt) >= options.retentionMs,
-      );
+      const canPrune = (item: LoopItem): boolean =>
+        isResolved(item) ||
+        (options.includeAutomated === true &&
+          ["gmail", "slack"].includes(item.source ?? String(item.sourcePayload?.source ?? "")) &&
+          item.sourcePayload?.automated === true &&
+          !item.proposal &&
+          item.outputIds.length === 0 &&
+          item.status !== "in_progress" &&
+          !(item.decisionToken && (item.decisionAt ?? 0) + DECISION_LEASE_MS > now));
+      const pruneAt = (item: LoopItem): number =>
+        isResolved(item) ? (item.actedAt ?? item.updatedAt) : (item.sourceAt ?? item.createdAt);
+      const expired = items.filter((item) => canPrune(item) && now - pruneAt(item) >= options.retentionMs);
       const doomed = new Map(expired.map((item) => [item.id, item]));
       const surviving = items.filter((item) => !doomed.has(item.id));
       if (surviving.length > options.maxItems) {
-        const resolvedOldestFirst = surviving
-          .filter(isResolved)
-          .sort((a, b) => (a.actedAt ?? a.updatedAt) - (b.actedAt ?? b.updatedAt));
-        for (const item of resolvedOldestFirst.slice(0, surviving.length - options.maxItems)) doomed.set(item.id, item);
+        const oldestFirst = surviving.filter(canPrune).sort((a, b) => pruneAt(a) - pruneAt(b));
+        for (const item of oldestFirst.slice(0, surviving.length - options.maxItems)) doomed.set(item.id, item);
       }
-      for (const id of doomed.keys()) await backing.delete(id);
-      return doomed.size;
+      let deleted = 0;
+      for (const [id, snapshot] of doomed) {
+        const unchanged = canonicalJson(snapshot);
+        if (await backing.deleteIf(id, (current) => canPrune(current) && canonicalJson(current) === unchanged))
+          deleted++;
+      }
+      return deleted;
     },
     get: (id) => backing.get(id),
     byLoop: forLoop,

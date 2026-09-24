@@ -30,7 +30,7 @@ import {
   Undo2,
   X,
 } from "lucide";
-import { api, ApiError } from "./core-bridge";
+import { api, ApiError, putUiState } from "./core-bridge";
 import { onInboxItemEvent, onInboxResync } from "./conversations";
 import { createInboxEventCoalescer, type InboxItemRef } from "./inbox-coalesce";
 import { charForName, ensureEmojiIndex } from "./emoji-picker";
@@ -96,6 +96,7 @@ export interface InboxItem {
   source: InboxSource;
   sourceKey: string;
   reviewState?: string;
+  ledgerState?: LedgerItem["state"];
   attention?: boolean;
   proposalData?: Record<string, unknown>;
   outputs?: ReviewOutput[];
@@ -121,6 +122,7 @@ export interface InboxItem {
   externalReplyText?: string;
   reactions?: string[];
   probablyResolved?: boolean;
+  automated?: boolean;
   images?: string[];
   updatedAt: number;
 }
@@ -161,7 +163,17 @@ function inboxViewSegment(viewId: string): string {
   return DEFAULT_VIEWS.some((view) => view.id === viewId) ? viewId : `loop-${viewId}`;
 }
 
+const INBOX_FILTERS = [
+  { id: "triaged", label: "Loop triaged", description: "Messages the Loop identified as needing your attention" },
+  { id: "human", label: "Only human", description: "Human conversations, including those that need no reply" },
+  { id: "all", label: "All emails", description: "All synced messages, including automated mail and bots" },
+] as const;
+
+type InboxFilter = (typeof INBOX_FILTERS)[number]["id"];
+
 export const inboxState = {
+  filter: "triaged" as InboxFilter,
+  filterBusy: false,
   items: [] as InboxItem[],
   selected: [] as Array<{
     id: string;
@@ -299,6 +311,8 @@ export function resetInboxState(): void {
   inboxState.selected = [];
   inboxState.available = [];
   inboxState.total = 0;
+  inboxState.filter = "triaged";
+  inboxState.filterBusy = false;
   inboxState.nextCursor = null;
   feedWindows.clear();
   inboxState.picker = false;
@@ -333,7 +347,11 @@ export function itemsFor(viewId: string, status: "open" | "handled"): InboxItem[
     if (item.sentChat) return false;
     if (viewId !== "all" && viewId !== "sent" && item.loopId !== viewId && item.source !== viewId) return false;
     if (viewId === "sent") return item.status === "sent" && item.source !== "generic";
-    return status === "open" ? item.status === "open" && item.attention !== false : item.status !== "open";
+    if (status !== "open") return item.status !== "open";
+    if (item.status !== "open") return false;
+    if (inboxState.filter === "all") return true;
+    if (item.automated) return false;
+    return inboxState.filter === "human" || (item.attention !== false && !item.probablyResolved);
   });
 }
 
@@ -374,6 +392,7 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     source,
     sourceKey: entry.dedupeKey,
     status: resolved,
+    ledgerState: entry.state,
     sentChat: payload.sentChat === true,
     ...(payload.sentChat === true ? { detailLoaded: true } : {}),
     title: str(payload.title) ?? entry.summary ?? "Review item",
@@ -398,6 +417,7 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     ...(payload.slack ? { slack: payload.slack as InboxItem["slack"] } : {}),
     ...(reactions?.length ? { reactions } : {}),
     ...(payload.probablyResolved === true ? { probablyResolved: true } : {}),
+    ...(payload.automated === true ? { automated: true } : {}),
     ...(Array.isArray(payload.images)
       ? { images: (payload.images as unknown[]).filter((u): u is string => typeof u === "string") }
       : {}),
@@ -445,6 +465,7 @@ export async function refreshInbox(
   try {
     type Feed = {
       migrationPending: boolean;
+      filter: InboxFilter;
       selected: typeof inboxState.selected;
       available: typeof inboxState.available;
       items: LedgerItem[];
@@ -454,6 +475,17 @@ export async function refreshInbox(
     const viewIds = new Set(["all", fullViewId, ...[...surfaces].map((surface) => surface.viewId)]);
     const moreView = opts.viewId ?? fullViewId;
     const combined = new Map<string, InboxItem>();
+    const windows = new Map(feedWindows);
+    let metadata: Feed | undefined;
+    let refreshFilter: InboxFilter | undefined;
+    const fetchFeed = async (qs: URLSearchParams): Promise<Feed> => {
+      if (refreshFilter) qs.set("filter", refreshFilter);
+      const feed = await api<Feed>(`/api/inbox?${qs}`);
+      const filter = feed.filter ?? "triaged";
+      if (refreshFilter && filter !== refreshFilter) throw new Error("Inbox filter changed during refresh. Try again.");
+      refreshFilter = filter;
+      return feed;
+    };
     for (const viewId of [...viewIds, ...[...viewIds].filter((id) => id !== "sent").map((id) => `handled:${id}`)]) {
       const handled = viewId.startsWith("handled:");
       const filterView = handled ? viewId.slice(8) : viewId;
@@ -463,20 +495,28 @@ export async function refreshInbox(
       if (handled) qs.set("view", "handled");
       else if (filterView === "sent") qs.set("view", "sent");
       if (filterView !== "all" && filterView !== "sent")
-        qs.set("loopId", inboxState.selected.find((loop) => loop.source === filterView)?.id ?? filterView);
-      let found = await api<Feed>(`/api/inbox?${qs}`);
+        qs.set(
+          "loopId",
+          (metadata?.selected ?? inboxState.selected).find((loop) => loop.source === filterView)?.id ?? filterView,
+        );
+      let found = await fetchFeed(qs);
       while (found.nextCursor && found.items.length < limit) {
         qs.set("cursor", found.nextCursor);
-        const page = await api<Feed>(`/api/inbox?${qs}`);
+        const page = await fetchFeed(qs);
         found = { ...page, items: [...found.items, ...page.items] };
       }
-      feedWindows.set(viewId, { limit, nextCursor: found.nextCursor });
-      inboxState.selected = found.selected;
-      inboxState.available = found.available;
-      inboxState.total = found.total;
-      inboxState.migrationPending = found.migrationPending;
+      windows.set(viewId, { limit, nextCursor: found.nextCursor });
+      metadata = found;
       for (const entry of found.items) combined.set(entry.id, toInboxItem(entry));
     }
+    if (!metadata) return;
+    feedWindows.clear();
+    for (const [view, window] of windows) feedWindows.set(view, window);
+    inboxState.selected = metadata.selected;
+    inboxState.available = metadata.available;
+    inboxState.total = metadata.total;
+    inboxState.filter = refreshFilter!;
+    inboxState.migrationPending = metadata.migrationPending;
     const next = [...combined.values()];
     const openId = fullSurface?.selectedId;
     const detail = openId ? inboxState.items.find((item) => item.id === openId && item.detailLoaded) : undefined;
@@ -527,6 +567,23 @@ async function loadDetail(itemId: string, loopId: string): Promise<void> {
   } catch (error) {
     inboxState.items = inboxState.items.filter((item) => item.id !== itemId);
     notify(error instanceof Error ? error.message : "Could not load item");
+  }
+}
+
+async function selectInboxFilter(filter: InboxFilter): Promise<void> {
+  if (inboxState.filterBusy || inboxState.loading || inboxState.filter === filter) return;
+  inboxState.filterBusy = true;
+  drawAll();
+  try {
+    await putUiState("inbox-filter", filter, Date.now());
+    feedWindows.clear();
+    await refreshInbox();
+    if (inboxState.error) notify(inboxState.error);
+  } catch (error) {
+    notify(error instanceof Error ? error.message : "Could not save inbox filter");
+  } finally {
+    inboxState.filterBusy = false;
+    drawAll();
   }
 }
 
@@ -870,8 +927,18 @@ async function persistDraftNow(itemId: string): Promise<void> {
   }
 }
 
+function blockedReplyStatus(item: InboxItem): string | undefined {
+  if (item.ledgerState === "processed") return "Preparing reply";
+  if (item.ledgerState === "failed") return "Draft needs attention";
+  return undefined;
+}
+
+function canSendItem(item: InboxItem): boolean {
+  return item.source !== "generic" && item.detailLoaded === true && item.status === "open" && !blockedReplyStatus(item);
+}
+
 async function sendItem(item: InboxItem): Promise<void> {
-  if (item.source === "generic" || !item.detailLoaded || sending.has(item.id)) return;
+  if (!canSendItem(item) || sending.has(item.id)) return;
   if (!effectiveDraft(item).body.trim()) {
     notify("Nothing to send. The draft is empty.");
     return;
@@ -888,7 +955,7 @@ async function sendItem(item: InboxItem): Promise<void> {
 
 async function sendItemNow(itemId: string): Promise<void> {
   const item = inboxItemById(itemId);
-  if (!item) return;
+  if (!item || !canSendItem(item)) return;
   const edited = draftEdits.get(item.id);
   const draft = effectiveDraft(item);
   if (!draft.body.trim()) {
@@ -1196,7 +1263,7 @@ export function chatTpl(item: InboxItem): TemplateResult {
                     <button
                       class="inbox-suggest-chip primary"
                       type="button"
-                      ?disabled=${sending.has(item.id)}
+                      ?disabled=${sending.has(item.id) || !canSendItem(item)}
                       ${tip(item.source === "gmail" ? "Send the drafted reply in Gmail" : "Send the drafted reply to Slack")}
                       @click=${() => void sendItem(item)}
                     >
@@ -1236,10 +1303,12 @@ export function chatTpl(item: InboxItem): TemplateResult {
 
 export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): TemplateResult {
   const draft = effectiveDraft(item);
+  const blocked = blockedReplyStatus(item);
   const gmail = item.source === "gmail";
   const showCc = gmail && ((draft.cc?.length ?? 0) > 0 || (item.gmail?.cc?.length ?? 0) > 0);
   return html`
     <div class="inbox-draft ${gmail ? "email" : "slack"}">
+      ${blocked ? html`<p role="status">${blocked}. Sending is unavailable until a fresh draft is ready.</p>` : nothing}
       <div class="inbox-draft-head">
         <span class="inbox-draft-label">Draft reply</span>
         ${
@@ -1309,7 +1378,7 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
         <textarea
           class="inbox-draft-body"
           rows=${gmail ? 7 : 3}
-          placeholder=${item.draft ? "Write a reply…" : "No draft yet. The next sync writes one, or write your own."}
+          placeholder=${item.draft || item.automated ? "Write a reply…" : "No draft yet. The next sync writes one, or write your own."}
           .value=${draft.body}
           @input=${(e: Event) => editDraft(item, { body: (e.currentTarget as HTMLTextAreaElement).value })}
           @blur=${() => void persistDraft(item)}
@@ -1339,6 +1408,8 @@ function handledStateLabel(item: InboxItem): string {
 
 function itemSideMark(item: InboxItem, handled: boolean): TemplateResult | typeof nothing {
   if (handled) return html`<span class="inbox-item-state">${handledStateLabel(item)}</span>`;
+  const blocked = blockedReplyStatus(item);
+  if (blocked) return html`<span class="inbox-item-state">${blocked}</span>`;
   if (item.draft)
     return html`<span class="inbox-item-drafted" title="A reply is drafted and ready">${icon(CheckCheck, 12)}</span>`;
   return nothing;
@@ -1500,9 +1571,11 @@ function syncLineTpl(surface: InboxSurface): TemplateResult | typeof nothing {
 function surfaceTpl(surface: InboxSurface): TemplateResult {
   const density = surface.density();
   const compact = density !== "full";
-  const allOpen = itemsFor(surface.viewId, "open");
-  const openItems = allOpen.filter((i) => !i.probablyResolved);
-  const resolvedItems = allOpen.filter((i) => i.probablyResolved);
+  const openItems = itemsFor(surface.viewId, "open");
+  let emptyMessage = "No messages in this view yet. Sync to check for new messages.";
+  if (inboxState.filter === "triaged")
+    emptyMessage = "Nothing is waiting on you. Choose Only human or All emails to see more.";
+  if (surface.viewId === "sent") emptyMessage = "No sent messages yet. Sent Email and Slack replies will appear here.";
   const handledItems = itemsFor(surface.viewId, "handled");
   const setupLoops = inboxState.selected.filter(
     (loop) =>
@@ -1517,6 +1590,8 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
           type="button"
           role="tab"
           aria-selected=${surface.viewId === v.id ? "true" : "false"}
+          aria-label=${`${v.name}, ${count} items`}
+          ${tip(count > 99 ? `${count} items` : "")}
           @click=${() => {
             if (surface === fullSurface) selectInboxView(v.id, true);
             else surface.viewId = v.id;
@@ -1524,7 +1599,13 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
             drawAll();
           }}
         >
-          ${v.id === "all" ? nothing : loopIcon(inboxState.selected.find((loop) => loop.id === v.id) ?? {})}<span>${v.name}</span>${count > 0 ? html`<span class="inbox-chip-count">${count}</span>` : nothing}
+          ${v.id === "all" ? nothing : loopIcon(inboxState.selected.find((loop) => loop.id === v.id) ?? {})}<span
+            >${v.name}</span
+          ><span class="inbox-chip-count-slot"
+            ><span class="inbox-chip-count" aria-hidden="true" ?data-empty=${count === 0}
+              >${count > 99 ? "99+" : count}</span
+            ></span
+          >
         </button>`;
       })}
       ${
@@ -1579,24 +1660,10 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
     }
     ${
       inboxState.loaded && openItems.length === 0
-        ? html`<div class="empty compact inbox-zero">
-            ${
-              surface.viewId === "sent"
-                ? "No sent messages yet. Sent Email and Slack replies will appear here."
-                : "Nothing is waiting on you in the selected Loops."
-            }
-          </div>`
+        ? html`<div class="empty compact inbox-zero">${emptyMessage}</div>`
         : nothing
     }
     <div class="inbox-list">${openItems.map((i) => itemRowTpl(surface, i))}</div>
-    ${
-      resolvedItems.length
-        ? html`<div class="inbox-resolved-sect">
-            <div class="inbox-resolved-head">Probably resolved · no reply likely needed</div>
-            <div class="inbox-list inbox-resolved-list">${resolvedItems.map((i) => itemRowTpl(surface, i))}</div>
-          </div>`
-        : nothing
-    }
     ${
       handledItems.length
         ? html`
@@ -1623,6 +1690,29 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
       <div class="inbox-toolbar">
         ${chips} ${surface.pane ? html`<span class="inbox-toolbar-spacer"></span>${syncLineTpl(surface)}` : nothing}
       </div>
+      ${
+        surface.viewId !== "sent"
+          ? html`
+              <div class="inbox-filter-bar">
+                <div class="inbox-filters" role="group" aria-label="Inbox filter">
+                  ${INBOX_FILTERS.map(
+                    (filter) => html`
+                      <button
+                        type="button"
+                        aria-pressed=${inboxState.filter === filter.id}
+                        title=${filter.description}
+                        ?disabled=${inboxState.filterBusy || inboxState.loading}
+                        @click=${() => void selectInboxFilter(filter.id)}
+                      >
+                        ${filter.label}
+                      </button>
+                    `,
+                  )}
+                </div>
+              </div>
+            `
+          : nothing
+      }
       ${
         setupLoops.length
           ? html`<section class="inbox-setup" aria-label="Set up account sync">
@@ -1767,7 +1857,7 @@ function sentDraftTpl(): TemplateResult | undefined {
     </div>`;
   return html`${inboxState.notice ? html`<div class="inbox-notice" role="status">${inboxState.notice}</div>` : nothing}${draftEditorTpl(item, { chat: false })}<button
       class="btn primary"
-      ?disabled=${sending.has(item.id)}
+      ?disabled=${sending.has(item.id) || !canSendItem(item)}
       @click=${() => void sendItem(item)}
     >
       ${sending.has(item.id) ? "Sending…" : "Send reply"}

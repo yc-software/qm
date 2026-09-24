@@ -80,6 +80,7 @@ export async function runLoopFire(
   const summary = emptySummary(loop, isRunnable(loop));
   if (!summary.ran) return summary;
   const effectiveMaxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const inbox = loop.surface === "inbox" || loop.surface?.startsWith("inbox:");
 
   const openOutputs = (await stores.outputs.byLoop(loop.id)).filter(unresolvedOutput).length;
   if (loop.caps?.maxOpenOutputs !== undefined && openOutputs >= loop.caps.maxOpenOutputs) {
@@ -104,6 +105,10 @@ export async function runLoopFire(
     const item = await stores.items.claim(queued.id, undefined, loop.id);
     if (!item) continue;
     const claimToken = item.claimToken!;
+    if (inbox && item.sourcePayload?.automated === true && !item.proposal && item.outputIds.length === 0) {
+      await stores.items.markReady(item.id, [], claimToken);
+      continue;
+    }
     summary.worked += 1;
 
     let autoShippedCount = 0;
@@ -153,7 +158,9 @@ export async function runLoopFire(
       }
 
       if (captured.length === 0) {
-        if ((await stores.items.get(item.id))?.proposal) {
+        const current = await stores.items.get(item.id);
+        const automatedInbox = inbox && current?.sourcePayload?.automated === true;
+        if (current?.proposal || automatedInbox) {
           if (await stores.items.markReady(item.id, [], claimToken)) summary.ready.push(item.id);
         } else if (await stores.items.markShipped(item.id, claimToken)) summary.shipped.push(item.id);
         continue;

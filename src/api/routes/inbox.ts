@@ -1,6 +1,11 @@
 import { migrateInbox } from "../../loops/inbox-migration.ts";
 import { scopeId, type Loop } from "../../types.ts";
-import { ensureDefaultInboxLoops, findInboxLoop } from "../../loops/inbox-loop.ts";
+import {
+  INBOX_LEDGER_MAX_ITEMS,
+  INBOX_LEDGER_RETENTION_MS,
+  ensureDefaultInboxLoops,
+  findInboxLoop,
+} from "../../loops/inbox-loop.ts";
 import { ledgerItemView } from "../../loops/ledger-view.ts";
 import { uiStateId } from "../../surfaces/ui-state.ts";
 import { sendJson } from "../http.ts";
@@ -49,6 +54,14 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   }
   const selected = ids.flatMap((value) => available.filter((loop) => loop.id === value));
   const selectedIds = selected.map((loop) => loop.id);
+  for (const loop of selected) {
+    if (loop.surface === "inbox" || loop.surface?.startsWith("inbox:"))
+      await deps.items.prune(loop.id, {
+        maxItems: INBOX_LEDGER_MAX_ITEMS,
+        retentionMs: INBOX_LEDGER_RETENTION_MS,
+        includeAutomated: true,
+      });
+  }
   const summaries = (await deps.items.summaries(selectedIds)).filter(
     (item) => selectedIds.includes(item.loopId) && item.inboxPreview?.sentChat !== true,
   );
@@ -61,15 +74,26 @@ async function inbox(ctx: ApiCtx): Promise<void> {
       outputs: (await deps.outputs.byItem(item.id)).filter((output) => output.loopId === item.loopId),
     });
   }
+  const requestedFilter = ctx.url.searchParams.get("filter");
+  if (requestedFilter !== null && !["all", "human", "triaged"].includes(requestedFilter))
+    return sendJson(ctx.res, 400, { error: "invalid_filter" });
+  const savedFilter = requestedFilter ?? (await preferences.get(uiStateId(acting.actorId, "inbox-filter")))?.value;
+  const inboxFilter = savedFilter === "all" || savedFilter === "human" ? savedFilter : "triaged";
   const handled = ctx.url.searchParams.get("view") === "handled";
   const sent = ctx.url.searchParams.get("view") === "sent";
   const filter = ctx.url.searchParams.get("loopId");
-  const attention = summaries.filter(
-    (item) => item.status === "ready" || (item.status === "failed" && item.parkedReason),
-  );
+  const attention = summaries.filter((item) => {
+    if (item.status === "shipped" || item.status === "skipped") return false;
+    if (inboxFilter === "all") return true;
+    if (item.inboxPreview?.automated === true) return false;
+    if (inboxFilter === "human") return true;
+    return (
+      item.inboxPreview?.probablyResolved !== true &&
+      (item.status === "ready" || (item.status === "failed" && Boolean(item.parkedReason)))
+    );
+  });
   const counts = new Map<string, number>();
-  for (const item of attention.filter((entry) => entry.inboxPreview?.probablyResolved !== true))
-    counts.set(item.loopId, (counts.get(item.loopId) ?? 0) + 1);
+  for (const item of attention) counts.set(item.loopId, (counts.get(item.loopId) ?? 0) + 1);
   let candidates = attention;
   if (sent)
     candidates = summaries.filter(
@@ -124,6 +148,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
       selected: selectedIds.includes(loop.id),
     })),
     migrationPending: !migrated,
+    filter: inboxFilter,
     total: [...counts.values()].reduce((sum, count) => sum + count, 0),
     items: page.map((item) =>
       ledgerItemView({

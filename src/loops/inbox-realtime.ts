@@ -76,6 +76,8 @@ export function createInboxRealtime(deps: InboxRealtimeDeps): {
                   sourceAt: event.at,
                   sourcePayload: {
                     ...item.sourcePayload,
+                    automated: undefined,
+                    probablyResolved: undefined,
                     ...(snippet ? { snippet } : {}),
                     receivedAt: event.at,
                   },
