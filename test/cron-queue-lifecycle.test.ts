@@ -23,6 +23,7 @@ let useListenNotify: boolean | undefined;
 let sessionClient: ListenerClient | undefined;
 let sessionQueries: string[] = [];
 let sessionReleased = false;
+let workOptions: unknown[] = [];
 let failStart = false;
 let failWork = false;
 let emitError: (e: Error) => void = () => {};
@@ -76,7 +77,8 @@ mock.module("pg-boss", {
         if (failStart) throw new Error("startup failed");
       }
       async createQueue() {}
-      async work() {
+      async work(...args: unknown[]) {
+        workOptions.push(args[1]);
         if (failWork) throw new Error("polling failed");
       }
       async offWork() {}
@@ -97,8 +99,9 @@ test("pg-boss enables LISTEN/NOTIFY for cron queues", () => {
 test("pg-boss forwards notifications from a pinned session", async () => {
   sessionQueries = [];
   sessionReleased = false;
+  workOptions = [];
   const queue = createPgBossCronQueue("postgres://unused");
-  await queue.start(handlers, 60_000);
+  await queue.start(handlers);
   const received: string[] = [];
   let reconnects = 0;
   const listener = await adapter.listen!(
@@ -108,6 +111,7 @@ test("pg-boss forwards notifications from a pinned session", async () => {
   );
   try {
     assert.deepEqual(sessionQueries, ['LISTEN "pgboss_test"']);
+    assert.equal((workOptions[0] as { notifyPollingIntervalSeconds?: number }).notifyPollingIntervalSeconds, 10);
     assert.equal(reconnects, 1);
     sessionClient!.emit("notification", { payload: "cron-fire" });
     assert.deepEqual(received, ["cron-fire"]);

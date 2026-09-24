@@ -23,6 +23,7 @@ export interface CronJobQueue {
 const UNHEALTHY_AFTER_ERROR_MS = 30_000;
 
 const FIRE_QUEUE = "cron-fire";
+const NOTIFY_POLLING_INTERVAL_SECONDS = 10;
 
 async function listenForPgBoss(
   pool: PgPool,
@@ -148,7 +149,12 @@ export function createPgBossCronQueue(
         const localConcurrency = Math.min(32, Math.max(1, Math.trunc(fireConcurrency)));
         await boss.work<CronFireJob>(
           FIRE_QUEUE,
-          { pollingIntervalSeconds: 1, batchSize: 1, localConcurrency },
+          {
+            pollingIntervalSeconds: 1,
+            notifyPollingIntervalSeconds: NOTIFY_POLLING_INTERVAL_SECONDS,
+            batchSize: 1,
+            localConcurrency,
+          },
           async (jobs) => {
             for (const job of jobs) await handlers.onFire(job.data);
           },
