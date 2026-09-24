@@ -1373,3 +1373,21 @@ test("estimate-only app patches preserve legacy runtime and existing grant-reaff
   assert.deepEqual(updated?.runtime, runtime);
   assert.deepEqual(updated?.unattendedGrants, []);
 });
+
+test("inherit and null have identical no-op semantics for an already inherited privileged cron", async () => {
+  const { built, control } = setup();
+  const cron = await built.crons.create({
+    ownerScopeId: "personal:admin-alice",
+    owner: "admin-alice",
+    createdBy: "admin-alice",
+    schedule: { everyMs: 60_000 },
+    action: "check",
+    unattendedGrants: ["admin.sessions.read"],
+  });
+  const before = await built.crons.update(cron.id, { runtime: null });
+  for (const runtime of [null, "inherit"] as const) {
+    const result = await control.patchCron(cron.id, { runtime }, claims("admin-alice"));
+    assert.ok(result.ok, JSON.stringify(result));
+    assert.deepEqual(result.cron, before);
+  }
+});

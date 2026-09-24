@@ -319,7 +319,7 @@ async function patchFromCronPatchRequest(
     };
   }
   return {
-    ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
+    ...(req.runtime !== undefined ? { runtime: req.runtime === "inherit" ? null : req.runtime } : {}),
     ...(req.computeEstimate !== undefined ? { computeEstimate: req.computeEstimate } : {}),
     ...(req.title !== undefined ? { title: req.title } : {}),
     ...(req.action !== undefined ? { action: req.action } : {}),
