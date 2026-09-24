@@ -106,7 +106,7 @@ test("confirmed sign-in launches the app with a CSP-authorized script and retain
   const response = await fetch(`${base}${requestPath}`, { method: "POST", headers: { origin, cookie } });
   const html = await response.text();
   const callback = html.match(/id="desktop-launch"[^>]+href="([^"]+)"/)?.[1]?.replaceAll("&amp;", "&");
-  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  const script = html.match(/<script>([\s\S]*?)<\/script>/i)?.[1];
   assert.ok(callback?.startsWith("qm-desktop://auth/callback?"));
   assert.ok(script);
   const hash = createHash("sha256").update(script).digest("base64");
