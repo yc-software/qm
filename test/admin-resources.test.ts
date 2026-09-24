@@ -428,6 +428,22 @@ test("memory policy validates updates, rejects unauthorized changes, and resets 
     });
     assert.equal(invalid.status, 400);
 
+    for (const body of [null, ["off"], {}, { recall: ["off"], capture: ["off"] }, { recall: {}, capture: "off" }]) {
+      const malformed = await fetch(endpoint, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify(body),
+      });
+      assert.equal(malformed.status, 400);
+    }
+
+    const unsupported = await fetch(`${srv.base}/v1/admin/scopes/team:engineering/memory-policy`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ recall: "off", capture: "off" }),
+    });
+    assert.equal(unsupported.status, 400);
+
     const update = await fetch(endpoint, {
       method: "PUT",
       headers: ADMIN,
@@ -438,6 +454,28 @@ test("memory policy validates updates, rejects unauthorized changes, and resets 
       recall: "off",
       capture: "off",
     });
+    const governance = await fetch(`${srv.base}/v1/admin/scopes/channel:private?view=governance`, {
+      headers: ADMIN,
+    });
+    const governed = (await governance.json()) as {
+      memoryPolicy: { recall: string; capture: string };
+      memoryPolicyOverride: { recall: string; capture: string } | null;
+    };
+    assert.deepEqual(governed.memoryPolicy, { recall: "off", capture: "off" });
+    assert.deepEqual(governed.memoryPolicyOverride, { recall: "off", capture: "off" });
+
+    for (const policy of [
+      { recall: "off", capture: "writable" },
+      { recall: "visible", capture: "off" },
+    ] as const) {
+      const mixed = await fetch(endpoint, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify(policy),
+      });
+      assert.equal(mixed.status, 200);
+      assert.deepEqual(await srv.built.config.getMemoryPolicyOwnDurable("channel:private"), policy);
+    }
 
     const reset = await fetch(endpoint, {
       method: "PUT",
@@ -449,6 +487,10 @@ test("memory policy validates updates, rejects unauthorized changes, and resets 
       recall: "visible",
       capture: "writable",
     });
+    const inherited = await fetch(`${srv.base}/v1/admin/scopes/channel:private?view=governance`, {
+      headers: ADMIN,
+    });
+    assert.equal(((await inherited.json()) as { memoryPolicyOverride: unknown }).memoryPolicyOverride, null);
   } finally {
     await srv.close();
   }

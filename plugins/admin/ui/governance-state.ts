@@ -193,9 +193,13 @@ export function loadResource(key: string, body: Record<string, any>) {
   states.get(key)!.load(body);
 }
 export function load(data: Record<string, any>, scope: string, only?: string) {
+  const memoryPolicyScope = ["personal", "channel", "group", "org"].includes(scope.split(":", 1)[0] || "");
   const resources: Record<string, [boolean, Record<string, any>]> = {
     "security-posture": ["securityPosture" in data, { posture: data.securityPosture || "auto" }],
-    "memory-policy": ["memoryPolicy" in data, data.memoryPolicy || { recall: "visible", capture: "writable" }],
+    "memory-policy": [
+      memoryPolicyScope && "memoryPolicy" in data,
+      data.memoryPolicy || { recall: "visible", capture: "writable" },
+    ],
     "sharing-posture": ["sharingPosture" in data, { posture: data.sharingPosture || "isolated" }],
     "auto-flagger": [
       scope.startsWith("org:") && "autoFlagger" in data,

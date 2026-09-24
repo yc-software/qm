@@ -186,17 +186,22 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     readKey: "memoryPolicy",
     get: (deps, scope) => deps.config!.getMemoryPolicyDurable(scope),
     apply: generic<MemoryPolicy | null>(
-      (body) => {
+      (body, { scope }) => {
+        const kind = parseScopeId(scope).kind;
+        if (kind !== "personal" && kind !== "channel" && kind !== "group" && kind !== "org")
+          return { error: "memory-policy applies only to personal, channel, group, or org scopes" };
+        if (typeof body !== "object" || body === null || Array.isArray(body))
+          return { error: "memory-policy requires an object" };
         const value = body as { inherit?: unknown; recall?: unknown; capture?: unknown };
         if (value.inherit === true) return { value: null };
-        if (!["off", "writable", "visible"].includes(String(value.recall)))
+        if (value.recall !== "off" && value.recall !== "writable" && value.recall !== "visible")
           return { error: "memory-policy requires recall (off | writable | visible)" };
-        if (!["off", "writable"].includes(String(value.capture)))
+        if (value.capture !== "off" && value.capture !== "writable")
           return { error: "memory-policy requires capture (off | writable)" };
         return {
           value: {
-            recall: value.recall as MemoryPolicy["recall"],
-            capture: value.capture as MemoryPolicy["capture"],
+            recall: value.recall,
+            capture: value.capture,
           },
         };
       },

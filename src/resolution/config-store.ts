@@ -188,6 +188,7 @@ export interface ScopedConfigStore {
   setSecurityPosture(id: ScopeId, posture: SecurityPosture): Promise<void>;
   clearSecurityPosture(id: ScopeId): void;
   getMemoryPolicyDurable(id: ScopeId): Promise<MemoryPolicy>;
+  getMemoryPolicyOwnDurable(id: ScopeId): Promise<MemoryPolicy | null>;
   setMemoryPolicy(id: ScopeId, policy: MemoryPolicy): Promise<void>;
   clearMemoryPolicy(id: ScopeId): Promise<void>;
   getSharingPosture(id: ScopeId): SharingPosture;
@@ -706,6 +707,9 @@ export function createMemoryConfigStore(
       const orgPolicy = (await memoryPolicyStore.get(org))?.policy;
       const scopePolicy = id === org ? undefined : (await memoryPolicyStore.get(id))?.policy;
       return composeMemoryPolicy(defaultMemoryPolicy, orgPolicy, scopePolicy);
+    },
+    async getMemoryPolicyOwnDurable(id) {
+      return (await memoryPolicyStore.get(id))?.policy ?? null;
     },
     async setMemoryPolicy(id, policy) {
       await writeQueue(`memoryPolicy:${id}`, () => memoryPolicyStore.put(id, { scopeId: id, policy }));

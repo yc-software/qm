@@ -102,7 +102,7 @@ import {
 } from "../security/security-posture.ts";
 import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
-import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
+import { composeMemoryPolicy, DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { collectBlob, createMemoryBlobTransferStore } from "../persistence/blob-transfer.ts";
 import { skillsIndex } from "../skills/materialize.ts";
@@ -1038,6 +1038,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const rwLayer = resolution.layers.find((l) => l.mode === "rw");
       if (rwLayer && environmentId !== rwLayer.scopeId) rwLayer.scopeId = environmentId;
       for (const layer of resolution.layers) await deps.workspace.ensureScope(layer.scopeId);
+      const turnMemoryPolicy = composeMemoryPolicy(memoryPolicy, resolution.memoryPolicy);
 
       const context = await resolveTurnContext({
         actor,
@@ -1050,7 +1051,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         sessions: deps.sessions,
         isCurrentSharedScopeMember,
         resolution,
-        memoryPolicy: resolution.memoryPolicy ?? memoryPolicy,
+        memoryPolicy: turnMemoryPolicy,
         useMemory,
         memory: deps.memory,
         workspace: deps.workspace,
@@ -1059,7 +1060,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         auditLog: deps.auditLog,
       });
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
-      const turnMemoryPolicy = resolution.memoryPolicy ?? memoryPolicy;
       resolution.grantedHandles = context.listFiles();
       const recallStart = Date.now();
       const recalled = await context.recall();

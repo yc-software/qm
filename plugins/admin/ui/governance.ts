@@ -27,6 +27,11 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         <p>Control future memory capture and recall. Existing memories are retained when either setting is off.</p>
       </div>
       <div class="body">
+        <p>
+          Effective: capture ${s.context.memoryPolicy?.capture === "off" ? "off" : "on"}; recall
+          ${s.context.memoryPolicy?.recall || "visible"}.
+          ${s.context.memoryPolicyOverride == null ? "Following parent." : "This scope has an override."}
+        </p>
         <label for="memory-capture">Capture</label>
         <select
           id="memory-capture"
