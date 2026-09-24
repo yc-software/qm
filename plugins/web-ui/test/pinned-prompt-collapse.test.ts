@@ -15,10 +15,11 @@ function fixture() {
   const toggle = row.querySelector<HTMLButtonElement>("button")!;
   let height = 300;
   let fullHeight = 600;
+  let scrollHeight = 2000;
   let pinsHeight = 0;
   scroller.querySelector<HTMLElement>(".pinned-strip")!.getBoundingClientRect = () =>
     ({ height: pinsHeight }) as DOMRect;
-  Object.defineProperties(scroller, { clientHeight: { get: () => height }, scrollHeight: { value: 2000 } });
+  Object.defineProperties(scroller, { clientHeight: { get: () => height }, scrollHeight: { get: () => scrollHeight } });
   Object.defineProperties(content, {
     scrollHeight: { get: () => fullHeight },
     clientHeight: {
@@ -73,6 +74,12 @@ function fixture() {
     resize: (next: number) => {
       height = next;
       resize([{ target: scroller }]);
+    },
+    setScrollHeight: (next: number) => {
+      scrollHeight = next;
+    },
+    wheel: (deltaY: number) => {
+      scroller.dispatchEvent(new dom.window.WheelEvent("wheel", { deltaY }));
     },
     setPins: (next: number) => {
       pinsHeight = next;
@@ -282,6 +289,27 @@ test("the prompt condenses in step with the scroll, one pixel of height per pixe
     f.toggle.click();
     assert.equal(f.row.classList.contains("pin-condensed"), false);
     assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "");
+  } finally {
+    f.close();
+  }
+});
+
+test("auto-follow layout clamps do not reverse an in-progress prompt collapse", () => {
+  const f = fixture();
+  try {
+    f.setScrollHeight(349.75);
+    f.scroll(49.75);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "89.75px");
+
+    f.setScrollHeight(340);
+    f.scroll(40);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "89.75px");
+
+    f.wheel(-10);
+    f.scroll(30);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "109.5px");
+    f.scroll(40);
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "99.5px");
   } finally {
     f.close();
   }

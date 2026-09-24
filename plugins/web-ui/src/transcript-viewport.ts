@@ -47,6 +47,7 @@ export function createTranscriptViewport() {
   let condensedHeight = 0;
   let gap: number | null = null;
   let contentMax = "";
+  let collapseDistance = 0;
   const contentUpdates = new Set<Promise<void>>();
 
   function setFollowing(value: boolean): void {
@@ -69,6 +70,7 @@ export function createTranscriptViewport() {
     restContent = condensedContent = contentHeight = condensedHeight = 0;
     gap = null;
     contentMax = "";
+    collapseDistance = 0;
     remeasure = true;
     const toggle = prompt?.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) toggle.hidden = true;
@@ -170,6 +172,10 @@ export function createTranscriptViewport() {
 
   function condense(active: boolean, distance: number): void {
     if (!prompt || !content) return;
+    if (!active) collapseDistance = 0;
+    else if (following) collapseDistance = Math.max(collapseDistance, distance);
+    else collapseDistance = distance;
+    distance = collapseDistance;
     const span = restContent - condensedContent;
     const settled = span <= 0.5 || span - distance < 0.5;
     if (active && settled && !prompt.classList.contains("pin-condensed")) {
