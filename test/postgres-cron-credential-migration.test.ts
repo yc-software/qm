@@ -252,11 +252,14 @@ test(
         principalId: "protected-login@example.test",
         canonicalId: "protected@example.test",
       });
-      await put("principal_links", "U_OLD_EXTERNAL", {
-        principalId: "U_OLD_EXTERNAL",
+      await put("principal_links", "former-alias@example.test", {
+        principalId: "former-alias@example.test",
         canonicalId: "reinstated@example.test",
       });
-      await put("external_members", "U_OLD_EXTERNAL", { email: "U_OLD_EXTERNAL", expiresAt: old });
+      await put("external_members", "former-alias@example.test", {
+        email: "former-alias@example.test",
+        expiresAt: old,
+      });
       for (const [alias, canonical, expected] of [
         ["U_OVERRIDE_ALIAS", "override-alias@example.test", true],
         ["U_CANONICAL_OVERRIDE_ALIAS", "canonical-override@example.test", false],
