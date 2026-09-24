@@ -160,7 +160,6 @@ test("a body read avoids sandbox work and a file request materializes that skill
     turnSessionDir: "turn/s",
     turnFilesDir: "turn/s/t",
     connectorEnv: {},
-    ownerEnvCredentialIds: [],
     credentialCutoverServices: [],
     visibleSkillsForTurn: async () => visible,
     emitGapWork: () => {},

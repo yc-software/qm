@@ -434,8 +434,8 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     const m = await built.keychain!.materialize(g!.grant.id, scopeId("channel", "C1"), "U_A");
     assert.ok(m.kind === "env");
     assert.deepEqual(m.kind === "env" ? m.env : [], [
-      { key: "DOORDASH_EMAIL", value: "alice@acme.co" },
-      { key: "DOORDASH_PASSWORD", value: "hunter2" },
+      { key: "DOORDASH_EMAIL", value: "alice@acme.co", secret: false },
+      { key: "DOORDASH_PASSWORD", value: "hunter2", secret: true },
     ]);
   });
 

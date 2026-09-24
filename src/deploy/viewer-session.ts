@@ -1,7 +1,18 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+export const FRAME_SESSION_COOKIE = "portal_session_x";
+
 export function portalSessionSub(cookieHeader: string | undefined, secret: string, now = Date.now()): string | null {
-  for (const token of readCookies(cookieHeader, "portal_session")) {
+  return portalSessionSubFrom(cookieHeader, "portal_session", secret, now);
+}
+
+export function portalSessionSubFrom(
+  cookieHeader: string | undefined,
+  name: string,
+  secret: string,
+  now = Date.now(),
+): string | null {
+  for (const token of readCookies(cookieHeader, name)) {
     const sub = verifySessionToken(token, secret, now);
     if (sub) return sub;
   }

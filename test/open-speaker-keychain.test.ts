@@ -4,9 +4,8 @@ import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orches
 import { coreToolOptions } from "../src/harness/agent-tools.ts";
 import { loadConfig } from "../src/config.ts";
 
-test("Open owner execution is discoverable even when automation isolation defaults off", () => {
+test("Open owner execution is discoverable without an isolation flag", () => {
   const config = loadConfig({});
-  assert.equal(config.sharedOwnerAuthIsolation, false);
   assert.equal(coreToolOptions(config).ownerAuthExec, true);
 });
 
@@ -43,8 +42,6 @@ test("Open owner computer rechecks revocation before reuse and is destroyed, nev
     isolateOwnerKeychain: true,
     openSpeakerKeychain: true,
     ownerAuthAvailable: true,
-    ownerAuthEnv: { TEST_TOKEN: "synthetic-secret" },
-    ownerEnvCredentialIds: ["synthetic-id"],
     connectorEnv: {},
     credentialTools: [],
     credentialServices: [],

@@ -5603,6 +5603,25 @@
       #view-governance .sv-customize > .head {
         row-gap: 0;
       }
+      #feature-flag-list {
+        display: grid;
+        gap: 10px;
+      }
+      #feature-flag-list .feature-flag-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+      }
+      #feature-flag-list .feature-flag-row code {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      #card-feature-flags .feature-flag-editor {
+        display: grid;
+        gap: 12px;
+        margin-top: 16px;
+      }
       #view-governance .sv-customize .body label:not(.setting-toggle) {
         margin-bottom: 4px;
         font-size: 13px;

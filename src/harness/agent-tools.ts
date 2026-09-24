@@ -1,3 +1,4 @@
+import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { createGrindMeter, grindState } from "./grind.ts";
@@ -312,7 +313,6 @@ function fmtCronRunLine(entry: CronFireLogEntry): string {
 
 export interface AgentToolsOptions {
   sessionTools?: boolean;
-  credentialExecServices?: readonly { service: string; binary: string }[];
   commandCredentialHandles?: readonly string[];
   scratchExec?: boolean;
   ownerAuthExec?: boolean;
@@ -388,8 +388,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const ownerAuthExec = !!opts?.ownerAuthExec;
   const reachExec = !!opts?.reachExec;
   const controlTools = !!opts?.controlTools;
-  const credentialExecServices = opts?.credentialExecServices ?? ref.current?.credentialExecServices ?? [];
-  const commandCredentialHandles = opts?.commandCredentialHandles ?? ref.current?.commandCredentialHandles ?? [];
   const surfaceTools = !!opts?.surfaceTools;
   const delegateWork = opts?.delegateWork === true;
   const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000) / 1000);
@@ -592,10 +590,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ),
     purpose: Type.String({
       description:
-        "One short sentence on what this command accomplishes and why you're running it now — " +
-        "the intent, not a restatement of the command. Required on every call: keep it terse for " +
-        "routine commands, but never skip it, because you can't tell in advance which command will " +
-        "trip human approval, and if one does this is the ONLY context the approver sees before deciding.",
+        "A human-readable intent label, at most 4 words (e.g. 'Check Python version'). " +
+        "Describe the purpose, not the code. Required on every call; shown in tool activity and approval requests.",
     }),
     timeout_seconds: Type.Optional(
       Type.Integer({
@@ -607,15 +603,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }),
     ),
 
-    ...(commandCredentialHandles.length
-      ? {
-          credentials: Type.Optional(
-            Type.Array(Type.String({ enum: [...commandCredentialHandles] }), {
-              description: "Exact credential handles to expose to this command only.",
-            }),
-          ),
-        }
-      : {}),
+    credentials: Type.Optional(
+      Type.Array(Type.String(), {
+        description:
+          "Exact authorized credential handles to materialize for this command only. Newly granted handles are accepted.",
+      }),
+    ),
   };
 
   const blockOnApproval = (callId: string, e: NeedsApproval, purpose?: string, tool = "execute") => {
@@ -667,6 +660,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     await recordCall(callId, {
       tool: "execute",
       command: params.command,
+      purpose: params.purpose,
       ...scopeNote,
       ...(params.sandbox_id ? { sandbox_id: params.sandbox_id } : {}),
     });
@@ -708,6 +702,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         r.reached ? { provenance: "external", source: "reached room" } : undefined,
       );
     } catch (e) {
+      if (e instanceof MaskedExecutionError) {
+        return recordResult(callId, { tool: "execute", ...scopeNote }, text(e.message), true);
+      }
       if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose);
       if (e instanceof CommandDenied) {
         return recordResult(
@@ -787,14 +784,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     const durable = params.durable;
     if (keyword === "scoped") {
       if ((scratchExec || ownerAuthExec) && durable === false) {
-        await recordCall(callId, { tool: "execute", command: params.command, scope, durable });
+        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
         return invalidExecute(callId, { tool: "execute", invalid: "scoped_ephemeral" }, SCOPED_EPHEMERAL_ERROR);
       }
       return runExecute(callId, params, { scratch: false });
     }
     if (keyword === "scratch") {
       if (!scratchExec) {
-        await recordCall(callId, { tool: "execute", command: params.command, scope });
+        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope });
         return invalidExecute(
           callId,
           { tool: "execute", invalid: "scratch_unavailable" },
@@ -802,14 +799,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         );
       }
       if (durable === true) {
-        await recordCall(callId, { tool: "execute", command: params.command, scope, durable });
+        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
         return invalidExecute(callId, { tool: "execute", invalid: "scratch_durable" }, SCRATCH_DURABLE_ERROR);
       }
       return runExecute(callId, params, { scratch: true });
     }
     if (keyword === "owner") {
       if (!ownerAuthExec) {
-        await recordCall(callId, { tool: "execute", command: params.command, scope });
+        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope });
         return invalidExecute(
           callId,
           { tool: "execute", invalid: "owner_unavailable" },
@@ -817,7 +814,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         );
       }
       if (durable === true) {
-        await recordCall(callId, { tool: "execute", command: params.command, scope, durable });
+        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
         return invalidExecute(
           callId,
           { tool: "execute", invalid: "owner_durable" },
@@ -891,7 +888,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "sandbox",
     label: "sandbox",
     description:
-      "Manage sandbox resources. list returns providers, supported actions, inventory, and this scope's optional default. create provisions a blank sandbox without changing the default or copying files. set_default changes routing only; pass sandbox_id:null to clear it. status reports health and recovery expiry without provisioning. restart recovers working state where supported and stops running processes. retire deletes the named sandbox after its default and jobs are cleared. Durable outputs belong in Files or git. Select an exact sandbox_id for status/restart or omit it to use the stored default.",
+      "Manage sandbox resources. list returns providers, supported actions, inventory, and this scope's optional default. If work needs a computer and this scope has no default, do not report blocked: list providers, create a sandbox, set_default to it, and retry. Only report blocked if creation fails. create provisions a blank sandbox without changing the default or copying files. set_default changes routing only; pass sandbox_id:null to clear it. status reports health and recovery expiry without provisioning. restart recovers working state where supported and stops running processes. retire deletes the named sandbox after its default and jobs are cleared. Durable outputs belong in Files or git. Select an exact sandbox_id for status/restart or omit it to use the stored default.",
     parameters: Type.Object({
       action: Type.String({ enum: sandboxActions }),
       sandbox_id: Type.Optional(
@@ -901,7 +898,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
       backend: Type.Optional(Type.String({ description: "create only: provider from list." })),
       name: Type.Optional(Type.String({ description: "create only: human-readable name." })),
-      purpose: Type.String({ description: "Briefly explain why this action is needed." }),
+      purpose: Type.String({ description: "Human-readable purpose, at most 4 words (e.g. 'Check sandbox health')." }),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -909,6 +906,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       await recordCall(callId, {
         tool: "sandbox",
         action: params.action,
+        purpose: params.purpose,
         ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
         ...(params.backend ? { backend: params.backend } : {}),
         ...(params.name ? { name: params.name } : {}),
@@ -1113,9 +1111,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     label: "publish",
     description:
       "Publish a directory from the workspace as a durable, scope-bound internal web app " +
-      "(it keeps running after the turn ends and gets a stable link). The app must listen on " +
-      "the PORT env var. Set audience to [] to suppress default audience grants, or supply publication-time grants. Use apps action share for subsequent grants. Share the full absolute URL returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, stable link /d/<name>/; " +
-      "`renameFrom` to rename; `rollbackTo` to flip back to an earlier version. Egress is open, " +
+      "(it keeps running after the turn ends and gets a stable link). Before publishing, verify the " +
+      "directory exists and contains files. For a new app or a code/file update, always pass `entrypoint`; " +
+      "the app must listen on the PORT env var. `dir` is workspace-relative: use `app`, never a path " +
+      "beginning with `/` or a redundant `workspace/app`. `renameFrom` takes an existing " +
+      "deployment name, not its ID. Set audience to [] to suppress default audience grants, or supply " +
+      "publication-time grants. Use apps action share for subsequent grants. Share the full absolute URL " +
+      "returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, " +
+      "stable link /d/<name>/; `renameFrom` to rename; `rollbackTo` to flip back to an earlier version. " +
+      "Egress is open, " +
       "so bake data in or have the app fetch it. When the runtime sets $DATA_DIR, state the app " +
       "writes there survives restarts and redeploys; keep durable state there. For a database use " +
       "SQLite at exactly $DATA_DIR/app.db — it gets the strongest durability the runtime offers " +
@@ -1123,7 +1127,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "most recent writes). The rest of the disk is reset from source on every relaunch. By default " +
       "an app sleeps when idle and cold-starts on the next visit; set `alwaysOn: true` to keep it " +
       "warm (no idle cold starts) — use it only when someone actually needs instant loads, and " +
-      "`alwaysOn: false` to turn it back off.",
+      "`alwaysOn: false` to turn it back off. An app cannot be shown inside another site's page " +
+      "(an iframe) unless `embedAncestors` names that site; set it when someone asks for the app in " +
+      "a panel or extension, and `[]` to turn it back off.",
     parameters: Type.Object({
       audience: Type.Optional(
         Type.Array(
@@ -1137,16 +1143,26 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           },
         ),
       ),
-      dir: Type.Optional(Type.String({ description: "Workspace directory to publish (default: the whole tree)." })),
+      dir: Type.Optional(
+        Type.String({
+          description:
+            "Workspace-relative directory to publish (default: the whole tree). Use `app`, not an absolute path or `workspace/app`.",
+        }),
+      ),
       entrypoint: Type.Optional(
-        Type.String({ description: 'Command the container runs, relative to the app root, e.g. "node server.js".' }),
+        Type.String({
+          description:
+            'Command the container runs, relative to the app root, e.g. "node server.js". Always provide it for a new app or file update.',
+        }),
       ),
       name: Type.Optional(
         Type.String({
           description: "Friendly, globally-unique handle → link is /d/<name>/. Lowercase letters/digits/hyphens.",
         }),
       ),
-      renameFrom: Type.Optional(Type.String({ description: "Rename the deployment currently named this to `name`." })),
+      renameFrom: Type.Optional(
+        Type.String({ description: "Existing deployment name to rename to `name`; this is a name, not an ID." }),
+      ),
       env: Type.Optional(
         Type.Record(Type.String(), Type.String(), {
           description:
@@ -1160,6 +1176,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         Type.Boolean({
           description:
             "true keeps the app always warm — it is never put to sleep for being idle, so there are no cold starts. false returns it to the default sleep-when-idle behavior. Omitted = leave the current setting alone.",
+        }),
+      ),
+      embedAncestors: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "Sites allowed to embed the app in an iframe, as https origins (https://tools.example.com, or https://*.example.com for any subdomain). Every frame between the app and the browser tab must be listed, so a panel inside another site needs both. [] forbids embedding again. Omitted = leave the current setting alone.",
         }),
       ),
     }),
@@ -1177,6 +1199,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const r = await tc.publish({ ...params, share: params.audience } as PublishInput);
         const reach = describePublishAudience(r.audience);
         const alwaysOnNote = r.alwaysOn ? "\nAlways-on: the app is kept warm — no idle cold starts." : "";
+        const embedNote = r.embedAncestors?.length ? `\nEmbeddable by: ${r.embedAncestors.join(", ")}` : "";
         const dataNote = r.dataDir
           ? `\nDurable data: runtime state written under ${r.dataDir} ($DATA_DIR) survives restarts and redeploys — keep SQLite at ${r.dataDir}/app.db (it gets the strongest durability the runtime offers). If this app writes runtime state anywhere else on disk, migrate it there (data deliberately baked into the repo stays where it is).`
           : "";
@@ -1192,7 +1215,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(r.audience ? { audience: r.audience } : {}),
             ...(r.dataDir ? { dataDir: r.dataDir } : {}),
           },
-          text(`Published ${r.name ?? r.id} (v${r.version}) → ${r.url}\n${reach}${alwaysOnNote}${dataNote}`),
+          text(
+            `Published ${r.name ?? r.id} (v${r.version}) → ${r.url}\n${reach}${alwaysOnNote}${embedNote}${dataNote}`,
+          ),
         );
       } catch (e) {
         const msg = errMessage(e);
@@ -1358,8 +1383,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "history",
     label: "history",
     description:
-      "Search or reopen THIS conversation's own durable transcript — every past turn and tool " +
-      "call/result, including parts compacted out of your current context. Use it when something " +
+      "Search or reopen THIS conversation's own durable transcript — past turns and tool calls, " +
+      "including parts compacted out of your current context. Tool results are excluded. Use it when something " +
       'earlier in this conversation is referenced but not in front of you ("that file from last ' +
       'week", "what did we decide"). Distinct from `memory` search, which searches remembered facts ' +
       "across conversations; `history` searches only this one, verbatim. With `query`, matching is " +
@@ -1390,7 +1415,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           return recordResult(
             callId,
             { tool: "history", error: "seq must be an integer" },
-            text("[error] history `seq` must be an integer entry number, like the 87 in tool_result#87."),
+            text("[error] history `seq` must be an integer entry number, like the 87 in tool_call#87."),
             true,
           );
         }
@@ -1658,7 +1683,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         },
       ),
       purpose: Type.Optional(
-        Type.String({ description: "Brief intent for a process operation that may require approval." }),
+        Type.String({ description: "Human-readable purpose, at most 4 words (e.g. 'Start preview server')." }),
       ),
       command: Type.Optional(Type.String({ description: "start only: the shell command to run in the background." })),
       process_id: Type.Optional(Type.String({ description: "poll/write/stop/watch only: the id start returned." })),
@@ -1724,6 +1749,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       await recordCall(callId, {
         tool: "background",
         action: params.action,
+        purpose: params.purpose,
         command: params.command,
         process_id: params.process_id,
         ...(params.sandbox_id ? { sandbox_id: params.sandbox_id } : {}),
@@ -2001,7 +2027,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     command: Type.Optional(executeBaseParams.command),
     purpose: Type.Optional(
       Type.String({
-        description: "Required for exec and management actions: briefly explain why. Optional for process actions.",
+        description:
+          "Human-readable intent label, at most 4 words (e.g. 'Check Python version'). Describe the purpose, not the code. Required for exec and management actions; optional for process actions.",
       }),
     ),
     timeout_seconds: Type.Optional(
@@ -2098,7 +2125,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               !Check(schema, params) ||
               ((params as Record<string, unknown>).sandbox_id === null && action !== "set_default")
             ) {
-              await recordCall(callId, { tool: "sandbox", action });
+              await recordCall(callId, { tool: "sandbox", action, purpose: params.purpose });
               return recordResult(
                 callId,
                 { tool: "sandbox", action, invalid: true },
@@ -3563,76 +3590,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
-  const credentialExec = defineTool({
-    name: "credential_exec",
-    label: "Credential exec",
-    description:
-      "Run a configured credential-bearing CLI in a one-shot isolated box. Shell operators and pipelines are not supported; args are passed literally. Available services: " +
-      credentialExecServices.map(({ service, binary }) => `${service} (${binary})`).join(", "),
-    parameters: Type.Object({
-      service: Type.String({ enum: credentialExecServices.map(({ service }) => service) }),
-      args: Type.Array(Type.String()),
-      timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: execCeilingSec })),
-    }),
-    async execute(callId, params: { service: string; args: string[]; timeout_seconds?: number }) {
-      const tc = ref.current;
-      await recordCall(callId, { tool: "credential_exec", service: params.service, args: params.args });
-      if (!tc?.credentialExec) {
-        return recordResult(
-          callId,
-          { tool: "credential_exec", unavailable: true },
-          text("[error] credential_exec is unavailable on this turn"),
-          true,
-        );
-      }
-      try {
-        const result = await tc.credentialExec(params.service, params.args, {
-          ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
-          ...(ref.abortSignal ? { signal: ref.abortSignal } : {}),
-        });
-        const parts = [result.stdout, result.stderr ? `[stderr]\n${result.stderr}` : ""].filter(Boolean).join("\n");
-        return recordResult(
-          callId,
-          { tool: "credential_exec", service: params.service, ...result },
-          text(`${parts}\n[exit ${result.code}${result.timedOut ? " timed-out" : ""}]`),
-          result.code !== 0,
-        );
-      } catch (error) {
-        if (error instanceof NeedsApproval) {
-          ref.pendingApprovals?.push({
-            command: error.command,
-            reason: error.approvalReason,
-            kind: error.kind,
-            matched: error.matched,
-            ...(error.approvalKey ? { approvalKey: error.approvalKey } : {}),
-            ...(error.grantModes ? { grantModes: error.grantModes } : {}),
-          });
-          ref.pausedOnApproval = true;
-          return recordResult(
-            callId,
-            { tool: "credential_exec", blocked: "needs_approval", reason: error.approvalReason },
-            { ...text(`[blocked: needs human approval] ${error.approvalReason}`), terminate: true },
-            true,
-          );
-        }
-        if (error instanceof CommandDenied) {
-          return recordResult(
-            callId,
-            { tool: "credential_exec", denied: true, reason: error.message },
-            text(`[denied by policy] ${error.message}`),
-            true,
-          );
-        }
-        return recordResult(
-          callId,
-          { tool: "credential_exec", service: params.service, failed: true },
-          text(`[error] ${errMessage(error)}`),
-          true,
-        );
-      }
-    },
-  });
-
   const registerLogin = defineTool({
     name: "register_login",
     label: "register_login",
@@ -3997,7 +3954,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const tools = [
     ...(!opts?.sandboxResources && !delegateWork ? [execute] : []),
-    ...(credentialExecServices.length && !delegateWork ? [credentialExec] : []),
     resourceTool("skills", {
       read: skill,
       ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
@@ -4085,6 +4041,7 @@ function withToolApprovalGate(
         await rec.recordCall(callId, {
           tool: tool.name,
           ...(resourceAction ? { action: resourceAction } : {}),
+          ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
           blocked: "needs_approval",
           reason: STRICT_TOOL_APPROVAL_REASON,
         });

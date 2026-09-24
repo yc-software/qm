@@ -120,7 +120,6 @@ export interface HarnessTurnInput {
   history: SessionEntry[];
   goal?: GoalRecord | null;
   tools: ToolContext;
-  credentialExecServices?: readonly { service: string; binary: string }[];
   commandCredentialHandles?: readonly string[];
   toolApprovalGate?(tool: string): boolean;
   emit(entry: NewEntry): Promise<SessionEntry>;

@@ -70,7 +70,7 @@ import {
   type PrincipalLink,
   type PrincipalLinkService,
 } from "./identity/principal-links.ts";
-import type { SlackAccountLink } from "./api/routes/composio.ts";
+import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { createResendMailer } from "./admin/invite-email.ts";
@@ -512,6 +512,7 @@ export interface BuiltApp {
   identity: IdentityService;
   principalLinks: PrincipalLinkService;
   slackAccounts: DurableMap<SlackAccountLink>;
+  composioReturns: DurableMap<ComposioReturn>;
   keychain?: Keychain;
   serviceCreds: ServiceCredentialStore;
   deliveries: DeliveryStore;
@@ -1134,6 +1135,7 @@ export function buildApp(
           exp: Date.now() + CAPABILITY_TTL_MS,
         },
         secret,
+        config.capabilityTokenCompression,
       );
       return { egressToken };
     },
@@ -1166,6 +1168,7 @@ export function buildApp(
           exp: Date.now() + CAPABILITY_TTL_MS,
         },
         egressSecret,
+        config.capabilityTokenCompression,
       );
       return { egressToken };
     },
@@ -1667,7 +1670,14 @@ export function buildApp(
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
+  const deliveries = withWebTranscriptDeliveries(
+    config.databaseUrl ? createPostgresDeliveryStore(config.databaseUrl) : createDeliveryStore(),
+    sessions,
+  );
   const deployService = createDeployService({
+    deliveries,
+    deployAppsDomain: config.awsDeploy.appsDomain,
+    publicWebUrl: config.publicWebUrl,
     appPublished: productAnalytics.appPublished,
     deployStore,
     provider: deployProvider,
@@ -1703,6 +1713,7 @@ export function buildApp(
                   exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
                 },
                 config.capabilitySecret ?? deployGitSecret,
+                config.capabilityTokenCompression,
               );
             }
             return env;
@@ -1770,10 +1781,6 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const deliveries = withWebTranscriptDeliveries(
-    config.databaseUrl ? createPostgresDeliveryStore(config.databaseUrl) : createDeliveryStore(),
-    sessions,
-  );
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreenBackend === "proxy") {
     securityScreener = createSecurityScreenProxy({
@@ -1878,6 +1885,7 @@ export function buildApp(
     backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+    capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
@@ -1912,7 +1920,6 @@ export function buildApp(
     webhooks,
     resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
     ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
-    ...(config.sharedOwnerAuthIsolation ? { sharedOwnerAuthIsolation: true } : {}),
     directory,
     isCurrentSharedScopeMember,
     managedGroups: projects,
@@ -2080,6 +2087,7 @@ export function buildApp(
     projects,
     environments,
     deploy: deployService,
+    deployAppsDomain: config.awsDeploy.appsDomain,
     deploymentLayer,
     ...(processes ? { processes } : {}),
     monitors,
@@ -2113,6 +2121,7 @@ export function buildApp(
     requestFire: (loopId) => void loopFire.fire(loopId, `loop:${loopId}:slack-event:${Date.now()}`).catch(() => {}),
   });
   const slackCore = createSlackCoreClient({
+    identity,
     ...(keychain
       ? {
           keychainApprovals: createKeychainApprovals({
@@ -2489,6 +2498,15 @@ export function buildApp(
   );
   const deployIdleTtlMs = deployProvider.profile.managedScaleToZero ? undefined : config.deployIdleTtlMs;
   const BLOB_TTL_MS = 6 * 60 * 60_000;
+  const composioReturns = artifactMap<ComposioReturn>("composio_returns");
+  const composioReturnSweeper = createSweeper(
+    async () => {
+      for (const [id, entry] of await composioReturns.entries())
+        if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
+    },
+    30 * 60_000,
+    { label: "Composio consent returns", immediate: true },
+  );
   const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
   const BLOB_TRANSFER_EXPIRY_DAYS = 1;
   void blobTransfer
@@ -2549,6 +2567,7 @@ export function buildApp(
       monitorRetentionSweeper.start();
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
+      composioReturnSweeper.start();
       fileUploads?.start();
       idleSweeper?.start();
       keepWarmSweeper.start();
@@ -2578,6 +2597,7 @@ export function buildApp(
       keepWarmSweeper.stop(),
       deepIdleSweeper?.stop(),
       blobSweeper.stop(),
+      composioReturnSweeper.stop(),
       fileUploads?.stop(),
       wakeSweep.stop(),
       swarms?.stop(),
@@ -2692,6 +2712,7 @@ export function buildApp(
     identity,
     principalLinks,
     slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
+    composioReturns,
     workspace,
     memory,
     ...(keychain ? { keychain } : {}),
@@ -2761,6 +2782,7 @@ export function serverDeps(
     allowUnauthenticatedCore: config.allowUnauthenticatedCore,
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+    capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
     ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
     ...(built.replayDedupe ? { replayDedupe: built.replayDedupe } : {}),
@@ -2828,6 +2850,7 @@ export function serverDeps(
     identity: built.identity,
     principalLinks: built.principalLinks,
     slackAccounts: built.slackAccounts,
+    composioReturns: built.composioReturns,
     ...(built.keychain ? { keychain: built.keychain } : {}),
     serviceCreds: built.serviceCreds,
     deliveries: built.deliveries,

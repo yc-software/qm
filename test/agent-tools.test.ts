@@ -496,6 +496,14 @@ test("sandbox advertises available management actions and retires migrate", asyn
   await assert.rejects(() => call(execute, { command: "", computer: "migrate" }), /migrate has been retired/);
 });
 
+test("sandbox tells the agent to provision a missing default before reporting a blocker", () => {
+  const ref: ToolContextRef = { current: fakeToolContext(), emit: () => {}, scopeLabel: "group:C1" };
+  const sandbox = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
+  assert.match(sandbox.description, /needs a computer and this scope has no default/i);
+  assert.match(sandbox.description, /list.*create.*set_default.*retry/is);
+  assert.match(sandbox.description, /report.*blocked.*creation fails/is);
+});
+
 test("sandbox creation and default routing remain independent", async () => {
   const calls: unknown[] = [];
   const ref: ToolContextRef = {
@@ -1812,73 +1820,6 @@ test("execute forwards the agent's timeout_seconds into tc.execute; omitting it 
   assert.equal(sink.lastExecOpts, undefined);
 });
 
-test("credential_exec is turn-scoped, typed, and forwards only service plus literal argv", async () => {
-  const calls: unknown[] = [];
-  const tc: ToolContext = {
-    ...fakeToolContext(),
-    credentialExecServices: [{ service: "acme", binary: "acmecli" }],
-    async credentialExec(service, args, opts) {
-      calls.push({ service, args, opts });
-      return { stdout: "authenticated", stderr: "", code: 0, timedOut: false };
-    },
-  };
-  const absent = createAgentTools({ current: fakeToolContext() });
-  assert.equal(
-    absent.some((tool) => tool.name === "credential_exec"),
-    false,
-  );
-  const tools = createAgentTools(
-    { current: tc },
-    { credentialExecServices: tc.credentialExecServices, execTimeoutCeilingMs: 10_000 },
-  );
-  const tool = tools.find((candidate) => candidate.name === "credential_exec")!;
-  assert.match(tool.description, /acme \(acmecli\)/);
-  assert.match(tool.description, /Shell operators and pipelines are not supported/);
-  const args = ["; env", "$(env)", "a|b", "> out", "two words"];
-  const result = await call(tool, { service: "acme", args, timeout_seconds: 7 });
-  assert.deepEqual(calls, [{ service: "acme", args, opts: { timeoutSeconds: 7 } }]);
-  assert.match((result as { content: Array<{ text: string }> }).content[0]!.text, /authenticated/);
-});
-
-test("credential_exec surfaces NeedsApproval and CommandDenied like execute", async () => {
-  const gated: ToolContext = {
-    ...fakeToolContext(),
-    credentialExecServices: [{ service: "acme", binary: "acmecli" }],
-    async credentialExec() {
-      throw new NeedsApproval("'acmecli' 'tool'", "mutating subcommand", "approval", "tool", "\\bacmecli\\s+tool\\b");
-    },
-  };
-  const ref = { current: gated, pendingApprovals: [] as NonNullable<ToolContextRef["pendingApprovals"]> };
-  const tool = createAgentTools(ref, { credentialExecServices: gated.credentialExecServices }).find(
-    (candidate) => candidate.name === "credential_exec",
-  )!;
-  const blocked = (await call(tool, { service: "acme", args: ["tool"] })) as {
-    content: Array<{ text: string }>;
-    terminate?: boolean;
-  };
-  assert.match(blocked.content[0]!.text, /needs human approval/);
-  assert.equal(blocked.terminate, true);
-  assert.equal(ref.pendingApprovals.length, 1);
-  assert.equal(ref.pendingApprovals[0]!.approvalKey, "\\bacmecli\\s+tool\\b");
-  assert.equal((ref as { pausedOnApproval?: boolean }).pausedOnApproval, true);
-
-  const denied: ToolContext = {
-    ...fakeToolContext(),
-    credentialExecServices: [{ service: "acme", binary: "acmecli" }],
-    async credentialExec() {
-      throw new CommandDenied("'acmecli'", "must be run with credential_exec");
-    },
-  };
-  const deniedTool = createAgentTools(
-    { current: denied },
-    { credentialExecServices: denied.credentialExecServices },
-  ).find((candidate) => candidate.name === "credential_exec")!;
-  const deniedResult = (await call(deniedTool, { service: "acme", args: [] })) as {
-    content: Array<{ text: string }>;
-  };
-  assert.match(deniedResult.content[0]!.text, /denied by policy/);
-});
-
 test('execute scope:"owner" routes only when the owner-auth surface is enabled', async () => {
   const sink: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] } = {};
   const execute = createAgentTools({ current: fakeToolContext(sink) }, { ownerAuthExec: true })[0]!;
@@ -1891,6 +1832,15 @@ test('execute scope:"owner" routes only when the owner-auth surface is enabled',
     (result as { content: Array<{ text: string }> }).content[0]?.text ?? "",
     /owner-auth box is not available/,
   );
+});
+
+test("publish instructions prevent malformed app configs", () => {
+  const apps = createAgentTools({ current: fakeToolContext() }).find((tool) => tool.name === "apps");
+  assert.ok(apps);
+  assert.match(apps.description, /always pass `entrypoint`/);
+  assert.match(apps.description, /workspace-relative/);
+  assert.match(apps.description, /verify.*directory.*contains files/i);
+  assert.match(apps.description, /`renameFrom`.*deployment name.*not.*ID/i);
 });
 
 test("publish reply states owner + resolved audience in human terms (ADR 0003 D7)", async () => {
@@ -3387,10 +3337,8 @@ test("conversation coordinators cannot execute commands through any command tool
       const tools = createAgentTools(ref, {
         ...options,
         sandboxResources,
-        credentialExecServices: [{ service: "aws", binary: "aws" }],
       });
-      for (const name of ["execute", "background", "credential_exec"])
-        assert.ok(!tools.some((tool) => tool.name === name));
+      for (const name of ["execute", "background"]) assert.ok(!tools.some((tool) => tool.name === name));
       const sandbox = tools.find((tool) => tool.name === "sandbox")!;
       assert.match(
         textOut(await call(sandbox, { action: "exec", command: "echo forbidden" })),
@@ -3588,4 +3536,36 @@ test("files share preserves artifact IDs, recipient resolution and authorization
   ])
     assert.match(textOut(await call(files, params)), /Invalid arguments/);
   assert.equal(requests.length, 1);
+});
+
+test("the retired credential tool is absent and execute accepts credential handles", () => {
+  const tools = createAgentTools({ current: fakeToolContext() }, { commandCredentialHandles: ["kc_test123456"] });
+  assert.equal(
+    tools.some((tool) => tool.name === "credential_exec"),
+    false,
+  );
+  assert.ok(tools.some((tool) => tool.name === "execute"));
+});
+
+test("sandbox call traces preserve purpose across execution, management, processes, and invalid routes", async () => {
+  const calls: Record<string, unknown>[] = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    scopeLabel: "personal:U1",
+    emit: (event) => {
+      if (event.type === "tool_call") calls.push(event.payload as Record<string, unknown>);
+    },
+  };
+  const sandbox = createAgentTools(ref, { sandboxResources: true }).find((tool) => tool.name === "sandbox")!;
+  for (const params of [
+    { action: "exec", command: "pwd" },
+    { action: "status" },
+    { action: "start_process", command: "echo ready" },
+    { action: "exec", command: "pwd", scope: "scratch" },
+    { action: "exec" },
+  ]) {
+    await call(sandbox, { ...params, purpose: "Inspect the demo workspace" });
+  }
+  assert.equal(calls.length, 5);
+  assert.ok(calls.every((entry) => entry.purpose === "Inspect the demo workspace"));
 });

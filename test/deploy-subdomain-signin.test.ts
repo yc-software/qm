@@ -291,6 +291,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
       target: "alice@example.com",
       audienceScopeId: "personal:alice@example.com",
       onBehalfOf: "mallory@example.com",
+      deploymentAccess: { deploymentId: (await app.getDeployment("mysite"))!.id, requesterId: "mallory@example.com" },
     });
 
     const signedOutAsk = await httpPost(port, "/__claw__/request-access", { Host: host });

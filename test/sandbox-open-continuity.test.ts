@@ -5,7 +5,12 @@ import { createToolContext, NeedsApproval, type ToolContextDeps } from "../src/t
 import { intersectEgressPolicies } from "../src/resolution/egress-policy.ts";
 import type { SandboxHandle } from "../src/sandbox/sandbox.ts";
 
-function fixture(source = "group:project", target = "personal:alice", authority = true) {
+function fixture(
+  source = "group:project",
+  target = "personal:alice",
+  authority = true,
+  toolDeps: Partial<ToolContextDeps> = {},
+) {
   const state = {
     open: true,
     member: true,
@@ -138,7 +143,6 @@ function fixture(source = "group:project", target = "personal:alice", authority 
     scopeId: source,
     memoryScopeId: source,
     openResourceAccess: authority,
-    ownerAuthEnv: { OWN_SECRET: "synthetic-own-secret" },
     credentialServices: [],
     credentialTools: [],
     quarantinedServices: [],
@@ -189,6 +193,7 @@ function fixture(source = "group:project", target = "personal:alice", authority 
     deploy: {},
     acl: {},
     createdBy: "alice",
+    ...toolDeps,
   } as unknown as ToolContextDeps);
   return {
     turn,
@@ -216,7 +221,7 @@ test("Open shared requests execute on the owner's personal machine without movin
   assert.equal(JSON.stringify(f.provisions).includes("synthetic-room"), false);
   assert.deepEqual(f.writes, []);
   assert.deepEqual(f.credentialOwners, ["alice"]);
-  assert.equal(f.runs.at(-1)?.env?.OWN_SECRET, "synthetic-own-secret");
+  assert.equal(f.runs.at(-1)?.env?.OWN_SECRET, undefined);
   assert.ok(f.restored.some((bytes) => Buffer.from(bytes).includes("synthetic-own-file")));
   assert.equal(JSON.stringify(f.provisions).includes("team:private"), false);
   const skill = await f.tools.skill("room-tool", { sandboxId: "personal-box" });
@@ -310,7 +315,7 @@ test("background starts use the authorized personal target and recheck revocatio
   const f = fixture();
   await f.tools.backgroundStart("node work.js", { sandboxId: "personal-box" });
   assert.equal(f.starts[0]?.scopeId, "personal:alice");
-  assert.deepEqual(f.starts[0]?.env, { OWN_SECRET: "synthetic-own-secret" });
+  assert.equal(f.starts[0]?.env, undefined);
   f.state.member = false;
   await assert.rejects(f.tools.backgroundStart("node work.js", { sandboxId: "personal-box" }), /authorized/);
 });
@@ -357,7 +362,7 @@ test("cross-target egress policies narrow both provider policy and minted proxy 
   });
 });
 
-test("cached personal access reapplies device-flow quarantine while keeping the turn credential snapshot", async () => {
+test("cached personal access reapplies device-flow quarantine without injecting environment credentials", async () => {
   const f = fixture();
   const first = await f.turn.provisionResource("personal-box");
   const firstRestores = f.restored.length;
@@ -366,7 +371,7 @@ test("cached personal access reapplies device-flow quarantine while keeping the 
   assert.equal(second, first);
   assert.ok(f.commands.some((command) => command.includes("rm -rf -- '.custom-login/token'")));
   assert.equal(f.restored.length, firstRestores);
-  assert.deepEqual(second.env, { OWN_SECRET: "synthetic-own-secret" });
+  assert.equal(second.env, undefined);
 });
 
 test("cross-scope teardown preserves live jobs regardless of which conversation started them", async () => {
@@ -420,4 +425,108 @@ test("target denial wins before a source one-shot approval is consumed", async (
   f.approve("protected", "once");
   await assert.rejects(f.tools.execute("protected", { sandboxId: "personal-box" }), /denied/);
   assert.deepEqual(f.approvalCalls, []);
+});
+
+test("cross-scope credential handles are refused without resolving or consuming grants", async () => {
+  const events: string[] = [];
+  const f = fixture("group:project", "personal:alice", true, {
+    commandCredentials: [
+      {
+        handle: "lazy",
+        resolve: async () => {
+          events.push("resolve");
+          return {
+            env: [{ key: "TOKEN", value: "synthetic-command-secret" }],
+            singleUse: true,
+            commit: async () => {
+              events.push("commit");
+            },
+          };
+        },
+      },
+    ],
+  });
+  f.state.targetPolicy = { mode: "denylist", rules: [{ pattern: "protected", decision: "require_approval" }] };
+  await assert.rejects(
+    f.tools.execute("protected", { sandboxId: "personal-box", credentials: ["lazy"] }),
+    /cannot be copied/,
+  );
+  assert.deepEqual(events, []);
+  assert.deepEqual(f.approvalCalls, []);
+  assert.deepEqual(f.provisions, []);
+});
+
+test("credential-specific source policy still restricts an explicit cross-scope target", async () => {
+  const calls: unknown[] = [];
+  const f = fixture("group:project", "personal:alice", true, {
+    commandPolicyForCredentials: (handles, ownerAuth) => {
+      calls.push([handles, ownerAuth]);
+      return { mode: "denylist", rules: [{ pattern: "protected", decision: "deny" }] };
+    },
+  });
+  await assert.rejects(f.tools.execute("protected", { sandboxId: "personal-box" }), /denied/);
+  assert.deepEqual(calls, [[[], false]]);
+  assert.deepEqual(f.provisions, []);
+});
+
+test("credential-specific source approval intersects target policy without consuming approval on target denial", async () => {
+  const f = fixture("group:project", "personal:alice", true, {
+    commandPolicyForCredentials: () => ({
+      mode: "denylist",
+      rules: [{ pattern: "protected", decision: "require_approval" }],
+    }),
+  });
+  f.state.targetPolicy = { mode: "denylist", rules: [{ pattern: "command", decision: "deny" }] };
+  f.approve("protected");
+  await assert.rejects(f.tools.execute("protected command", { sandboxId: "personal-box" }), /denied/);
+  assert.deepEqual(f.approvalCalls, []);
+  f.state.targetPolicy = { mode: "denylist", rules: [{ pattern: "command", decision: "require_approval" }] };
+  let approvalKey = "";
+  await assert.rejects(f.tools.execute("protected command", { sandboxId: "personal-box" }), (error: unknown) => {
+    assert.ok(error instanceof NeedsApproval);
+    assert.deepEqual(error.grantModes, { session: false, always: false });
+    approvalKey = error.approvalKey!;
+    assert.deepEqual(JSON.parse(approvalKey.slice("sandbox:".length)), ["personal:alice", "protected", "command"]);
+    return true;
+  });
+  f.approve(approvalKey);
+  await f.tools.execute("protected command", { sandboxId: "personal-box" });
+  await assert.rejects(f.tools.execute("protected command", { sandboxId: "personal-box" }), NeedsApproval);
+});
+
+test("same-scope explicit execution prepares credentials only after provisioning and wraps the effective env", async () => {
+  const events: string[] = [];
+  const f: ReturnType<typeof fixture> = fixture("group:project", "group:project", true, {
+    commandPolicyForCredentials: (handles, ownerAuth) => {
+      assert.deepEqual(handles, ["lazy"]);
+      assert.equal(ownerAuth, false);
+      events.push("policy");
+      return { mode: "denylist", rules: [] };
+    },
+    commandCredentials: [
+      {
+        handle: "lazy",
+        resolve: async () => {
+          assert.equal(f.provisions.length, 1);
+          events.push("resolve");
+          return {
+            env: [{ key: "TOKEN", value: "synthetic-command-secret" }],
+            singleUse: true,
+            commit: async () => {
+              events.push("commit");
+            },
+          };
+        },
+      },
+    ],
+    scopedCommand: (command, env) => {
+      events.push("wrap");
+      assert.equal(env?.TOKEN, "synthetic-command-secret");
+      assert.equal(env?.SHARED_SECRET, "synthetic-room-secret");
+      return command;
+    },
+  });
+  await f.tools.execute("pwd", { sandboxId: "personal-box", credentials: ["lazy"] });
+  assert.deepEqual(events, ["policy", "resolve", "commit", "wrap"]);
+  assert.equal(f.runs.at(-1)?.env?.TOKEN, "synthetic-command-secret");
 });

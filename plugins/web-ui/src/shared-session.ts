@@ -1,7 +1,7 @@
 import "./shell.css";
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import { html, render } from "lit";
-import { Lock, ArrowUpRight, Check, Copy, File } from "lucide";
+import { Lock, ArrowUpRight, Check, ChevronDown, Copy, File } from "lucide";
 import { createTranscriptViewport } from "./transcript-viewport";
 import { decorateTextCodeBlocks } from "./text-code";
 import { markdown } from "./message-markdown";
@@ -75,7 +75,7 @@ render(
                         <div class=${message.role === "user" ? "pin-content" : "shared-message-content"}>
                           ${markdown(message.text)}
                         </div>
-                        ${message.role === "user" ? html`<button class="pin-toggle" type="button" hidden aria-expanded="false">Show more</button>` : ""}
+                        ${message.role === "user" ? html`<button class="pin-toggle" type="button" hidden aria-expanded="false"><span class="pin-toggle-label">Show more</span>${icon(ChevronDown, 14)}</button>` : ""}
                         ${message.role === "assistant" ? files : ""}
                         ${message.role === "assistant" ? html`<div class="message-meta"><button class="msg-copy" aria-label="Copy message" title="Copy" @click=${(e: Event) => void copyText(message.text, e.currentTarget as HTMLButtonElement)}>${icon(Copy, 13)}${icon(Check, 13)}</button></div>` : ""}
                       </div>

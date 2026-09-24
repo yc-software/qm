@@ -7,6 +7,7 @@ import { createMockHarness } from "../src/harness/mock-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { mintCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
+import { credentialHandle } from "../src/credentials/keychain.ts";
 import { testConfig } from "./support/test-config.ts";
 
 mock.module("../src/harness/mock-harness.ts", {
@@ -17,13 +18,19 @@ mock.module("../src/harness/mock-harness.ts", {
       h.turns.runTurn = async (turn: HarnessTurnInput) => {
         const match = /!proof (\{[^\n]+\})/.exec(turn.input);
         if (!match) return run(turn);
-        const command = JSON.parse(match[1]!) as { id?: string; ownerAuth?: boolean; command: string };
+        const command = JSON.parse(match[1]!) as {
+          id?: string;
+          ownerAuth?: boolean;
+          command: string;
+          credentials?: string[];
+        };
         await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
         let reply: string;
         try {
           const out = await turn.tools.execute(command.command, {
             ...(command.id ? { sandboxId: command.id } : {}),
             ...(command.ownerAuth ? { ownerAuth: true } : {}),
+            ...(command.credentials ? { credentials: command.credentials } : {}),
           });
           reply = out.stdout.trim() || out.stderr.trim();
         } catch (e) {
@@ -225,7 +232,7 @@ test("HTTP Open continuity: member edit keeps owner, notifies privately, fires w
 test("HTTP Open shared cron isolates synthetic owner credential and revokes resource access", async (t) => {
   const b = await fixture(t);
   assert.ok(b.keychain);
-  await b.keychain.save({
+  const credential = await b.keychain.save({
     ownerId: "alice",
     service: "continuity-synthetic",
     envKey: "CONTINUITY_PROOF_TOKEN",
@@ -235,7 +242,7 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
   const created = await b.request("POST", "/v1/crons", owner, {
     title: "Owner keychain proof",
     schedule: { everyMs: 3600000 },
-    task: `!proof ${JSON.stringify({ ownerAuth: true, command: 'printf "%s" "$CONTINUITY_PROOF_TOKEN"' })}`,
+    task: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential.id)], command: 'test "$CONTINUITY_PROOF_TOKEN" = "synthetic-owner-sentinel" && printf owner-credential-present' })}`,
   });
   assert.equal(created.status, 200, JSON.stringify(created.body));
   assert.equal(created.body.cron.runAs, "scopeShared");
@@ -243,7 +250,7 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
   assert.equal((await b.request("POST", `/v1/crons/${id}/run`, owner, {})).status, 200);
   const log = await b.awaitFire(id, owner);
   assert.ok(
-    (await b.deliveries.pending("slack")).some((d) => d.text.includes("synthetic-owner-sentinel")),
+    (await b.deliveries.pending("slack")).some((d) => d.text.includes("owner-credential-present")),
     JSON.stringify(log),
   );
   assert.equal(
@@ -266,7 +273,7 @@ for (const isPrivate of [false, true]) {
         [{ channelId: "public-room", name: "public-room", isPrivate }],
         ["alice", "bob"].map((principalId) => ({ channelId: "public-room", principalId })),
       );
-      await b.keychain.save({
+      const credential = await b.keychain.save({
         ownerId: "alice",
         service: "continuity-veto",
         envKey: "CONTINUITY_VETO_TOKEN",
@@ -275,7 +282,7 @@ for (const isPrivate of [false, true]) {
       const response = await b.request("POST", "/v1/crons", await b.cap("alice"), {
         title: "Opt-out proof",
         schedule: { everyMs: 3600000 },
-        task: `!proof ${JSON.stringify({ ownerAuth: true, command: 'printf "%s" "$CONTINUITY_VETO_TOKEN"' })}`,
+        task: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential.id)], command: 'test "$CONTINUITY_VETO_TOKEN" = "synthetic-veto-sentinel" && printf veto-credential-present' })}`,
       });
       assert.equal(response.status, 200, JSON.stringify(response.body));
       const id = response.body.cron.id;
@@ -283,10 +290,10 @@ for (const isPrivate of [false, true]) {
       const initial = await b.scheduler.runNow(id);
       assert.equal(initial.started, true);
       if (initial.started) await initial.settled;
-      assert.ok((await b.deliveries.pending("slack")).some((d) => d.text.includes("synthetic-veto-sentinel")));
-      const original = b.keychain.materializeOwn.bind(b.keychain);
+      assert.ok((await b.deliveries.pending("slack")).some((d) => d.text.includes("veto-credential-present")));
+      const original = b.keychain.materializeOwnById.bind(b.keychain);
       let materializations = 0;
-      b.keychain.materializeOwn = async (...args: Parameters<typeof original>) => {
+      b.keychain.materializeOwnById = async (...args: Parameters<typeof original>) => {
         materializations++;
         return original(...args);
       };
@@ -296,7 +303,7 @@ for (const isPrivate of [false, true]) {
       assert.equal(materializations, 0);
       assert.equal((await b.crons.get(id))?.enabled, false);
       assert.equal(
-        (await b.deliveries.pending("slack")).filter((d) => d.text.includes("synthetic-veto-sentinel")).length,
+        (await b.deliveries.pending("slack")).filter((d) => d.text.includes("veto-credential-present")).length,
         1,
       );
       assert.equal((await b.turn('!run printf "%s" "${CONTINUITY_VETO_TOKEN-unset}"', "bob")).reply, "unset");
@@ -312,7 +319,7 @@ test("HTTP legacy explicit private shared cron remains owner-authorized under is
     ["alice", "bob"].map((principalId) => ({ channelId: "public-room", principalId })),
   );
   await b.config.setSharingPosture("org:default-org", "isolated");
-  await b.keychain.save({
+  const credential = await b.keychain.save({
     ownerId: "alice",
     service: "continuity-legacy",
     envKey: "CONTINUITY_LEGACY_TOKEN",
@@ -325,13 +332,13 @@ test("HTTP legacy explicit private shared cron remains owner-authorized under is
     runAs: "scopeShared",
     members,
     schedule: { everyMs: 3600000 },
-    action: `!proof ${JSON.stringify({ ownerAuth: true, command: 'printf "%s" "$CONTINUITY_LEGACY_TOKEN"' })}`,
+    action: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential.id)], command: 'test "$CONTINUITY_LEGACY_TOKEN" = "synthetic-legacy-sentinel" && printf legacy-credential-present' })}`,
     destination: { type: "slack", target: "public-room", audienceScopeId: "channel:public-room" },
   });
   assert.equal(cron.ownerResourcesRequireOpen, undefined);
   const fired = await b.scheduler.runNow(cron.id);
   assert.equal(fired.started, true);
   if (fired.started) await fired.settled;
-  assert.ok((await b.deliveries.pending("slack")).some((d) => d.text.includes("synthetic-legacy-sentinel")));
+  assert.ok((await b.deliveries.pending("slack")).some((d) => d.text.includes("legacy-credential-present")));
   assert.equal((await b.turn('!run printf "%s" "${CONTINUITY_LEGACY_TOKEN-unset}"', "bob")).reply, "unset");
 });

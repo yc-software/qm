@@ -1,3 +1,4 @@
+import { deployAccessMessage } from "./deploy-access.ts";
 import { keychainApprovalMessage, keychainApprovalOrigin } from "./keychain-approvals.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { performance } from "node:perf_hooks";
@@ -366,9 +367,14 @@ export function createDeliveryPoller(deps: {
                 d.destination.keychainAskId && core.keychainApprovals
                   ? await core.keychainApprovals.get(d.destination.keychainAskId, d.destination.target)
                   : null;
-              const card = approval
-                ? keychainApprovalMessage(approval, await keychainApprovalOrigin(approval, client, deps.webUiPublicUrl))
-                : null;
+              let card: { text: string; blocks: Array<Record<string, unknown>> } | null = null;
+              if (approval)
+                card = keychainApprovalMessage(
+                  approval,
+                  await keychainApprovalOrigin(approval, client, deps.webUiPublicUrl),
+                );
+              else if (d.destination.deploymentAccess)
+                card = deployAccessMessage(d.destination.deploymentAccess, d.text);
               const text = card?.text ?? toSlackMrkdwn(stripReactionDirectives(d.text));
               if (!text.trim() && !d.attachments?.length) return undefined;
               const channel = await openConversationFor(client, [d.destination.target]);

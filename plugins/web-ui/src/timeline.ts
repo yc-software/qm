@@ -13,6 +13,7 @@ export interface ToolPayload {
 
   tool?: string;
   command?: string;
+  purpose?: string;
   path?: string;
   bytes?: number;
   name?: string;

@@ -640,7 +640,6 @@ test("Claude coordinators expose neither command tools nor native subagents", as
   assert.deepEqual(capturedOptions.tools, []);
   assert.equal(capturedOptions.agents, undefined);
   const allowed = capturedOptions.allowedTools as string[];
-  for (const name of ["Agent", "mcp__qm__execute", "mcp__qm__background", "mcp__qm__credential_exec"])
-    assert.ok(!allowed.includes(name));
+  for (const name of ["Agent", "mcp__qm__execute", "mcp__qm__background"]) assert.ok(!allowed.includes(name));
   await harness.turns.close?.();
 });

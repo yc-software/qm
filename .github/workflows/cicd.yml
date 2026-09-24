@@ -78,8 +78,15 @@ jobs:
           cache-dependency-path: |
             cli/package-lock.json
             package-lock.json
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
       - name: Install, typecheck, unit + packaged-artifact + e2e tests
         working-directory: cli
+        env:
+          QM_TERRAFORM_BIN: terraform
+          QM_TEST_TERRAFORM: terraform
         run: |
           npm ci
           npm run typecheck

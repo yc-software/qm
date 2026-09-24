@@ -119,7 +119,7 @@ test("expanded pins wrap their full text instead of truncating to one line", () 
 });
 
 test("chat shadows stay limited to elevated surfaces and subtle activity hover glow", () => {
-  const elevated = [".pinned-strip", ".message-stack .user-row.stuck > .user-bubble"];
+  const elevated = [".pinned-strip", ".message-stack .user-row.stuck > .user-bubble", ".attachment-peek"];
   const rules = shellCss.replace(/\/\*[\s\S]*?\*\//g, "");
   const painted = [...rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap((rule) =>
     [...rule[2].matchAll(/(box|text)-shadow\s*:\s*([^;}]+)/g)]
@@ -136,8 +136,9 @@ test("chat shadows stay limited to elevated surfaces and subtle activity hover g
         "0 0 12px color-mix(in srgb, var(--foreground) 12%, transparent)",
       ],
       [".composer-wrap", "box", "0 2px 5px rgb(0 0 0 / 0.05), 0 8px 24px rgb(0 0 0 / 0.06)"],
+      [".qm-tooltip", "box", "var(--chat-surface-shadow)"],
     ],
-    "pinned surfaces and the composer retain their shadows; activity glow appears only on hover",
+    "pinned surfaces, the composer, and tooltips retain their shadows; activity glow appears only on hover",
   );
   const inlineShadows = [...tsSource.matchAll(/(?:box|text)-shadow\s*:\s*([^;}]+)/g)]
     .map((m) => m[1].trim())

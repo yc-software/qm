@@ -24,13 +24,35 @@ const onPath = (m: string, p: string) => (method: string, pathname: string) => m
 
 const FAMILIES: AgentApiFamily[] = [
   {
-    match: onPath("GET", "/v1/composio/identity"),
+    match: (method, path) =>
+      (method === "GET" &&
+        ["identity", "connections", "toolkits", "tools"].some((name) => path === `/v1/composio/${name}`)) ||
+      (method === "POST" && ["authorize", "execute"].some((name) => path === `/v1/composio/${name}`)),
+    guidance:
+      "Use the composio skill for backend app access. Never load a Composio project key or call its SDK directly. Execution binds accounts to your identity and sharing permissions.",
     routes: [
+      { method: "GET", path: "/v1/composio/toolkits", summary: "discover available apps; cursor pagination" },
+      { method: "GET", path: "/v1/composio/connections", summary: "list your active connections; cursor pagination" },
+      {
+        method: "GET",
+        path: "/v1/composio/tools?toolkit=&query=",
+        summary: "discover tool schemas and concrete versions; cursor pagination",
+      },
+      {
+        method: "POST",
+        path: "/v1/composio/authorize",
+        summary: "{toolkit} creates a personal consent link on a human-started turn",
+      },
+      {
+        method: "POST",
+        path: "/v1/composio/execute",
+        summary: "{tool,accountId,version,arguments} executes a discovered tool using your own active connection",
+      },
       {
         method: "GET",
         path: "/v1/composio/identity",
         summary:
-          "read your stable Composio userId used by the web app picker; this selects accounts and does not grant access to them",
+          "read your canonical Composio userId and verified linked userIds used by the web app picker; this selects accounts and does not grant access to them",
       },
     ],
   },
@@ -437,9 +459,10 @@ const FAMILIES: AgentApiFamily[] = [
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/fetch$/.test(p)) ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/logs$/.test(p)) ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/(git-url|share)$/.test(p)) ||
-      (m === "POST" && /^\/v1\/deployments\/[^/]+\/(share|archive|restore|name|display-name|always-on)$/.test(p)),
+      (m === "POST" &&
+        /^\/v1\/deployments\/[^/]+\/(share|archive|restore|name|display-name|always-on|embed-ancestors)$/.test(p)),
     guidance:
-      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. To widen or narrow that — "share it with everyone" or "share it with <teammate>" — POST /v1/deployments/:id/share with `scope:"org"` or `recipient:"<name>"`; no redeploy. To rename or take down an app, use name / display-name / archive. POST /v1/deployments/:id/always-on with `{alwaysOn:true|false}` keeps an app permanently warm (no idle cold starts) or returns it to sleep-when-idle. Anyone who manages the app can change these: its owner from any conversation, a current member of the channel/team it was published from, or someone granted "manage" access.',
+      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. To widen or narrow that — "share it with everyone" or "share it with <teammate>" — POST /v1/deployments/:id/share with `scope:"org"` or `recipient:"<name>"`; no redeploy. To rename or take down an app, use name / display-name / archive. POST /v1/deployments/:id/always-on with `{alwaysOn:true|false}` keeps an app permanently warm (no idle cold starts) or returns it to sleep-when-idle. POST /v1/deployments/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites show the app inside their own page (an iframe); list every frame between the app and the browser tab, and pass `[]` to forbid embedding again. Anyone who manages the app can change these: its owner from any conversation, a current member of the channel/team it was published from, or someone granted "manage" access.',
     routes: [
       {
         method: "GET",
@@ -497,6 +520,12 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/deployments/:id/always-on",
         summary:
           "keep an app you manage permanently warm — body {alwaysOn:true} exempts it from idle sleep so visitors never hit a cold start; {alwaysOn:false} returns it to the default sleep-when-idle",
+      },
+      {
+        method: "POST",
+        path: "/v1/deployments/:id/embed-ancestors",
+        summary:
+          "let named sites show an app you manage inside their page (iframe) — body {embedAncestors:[https origins, optionally https://*.example.com]}; list every frame between the app and the browser tab; [] forbids embedding again",
       },
       {
         method: "POST",

@@ -13,7 +13,6 @@ import {
 } from "../../credentials/device-flow-persist.ts";
 import type { DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
 import { expandServiceAliases } from "../../credentials/resident-paths.ts";
-import { shq } from "../../util/shell.ts";
 import {
   materializeSkillTree as laySkillTree,
   packRoot,
@@ -51,8 +50,6 @@ export interface TurnSandboxContext {
   openSpeakerKeychain?: boolean;
   openResourceAccess?: boolean;
   ownerAuthAvailable: boolean;
-  ownerAuthEnv: Record<string, string>;
-  ownerEnvCredentialIds: string[];
   credentialTools: readonly import("../../deployment/load-layer.ts").LayerCredentialTool[];
   credentialServices: string[];
   credentialCutoverServices: string[];
@@ -82,8 +79,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     openSpeakerKeychain,
     openResourceAccess,
     ownerAuthAvailable,
-    ownerAuthEnv,
-    ownerEnvCredentialIds,
     credentialTools,
     credentialServices,
     credentialCutoverServices,
@@ -94,7 +89,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     perf,
   } = ctx;
 
-  let ownerAuthCommand: ((command: string) => string) | undefined;
+  let ownerAuthCommand: ((command: string, env?: Record<string, string>) => string) | undefined;
   const brokerEnvKeys = [
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
@@ -110,7 +105,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     ? (command: string, env = connectorEnv): string => `${unsetBrokerEnv(env)}${command}`
     : undefined;
   if (ownerAuthAvailable) {
-    ownerAuthCommand = (command) => {
+    ownerAuthCommand = (command, env = {}) => {
       if (openSpeakerKeychain)
         deps.auditLog.record({
           at: Date.now(),
@@ -119,19 +114,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           resource: "isolated owner execution",
           scopeLabel: scopeId,
         });
-      for (const credentialId of ownerEnvCredentialIds) {
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: actor.id,
-          action: "keychain.materialize",
-          resource: `${credentialId} (owner-auth command)`,
-          scopeLabel: scopeId,
-        });
-      }
-      const exports = Object.entries(ownerAuthEnv)
-        .map(([key, value]) => `${key}=${shq(value)}`)
-        .join(" ");
-      return `unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN AGENT_CREDENTIAL_TOKEN; ${unsetBrokerEnv(ownerAuthEnv)}${exports ? `export ${exports}; ` : ""}${command}`;
+      return `unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN AGENT_CREDENTIAL_TOKEN; ${unsetBrokerEnv(env)}${command}`;
     };
   }
   const box: {
@@ -444,7 +427,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       crossScope: true,
       egress: intersectEgressPolicies(resolution.egress, deps.config!.getEgress(resource.ownerScopeId)),
       commandPolicy: deps.config!.getCommandPolicy(resource.ownerScopeId),
-      ...(credentialScopeId ? { credentialScopeId, env: ownerAuthEnv } : {}),
+      ...(credentialScopeId ? { credentialScopeId } : {}),
     };
   };
   const provisionResource = async (

@@ -1,3 +1,4 @@
+import { userRuntimeConfigBody } from "./runtime-config.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
@@ -176,6 +177,8 @@ export function createTurnMethods(
           ? await deps.config.getModelAccountDurable(actor.id)
           : "company";
       const individualAuth = modelAccount !== "company";
+      let requestedModel = req.model;
+      let requestedHarness = req.harness;
       if (req.surface === "web") {
         const threadRef = req.conversation.threadRef;
         const existing = await deps.sessions.getByThread(threadRef);
@@ -194,6 +197,20 @@ export function createTurnMethods(
           harnessId: fallbackHarness,
           modelId: defaultModelForHarness(fallbackHarness),
         };
+        if (individualAuth && (req.model || req.harness)) {
+          const available = await userRuntimeConfigBody({ deps }, targetScope, actor.id);
+          const harness = req.harness ?? available.effective.harnessId;
+          const model = req.model ?? available.effective.modelId;
+          if (!available.modelsByHarness[harness]?.includes(model))
+            return { status: "refused", reason: "Your connected AI account cannot serve this model on that harness." };
+          const invalidModelOption = validateWebTurnModelOptions(
+            { ...req, model },
+            available.modelsByHarness[harness] ?? [],
+          );
+          if (invalidModelOption) return { status: "refused", reason: invalidModelOption };
+          requestedModel = model;
+          requestedHarness = harness;
+        }
         if (!individualAuth) {
           const configuredKeys = deps.providerKeys ??
             deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false };
@@ -304,8 +321,8 @@ export function createTurnMethods(
         ...(req.detectOpener ? { detectOpener: req.detectOpener } : {}),
         ...(req.attachments?.length ? { attachments: req.attachments } : {}),
         ...(req.inboundNotes?.length ? { inboundNotes: req.inboundNotes } : {}),
-        ...(!individualAuth && req.harness ? { harness: req.harness } : {}),
-        ...(!individualAuth && req.model ? { model: req.model } : {}),
+        ...((!individualAuth || req.surface === "web") && requestedHarness ? { harness: requestedHarness } : {}),
+        ...((!individualAuth || req.surface === "web") && requestedModel ? { model: requestedModel } : {}),
         ...turnModelOptions(req),
         ...(req.readOnly ? { readOnly: true } : {}),
         ...(privateRequest

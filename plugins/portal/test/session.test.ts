@@ -174,6 +174,15 @@ test("cookie helpers set HttpOnly/SameSite/Path and Secure only when asked", () 
   assert.match(clearCookie("portal_session", "/", true), /Max-Age=0/);
 });
 
+test("a cross-site cookie is only emitted when it is also Secure", () => {
+  const crossSite = setCookie("portal_session_x", "v", { path: "/", maxAge: 100, secure: true, sameSite: "None" });
+  assert.match(crossSite, /SameSite=None/);
+  assert.match(crossSite, /Secure/);
+  const insecure = setCookie("portal_session_x", "v", { path: "/", maxAge: 100, secure: false, sameSite: "None" });
+  assert.match(insecure, /SameSite=Lax/);
+  assert.ok(!insecure.includes("Secure"));
+});
+
 test("readCookie extracts a named cookie and survives other pairs", () => {
   const header = "a=1; portal_session=abc.def; webuiuser=EVIL";
   assert.equal(readCookie(header, "portal_session"), "abc.def");
@@ -242,4 +251,12 @@ test("sanitizeReturnTo accepts same-origin paths and rejects redirect escapes", 
   ]) {
     assert.equal(sanitizeReturnTo(bad, origin), "/", `expected "/" for ${JSON.stringify(bad)}`);
   }
+});
+
+test("login preserves opaque callback query values while rejecting normalized redirect escapes", () => {
+  const callback =
+    "/api/composio/callback?session_uri=" + encodeURIComponent("https://backend.composio.dev/session/opaque");
+  assert.equal(sanitizeReturnTo(callback, "https://qm.example"), callback);
+  assert.equal(sanitizeReturnTo("/path/..//evil.example", "https://qm.example"), "/");
+  assert.equal(sanitizeReturnTo("/%2f%2fevil.example?session_uri=ok", "https://qm.example"), "/");
 });
