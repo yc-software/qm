@@ -101,3 +101,17 @@ test("compact overrides stop matching when the canvas returns to one pane", () =
   }
   dom.window.close();
 });
+
+test("phone composers keep input and touch controls on one row outside split panes", () => {
+  const phone = css.slice(
+    css.indexOf("    --composer-font-size: 16px;"),
+    css.indexOf("  .live-work-line {", css.indexOf("    --composer-font-size: 16px;")),
+  );
+  assert.match(phone, /display: grid;[\s\S]*grid-template-columns: minmax\(0, 1fr\) auto;/);
+  assert.match(phone, /\.composer-wrap > \* \{\s*grid-column: 1 \/ -1;/);
+  assert.match(phone, /\.composer-input \{[^}]*grid-column: 1;[^}]*min-width: 0;/);
+  assert.match(phone, /\.composer-wrap \.composer-toolbar \{[^}]*grid-column: 2;[^}]*flex-wrap: nowrap;/);
+  assert.match(phone, /\.loadout-button \.menu-suffix \{\s*display: none;/);
+  assert.match(phone, /\.composer-input::placeholder \{\s*white-space: nowrap;/);
+  assert.match(phone, /\.composer-toolbar \.send-btn \{[^}]*width: 44px;[^}]*height: 44px;/);
+});

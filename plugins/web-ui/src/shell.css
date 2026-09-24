@@ -10964,6 +10964,10 @@ h3.ambient-field-label {
 
   .composer-wrap {
     --composer-font-size: 16px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
     width: calc(100% - 16px);
     margin: 0 auto calc(8px + env(safe-area-inset-bottom));
     --composer-pad-block: 8px;
@@ -10972,22 +10976,31 @@ h3.ambient-field-label {
     padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
     border-radius: 20px;
   }
+  .composer-wrap > * {
+    grid-column: 1 / -1;
+  }
   .composer-input {
+    grid-column: 1;
+    min-width: 0;
     line-height: 1.4;
     min-height: 40px;
     max-height: 32vh;
     padding: 12px 10px 6px;
   }
-  .composer-wrap.compact .composer-toolbar {
+  .composer-input::placeholder {
+    white-space: nowrap;
+  }
+  .composer-wrap .composer-toolbar {
+    grid-column: 2;
     flex-wrap: nowrap;
     gap: 6px;
   }
-  .composer-wrap.compact .composer-left,
-  .composer-wrap.compact .composer-right {
+  .composer-wrap .composer-left,
+  .composer-wrap .composer-right {
     width: auto;
     flex-wrap: nowrap;
   }
-  .composer-wrap.compact .composer-right {
+  .composer-wrap .composer-right {
     margin-left: auto;
   }
   .composer-toolbar .stop-btn {
@@ -11004,6 +11017,15 @@ h3.ambient-field-label {
     width: 44px;
     height: 44px;
     border-radius: 50%;
+  }
+  .composer-wrap .loadout-button .menu-label,
+  .composer-wrap .loadout-button .menu-suffix {
+    display: none;
+  }
+  .composer-wrap .composer-toolbar .menu-button.loadout-button {
+    width: 44px;
+    padding: 0;
+    justify-content: center;
   }
   .live-work-line {
     min-height: 40px;
