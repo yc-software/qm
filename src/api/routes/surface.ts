@@ -1,7 +1,8 @@
+import { isSessionStatus } from "../../sessions/session-status.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeFallback, runtimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
-import type { Grant, ScopeId } from "../../types.ts";
+import type { Grant, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
 import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
@@ -371,10 +372,23 @@ async function uploadFile(ctx: ApiCtx): Promise<void> {
 async function patchSession(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
-  const b = body as { principalId?: unknown; title?: unknown; archived?: unknown; pinned?: unknown; color?: unknown };
+  const b = body as {
+    principalId?: unknown;
+    title?: unknown;
+    archived?: unknown;
+    pinned?: unknown;
+    color?: unknown;
+    status?: unknown;
+  };
   const principalId = typeof b.principalId === "string" ? b.principalId : null;
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  const patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null } = {};
+  const patch: {
+    title?: string | null;
+    archived?: boolean;
+    pinned?: boolean;
+    color?: string | null;
+    status?: Session["status"];
+  } = {};
   if ("title" in b) {
     if (b.title !== null && typeof b.title !== "string") {
       return sendJson(res, 400, { error: "bad_request", message: "title must be a string or null" });
@@ -400,13 +414,23 @@ async function patchSession(ctx: ApiCtx): Promise<void> {
     }
     patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
   }
+  if ("status" in b) {
+    if (!isSessionStatus(b.status)) {
+      return sendJson(res, 400, {
+        error: "bad_request",
+        message: "status must be null or {emoji: one Unicode emoji, text: 1–200 characters without control characters}",
+      });
+    }
+    patch.status = b.status;
+  }
   if (
     patch.title === undefined &&
     patch.archived === undefined &&
     patch.pinned === undefined &&
-    patch.color === undefined
+    patch.color === undefined &&
+    patch.status === undefined
   ) {
-    return sendJson(res, 400, { error: "bad_request", message: "title, archived, pinned, or color required" });
+    return sendJson(res, 400, { error: "bad_request", message: "title, archived, pinned, color, or status required" });
   }
   const session = await app.updateSession(id, principalId, patch);
   if (!session) return sendJson(res, 404, { error: "not_found" });
@@ -425,6 +449,7 @@ async function listAgentConversations(ctx: ApiCtx): Promise<void> {
       scopeId: s.scopeId,
       surface: s.surface ?? "unknown",
       title: s.title ?? null,
+      status: s.status ?? null,
       archived: s.archived === true,
       pinned: s.pinned === true,
       createdAt: s.createdAt,
@@ -439,7 +464,13 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
   }
   const b = isObj(body) ? body : {};
-  const patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null } = {};
+  const patch: {
+    title?: string | null;
+    archived?: boolean;
+    pinned?: boolean;
+    color?: string | null;
+    status?: Session["status"];
+  } = {};
   if ("archived" in b) {
     if (typeof b.archived !== "boolean") {
       return sendJson(res, 400, { error: "bad_request", message: "archived must be a boolean" });
@@ -465,13 +496,23 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
     }
     patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
   }
+  if ("status" in b) {
+    if (!isSessionStatus(b.status)) {
+      return sendJson(res, 400, {
+        error: "bad_request",
+        message: "status must be null or {emoji: one Unicode emoji, text: 1–200 characters without control characters}",
+      });
+    }
+    patch.status = b.status;
+  }
   if (
     patch.archived === undefined &&
     patch.pinned === undefined &&
     patch.title === undefined &&
-    patch.color === undefined
+    patch.color === undefined &&
+    patch.status === undefined
   ) {
-    return sendJson(res, 400, { error: "bad_request", message: "archived, pinned, title, or color required" });
+    return sendJson(res, 400, { error: "bad_request", message: "archived, pinned, title, color, or status required" });
   }
   const session = await app.updateSession(ctx.params.id!, capability.actorId, patch);
   if (!session) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
@@ -489,6 +530,7 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
       archived: session.archived === true,
       pinned: session.pinned === true,
       color: session.color ?? null,
+      status: session.status ?? null,
     },
   });
 }

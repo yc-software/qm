@@ -609,6 +609,31 @@ a.chat-row-open {
   white-space: nowrap;
 }
 
+.session-status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.session-row:has(.session-status) .session {
+  padding-right: 30px;
+}
+.session-row:has(.session-status):is(:hover, :focus-within, .menu-open) .session {
+  padding-right: 112px;
+}
+.session-menu > .session-status {
+  justify-content: center;
+  width: 20px;
+}
+.split-pane-title > .session-status {
+  margin-inline-start: auto;
+}
+.split-pane-title:has(> .session-status) .split-tab-actions {
+  right: 22px;
+}
+
 .working-mark {
   display: inline-flex;
   align-items: center;
@@ -1198,7 +1223,7 @@ a.chat-row-open {
   grid-template-rows: auto minmax(0, 1fr) auto minmax(0, 1fr);
 }
 .custom-chat-shell.in-pane.empty-chat {
-  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 .split-canvas:not(.single-pane) .custom-chat-shell.in-pane.empty-chat {
   grid-template-rows: minmax(0, 1fr) auto;
@@ -1647,7 +1672,7 @@ a.chat-row-open {
   padding-bottom: 24px;
 }
 .welcome-greeting .assistant-body {
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.55;
 }
 .welcome-greeting h1 {
@@ -1881,7 +1906,7 @@ button.subagent-chip:hover {
 .assistant-body {
   min-width: 0;
   color: var(--foreground);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.65;
 }
 .assistant-body :is(markdown-block, qm-markdown),
@@ -1991,7 +2016,7 @@ qm-markdown .tok-in {
   max-width: min(72%, 620px);
   padding: 10px 14px;
   border-radius: 18px;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.55;
 }
 .user-bubble {
@@ -3062,7 +3087,7 @@ qm-markdown .tok-in {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: var(--composer-font-size, 15px);
+  font-size: var(--composer-font-size, 14px);
   line-height: 1.4;
   cursor: pointer;
   border-radius: 6px;
@@ -3146,7 +3171,7 @@ qm-markdown .tok-in {
 .assistant-body :is(markdown-block, qm-markdown) pre code,
 .user-bubble :is(markdown-block, qm-markdown) pre code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.55;
   background: none;
   padding: 0;
@@ -3233,7 +3258,7 @@ qm-markdown .tok-in {
 }
 
 .composer-wrap {
-  --composer-font-size: 15px;
+  --composer-font-size: 14px;
   --composer-pad-block: 12px;
   --composer-pad-inline: 12px;
   --composer-pad-end: var(--composer-pad-inline);
@@ -7677,7 +7702,9 @@ a.connector-widget:focus-visible {
 }
 .context-model {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 10px;
 }
 .project-slack-form {
@@ -7698,27 +7725,15 @@ a.connector-widget:focus-visible {
   font-size: 12px;
   line-height: 1.45;
 }
-.context-model-select {
+.context-model .loadout-control {
   align-self: flex-start;
-  min-width: min(260px, 100%);
+  max-width: 100%;
 }
-.context-model-effort {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  align-self: flex-start;
-}
-.context-model-effort-label {
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-.context-model-hint {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  line-height: 1.45;
+.context-model .loadout-button {
+  max-width: 100%;
 }
 .context-model-status {
+  flex-basis: 100%;
   color: var(--muted-foreground);
   font-size: 12px;
 }
@@ -8259,6 +8274,7 @@ h3.ambient-field-label {
   flex-direction: column;
   width: 100%;
   height: 100%;
+  zoom: 0.8;
   overflow: hidden;
 }
 
@@ -8548,16 +8564,36 @@ h3.ambient-field-label {
   display: none;
 }
 
-.split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap {
-  --composer-font-size: 12px;
-  --composer-pad-block: 10px;
-  --composer-pad-inline: 10px;
+[data-density] .composer-wrap {
+  --composer-pad-block: 6px;
+  --composer-pad-inline: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 2px;
+  padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
+}
+.split-pane-chat .custom-chat-shell .composer-wrap {
   width: 100%;
   margin: 0;
   padding-bottom: max(var(--composer-pad-block), env(safe-area-inset-bottom));
   border-width: 1px 0 0;
   border-radius: 0;
   box-shadow: none;
+}
+
+[data-density] .composer-input {
+  flex: 1 1 120px;
+  min-height: 0;
+  max-height: 120px;
+  padding: 6px 6px 7px;
+}
+[data-density] .composer-toolbar {
+  display: contents;
+}
+[data-density] .composer-left,
+[data-density] .composer-right {
+  width: auto;
 }
 
 [data-density] .composer-toolbar .icon-btn,

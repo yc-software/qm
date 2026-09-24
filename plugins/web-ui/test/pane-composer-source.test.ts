@@ -4,23 +4,19 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
+const picker = readFileSync(new URL("../src/model-picker.ts", import.meta.url), "utf8");
 const composer = readFileSync(new URL("../src/composer.ts", import.meta.url), "utf8");
 
-test("pane composers default to the full-width input above a separate toolbar", () => {
+test("pane composer collapses to a single line — keyed off the pane, not a whole-document layout class", () => {
   assert.doesNotMatch(css, /\.embed-layout/, "panes are elements now, not framed documents");
-  const wrap = css.match(/^\.composer-wrap \{[^}]*\}/m)?.[0] ?? "";
-  assert.doesNotMatch(wrap, /display: flex;/);
-  assert.match(css, /^\.composer-input \{[^}]*width: 100%;[^}]*min-height: 48px;/m);
-  assert.match(css, /^\.composer-toolbar \{[^}]*display: flex;[^}]*justify-content: space-between;/m);
-  assert.doesNotMatch(css, /\[data-density[^\]]*\] \.composer-(?:wrap|input|toolbar)\s*\{/);
+  assert.match(css, /\[data-density\] \.composer-wrap \{[^}]*display: flex;/);
+  assert.match(css, /\[data-density\] \.composer-toolbar \{\s*display: contents;/);
+  assert.match(css, /\[data-density\] \.composer-input \{[^}]*min-height: 0;/);
   assert.match(composer, /Math\.max\(ctx\.pane \? 0 : 48, content\)/);
 });
 
-test("a multipane composer fills the surface with square edges and no outer gutter", () => {
-  const block =
-    css.match(
-      /\.split-canvas:not\(\.single-pane\) \.split-pane-chat \.custom-chat-shell \.composer-wrap \{[^}]*\}/,
-    )?.[0] ?? "";
+test("a pane's composer fills the surface with square edges and no outer gutter", () => {
+  const block = css.match(/\.split-pane-chat \.custom-chat-shell \.composer-wrap \{[^}]*\}/)?.[0] ?? "";
   assert.match(block, /width: 100%;/);
   assert.match(block, /margin: 0;/);
   assert.match(block, /border-radius: 0;/);
@@ -32,7 +28,7 @@ test("phone touch layout cannot inflate a pane's composer controls", () => {
     css,
     /\[data-density\] \.composer-toolbar \.icon-btn,\s*\[data-density\] \.composer-toolbar \.menu-button,\s*\[data-density\] \.composer-toolbar \.send-btn \{\s*width: 34px;\s*height: 34px;\s*min-height: 34px;/,
   );
-  assert.doesNotMatch(css, /\[data-density[^\]]*\] \.composer-(?:left|right)[^{]*\{/);
+  assert.match(css, /\[data-density\] \.composer-left,\s*\[data-density\] \.composer-right \{\s*width: auto;/);
 });
 
 test("pane settings control is visible without hover", () => {
@@ -58,7 +54,7 @@ test("narrow short panes hide runtime labels, not the accessible picker", () => 
   assert.match(narrow, /\.loadout-button \.menu-suffix \{\s*display: none;/);
   assert.match(narrow, /\.loadout-button \{[^}]*width: 34px;/);
   assert.doesNotMatch(narrow, /\.loadout-(?:button|control) \{[^}]*display: none;/);
-  assert.match(composer, /aria-label=\$\{`Model:/);
+  assert.match(picker, /aria-label=\$\{`Model:/);
 });
 
 test("the smallest short panes leave text space even with stop controls", () => {
@@ -83,7 +79,7 @@ test("compact overrides stop matching when the canvas returns to one pane", () =
       selector.includes(".split-pane-chat") &&
       /(?:font-size: 12px|--composer-font-size: 12px|font-size: 21px)/.test(declarations),
   );
-  assert.equal(overrides.length, 4);
+  assert.equal(overrides.length, 3);
   for (const [, selector] of overrides) {
     assert.equal(canvas.querySelector(selector.trim()), null, selector);
   }

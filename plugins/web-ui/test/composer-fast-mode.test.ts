@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const composer = readFileSync(new URL("../src/composer.ts", import.meta.url), "utf8");
+const composer = readFileSync(new URL("../src/model-picker.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 const fast = composer.slice(
   composer.indexOf('class="loadout-setting"'),

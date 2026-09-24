@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest, type SessionStatus } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -65,6 +65,47 @@ describe("agent conversations self-API", async () => {
 
   after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("sets, replaces, lists and clears a shared session status", async () => {
+    const token = await capFor("U1");
+    await built.sessions.addParticipant(mineId, "U3");
+    for (const status of [{ emoji: "✅", text: "PR merged" }, { emoji: "🚀", text: "Live in production" }, null]) {
+      const res = await post(`/v1/conversations/${mineId}`, { status }, token);
+      assert.equal(res.status, 200);
+      assert.deepEqual(
+        ((await res.json()) as { conversation: { status: SessionStatus | null } }).conversation.status,
+        status,
+      );
+      assert.deepEqual((await built.app.getSessionForViewer(mineId, "U3"))?.session.status ?? null, status);
+      const list = await get("/v1/conversations", token);
+      assert.deepEqual(
+        (
+          (await list.json()) as { conversations: Array<{ id: string; status: SessionStatus | null }> }
+        ).conversations.find((s) => s.id === mineId)?.status,
+        status,
+      );
+    }
+  });
+
+  it("rejects malformed status and unauthorized status updates", async () => {
+    const token = await capFor("U1");
+    for (const status of [
+      {},
+      { emoji: "abc", text: "Merged" },
+      { emoji: "✅🚀", text: "Merged" },
+      { emoji: "✅", text: " " },
+      { emoji: "✅", text: "x".repeat(201) },
+      { emoji: "✅", text: "a\u0000b" },
+      "merged",
+    ]) {
+      assert.equal((await post(`/v1/conversations/${mineId}`, { status }, token)).status, 400);
+    }
+    assert.equal(
+      (await post(`/v1/conversations/${theirsId}`, { status: { emoji: "✅", text: "Merged" } }, token)).status,
+      404,
+    );
+    assert.equal((await post(`/v1/conversations/${mineId}`, { status: null })).status, 401);
   });
 
   it("spawns a fresh conversation with only the seed text", async () => {

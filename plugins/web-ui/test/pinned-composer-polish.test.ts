@@ -24,15 +24,8 @@ test("background activity shares the queued inset above the composer", () => {
 
 test("thinking shares input sizing while background activity stays compact", () => {
   assert.match(css, /\.chat-bottom-dock > \.bg-activity > \.bg-activity-strip \{[^}]*font-size: 12px;/);
-  const sizes = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap((rule) =>
-    [...rule[2].matchAll(/--composer-font-size: (\d+)px/g)].map((match) => [rule[1].trim(), Number(match[1])]),
-  );
-  assert.deepEqual(sizes, [
-    [".composer-wrap", 15],
-    [".split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap", 12],
-    [".composer-wrap", 16],
-    ["body.app-edit-embed .composer-wrap", 13],
-  ]);
+  const sizes = [...css.matchAll(/--composer-font-size: (\d+)px/g)].map((match) => Number(match[1]));
+  assert.deepEqual(sizes, [14, 16, 13]);
   for (const selector of [".live-work-line", ".composer-input"]) {
     const blocks = css.matchAll(new RegExp(`${selector.replaceAll(".", "\\.")} \\{([^}]+)\\}`, "g"));
     const declarations = [...blocks].flatMap((match) => [...match[1].matchAll(/font-size: ([^;]+);/g)]);

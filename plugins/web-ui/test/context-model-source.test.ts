@@ -14,17 +14,14 @@ test("the scope's model panel writes through the same endpoint the composer's de
 });
 
 test("the panel offers inheriting the org default and names what is serving now", () => {
-  assert.match(panel, /Org default \(\$\{labelForRuntime\(config, config\.orgDefault\)\}\)/);
-  assert.match(panel, /!options\.some\(\(o\) => o\.value === selected\)/);
+  assert.match(panel, /changeDefault: \(\) => choose\(scopeId, INHERIT\)/);
   assert.match(panel, /no longer offered/);
-  assert.match(panel, /Saved\. New conversations here run on/);
-  assert.match(panel, /The pinned Slack header \(when enabled below\) names this model\./);
 });
 
-test("the panel is labelled, focus-keyed, and disabled while saving", () => {
-  assert.match(panel, /ariaLabel: "Default model for this project"/);
-  assert.match(panel, /focusKey: "context-model"/);
-  assert.match(panel, /disabled: contextModelState\.saving/);
+test("context settings reuse the composer picker and disable it while saving", () => {
+  assert.match(panel, /createModelPicker<void>/);
+  assert.match(panel, /picker.render\(undefined, option, contextModelState.saving\)/);
+  assert.doesNotMatch(panel, /fieldSelect/);
   assert.match(panel, /aria-live="polite"/);
 });
 
@@ -41,33 +38,25 @@ test("model panel styles use the shell theme contract", () => {
   assert.doesNotMatch(block, /#[0-9a-f]{6}(?![^)]*\))/i);
 });
 
-test("the model dropdown marks the pinned option selected so the first paint is honest", () => {
-  assert.match(panel, /\?selected=\$\{selected === INHERIT\}/);
-  assert.match(panel, /\?selected=\$\{o\.value === selected\}/);
-  assert.match(panel, /option value=\$\{selected\} selected/);
-});
-
 test("an in-flight pick wins the saving re-render — no snap-back while the save runs", () => {
   assert.match(panel, /pending: null as string \| null/);
   assert.match(panel, /contextModelState\.pending = value/);
-  assert.match(panel, /const selected = contextModelState\.pending \?\? selectedValue\(config\)/);
-  // pending is cleared with saving, in the same guarded finally
   assert.match(panel, /contextModelState\.saving = false;\n\s+contextModelState\.pending = null;/);
 });
 
-test("a pinned model offers a default effort level on the panel", () => {
-  assert.match(panel, /harnessSupportsEffort\(pinnedHarness\)/);
-  assert.match(panel, /ariaLabel: "Default effort level for this project"/);
-  assert.match(panel, /focusKey: "context-effort"/);
-  // effort choices are filtered to what the pinned harness accepts
-  assert.match(panel, /if \(value === "ultracode"\) return harnessId === "pi"/);
-  assert.match(panel, /if \(value === "max"\) return harnessId !== "codex"/);
-  // switching models carries a still-valid effort, drops an invalid one
-  assert.match(panel, /effortLevelsFor\(nextHarness\)\.some\(\(o\) => o\.value === effort\) \? effort : undefined/);
-  // the effort styles exist
-  assert.ok(css.includes(".context-model-effort {"));
+test("context effort and Fast use the shared harness and model capabilities", () => {
+  assert.match(panel, /return effortLevelsForHarness\(harnessId\)/);
+  assert.match(panel, /harnessSupportsFastMode\(harnessId\)/);
+  assert.match(panel, /modelSupportsFastMode\(scope, value.slice\(sep \+ 1\)\)/);
 });
 
 test("no effort is ever sent for a harness that doesn't support it", () => {
   assert.match(panel, /if \(!harnessSupportsEffort\(harnessId\)\) return \[\];/);
+});
+
+test("the model card omits explanatory and success prose", () => {
+  assert.doesNotMatch(
+    panel,
+    /The model every conversation|Following the org default|Pinned for this project|Saved\. New conversations/,
+  );
 });

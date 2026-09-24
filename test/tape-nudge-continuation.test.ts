@@ -427,11 +427,13 @@ test("consecutive stopped turns heal one import each and converge once a turn co
   assert.equal(await countImports(), 3, "no further imports once coverage is restored");
 });
 
-test("a stopped partial keeps withholding coverage when the direct delivery fails and the nudge replaces the result", async () => {
-  const { sessions, session, entries, orchestrator, input } = await runScenario({
+test("a user-stopped turn skips direct delivery and the reply nudge while preserving replay coverage", async () => {
+  const { modes, deliveries, sessions, session, entries, orchestrator, input } = await runScenario({
     stoppedPartial: true,
     failDirectDelivery: true,
   });
+  assert.deepEqual(modes, ["shadow", "serve"], "Stop must not invoke the harness again");
+  assert.deepEqual(await deliveries.pending("slack"), [], "Stop must not enqueue a reply");
   const partial = entries.find(
     (entry) =>
       entry.type === "assistant" && (entry.payload as { text?: unknown } | null)?.text === "worklog without a post",
@@ -439,7 +441,7 @@ test("a stopped partial keeps withholding coverage when the direct delivery fail
   assert.ok(partial);
   assert.ok(
     (await sessions.tapeCoverage(session.id)) < partial.seq,
-    "the nudge result must not launder the stopped primary into an advanced watermark",
+    "the stopped primary must not advance the watermark",
   );
 
   await orchestrator.handleTurn(input("continue after stop"));

@@ -68,6 +68,7 @@ export function rowToSession(r: Record<string, unknown>): Session {
     threadRef: r.thread_ref as string,
     ...(r.surface != null ? { surface: r.surface as string } : {}),
     createdAt: Number(r.created_at),
+    ...(r.status != null ? { status: r.status as Session["status"] } : {}),
     ...(r.title != null ? { title: r.title as string } : {}),
     ...(r.channel_name != null ? { channelName: r.channel_name as string } : {}),
     ...(r.forked_from_session_id != null && r.fork_boundary_seq != null
@@ -566,6 +567,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
              ON sessions(parent_session_id) WHERE parent_session_id IS NOT NULL`,
         ],
       },
+      {
+        id: "sessions/store/0016-status",
+        statements: ["ALTER TABLE sessions ADD COLUMN IF NOT EXISTS status JSONB"],
+      },
     ],
     [
       {
@@ -703,6 +708,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async updateTitle(sessionId, title): Promise<void> {
       await q("UPDATE sessions SET title = $2 WHERE id = $1", [sessionId, title]);
+    },
+
+    async updateStatus(sessionId, status): Promise<void> {
+      await q("UPDATE sessions SET status = $2::jsonb WHERE id = $1", [
+        sessionId,
+        status ? JSON.stringify(status) : null,
+      ]);
     },
 
     async updateForkProvenance(sessionId, provenance): Promise<void> {

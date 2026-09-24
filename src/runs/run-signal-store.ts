@@ -153,6 +153,7 @@ export function startSignalPoll(
       });
   };
   const unsubscribe = signals.onSignal(runId, drain);
+  drain();
   const timer = setInterval(drain, opts?.intervalMs ?? SIGNAL_POLL_MS);
   timer.unref?.();
   return async () => {

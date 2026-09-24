@@ -573,3 +573,25 @@ test("failed attachment preparation does not block Stop", async () => {
   }
   assert.equal((await store.pending("stop-after-failure"))[0]?.signal.text, "file");
 });
+
+test("startSignalPoll: a Stop sent before subscription is delivered without waiting for the poll", async () => {
+  const store = createMemoryRunSignalStore();
+  await store.send("early-stop", { kind: "abort" });
+  let aborted = false;
+  const stop = startSignalPoll(
+    store,
+    "early-stop",
+    {
+      onSteer: async () => {},
+      onAbort: async () => {
+        aborted = true;
+      },
+    },
+    { intervalMs: 60_000 },
+  );
+  try {
+    await until(() => aborted, 500);
+  } finally {
+    await stop();
+  }
+});
