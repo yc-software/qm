@@ -13,7 +13,13 @@ import { testAutoFlagger } from "./admin/auto-flagger-test.ts";
 import { egress, listAdminAudit, listAdminErrors, listAdminRuns, metrics } from "./admin/observability.ts";
 import { getAdminSession, getAdminSessionLlm, listAdminSessions, listAdminShadowDeliveries } from "./admin/sessions.ts";
 import { downloadAdminFile, listAdminFiles, readAdminFile, uploadAdminFile } from "./admin/files.ts";
-import { archiveAdminSkill, getAdminSkill, listAdminArtifacts, putAdminCronDestination } from "./admin/artifacts.ts";
+import {
+  archiveAdminSkill,
+  getAdminSkill,
+  listAdminArtifacts,
+  putAdminCronDestination,
+  putAdminCronRuntime,
+} from "./admin/artifacts.ts";
 import { getAdminMemory, listMemoryScopes, putAdminMemory } from "./admin/memory.ts";
 import { listSandboxRoutes, migrateSandboxScope, manageSandboxResources } from "./admin/sandbox.ts";
 import {
@@ -134,6 +140,7 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "either",
     handle: listAdminArtifacts,
   },
+  { method: "PUT", path: "/v1/admin/crons/:id/runtime", auth: "either", handle: putAdminCronRuntime },
   { method: "PUT", path: "/v1/admin/crons/:id/destination", auth: "either", handle: putAdminCronDestination },
   { method: "GET", path: "/v1/admin/skills/:id", auth: "either", handle: getAdminSkill },
   { method: "DELETE", path: "/v1/admin/skills/:id", auth: "either", handle: archiveAdminSkill },

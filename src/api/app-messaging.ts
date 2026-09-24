@@ -74,6 +74,7 @@ export function createMessagingMethods(
   | "cronFiresByThreadRefs"
   | "latestCronFireForThread"
   | "setCronDestination"
+  | "setCronRuntime"
   | "setCronRecipientConsent"
   | "createWebhook"
   | "getWebhook"
@@ -264,6 +265,12 @@ export function createMessagingMethods(
         });
       }
       return outcome;
+    },
+    async setCronRuntime(id, runtime) {
+      const before = await deps.crons.get(id);
+      if (!before) return null;
+      await validateRuntime({ ...before, runtime });
+      return deps.crons.update(id, { runtime });
     },
     async setCronDestination(id, destination) {
       const before = await deps.crons.get(id);
