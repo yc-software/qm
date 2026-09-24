@@ -608,7 +608,6 @@ export interface AppDeps {
   swarms?: SwarmService;
   identity: IdentityService;
   publicWebUrl?: string;
-  deployAppsDomain?: string;
   inviteMailer?: InviteMailer;
   sessions: SessionStore;
   screenSecurity?: SecurityScreenProbe;

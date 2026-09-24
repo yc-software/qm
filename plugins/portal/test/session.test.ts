@@ -282,6 +282,7 @@ for (const domain of [undefined, "example.test"]) {
     );
   });
 }
+
 test("openSession preserves signed app-only authority and rejects malformed markers", () => {
   const now = Math.floor(Date.now() / 1000);
   const claims = { k: "session", sub: "guest@partner.test", org: "acme", iat: now, exp: now + 3600 };
