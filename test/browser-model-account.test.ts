@@ -213,6 +213,7 @@ test("company Codex subscription auth uses the native subscription transport wit
   const selection = { account: "company" as const, model: "gpt-5.6-sol", routing: null };
   const keys = await built.resolveBrowserCompanyKeys();
   assert.equal(keys["openai-codex"], "company-access");
+  assert.equal((await built.resolveBrowserCompanyKeys(false))["openai-codex"], undefined);
   const input = {
     selection,
     actorId: "U1",

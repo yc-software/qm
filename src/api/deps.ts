@@ -84,7 +84,7 @@ export interface ServerDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
   browserModelGateway?: ModelGatewayTransportConfig;
-  resolveBrowserCompanyKeys?: () => Promise<ProviderKeys>;
+  resolveBrowserCompanyKeys?: (includeSubscription?: boolean) => Promise<ProviderKeys>;
   slackAccounts?: DurableMap<SlackAccountLink>;
   composioReturns?: DurableMap<ComposioReturn>;
   composioFetch?: typeof fetch;
