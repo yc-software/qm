@@ -41,9 +41,10 @@ test("pane settings control is visible without hover", () => {
   assert.doesNotMatch(block, /opacity: 0;/);
 });
 
-test("only short split panes put the textarea and toolbar on the same grid row", () => {
+test("short or narrow split panes put the textarea and toolbar on the same grid row", () => {
   assert.match(css, /\.split-pane-content \{\s*container: split-pane \/ size;/);
-  const short = css.slice(css.indexOf("@container split-pane (max-height: 480px)"));
+  const short = css.slice(css.indexOf("@container split-pane (max-height: 480px) or (max-width: 560px)"));
+  assert.match(css, /@container split-pane \(max-height: 480px\) or \(max-width: 560px\)/);
   assert.match(short, /\.composer-wrap \{[^}]*display: grid;[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/);
   assert.match(short, /\.composer-wrap > \* \{\s*grid-column: 1 \/ -1;/);
   assert.match(short, /\.composer-input \{[^}]*grid-column: 1;[^}]*min-height: 34px;[^}]*max-height: 120px;/);
@@ -53,7 +54,7 @@ test("only short split panes put the textarea and toolbar on the same grid row",
 });
 
 test("narrow short panes hide runtime labels, not the accessible picker", () => {
-  const narrow = css.slice(css.indexOf("@container split-pane (max-height: 480px) and (max-width: 470px)"));
+  const narrow = css.slice(css.indexOf("@container split-pane (max-width: 470px)"));
   assert.match(narrow, /\.loadout-button \.menu-label,/);
   assert.match(narrow, /\.loadout-button \.menu-suffix \{\s*display: none;/);
   assert.match(narrow, /\.loadout-button \{[^}]*width: 34px;/);
@@ -65,7 +66,7 @@ test("narrow short panes hide runtime labels, not the accessible picker", () => 
 });
 
 test("the smallest short panes leave text space even with stop controls", () => {
-  const minimum = css.slice(css.indexOf("@container split-pane (max-height: 480px) and (max-width: 300px)"));
+  const minimum = css.slice(css.indexOf("@container split-pane (max-width: 300px)"));
   assert.match(minimum, /\.composer-toolbar \.stop-btn \{\s*width: 28px;\s*height: 28px;\s*min-height: 28px;/);
   assert.match(minimum, /\.composer-attach \{\s*transform: none;/);
 });

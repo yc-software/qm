@@ -83,11 +83,11 @@ test("a pane title ellipsizes rather than being clipped or wrapped", () => {
 
 test("the active tab keeps a higher floor than its neighbours and runs down onto the body", () => {
   const multi = css.match(/:not\(\.dv-single-tab\) \.dv-tab \{[^}]*\}/)?.[0] ?? "";
-  assert.match(multi, /flex: 0 1 160px;/);
+  assert.match(multi, /flex: 0 1 auto;/);
   assert.match(multi, /min-width: 72px;/);
-  assert.match(multi, /max-width: 220px;/);
+  assert.match(multi, /max-width: 320px;/);
   const active = css.match(/:not\(\.dv-single-tab\) \.dv-tab\.dv-active-tab \{[^}]*\}/)?.[0] ?? "";
-  assert.match(active, /flex: 0 1 260px;/);
+  assert.match(active, /flex: 0 1 auto;/);
   assert.match(active, /min-width: 150px;/);
   assert.match(active, /align-self: stretch;/);
   assert.match(active, /padding-bottom: var\(--split-strip-pad\);/);
@@ -112,6 +112,12 @@ test("tab actions sit in the title's flow so the title truncates around them", (
   const draw = split.slice(split.indexOf("class PaneTab"), split.indexOf("class StripDrop"));
   assert.equal((draw.match(/class="split-tab-actions"/g) ?? []).length, 2);
   assert.equal((draw.match(/split-tab-close/g) ?? []).length, 2, "each tab form carries exactly one close control");
+});
+
+test("the tab close control stays at the trailing edge of a wide tab", () => {
+  const title = css.match(/^\.dv-tab \.split-pane-title-text \{[^}]*\}/m)?.[0] ?? "";
+  assert.match(title, /flex: 1 1 auto;/);
+  assert.match(title, /min-width: 0;/);
 });
 
 test("the tab overflow menu is lifted above the panes and styled", () => {

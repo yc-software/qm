@@ -8369,9 +8369,9 @@ h3.ambient-field-label {
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
   --split-tab-h: 34px;
   height: var(--split-tab-h);
-  flex: 0 1 160px;
+  flex: 0 1 auto;
   min-width: 72px;
-  max-width: 220px;
+  max-width: 320px;
   padding: 0 8px 0 10px;
   display: flex;
   align-items: center;
@@ -8380,7 +8380,7 @@ h3.ambient-field-label {
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab.dv-active-tab {
-  flex: 0 1 260px;
+  flex: 0 1 auto;
   min-width: 150px;
   max-width: 320px;
   align-self: stretch;
@@ -8525,6 +8525,11 @@ h3.ambient-field-label {
 .dv-tab .split-pane-title {
   position: relative;
   flex: 1 1 auto;
+}
+
+.dv-tab .split-pane-title-text {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .split-pane-title-text {
@@ -12559,7 +12564,7 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   flex-wrap: wrap;
 }
 
-@container split-pane (max-height: 480px) {
+@container split-pane (max-height: 480px) or (max-width: 560px) {
   .composer-wrap {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -12597,7 +12602,7 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   }
 }
 
-@container split-pane (max-height: 480px) and (max-width: 470px) {
+@container split-pane (max-width: 470px) {
   .composer-wrap .loadout-button .menu-label,
   .composer-wrap .loadout-button .menu-suffix {
     display: none;
@@ -12609,7 +12614,7 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   }
 }
 
-@container split-pane (max-height: 480px) and (max-width: 300px) {
+@container split-pane (max-width: 300px) {
   .composer-wrap .composer-toolbar .icon-btn,
   .composer-wrap .composer-toolbar .menu-button.loadout-button,
   .composer-wrap .composer-toolbar .send-btn,
