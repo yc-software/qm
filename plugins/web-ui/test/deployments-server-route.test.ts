@@ -171,6 +171,7 @@ test("embed-ancestors relays the origin list and never invents one", async () =>
     .slice(before)
     .find((call) => call.method === "POST" && isNoncedCoreCall(call.url, "/v1/deployments/d1/embed-ancestors"));
   assert.deepEqual(coercedCall?.body, { embedAncestors: [] });
+});
 
 test("deployment share bridge forwards an exact email without caller identity", async () => {
   const before = calls.length;
@@ -183,5 +184,4 @@ test("deployment share bridge forwards an exact email without caller identity", 
   const request = calls.slice(before).find((call) => call.url === "/v1/deployments/d1/share");
   assert.deepEqual(request?.body, { email: "Invitee@Example.com", access: "view" });
   assert.equal(request?.capability, "signed-in-user-capability");
-
 });

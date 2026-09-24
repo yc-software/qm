@@ -22,7 +22,7 @@ import { resolveShareTarget as resolveShareTargetGrammar } from "../artifact-sha
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import { principalDestination } from "../../reach/reach.ts";
-import { FRAME_SESSION_COOKIE, portalSessionSub, portalSessionSubFrom } from "../../deploy/viewer-session.ts";
+import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
 
@@ -839,14 +839,15 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   const sessionSecret = deps.deployAppsSessionSecret;
   const loginUrl = deps.deployAppsLoginUrl;
   const wantsHtml = ctx.method === "GET" && String(req.headers.accept ?? "").includes("text/html");
-  let sub = sessionSecret ? portalSessionSub(req.headers.cookie, sessionSecret) : null;
+  let session = sessionSecret ? portalSession(req.headers.cookie, sessionSecret) : null;
   const dest = req.headers["sec-fetch-dest"];
   const site = req.headers["sec-fetch-site"];
   const framed = dest === "iframe" || site === "same-origin";
   const embedAncestors = framed ? (deployment?.embedAncestors ?? []) : [];
-  if (!sub && sessionSecret && embedAncestors.length) {
-    sub = portalSessionSubFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret);
+  if (!session && sessionSecret && embedAncestors.length) {
+    session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret);
   }
+  const sub = session?.sub;
   if (embedAncestors.length) res.setHeader("content-security-policy", frameAncestorsDirective(embedAncestors));
   if (!isPublic && (!sessionSecret || !loginUrl)) {
     sendJson(res, 503, { error: "unavailable", message: "sign-in is not configured for deployment subdomains" });
@@ -875,8 +876,22 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   url.searchParams.delete("__qm_no_shell");
   const isTopDocument = String(req.headers["sec-fetch-dest"] ?? "") === "document";
   const isShellRequest = pathname.startsWith(APP_SHELL_PATH_PREFIX);
-  const canManage = sub ? await app.canManageDeployment(slug, sub) : false;
-  const authenticatedPermission = sub && deployment ? await app.effectiveDeploymentPermission(deployment, sub) : null;
+  const canManage = sub && !session?.appOnly ? await app.canManageDeployment(slug, sub) : false;
+  let authenticatedPermission: Permission | null = null;
+  if (sub && deployment) {
+    if (session?.appOnly) {
+      await deps.identity?.refresh();
+      if (
+        deps.identity?.deactivationSource(sub) !== "manual" &&
+        (await app.deploymentGrantees(deployment.id)).some(
+          (grant) => grant.scope === scopeId("personal", sub.trim().toLowerCase()) && grant.permission === "read",
+        )
+      )
+        authenticatedPermission = "read";
+    } else {
+      authenticatedPermission = await app.effectiveDeploymentPermission(deployment, sub);
+    }
+  }
   if (ctx.method === "GET" && ((!bareApp && isTopDocument) || isShellRequest) && canManage && loginUrl) {
     if (signInAttempted) {
       cleanUrlRedirect();
@@ -900,7 +915,14 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     return true;
   }
   const viewer = sub ?? "";
-  const reach = await app.reachDeployment(slug, viewer, canManage || isPublic ? { bypassAcl: true } : undefined);
+  const reach =
+    session?.appOnly && !isPublic && !authenticatedPermission
+      ? { status: deployment ? ("denied" as const) : ("not_found" as const) }
+      : await app.reachDeployment(
+          deployment?.id ?? slug,
+          viewer,
+          canManage || isPublic || session?.appOnly ? { bypassAcl: true } : undefined,
+        );
   if (reach.status === "denied") {
     const owner = (await app.getDeployment(slug).catch(() => null))?.ownerScopeId;
     const ev = {

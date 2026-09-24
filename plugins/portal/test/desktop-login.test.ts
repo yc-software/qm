@@ -178,3 +178,13 @@ test("desktop handoff renews a browser session near expiry without resetting its
   assert.equal(effective?.session.auth, oldBrowser.auth);
   assert.ok(effective && effective.session.exp >= testNow + 604_800);
 });
+
+test("app-only sessions cannot mint desktop sessions", async () => {
+  assert.throws(() => mintDesktopLogin({ ...browser, appOnly: true }, secret, origin, challenge, state), /app-only/);
+  const appCookie = `portal_session=${seal({ ...browser, appOnly: true }, deriveKey(secret, "portal.session.v1"))}`;
+  for (const method of ["GET", "POST"]) {
+    const response = await fetch(`${base}${requestPath}`, { method, headers: { origin, cookie: appCookie } });
+    assert.equal(response.status, 403);
+    assert.equal(response.headers.get("set-cookie"), null);
+  }
+});
