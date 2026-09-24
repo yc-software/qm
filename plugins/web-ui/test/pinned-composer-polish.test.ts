@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { JSDOM } from "jsdom";
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 
@@ -51,6 +52,18 @@ test("queued cards tuck beneath the next card just as the queue tucks beneath th
   assert.doesNotMatch(strip, /gap:/);
   assert.match(strip, /margin: 0 auto -10px;/);
   assert.match(stacked, /margin-top: -10px;/);
+});
+
+test("the submitted editor remains clickable inside the sticky prompt row", () => {
+  const dom = new JSDOM(
+    `<style>${css.replace(/^@import.*$/m, "")}</style><div class="message-stack"><article class="message-row user-row"><div class="submitted-edit queued-chip queued-editing"><button class="queued-steer">Save and rerun</button><button class="queued-steer">Cancel</button></div></article></div>`,
+  );
+  const row = dom.window.document.querySelector<HTMLElement>(".user-row")!;
+  const editor = dom.window.document.querySelector<HTMLElement>(".submitted-edit")!;
+  const buttons = dom.window.document.querySelectorAll<HTMLElement>(".queued-steer");
+  assert.equal(dom.window.getComputedStyle(row).pointerEvents, "none");
+  assert.equal(dom.window.getComputedStyle(editor).pointerEvents, "auto");
+  assert.deepEqual([...buttons].map((button) => dom.window.getComputedStyle(button).pointerEvents), ["auto", "auto"]);
 });
 
 test("collapsed prompt content uses a readable six-line cutoff", () => {
