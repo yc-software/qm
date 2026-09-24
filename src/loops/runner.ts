@@ -153,7 +153,11 @@ export async function runLoopFire(
       }
 
       if (captured.length === 0) {
-        if ((await stores.items.get(item.id))?.proposal) {
+        const current = await stores.items.get(item.id);
+        const automatedInbox =
+          (loop.surface === "inbox" || loop.surface?.startsWith("inbox:")) &&
+          current?.sourcePayload?.automated === true;
+        if (current?.proposal || automatedInbox) {
           if (await stores.items.markReady(item.id, [], claimToken)) summary.ready.push(item.id);
         } else if (await stores.items.markShipped(item.id, claimToken)) summary.shipped.push(item.id);
         continue;

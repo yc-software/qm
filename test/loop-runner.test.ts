@@ -68,6 +68,30 @@ test("firing twice over the same source never works the item twice", async () =>
   assert.equal((await s.items.byLoop(loop.id)).length, 1);
 });
 
+test("automated inbox messages classified during work stay ready without a draft or outputs", async () => {
+  for (const surface of ["inbox", "inbox:gmail", "inbox:slack", undefined]) {
+    const s = stores();
+    const loop = await loopIn(s, { surface });
+    const summary = await runLoopFire(
+      loop,
+      s,
+      effects(s, {
+        work: async ({ item }) => {
+          await s.items.annotate(item.id, { automated: true });
+          return { runId: "classification" };
+        },
+        captureOutputs: async () => [],
+      }),
+    );
+    const [item] = await s.items.byLoop(loop.id);
+    assert.equal(item!.proposal, undefined);
+    assert.deepEqual(item!.outputIds, []);
+    assert.equal(item!.status, surface ? "ready" : "shipped");
+    assert.deepEqual(summary.ready, surface ? [item!.id] : []);
+    assert.deepEqual(summary.shipped, surface ? [] : [item!.id]);
+  }
+});
+
 test("a paused loop does not run at all", async () => {
   const s = stores();
   const loop = await loopIn(s);
