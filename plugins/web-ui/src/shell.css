@@ -2236,6 +2236,15 @@ qm-markdown .tok-in {
   font: inherit;
   line-height: 1.5;
 }
+.submitted-edit {
+  width: min(100%, 560px);
+  margin-left: auto;
+  padding-bottom: 6px;
+  background: var(--secondary);
+}
+.submitted-edit-note {
+  margin-right: auto;
+}
 .queued-chip + .queued-chip {
   margin-top: -10px;
 }

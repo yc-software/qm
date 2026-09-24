@@ -152,6 +152,7 @@ test("post replies remain visible in new and continuing conversations", async (t
     const { createConversation, disposeConversation, ensureDeliveryStream } =
       await vite.ssrLoadModule("/src/conversations.ts");
     const { entriesToMessages } = await vite.ssrLoadModule("/src/core-bridge.ts");
+    const { clearAllDrafts } = await vite.ssrLoadModule("/src/drafts.ts");
     const { transcriptModel } = await vite.ssrLoadModule("/src/model-options.ts");
     const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     seedRuntimeConfig(row.scopeId, await (await fetch("/api/runtime-config")).json());
@@ -326,6 +327,46 @@ test("post replies remain visible in new and continuing conversations", async (t
       assert.notEqual(conv!.state.agent, oldAgent);
       assert.equal(shownAnswer(), false);
       assert.equal(conv!.state.threadRef, "web:owner:replacement");
+    });
+    await t.test("submitted edit is multiline, preserves the draft, dedupes saves, and respects navigation", async () => {
+      const editable = { ...user, editable: true, payload: { text: "First line\nSecond line", runId: "r-edit" } };
+      await mount([editable]);
+      const composer = host.querySelector<HTMLTextAreaElement>(".composer-input")!;
+      composer.value = "unfinished draft";
+      composer.dispatchEvent(new dom.window.InputEvent("input", { bubbles: true }));
+      host.querySelector<HTMLButtonElement>('[aria-label="Edit message and rerun in a fork"]')!.click();
+      const editor = host.querySelector<HTMLTextAreaElement>(".submitted-edit-input")!;
+      assert.equal(editor.value, "First line\nSecond line");
+      assert.equal(host.querySelector<HTMLTextAreaElement>(".composer-input")!.value, "unfinished draft");
+      editor.value = "First line\nCorrected second line";
+      editor.dispatchEvent(new dom.window.InputEvent("input", { bubbles: true }));
+      let release!: () => void;
+      let editCalls = 0;
+      const pending = new Promise<Response>((resolve) => {
+        release = () =>
+          resolve(
+            Response.json({
+              session: { ...row, id: "edited-fork", threadRef: "web:owner:edited-fork" },
+              entries: [],
+            }),
+          );
+      });
+      intercept = (path) => {
+        if (!path.includes("/messages/0/edit")) return undefined;
+        editCalls++;
+        return pending;
+      };
+      const save = host.querySelector<HTMLButtonElement>(".submitted-edit .queued-steer")!;
+      save.click();
+      save.click();
+      await until(() => editCalls === 1);
+      conv!.mountContinuable("web:owner:replacement", null, row.scopeId, []);
+      release();
+      await settle();
+      intercept = undefined;
+      assert.equal(editCalls, 1);
+      assert.equal(conv!.state.threadRef, "web:owner:replacement");
+      clearAllDrafts();
     });
     await t.test("fork history follows the same refresh generation and preserves fully loaded history", async () => {
       await mount();

@@ -168,7 +168,14 @@ async function editSubmittedMessage(ctx: ApiCtx): Promise<void> {
       ...(source.conversation.channelRef ? { channelRef: source.conversation.channelRef } : {}),
       ...(source.conversation.channelName ? { channelName: source.conversation.channelName } : {}),
       ...(source.conversation.audience.length
-        ? { audience: source.conversation.audience.map((actor) => ({ externalId: actor.id })) }
+        ? {
+            audience: source.conversation.audience.map((actor) => ({
+              externalId: actor.id,
+              ...(actor.type === "guest" ? { isExternalGuest: true } : {}),
+              ...(actor.teamIds?.length ? { teamIds: actor.teamIds } : {}),
+              ...(actor.displayName ? { displayName: actor.displayName } : {}),
+            })),
+          }
         : {}),
     },
     text: b.text.trim(),

@@ -42,6 +42,18 @@ async function edit(sessionId: string, seq: number, principalId: string, text: s
 }
 
 test("submitted web messages edit by rerunning an authorized durable fork", async () => {
+  const first = await turn("wrong opening", "web:U1:first-submitted-edit");
+  const firstSource = (await built.app.getSession(first.sessionId!))!;
+  const firstEntries = structuredClone(firstSource.entries);
+  const firstTape = structuredClone(await built.sessions.getTape(firstSource.session.id));
+  const firstResponse = await edit(firstSource.session.id, 0, "U1", "fixed opening");
+  assert.equal(firstResponse.status, 202);
+  const firstResult = (await firstResponse.json()) as { entries: unknown[]; turn: { runId: string } };
+  assert.deepEqual(firstResult.entries, []);
+  assert.equal((await built.runs.get(firstResult.turn.runId))?.request.text, "fixed opening");
+  assert.deepEqual((await built.app.getSession(firstSource.session.id))!.entries, firstEntries);
+  assert.deepEqual(await built.sessions.getTape(firstSource.session.id), firstTape);
+
   const threadRef = "web:U1:submitted-edit";
   await turn("context that stays", threadRef);
   const blob = await built.blobTransfer.put(Buffer.from("attachment stays"));
@@ -78,6 +90,9 @@ test("submitted web messages edit by rerunning an authorized durable fork", asyn
   assert.equal(busyRun?.status, "pending");
   assert.equal(busyRun?.turnUserSeq, null);
 
+  const sourceEntriesBeforeEdit = structuredClone((await built.app.getSession(source.session.id))!.entries);
+  const sourceTapeBeforeEdit = structuredClone(await built.sessions.getTape(source.session.id));
+
   const response = await edit(source.session.id, target.seq, "U1", "fixed detail");
   assert.equal(response.status, 202);
   const result = (await response.json()) as { session: { id: string; threadRef: string }; turn: { runId: string } };
@@ -88,6 +103,8 @@ test("submitted web messages edit by rerunning an authorized durable fork", asyn
   const rerun = await built.runs.get(result.turn.runId);
   assert.equal(rerun?.request.text, "fixed detail");
   assert.deepEqual(rerun?.request.attachments, originalRun.request.attachments);
+  assert.deepEqual((await built.app.getSession(source.session.id))!.entries, sourceEntriesBeforeEdit);
+  assert.deepEqual(await built.sessions.getTape(source.session.id), sourceTapeBeforeEdit);
 
   const reloaded = (await built.app.getSession(result.session.id))!;
   const inherited = reloaded.entries.map((entry) => JSON.stringify(entry.payload)).join("\n");
