@@ -27,6 +27,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { ref } from "lit/directives/ref.js";
 import {
   Activity,
+  Ban,
   BookOpen,
   Search,
   Brain,
@@ -1478,6 +1479,7 @@ export function createChatSurface(
         ? chatState.forkSession.forkedFrom
         : undefined;
     return sessionTopbarTpl({
+      status: session?.status,
       sessionId: chatState.sessionId ?? session?.id,
       crumb,
       title,
@@ -2253,6 +2255,8 @@ export function createChatSurface(
 
   function liveWorkStatus(agent: Agent): TemplateResult | typeof nothing {
     if (!agent.state.isStreaming && chatState.resolvingApprovals.size === 0) return nothing;
+    if (runSlot.stopGeneration === runSlot.generation)
+      return html`<div class="stopped-note" role="status">${icon(Ban, 13)}<span>Stop requested</span></div>`;
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
     if (work.status !== "thinking" && work.status !== "working") return nothing;
     if (currentTextPhase(work)?.phase === "final_answer" || shouldShowWork(work, "")) return nothing;
@@ -2274,7 +2278,7 @@ export function createChatSurface(
         >
           ${summary ? html`<span class="tool-icon">${icon(summary.icon, 15)}</span>` : nothing}
           <span class="live-work-label"
-            >${summary ? summary.label : sheenLabel(stopping ? "Stopping…" : `Thinking${usedToolsSuffix(work)}`, true)}</span
+            >${summary ? summary.label : sheenLabel(`Thinking${usedToolsSuffix(work)}`, true)}</span
           >
           ${summary?.detail ? html`<span class="live-work-detail">${summary.detail}</span>` : nothing}
           ${expandable ? html`<span class="live-work-toggle">${icon(ChevronRight, 14)}</span>` : nothing}

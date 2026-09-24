@@ -72,6 +72,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
   let decision = deferred<Response>();
   let continuation = deferredRun();
   const handoff = deferred<void>();
+  const stopAck = deferred<Response>();
   let refreshGate: ReturnType<typeof deferred<void>> | undefined;
   let submitted = false;
   const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
@@ -105,7 +106,8 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
     if (path === "/api/runs/q1") return Response.json({ status: "done", result: { status: "ok", reply: "done" } });
     if (path === "/api/turn") return Response.json({ runId: "q1" });
     if (path === "/api/runs/q1/withdraw") return Response.json({ withdrawn: true });
-    if (path === "/api/runs/r1/signal") return Response.json({ accepted: true });
+    if (path === "/api/runs/r1/signal")
+      return JSON.parse(String(init?.body)).kind === "abort" ? stopAck.promise : Response.json({ accepted: true });
     if (path.endsWith("/approvals")) return Response.json({ approvals: pending });
     if (path.startsWith("/api/sessions/s1")) {
       if (submitted) await handoff.promise;
@@ -191,6 +193,26 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
         scopeId: row.scopeId,
       });
       assert.equal(chat.state.agent!.state.isStreaming, true);
+    });
+
+    await t.test("Stop preserves the draft and focus while disabling Send until acknowledgment", async () => {
+      const input = host.querySelector<HTMLTextAreaElement>("textarea")!;
+      input.value = "my next instruction";
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      host.querySelector<HTMLButtonElement>('[aria-label="Stop"]')!.click();
+      assert.equal(host.querySelector('[aria-label="Stop"]'), null);
+      assert.equal(host.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.disabled, true);
+      assert.match(host.querySelector('[role="status"]')?.textContent ?? "", /Stop requested/);
+      assert.equal(host.querySelector(".live-work-status"), null);
+      await until(() => document.activeElement === input);
+      assert.equal(input.value, "my next instruction");
+      assert.equal(chat.state.agent!.state.isStreaming, true);
+      stopAck.resolve(Response.json({ error: "unavailable" }, { status: 503 }));
+      await until(() => !!host.querySelector('[aria-label="Stop"]'));
+      assert.match(chat.composer.state.error, /Could not request stop/);
+      assert.equal(host.querySelector<HTMLButtonElement>('[aria-label="Stop"]')?.disabled, false);
+      input.value = "";
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     });
 
     await t.test("a subsequent pause still requires and accepts another decision", async () => {

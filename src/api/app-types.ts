@@ -369,7 +369,13 @@ export interface App {
   updateSession(
     sessionId: string,
     principalId: string,
-    patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null },
+    patch: {
+      title?: string | null;
+      archived?: boolean;
+      pinned?: boolean;
+      color?: string | null;
+      status?: Session["status"];
+    },
   ): Promise<Session | null>;
   regenerateTitle(sessionId: string, principalId: string): Promise<{ title: string | null } | null>;
   detachSession(sessionId: string, principalId: string): Promise<{ detached: true } | null>;

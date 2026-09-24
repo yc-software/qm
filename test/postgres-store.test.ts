@@ -2553,3 +2553,17 @@ test("pg personal conversation counts tolerate legacy null characters", { skip }
     await raw.end();
   }
 });
+
+test("pg session status survives restart, is shared, and clears", { skip }, async () => {
+  const first = createPostgresSessionStore(URL!);
+  const session = await first.getOrCreateByThread("session-status", "dm", scopeId("personal", "U1"));
+  await first.addParticipant(session.id, "U1");
+  await first.addParticipant(session.id, "U2");
+  const status = { emoji: "🚀", text: "Live in production" };
+  await first.updateStatus(session.id, status);
+  const restarted = createPostgresSessionStore(URL!);
+  assert.deepEqual((await restarted.get(session.id))?.status, status);
+  assert.deepEqual((await restarted.getForParticipant(session.id, "U2"))?.status, status);
+  await restarted.updateStatus(session.id, null);
+  assert.equal((await first.get(session.id))?.status ?? null, null);
+});

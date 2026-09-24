@@ -82,6 +82,11 @@ export interface SpawnMeta {
   thinkingLevel?: string;
 }
 
+export interface SessionStatus {
+  emoji: string;
+  text: string;
+}
+
 export interface Session {
   id: string;
   type: SessionType;
@@ -94,6 +99,7 @@ export interface Session {
   archived?: boolean;
   pinned?: boolean;
   color?: string;
+  status?: SessionStatus | null;
   forkedFrom?: { sessionId: string; title?: string | null };
   forkBoundarySeq?: number;
   parentSessionId?: string;

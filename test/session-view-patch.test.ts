@@ -93,3 +93,20 @@ test("POST /v1/sessions/:id rejects malformed colors and non-boolean pins", asyn
     await srv.close();
   }
 });
+
+test("surface session route sets and clears status, rejecting malformed input", async () => {
+  const srv = start();
+  try {
+    const id = await newSession(srv.base, "web:U1:status");
+    const status = { emoji: "🚀", text: "Live in production" };
+    const set = await patch(srv.base, id, { principalId: "U1", status });
+    assert.equal(set.status, 200);
+    assert.deepEqual(set.session?.status, status);
+    assert.equal((await patch(srv.base, id, { principalId: "U1", status: {} })).status, 400);
+    const cleared = await patch(srv.base, id, { principalId: "U1", status: null });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.session?.status ?? null, null);
+  } finally {
+    await srv.close();
+  }
+});
