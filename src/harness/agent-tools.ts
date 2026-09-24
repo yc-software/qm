@@ -1,3 +1,6 @@
+import { E2bSandboxGoneError, E2bCommandLostError } from "../sandbox/e2b-client.ts";
+import { ModalSandboxGoneError } from "../sandbox/modal-client.ts";
+import { SuperserveSandboxGoneError } from "../sandbox/superserve-client.ts";
 import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -338,7 +341,7 @@ export type CoreToolOptions = Omit<AgentToolsOptions, "readOnly" | "surfaceTools
 
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
-    sandboxResources: config.sandboxResourcesEnabled,
+    sandboxResources: true,
     scratchExec: config.scratchExecEnabled,
     // Availability is checked per turn; Open can be enabled without restarting the harness.
     ownerAuthExec: true,
@@ -576,6 +579,40 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   ): Promise<T> =>
     recordResult(callId, summary, ret, false, sourceScopeId, false, undefined, { provenance: "external", source });
 
+  const sandboxRecoveryGuidance =
+    "[recovery] Transport errors can also come from credentials or other services; first inspect the affected sandbox with sandbox action=status. Only if it confirms a sandbox failure, use action=restart if supported (it stops running processes). If the sandbox is healthy, investigate the failing dependency instead. " +
+    "If a confirmed sandbox failure cannot be recovered, use sandbox action=list to discover configured providers and authorized sandboxes. Select an available sandbox_id for execution, or create on a listed provider and set_default when appropriate. A new sandbox is blank; changing the default does not copy files or move jobs. Keep the old sandbox and recover needed files from it, Files, or git. " +
+    "Continue unfinished work without repeating completed effects; a failed transport may hide a command that already ran. Do not use another sandbox to bypass permission denials, approvals, or quarantines.";
+
+  const sandboxFailureText = (error: unknown): string | undefined => {
+    let cause = error;
+    let infrastructureFailure = false;
+    const seen = new Set<unknown>();
+    while (isObj(cause) && !seen.has(cause)) {
+      seen.add(cause);
+      if (cause.status === 401 || cause.status === 403 || cause.name === "AbortError") return undefined;
+      if (
+        cause instanceof E2bSandboxGoneError ||
+        cause instanceof E2bCommandLostError ||
+        cause instanceof ModalSandboxGoneError ||
+        cause instanceof SuperserveSandboxGoneError ||
+        [502, 503, 504].includes(Number(cause.status)) ||
+        [
+          "ECONNRESET",
+          "ECONNREFUSED",
+          "ETIMEDOUT",
+          "EHOSTUNREACH",
+          "ENETUNREACH",
+          "UND_ERR_CONNECT_TIMEOUT",
+          "UND_ERR_SOCKET",
+        ].includes(String(cause.code))
+      )
+        infrastructureFailure = true;
+      cause = cause.cause;
+    }
+    return infrastructureFailure ? `[error] ${errMessage(error)}\n${sandboxRecoveryGuidance}` : undefined;
+  };
+
   const EXECUTE_TIMEOUT_GUIDANCE =
     `Each command has a wall-clock timeout (default ${execTimeoutSec}s, max ${execCeilingSec}s) — set \`timeout_seconds\` ` +
     "higher for builds/installs/tsc/test runs that legitimately take minutes, or lower for " +
@@ -721,7 +758,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           true,
         );
       }
-      throw e;
+      const failure = sandboxFailureText(e);
+      if (!failure) throw e;
+      return recordResult(callId, { tool: "execute", ...scopeNote, failed: true }, text(failure), true);
     }
   };
 
@@ -977,6 +1016,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             [
               `machine: ${machineLine}; shell: ${shellLine}${pressureLine}${resourcesLine}${verdictLine}`,
               ...recoveryLines,
+              ...(verdict === "wedged" ? [sandboxRecoveryGuidance] : []),
             ].join("\n"),
           ),
         );
@@ -985,7 +1025,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         return recordResult(
           callId,
           { tool: "sandbox", action: params.action, failed: true },
-          text(`[error] ${errMessage(e)}`),
+          text(sandboxFailureText(e) ?? `[error] ${errMessage(e)}`),
           true,
         );
       }
@@ -2016,7 +2056,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             true,
           );
         }
-        throw e;
+        const failure = sandboxFailureText(e);
+        if (!failure) throw e;
+        return recordResult(callId, { tool: "background", action: params.action, failed: true }, text(failure), true);
       }
     },
   });
@@ -4046,7 +4088,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           callId,
           { tool: "runtime", error: "goal_in_progress" },
           text(
-            "Runtime changes are unavailable while a goal or work floor is unfinished. Continue the goal on the current runtime.",
+            "Runtime changes are unavailable while a goal or work floor is unfinished. Continue the goal on the current runtime. Sandbox status, restart, and available discovery/routing actions remain usable for infrastructure recovery; do not complete or discard the goal just to switch runtimes.",
           ),
           true,
         );

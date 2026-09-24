@@ -22,7 +22,6 @@ async function main(): Promise<void> {
     runStore: "memory",
     harness: "pi",
     sandboxBackend: "local",
-    sandboxResourcesEnabled: true,
     backgroundWorkEnabled: false,
     turnWallClockMs: 180_000,
     localSandbox: { ...config.localSandbox, coreContainer: process.env.QM_CORE_CONTAINER },

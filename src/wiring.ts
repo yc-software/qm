@@ -1084,7 +1084,7 @@ export function buildApp(
   }
   const sandboxRoutes = artifactMap<SandboxRoute>("sandbox_routing");
   const sandboxResources = createSandboxResources({
-    enabled: config.sandboxResourcesEnabled,
+    enabled: true,
     rollout: artifactMap<SandboxResourceRollout>("sandbox_resource_rollout"),
     legacyScopes: async () => (await sessions.distinctScopes()).map((scope) => scope.scopeId),
     legacySandboxes: async () => {

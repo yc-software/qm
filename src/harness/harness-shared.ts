@@ -110,7 +110,26 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
   };
 }
 
-export function nativeChildToolAllowed(name: string, args?: unknown): boolean {
+export function nativeChildToolAllowed(name: string, ...input: [] | [unknown]): boolean {
+  const [args] = input;
+  if (name === "sandbox") {
+    if (!input.length) return true;
+    if (!args || typeof args !== "object" || Array.isArray(args)) return false;
+    const action = (args as Record<string, unknown>).action;
+    return (
+      typeof action === "string" &&
+      [
+        "exec",
+        "start_process",
+        "read_process",
+        "write_stdin",
+        "signal_process",
+        "list_processes",
+        "watch_process",
+        "unwatch_process",
+      ].includes(action)
+    );
+  }
   if (!["execute", "files", "apps", "memory", "history", "background"].includes(name)) return false;
   if (args === undefined || (name !== "apps" && name !== "files")) return true;
   const action = args && typeof args === "object" ? (args as Record<string, unknown>).action : undefined;
