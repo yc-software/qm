@@ -1379,3 +1379,23 @@ test("verified swarm workers use category defaults instead of copied parent choi
     assert.equal(run.request.model, inherited.modelId, "the verified stored dispatch is not mutated");
   }
 });
+
+test("foreground compaction failure preserves history and does not schedule a duplicate background attempt", async () => {
+  const { harness, resetCalls } = spyHarness();
+  let calls = 0;
+  harness.models.compactHistory = async () => {
+    calls++;
+    throw new Error("summary unavailable");
+  };
+  const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("msg 4", "msg 5"));
+  const sid = await seed(
+    sessions,
+    msgTexts(6).map((text) => ({ payload: { text } })),
+  );
+  const before = await sessions.getEntries(sid);
+  await assert.rejects(orch.handleTurn(turn("!histcount")), /summary unavailable/);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(calls, 1);
+  assert.deepEqual(await sessions.getEntries(sid), before);
+  assert.equal(resetCalls.length, 0);
+});

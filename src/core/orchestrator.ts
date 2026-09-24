@@ -1939,6 +1939,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }).catch(swallowAs("orchestrator: message revision catch-up", undefined));
       };
       let tailOwnsCleanup = false;
+      let foregroundCompactionFailed = false;
       let leaseReleased = false;
       let turnProgress = 0;
       const turnAbort = new AbortController();
@@ -2901,6 +2902,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           orgScopeId: resolution.orgScopeId,
           actorId: actor.id,
           ...(input.model ? { model: input.model } : {}),
+        }).catch((error: unknown) => {
+          foregroundCompactionFailed = true;
+          throw error;
         });
         compactMs = Date.now() - compactStart;
         const documentInputs = strictReadOnly
@@ -4256,13 +4260,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);
         }
-        scheduleBackgroundCompaction({
-          sessionId: session.id,
-          scopeId,
-          orgScopeId: resolution.orgScopeId,
-          actorId: actor.id,
-          ...(input.model ? { model: input.model } : {}),
-        });
+        if (!foregroundCompactionFailed)
+          scheduleBackgroundCompaction({
+            sessionId: session.id,
+            scopeId,
+            orgScopeId: resolution.orgScopeId,
+            actorId: actor.id,
+            ...(input.model ? { model: input.model } : {}),
+          });
       }
     },
   };

@@ -1,8 +1,14 @@
+import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
+import { processRun } from "../src/runs/worker.ts";
+import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
+import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { zstdDecompressSync } from "node:zlib";
 import { buildModelRuntime } from "../src/harness/pi-harness.ts";
 import { contentText, createAssistantMessageEventStream, type StopReason } from "@earendil-works/pi-ai";
+import { NonRetryableTurnError } from "../src/core/turn-error.ts";
+import { COMPACTION_REFUSED_TEXT } from "../plugins/chassis/src/failure-copy.ts";
 import { summarizeHistory } from "../src/harness/history-summary.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 import { createContextSummaryPayload } from "../src/sessions/session-store.ts";
@@ -21,7 +27,7 @@ const entry = (seq: number, type: SessionEntry["type"], payload: unknown): Sessi
   createdAt: 1_700_000_000_000 + seq,
 });
 
-function response(text = summary, stopReason: StopReason = "stop") {
+function response(text = summary, stopReason: StopReason = "stop", errorMessage?: string) {
   const stream = createAssistantMessageEventStream();
   stream.end({
     role: "assistant",
@@ -31,6 +37,7 @@ function response(text = summary, stopReason: StopReason = "stop") {
     model: model.id,
     usage: zeroUsage(),
     stopReason,
+    ...(errorMessage ? { errorMessage } : {}),
     timestamp: 0,
   });
   return stream;
@@ -150,4 +157,70 @@ test("Astra compaction serializes a supported reasoning effort through the provi
   assert.ok(request, "compaction must reach the provider's HTTP transport");
   assert.equal(request.model, "gpt-6-astra");
   assert.equal(request.reasoning?.effort, "low");
+});
+
+for (const message of [
+  "This request was blocked under Anthropic's Usage Policy.",
+  "This request would violate Anthropic’s usage policy.",
+]) {
+  test(`compaction treats explicit provider refusal as terminal: ${message}`, async () => {
+    let calls = 0;
+    await assert.rejects(
+      summarizeHistory([], model, () => {
+        calls++;
+        return response("partial summary", "error", message);
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof NonRetryableTurnError);
+        assert.equal(error.message, COMPACTION_REFUSED_TEXT);
+        return true;
+      },
+    );
+    assert.equal(calls, 1);
+  });
+}
+
+test("transient summary errors remain retryable", async () => {
+  await assert.rejects(
+    summarizeHistory([], model, () => response("", "error", "Request timed out.")),
+    (error: unknown) => error instanceof Error && !(error instanceof NonRetryableTurnError),
+  );
+});
+
+test("a compaction refusal parks the worker on its first attempt and delivers recovery instructions", async () => {
+  const { runs } = createMemoryRunStore();
+  const actor = { id: "test-user", type: "internal" as const };
+  const orchestrator: Orchestrator = {
+    async handleTurn() {
+      await summarizeHistory([], model, () => response("", "error", "Blocked under Anthropic's Usage Policy."));
+      throw new Error("must not reach the main turn");
+    },
+    async screenSecuritySteer() {
+      return "allow";
+    },
+    async regenerateTitle() {
+      return null;
+    },
+  };
+  await runs.enqueue({
+    sessionId: "test-thread",
+    maxAttempts: 3,
+    request: {
+      surface: "slack",
+      deliveryTarget: "test-channel",
+      actor,
+      conversation: { kind: "dm", threadRef: "test-thread", audience: [actor] },
+      origin: { kind: "direct" },
+      text: "hello",
+    },
+  });
+  const run = await runs.claim("test-worker", 5_000);
+  assert.ok(run);
+  await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run), NonRetryableTurnError);
+  const failed = await runs.get(run.id);
+  assert.ok(failed);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.attempts, 1);
+  assert.equal(await runs.claim("test-worker", 5_000), null);
+  assert.ok(runResultDelivery(failed)?.text.includes(COMPACTION_REFUSED_TEXT));
 });

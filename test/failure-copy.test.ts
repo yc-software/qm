@@ -8,7 +8,7 @@ import {
   userFacingFailureText,
 } from "../src/core/failure-copy.ts";
 import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../plugins/chassis/src/security-quarantine.ts";
-import { GENERIC_FAILURE_TEXT } from "../plugins/chassis/src/failure-copy.ts";
+import { COMPACTION_REFUSED_TEXT, GENERIC_FAILURE_TEXT } from "../plugins/chassis/src/failure-copy.ts";
 
 test("the shared failure policy renders quarantine canned, refused reasons verbatim, everything else generic", () => {
   const quarantine = {
@@ -41,4 +41,11 @@ test("the shared failure policy renders quarantine canned, refused reasons verba
   assert.doesNotMatch(userFacingFailureText(failed), /TypeError|sandbox\.ts/);
 
   assert.equal(userFacingFailureText({ status: "refused" }), GENERIC_FAILURE_TEXT);
+});
+
+test("compaction refusal is actionable without exposing arbitrary provider failures", () => {
+  const failure = { status: "failed", reason: COMPACTION_REFUSED_TEXT };
+  assert.equal(userFacingFailureText(failure), COMPACTION_REFUSED_TEXT);
+  assert.equal(userFacingFailureClause(failure), COMPACTION_REFUSED_TEXT);
+  assert.equal(userFacingFailureText({ status: "failed", reason: "raw provider payload" }), GENERIC_FAILURE_TEXT);
 });
