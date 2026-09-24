@@ -1,3 +1,6 @@
+import { E2bSandboxGoneError, E2bCommandLostError } from "../src/sandbox/e2b-client.ts";
+import { ModalSandboxGoneError } from "../src/sandbox/modal-client.ts";
+import { SuperserveSandboxGoneError } from "../src/sandbox/superserve-client.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
@@ -3598,4 +3601,116 @@ test("sandbox call traces preserve purpose across execution, management, process
   }
   assert.equal(calls.length, 5);
   assert.ok(calls.every((entry) => entry.purpose === "Inspect the demo workspace"));
+});
+
+test("sandbox transport recovery discovers alternatives without losing work during an active goal", async () => {
+  for (const action of ["exec", "restart", "start_process"] as const) {
+    const failure = Object.assign(new Error("provider unavailable"), { status: 503 });
+    const fail = async (): Promise<never> => {
+      throw failure;
+    };
+    const ref: ToolContextRef = {
+      current: { ...fakeToolContext(), execute: fail, restartComputer: fail, backgroundStart: fail },
+    };
+    const tools = createAgentTools(ref, { sandboxResources: true });
+    await call(
+      tools.find((tool) => tool.name === "goal"),
+      { action: "create", objective: "finish the work" },
+    );
+    const result = textOut(
+      await call(
+        tools.find((tool) => tool.name === "sandbox"),
+        {
+          action,
+          ...(action !== "restart" ? { command: "true" } : {}),
+          purpose: "Test recovery",
+          sandbox_id: "original",
+        },
+      ),
+    );
+    assert.match(result, /provider unavailable/);
+    assert.match(result, /Only if it confirms a sandbox failure/);
+    assert.match(result, /If the sandbox is healthy, investigate the failing dependency instead/);
+    assert.match(result, /action=list/);
+    assert.match(result, /new sandbox is blank/);
+    assert.match(result, /does not copy files or move jobs/);
+    assert.match(result, /already ran/);
+    assert.equal(ref.goal?.status, "active");
+  }
+});
+
+test("sandbox recovery handles nested transport errors and respects output quarantine", async () => {
+  const failure = new Error("fetch failed", { cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }) });
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      execute: async () => {
+        throw failure;
+      },
+    },
+  };
+  const execute = createAgentTools(ref).find((tool) => tool.name === "execute");
+  const result = textOut(await call(execute, { command: "true", purpose: "Test recovery" }));
+  assert.match(result, /\[recovery\]/);
+  assert.doesNotMatch(result, /action=list/);
+  ref.screenToolResult = async () => ({ outcome: "quarantine" });
+  const quarantined = textOut(await call(execute, { command: "true", purpose: "Test recovery" }));
+  assert.match(quarantined, /quarantined/);
+  assert.doesNotMatch(quarantined, /\[recovery\]/);
+});
+
+test("sandbox management does not suggest fallback for access denial, cancellation, or unknown errors", async () => {
+  for (const failure of [
+    Object.assign(new Error("denied"), { status: 403, cause: { code: "ECONNRESET" } }),
+    Object.assign(new Error("cancelled"), { name: "AbortError", cause: { code: "ECONNRESET" } }),
+    new Error("permission required"),
+    new Error("unknown failure"),
+  ]) {
+    const ref: ToolContextRef = {
+      current: {
+        ...fakeToolContext(),
+        restartComputer: async () => {
+          throw failure;
+        },
+      },
+    };
+    const result = textOut(
+      await call(
+        createAgentTools(ref, { sandboxResources: true }).find((tool) => tool.name === "sandbox"),
+        {
+          action: "restart",
+          purpose: "Test recovery",
+          sandbox_id: "original",
+        },
+      ),
+    );
+    assert.doesNotMatch(result, /\[recovery\]|action=list/);
+    assert.match(result, /\[error\]/);
+  }
+});
+
+test("lost provider sandboxes suggest authorized recovery without replaying commands", async () => {
+  for (const ErrorType of [
+    E2bSandboxGoneError,
+    E2bCommandLostError,
+    ModalSandboxGoneError,
+    SuperserveSandboxGoneError,
+  ]) {
+    const ref: ToolContextRef = {
+      current: {
+        ...fakeToolContext(),
+        execute: async () => {
+          throw new ErrorType("original", "lost");
+        },
+      },
+    };
+    const result = textOut(
+      await call(
+        createAgentTools(ref).find((tool) => tool.name === "execute"),
+        { command: "true" },
+      ),
+    );
+    assert.match(result, /\[recovery\]/);
+    assert.match(result, /already ran/);
+  }
 });
