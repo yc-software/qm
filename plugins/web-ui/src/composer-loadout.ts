@@ -120,17 +120,17 @@ export function modelLoadoutOptions(
 
 const LOADOUT_STORAGE_KEY = "web-ui:loadout";
 
-export function loadLoadout(): LoadoutEntry[] {
+export function loadLoadout(key = LOADOUT_STORAGE_KEY): LoadoutEntry[] {
   try {
-    return parseLoadout(localStorage.getItem(LOADOUT_STORAGE_KEY));
+    return parseLoadout(localStorage.getItem(key));
   } catch {
     return [];
   }
 }
 
-export function saveLoadout(entries: LoadoutEntry[]): void {
+export function saveLoadout(entries: LoadoutEntry[], key = LOADOUT_STORAGE_KEY): void {
   try {
-    localStorage.setItem(LOADOUT_STORAGE_KEY, JSON.stringify(entries.slice(0, LOADOUT_CAP)));
+    localStorage.setItem(key, JSON.stringify(entries.slice(0, LOADOUT_CAP)));
   } catch {
     return;
   }

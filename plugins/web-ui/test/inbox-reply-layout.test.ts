@@ -7,7 +7,10 @@ const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
 test("the reply follows source messages in the same thread container", () => {
   const page = inbox.match(/function itemPageTpl[\s\S]*?function keepingChatLogsPinned/)?.[0] ?? "";
-  assert.match(page, /inbox-item-thread[\s\S]*?\$\{contextTpl\(item\)\}[\s\S]*?\$\{chatTpl\(item\)\}\s*<\/div>/);
+  assert.match(
+    page,
+    /\$\{contextTpl\(item\)\}[\s\S]*?\$\{chatTpl\(item\)\}[\s\S]*?inbox-item-thread[\s\S]*?\$\{detail\}/,
+  );
   assert.doesNotMatch(page, /<aside/);
 });
 

@@ -1688,6 +1688,7 @@ const apiRoutes: readonly WebRoute[] = [
       const { res, url, user } = c;
       const scopeId = url.searchParams.get("scopeId") || `personal:${user}`;
       const qs = new URLSearchParams({ principalId: user, scopeId });
+      if (url.searchParams.get("account") === "company") qs.set("account", "company");
       return relayCore(res, "GET", `/v1/runtime-config?${qs.toString()}`);
     },
   },

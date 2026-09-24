@@ -1,5 +1,6 @@
 import { metadata } from "./model-metadata.ts";
 export const inboxRuntime = {
+  scopeId: "personal:taylor@example.com",
   modelCatalog: {
     "gpt-5.6-sol": metadata("gpt-5.6-sol", "GPT-5.6 Sol"),
     "gpt-5.6-terra": metadata("gpt-5.6-terra", "GPT-5.6 Terra"),

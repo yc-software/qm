@@ -32,6 +32,7 @@ function start(
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
+    userModelCredentials: built.userModelCredentials,
     modelCredentialFetch,
     harnessId: config.harness ?? "pi",
     ...(harnessCarriedModelAuth(appConfig) ? { harnessCarriedModelAuth: harnessCarriedModelAuth(appConfig) } : {}),
@@ -662,8 +663,30 @@ test("inbox runtime overrides use the web model allowlist without changing defau
       async: true,
     });
     assert.equal(rejected.status, "refused");
-    assert.match(rejected.reason ?? "", /not enabled for the web UI/);
+    assert.match(rejected.reason ?? "", /runtime is no longer available/);
     assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.modelId, "claude-opus-4-8");
+    assert.equal(await srv.built.config.getRuntimeSelectionDurable("personal:alice"), null);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("company runtime reads exclude personal-only models without changing the regular picker", async () => {
+  const srv = start({ anthropicApiKey: undefined, openaiApiKey: undefined });
+  try {
+    srv.built.config.setApprovedHarnesses(["pi"]);
+    await srv.built.config.flushScope("org:default-org");
+    await srv.built.userModelCredentials.setApiKey("alice", "openai", "synthetic-openai");
+    await srv.built.config.setPersonalModelAuth("alice", true, "openai");
+    const url = `${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`;
+    const personal = (await (await fetch(url)).json()) as { modelsByHarness: Record<string, string[]> };
+    assert.ok(personal.modelsByHarness.pi?.includes("gpt-5.6-terra"));
+    const company = (await (await fetch(`${url}&account=company`)).json()) as {
+      modelsByHarness: Record<string, string[]>;
+    };
+    assert.ok(!company.modelsByHarness.pi?.includes("gpt-5.6-terra"));
+    assert.deepEqual(await (await fetch(url)).json(), personal);
+    assert.equal((await fetch(`${url}&account=unknown`)).status, 400);
     assert.equal(await srv.built.config.getRuntimeSelectionDurable("personal:alice"), null);
   } finally {
     await srv.close();

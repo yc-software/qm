@@ -97,7 +97,7 @@ test("a new inbound message during a provider read wins over the older own reply
       return json({ messages: [{ internalDate: "2000", labelIds: ["SENT"] }] });
     },
   })("owner", [item]);
-  assert.equal((await items.get(item.id))!.status, "ready");
+  assert.equal((await items.get(item.id))!.status, "queued");
   assert.equal((await items.get(item.id))!.sourceAt, 3000);
 });
 

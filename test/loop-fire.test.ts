@@ -39,6 +39,7 @@ function service(
   respond: Responder,
   overrides?: {
     admittedWork?: ReturnType<typeof createAdmittedWork>;
+    turnResult?: TurnResult;
     grants?: ReturnType<typeof createShipGrantStore>;
     samePerson?: (a: string, b: string) => Promise<boolean>;
   },
@@ -66,6 +67,7 @@ function service(
       run: async (req): Promise<TurnResult> => {
         const run = async (): Promise<TurnResult> => {
           turns.push(req);
+          if (overrides?.turnResult) return overrides.turnResult;
           return { status: "ok", reply: await respond(req), sessionId: `s${turns.length}` };
         };
         return overrides?.admittedWork ? overrides.admittedWork.run(run) : run();
@@ -694,7 +696,7 @@ test("privileged item turns inherit grants only for the owner", async () => {
   assert.equal((await s.fire.itemAction(loop, item, "inspect", {}, "josh")).ok, true);
   const before = s.turns.length;
   assert.equal((await s.fire.itemAction(loop, item, "inspect", {}, "mallory")).ok, false);
-  await s.fire.followUp(loop, item, "inspect", "mallory");
+  await assert.rejects(s.fire.followUp(loop, item, "inspect", "mallory"), /only the owner/);
   assert.equal(s.turns.length, before);
 });
 
@@ -964,4 +966,17 @@ test("inbox followup runtime and attachments affect only that item turn", async 
     assert.equal(scheduled.thinkingLevel, "xhigh");
     assert.equal(scheduled.attachments, undefined);
   }
+});
+
+test("a failed followup rejects so the composer can retain uploaded attachments", async () => {
+  const s = service(() => "", { turnResult: { status: "refused", reason: "runtime unavailable" } });
+  const loop = await makeLoop(s.loops);
+  const item = (await s.items.enqueue({ loopId: loop.id, sourceKey: "attachment-retry" })).item;
+  await assert.rejects(
+    s.fire.followUp(loop, item, "Review this file", loop.owner, {
+      attachments: [{ name: "notes.txt", blobId: "test-blob", mimetype: "text/plain", sizeBytes: 12 }],
+    }),
+  );
+  assert.equal(s.turns[0]?.attachments?.[0]?.blobId, "test-blob");
+  assert.equal((await s.items.get(item.id))?.thread?.at(-1)?.role, "system");
 });

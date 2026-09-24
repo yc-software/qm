@@ -9326,7 +9326,7 @@ h3.ambient-field-label {
   height: auto;
   margin: 0 auto;
 }
-.content-wide-page:not(:has(.inbox-item-aside)) > .pane-head {
+.content-wide-page > .pane-head {
   width: min(var(--content-wide-width), 100%);
   max-width: none;
 }
@@ -12852,4 +12852,11 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .inbox-source-notice {
   font-size: 12px;
   padding: 8px 0;
+}
+
+.inbox-runtime-note {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted-foreground);
+  font-size: 11px;
 }

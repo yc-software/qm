@@ -52,7 +52,7 @@ test("switching setups preserves prior tweaks and validates effort and Fast for 
     ),
     "a stored Fast preference cannot enable an unsupported model",
   );
-  assert.ok(apply.includes("saveLoadout(loadout)"));
+  assert.ok(apply.includes("saveLoadout(loadout, loadoutKey)"));
 });
 
 test("attaching files is allowed while a turn is streaming", () => {

@@ -206,9 +206,11 @@ export const inboxState = {
 };
 
 const DRAFT_SUGGESTIONS = ["Make it shorter", "Make it more friendly", "Remove the salutations"];
+const draftConflicts = new Map<string, number>();
 const draftEdits = new Map<string, InboxDraft & { basedOnAt?: number }>();
 const acting = new Set<string>();
 const chatting = new Set<string>();
+const chatDrafts = new Map<string, string>();
 
 let archiveToastHost: HTMLDivElement | null = null;
 let archiveToastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -313,6 +315,7 @@ export function resetInboxState(): void {
   inboxState.notice = null;
   inboxState.syncBusy = false;
   draftEdits.clear();
+  draftConflicts.clear();
   acting.clear();
   chatting.clear();
 }
@@ -788,6 +791,7 @@ function isDraftConflict(e: unknown): boolean {
 }
 
 async function explainDraftConflict(item: InboxItem, edited: boolean): Promise<void> {
+  draftConflicts.set(item.id, (draftConflicts.get(item.id) ?? 0) + 1);
   await refetchItem(item);
   const fresh = inboxItemById(item.id);
   const overlay = draftEdits.get(item.id);
@@ -908,13 +912,16 @@ export async function askAgent(item: InboxItem, message: string, options?: Compo
   const text = message.trim();
   if ((!text && !options?.attachments?.length) || chatting.has(item.id)) return false;
   const draft = effectiveDraft(item);
+  const conflictRevision = draftConflicts.get(item.id) ?? 0;
   chatting.add(item.id);
   drawAll();
   try {
     await enqueueForItem(item.id, async () => {
+      if ((draftConflicts.get(item.id) ?? 0) !== conflictRevision)
+        throw new Error("The draft changed. Review it before sending again.");
       await persistDraftNow(item.id);
       if (draftEdits.has(item.id)) throw new Error("Save the draft before continuing. Your edits have been kept.");
-      const current = inboxState.items.find((i) => i.id === item.id) ?? item;
+      const current = inboxItemById(item.id) ?? item;
       if (!sameDraft(effectiveDraft(current), draft)) {
         throw new Error("The draft changed. Review it before continuing.");
       }
@@ -1138,22 +1145,26 @@ export function chatTpl(item: InboxItem, compact = false): TemplateResult {
   return html`
     <div class="inbox-chat">
       <div class="inbox-chat-log">
-        ${item.status === "open" ? html`<div class="inbox-chat-msg agent">${draftMessageTpl(item)}</div>` : nothing}
+        ${item.status === "open" && !usesOutputReview(item) && (!item.sentChat || item.draft) ? html`<div class="inbox-chat-msg agent">${draftMessageTpl(item)}</div>` : nothing}
         ${item.thread.map(
           (m) => html`<div class="inbox-chat-msg ${m.role}"><span class="inbox-chat-text">${m.text}</span></div>`,
         )}
         ${
           item.status === "open"
             ? html`<div class="inbox-chat-suggestions">
-                <button
-                  class="inbox-suggest-chip primary"
-                  type="button"
-                  ?disabled=${busy || acting.has(item.id)}
-                  ${tip("Send the draft with your instructions")}
-                  @click=${(e: MouseEvent) => submit(e, "Send it")}
-                >
-                  ${icon(Send, 12)}<span>Send it</span>
-                </button>
+                ${
+                  !usesOutputReview(item) && (!item.sentChat || item.draft)
+                    ? html`<button
+                        class="inbox-suggest-chip primary"
+                        type="button"
+                        ?disabled=${busy || acting.has(item.id)}
+                        ${tip("Send the draft with your instructions")}
+                        @click=${(e: MouseEvent) => submit(e, "Send it")}
+                      >
+                        ${icon(Send, 12)}<span>Send it</span>
+                      </button>`
+                    : nothing
+                }
                 <div class="inbox-edit-suggestions">
                   ${(empty ? suggestions : []).map(
                     (prompt) =>
@@ -1404,8 +1415,12 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
       ${
         expanded
           ? html`<div class="inbox-item-detail">
-              ${usesOutputReview(item) ? reviewTpl(item) : html`${handled ? nothing : html`<div class="inbox-item-detail-actions">${dismissItemTpl(item)}</div>`}
-              ${contextTpl(item)} ${handled ? handledNoteTpl(item) : chatTpl(item, true)}`}
+              ${
+                usesOutputReview(item)
+                  ? reviewTpl(item)
+                  : html`${handled ? nothing : html`<div class="inbox-item-detail-actions">${dismissItemTpl(item)}</div>`}
+                    ${contextTpl(item)} ${handled ? handledNoteTpl(item) : chatTpl(item, true)}`
+              }
             </div>`
           : nothing
       }
@@ -1694,17 +1709,15 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
   `;
 }
 
-function itemDetailTpl(item: InboxItem, handled: boolean): TemplateResult {
-  if (usesOutputReview(item)) return reviewTpl(item);
-  if (!item.detailLoaded) return html`<div class="empty compact">Loading message…</div>`;
-  return html`${contextTpl(item)} ${handled ? handledNoteTpl(item) : draftEditorTpl(item, { chat: false })}`;
-}
-
 function itemPageTpl(item: InboxItem): TemplateResult {
   const handled = item.status !== "open";
   const gmail = item.source === "gmail";
   const heading = gmail ? item.from || item.title : (item.slack?.channelLabel ?? item.title);
   const sub = gmail ? item.title : "";
+  let detail: TemplateResult;
+  if (!item.detailLoaded) detail = html`<div class="empty compact">Loading message…</div>`;
+  else if (usesOutputReview(item)) detail = reviewTpl(item);
+  else detail = html`${contextTpl(item)} ${handled ? handledNoteTpl(item) : nothing} ${chatTpl(item)}`;
   return html`
     <div class="pane-head inbox-item-head src-${item.source}">
       <div class="inbox-item-head-copy">
@@ -1723,7 +1736,7 @@ function itemPageTpl(item: InboxItem): TemplateResult {
     <div class="inbox-surface inbox-item-surface">
       <div class="inbox-scroll inbox-item-thread">
         ${inboxState.notice ? html`<div class="inbox-notice" role="status">${inboxState.notice}</div>` : nothing}
-        ${usesOutputReview(item) ? itemDetailTpl(item, handled) : html`${contextTpl(item)} ${handled ? handledNoteTpl(item) : nothing} ${chatTpl(item)}`}
+        ${detail}
       </div>
     </div>
   `;
@@ -1738,13 +1751,7 @@ function sentDraftTpl(): TemplateResult | undefined {
       <p>Reply sent.</p>
       <button class="btn" @click=${() => void continueSentReply(item)}>Write another reply</button>
     </div>`;
-  return html`${inboxState.notice ? html`<div class="inbox-notice" role="status">${inboxState.notice}</div>` : nothing}${draftEditorTpl(item, { chat: false })}<button
-      class="btn primary"
-      ?disabled=${sending.has(item.id)}
-      @click=${() => void sendItem(item)}
-    >
-      ${sending.has(item.id) ? "Sending…" : "Send reply"}
-    </button>`;
+  return undefined;
 }
 
 function keepingChatLogsPinned(host: HTMLElement, draw: () => void): void {

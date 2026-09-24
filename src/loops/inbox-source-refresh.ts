@@ -80,7 +80,8 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
           ...(typeof latest.snippet === "string" ? { result: latest.snippet.slice(0, 500) } : {}),
         });
       }
-      if (payload.sourceRefreshError) await deps.items.annotate(item.id, { sourceRefreshError: null }, { expectedSourceAt: item.sourceAt });
+      if (payload.sourceRefreshError)
+        await deps.items.annotate(item.id, { sourceRefreshError: null }, { expectedSourceAt: item.sourceAt });
       return;
     }
     const meta = isObj(payload.slack) ? payload.slack : {};

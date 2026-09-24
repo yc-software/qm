@@ -61,7 +61,13 @@ export type LoopFollowUpOptions = Pick<TurnRequest, "model" | "harness" | "think
 
 export interface LoopFireService {
   fire(loopId: string, fireKey: string, cronId?: string, options?: { enumerate?: boolean }): Promise<LoopFireResult>;
-  followUp(loop: Loop, item: LoopItem, message: string, actorId: string, options?: LoopFollowUpOptions): Promise<LoopItem | null>;
+  followUp(
+    loop: Loop,
+    item: LoopItem,
+    message: string,
+    actorId: string,
+    options?: LoopFollowUpOptions,
+  ): Promise<LoopItem | null>;
   itemAction(
     loop: Loop,
     item: LoopItem,
@@ -773,7 +779,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       await deps.items.appendThread(item.id, [
         { role: "system", text: `The agent could not answer: ${turn.userNote ?? "the turn did not run"}` },
       ]);
-      return deps.items.get(item.id);
+      throw new Error(turn.userNote ?? "The agent could not answer");
     }
     const { text, proposal } = splitProposalReply(turn.reply ?? "");
     if (text) {

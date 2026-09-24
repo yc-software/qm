@@ -927,20 +927,23 @@ test("Slack thread keys reuse a legacy item's identity, edits, and replied water
   assert.equal((await w.loops.items.get(original!.id))!.status, "skipped");
 });
 
-test("ordinary item reads do not hydrate Slack; the selected-item refresh flag does", async () => {
-  const w = world();
-  const loop = await ensureInboxLoop(w.loops.store, "josh");
-  await w.loops.items.ingest([{ loopId: loop.id, dedupeKey: "slack", source: "slack", sourcePayload: {} }]);
-  const [item] = await w.loops.items.byLoop(loop.id);
-  let refreshes = 0;
-  w.sourceRefresh = async () => {
-    refreshes++;
-  };
-  await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}` });
-  assert.equal(refreshes, 0);
-  await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}?refreshSource=1` });
-  assert.equal(refreshes, 1);
-});
+for (const migrated of [false, true])
+  test(`ordinary item reads only hydrate Slack with the refresh flag (migrated=${migrated})`, async () => {
+    const w = world();
+    const loop = migrated
+      ? (await ensureDefaultInboxLoops(w.loops.store, "josh")).find((loop) => loop.sources?.includes("slack"))!
+      : await ensureInboxLoop(w.loops.store, "josh");
+    await w.loops.items.ingest([{ loopId: loop.id, dedupeKey: "slack", source: "slack", sourcePayload: {} }]);
+    const [item] = await w.loops.items.byLoop(loop.id);
+    let refreshes = 0;
+    w.sourceRefresh = async () => {
+      refreshes++;
+    };
+    await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}` });
+    assert.equal(refreshes, 0);
+    await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}?refreshSource=1` });
+    assert.equal(refreshes, 1);
+  });
 
 test("a new Slack thread cannot overwrite an unrelated unthreaded DM card", async () => {
   const w = world();

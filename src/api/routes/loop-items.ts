@@ -110,7 +110,7 @@ async function listItems(ctx: ApiCtx): Promise<void> {
   if (wanted !== null && !isLedgerState(wanted)) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "unknown state filter" });
   }
-  if (loop.surface === "inbox" && loop.owner === loaded.acting.actorId) {
+  if ((loop.surface === "inbox" || loop.surface?.startsWith("inbox:")) && loop.owner === loaded.acting.actorId) {
     const openMail = (await deps.items.byLoop(loop.id)).filter(
       (item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail",
     );
@@ -254,7 +254,7 @@ async function getItem(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   if (
     ctx.url.searchParams.get("refreshSource") === "1" &&
-    loaded.loop.surface === "inbox" &&
+    (loaded.loop.surface === "inbox" || loaded.loop.surface?.startsWith("inbox:")) &&
     loaded.loop.owner === loaded.actorId
   )
     await ctx.deps.inboxSourceRefresh?.(loaded.loop.owner, [loaded.item]);

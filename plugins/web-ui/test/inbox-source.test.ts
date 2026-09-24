@@ -201,12 +201,9 @@ test("the inbox list spans the same desktop content width as the item detail", (
   assert.match(css, /\.inbox-page \.inbox-surface \{\s*width: min\(var\(--content-wide-width\), 100%\);/);
   assert.match(
     css,
-    /\.content-wide-page:not\(:has\(\.inbox-item-aside\)\) > \.pane-head \{\s*width: min\(var\(--content-wide-width\), 100%\);\s*max-width: none;/,
+    /\.content-wide-page > \.pane-head \{\s*width: min\(var\(--content-wide-width\), 100%\);\s*max-width: none;/,
   );
-  assert.match(
-    css,
-    /grid-template-columns: minmax\(0, var\(--content-primary-width\)\) minmax\(0, var\(--content-aside-width\)\);/,
-  );
+  assert.doesNotMatch(css, /inbox-item-aside/);
 });
 
 test("inbox item hover behaves like a sidebar conversation hover", () => {

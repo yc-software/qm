@@ -65,7 +65,11 @@ export interface LoopItemLedger {
     proposal: Omit<LoopProposal, "at">,
     opts?: { expectedAt?: number; expectedClaimToken?: string },
   ): Promise<LoopItem | null>;
-  annotate(id: string, patch: LoopSourcePayload, opts?: { summary?: string; expectedSourceAt?: number }): Promise<LoopItem | null>;
+  annotate(
+    id: string,
+    patch: LoopSourcePayload,
+    opts?: { summary?: string; expectedSourceAt?: number },
+  ): Promise<LoopItem | null>;
   appendThread(id: string, messages: Array<Omit<LoopThreadMessage, "id" | "at">>): Promise<LoopItem | null>;
   recordAction(id: string, input: RecordActionInput): Promise<LoopItem | null>;
   reopen(id: string, opts?: { sentReply?: boolean }): Promise<LoopItem | null>;

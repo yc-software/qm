@@ -755,9 +755,12 @@ export interface RuntimeConfig {
   fastModeModelIds?: string[];
 }
 
-export async function fetchRuntimeConfig(scopeId?: string | null): Promise<RuntimeConfig | null> {
+export async function fetchRuntimeConfig(scopeId?: string | null, account?: "company"): Promise<RuntimeConfig | null> {
   try {
-    const query = scopeId ? `?scopeId=${encodeURIComponent(scopeId)}` : "";
+    const params = new URLSearchParams();
+    if (scopeId) params.set("scopeId", scopeId);
+    if (account) params.set("account", account);
+    const query = params.size ? `?${params}` : "";
     return await api<RuntimeConfig>(`/api/runtime-config${query}`);
   } catch (e) {
     swallow("web-ui: fetch runtime config", e);

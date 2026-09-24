@@ -133,6 +133,39 @@ test("draft is the first editable chat message and Send it submits the combined 
         }
       }
     }
+    render(null, host);
+    resetInboxState();
+    const staleLedger = {
+      id: "stale-save",
+      loopId: "loop-1",
+      state: "held",
+      source: "gmail",
+      sourcePayload: {},
+      proposal: { data: { body: "Original" }, by: "agent", at: 100 },
+      thread: [],
+      updatedAt: 100,
+    };
+    const staleItem = toInboxItem(staleLedger);
+    inboxState.items = [staleItem];
+    const staleCalls: string[] = [];
+    globalThis.fetch = async (url) => {
+      if (String(url).includes("runtime-config")) return Response.json(inboxRuntime);
+      staleCalls.push(String(url));
+      if (String(url).endsWith("/action")) return Response.json({ message: "draft changed" }, { status: 409 });
+      staleLedger.proposal = { data: { body: "New agent draft" }, by: "agent", at: 200 };
+      return Response.json({ item: staleLedger });
+    };
+    render(chatTpl(staleItem), host);
+    await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
+    const staleDraft = host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!;
+    staleDraft.value = "My edited reply";
+    staleDraft.dispatchEvent(new dom.window.Event("input"));
+    staleDraft.dispatchEvent(new dom.window.Event("blur"));
+    host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.click();
+    await until(() => Boolean(host.querySelector(".composer-error")));
+    assert.equal(staleCalls.filter((url) => url.endsWith("/action")).length, 1);
+    assert.equal(staleCalls.filter((url) => url.endsWith("/followup")).length, 0);
+    assert.equal(host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!.value, "My edited reply");
     // Different items keep separate picks and never rewrite the main composer's defaults.
     const { embeddedComposer } = await vite.ssrLoadModule("/src/embedded-composer.ts");
     const { html } = await vite.ssrLoadModule("lit");
@@ -153,14 +186,16 @@ test("draft is the first editable chat message and Send it submits the combined 
       })}`;
     render(embedded("test-inbox-first"), host);
     await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
-    host.querySelector<HTMLButtonElement>(".model-control .menu-button")!.click();
-    const terra = [...host.querySelectorAll<HTMLButtonElement>(".menu-option")].find((el) =>
-      el.textContent?.includes("Terra"),
-    )!;
+    host.querySelector<HTMLButtonElement>(".loadout-button")!.click();
+    host.querySelector<HTMLButtonElement>(".loadout-add")!.click();
+    const terra = host.querySelector<HTMLButtonElement>('[aria-label="Add GPT-5.6 Terra to presets"]')!;
     terra.click();
-    host.querySelector<HTMLButtonElement>(".fast-toggle")!.click();
+    host.querySelector<HTMLButtonElement>(".loadout-button")!.click();
+    host.querySelector<HTMLButtonElement>('[aria-label="Fast"][role="menuitemcheckbox"]')!.click();
     assert.equal(host.querySelector(".runtime-default-btn"), null);
     assert.equal(localStorage.getItem("web-ui:fast-mode"), null);
+    assert.equal(localStorage.getItem("web-ui:loadout"), null);
+    assert.equal(host.querySelector(".loadout-make-default, .loadout-foot-btn"), null);
     const fill = (text: string) => {
       const input = host.querySelector<HTMLTextAreaElement>(".composer-input")!;
       input.value = text;
@@ -180,16 +215,22 @@ test("draft is the first editable chat message and Send it submits the combined 
     assert.equal(submissions[1]!.fastMode, false);
     render(embedded("test-inbox-first"), host);
     await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
-    assert.match(host.querySelector(".model-control")!.textContent!, /Terra/);
-    assert.equal(host.querySelector(".fast-toggle")!.getAttribute("aria-pressed"), "true");
+    assert.match(host.querySelector(".loadout-button")!.textContent!, /Terra/);
+    host.querySelector<HTMLButtonElement>(".loadout-button")!.click();
+    await until(
+      () => host.querySelector('[aria-label="Fast"][role="menuitemcheckbox"]')?.getAttribute("aria-checked") === "true",
+    );
+    const { invalidateRuntimeConfigs } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
+    invalidateRuntimeConfigs();
     unavailable = true;
     render(embedded("test-inbox-deleted-model"), host);
-    await until(() => Boolean(host.querySelector("select")));
+    await until(() => Boolean(host.querySelector('select option[value="pi:gpt-5.6-sol"]')));
     const replacement = host.querySelector<HTMLSelectElement>("select")!;
     replacement.value = "pi:gpt-5.6-sol";
     replacement.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
     await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
     unavailable = false;
+    invalidateRuntimeConfigs();
     for (const nextKey of ["frozen-item", "different-item"]) {
       const called: string[] = [];
       const pending = (key: string, label: string) =>
