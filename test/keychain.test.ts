@@ -976,6 +976,11 @@ test("manifest: in the owner's personal scope their own credentials need no gran
   const k = kc();
   await k.save(GH);
   await k.save({ ownerId: "U1", service: "npm", secret: "npm_x", envKey: "NPM_TOKEN", expiresAt: Date.now() - 1 });
+  await k.save({
+    ownerId: "U1",
+    service: "file-login",
+    files: [{ path: ".qa/token", contentBase64: Buffer.from("file-secret").toString("base64") }],
+  });
   const own = renderKeychainManifest({
     scopeId: "personal:U1",
     conversationKind: "dm",
@@ -985,8 +990,9 @@ test("manifest: in the owner's personal scope their own credentials need no gran
     scopeGrants: [],
     injected: [],
   });
-  assert.match(own, /their own — no grant needed on their live turn/);
-  assert.match(own, /Background and scheduled turns require an explicit grant/);
+  assert.match(own, /file-login.*raw file loading needs no grant on their live turn; background turns need a grant/);
+  assert.match(own, /their own — execute.credentials needs no grant/);
+  assert.match(own, /including background and scheduled turns/);
   assert.match(own, /"credential":"<credential id>"/);
   assert.match(own, /works only on their live turn in their personal conversation/);
   assert.ok(!own.includes("no grant for this conversation"));

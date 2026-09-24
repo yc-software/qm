@@ -1453,7 +1453,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
         }
         const ownAllowed =
-          (liveAuthorTurn && scopeId === personalScope(actor.id)) ||
+          scopeId === personalScope(actor.id) ||
           isolateOwnerKeychain ||
           (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true);
         if (ownAllowed) {
@@ -1481,7 +1481,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (
           !strictReadOnly &&
           deps.connectorTokens &&
-          ((conversation.kind === "dm" && liveAuthorTurn) || openSpeakerKeychain || openAutomationKeychain)
+          (scopeId === personalScope(actor.id) || openSpeakerKeychain || openAutomationKeychain)
         ) {
           const tokens = deps.connectorTokens;
           const inventory = tokens.listConnectorsByOwners
