@@ -1524,7 +1524,13 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
             drawAll();
           }}
         >
-          ${v.id === "all" ? nothing : loopIcon(inboxState.selected.find((loop) => loop.id === v.id) ?? {})}<span>${v.name}</span>${count > 0 ? html`<span class="inbox-chip-count">${count}</span>` : nothing}
+          ${v.id === "all" ? nothing : loopIcon(inboxState.selected.find((loop) => loop.id === v.id) ?? {})}<span
+            >${v.name}</span
+          ><span class="inbox-chip-count-slot"
+            ><span class="inbox-chip-count" aria-hidden=${count === 0 ? "true" : "false"} title=${String(count)}
+              >${count > 99 ? "99+" : count}</span
+            ></span
+          >
         </button>`;
       })}
       ${

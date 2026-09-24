@@ -9403,7 +9403,14 @@ h3.ambient-field-label {
 .inbox-chip:has(.inbox-chip-count) {
   padding-right: 7px;
 }
+.inbox-chip-count-slot {
+  display: inline-flex;
+  align-items: center;
+  width: 30px;
+  flex: none;
+}
 .inbox-chip-count {
+  box-sizing: border-box;
   min-width: 16px;
   padding: 0 4px 1px;
   border-radius: 8px;
@@ -9411,9 +9418,13 @@ h3.ambient-field-label {
   color: var(--accent-foreground, #fff);
   font-size: 11px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   letter-spacing: -0.035em;
   line-height: 14px;
   text-align: center;
+}
+.inbox-chip-count[aria-hidden="true"] {
+  visibility: hidden;
 }
 .inbox-sync-line {
   display: inline-flex;
@@ -10355,7 +10366,7 @@ h3.ambient-field-label {
 }
 .inbox-surface[data-density="min"] .inbox-item-sub,
 .inbox-surface[data-density="min"] .inbox-item-side .inbox-avatars,
-.inbox-surface[data-density="min"] .inbox-chip-count {
+.inbox-surface[data-density="min"] .inbox-chip-count-slot {
   display: none;
 }
 .inbox-surface[data-density="min"] .inbox-chip:has(.inbox-chip-count) {
