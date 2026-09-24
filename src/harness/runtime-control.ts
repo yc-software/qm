@@ -1,4 +1,3 @@
-import type { RuntimeChoice } from "./harness.ts";
 import type { RuntimeService } from "./runtime-types.ts";
 import type { App } from "../api/app.ts";
 import {
@@ -10,6 +9,8 @@ import {
 import { livePersonCapability } from "../api/artifact-share.ts";
 import { parseScopeId } from "../types.ts";
 import { isHarnessId, thinkingLevelsForHarness } from "../model/pi-models.ts";
+
+import { resolveModelSelector } from "./model-selector.ts";
 
 export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authorizesCapabilityScope">): RuntimeService {
   return async (claims, active, request, authorizeChoice, individualAuth, signal, cronFire = false) => {
@@ -58,31 +59,19 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
     const harnessId = request.harness ?? active.harnessId;
     if (!isHarnessId(harnessId) || !snapshot.approvedHarnesses.includes(harnessId))
       return { ok: false, error: "harness_not_approved", candidates: snapshot.approvedHarnesses };
-    const candidates = snapshot.modelsByHarness[harnessId] ?? [];
-    let modelId = request.model ?? active.modelId;
-    if (!candidates.includes(modelId)) {
-      const query = modelId.toLowerCase();
-      const matches = candidates.filter((id) => {
-        const meta = snapshot.modelCatalog[id];
-        return [id, meta?.name, meta?.label, meta?.buttonLabel].some((label) => label?.toLowerCase() === query);
-      });
-      if (matches.length !== 1)
-        return {
-          ok: false,
-          error: matches.length ? "model_ambiguous" : "model_unavailable",
-          candidates: matches.length ? matches : candidates,
-        };
-      modelId = matches[0]!;
-    }
-    if (!(await webuiModelEnabled({ deps }, modelId))) return { ok: false, error: "model_not_enabled" };
-    const choice: RuntimeChoice = {
-      harnessId,
-      modelId,
-      effortLevel: request.effort ?? active.effortLevel ?? "auto",
-      fastMode: request.fastMode ?? active.fastMode ?? false,
-    };
-    const error = validateRuntimeChoice(choice);
-    if (error) return { ok: false, error };
+    const resolved = resolveModelSelector(
+      {
+        modelId: request.model ?? active.modelId,
+        harnessId,
+        effortLevel: request.effort,
+        fastMode: request.fastMode,
+      },
+      { ...active, effortLevel: active.effortLevel ?? "auto", fastMode: active.fastMode ?? false },
+      snapshot,
+    );
+    if (!resolved.ok) return resolved;
+    const choice = resolved.choice;
+    if (!(await webuiModelEnabled({ deps }, choice.modelId))) return { ok: false, error: "model_not_enabled" };
     const authError = await authorizeChoice?.(choice);
     if (authError) return { ok: false, error: "account_runtime_unavailable", message: authError };
     if (signal?.aborted) return { ok: false, error: "cancelled" };
