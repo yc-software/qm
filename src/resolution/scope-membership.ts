@@ -19,6 +19,10 @@ export interface ScopeMembershipDeps {
     channelMembership?(channelId: string, principalId: string): Promise<boolean | undefined>;
     groupMembership?(groupId: string, principalId: string): Promise<boolean | undefined>;
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
+    conversationMembers?(
+      kind: "channel" | "group",
+      id: string,
+    ): Promise<Array<{ principalId: string; displayName?: string; type: string }> | undefined>;
     list?(): Promise<Array<{ principalId: string; displayName?: string }>>;
     get?(principalId: string): Promise<{ principalId?: string; slackId?: string } | null>;
   };
@@ -108,7 +112,7 @@ export function withLiveTurnMembership(
 
 export type CurrentScopeMembers = (scope: ScopeId) => Promise<Principal[] | undefined>;
 
-export function createCurrentScopeMembers(deps: ScopeMembershipDeps): CurrentScopeMembers {
+export function createCurrentScopeMembers(deps: ScopeMembershipDeps, requireComplete = false): CurrentScopeMembers {
   const principal = (id: string, displayName?: string): Principal | null => {
     const classified = deps.identity?.classify(id);
     if (classified?.type !== undefined && classified.type !== "internal") return null;
@@ -126,7 +130,16 @@ export function createCurrentScopeMembers(deps: ScopeMembershipDeps): CurrentSco
 
     if (kind === "group" && deps.managedGroups?.recognizes(ref)) {
       const memberIds = await deps.managedGroups.members(ref);
-      return (memberIds ?? []).map((id) => principal(id)).filter((member): member is Principal => member !== null);
+      const members = (memberIds ?? []).map((id) => principal(id));
+      if (requireComplete && (!memberIds?.length || members.some((member) => member === null))) return undefined;
+      return members.filter((member): member is Principal => member !== null);
+    }
+
+    if (requireComplete) {
+      const roster = await deps.directory?.conversationMembers?.(kind, ref);
+      if (!roster?.length || roster.some((member) => member.type !== "internal")) return undefined;
+      const members = roster.map((member) => principal(member.principalId, member.displayName));
+      return members.some((member) => member === null) ? undefined : (members as Principal[]);
     }
 
     if (!deps.directory?.list) return undefined;

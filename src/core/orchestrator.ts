@@ -1080,6 +1080,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         config: deps.config,
         sessions: deps.sessions,
         isCurrentSharedScopeMember,
+        currentScopeMembers: deps.currentScopeMembers,
         resolution,
         memoryPolicy,
         useMemory,
@@ -2726,7 +2727,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       }),
                   }),
               }),
-          memory: deps.memory,
+          memory: context.memory,
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
           ...(!external && deps.mcp ? { mcp: deps.mcp } : {}),
@@ -3355,7 +3356,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             tape?: { rows: Awaited<ReturnType<SessionStore["getTape"]>>; mode: "shadow" | "serve"; fold?: unknown[] };
           },
         ) => {
-          const recall = memoryRecallDelta(recalled, continuation?.history ?? history, memoryAccess?.read ?? []);
+          const recall = memoryRecallDelta(recalled, continuation?.history ?? history);
           const turnEnvironment = environmentNote(
             [turnEnvironmentContents, recall.text ? `${memoryHeading}${recall.text}` : ""].filter(Boolean).join("\n\n"),
           );
