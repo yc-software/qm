@@ -79,6 +79,47 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
     assert.match(self.content, /speaker attribution/);
   });
 
+  it("derives capture provenance from the capability rather than request metadata", async () => {
+    const source = scopeId("personal", "provenance-user");
+    const cap = await mintCapabilityToken(
+      {
+        actorId: "provenance-user",
+        scopeId: source,
+        sessionId: "trusted-session",
+        exp: Date.now() + CAPABILITY_TTL_MS,
+        memory: { write: source, orgWrite: ORG, read: [source, ORG] },
+      },
+      SECRET,
+    );
+    const capture = built.memory.capture;
+    let context: Parameters<typeof capture>[4];
+    built.memory.capture = async (scope, facts, at, author, metadata) => {
+      context = metadata;
+      return capture(scope, facts, at, author, metadata);
+    };
+    try {
+      const res = await post(
+        "/v1/memory/facts",
+        {
+          facts: ["synthetic provenance"],
+          scope: "org",
+          conversationScopeId: "group:forged",
+          sessionId: "forged",
+          sensitivity: "ordinary",
+          inheritedRecords: [],
+        },
+        { "x-agent-capability": cap },
+      );
+      assert.equal(res.status, 200);
+      assert.equal(context?.conversationScopeId, source);
+      assert.equal(context?.sessionId, "trusted-session");
+      assert.equal(context?.sensitivity, undefined);
+      assert.equal(context?.inheritedRecords, undefined);
+    } finally {
+      built.memory.capture = capture;
+    }
+  });
+
   it("dedupes repeated facts server-side", async () => {
     const cap = await capFor("U1", { write: U1, read: [U1] });
     const res = await post(

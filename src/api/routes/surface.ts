@@ -803,6 +803,8 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
     const added = await deps.memory.capture(write, facts, Date.now(), capability.actorId, {
       mode: "explicit",
       actorId: capability.actorId,
+      conversationScopeId: capability.scopeId,
+      ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
     });
     audit(deps, {
       principalId: capability.actorId,

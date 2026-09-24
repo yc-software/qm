@@ -1187,7 +1187,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!deps.memory || !write) return null;
       return once(() =>
         timed("memory_write", () =>
-          deps.memory!.capture(write, facts, Date.now(), deps.createdBy, { mode: "explicit", actorId: deps.createdBy }),
+          deps.memory!.capture(write, facts, Date.now(), deps.createdBy, {
+            mode: "explicit",
+            actorId: deps.createdBy,
+            conversationScopeId: writableScopeId ?? write,
+          }),
         ),
       );
     },
