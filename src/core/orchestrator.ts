@@ -3319,7 +3319,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     active: RuntimeChoice,
                     request: import("../harness/runtime-types.ts").RuntimeRequest,
                     signal?: AbortSignal,
-                  ) => deps.runtime!(runtimeClaims, active, request, checkRuntimeAuth, !!userHarnessOverride, signal),
+                  ) =>
+                    deps.runtime!(
+                      runtimeClaims,
+                      active,
+                      request,
+                      checkRuntimeAuth,
+                      !!userHarnessOverride,
+                      signal,
+                      automatedTurn && input.surface === "cron",
+                    ),
                 }
               : {}),
             ...(codexTurnAuth ? { codexAuth: codexTurnAuth } : {}),

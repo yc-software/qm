@@ -31,4 +31,5 @@ export type RuntimeService = (
   authorizeChoice?: (choice: RuntimeChoice) => Promise<string | null>,
   individualAuth?: boolean,
   signal?: AbortSignal,
+  cronFire?: boolean,
 ) => Promise<RuntimeResult>;

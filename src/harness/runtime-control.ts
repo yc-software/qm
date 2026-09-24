@@ -12,7 +12,7 @@ import { parseScopeId } from "../types.ts";
 import { isHarnessId, thinkingLevelsForHarness } from "../model/pi-models.ts";
 
 export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authorizesCapabilityScope">): RuntimeService {
-  return async (claims, active, request, authorizeChoice, individualAuth, signal) => {
+  return async (claims, active, request, authorizeChoice, individualAuth, signal, cronFire = false) => {
     if (!deps.config) return { ok: false, error: "runtime_unavailable" };
     const scope = parseScopeId(claims.scopeId);
     if (
@@ -32,11 +32,12 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
           snapshot.approvedHarnesses.map((id) => [id, thinkingLevelsForHarness(id)]),
         ),
         taskLifetime:
-          "The current user request, including retries and runtime handoffs. Future requests use the scope default.",
+          "The current request or cron fire, including retries and runtime handoffs. Future requests and fires use their configured defaults.",
       };
-    if (!livePersonCapability(claims) || claims.triggered || claims.botActor)
-      return { ok: false, error: "live_actor_required" };
     const lifetime = request.lifetime ?? "task";
+    const cronTask = cronFire && claims.triggered === true && !claims.botActor && lifetime === "task";
+    if (!cronTask && (!livePersonCapability(claims) || claims.triggered || claims.botActor))
+      return { ok: false, error: "live_actor_required" };
     if (request.action === "inherit") {
       const choice = lifetime === "scope" ? snapshot.orgDefault : snapshot.effective;
       const error = validateRuntimeChoice(choice);
@@ -46,6 +47,7 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
         !snapshot.modelsByHarness[choice.harnessId]?.includes(choice.modelId)
       )
         return { ok: false, error: "runtime_unavailable" };
+      if (!(await webuiModelEnabled({ deps }, choice.modelId))) return { ok: false, error: "model_not_enabled" };
       const authError = await authorizeChoice?.(choice);
       if (authError) return { ok: false, error: "account_runtime_unavailable", message: authError };
       if (signal?.aborted) return { ok: false, error: "cancelled" };

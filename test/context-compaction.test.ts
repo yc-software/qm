@@ -17,6 +17,7 @@ import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createErrorLog } from "../src/admin/error-log.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
+import { createRuntimeService } from "../src/harness/runtime-control.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -130,6 +131,10 @@ function buildOrchestrator(harness: Harness, maxContextTokens?: number, defaultT
     acl,
     maxContextTokens,
     defaultTurnWallClockMs,
+    runtime: createRuntimeService(
+      { config, harnessId: "pi", baseModelDefault: "claude-sonnet-5" },
+      { authorizesCapabilityScope: async () => true },
+    ),
   });
   return { orch, sessions, errors };
 }
@@ -1156,4 +1161,63 @@ test("a retry restores a committed runtime decision after reset crashes, without
   await assert.rejects(() => orch.handleTurn(input), /worker died/);
   await orch.handleTurn({ ...input, attempt: 2 });
   assert.equal(calls, 2);
+});
+
+test("only a cron automation receives task-runtime authority and each fire starts fresh", async () => {
+  const base = createMockHarness();
+  const active = { harnessId: "pi" as const, modelId: "claude-sonnet-5", effortLevel: "high", fastMode: false };
+  const outcomes: { surface: string; ok: boolean }[] = [];
+  let resumed = 0;
+  const harness: Harness = {
+    ...base,
+    turns: {
+      ...base.turns,
+      runTurn: async (input) => {
+        if (input.runtime?.modelId === "gpt-6-astra") {
+          resumed++;
+          return { reply: "handled" };
+        }
+        const result = await input.runtimeControl!(active, { action: "set", model: "Astra" });
+        outcomes.push({ surface: input.input, ok: result.ok });
+        if (result.ok && result.handoff) {
+          await input.emit({
+            type: "tool_result",
+            scopeLabel: input.scopeLabel,
+            payload: { tool: "runtime", runId: input.runId, actorId: actor.id, runtimeHandoff: result.handoff },
+          });
+          return { reply: "", runtimeHandoff: result.handoff };
+        }
+        return { reply: "denied" };
+      },
+    },
+  };
+  const { orch } = buildOrchestrator(harness);
+  for (const surface of ["cron", "webhook"]) {
+    await orch.handleTurn({
+      ...turn(surface),
+      surface,
+      origin: { kind: "automation" },
+      runId: surface + "-run",
+      surfaceTools: false,
+    });
+  }
+  await orch.handleTurn({
+    ...turn("ambient"),
+    surface: "cron",
+    origin: { kind: "ambient" },
+    runId: "ambient-run",
+    surfaceTools: false,
+  });
+  await orch.handleTurn({
+    ...turn("next fire"),
+    surface: "cron",
+    origin: { kind: "automation" },
+    runId: "next-cron-run",
+    surfaceTools: false,
+  });
+  assert.deepEqual(
+    outcomes.map((x) => x.ok),
+    [true, false, true],
+  );
+  assert.equal(resumed, 2);
 });
