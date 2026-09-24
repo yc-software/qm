@@ -165,6 +165,7 @@ test("spine ON: a bare 'stop' mid-turn routes through the ABORT interrupt (not a
   const root = "200.2";
   const first = await built.app.turn(mention("@bot do a long thing", channel, root));
   const liveRunId = first.runId!;
+  assert.ok(await built.runs.claimById(liveRunId, "worker", 30_000));
 
   const stop = await built.app.turn(mention("stop", channel, root));
   assert.equal(stop.runId, liveRunId, "the stop attached to the live run");
@@ -329,6 +330,7 @@ test("an addressed bare 'stop' still ABORTS a live UNPROMPTED run", async () => 
   const root = "1100.1";
   const first = await built.app.turn(overheard("hm, interesting", channel, root));
   const liveRunId = first.runId!;
+  assert.ok(await built.runs.claimById(liveRunId, "worker", 30_000));
 
   const stop = await built.app.turn(mention("stop", channel, root));
   assert.equal(stop.runId, liveRunId, "the stop attached to the live run");
@@ -385,6 +387,7 @@ test("an addressed bare 'stop' still ABORTS a live AUTOMATION run", async () => 
   const root = "1400.1";
   const first = await built.app.turn(automationRun(channel, root));
   const liveRunId = first.runId!;
+  assert.ok(await built.runs.claimById(liveRunId, "worker", 30_000));
 
   const stop = await built.app.turn(mention("stop", channel, root));
   assert.equal(stop.runId, liveRunId, "the stop attached to the live automation run");
@@ -885,4 +888,13 @@ test("run snapshots expose authorized durable web input with safe attachment met
     request: { ...run.request, proactiveOpener: true },
   });
   assert.equal((await built.app.getRun(explicit.run.id, run.request.actor.id))?.input?.text, "pending input");
+});
+
+test("an addressed stop withdraws queued work before a worker can claim it", async () => {
+  const built = freshApp();
+  const first = await built.app.turn(mention("start the task", "C_STOP_QUEUED", "100.1"));
+  const stop = await built.app.turn(mention("stop", "C_STOP_QUEUED", "100.1"));
+  assert.equal(stop.runId, first.runId);
+  assert.equal(await built.runs.get(first.runId!), null);
+  assert.equal(await built.runs.claimById(first.runId!, "worker", 30_000), null);
 });
