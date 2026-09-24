@@ -205,7 +205,7 @@ function forwardableHeaders(req: BaseCtx["req"]): Record<string, string | string
   return out;
 }
 
-const APP_SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
+const APP_SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; frame-ancestors 'self'";
 
 function frameAncestorsDirective(ancestors: readonly string[]): string {
   return `frame-ancestors 'self' ${ancestors.join(" ")}`;

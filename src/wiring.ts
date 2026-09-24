@@ -2,6 +2,7 @@ import { createApprovalStore } from "./core/approval-store.ts";
 import { createKeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
 import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
+import { createDesignSystems, type DesignSystems, type DesignSystemSelection } from "./design-system/design-systems.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
 import { resolveTurnOrigin } from "./core/turn-origin.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
@@ -457,6 +458,7 @@ export function stopWithBackstop(
 }
 
 export interface BuiltApp {
+  designSystems: DesignSystems;
   backgroundOwnership?: { store: BackgroundOwnershipStore; instanceId: string; deploymentId: string };
   suggestedActivityMaintenance: Sweeper;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
@@ -1603,7 +1605,7 @@ export function buildApp(
       : undefined;
   const buildDeployProvider: Record<Config["deployProvider"], () => DeployProvider> = {
     aws: buildAwsDeploy,
-    docker: createDockerDeployProvider,
+    docker: () => createDockerDeployProvider({ basePort: config.dockerDeployBasePort }),
     fly: () =>
       createFlyDeployProvider({
         ...config.flyDeploy,
@@ -1822,6 +1824,15 @@ export function buildApp(
       conversation: { ...request.conversation, audience, publishMembers: audience },
     };
   };
+  const designSystems: DesignSystems = createDesignSystems({
+    selections: artifactMap<DesignSystemSelection>("design_system_selections"),
+    store: deployStore,
+    deploy: deployService,
+    orgScope,
+    lock: advisoryLock,
+    canRead: async (id, actor): Promise<boolean> => (await app.deploymentGitPermissionFor(id, actor)) !== null,
+    canEdit: async (id, actor): Promise<boolean> => (await app.deploymentGitPermissionFor(id, actor)) === "write",
+  });
   const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox"));
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
@@ -1844,6 +1855,7 @@ export function buildApp(
     },
   });
   const orchestratorDeps: OrchestratorDeps = {
+    designSystems,
     sessionSyscalls,
     refreshModels,
     identity,
@@ -2034,7 +2046,7 @@ export function buildApp(
           },
         })
     : undefined;
-  const app = createApp({
+  const app: App = createApp({
     admittedWork,
     ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
@@ -2667,6 +2679,7 @@ export function buildApp(
   };
 
   return {
+    designSystems,
     app,
     ...(screenSecurity ? { screenSecurity } : {}),
     deploymentLayer,
@@ -2795,6 +2808,7 @@ export function serverDeps(
     ...(built.replayDedupe ? { replayDedupe: built.replayDedupe } : {}),
     ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
     config: built.config,
+    designSystems: built.designSystems,
     ...(built.screenSecurity ? { screenSecurity: built.screenSecurity } : {}),
     ...(configuredModel ? { baseModelDefault: configuredModel } : {}),
     modelProviders: modelProviderAvailabilityFor(config.harness, providerKeysPresent(config)),

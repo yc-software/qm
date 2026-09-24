@@ -1218,6 +1218,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;
       }
       if (visibleSkills.length) systemPrompt += `\n\n${skillsIndex(visibleSkills, sharingSources)}`;
+      const designContext =
+        actor.type === "internal" && deps.designSystems
+          ? await deps.designSystems.context(actor.id, scopeId).catch((error) => {
+              console.warn("[design-system] references unavailable:", errMessage(error));
+              return {prompt:"App design references are temporarily unavailable. If building an app, report that before choosing a fallback design. Other tasks can proceed normally.",references:[]};
+            })
+          : { prompt: "", references: [] };
+      if (designContext.prompt) systemPrompt += `\n\n${designContext.prompt}`;
       const gatewayBlock = renderGatewayContext(input.surface, input.gatewayContext);
       if (gatewayBlock) systemPrompt += `\n\n${gatewayBlock}`;
       const homeChannel =
@@ -2463,6 +2471,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(ownerAuthCommand ? { ownerAuthCommand } : {}),
           ...(scopedCommand ? { scopedCommand } : {}),
           useSkill,
+          ...(deps.designSystems
+            ? { readDesignSource: (path: string) => deps.designSystems!.read(actor.id, designContext.references, path) }
+            : {}),
           ...(reachAvailable
             ? {
                 reach: {

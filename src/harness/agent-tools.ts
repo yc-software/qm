@@ -1041,7 +1041,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const read = defineTool({
     name: "read",
     label: "read",
-    description: "Read a file from the workspace (scope, then global). Returns its contents.",
+    description: "Read a workspace file (scope, then global) or a selected design app source at design://<app-id>/<version>/<path> without starting a sandbox. Returns its contents.",
     parameters: Type.Object({
       path: Type.String({ description: "Relative path within the workspace." }),
     }),

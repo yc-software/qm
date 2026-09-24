@@ -87,6 +87,7 @@ test("/d/ path serving sandboxes proxied HTML so an app cannot act on the portal
     assert.equal(page.status, 200);
     const csp = page.headers["content-security-policy"];
     assert.match(String(csp), /^sandbox /, "proxied HTML carries a sandbox CSP");
+    assert.match(String(csp), /frame-ancestors 'self'/);
     assert.doesNotMatch(String(csp), /allow-same-origin/, "the sandbox must deny the portal origin to app code");
   } finally {
     await f.close();

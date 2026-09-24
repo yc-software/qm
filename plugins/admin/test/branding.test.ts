@@ -112,10 +112,10 @@ test("design system routes embed the shared component library and retain the scr
   }
 });
 
-test("design system routes use the inbox allowlist", async () => {
+test("design system shell is available outside the inbox pilot", async () => {
   for (const path of ["/design-system", "/design-system/", "/design", "/design/"]) {
     const denied = await fetch(base + path, { headers: { cookie: "admin=U-rando" } });
-    assert.equal(denied.status, 404);
-    assert.deepEqual(await denied.json(), { error: "not_found" });
+    assert.equal(denied.status, 200);
+    assert.match(await denied.text(), /view-design/);
   }
 });

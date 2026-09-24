@@ -1,4 +1,5 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
+import type { DesignSystems } from "../design-system/design-systems.ts";
 import type { BackgroundOwnershipStore } from "../runs/background-ownership.ts";
 import type { LoopIngressService } from "../loops/ingress.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
@@ -110,6 +111,7 @@ export interface ServerDeps {
   publicUrl?: string;
   portalUrl?: string;
   config?: ScopedConfigStore;
+  designSystems?: DesignSystems;
   acl?: AclStore;
   credentialUsage?: CredentialUsageSink;
   deviceFlowCutover?: DeviceFlowCutoverStore;

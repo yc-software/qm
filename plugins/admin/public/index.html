@@ -395,6 +395,27 @@
         min-width: 0;
         padding: 28px 28px 40px;
       }
+      .design-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin: 20px 0 16px;
+      }
+      .design-toolbar h2 { margin: 0; font-size: 14px; }
+      .design-toolbar .hint { margin: 4px 0 0; }
+      .design-toolbar-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+      .design-preview {
+        display: block;
+        width: 100%;
+        height: max(560px, calc(100dvh - 250px));
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: white;
+      }
+      .design-chooser { margin-bottom: 20px; }
+      .design-chooser[hidden] { display: none; }
       .admin-inner {
         width: 100%;
         margin: 0;
@@ -6147,14 +6168,6 @@
           white-space: normal;
         }
       }
-      @media (min-width: 901px) {
-        nav.tabs .tab.tab-footer:last-child {
-          margin-top: auto;
-          padding-top: 12px;
-          border-top: 1px solid var(--border);
-          border-radius: 0;
-        }
-      }
       nav.tabs .tab {
         border-radius: 8px;
         transition: background 0.12s ease;
@@ -6623,7 +6636,7 @@
       const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
       const SECTIONS = [
         {
-          views: ["governance", "models", "credentials", "connectors", "slack-settings", "customize", "users"],
+          views: ["governance", "models", "credentials", "connectors", "slack-settings", "customize", "users", "design-system"],
         },
         {
           label: "Logs",
@@ -6633,7 +6646,6 @@
           label: "Artifacts",
           views: ["files", "skills", "memory", "deployments", "crons"],
         },
-        { views: ["design-system"] },
       ];
 
       const VIEWS = [...SECTIONS.flatMap((s) => s.views), "onboarding", "user", "ackemoji", "keychain"];
@@ -7281,10 +7293,8 @@
             nav.appendChild(h);
           }
           s.views.forEach((v) => {
-            if (v === "design-system" && !permissions.includes("inbox")) return;
             const b = document.createElement("button");
             b.className = "tab" + (s.label ? "" : " tab-top") + (v === view ? " active" : "");
-            if (v === "design-system") b.classList.add("tab-footer");
             b.type = "button";
             b.appendChild(document.createTextNode(VIEW_TITLE[v] || v[0].toUpperCase() + v.slice(1)));
             if (v === view) b.setAttribute("aria-current", "page");
@@ -7376,7 +7386,7 @@
 
         const turnRaw = p.get("turn");
         let resolvedView = DEFAULT_VIEW;
-        if (VIEWS.includes(v) && (v !== "design-system" || permissions.includes("inbox"))) resolvedView = v;
+        if (VIEWS.includes(v)) resolvedView = v;
         else if (session) resolvedView = "history";
         return {
           view: resolvedView,
@@ -7537,7 +7547,6 @@
         });
       }
       function setView(v) {
-        if (v === "design-system" && !permissions.includes("inbox")) return;
         go({
           view: v,
           scope: v === "history" || v === "errors" ? "org:" + orgId : scope,
@@ -8549,15 +8558,133 @@
         return group;
       }
 
-      function renderDesignLibrary() {
-        governanceUI.design.show({
-          stateToUrl,
-          scope: () => scope,
-          searchField,
-          twoWayToggle,
-          fileThumb,
-          initCustomDropdowns,
-        });
+      let designRequest = 0;
+      async function renderDesignLibrary() {
+        const request = ++designRequest;
+        const root = $("view-design");
+        root.textContent = "Loading design system…";
+        const response = await api("GET", "/api/design-system");
+        if (request !== designRequest) return;
+        root.replaceChildren();
+        const description = document.createElement("p");
+        description.className = "lead";
+        description.textContent =
+          "The shared starting point for new QM apps. Personal customizations layer on top in Settings.";
+        root.append(description);
+        if (!response.ok) {
+          const error = document.createElement("p");
+          error.textContent = response.data?.message || "Could not load the design system.";
+          const retry = document.createElement("button");
+          retry.textContent = "Retry";
+          retry.onclick = renderDesignLibrary;
+          root.append(error, retry);
+          return;
+        }
+        const state = response.data;
+        const heading = document.createElement("h2");
+        heading.textContent = state.org?.name || "Choose an organization design app";
+        const toolbar = document.createElement("div");
+        toolbar.className = "design-toolbar";
+        const summary = document.createElement("div");
+        summary.append(heading);
+        const toolbarActions = document.createElement("div");
+        toolbarActions.className = "design-toolbar-actions";
+        toolbar.append(summary, toolbarActions);
+        root.append(toolbar);
+        const chooser = document.createElement("div");
+        chooser.className = "design-chooser";
+        chooser.id = "design-chooser";
+        chooser.hidden = !!state.org;
+        if (state.org) {
+          const open = document.createElement("a");
+          open.href = state.org.url;
+          open.textContent = "Open full screen ↗";
+          open.target = "_blank";
+          open.rel = "noopener";
+          const hint = document.createElement("p");
+          hint.className = "hint";
+          hint.textContent =
+            "Version " +
+            state.org.version +
+            " · Organization default";
+          summary.append(hint);
+          const change = document.createElement("button");
+          change.textContent = "Change";
+          change.setAttribute("aria-expanded", "false");
+          change.setAttribute("aria-controls", chooser.id);
+          change.onclick = () => {
+            chooser.hidden = !chooser.hidden;
+            change.setAttribute("aria-expanded", String(!chooser.hidden));
+          };
+          toolbarActions.append(change);
+          if (state.org.editUrl) {
+            const edit = document.createElement("a");
+            edit.href = state.org.editUrl;
+            edit.textContent = "Edit with QM ↗";
+            edit.target = "_blank";
+            edit.rel = "noopener";
+            toolbarActions.append(edit);
+          }
+          toolbarActions.append(open);
+        }
+        if (state.orgUnavailable) {
+          const warning = document.createElement("p");
+          warning.className = "status err";
+          warning.textContent =
+            "The selected app is unavailable or no longer shared with the organization. Restore access, choose another app, or clear the selection.";
+          root.append(warning);
+        }
+        const field = document.createElement("div");
+        field.className = "field";
+        const label = document.createElement("label");
+        label.htmlFor = "org-design-app";
+        label.textContent = "Organization design app";
+        const select = document.createElement("select");
+        select.id = "org-design-app";
+        select.append(new Option("No organization design app", ""));
+        for (const app of state.choices.filter((app) => app.orgEligible)) select.append(new Option(app.name, app.id));
+        select.value = state.org?.id || "";
+        const note = document.createElement("p");
+        note.className = "hint";
+        note.textContent =
+          "Choose an app shared with the whole organization, or create a starter from QM’s component gallery.";
+        field.append(label, select, note);
+        const actions = document.createElement("div");
+        actions.className = "foot";
+        const status = document.createElement("span");
+        status.setAttribute("role", "status");
+        const save = document.createElement("button");
+        save.className = "primary";
+        save.textContent = "Apply";
+        save.disabled = !state.orgUnavailable;
+        select.onchange = () => {
+          save.disabled = select.value === (state.org?.id || "") && !state.orgUnavailable;
+        };
+        const create = document.createElement("button");
+        create.textContent = "Create starter app";
+        create.hidden = !!state.org || state.orgUnavailable;
+        async function mutate(method, body) {
+          select.disabled = save.disabled = create.disabled = true;
+          status.textContent = method === "POST" ? "Creating app…" : "Saving…";
+          const result = await api(method, "/api/design-system", body);
+          if (request !== designRequest) return;
+          if (result.ok) return renderDesignLibrary();
+          status.textContent = result.data?.message || "Unable to save. Try again.";
+          select.disabled = save.disabled = create.disabled = false;
+        }
+        save.onclick = () => mutate("PUT", { deploymentId: select.value || null });
+        create.onclick = () => mutate("POST", {});
+        actions.append(status, create, save);
+        chooser.append(field, actions);
+        root.append(chooser);
+        if (state.org) {
+          const preview = document.createElement("iframe");
+          preview.className = "design-preview";
+          preview.title = state.org.name + " live preview";
+          preview.setAttribute("sandbox", "allow-scripts allow-forms allow-popups allow-modals allow-downloads");
+          preview.src = state.org.url;
+          root.append(preview);
+        }
       }
 
       governanceUI.integrations.configure({ api, orgScope, connectorName, fmtTime });
@@ -9278,6 +9405,7 @@
         })[view](root, data);
       }
       async function renderData() {
+        if (view === "design-system") return;
         const root = $("view-data");
         const reqId = ++dataReq;
         const q = "scope=" + encodeURIComponent(scope);

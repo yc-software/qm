@@ -436,6 +436,7 @@ export interface ToolContextDeps {
   ownerAuthCommand?: (command: string, env?: Record<string, string>) => string;
   scopedCommand?: (command: string, env?: Record<string, string>) => string;
   useSkill?: (name: string, path: string, sandboxId?: string) => Promise<SkillResult>;
+  readDesignSource?: (path: string) => Promise<ReadResult>;
   reach?: {
     resolveChannel(query: string): Promise<ReachResolution>;
     provisionFor(scopeId: ScopeId): Promise<SandboxHandle>;
@@ -836,6 +837,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async read(path: string, signal?: AbortSignal): Promise<ReadResult> {
       signal?.throwIfAborted();
+      if (path.startsWith("design://"))
+        return deps.readDesignSource
+          ? withAbort(() => deps.readDesignSource!(path), signal)
+          : { content: null, sourceScopeId: null };
       if (path === MEMORY_FILE && deps.memory && deps.memoryScopeId) {
         if (!deps.memoryAccess?.read.includes(deps.memoryScopeId)) {
           throw new Error("memory recall is not enabled for this conversation; use the `memory` tool when enabled");
@@ -917,6 +922,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult> {
+      if (path.startsWith("design://"))
+        throw new Error("Design references are read-only; edit and publish the design app to update it.");
       const wantShare = share !== undefined && share.length > 0;
       if (data === undefined && !wantShare) {
         throw new Error("write needs `data` to save content, `share` to grant access, or both");

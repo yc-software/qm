@@ -36,6 +36,8 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
   const docker = opts.docker ?? "docker";
   const image = opts.image ?? "node:24-alpine";
   let nextPort = opts.basePort ?? 9200;
+  if (!Number.isInteger(nextPort) || nextPort < 1024 || nextPort > 65535)
+    throw new Error("Docker deployment base port must be between 1024 and 65535.");
   const ports = new Map<string, number>();
   const freed: number[] = [];
   const allocPort = (n: string): number => {

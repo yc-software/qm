@@ -1,5 +1,4 @@
 import { litFixture } from "./lit-fixture.ts";
-import { renderDesign } from "./design-source.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -234,25 +233,8 @@ test("navigation drops retired design parameters while retaining route state", (
 });
 
 for (const base of ["", "/admin", "/control"]) {
-  test(`catalog live links use the configured base (${base || "root"})`, () => {
+  test(`design system keeps the configured admin base (${base || "root"})`, () => {
     const { stateToUrl } = routerAt(`${base}/design-system`, "", base);
-    const dom = renderDesign(stateToUrl, SCOPE);
-    const links = [...dom.window.document.querySelectorAll<HTMLAnchorElement>(".design-page-links a")];
-    assert.deepEqual(
-      links.map((link) => link.dataset.designView),
-      ["governance", "skills", "files", "history", "audit", "egress"],
-    );
-    assert.deepEqual(
-      links.map((link) => link.getAttribute("href")),
-      [
-        `${base}/governance?scope=${SCOPE_ENC}`,
-        `${base}/skills?scope=${SCOPE_ENC}`,
-        `${base}/files?scope=${SCOPE_ENC}`,
-        `${base}/history/scopes/${SCOPE_ENC}`,
-        `${base}/audit?scope=${SCOPE_ENC}`,
-        `${base}/egress?scope=${SCOPE_ENC}`,
-      ],
-    );
-    dom.window.close();
+    assert.equal(stateToUrl({ view: "design-system", scope: SCOPE }), `${base}/design-system`);
   });
 }

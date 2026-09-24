@@ -2171,6 +2171,12 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCap(res, "DELETE", `/v1/keychain/credentials/${encodeURIComponent(id)}`);
     },
   },
+  ...["GET", "PUT", "POST"].map((method) => ({
+    method,
+    path: "/api/design-system",
+    handle: async ({ req, res }: WebCtx) =>
+      relayCore(res, method as HttpMethod, "/v1/design-system", method === "GET" ? "" : await readBody(req)),
+  })),
   {
     method: "GET",
     path: "/api/deployments",
@@ -3227,11 +3233,17 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const outHeaders = Object.fromEntries(up.headers.entries());
     delete outHeaders["content-encoding"];
     delete outHeaders["content-length"];
-    res.writeHead(up.status, {
-      ...outHeaders,
-      "content-security-policy": UNTRUSTED_CONTENT_SANDBOX_CSP,
-      "x-content-type-options": "nosniff",
-    });
+    res.writeHead(
+      up.status,
+      framedByOwnSurfaces(
+        res,
+        {
+          ...outHeaders,
+          "x-content-type-options": "nosniff",
+        },
+        `${UNTRUSTED_CONTENT_SANDBOX_CSP}; frame-ancestors 'self'`,
+      ),
+    );
     return res.end(Buffer.from(await up.arrayBuffer()));
   }
 

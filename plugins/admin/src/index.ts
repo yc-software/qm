@@ -297,6 +297,7 @@ async function coreWhoami(principal: string): Promise<{ isAdmin: boolean; role?:
 }
 
 const WRITES = new Map<string, string[]>([
+  ["design-system", ["PUT", "POST"]],
   ["grants", ["POST", "DELETE"]],
   ["principal-links", ["POST", "DELETE"]],
   ["external-users", ["POST", "DELETE"]],
@@ -312,6 +313,7 @@ const WRITES = new Map<string, string[]>([
 ]);
 
 const READS = [
+  "design-system",
   "metrics",
   "egress",
   "errors",
@@ -502,14 +504,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (method === "GET" && READS.includes(first)) {
     if (!principal) return json(res, 401, { error: "signed_out" });
     return forward(req, res, principal, "GET", `/v1/admin/${rest}${url.search}`);
-  }
-
-  if (method === "GET" && ["/design-system", "/design-system/", "/design", "/design/"].includes(pathname)) {
-    const viewer = cookiePrincipal(req);
-    if (!viewer || !principalInAllowlist(viewer, process.env.INBOX_USERS)) {
-      return json(res, 404, { error: "not_found" });
-    }
-    return serveShell();
   }
 
   if (method === "GET" && !pathname.startsWith("/api/") && !pathname.startsWith("/deployments/")) {

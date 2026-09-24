@@ -1,3 +1,4 @@
+import { designSystemRoutes } from "./design-systems.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { backgroundWorkRoutes } from "./background-work.ts";
 import { composioRoutes } from "./composio.ts";
@@ -75,6 +76,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...adminRoutes,
   ...skillPackRoutes,
   ...surfaceRoutes,
+  ...designSystemRoutes,
   ...fileUploadRoutes,
   ...projectRoutes,
   ...contextPolicyRoutes,

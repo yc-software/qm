@@ -419,13 +419,108 @@ function accountRow(): TemplateResult {
   `;
 }
 
+interface DesignApp {
+  id: string;
+  name: string;
+  version: number;
+  url: string;
+  editUrl?: string;
+}
+interface DesignState {
+  org: DesignApp | null;
+  personal: DesignApp | null;
+  orgUnavailable: boolean;
+  personalUnavailable: boolean;
+  choices: Array<{ id: string; name: string }>;
+}
+let designState: DesignState | null = null;
+let designChoice = "";
+let designBusy = false;
+let designError = "";
+let designRevision = 0;
+
+async function loadDesignState(): Promise<void> {
+  if (designBusy) return;
+  const revision = ++designRevision;
+  designBusy = true;
+  designError = "";
+  drawSettings();
+  try {
+    const state = await api<DesignState>("/api/design-system");
+    if (revision !== designRevision) return;
+    designState = state;
+    designChoice = state.personal?.id ?? "";
+  } catch (error) {
+    designError = errMessage(error);
+  }
+  designBusy = false;
+  drawSettings();
+}
+
+async function saveDesignState(create = false): Promise<void> {
+  if (designBusy) return;
+  designBusy = true;
+  designError = "";
+  drawSettings();
+  try {
+    designState = await api<DesignState>("/api/design-system", {
+      method: create ? "POST" : "PUT",
+      body: JSON.stringify(create ? {} : { deploymentId: designChoice || null }),
+    });
+    designChoice = designState.personal?.id ?? "";
+  } catch (error) {
+    designError = errMessage(error);
+  }
+  designBusy = false;
+  drawSettings();
+}
+
+function designSystemRow(): TemplateResult {
+  const state = designState;
+  return html`<div class="settings-row">
+    <div class="settings-row-copy">
+      <div class="settings-row-title">App design system</div>
+      <div class="settings-row-note">
+        New apps use your organization’s design system. In personal chats, your optional design app adds customizations
+        on top. Explicit app instructions take precedence.
+      </div>
+      ${state?.org ? html`<p><a href=${state.org.url} target="_blank" rel="noopener">${state.org.name} ↗</a> · v${state.org.version}</p>` : html`<p class="settings-row-note">${state?.orgUnavailable ? "The organization design app is unavailable." : "No organization design app selected."}</p>`}
+      ${state?.personal ? html`<p><a href=${state.personal.url} target="_blank" rel="noopener">Open my design app ↗</a> · v${state.personal.version} ${state.personal.editUrl ? html` · <a href=${state.personal.editUrl}>Edit with QM</a>` : nothing}</p>` : nothing}
+      ${state?.personalUnavailable ? html`<p role="status">Your selected app is unavailable. Restore access, choose another app, or clear the selection.</p>` : nothing}
+      ${designError ? html`<p class="settings-row-error" role="alert">${designError} <button class="btn" ?disabled=${designBusy} @click=${loadDesignState}>Retry</button></p>` : nothing}
+      <label for="personal-design-app">Personal customizations</label>
+      <select
+        id="personal-design-app"
+        .value=${designChoice}
+        ?disabled=${designBusy || !state}
+        @change=${(e: Event) => {
+          designChoice = (e.target as HTMLSelectElement).value;
+          drawSettings();
+        }}
+      >
+        <option value="">Use organization defaults</option>
+        ${state?.choices.map((app) => html`<option value=${app.id} ?selected=${designChoice === app.id}>${app.name}</option>`)}
+      </select>
+      <button
+        class="btn"
+        ?disabled=${designBusy || !state || (designChoice === (state.personal?.id ?? "") && !state.personalUnavailable)}
+        @click=${() => void saveDesignState()}
+      >
+        Apply
+      </button>
+      ${state && !state.personal && !state.personalUnavailable ? html`<button class="btn" ?disabled=${designBusy} @click=${() => void saveDesignState(true)}>Create personal design app</button>` : nothing}
+      ${designBusy ? html`<span role="status">Working…</span>` : nothing}
+    </div>
+  </div>`;
+}
+
 function settingsPane(): TemplateResult {
   return html`
     <div class="list-page-head">
       <h1 class="pane-title">Settings</h1>
     </div>
     <div class="settings-group">
-      ${aiAccountsRow()} ${themeRow()} ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${desktopRow()}
+      ${aiAccountsRow()} ${themeRow()} ${designSystemRow()} ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${desktopRow()}
       ${accountRow()}
       <div class="settings-row settings-slack-account">
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
@@ -456,4 +551,5 @@ function drawSettings(): void {
 export function renderSettings(): void {
   drawSettings();
   void loadAiStatus();
+  void loadDesignState();
 }

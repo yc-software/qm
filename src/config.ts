@@ -70,6 +70,7 @@ export interface Config {
   sandboxSecondaryBackend?:
     "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37" | "superserve";
   deployProvider: "docker" | "aws" | "fly" | "porter";
+  dockerDeployBasePort?: number;
   egressServiceHosts?: string[];
   brandingDefault?: OrgBranding;
   modelId?: string;
@@ -1442,6 +1443,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sandboxScopeDefaults,
     sandboxResourcesEnabled: boolEnvStrict("SANDBOX_RESOURCES_ENABLED", env.SANDBOX_RESOURCES_ENABLED) ?? false,
     deployProvider,
+    ...(env.DOCKER_DEPLOY_BASE_PORT
+      ? { dockerDeployBasePort: numEnvStrict("DOCKER_DEPLOY_BASE_PORT", env.DOCKER_DEPLOY_BASE_PORT) }
+      : {}),
     ...(env.EGRESS_SERVICE_HOSTS
       ? {
           egressServiceHosts: env.EGRESS_SERVICE_HOSTS.split(",")

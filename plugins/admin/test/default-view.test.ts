@@ -54,10 +54,9 @@ test("admin shell groups control, logs, and artifacts like the reorganization", 
   assert.ok(sections);
   const actual = JSON.parse(JSON.stringify(vm.runInNewContext(sections)));
   assert.deepEqual(actual, [
-    { views: ["governance", "models", "credentials", "connectors", "slack-settings", "customize", "users"] },
+    { views: ["governance", "models", "credentials", "connectors", "slack-settings", "customize", "users", "design-system"] },
     { label: "Logs", views: ["history", "slack", "judgments", "errors", "audit", "egress"] },
     { label: "Artifacts", views: ["files", "skills", "memory", "deployments", "crons"] },
-    { views: ["design-system"] },
   ]);
   assert.match(html, /history: "Sessions"/);
   assert.match(
@@ -77,12 +76,12 @@ test("admin shell defaults bare admin URLs to org history", () => {
   assert.match(html, /let view = DEFAULT_VIEW;/);
   assert.match(
     html,
-    /let resolvedView = DEFAULT_VIEW;\s*if \(VIEWS\.includes\(v\) && \(v !== "design-system" \|\| permissions\.includes\("inbox"\)\)\) resolvedView = v;\s*else if \(session\) resolvedView = "history";[\s\S]*view: resolvedView/,
+    /let resolvedView = DEFAULT_VIEW;\s*if \(VIEWS\.includes\(v\)\) resolvedView = v;\s*else if \(session\) resolvedView = "history";[\s\S]*view: resolvedView/,
   );
 });
 
-test("the design system follows the inbox permission", () => {
-  assert.match(html, /if \(v === "design-system" && !permissions\.includes\("inbox"\)\) return;/);
+test("the org design system is independent of the inbox pilot", () => {
+  assert.doesNotMatch(html, /if \(v === "design-system" && !permissions\.includes\("inbox"\)\) return;/);
   assert.match(html, /permissions = Array\.isArray\(me\.data\.permissions\) \? me\.data\.permissions : \[\];/);
 });
 

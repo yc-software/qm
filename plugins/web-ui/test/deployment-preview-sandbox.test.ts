@@ -37,6 +37,8 @@ test("in-surface deployment preview is sandboxed to an opaque origin (no same-or
   const r = await fetch(`${base}/deployments/some-app/`, { headers: { [PORTAL_IDENTITY_HEADER]: identity } });
   assert.equal(r.status, 200);
   const csp = r.headers.get("content-security-policy") ?? "";
+  assert.match(csp, /frame-ancestors 'self'/);
+  assert.equal(r.headers.get("x-frame-options"), null);
   assert.match(csp, /^sandbox\b/, "the response is served under a CSP sandbox");
   assert.ok(!/allow-same-origin/.test(csp), "the sandbox never grants same-origin (opaque origin only)");
   assert.match(csp, /allow-scripts/, "scripts still run inside the opaque origin");

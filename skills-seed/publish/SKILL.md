@@ -19,12 +19,17 @@ The app must listen on the `PORT` env var (the runtime sets it).
 ## Match the house style (the default)
 
 Anything browsable you publish should look designed, not defaulted. Before you build the
-UI, load the design skills and apply your organization's **house style** unless the user
-asked for a different look:
+UI, use the design-system app references supplied in the turn context when available.
+Read their `design://<app-id>/<version>/<path>` sources with the files tool with action read. Start with
+DESIGN.md if present, then relevant components, styles, and assets. Apply the org app
+as the base and the personal app as a set of overrides. Explicit app instructions and
+an existing app's established design take precedence. Record the IDs, versions, and
+commits actually used in design-sources.json inside each newly generated app. Never
+copy credential-bearing Git URLs into published files.
 
-- **The deployment's house-style skill** — if the Skills index lists a `*-design` skill,
-  it carries the org's look as ready-to-paste CSS and design tokens. Start
-  there for the look.
+When no design-system app is selected, use the deployment's house-style skill if
+one is installed (`*-design`). Other design skills still help with the process:
+
 - **`taste-skill`** — the design _process_: reading the brief, layout,
   hierarchy, verifying the result, avoiding generic AI-design slop.
 - **`popular-web-designs`** — when the user wants a specific visual

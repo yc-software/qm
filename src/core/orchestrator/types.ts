@@ -1,3 +1,4 @@
+import type { DesignSystems } from "../../design-system/design-systems.ts";
 import type { RuntimeService } from "../../harness/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
@@ -113,6 +114,7 @@ export interface OrchestratorDeps {
   identity: IdentityService;
   resolution: ResolutionService;
   config?: ScopedConfigStore;
+  designSystems?: DesignSystems;
   /** The deployment's fallback harness (wiring's config.harness) — used when no org runtime selection exists. */
   defaultHarness?: string;
   defaultTurnWallClockMs?: number;
