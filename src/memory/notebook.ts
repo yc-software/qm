@@ -35,3 +35,19 @@ export function dateStr(at: number): string {
 export function capTail(text: string, maxChars: number): string {
   return text.length > maxChars ? text.slice(text.length - maxChars) : text;
 }
+
+export function memoryBlocks(body: string): string[] {
+  const result: string[] = [];
+  let pending: string[] = [];
+  const flush = () => {
+    const text = pending.join("\n").trim();
+    if (text) result.push(text);
+    pending = [];
+  };
+  for (const line of body.split("\n")) {
+    if (!line.trim() || /^(?:[-*] |#{1,6} )/.test(line)) flush();
+    if (line.trim()) pending.push(line);
+  }
+  flush();
+  return result;
+}

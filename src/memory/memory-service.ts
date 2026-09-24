@@ -4,6 +4,8 @@ import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { RECALL_MAX_CHARS, bullets, capTail, dateStr, isBullet, normalize } from "./notebook.ts";
 
+import type { MemoryCaptureMetadata, MemoryRecords } from "./records.ts";
+
 export const MEMORY_FILE = "memory/MEMORY.md";
 const MEMORY_HEADER = "# Memory";
 
@@ -15,6 +17,7 @@ export interface MemoryRevision {
   revision: string;
   content: string;
   operation: string;
+  records?: MemoryRecords;
   author?: string;
   at: number;
 }
@@ -23,6 +26,7 @@ interface MemoryHead {
   content: string;
   revision: string;
   updatedAt?: number;
+  records?: MemoryRecords;
 }
 
 export interface MemoryRecallContext {
@@ -34,11 +38,9 @@ export interface MemoryRecallContext {
   autonomous?: boolean;
 }
 
-export interface MemoryCaptureContext {
+export interface MemoryCaptureContext extends MemoryCaptureMetadata {
   mode: "explicit" | "automatic";
   actorId?: string;
-  sessionId?: string;
-  conversationScopeId?: ScopeId;
   input?: string;
   reply?: string;
   autonomous?: boolean;
@@ -209,5 +211,9 @@ export async function ccCaptureToPersonal(
     .slice(0, 60);
   const source = clean || (kind === "channel" ? "a channel" : "a group conversation");
   const tagged = facts.map((f) => `${f} (said in ${source})`);
-  return memory.capture(target, tagged, at, `cc:${origin}`, context);
+  return memory.capture(target, tagged, at, `cc:${origin}`, {
+    ...context,
+    mode: context?.mode ?? "automatic",
+    conversationScopeId: origin,
+  });
 }

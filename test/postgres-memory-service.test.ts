@@ -1,6 +1,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { ccCaptureToPersonal } from "../src/memory/memory-service.ts";
 import { scopeId } from "../src/types.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -150,4 +151,174 @@ test("pg memory: metadata sizes every notebook from head revisions (matches read
   assert.equal(meta.get(u1)!.updatedAt, await m.updatedAt!(u1), "updatedAt matches the head write time");
   assert.equal(meta.get(u2)!.bytes, 0, "a cleared notebook sizes to zero");
   assert.equal(meta.get(scopeId("personal", "absent")), undefined, "never-written scopes are absent");
+});
+
+test("pg memory: structured provenance and labels survive a separate instance and personal CC", { skip }, async () => {
+  const a = createPostgresMemoryService(URL!);
+  const source = scopeId("channel", "source");
+  await ccCaptureToPersonal(a, source, "alice", ["sensitive synthetic fact"], at, "Source", {
+    mode: "automatic",
+    conversationScopeId: "channel:wrong",
+    sessionId: "synthetic-session",
+    sensitivity: "sensitive",
+    inheritedRecords: [],
+  });
+  const b = createPostgresMemoryService(URL!);
+  const head = await b.readHead!(scopeId("personal", "alice"));
+  const record = head.records!.records.find((record) => record.text.includes("synthetic fact"))!;
+  assert.equal(record.sensitivity, "sensitive");
+  assert.equal(record.sourceUnknown, false);
+  assert.deepEqual(record.sources, [{ scopeId: source, sessionId: "synthetic-session" }]);
+  assert.deepEqual((await b.history!(scopeId("personal", "alice")))[0]!.records, head.records);
+});
+
+test("pg memory: rewrites and CAS persist metadata atomically without losing restrictions", { skip }, async () => {
+  const mem = createPostgresMemoryService(URL!);
+  const sid = scopeId("personal", "alice");
+  await mem.capture(sid, ["restricted synthetic fact"], at, "alice", {
+    mode: "explicit",
+    conversationScopeId: "group:private",
+    sensitivity: "restricted",
+    inheritedRecords: [],
+  });
+  const before = await mem.readHead!(sid);
+  const results = await Promise.all([
+    mem.replaceIfRevision!(sid, "- summary A", before.revision),
+    mem.replaceIfRevision!(sid, "- summary B", before.revision),
+  ]);
+  assert.deepEqual(results.sort(), [false, true]);
+  const after = await mem.readHead!(sid);
+  assert.equal(after.records!.records.length, 1);
+  assert.equal(after.records!.records[0]!.text + "\n", after.content);
+  assert.equal(after.records!.records[0]!.sensitivity, "restricted");
+  assert.deepEqual(after.records!.records[0]!.sources, [{ scopeId: "group:private" }]);
+});
+
+test(
+  "pg memory: legacy migration retains text and marks unknown provenance without guessing from labels",
+  { skip },
+  async () => {
+    const pg = (await import("pg")).default;
+    const pool = new pg.Pool({ connectionString: URL });
+    const sid = scopeId("personal", "legacy");
+    const body = "# Memory\n\n- old note (said in private channel)\n";
+    try {
+      await pool.query(
+        "CREATE TABLE memory_revisions(id BIGSERIAL PRIMARY KEY, scope_id TEXT NOT NULL, seq BIGINT NOT NULL, op TEXT NOT NULL, body TEXT NOT NULL, author TEXT, at BIGINT NOT NULL, UNIQUE(scope_id, seq))",
+      );
+      await pool.query("INSERT INTO memory_revisions(scope_id,seq,op,body,at) VALUES ($1,1,'capture',$2,$3)", [
+        sid,
+        body,
+        at,
+      ]);
+      const mem = createPostgresMemoryService(URL!);
+      const head = await mem.readHead!(sid);
+      assert.equal(head.content, body);
+      assert.ok(
+        head.records!.records.every(
+          (record) => record.sourceUnknown && record.sensitivity === "unknown" && !record.sources.length,
+        ),
+      );
+      await mem.capture(sid, ["new fact"], at, "legacy", { mode: "explicit", sessionId: "new-session" });
+      const next = await mem.readHead!(sid);
+      assert.deepEqual(next.records!.records.slice(0, head.records!.records.length), head.records!.records);
+      assert.equal(next.records!.records.at(-1)!.sources[0]!.sessionId, "new-session");
+      assert.equal((await mem.history!(sid)).length, 2);
+    } finally {
+      await pool.end();
+    }
+  },
+);
+
+test(
+  "pg memory: restoring an earlier notebook preserves its source and the later restriction floor",
+  { skip },
+  async () => {
+    const mem = createPostgresMemoryService(URL!);
+    const sid = scopeId("personal", "restore");
+    await mem.capture(sid, ["ordinary synthetic fact"], at, "restore", {
+      mode: "explicit",
+      sensitivity: "ordinary",
+      inheritedRecords: [],
+    });
+    const original = await mem.readHead!(sid);
+    await mem.capture(sid, ["restricted synthetic fact"], at, "restore", {
+      mode: "explicit",
+      sensitivity: "restricted",
+      conversationScopeId: "group:private",
+      inheritedRecords: [],
+    });
+    const latest = await mem.readHead!(sid);
+    assert.equal(await mem.restore!(sid, original.revision, latest.revision), true);
+    const restored = await mem.readHead!(sid);
+    assert.equal(restored.content, original.content);
+    assert.ok(restored.records!.records.every((record) => record.sensitivity === "restricted"));
+    assert.ok(
+      restored.records!.records.every((record) => record.sources.some((source) => source.scopeId === "group:private")),
+    );
+    assert.equal(await mem.restore!(sid, original.revision, latest.revision), false);
+  },
+);
+
+test(
+  "pg memory: duplicate captures tighten metadata without duplicating text or adding unchanged revisions",
+  { skip },
+  async () => {
+    const mem = createPostgresMemoryService(URL!);
+    const sid = scopeId("personal", "duplicate");
+    const context = { mode: "explicit" as const, sensitivity: "ordinary" as const, inheritedRecords: [] };
+    await mem.capture(sid, ["same fact", "unrelated fact"], at, "duplicate", context);
+    const first = await mem.readHead!(sid);
+    assert.equal(
+      await mem.capture(sid, ["same fact"], at + 86400000, "duplicate", {
+        ...context,
+        sensitivity: "restricted",
+        conversationScopeId: "group:private",
+      }),
+      0,
+    );
+    const tightened = await mem.readHead!(sid);
+    assert.equal(tightened.content, first.content);
+    const match = tightened.records!.records.find((record) => record.text.includes("same fact"))!;
+    assert.equal(match.sensitivity, "restricted");
+    assert.equal(match.id, first.records!.records.find((record) => record.text.includes("same fact"))!.id);
+    assert.deepEqual(new Set(match.sources.map((source) => source.scopeId)), new Set([sid, "group:private"]));
+    assert.equal(
+      tightened.records!.records.find((record) => record.text.includes("unrelated fact"))!.sensitivity,
+      "ordinary",
+    );
+    await mem.capture(sid, ["same fact"], at, "duplicate", context);
+    assert.equal((await mem.readHead!(sid)).revision, tightened.revision);
+    assert.equal(await mem.replaceIfRevision!(sid, tightened.content, tightened.revision), true);
+    assert.equal((await mem.readHead!(sid)).revision, tightened.revision);
+  },
+);
+
+test("pg memory: an intermediate empty restore cannot erase later restrictions", { skip }, async () => {
+  const mem = createPostgresMemoryService(URL!);
+  const sid = scopeId("personal", "empty-restore");
+  await mem.capture(sid, ["seed"], at);
+  await mem.replace(sid, "");
+  const empty = await mem.readHead!(sid);
+  await mem.capture(sid, ["same fact"], at, "actor", {
+    mode: "explicit",
+    sensitivity: "ordinary",
+    inheritedRecords: [],
+  });
+  const ordinary = await mem.readHead!(sid);
+  await mem.capture(sid, ["same fact"], at, "actor", {
+    mode: "explicit",
+    sensitivity: "restricted",
+    conversationScopeId: "group:private",
+    inheritedRecords: [],
+  });
+  const restricted = await mem.readHead!(sid);
+  assert.equal(await mem.restore!(sid, empty.revision, restricted.revision), true);
+  const cleared = await mem.readHead!(sid);
+  assert.equal(cleared.content, "");
+  assert.equal(await mem.restore!(sid, ordinary.revision, cleared.revision), true);
+  const restored = await mem.readHead!(sid);
+  const fact = restored.records!.records.find((record) => record.text.includes("same fact"))!;
+  assert.equal(fact.sensitivity, "restricted");
+  assert.ok(fact.sources.some((source) => source.scopeId === "group:private"));
 });
