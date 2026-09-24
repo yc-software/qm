@@ -44,6 +44,62 @@ Env (see `.env.example`): `CORE_API_URL` (default `http://localhost:8080`),
 `WEB_UI_PRINCIPALS` (csv allowlist; empty = any id, **dev only**),
 and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
 
+## Sidebar organization
+
+**Customize sidebar** edits a personal layout. Tabs can be added, renamed, given an
+emoji or symbol, reordered, and removed. The selected tab can show its name or remain
+icon-only. Tabs switch sidebar contents while preserving the open conversation.
+Removing a tab moves its sections and shortcuts to the first remaining tab.
+
+Each tab can contain shortcuts to QM views, new-chat/new-project actions, projects,
+and individual conversations. Shortcuts support custom labels/icons, ordering,
+removal, and moving between tabs. Search and Settings remain available independently.
+
+Sections support hide/show, collapse, ordering, icons, moving between tabs, and
+5/10/15/20/50/all visible items. Sort projects and conversations manually, by name, or
+by recent activity. Use drag-and-drop or the keyboard-accessible reorder controls.
+Create project groups or saved conversation views filtered by project, title, and
+active/waiting/archived status. A missing project remains an explicit unavailable
+filter until cleared. Removing a project group returns its projects to Projects.
+
+Favorites are shortcuts: favoriting a project or chat preserves its original location.
+Project and conversation icons are personal; project names and sharing still use the
+existing project controls. Conversations retain their existing color and archive
+controls. Project children remain expandable.
+
+Section options float above the page, dismiss on outside click, and return focus on
+Escape. Customization preserves the list's previous scroll position. Hover controls
+also appear on keyboard focus and touch devices. Tabs support Left/Right/Home/End
+navigation. The sidebar edge supports dragging and Left/Right to resize, Home/End for
+minimum/maximum widths, and double-click to reset. Width is saved on the device.
+
+Layout version 2 migrates the original section-only preferences and uses the existing
+per-user `sidebar-layout` UI-state record, backed by Postgres in durable deployments.
+Failed loads/saves expose Retry; pending saves flush when leaving the page. Layouts
+that exceed the preference storage limit are rejected with a message, preserving the
+previous layout. Resetting the layout never deletes projects or conversations.
+
+### Notion comparison
+
+Audited against the live Notion sidebar and its
+[sidebar documentation](https://www.notion.com/help/navigate-with-the-sidebar).
+
+| Notion customization                         | QM equivalent                                                                 |
+| -------------------------------------------- | ----------------------------------------------------------------------------- |
+| Named/icon tabs, reorder/remove, hide names  | Personal tabs with keyboard and drag ordering                                 |
+| Create/navigation/page shortcuts per tab     | Actions, views, projects, and conversation shortcuts                          |
+| Add/remove/reorder sections, move to tab     | Built-in sections, project groups, saved conversation views                   |
+| Section sort and visible-item limit          | Manual/name/activity; 5–50 or all; Show more/less                             |
+| Favorites without relocating content         | Project and conversation Favorites                                            |
+| Page/chat name and icon                      | Project/chat rename plus personal icons; existing chat colors                 |
+| Teamspace-specific or database-view section  | Project-specific and filtered conversation sections                           |
+| Expand/collapse, resize/hide, appearance     | Expandable project/chat tree, resize, rail/mobile drawer, existing themes     |
+| Contextual hover controls and floating menus | Hover/focus/touch actions, anchored section dialogs, Escape/outside dismissal |
+
+Notion's arbitrary page nesting, database schemas/views, and meeting notes are content
+features outside QM's project/conversation model. Saved conversation views cover the
+sidebar filtering use case; QM's Calendar remains available as a navigation shortcut.
+
 ## Suggested activities
 
 Suggested activity generation is **on by default** when the configured harness supports

@@ -6,6 +6,10 @@ import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import {
   Archive,
+  ArrowUp,
+  ArrowDown,
+  Star,
+  MessageSquare,
   Ban,
   Binoculars,
   ArchiveRestore,
@@ -57,7 +61,6 @@ import {
   bumpActivity,
   sidebarSessions,
   groupProjectSessions,
-  recencyGroup,
   recentProjectSeeds,
   reconcileSessions,
   rowIndicators,
@@ -68,6 +71,15 @@ import {
   type ChatBrowseStatus,
 } from "./session-list";
 import { tip } from "./tooltip";
+import {
+  acceptsProjects,
+  moveSidebarProject,
+  orderSidebarProjects,
+  orderSidebarItems,
+  projectSection,
+} from "./sidebar-model";
+import { sidebarState, updateSidebarLayout } from "./sidebar-state";
+import { PROJECT_DRAG, sidebarCustomization, sidebarSection } from "./sidebar";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, icon, menuSelect, relTime, workingWave } from "./ui";
 import { listPageTpl } from "./list-page";
@@ -75,6 +87,7 @@ import {
   contextsState,
   ensureContexts,
   openProjectDetail,
+  openCreateProject,
   personalScopeId,
   renameProject,
   scopeChip,
@@ -85,8 +98,8 @@ import {
   appState,
   closeSidebarOnNarrowView,
   renderSidebarTop,
+  sidebarShortcutChoices,
   showMainEmpty,
-  syncDocumentTitle,
   syncUrlFromState,
 } from "./shell";
 import { allConversations, isLiveConversation, mainConversation } from "./conversations";
@@ -116,8 +129,9 @@ export const sessionsState = {
   renamingId: null as string | null,
   openingKey: null as string | null,
   webOnly: true,
-  collapsedProjectScopes: new Set<string>(),
 };
+
+let menuLocation = "";
 
 let selection: SessionSelection = emptySelection();
 type SessionPatch = { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null };
@@ -145,13 +159,20 @@ function redrawSelection(): void {
   renderSidebarTop();
 }
 
-function visibleRowOrder(): string[] {
-  const el = appState.listEl;
+function visibleRowOrder(source?: Element): string[] {
+  const el = source?.closest(".sidebar-section") ?? appState.listEl;
+  const location = source?.closest<HTMLElement>("[data-sidebar-location]")?.dataset.sidebarLocation;
   if (!el) return [];
-  return [...el.querySelectorAll<HTMLElement>("[data-session-id]")]
-    .filter((row) => !row.closest("[hidden]"))
-    .map((n) => n.dataset.sessionId ?? "")
-    .filter(Boolean);
+  return [
+    ...new Set(
+      [...el.querySelectorAll<HTMLElement>("[data-session-id]")]
+        .filter(
+          (row) => !row.closest("[hidden]") && (location === undefined || row.dataset.sidebarLocation === location),
+        )
+        .map((n) => n.dataset.sessionId ?? "")
+        .filter(Boolean),
+    ),
+  ];
 }
 
 const WEB_ONLY_KEY = "web-ui:web-only";
@@ -170,7 +191,6 @@ let recentContextsRequest: Promise<void> | null = null;
 const RECENT_CONTEXT_MAX_AGE_MS = 30_000;
 let renameDraft = "";
 const refreshingTitleIds = new Set<string>();
-let showArchived = false;
 
 let chatsPageScope: string | null = null;
 let chatsPageQuery = "";
@@ -191,10 +211,8 @@ export function resetSessionsState(): void {
   sessionsState.openMenuId = null;
   sessionsState.renamingId = null;
   sessionsState.openingKey = null;
-  sessionsState.collapsedProjectScopes.clear();
   renameDraft = "";
   refreshingTitleIds.clear();
-  showArchived = false;
   chatsPageScope = null;
   chatsPageQuery = "";
   chatsPageStatus = "active";
@@ -212,12 +230,6 @@ function recentItemActivity(item: RecentItem): number {
   if (item.sessions[0]) return activityOf(item.sessions[0]);
   const context = contextsState.list.find((candidate) => candidate.scopeId === item.scopeId);
   return context?.lastActivityAt ?? context?.project?.createdAt ?? context?.project?.updatedAt ?? 0;
-}
-
-function recentItemsFor(sessions: readonly CoreSession[]): RecentItem[] {
-  return groupProjectSessions(sessions, projectSeedsForRecents()).sort(
-    (a, b) => recentItemActivity(b) - recentItemActivity(a),
-  );
 }
 
 function loadRecentContexts(force = false): void {
@@ -321,60 +333,107 @@ function visibleSessions(): CoreSession[] {
 }
 
 export function renderList(): void {
-  syncDocumentTitle();
+  renderSidebarTop();
   if (chatsPageShowing()) drawChatsPage();
   if (!appState.listEl) return;
   const visible = visibleSessions();
   const active = visible.filter((s) => !s.archived);
   const archived = visible.filter((s) => s.archived);
-  const { pinned, rest } = splitPinned(active);
-  const activeItems = recentItemsFor(rest);
-  const archivedItems: RecentItem[] = archived.map((session) => ({
-    kind: "session",
-    session,
-  }));
-  armMidnightRefresh();
+  const { pinned } = splitPinned(active);
+  const rest = active;
+  const items = groupProjectSessions(rest, projectSeedsForRecents());
+  const projects = items.filter(
+    (item): item is Extract<RecentItem, { kind: "project" }> => item.kind === "project" && item.groupKind === "project",
+  );
+  const sessionRows = (rows: CoreSession[], sectionId: string) =>
+    rows.map((session) => ({
+      key: session.threadRef,
+      name: sessionTitle(session),
+      activity: activityOf(session),
+      content: sessionRow(session, false, sectionId),
+    }));
+  const personal = rest.filter((session) => session.scopeId.startsWith("personal:"));
+  const shared = items.filter((item) =>
+    item.kind === "project"
+      ? item.groupKind === "channel" || item.groupKind === "group"
+      : !item.session.scopeId.startsWith("personal:"),
+  );
+  const sections = sidebarState.layout.sections.filter(
+    (section) => !section.hidden && section.tabId === sidebarState.layout.activeTab,
+  );
   render(
     html`
       ${detachDropZone()}
       ${
-        pinned.length
-          ? html`
-              <div class="recents-group pinned-head">
-                <span class="pinned-head-glyph">${icon(Pin, 11)}</span><span>Pinned</span>
-              </div>
-              <div class="pinned-children">
-                ${repeat(
-                  pinned,
-                  (session) => session.threadRef,
-                  (session) => sessionRow(session),
-                )}
-              </div>
-            `
-          : nothing
+        sidebarState.customizing
+          ? sidebarCustomization(sidebarShortcutChoices())
+          : sections.map((section) => {
+              const owned = orderSidebarProjects(
+                section,
+                projects.filter((project) =>
+                  section.kind === "favorites"
+                    ? section.projects.includes(project.scopeId)
+                    : projectSection(sidebarState.layout, project.scopeId).id === section.id,
+                ),
+                recentItemActivity,
+              );
+              let rows = owned.map((project) => ({
+                key: project.scopeId,
+                name: project.name ?? "Project",
+                activity: recentItemActivity(project),
+                content: recentItem(project, section.id),
+              }));
+              if (section.kind === "favorites") rows = [...rows, ...sessionRows(pinned, section.id)];
+              if (section.kind === "private") rows = sessionRows(personal, section.id);
+              if (section.kind === "shared")
+                rows = shared.map((item) => ({
+                  key: item.kind === "project" ? item.scopeId : item.session.threadRef,
+                  name: item.kind === "project" ? (item.name ?? "Shared") : sessionTitle(item.session),
+                  activity: recentItemActivity(item),
+                  content: recentItem(item, section.id),
+                }));
+              if (section.kind === "archived") rows = sessionRows(archived, section.id);
+              if (section.kind === "chats")
+                rows = sessionRows(
+                  visible.filter(
+                    (session) =>
+                      (section.status === "archived" ? session.archived : !session.archived) &&
+                      (section.status !== "waiting" || session.awaitingInput) &&
+                      (!section.scopeId || section.scopeId === session.scopeId) &&
+                      (!section.query || sessionTitle(session).toLowerCase().includes(section.query.toLowerCase())),
+                  ),
+                  section.id,
+                );
+              rows = orderSidebarItems(section, rows);
+              if (rows.length === 0 && (section.kind === "shared" || section.kind === "archived")) return nothing;
+              const empty = {
+                favorites: "Keep important projects and chats here.",
+                projects: "Create a project to keep related work together.",
+                private: "Your personal chats live here.",
+                shared: "Shared conversations appear here.",
+                archived: "No archived conversations.",
+                custom: "Drag projects here to organize them.",
+                chats: "No conversations match this view.",
+              }[section.kind];
+              return sidebarSection(section, rows, {
+                empty,
+                itemOrder: rows.map((row) => row.key),
+                projectOrder: rows
+                  .map((row) => row.key)
+                  .filter((key) => owned.some((project) => project.scopeId === key)),
+                scopes: contextsState.list
+                  .filter((context) => context.project)
+                  .map((context) => ({ id: context.scopeId, name: context.project!.name })),
+                ...(section.kind === "projects" ? { add: openCreateProject, addLabel: "New project" } : {}),
+                ...(section.kind === "private"
+                  ? { add: () => startNewChat(personalScopeId()), addLabel: "New private chat" }
+                  : {}),
+              });
+            })
       }
-      ${groupedRows(activeItems)}
-      ${
-        archived.length
-          ? html`
-              <button class="archived-toggle ${showArchived ? "open" : ""}" @click=${toggleShowArchived}>
-                ${icon(showArchived ? ChevronDown : ChevronRight, 14)}
-                <span>Archived</span>
-                <span class="archived-count">${archived.length}</span>
-              </button>
-              ${showArchived ? html`<div class="archived-children">${groupedRows(archivedItems)}</div>` : nothing}
-            `
-          : nothing
-      }
+      ${!sidebarState.customizing && sections.length === 0 ? html`<div class="sidebar-section-empty">Add shortcuts and sections with Customize sidebar.</div>` : nothing}
       ${sessionsNotice ? html`<div class="empty" style="padding:16px">${sessionsNotice}</div>` : ""}
       ${sessionsLoading ? html`<div class="empty" style="padding:16px">Loading conversations...</div>` : ""}
-      ${
-        !sessionsLoading && !sessionsNotice && visible.length === 0
-          ? html`<div class="empty" style="padding:16px">
-              ${sessionsState.list.length ? "Slack conversations hidden." : "No conversations yet."}
-            </div>`
-          : ""
-      }
     `,
     appState.listEl,
   );
@@ -395,9 +454,9 @@ function newChatHint(name: string): string {
   return `Start a new chat in ${name}`;
 }
 
-function recentItem(item: RecentItem): TemplateResult {
-  if (item.kind === "session") return sessionRow(item.session);
-  const collapsed = sessionsState.collapsedProjectScopes.has(item.scopeId);
+function recentItem(item: RecentItem, sidebarSectionId = ""): TemplateResult {
+  if (item.kind === "session") return sessionRow(item.session, false, sidebarSectionId);
+  const collapsed = sidebarState.layout.collapsedProjects.includes(item.scopeId);
   let glyph: IconNode | null = Folder;
   if (item.groupKind === "personal") glyph = null;
   else if (item.groupKind === "channel") glyph = Hash;
@@ -406,24 +465,58 @@ function recentItem(item: RecentItem): TemplateResult {
   if (item.groupKind === "channel") fallbackName = "Channel";
   else if (item.groupKind === "group") fallbackName = "Group DM";
   const name = item.name ?? fallbackName;
-  const childrenId = `recent-${item.scopeId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  let projectGlyph: TemplateResult | typeof nothing = nothing;
+  if (sidebarState.layout.itemIcons[item.scopeId])
+    projectGlyph = html`<span class="glyph">${sidebarState.layout.itemIcons[item.scopeId]}</span>`;
+  else if (glyph && !collapsed) projectGlyph = html`<span class="glyph">${icon(glyph, 14)}</span>`;
+  const childrenId = `recent-${sidebarSectionId}-${item.scopeId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const menuKey = projectMenuKey(item.scopeId);
-  const menuOpen = sessionsState.openMenuId === menuKey;
+  const menuOpen = sessionsState.openMenuId === menuKey && menuLocation === sidebarSectionId;
   return html`
-    <section class="recent-project ${item.sessions.some(isActiveRow) ? "active" : ""}" aria-label=${`${name} project`}>
+    <section
+      class="recent-project ${item.sessions.some(isActiveRow) ? "active" : ""}"
+      aria-label=${`${name} project`}
+      data-project-scope=${item.scopeId}
+      data-sidebar-location=${sidebarSectionId}
+      @dragover=${(event: DragEvent) => {
+        if (item.groupKind !== "project" || !event.dataTransfer?.types.includes(PROJECT_DRAG)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        (event.currentTarget as HTMLElement).classList.add("sidebar-project-drop");
+      }}
+      @dragleave=${(event: DragEvent) => {
+        const target = event.currentTarget as HTMLElement;
+        if (!(event.relatedTarget instanceof Node) || !target.contains(event.relatedTarget))
+          target.classList.remove("sidebar-project-drop");
+      }}
+      @drop=${(event: DragEvent) => {
+        (event.currentTarget as HTMLElement).classList.remove("sidebar-project-drop");
+        const scope = event.dataTransfer?.getData(PROJECT_DRAG);
+        if (!scope || item.groupKind !== "project") return;
+        event.preventDefault();
+        event.stopPropagation();
+        moveProjectBefore(scope, item.scopeId, sidebarSectionId);
+      }}
+    >
       ${
-        sessionsState.renamingId === menuKey
+        sessionsState.renamingId === menuKey && menuLocation === sidebarSectionId
           ? projectRenameRow(item)
           : html`<div class="recent-project-head">
               <button
                 class="recent-project-toggle"
                 type="button"
+                draggable=${item.groupKind === "project" ? "true" : "false"}
+                @dragstart=${(event: DragEvent) => {
+                  if (item.groupKind !== "project") return;
+                  event.dataTransfer?.setData(PROJECT_DRAG, item.scopeId);
+                  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+                }}
                 aria-expanded=${collapsed ? "false" : "true"}
                 aria-controls=${childrenId}
                 @click=${() => toggleRecentProject(item.scopeId)}
               >
                 <span class="recent-project-glyph">
-                  ${glyph && !collapsed ? html`<span class="glyph">${icon(glyph, 14)}</span>` : nothing}
+                  ${projectGlyph}
                   <span class="chev">${icon(collapsed ? ChevronRight : ChevronDown, 13)}</span>
                 </span>
                 <span class="recent-project-name" dir="auto">${name.replace(/^#/, "")}</span>
@@ -459,7 +552,7 @@ function recentItem(item: RecentItem): TemplateResult {
         ${repeat(
           item.sessions,
           (session) => session.threadRef,
-          (session) => sessionRow(session, true),
+          (session) => sessionRow(session, true, `${sidebarSectionId}/${item.scopeId}`),
         )}
       </div>
     </section>
@@ -467,9 +560,89 @@ function recentItem(item: RecentItem): TemplateResult {
 }
 
 function toggleRecentProject(scopeId: string): void {
-  if (sessionsState.collapsedProjectScopes.has(scopeId)) sessionsState.collapsedProjectScopes.delete(scopeId);
-  else sessionsState.collapsedProjectScopes.add(scopeId);
-  renderList();
+  updateSidebarLayout((layout) => ({
+    ...layout,
+    collapsedProjects: layout.collapsedProjects.includes(scopeId)
+      ? layout.collapsedProjects.filter((id) => id !== scopeId)
+      : [...layout.collapsedProjects, scopeId],
+  }));
+}
+
+function expandRecentProject(scopeId: string): void {
+  if (sidebarState.layout.collapsedProjects.includes(scopeId)) toggleRecentProject(scopeId);
+}
+
+function orderedProjects(sectionId: string) {
+  const section = sidebarState.layout.sections.find((item) => item.id === sectionId)!;
+  const items = groupProjectSessions(
+    visibleSessions().filter((session) => !session.archived),
+    projectSeedsForRecents(),
+  );
+  return orderSidebarProjects(
+    section,
+    items.filter(
+      (item): item is Extract<RecentItem, { kind: "project" }> =>
+        item.kind === "project" &&
+        item.groupKind === "project" &&
+        (section.kind === "favorites"
+          ? section.projects.includes(item.scopeId)
+          : projectSection(sidebarState.layout, item.scopeId).id === sectionId),
+    ),
+    recentItemActivity,
+  );
+}
+
+function sectionItemOrder(sectionId: string): string[] {
+  const section = sidebarState.layout.sections.find((item) => item.id === sectionId)!;
+  const projects = orderedProjects(sectionId).map((project) => ({
+    key: project.scopeId,
+    name: project.name ?? "Project",
+    activity: recentItemActivity(project),
+  }));
+  const chats =
+    section.kind === "favorites"
+      ? visibleSessions()
+          .filter((session) => session.pinned && !session.archived)
+          .map((session) => ({ key: session.threadRef, name: sessionTitle(session), activity: activityOf(session) }))
+      : [];
+  return orderSidebarItems(section, [...projects, ...chats]).map((item) => item.key);
+}
+
+function moveProjectBefore(scopeId: string, before: string, sectionId?: string): void {
+  if (!projectOf(scopeId) || !projectOf(before) || scopeId === before) return;
+  const section =
+    sidebarState.layout.sections.find((item) => item.id === sectionId) ?? projectSection(sidebarState.layout, before);
+  const ids = orderedProjects(section.id).map((item) => item.scopeId);
+  updateSidebarLayout((layout) =>
+    moveSidebarProject(
+      {
+        ...layout,
+        sections: layout.sections.map((item) =>
+          item.id === section.id ? { ...item, projects: ids, items: sectionItemOrder(section.id) } : item,
+        ),
+      },
+      scopeId,
+      section.id,
+      before,
+    ),
+  );
+}
+
+function moveProjectTo(scopeId: string, sectionId: string): void {
+  sessionsState.openMenuId = null;
+  const ids = orderedProjects(sectionId).map((item) => item.scopeId);
+  updateSidebarLayout((layout) =>
+    moveSidebarProject(
+      {
+        ...layout,
+        sections: layout.sections.map((section) =>
+          section.id === sectionId ? { ...section, projects: ids, items: sectionItemOrder(sectionId) } : section,
+        ),
+      },
+      scopeId,
+      sectionId,
+    ),
+  );
 }
 
 export function startNewChat(
@@ -478,7 +651,7 @@ export function startNewChat(
   threadRef?: string,
 ): Conversation | null {
   closeSidebarOnNarrowView();
-  if (scopeId) sessionsState.collapsedProjectScopes.delete(scopeId);
+  if (scopeId) expandRecentProject(scopeId);
   const pane = startNewChatInCanvas(scopeId ?? undefined, threadRef);
   if (pane) return pane;
   const conv = mainConversation();
@@ -500,6 +673,13 @@ function startProjectChat(event: Event, scopeId: string, name: string | null): v
 
 function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): TemplateResult {
   const owned = projectOf(item.scopeId)?.ownerId === appState.me?.user;
+  const favorites = sidebarState.layout.sections.find((entry) => entry.kind === "favorites")!;
+  const favorite = favorites.projects.includes(item.scopeId);
+  const section =
+    sidebarState.layout.sections.find((entry) => entry.id === menuLocation) ??
+    projectSection(sidebarState.layout, item.scopeId);
+  const ordered = item.groupKind === "project" ? orderedProjects(section.id) : [];
+  const index = ordered.findIndex((project) => project.scopeId === item.scopeId);
   return html`
     <div class="session-menu-popover" role="menu" ${ref(placeSessionMenu)} @click=${(e: Event) => e.stopPropagation()}>
       <button
@@ -510,6 +690,69 @@ function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): Tem
       >
         ${icon(Folder, 15)}<span>View project</span>
       </button>
+      ${
+        item.groupKind === "project"
+          ? html`
+              <button
+                class="session-menu-option"
+                type="button"
+                role="menuitem"
+                ?disabled=${!sidebarState.loaded}
+                @click=${() => {
+                  if (favorite) {
+                    sessionsState.openMenuId = null;
+                    updateSidebarLayout((layout) => ({
+                      ...layout,
+                      sections: layout.sections.map((entry) =>
+                        entry.id === favorites.id
+                          ? { ...entry, projects: entry.projects.filter((id) => id !== item.scopeId) }
+                          : entry,
+                      ),
+                    }));
+                  } else moveProjectTo(item.scopeId, favorites.id);
+                }}
+              >
+                ${icon(Star, 15)}<span>${favorite ? "Remove from favorites" : "Add to favorites"}</span>
+              </button>
+              ${sidebarItemIcon(item.scopeId, item.name ?? "Project")}
+              <label class="sidebar-move-project"
+                >Move to
+                <select
+                  aria-label=${`Move ${item.name ?? "project"} to section`}
+                  .value=${projectSection(sidebarState.layout, item.scopeId).id}
+                  ?disabled=${!sidebarState.loaded}
+                  @change=${(event: Event) => moveProjectTo(item.scopeId, (event.currentTarget as HTMLSelectElement).value)}
+                >
+                  ${sidebarState.layout.sections.filter((target) => acceptsProjects(target) && target.kind !== "favorites").map((target) => html`<option value=${target.id} ?selected=${target.id === projectSection(sidebarState.layout, item.scopeId).id}>${target.name}</option>`)}
+                </select>
+              </label>
+              <button
+                class="session-menu-option"
+                type="button"
+                role="menuitem"
+                ?disabled=${index <= 0 || !sidebarState.loaded}
+                @click=${() => {
+                  sessionsState.openMenuId = null;
+                  moveProjectBefore(item.scopeId, ordered[index - 1]!.scopeId, section.id);
+                }}
+              >
+                ${icon(ArrowUp, 15)}<span>Move up</span>
+              </button>
+              <button
+                class="session-menu-option"
+                type="button"
+                role="menuitem"
+                ?disabled=${index < 0 || index >= ordered.length - 1 || !sidebarState.loaded}
+                @click=${() => {
+                  sessionsState.openMenuId = null;
+                  moveProjectBefore(ordered[index + 1]!.scopeId, item.scopeId, section.id);
+                }}
+              >
+                ${icon(ArrowDown, 15)}<span>Move down</span>
+              </button>
+            `
+          : nothing
+      }
       ${
         owned
           ? html`<button
@@ -813,46 +1056,11 @@ export function bumpSessionActivity(threadRef: string): void {
   renderList();
 }
 
-function groupedRows(list: RecentItem[]): TemplateResult {
-  const now = Date.now();
-  const items: { key: string; tpl: TemplateResult }[] = [];
-  let group: string | null = null;
-  for (const item of list) {
-    const dateless = item.kind === "project" && item.sessions.length === 0;
-    const g = recencyGroup(recentItemActivity(item), now);
-    if (!dateless && g !== group) {
-      group = g;
-      items.push({ key: `group:${g}`, tpl: html`<div class="recents-group">${g}</div>` });
-    }
-    const key = item.kind === "session" ? item.session.threadRef : `project:${item.scopeId}`;
-    items.push({ key, tpl: recentItem(item) });
-  }
-  return html`${repeat(
-    items,
-    (it) => it.key,
-    (it) => it.tpl,
-  )}`;
-}
-
-let midnightTimer: number | undefined;
-function armMidnightRefresh(): void {
-  if (midnightTimer !== undefined) window.clearTimeout(midnightTimer);
-  const d = new Date();
-  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
-  midnightTimer = window.setTimeout(
-    () => {
-      midnightTimer = undefined;
-      renderList();
-    },
-    Math.max(1_000, next - Date.now()),
-  );
-}
-
 function surfaceGlyph(s: CoreSession): TemplateResult | typeof nothing {
   const surface = surfaceOf(s);
   if (surface === "slack") return html`<span class="surface-glyph">${slackLogo(12)}</span>`;
   if (surface === "core") return html`<span class="surface-glyph">${icon(SquareTerminal, 12)}</span>`;
-  return nothing;
+  return html`<span class="surface-glyph">${icon(MessageSquare, 14)}</span>`;
 }
 
 function rowContext(s: CoreSession): string | null {
@@ -861,11 +1069,12 @@ function rowContext(s: CoreSession): string | null {
   return label && label !== sessionTitle(s) ? label : null;
 }
 
-function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
+function sessionRow(s: CoreSession, projectChild = false, sidebarLocation = ""): TemplateResult {
   const saved = Boolean(s.id);
-  if (saved && sessionsState.renamingId === s.id) return renameRow(s);
+  if (saved && sessionsState.renamingId === s.id && menuLocation === sidebarLocation)
+    return html`<div data-sidebar-location=${sidebarLocation}>${renameRow(s)}</div>`;
   const active = isActiveRow(s);
-  const menuOpen = saved && sessionsState.openMenuId === s.id;
+  const menuOpen = saved && sessionsState.openMenuId === s.id && menuLocation === sidebarLocation;
   const refreshingTitle = saved && refreshingTitleIds.has(s.id);
   const untitledProjectChild = projectChild && !s.title?.trim();
   let title = sessionTitle(s);
@@ -897,6 +1106,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   return html`
     <div
       data-session-id=${saved ? s.id : nothing}
+      data-sidebar-location=${sidebarLocation}
       class="session-row ${active ? "active" : ""} ${saved && selection.ids.has(s.id) ? "selected" : ""} ${menuOpen ? "menu-open" : ""} ${readOnly ? "read-only" : ""} ${refreshingTitle ? "title-refreshing" : ""} ${working ? "working" : ""} ${s.awaitingInput ? "awaiting-input" : ""} ${projectChild ? "project-child" : ""} ${color ? "colored" : ""}"
       style=${color ? `--session-color:${color}` : nothing}
     >
@@ -915,7 +1125,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         @click=${(e: MouseEvent) => {
           if (saved && e.button === 0 && (e.shiftKey || e.metaKey || e.ctrlKey)) {
             e.preventDefault();
-            selection = selectionClick(selection, visibleRowOrder(), s.id, {
+            selection = selectionClick(selection, visibleRowOrder(e.currentTarget as Element), s.id, {
               shift: e.shiftKey,
               toggle: e.metaKey || e.ctrlKey,
             });
@@ -933,7 +1143,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         @keydown=${(e: KeyboardEvent) => {
           if (!saved || e.key !== " ") return;
           e.preventDefault();
-          selection = selectionClick(selection, visibleRowOrder(), s.id, {
+          selection = selectionClick(selection, visibleRowOrder(e.currentTarget as Element), s.id, {
             shift: e.shiftKey,
             toggle: !e.shiftKey || e.metaKey || e.ctrlKey,
           });
@@ -942,11 +1152,12 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         @dblclick=${(e: Event) => {
           if (!saved) return;
           e.preventDefault();
+          menuLocation = sidebarLocation;
           startRename(s);
         }}
       >
         <div class="title" aria-live="polite">
-          ${statusMarks(s)}${surfaceGlyph(s)}${readOnly ? html`<span class="ro-lock" ${tip("Read-only")}>${icon(Lock, 12)}</span>` : nothing}<span
+          ${statusMarks(s)}${sidebarState.layout.itemIcons[s.threadRef] ? html`<span class="surface-glyph">${sidebarState.layout.itemIcons[s.threadRef]}</span>` : surfaceGlyph(s)}${readOnly ? html`<span class="ro-lock" ${tip("Read-only")}>${icon(Lock, 12)}</span>` : nothing}<span
             class="tl"
             dir="auto"
             >${titleContent}</span
@@ -1063,15 +1274,16 @@ function detachDropZone(): TemplateResult {
 const placeSessionMenu = (el?: Element): void => {
   if (!(el instanceof HTMLElement)) return;
   el.classList.remove("drop-up");
+  el.style.transform = "";
   const margin = 8;
   const scrollport = el.closest(".list")?.getBoundingClientRect();
   const bottomLimit = Math.min(window.innerHeight, scrollport?.bottom ?? Infinity) - margin;
   const topLimit = Math.max(0, scrollport?.top ?? 0) + margin;
+  el.style.maxHeight = `${Math.max(80, bottomLimit - topLimit)}px`;
+  el.style.overflowY = "auto";
   const rect = el.getBoundingClientRect();
-  const anchorTop = el.parentElement?.getBoundingClientRect().top ?? rect.top;
-  if (rect.bottom > bottomLimit && anchorTop - 4 - rect.height >= topLimit) {
-    el.classList.add("drop-up");
-  }
+  const top = Math.max(topLimit, Math.min(rect.top, bottomLimit - rect.height));
+  el.style.transform = `translateY(${top - rect.top}px)`;
 };
 
 function sessionMenuPopover(s: CoreSession): TemplateResult {
@@ -1084,7 +1296,7 @@ function sessionMenuPopover(s: CoreSession): TemplateResult {
         ${icon(Link, 15)}<span>Copy link</span>
       </button>
       <button class="session-menu-option" type="button" role="menuitem" @click=${() => setPinned(s, !pinned)}>
-        ${pinned ? icon(PinOff, 15) : icon(Pin, 15)}<span>${pinned ? "Unpin" : "Pin"}</span>
+        ${icon(Star, 15)}<span>${pinned ? "Remove from favorites" : "Add to favorites"}</span>
       </button>
       <button class="session-menu-option" type="button" role="menuitem" @click=${() => startRename(s)}>
         ${icon(Pencil, 15)}<span>Rename</span>
@@ -1101,7 +1313,7 @@ function sessionMenuPopover(s: CoreSession): TemplateResult {
       <button class="session-menu-option" type="button" role="menuitem" @click=${() => setArchived(s, !archived)}>
         ${archived ? icon(ArchiveRestore, 15) : icon(Archive, 15)}<span>${archived ? "Unarchive" : "Archive"}</span>
       </button>
-      ${sessionColorRow(s)}
+      ${sidebarItemIcon(s.threadRef, sessionTitle(s))} ${sessionColorRow(s)}
     </div>
   `;
 }
@@ -1197,11 +1409,6 @@ function renameInput(menuKey: string, ariaLabel: string, commit: () => Promise<v
   `;
 }
 
-function toggleShowArchived(): void {
-  showArchived = !showArchived;
-  renderList();
-}
-
 export function setWebOnly(webOnly: boolean): void {
   sessionsState.webOnly = webOnly;
   try {
@@ -1223,9 +1430,23 @@ async function copySessionLink(s: CoreSession): Promise<void> {
   await copyText(sessionLink(location.origin, UI_BASE, s.id));
 }
 
+function sidebarItemIcon(key: string, name: string): TemplateResult {
+  return html`<label class="sidebar-move-project"
+    >Icon<input
+      aria-label=${`Icon for ${name}`}
+      maxlength="16"
+      placeholder="Default"
+      .value=${sidebarState.layout.itemIcons[key] ?? ""}
+      @change=${(event: Event) => updateSidebarLayout((layout) => ({ ...layout, itemIcons: { ...layout.itemIcons, [key]: (event.currentTarget as HTMLInputElement).value } }))}
+  /></label>`;
+}
+
 function toggleSessionMenu(e: Event, id: string): void {
   e.stopPropagation();
-  sessionsState.openMenuId = sessionsState.openMenuId === id ? null : id;
+  const location =
+    (e.currentTarget as HTMLElement).closest<HTMLElement>("[data-sidebar-location]")?.dataset.sidebarLocation ?? "";
+  sessionsState.openMenuId = sessionsState.openMenuId === id && menuLocation === location ? null : id;
+  menuLocation = location;
   renderList();
 }
 
@@ -1239,7 +1460,10 @@ function beginRename(key: string, draft: string): void {
   renameDraft = draft;
   renderList();
   requestAnimationFrame(() => {
-    const input = appState.listEl?.querySelector<HTMLInputElement>(".session-rename-input");
+    const input = [...(appState.listEl?.querySelectorAll<HTMLInputElement>(".session-rename-input") ?? [])].find(
+      (element) =>
+        (element.closest<HTMLElement>("[data-sidebar-location]")?.dataset.sidebarLocation ?? "") === menuLocation,
+    );
     if (!input) return;
     input.focus();
     input.select();
@@ -1249,7 +1473,13 @@ function beginRename(key: string, draft: string): void {
 function focusSessionMenuButton(menuKey: string): void {
   requestAnimationFrame(() => {
     const buttons = appState.listEl?.querySelectorAll<HTMLButtonElement>(".session-menu-btn") ?? [];
-    [...buttons].find((button) => button.dataset.menuId === menuKey)?.focus();
+    [...buttons]
+      .find(
+        (button) =>
+          button.dataset.menuId === menuKey &&
+          (button.closest<HTMLElement>("[data-sidebar-location]")?.dataset.sidebarLocation ?? "") === menuLocation,
+      )
+      ?.focus();
   });
 }
 
@@ -1621,7 +1851,7 @@ export async function openSession(
   mountRestoredCanvas();
   const pane = splitInterceptsOpen(s);
   closeSidebarOnNarrowView();
-  if (projectName(s.scopeId) && sessionsState.collapsedProjectScopes.delete(s.scopeId)) renderList();
+  if (projectName(s.scopeId)) expandRecentProject(s.scopeId);
   return openSessionInto(pane ?? mainConversation(), s, entriesPrefetch, approvalsPrefetch, true);
 }
 

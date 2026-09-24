@@ -41,7 +41,7 @@ test("the collapsed rail keeps icon-only navigation instead of going empty", () 
   );
   assert.match(
     css,
-    /\.layout\.sidebar-closed #sidebar-top \.navrow span,\s*\.layout\.sidebar-closed #sidebar-top \.section-label \{\s*display: none;/,
+    /\.layout\.sidebar-closed #sidebar-top \.navrow span:not\(\.sidebar-shortcut-icon\),\s*\.layout\.sidebar-closed #sidebar-top \.section-label \{\s*display: none;/,
   );
   assert.match(css, /\.layout\.sidebar-closed #sidebar-top \.navrow \{\s*justify-content: center;/);
 

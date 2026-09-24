@@ -95,7 +95,7 @@ body {
   flex-direction: column;
   overflow: hidden;
   padding: 10px 4px 10px 8px;
-  background: color-mix(in srgb, var(--secondary) 42%, var(--background));
+  background: color-mix(in srgb, var(--secondary) 58%, var(--background));
   transition: width 0.18s ease;
 }
 /* Collapsed, the sidebar narrows to a rail that keeps its own toggle in flow — nothing
@@ -141,7 +141,7 @@ body.resizing-sidebar .sidebar {
 .layout.sidebar-closed #sidebar-footer .user-menu {
   display: none;
 }
-.layout.sidebar-closed #sidebar-top .navrow span,
+.layout.sidebar-closed #sidebar-top .navrow span:not(.sidebar-shortcut-icon),
 .layout.sidebar-closed #sidebar-top .section-label {
   display: none;
 }
@@ -261,12 +261,8 @@ body.resizing-sidebar {
   gap: 1px;
 }
 .quick-nav {
-  margin-bottom: 4px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-}
-.new-chat-nav {
-  margin-top: 4px;
+  margin-bottom: 2px;
+  padding-bottom: 0;
 }
 a.navrow,
 a.session,
@@ -338,9 +334,573 @@ a.chat-row-open {
   flex-direction: column;
   gap: 1px;
 }
+#sidebar-controls {
+  padding: 6px 2px 6px 0;
+}
+.sidebar-search {
+  margin: 4px 0 8px;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--background) 65%, transparent);
+  color: var(--muted-foreground);
+  gap: 8px;
+}
+.sidebar-search kbd {
+  margin-left: auto;
+  border-radius: 4px;
+  padding: 1px 4px;
+  font: inherit;
+  font-size: 11px;
+  background: var(--secondary);
+}
+.layout.sidebar-closed .sidebar-search {
+  border-color: transparent;
+  background: transparent;
+}
+.layout.sidebar-closed .sidebar-search kbd {
+  display: none;
+}
+.sidebar-customize {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  min-height: 32px;
+}
+.sidebar-customize small {
+  margin-left: auto;
+  font-size: 10px;
+}
+.sidebar-customize.customizing {
+  justify-content: center;
+  color: var(--cta-foreground);
+  background: var(--cta);
+}
+.sidebar-section {
+  margin: 0 0 12px;
+  min-width: 0;
+  border-radius: 6px;
+}
+.sidebar-section-head {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  gap: 1px;
+  color: var(--muted-foreground);
+}
+.sidebar-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-section-toggle span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-section-count {
+  font-size: 10px;
+  margin-right: 3px;
+}
+.sidebar-small-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 23px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.sidebar-small-button:hover,
+.sidebar-section-toggle:hover {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+.sidebar-small-button:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+.sidebar-section-action {
+  opacity: 0;
+}
+.sidebar-section-head:hover .sidebar-section-action,
+.sidebar-section-head:focus-within .sidebar-section-action {
+  opacity: 1;
+}
+.sidebar-section-empty {
+  padding: 2px 12px 8px 21px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted-foreground);
+}
+.sidebar-show-more {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  border-radius: 5px;
+  padding: 6px 11px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sidebar-show-more:hover {
+  background: var(--secondary);
+}
+.sidebar-section-options {
+  margin: 2px 4px 8px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+}
+.sidebar-section-options > button {
+  display: block;
+  width: 100%;
+  padding: 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--foreground);
+}
+.sidebar-section-options > button:hover {
+  background: var(--secondary);
+}
+.sidebar-section-options label,
+.sidebar-move-project {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.sidebar-section-options select,
+.sidebar-move-project select {
+  min-width: 0;
+  flex: 1;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--foreground);
+  background: var(--background);
+  font: inherit;
+}
+.sidebar-drop-over {
+  box-shadow: inset 0 0 0 1.5px var(--brand-accent);
+  background: color-mix(in srgb, var(--brand-accent) 5%, transparent);
+}
+.sidebar-project-drop,
+.sidebar-item-over {
+  box-shadow: 0 -2px 0 var(--brand-accent);
+}
+.sidebar-customization {
+  padding: 8px 3px;
+}
+.sidebar-customization-heading {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 5px;
+}
+.sidebar-customization p {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.65;
+  margin: 6px 5px 8px;
+}
+.sidebar-customization-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  border-radius: 5px;
+}
+.sidebar-customization-row:hover {
+  background: var(--secondary);
+}
+.sidebar-customization-row.is-hidden {
+  color: var(--muted-foreground);
+}
+.sidebar-drag-grip {
+  display: flex;
+  color: var(--muted-foreground);
+  cursor: grab;
+}
+.sidebar-customization-row input[type="checkbox"] {
+  accent-color: var(--brand-accent);
+}
+.sidebar-customization-name,
+.sidebar-section-name-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+}
+.sidebar-section-name-input {
+  width: 0;
+  padding: 5px 2px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--foreground);
+}
+.sidebar-add-section {
+  display: flex;
+  align-items: center;
+  margin: 8px 4px;
+  padding: 3px 5px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.sidebar-add-section input {
+  min-width: 0;
+  flex: 1;
+  padding: 5px 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 12px;
+}
+.sidebar-add-section:focus-within {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 1px;
+}
+#sidebar-top {
+  max-height: min(50vh, 420px);
+  flex-shrink: 0;
+  overflow-y: auto;
+}
+.sidebar-tab-settings {
+  margin: 6px 4px;
+  font-size: 12px;
+}
+.sidebar-tab-settings summary {
+  color: var(--muted-foreground);
+  cursor: pointer;
+  padding: 6px 0;
+}
+.sidebar-customization-row {
+  position: relative;
+}
+.sidebar-customization-row .sidebar-small-button,
+.sidebar-row-settings summary {
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+.sidebar-customization-row:hover .sidebar-small-button,
+.sidebar-customization-row:focus-within .sidebar-small-button,
+.sidebar-customization-row:hover .sidebar-row-settings summary,
+.sidebar-customization-row:focus-within .sidebar-row-settings summary {
+  opacity: 1;
+}
+.sidebar-row-settings summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 5px 2px;
+  color: var(--muted-foreground);
+}
+.sidebar-row-settings summary::-webkit-details-marker {
+  display: none;
+}
+.sidebar-row-settings > div {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 100%;
+  z-index: 5;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px #0002;
+  padding: 8px;
+}
+.sidebar-row-settings label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.sidebar-row-settings select {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  padding: 4px;
+}
+.sidebar-section-options[popover] {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: 260px;
+  max-width: calc(100vw - 24px);
+  max-height: min(70vh, 600px);
+  box-sizing: border-box;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow:
+    0 8px 30px #0002,
+    0 2px 6px #0001;
+  overflow: auto;
+}
+.sidebar-section-options[popover]::backdrop {
+  background: transparent;
+}
+@media (hover: none) {
+  .sidebar-customization-row .sidebar-small-button,
+  .sidebar-row-settings summary {
+    opacity: 1;
+  }
+}
+@media (max-width: 860px) {
+  .sidebar-section-options[popover] {
+    width: calc(100vw - 24px);
+  }
+}
+.sidebar-tabs {
+  display: flex;
+  gap: 3px;
+  overflow-x: auto;
+  padding: 5px 0 8px;
+  scrollbar-width: thin;
+}
+.sidebar-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-shrink: 0;
+  max-width: 180px;
+  min-width: 32px;
+  min-height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sidebar-tabs button span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-tabs button[aria-selected="true"],
+.sidebar-tabs button:hover {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+.sidebar-shortcut-icon {
+  width: 17px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.sidebar-customization h3 {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  font-weight: 600;
+  margin: 12px 5px 5px;
+}
+.sidebar-preference {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 4px;
+}
+.sidebar-icon-input {
+  width: 28px;
+  min-width: 28px;
+  text-align: center;
+  border: 0;
+  padding: 4px 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+}
+.sidebar-edit-card {
+  padding: 0 4px;
+}
+.sidebar-edit-card label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--muted-foreground);
+}
+.sidebar-edit-card select,
+.sidebar-add-shortcut select,
+.sidebar-add-section select,
+.sidebar-section-options input,
+.sidebar-move-project input {
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 4px;
+  font: inherit;
+  font-size: 11px;
+}
+.sidebar-edit-card select {
+  max-width: 100px;
+}
+.sidebar-add-shortcut {
+  display: flex;
+  gap: 6px;
+  margin: 12px 4px;
+}
+.sidebar-add-shortcut select {
+  flex: 1;
+}
+.sidebar-add-section:has(select) {
+  flex-wrap: wrap;
+}
+.sidebar-add-section select {
+  width: calc(100% - 26px);
+  order: 2;
+  margin: 4px 0;
+}
+.sidebar-section-options input,
+.sidebar-move-project input {
+  width: 100px;
+}
+.sidebar-section-options details {
+  font-size: 11px;
+  padding: 7px 0;
+}
+.sidebar-section-options summary {
+  cursor: pointer;
+}
+.sidebar-section-options details[open] {
+  max-height: 240px;
+  overflow-y: auto;
+}
+.sidebar-customization-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-reset {
+  margin: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+@media (max-width: 860px), (pointer: coarse) {
+  .sidebar-tabs button,
+  .sidebar-icon-input {
+    min-width: 44px;
+  }
+  .sidebar-small-button {
+    flex-basis: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+  .sidebar-tabs button,
+  .sidebar-section-toggle,
+  .sidebar-show-more,
+  .sidebar-section-options > button,
+  .sidebar-section-options summary,
+  .sidebar-customization input:not([type="checkbox"]),
+  .sidebar-customization select,
+  .sidebar-section-options input,
+  .sidebar-section-options select,
+  .sidebar-reset,
+  .sidebar-tab-settings summary {
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+  .sidebar-row-settings summary {
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+  }
+  .sidebar-customization-row {
+    flex-wrap: wrap;
+    padding-bottom: 8px;
+  }
+  .sidebar-customization-row .sidebar-section-name-input,
+  .sidebar-customization-row .sidebar-customization-name {
+    flex: 1 0 calc(100% - 68px);
+  }
+  .sidebar-section-action,
+  .sidebar-customization-row .sidebar-small-button,
+  .sidebar-row-settings summary {
+    opacity: 1;
+  }
+}
+.layout.sidebar-closed .sidebar-tabs {
+  flex-direction: column;
+  align-items: center;
+}
+.layout.sidebar-closed .sidebar-tabs button span + span {
+  display: none;
+}
+.sidebar-save-error {
+  padding: 7px;
+  color: var(--warning);
+  font-size: 11px;
+}
+.sidebar-save-error button {
+  margin-left: 4px;
+  color: inherit;
+  text-decoration: underline;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.sidebar-resize-handle:focus-visible::after {
+  background: var(--brand-accent);
+}
+@media (hover: none) {
+  .sidebar-section-action {
+    opacity: 1;
+  }
+}
 .recent-project {
   min-width: 0;
-  margin: 3px 0 5px 4px;
+  margin: 1px 0;
 }
 .recent-project-head {
   display: flex;
@@ -352,11 +912,11 @@ a.chat-row-open {
 .recent-project-toggle {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
   flex: 1;
   min-width: 0;
-  min-height: 30px;
-  padding: 4px 3px 4px 2px;
+  min-height: 32px;
+  padding: 4px 3px 4px 10px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -365,6 +925,8 @@ a.chat-row-open {
   font: inherit;
   text-align: left;
 }
+.recent-project-head:hover,
+.recent-project-head:focus-within,
 .recent-project-toggle:focus-visible,
 .recent-project-new-chat:hover,
 .recent-project-new-chat:focus-visible {
@@ -404,7 +966,7 @@ a.chat-row-open {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12.5px;
+  font-size: 13px;
 }
 .recent-project-count,
 .archived-toggle .archived-count {
@@ -481,7 +1043,7 @@ a.chat-row-open {
   flex-direction: column;
   gap: 1px;
   min-width: 0;
-  margin-left: 9px;
+  margin-left: 22px;
 }
 .archived-children {
   margin-left: 13px;

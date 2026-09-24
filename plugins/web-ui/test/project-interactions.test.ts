@@ -82,7 +82,7 @@ test("project interactions preserve focus and successful local mutations", async
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
-    const { contextsState, renderContexts } = await vite.ssrLoadModule("/src/contexts.ts");
+    const { contextsState, renderContexts, openCreateProject } = await vite.ssrLoadModule("/src/contexts.ts");
     appState.me = { user: "owner", org: "acme" };
     appState.currentView = "contexts";
     appState.mainEl = document.querySelector("#main");
@@ -126,6 +126,14 @@ test("project interactions preserve focus and successful local mutations", async
       },
       { focusRestored: true, emptyNameFocusRestored: true, projectPreserved: true, personalPreserved: true },
     );
+    openCreateProject();
+    await Promise.resolve();
+    assert.ok(
+      document.querySelector<HTMLDialogElement>(".project-dialog")?.open,
+      "new project works from an existing project's detail",
+    );
+    document.querySelector<HTMLButtonElement>('button[aria-label="Close new project"]')!.click();
+    assert.equal(contextsState.selected, project.scopeId, "cancel keeps the project being viewed");
   } finally {
     await vite.close();
   }

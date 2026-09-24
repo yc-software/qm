@@ -6,6 +6,8 @@ const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 const compactCss = css.replace(/\s+/g, " ");
 const shell = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
 const sessions = readFileSync(new URL("../src/sessions.ts", import.meta.url), "utf8");
+const sidebar = readFileSync(new URL("../src/sidebar.ts", import.meta.url), "utf8");
+const model = readFileSync(new URL("../src/sidebar-model.ts", import.meta.url), "utf8");
 const contexts = readFileSync(new URL("../src/contexts.ts", import.meta.url), "utf8");
 const page = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 
@@ -18,7 +20,10 @@ test("mobile shell follows the visual viewport and device safe areas", () => {
 });
 
 test("mobile sidebar is modal, dismissible, and sized for touch", () => {
-  assert.match(shell, /actionRow\(ICON\.newChat[\s\S]{0,200}startNewChatInLastScope\(\);/);
+  assert.match(
+    shell,
+    /closeSidebarOnNarrowView\(\);[\s\S]{0,200}shortcut\.target === "action:new-chat"\) startNewChatInLastScope\(\);/,
+  );
   assert.match(sessions, /export function startNewChat\([^)]*\)[^{]*\{\s*closeSidebarOnNarrowView\(\);/);
   assert.match(shell, /class="sidebar-scrim"[^>]+aria-label="Close sidebar"[^>]+@click=\$\{toggleSidebar\}/);
   assert.match(shell, /main\.inert = modal/);
@@ -58,7 +63,7 @@ test("mobile sidebar is modal, dismissible, and sized for touch", () => {
 });
 
 test("the sidebar's quick actions share the navrow treatment", () => {
-  assert.match(shell, /const actionRow = \([\s\S]{0,160}class="navrow"\s+type="button"/);
+  assert.match(shell, /return html`<button\s+class="navrow"\s+type="button"/);
   assert.doesNotMatch(shell, /class="new-chat"/);
   assert.doesNotMatch(shell, /split-new-session/);
   assert.doesNotMatch(css, /(^|\n)\.new-chat[ ,:{]/);
@@ -66,28 +71,40 @@ test("the sidebar's quick actions share the navrow treatment", () => {
 });
 
 test("the sidebar resize handle stays accessible without a hover tooltip", () => {
-  assert.match(
-    shell,
-    /class="sidebar-resize-handle"[\s\S]{0,200}aria-label="Resize sidebar"[\s\S]{0,200}@pointerdown=\$\{startSidebarResize\}[\s\S]{0,100}@dblclick=\$\{resetSidebarWidth\}/,
-  );
+  const resize = shell.match(/class="sidebar-resize-handle"[\s\S]*?<\/div>/)?.[0] ?? "";
+  assert.match(resize, /aria-label="Resize sidebar"/);
+  assert.match(resize, /@pointerdown=\$\{startSidebarResize\}/);
+  assert.match(resize, /@dblclick=\$\{resetSidebarWidth\}/);
+  assert.match(resize, /@keydown=/);
   assert.doesNotMatch(shell, /Drag to resize/);
 });
 
-test("the quick nav is home, search, browse; create sits under the divider", () => {
+test("the configurable quick nav keeps search and the default destinations accessible", () => {
   assert.match(
     shell,
-    /<nav class="nav quick-nav"[\s\S]*?navRow\("chats", ICON\.home, "Home"\)[\s\S]*?actionRow\(Search, "Search"[\s\S]*?actionRow\(ICON\.browse, "Browse"[\s\S]*?<\/nav>/,
+    /<nav class="nav quick-nav"[\s\S]*?aria-label="Search"[\s\S]*?sidebarTabs\(\)[\s\S]*?shortcuts.map\(shortcutRow\)/,
   );
-  assert.doesNotMatch(
-    shell,
-    /<nav class="nav quick-nav"[\s\S]*?actionRow\(ICON\.newChat[\s\S]*?<\/nav>/,
-    "create belongs below the quick-nav divider, not inside it",
-  );
-  assert.match(shell, /<div class="nav new-chat-nav">[\s\S]*?actionRow\(ICON\.newChat[\s\S]*?<\/div>/);
-  assert.doesNotMatch(shell, /<span>Sessions<\/span>/);
-  assert.doesNotMatch(shell, /navRow\("chats", ICON\.chats/);
+  for (const target of [
+    "view:chats",
+    "view:inbox",
+    "view:calendar",
+    "view:contexts",
+    "action:browse",
+    "action:new-chat",
+  ])
+    assert.ok(model.includes(`"${target}"`));
+  assert.match(sidebar, /aria-label="Shortcut destination"/);
   assert.doesNotMatch(shell, /nav-section-toggle|nav-group|navWorkspaceOpen/);
   assert.doesNotMatch(css, /\.nav-section-toggle|\.nav-group/);
+});
+
+test("sidebar customization controls remain large enough on touch screens", () => {
+  assert.match(
+    compactCss,
+    /@media \(max-width: 860px\), \(pointer: coarse\) \{[\s\S]*?\.sidebar-small-button \{[^}]*flex-basis: 44px;[^}]*height: 44px;/,
+  );
+  assert.match(compactCss, /\.sidebar-tabs button,[\s\S]*?\.sidebar-section-toggle,[\s\S]*?min-height: 44px;/);
+  assert.match(compactCss, /\.sidebar-customization-row \{ flex-wrap: wrap;/);
 });
 
 test("impersonation mode keeps its critical exit control below the top safe area", () => {

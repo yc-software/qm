@@ -85,7 +85,7 @@ import { renderLoopsPage, resetActiveLoop } from "./loops";
 import { openWebhookById, renderWebhooksPage, resetActiveWebhook, routeWebhooksHistory } from "./webhooks";
 import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
-import { openChatSearch } from "./search";
+import { isMac, openChatSearch } from "./search";
 import { closeBrowse, openBrowse } from "./browse";
 import { attachTooltip, hideTooltip, tip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
@@ -102,14 +102,32 @@ import {
 } from "./inbox";
 import { openSkillById, renderSkills, resetActiveSkill, routeSkillsHistory } from "./skills";
 import { applyTheme, renderSettings, watchSystemTheme } from "./settings";
-import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
+import {
+  contextsState,
+  ensureContexts,
+  openCreateProject,
+  openProjectDetail,
+  renderContexts,
+  resetActiveProject,
+  resetContextsState,
+  resolveProjectScope,
+} from "./contexts";
 import { appState, can, canView, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
+import { loadSidebarState, resetSidebarState, subscribeSidebar } from "./sidebar-state";
+import { sidebarControls, sidebarTabs, type SidebarChoice } from "./sidebar";
+import { sidebarState } from "./sidebar-state";
 import { activeSessionForDocumentTitle, updateDocumentTitle } from "./document-title";
 export { appState, can, type Me, type View } from "./shell-state";
 
 let userMenuOpen = false;
 let footerEl: HTMLElement | null = null;
+let sidebarControlsEl: HTMLElement | null = null;
+
+subscribeSidebar(() => {
+  renderList();
+  if (sidebarControlsEl) render(sidebarControls(), sidebarControlsEl);
+});
 
 applyTheme();
 watchSystemTheme();
@@ -191,6 +209,7 @@ function startSidebarResize(e: PointerEvent): void {
   const onMove = (ev: PointerEvent) => {
     w = Math.min(SIDEBAR_MAX_W, Math.max(SIDEBAR_MIN_W, startW + (ev.clientX - startX)));
     document.documentElement.style.setProperty("--sidebar-w", `${w}px`);
+    handle.setAttribute("aria-valuenow", String(Math.round(w)));
   };
   const onUp = () => {
     handle.removeEventListener("pointermove", onMove);
@@ -207,6 +226,7 @@ function startSidebarResize(e: PointerEvent): void {
 function resetSidebarWidth(): void {
   document.documentElement.style.removeProperty("--sidebar-w");
   localStorage.removeItem(SIDEBAR_W_KEY);
+  (appEl as HTMLElement).querySelector(".sidebar-resize-handle")?.setAttribute("aria-valuenow", "280");
 }
 
 const ICON = {
@@ -245,6 +265,7 @@ export async function signOut(): Promise<void> {
   exitSplitIfActive();
   mainConversation().resetChatState();
   resetSessionsState();
+  resetSidebarState();
   appState.currentView = "chats";
   clearSkillsCache();
   resetMemoryState();
@@ -500,6 +521,7 @@ export function mountShell(): void {
           </div>
           <div id="sidebar-top"></div>
           <div class="list" id="sidebar-body"></div>
+          <div id="sidebar-controls"></div>
           <div class="sidebar-footer" id="sidebar-footer"></div>
         </aside>
         <button class="sidebar-scrim" type="button" aria-label="Close sidebar" @click=${toggleSidebar}></button>
@@ -508,6 +530,25 @@ export function mountShell(): void {
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize sidebar"
+          tabindex="0"
+          aria-valuemin=${SIDEBAR_MIN_W}
+          aria-valuemax=${SIDEBAR_MAX_W}
+          aria-valuenow=${Number.parseInt(document.documentElement.style.getPropertyValue("--sidebar-w")) || 280}
+          @keydown=${(event: KeyboardEvent) => {
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+            event.preventDefault();
+            const current =
+              (appEl as HTMLElement).querySelector<HTMLElement>(".sidebar")?.getBoundingClientRect().width ?? 280;
+            let next = Math.max(
+              SIDEBAR_MIN_W,
+              Math.min(SIDEBAR_MAX_W, current + (event.key === "ArrowRight" ? 16 : -16)),
+            );
+            if (event.key === "Home") next = SIDEBAR_MIN_W;
+            if (event.key === "End") next = SIDEBAR_MAX_W;
+            document.documentElement.style.setProperty("--sidebar-w", `${next}px`);
+            localStorage.setItem(SIDEBAR_W_KEY, String(next));
+            (event.currentTarget as HTMLElement).setAttribute("aria-valuenow", String(next));
+          }}
           @pointerdown=${startSidebarResize}
           @dblclick=${resetSidebarWidth}
         ></div>
@@ -530,13 +571,15 @@ export function mountShell(): void {
   appState.listEl = (appEl as HTMLElement).querySelector("#sidebar-body");
   appState.mainEl = (appEl as HTMLElement).querySelector("#main");
   footerEl = (appEl as HTMLElement).querySelector("#sidebar-footer");
+  sidebarControlsEl = (appEl as HTMLElement).querySelector("#sidebar-controls");
+  if (sidebarControlsEl) render(sidebarControls(), sidebarControlsEl);
   renderSidebarFooter();
   renderSidebarTop();
   updateSidebarToggleLabels();
   syncSidebarAccessibility(false);
 }
 
-function inboxNavRow(): TemplateResult {
+function inboxNavRow(label = "Inbox", symbol = "▣"): TemplateResult {
   const count = inboxOpenCount();
   return html`<a
     class="navrow ${appState.currentView === "inbox" ? "active" : ""}"
@@ -550,7 +593,7 @@ function inboxNavRow(): TemplateResult {
     }}
     @dragend=${() => endPaneDrag()}
   >
-    ${icon(ICON.inbox, 17)}<span>Inbox</span>${count > 0 ? html`<span class="nav-badge" aria-label=${`${count} waiting on you`}>${count > 99 ? "99+" : count}</span>` : nothing}
+    ${symbol === "▣" ? icon(ICON.inbox, 17) : html`<span class="sidebar-shortcut-icon" aria-hidden="true">${symbol}</span>`}<span>${label}</span>${count > 0 ? html`<span class="nav-badge" aria-label=${`${count} waiting on you`}>${count > 99 ? "99+" : count}</span>` : nothing}
   </a>`;
 }
 
@@ -593,54 +636,112 @@ export function renderSidebarFooter(): void {
   );
 }
 
+export function sidebarShortcutChoices(): SidebarChoice[] {
+  const views: [View, string, string][] = [
+    ["chats", "Home", "⌂"],
+    ["inbox", "Inbox", "▣"],
+    ["calendar", "Calendar", "▦"],
+    ["contexts", "Projects", "▱"],
+    ["files", "Files", "▤"],
+    ["skills", "Skills", "◇"],
+    ["memory", "Memory", "◎"],
+    ["crons", "Schedules", "◷"],
+    ["loops", "Loops", "↻"],
+    ["webhooks", "Webhooks", "↗"],
+    ["deploys", "Apps", "⊞"],
+    ["keychain", "Connections", "⚿"],
+    ["settings", "Settings", "⚙"],
+  ];
+  return [
+    ...views.filter(([view]) => canView(view)).map(([view, name, icon]) => ({ target: `view:${view}`, name, icon })),
+    { target: "action:new-chat", name: "New chat", icon: "+" },
+    { target: "action:new-project", name: "New project", icon: "+" },
+    { target: "action:browse", name: "Browse", icon: "⊞" },
+    ...contextsState.list
+      .filter((context) => context.project)
+      .map((context) => ({ target: `project:${context.scopeId}`, name: context.project!.name, icon: "▱" })),
+    ...sessionsState.list
+      .filter((session) => session.id && !session.archived && !session.parentSessionId)
+      .map((session) => ({ target: `session:${session.id}`, name: sessionTitle(session), icon: "◇" })),
+  ];
+}
+
 export function renderSidebarTop(): void {
   syncDocumentTitle();
   if (!appState.topEl) return;
-  const highlighted = (v: View) => v !== "chats" && appState.currentView === v;
-  const navRow = (v: View, glyph: IconNode, label: string) =>
-    html`<a
-      class="navrow ${highlighted(v) ? "active" : ""}"
-      href=${deepLinkPath(UI_BASE, v, null)}
-      data-view=${v}
-      aria-label=${label}
-      ${tip(sidebarOpen ? "" : label)}
-    >
-      ${icon(glyph, 17)}<span>${label}</span>
-    </a>`;
-  const actionRow = (glyph: IconNode, label: string, run: () => void) =>
-    html`<button
+  const choices = sidebarShortcutChoices();
+  const shortcuts = sidebarState.layout.shortcuts.filter(
+    (shortcut) =>
+      shortcut.tabId === sidebarState.layout.activeTab && choices.some((choice) => choice.target === shortcut.target),
+  );
+  const shortcutRow = (shortcut: (typeof shortcuts)[number]) => {
+    const target = shortcut.target.slice(shortcut.target.indexOf(":") + 1);
+    if (shortcut.target === "view:inbox") return inboxNavRow(shortcut.name, shortcut.icon);
+    const view = shortcut.target.startsWith("view:") && isView(target) ? target : null;
+    const defaults = choices.find((choice) => choice.target === shortcut.target);
+    let glyph: IconNode = MessageSquare;
+    if (view === "chats") glyph = ICON.home;
+    else if (view === "settings") glyph = Settings;
+    else if (view) glyph = ICON[view];
+    else if (shortcut.target === "action:browse") glyph = ICON.browse;
+    else if (shortcut.target.startsWith("action:new-")) glyph = Plus;
+    else if (shortcut.target.startsWith("project:")) glyph = Folder;
+    const symbol =
+      shortcut.icon === defaults?.icon
+        ? icon(glyph, 17)
+        : html`<span class="sidebar-shortcut-icon" aria-hidden="true">${shortcut.icon}</span>`;
+    const label =
+      shortcut.target === "action:new-chat" && shortcut.name === "New chat" && splitState.active
+        ? "New session"
+        : shortcut.name;
+    if (view)
+      return html`<a
+        class="navrow ${view !== "chats" && appState.currentView === view ? "active" : ""}"
+        href=${deepLinkPath(UI_BASE, view, null)}
+        data-view=${view}
+        aria-label=${label}
+        ${tip(sidebarOpen ? "" : label)}
+        >${symbol}<span>${label}</span></a
+      >`;
+    return html`<button
       class="navrow"
       type="button"
       aria-label=${label}
       ${tip(sidebarOpen ? "" : label)}
       @click=${() => {
+        hideTooltip();
         closeSidebarOnNarrowView();
-        run();
+        if (shortcut.target === "action:browse") openBrowse();
+        else if (shortcut.target === "action:new-chat") startNewChatInLastScope();
+        else if (shortcut.target === "action:new-project") openCreateProject();
+        else if (shortcut.target.startsWith("project:")) openProjectDetail(target);
+        else if (shortcut.target.startsWith("session:")) {
+          const session = sessionsState.list.find((item) => item.id === target);
+          if (session) void openSession(session);
+        }
       }}
     >
-      ${icon(glyph, 17)}<span>${label}</span>
+      ${symbol}<span>${label}</span>
     </button>`;
-  const newChatLabel = splitState.active ? "New session" : "Create New Chat";
+  };
   render(
     html`
       <nav class="nav quick-nav" @click=${onNavClick}>
-        ${navRow("chats", ICON.home, "Home")}
-        ${can("inbox") ? html`${inboxNavRow()} ${navRow("calendar", ICON.calendar, "Calendar")}` : nothing}
-        ${actionRow(Search, "Search", () => {
-          hideTooltip();
-          openChatSearch();
-        })}
-        ${actionRow(ICON.browse, "Browse", () => {
-          hideTooltip();
-          openBrowse();
-        })}
+        <button
+          class="navrow sidebar-search"
+          type="button"
+          aria-label="Search"
+          ${tip(sidebarOpen ? "" : "Search")}
+          @click=${() => {
+            hideTooltip();
+            closeSidebarOnNarrowView();
+            openChatSearch();
+          }}
+        >
+          ${icon(Search, 16)}<span>Search anything</span><kbd>${isMac ? "⌘K" : "Ctrl K"}</kbd>
+        </button>
+        ${sidebarTabs()} ${sidebarState.customizing ? nothing : shortcuts.map(shortcutRow)}
       </nav>
-      <div class="nav new-chat-nav">
-        ${actionRow(ICON.newChat, newChatLabel, () => {
-          hideTooltip();
-          startNewChatInLastScope();
-        })}
-      </div>
       ${sessionSelectionBar() ?? nothing}
     `,
     appState.topEl,
@@ -675,6 +776,7 @@ function onNavClick(e: Event): void {
   if (e instanceof MouseEvent && !isPlainLeftClick(e)) return;
   e.preventDefault();
   setScopedSession(null);
+  if (view === "contexts") resetActiveProject();
   switchView(view);
   closeSidebarOnNarrowView();
 }
@@ -1046,6 +1148,8 @@ export async function boot(): Promise<void> {
   appState.me = (await r.json()) as Me;
   void initializeBrowserErrors(appState.me);
   void initializeAnalytics(appState.me, isView(wanted) && canView(wanted) ? wanted : "chats");
+  resetSidebarState();
+  const sidebarLoaded = loadSidebarState();
   authMode = appState.me.mode ?? "portal";
   clearPortalAttempt();
   if (appState.me.individualModelAuth && !appState.me.modelAuthConnected) {
@@ -1067,7 +1171,7 @@ export async function boot(): Promise<void> {
   warmDeferredChunks();
   void refreshInbox({ silent: true });
   loadPersistedSplit();
-  await adoptRemoteSplit(remoteSplitFetch);
+  await Promise.all([adoptRemoteSplit(remoteSplitFetch), sidebarLoaded]);
 
   const connectedProvider = params.get("status") === "connected" ? params.get("connector") : null;
   if (connectedProvider) markConnectorConnected(connectedProvider);

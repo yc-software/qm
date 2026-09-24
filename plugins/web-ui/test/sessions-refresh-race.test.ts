@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 test("superseded session refreshes observe the winning refresh's list", async () => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
+  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main><nav id="sidebar-top"></nav>', {
     url: "http://localhost/web-ui/",
   });
   Object.defineProperty(dom.window, "matchMedia", {
@@ -37,7 +37,8 @@ test("superseded session refreshes observe the winning refresh's list", async ()
   globalThis.fetch = async (input) => {
     const path = String(input);
     if (path === "/api/sessions") return new Promise<Response>((resolve) => pending.push(resolve));
-    if (path === "/api/contexts") return Response.json({ contexts: [] });
+    if (path === "/api/contexts")
+      return Response.json({ contexts: [{ scopeId: "group:launch", kind: "group", project: { name: "Launch" } }] });
     throw new Error(`Unexpected request: ${path}`);
   };
 
@@ -45,7 +46,17 @@ test("superseded session refreshes observe the winning refresh's list", async ()
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { sessionsState, sessionsReady, refreshSessions } = await vite.ssrLoadModule("/src/sessions.ts");
+    const { sidebarState } = await vite.ssrLoadModule("/src/sidebar-state.ts");
+    const { renderSidebarTop } = await vite.ssrLoadModule("/src/shell.ts");
+    const { ensureContexts } = await vite.ssrLoadModule("/src/contexts.ts");
     appState.me = { user: "alex", org: "acme" };
+    appState.topEl = document.querySelector("#sidebar-top");
+    sidebarState.layout.shortcuts = [
+      { id: "saved", tabId: "home", name: "Saved chat", icon: "◇", target: "session:sess-a" },
+      { id: "project", tabId: "home", name: "Launch", icon: "▱", target: "project:group:launch" },
+    ];
+    renderSidebarTop();
+    assert.equal(document.querySelector('[aria-label="Saved chat"]'), null);
     const boot = refreshSessions({ silent: true });
     const pane1 = (async () => {
       const refreshed = await refreshSessions({ silent: true });
@@ -72,6 +83,9 @@ test("superseded session refreshes observe the winning refresh's list", async ()
     assert.equal(p1.found, true, "a superseded awaiter sees the session — no empty read-only stub");
     await readiness;
     assert.ok(sessionsState.list.some((s: { id: string }) => s.id === sessionA.id));
+    assert.ok(document.querySelector('[aria-label="Saved chat"]'), "session fetch refreshes saved shortcuts");
+    await ensureContexts(true);
+    assert.ok(document.querySelector('[aria-label="Launch"]'), "context fetch refreshes saved shortcuts");
   } finally {
     await vite.close();
   }

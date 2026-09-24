@@ -4,6 +4,7 @@ import test from "node:test";
 
 const shell = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
 const inbox = readFileSync(new URL("../src/inbox.ts", import.meta.url), "utf8");
+const contexts = readFileSync(new URL("../src/contexts.ts", import.meta.url), "utf8");
 
 const resetDetail = shell.match(/function resetActiveDetail\(v: View\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
 const refresh = shell.match(/function refreshActiveView\(v: View\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
@@ -11,6 +12,14 @@ const refresh = shell.match(/function refreshActiveView\(v: View\): void \{[\s\S
 test("pressing the nav entry for the view you are already on drops back to its index", () => {
   assert.match(refresh, /^\s*resetActiveDetail\(v\);/m);
   assert.match(refresh, /syncUrlFromState\(\);/);
+});
+
+test("the Projects shortcut clears selection without changing scoped project navigation", () => {
+  const navClick = shell.match(/function onNavClick\(e: Event\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(navClick, /if \(view === "contexts"\) resetActiveProject\(\);\s*switchView\(view\);/);
+  assert.match(contexts, /export function resetActiveProject\(\): void \{\s*selectContext\(null\);/);
+  const switcher = shell.match(/export function switchView\(v: View\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.doesNotMatch(switcher + resetDetail, /resetActiveProject/);
 });
 
 test("every view with a detail page clears it, so no nav entry is a no-op", () => {

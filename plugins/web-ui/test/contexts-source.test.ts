@@ -7,7 +7,7 @@ const source = readFileSync(new URL("../src/contexts.ts", import.meta.url), "utf
 test("contexts pane redraws preserve focus instead of raw-replacing the DOM", () => {
   assert.match(
     source,
-    /render\(selected \? detailTpl\(selected\) : gridTpl\(\), host\);\s+replacePanePreservingFocus\(host\);/,
+    /render\(html`\$\{selected \? detailTpl\(selected\) : gridTpl\(\)\}\$\{createProjectDialog\(\)\}`, host\);\s+replacePanePreservingFocus\(host\);/,
   );
   assert.doesNotMatch(source, /appState\.mainEl\.replaceChildren/);
 });

@@ -28,7 +28,7 @@ import { UI_BASE } from "./deep-link";
 import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, fieldSelect, formatBytes, icon, initials, menuSelect, relTime } from "./ui";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
-import { startNewChat } from "./sessions";
+import { renderList, startNewChat } from "./sessions";
 import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
 import { activityOf } from "./session-list";
 import type { WebhookView } from "./webhooks";
@@ -125,6 +125,7 @@ async function fetchContexts(): Promise<CoreContext[]> {
   contextsState.list = result.contexts ?? [];
   contextsState.loaded = true;
   contextsState.loadedAt = Date.now();
+  renderList();
   return contextsState.list;
 }
 
@@ -297,7 +298,7 @@ function drawContexts(): void {
   const selected = contextsState.selected
     ? contextsState.list.find((c) => c.scopeId === contextsState.selected)
     : undefined;
-  render(selected ? detailTpl(selected) : gridTpl(), host);
+  render(html`${selected ? detailTpl(selected) : gridTpl()}${createProjectDialog()}`, host);
   replacePanePreservingFocus(host);
   const dialog = host.querySelector<HTMLDialogElement>(".project-dialog");
   if (dialog && !dialog.open) dialog.showModal();
@@ -390,7 +391,6 @@ function gridTpl(): TemplateResult {
       </div>
       ${status ? html`<div class="status">${status}</div>` : nothing} ${projectList}
     </div>
-    ${createProjectDialog()}
   `;
 }
 
@@ -1005,7 +1005,8 @@ function deploymentRow(d: ScopeDeployment): TemplateResult {
   `;
 }
 
-function openCreateProject(): void {
+export function openCreateProject(): void {
+  if (appState.currentView !== "contexts") switchView("contexts");
   createProjectOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   contextsState.createOpen = true;
   contextsState.createName = "";
@@ -1087,6 +1088,10 @@ export function openProjectDetail(scopeId: string): void {
   selectContext(scopeId);
 }
 
+export function resetActiveProject(): void {
+  selectContext(null);
+}
+
 export async function renameProject(project: CoreProject, name: string): Promise<boolean> {
   try {
     const updated = projectFromResponse(
@@ -1134,6 +1139,7 @@ function upsertProject(project: CoreProject): CoreContext {
   contextsState.list = [next, ...contextsState.list.filter((context) => context.scopeId !== scopeId)];
   contextsState.loaded = loaded;
   if (loaded) contextsState.loadedAt = Date.now();
+  renderList();
   return next;
 }
 
