@@ -1,3 +1,4 @@
+import type { MemoryCaptureMetadata } from "../memory/records.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort } from "../util/async.ts";
@@ -486,6 +487,7 @@ export interface ToolContextDeps {
   config?: ScopedConfigStore;
   memory?: MemoryService;
   memoryScopeId?: ScopeId;
+  memoryCaptureMetadata?: () => MemoryCaptureMetadata;
   memoryAccess?: { write?: ScopeId; read: ScopeId[] };
   mcp?: McpToolService;
   sessionHistory?: {
@@ -1209,6 +1211,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return once(() =>
         timed("memory_write", () =>
           memory!.capture(write, facts, Date.now(), deps.createdBy, {
+            ...deps.memoryCaptureMetadata?.(),
             mode: "explicit",
             actorId: deps.createdBy,
             conversationScopeId: writableScopeId ?? write,

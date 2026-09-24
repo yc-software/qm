@@ -1,3 +1,4 @@
+import { memoryBoundedEntries, memoryContextPayload, nextMemoryContext } from "../memory/context-boundary.ts";
 import { isBackendCredential } from "../credentials/keychain.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
@@ -1042,6 +1043,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       for (const layer of resolution.layers) await deps.workspace.ensureScope(layer.scopeId);
 
       const context = await resolveTurnContext({
+        noteMemoryRead: async () => {
+          await deps.sessions.noteMemoryRead(session.id);
+        },
         actor,
         audience: conversation.audience,
         acl: deps.acl,
@@ -1064,7 +1068,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
       resolution.grantedHandles = context.listFiles();
       const recallStart = Date.now();
-      const recalled = await context.recall();
+      let memoryView = await context.memorySnapshot(false);
+      let recalled = memoryView.recalled;
       const recallMs = Date.now() - recallStart;
       const isWeb = input.surface === "web";
       const isSlack = input.surface === "slack";
@@ -1274,9 +1279,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (!input.runId || !deps.runs) return null;
         const seq = (await deps.runs.get(input.runId))?.turnUserSeq;
         if (seq == null) return null;
-        return turnAtSeq(await deps.sessions.getEntries(session.id, { sinceSeq: seq }), seq);
+        const entries = memoryBoundedEntries(await deps.sessions.getEntries(session.id));
+        if (!entries.some((entry) => entry.seq === seq)) return null;
+        return turnAtSeq(
+          entries.filter((entry) => entry.seq >= seq),
+          seq,
+        );
       };
-      const recordedTurn = isRetry ? await recordedTurnForRun() : null;
+      const initialMemoryWindow = await deps.sessions.getContextWindow(session.id);
+      const memorySnapshot = { ...memoryView.snapshot, readEpoch: await deps.sessions.memoryReadEpoch(session.id) };
+      const initialMemoryContext = initialMemoryWindow.entries.findLast((entry) => memoryContextPayload(entry));
+      const candidateMemoryContext = nextMemoryContext(
+        initialMemoryWindow.entries,
+        memorySnapshot,
+        await deps.sessions.latestEntrySeq(session.id),
+      );
+      let memoryContextChanged =
+        !initialMemoryContext ||
+        candidateMemoryContext.throughSeq > memoryContextPayload(initialMemoryContext)!.throughSeq;
+      const recordedTurn = isRetry && !memoryContextChanged ? await recordedTurnForRun() : null;
       if (recordedTurn?.answer) {
         const recordedAnswer = recordedTurn.answer;
         deps.auditLog.record({
@@ -1953,9 +1974,55 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
+        const memoryWindow = await deps.sessions.getContextWindow(session.id);
+        const readEpoch = await deps.sessions.memoryReadEpoch(session.id);
+        memoryView = await context.memorySnapshot();
+        memoryView.snapshot.readEpoch = readEpoch;
+        recalled = memoryView.recalled;
+        const latestMemoryContext = memoryWindow.entries.findLast((entry) => memoryContextPayload(entry));
+        const nextContext = nextMemoryContext(
+          memoryWindow.entries,
+          memoryView.snapshot,
+          await deps.sessions.latestEntrySeq(session.id),
+        );
+        memoryContextChanged =
+          !latestMemoryContext || nextContext.throughSeq > memoryContextPayload(latestMemoryContext)!.throughSeq;
+        if (memoryContextChanged && nextContext.throughSeq >= 0)
+          await deps.sessions.append(lease, { type: "system", scopeLabel: scopeId, payload: nextContext });
+        const memoryHistoryReset = nextContext.throughSeq >= 0;
+        const captureDependencies = () => [
+          ...memoryView.records,
+          ...(!memoryView.complete ||
+          memoryBoundedEntries(memoryWindow.entries).length > 0 ||
+          toolCalls > 0 ||
+          input.priorTurns?.length ||
+          input.overheard?.length ||
+          input.attachments?.length ||
+          input.inboundNotes
+            ? [
+                {
+                  id: "untracked-turn-context",
+                  text: "",
+                  sensitivity: "unknown" as const,
+                  sources: [],
+                  sourceUnknown: true,
+                },
+              ]
+            : []),
+        ];
+        if (memoryHistoryReset) await deps.harness.turns.resetSession?.(session.id);
         if (input.approval) {
           const p = await pending.get(input.approval.requestId);
           const decision = input.approval.approved ? "approve" : "deny";
+          const cutoffEntry = memoryHistoryReset
+            ? await deps.sessions.getEntry(session.id, nextContext.throughSeq)
+            : undefined;
+          if (cutoffEntry && (!p?.createdAt || p.createdAt <= cutoffEntry.createdAt))
+            return {
+              status: "refused",
+              sessionId: session.id,
+              reason: "Memory access changed; submit a fresh request rather than resuming the previous approval.",
+            };
           if (!p || p.sessionId !== session.id) {
             deps.auditLog.record({
               at: Date.now(),
@@ -2244,20 +2311,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.harness.models.shouldRespond &&
           !(
             isRetry &&
-            (recordedTurn ?? findTrailingPartialTurn((await transcripts.forRender(session.id)).entries, input.text))
+            (recordedTurn ??
+              (!memoryContextChanged &&
+                findTrailingPartialTurn((await transcripts.forRender(session.id)).entries, input.text)))
           )
         ) {
           const detectHistory = filterHistory(
-            (await deps.sessions.getEntries(session.id, { limit: DETECT_HISTORY_TAIL })).filter(
-              (e) => e.type !== "soul",
-            ),
+            memoryBoundedEntries((await deps.sessions.getContextWindow(session.id)).entries)
+              .slice(-DETECT_HISTORY_TAIL)
+              .filter((e) => e.type !== "soul"),
           );
           const detectStart = Date.now();
           const decision = await deps.harness.models.shouldRespond({
             session,
             message: input.text,
-            recentContext: input.detectContext ?? "",
-            ...(input.detectOpener ? { threadOpener: input.detectOpener } : {}),
+            recentContext: memoryHistoryReset ? "" : (input.detectContext ?? ""),
+            ...(!memoryHistoryReset && input.detectOpener ? { threadOpener: input.detectOpener } : {}),
             systemPrompt: resolution.systemPrompt,
             ...(input.gatewayContext?.reactionGuidance
               ? { reactionGuidance: input.gatewayContext.reactionGuidance }
@@ -2561,6 +2630,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   session,
                   scopeId: scopeId as ScopeId,
                   orgScopeId: resolution.orgScopeId,
+                  memoryContext: memoryView.snapshot,
                   request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
                 }),
               }
@@ -2588,6 +2658,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   }),
               }),
           memory: context.memory,
+          memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedRecords: captureDependencies() }),
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
           ...(deps.mcp ? { mcp: deps.mcp } : {}),
@@ -2687,7 +2758,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         const importedOverheard: OverheardEntryPayload[] = [];
-        if ((!input.envelopeWrapped || humanTurn) && input.overheard?.length) {
+        if (!memoryHistoryReset && (!input.envelopeWrapped || humanTurn) && input.overheard?.length) {
           const toImport = await transcripts
             .forRender(session.id)
             .then((read) => selectOverheardToImport(input.overheard!, recordedMessageTimestamps(read.entries)))
@@ -2737,7 +2808,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const contextWindow = await deps.sessions.getContextWindow(session.id);
         const rawEntries = contextWindow.entries;
         const historyHasSecurityTaint = contextWindow.hasSecurityTaint;
-        const priorTurns = historyHasSecurityTaint ? undefined : input.priorTurns;
+        const priorTurns = historyHasSecurityTaint || memoryHistoryReset ? undefined : input.priorTurns;
         if (historyHasSecurityTaint) {
           await deps.harness.turns.resetSession?.(session.id);
         }
@@ -2775,7 +2846,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
         };
         const tapeRows = await (async () => {
-          if (historyHasSecurityTaint || contextWindow.totalEntries > TAPE_IMPORT_MAX_ENTRIES) return undefined;
+          if (memoryHistoryReset || historyHasSecurityTaint || contextWindow.totalEntries > TAPE_IMPORT_MAX_ENTRIES)
+            return undefined;
           try {
             const preAppended = new Set(preAppendedSeqs);
             const priorMaxSeq = rawEntries.reduce((m, e) => (preAppended.has(e.seq) ? m : Math.max(m, e.seq)), -1);
@@ -3196,6 +3268,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 const payload = isObj(tainted.payload) ? { ...tainted.payload } : {};
                 if (!recordedRecall && !payload.steered && !payload.overheard) {
                   recordedRecall = true;
+                  payload.memoryContext = nextContext;
                   if (environment) payload.environment = environment;
                   if (recall.text) payload.memoryRecall = recall.record;
                 }
@@ -3816,6 +3889,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               await onTurnEnd({
                 scopeId: memoryScopeId,
                 conversationScopeId: scopeId,
+                inheritedRecords: captureDependencies(),
                 input: turnInput,
                 reply,
                 actorId: actor.id,

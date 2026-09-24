@@ -18,6 +18,7 @@ export interface MemoryDisclosure {
   config?: Pick<ScopedConfigStore, "resolveSharingPostureDurable">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: CurrentScopeMembers;
+  noteRead?: () => Promise<void>;
 }
 
 function validRecords(content: string, snapshot: MemoryRecords): boolean {
@@ -192,20 +193,27 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
       if (!target || (await filtered(scope, target)).content !== target.content) return false;
       return (await memory.restore?.(scope, revision, expectedRevision, author)) ?? false;
     },
-    readHead: head,
+    async readHead(scope) {
+      await access.noteRead?.();
+      return head(scope);
+    },
     async read(scope) {
+      await access.noteRead?.();
       return (await head(scope)).content;
     },
     async recall(scope, context) {
+      await access.noteRead?.();
       if (memory.readHead) return recallBody((await head(scope)).content);
       return (await memoryDisclosurePolicy(access).narrow(scope)) ? memory.recall(scope, context) : "";
     },
     async query(scope, query, limit = 20, context) {
+      await access.noteRead?.();
       const snapshot = await memory.readHead?.(scope);
       if (snapshot?.records) return queryBullets((await filtered(scope, snapshot)).content, query, limit);
       return (await memoryDisclosurePolicy(access).narrow(scope)) ? memory.query(scope, query, limit, context) : [];
     },
     async history(scope, limit) {
+      await access.noteRead?.();
       return Promise.all((await guardedHistory(scope, limit)).map((revision) => filtered(scope, revision)));
     },
   };

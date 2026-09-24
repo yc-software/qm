@@ -112,3 +112,32 @@ test("external capture failures degrade to the remaining provider", async () => 
   });
   await assert.rejects(strictMemory.capture("org:acme", ["fact"], 1, "U1", { mode: "automatic" }), /offline/);
 });
+
+test("cross-origin capture only reaches providers that preserve structured provenance", async () => {
+  const calls: string[] = [];
+  const notebook = provider("notebook", calls);
+  notebook.readHead = async () => ({ content: "", revision: "0", records: { version: 1, records: [] } });
+  const memory = createRoutedMemoryService({
+    providers: { notebook, opaque: provider("opaque", calls) },
+    routes: [
+      { provider: "notebook", scopes: ["personal"], capture: "automatic" },
+      { provider: "opaque", scopes: ["personal"], capture: "automatic", manage: false },
+    ],
+  });
+  assert.equal(
+    await memory.capture("personal:alice", ["Synthetic fact"], 1, "alice", {
+      mode: "automatic",
+      conversationScopeId: "group:private",
+      inheritedRecords: [],
+      sensitivity: "sensitive",
+    }),
+    1,
+  );
+  assert.deepEqual(calls, ["notebook:capture:personal:alice:automatic:Synthetic fact"]);
+  calls.length = 0;
+  await memory.capture("personal:alice", ["Native fact"], 1, "alice", {
+    mode: "explicit",
+    conversationScopeId: "personal:alice",
+  });
+  assert.equal(calls.length, 2);
+});

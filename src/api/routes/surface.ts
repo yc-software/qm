@@ -1,4 +1,4 @@
-import { memoryForRequest } from "./memory-access.ts";
+import { memoryForRequest, memoryBoundaryForRequest } from "./memory-access.ts";
 import { isSessionStatus } from "../../sessions/session-status.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeFallback, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
@@ -176,6 +176,21 @@ async function spawnAgentConversation(ctx: ApiCtx): Promise<void> {
   });
 }
 
+function agentConversation(session: Session) {
+  return {
+    id: session.id,
+    type: session.type,
+    scopeId: session.scopeId,
+    threadRef: session.threadRef,
+    surface: session.surface,
+    createdAt: session.createdAt,
+    archived: session.archived === true,
+    pinned: session.pinned === true,
+    color: session.color ?? null,
+    lastActivityAt: session.lastActivityAt ?? session.createdAt,
+  };
+}
+
 async function forkAgentConversation(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
   if (!capability) {
@@ -185,13 +200,18 @@ async function forkAgentConversation(ctx: ApiCtx): Promise<void> {
   if (b.upToSeq !== undefined && (typeof b.upToSeq !== "number" || !Number.isInteger(b.upToSeq) || b.upToSeq < 0)) {
     return sendJson(res, 400, { error: "bad_request", message: "upToSeq must be a non-negative integer" });
   }
-  const out = await app.forkSession(
-    ctx.params.id!,
-    capability.actorId,
-    b.upToSeq !== undefined ? { upToSeq: b.upToSeq } : undefined,
-  );
+  const source = await app.getSessionForViewer(ctx.params.id!, capability.actorId, { tailTurns: 1 });
+  if (!source) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
+  const boundary = await memoryBoundaryForRequest(ctx, ctx.params.id!);
+  if (!boundary || boundary.throughSeq >= 0) return sendJson(res, 403, { error: "forbidden" });
+  const out = await app.forkSession(ctx.params.id!, capability.actorId, {
+    upToSeq: Math.min(b.upToSeq ?? boundary.latestSeq, boundary.latestSeq),
+  });
   if (!out) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
-  return sendJson(res, 200, out);
+  return sendJson(res, 200, {
+    session: agentConversation(out.session),
+    entries: out.entries.filter((entry) => entry.type !== "system"),
+  });
 }
 
 function transcriptWindow(
@@ -254,7 +274,13 @@ async function getAgentConversation(ctx: ApiCtx): Promise<void> {
   }
   const found = await app.getSessionForViewer(ctx.params.id!, capability.actorId, window);
   if (!found) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
-  return sendJson(res, 200, found);
+  const boundary = await memoryBoundaryForRequest(ctx, ctx.params.id!);
+  if (!boundary) return sendJson(res, 403, { error: "forbidden" });
+  return sendJson(res, 200, {
+    session: agentConversation(found.session),
+    entries: found.entries.filter((entry) => entry.seq > boundary.throughSeq && entry.type !== "system"),
+    ...(boundary.throughSeq < 0 && found.earlierEntries ? { earlierEntries: found.earlierEntries } : {}),
+  });
 }
 
 async function getSessionEntry(ctx: ApiCtx): Promise<void> {
@@ -445,17 +471,7 @@ async function listAgentConversations(ctx: ApiCtx): Promise<void> {
   }
   const sessions = await app.listSessions(capability.actorId);
   return sendJson(res, 200, {
-    conversations: sessions.map((s) => ({
-      id: s.id,
-      scopeId: s.scopeId,
-      surface: s.surface ?? "unknown",
-      title: s.title ?? null,
-      status: s.status ?? null,
-      archived: s.archived === true,
-      pinned: s.pinned === true,
-      createdAt: s.createdAt,
-      lastActivityAt: s.lastActivityAt ?? s.createdAt,
-    })),
+    conversations: sessions.map(agentConversation),
   });
 }
 
@@ -526,12 +542,9 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
   });
   return sendJson(res, 200, {
     conversation: {
-      id: session.id,
-      title: session.title ?? null,
-      archived: session.archived === true,
-      pinned: session.pinned === true,
-      color: session.color ?? null,
-      status: session.status ?? null,
+      ...agentConversation(session),
+      ...(patch.title !== undefined ? { title: patch.title } : {}),
+      ...(patch.status !== undefined ? { status: patch.status } : {}),
     },
   });
 }

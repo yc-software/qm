@@ -568,6 +568,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ],
       },
       {
+        id: "sessions/store/0018-memory-read-epoch",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS memory_read_epoch BIGINT NOT NULL DEFAULT 0`,
+        ],
+      },
+      {
         id: "sessions/store/0016-status",
         statements: ["ALTER TABLE sessions ADD COLUMN IF NOT EXISTS status JSONB"],
       },
@@ -704,6 +711,22 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     async get(id): Promise<Session | null> {
       const rows = await q("SELECT * FROM sessions WHERE id = $1", [id]);
       return rows[0] ? rowToSession(rows[0]) : null;
+    },
+
+    async memoryReadEpoch(sessionId) {
+      const rows = await q("SELECT memory_read_epoch FROM sessions WHERE id = $1", [sessionId]);
+      if (!rows[0]) throw new Error("Session not found");
+      const epoch = Number(rows[0].memory_read_epoch);
+      if (!Number.isSafeInteger(epoch) || epoch < 0) throw new Error("Invalid memory read epoch");
+      return epoch;
+    },
+
+    async noteMemoryRead(sessionId) {
+      const rows = await q(
+        "UPDATE sessions SET memory_read_epoch = memory_read_epoch + 1 WHERE id = $1 AND memory_read_epoch < $2 RETURNING id",
+        [sessionId, Number.MAX_SAFE_INTEGER],
+      );
+      if (!rows.length) throw new Error("Session missing or memory read epoch exhausted");
     },
 
     async updateTitle(sessionId, title): Promise<void> {
@@ -939,7 +962,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async getContextWindow(sessionId) {
-      const [meta, summary] = await Promise.all([
+      const [meta, summary, memoryContext] = await Promise.all([
         q(
           `SELECT count(*)::int AS total,
                   bool_or((payload::jsonb -> 'securityTainted') = 'true'::jsonb) AS taint
@@ -956,6 +979,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
             ORDER BY seq DESC LIMIT 1`,
           [sessionId],
         ),
+        q(
+          "SELECT * FROM session_entries WHERE session_id = $1 AND ((type = 'system' AND payload::jsonb ->> 'kind' = 'memory_context') OR (type = 'user' AND payload::jsonb -> 'memoryContext' ->> 'kind' = 'memory_context')) ORDER BY seq DESC LIMIT 1",
+          [sessionId],
+        ),
       ]);
       const through = summary[0]?.through;
       const sinceSeq = typeof through === "number" ? through + 1 : 0;
@@ -964,7 +991,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         sinceSeq,
       ]);
       return {
-        entries: rows.map(rowToEntry),
+        entries: [
+          ...(memoryContext[0] && Number(memoryContext[0].seq) < sinceSeq ? [rowToEntry(memoryContext[0])] : []),
+          ...rows.map(rowToEntry),
+        ],
         totalEntries: Number(meta[0]?.total ?? 0),
         hasSecurityTaint: meta[0]?.taint === true,
       };

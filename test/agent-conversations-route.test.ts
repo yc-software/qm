@@ -56,7 +56,13 @@ describe("agent conversations self-API", async () => {
 
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
-    server = createServer(built.app, { signingSecret: SECRET, portalUrl: "https://portal.example/" });
+    server = createServer(built.app, {
+      signingSecret: SECRET,
+      portalUrl: "https://portal.example/",
+      sessions: built.sessions,
+      memory: built.memory,
+      config: built.config,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
     mineId = (await built.app.turn(dm("U1", "plan the launch", "web:U1:c1"))).sessionId!;
@@ -83,7 +89,7 @@ describe("agent conversations self-API", async () => {
         (
           (await list.json()) as { conversations: Array<{ id: string; status: SessionStatus | null }> }
         ).conversations.find((s) => s.id === mineId)?.status,
-        status,
+        undefined,
       );
     }
   });
@@ -137,12 +143,7 @@ describe("agent conversations self-API", async () => {
     assert.equal(run?.request.text, "investigate the flaky test");
     assert.equal(run?.request.conversation.threadRef, body.session.threadRef, "the seed runs in the new session");
     const read = await get(`/v1/conversations/${body.session.id}`, token);
-    assert.equal(read.status, 200);
-    const readBody = (await read.json()) as { entries: Array<{ payload: { text?: string } }> };
-    assert.ok(
-      !readBody.entries.some((e) => (e.payload.text ?? "").includes("plan the launch")),
-      "nothing from the spawning conversation leaks in",
-    );
+    assert.equal(read.status, 403, "an unstarted session has no memory checkpoint yet");
   });
 
   it("preserves the public base prefix and encodes the returned session id", async () => {

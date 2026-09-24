@@ -2,10 +2,16 @@ import { relative } from "node:path";
 import type { ScopeId } from "../../types.ts";
 import type { HarnessModelUtilities } from "../../harness/harness.ts";
 import type { WorkspaceStore } from "../../workspace/workspace-store.ts";
-import { type MemoryService, ccCaptureToPersonal } from "../memory-service.ts";
+import { type MemoryService } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
 import { bullets, capTail, dateStr, normalize } from "../notebook.ts";
-import { type Burst, createBurstBuffer, DEFAULT_CAPTURE_MAX_TURNS, extractFacts } from "./per-turn.ts";
+import {
+  type Burst,
+  createBurstBuffer,
+  DEFAULT_CAPTURE_MAX_TURNS,
+  extractFacts,
+  burstCaptureContext,
+} from "./per-turn.ts";
 import { createKeyedQueue } from "../../util/async.ts";
 
 const LOG_DIR = "memory/log";
@@ -128,7 +134,10 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
       return parts.join("\n\n");
     },
 
-    async capture(scopeId, facts, at) {
+    async capture(scopeId, facts, at, _author, context) {
+      if (context?.conversationScopeId && context.conversationScopeId !== scopeId) return 0;
+      if (context?.inheritedRecords?.some((record) => record.sources.some((source) => source.scopeId !== scopeId)))
+        return 0;
       return perScope(scopeId, async () => {
         const clean = facts.map((f) => f.replace(/\s+/g, " ").trim()).filter(Boolean);
         if (!clean.length) return 0;
@@ -173,11 +182,10 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
   };
 
   async function flushBurst(burst: Burst): Promise<void> {
-    const facts = await extractFacts(deps.harness, burst.turns);
+    const { facts, sensitivity } = await extractFacts(deps.harness, burst.turns);
     if (!facts.length) return;
     const at = Date.now();
-    await memory.capture(burst.scopeId, facts, at);
-    await ccCaptureToPersonal(memory, burst.conversationScopeId, burst.actorId, facts, at, burst.conversationLabel);
+    await memory.capture(burst.scopeId, facts, at, burst.actorId, { ...burstCaptureContext(burst), sensitivity });
   }
 
   const strategy: MemoryStrategy = {
