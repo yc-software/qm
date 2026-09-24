@@ -236,3 +236,18 @@ export async function webuiModelEnabled(ctx: { deps: RuntimeDeps }, modelId: str
   const orgModel = stored?.modelId ?? (await config.getBaseModelOwnDurable(org)) ?? runtimeFallback(ctx).modelId;
   return modelId === orgModel;
 }
+
+export async function availableRuntimeError(
+  ctx: { deps: RuntimeDeps },
+  scope: ScopeId,
+  choice: RuntimeChoice,
+): Promise<string | null> {
+  await ctx.deps.refreshModels?.();
+  const choices = await runtimeConfigBody(ctx, scope);
+  if (
+    !choices.modelsByHarness[choice.harnessId]?.includes(choice.modelId) ||
+    !(await webuiModelEnabled(ctx, choice.modelId))
+  )
+    return "runtime is no longer available or enabled on this deployment";
+  return validateRuntimeChoice({ ...choice, effortLevel: undefined });
+}

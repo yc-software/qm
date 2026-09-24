@@ -205,6 +205,7 @@ function fmtCronSchedule(c: {
 }
 
 interface CronLike {
+  runtime?: import("./harness.ts").RuntimeChoice | null;
   id: string;
   title?: string;
   enabled: boolean;
@@ -277,7 +278,10 @@ function fmtCronLine(c: CronLike, preview = false): string {
     !preview && c.lastFireNote && Number.isFinite(c.lastFireNote.at)
       ? `\n    shift-change note (${utcMinute(c.lastFireNote.at)}${c.lastFireNote.by ? `, by ${c.lastFireNote.by}` : ""}): ${c.lastFireNote.text}`
       : "";
-  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${note}`;
+  const runtime = c.runtime
+    ? `\n    runtime: ${c.runtime.harnessId}/${c.runtime.modelId}${c.runtime.effortLevel ? ` (${c.runtime.effortLevel})` : ""}`
+    : "";
+  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${note}`;
 }
 
 function fmtCronCreated(r: {
@@ -1110,13 +1114,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "publish",
     label: "publish",
     description:
-      "Publish a directory from the workspace as a durable, scope-bound internal web app " +
+      "Publish a directory from the workspace as a durable, private-by-default web app " +
       "(it keeps running after the turn ends and gets a stable link). Before publishing, verify the " +
       "directory exists and contains files. For a new app or a code/file update, always pass `entrypoint`; " +
       "the app must listen on the PORT env var. `dir` is workspace-relative: use `app`, never a path " +
       "beginning with `/` or a redundant `workspace/app`. `renameFrom` takes an existing " +
       "deployment name, not its ID. Set audience to [] to suppress default audience grants, or supply " +
-      "publication-time grants. Use apps action share for subsequent grants. Share the full absolute URL " +
+      "publication-time grants. `public: true` makes the app reachable without sign-in; it is never the default. " +
+      "Use apps action share for subsequent grants. Share the full absolute URL " +
       "returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, " +
       "stable link /d/<name>/; `renameFrom` to rename; `rollbackTo` to flip back to an earlier version. " +
       "Egress is open, " +
@@ -1172,6 +1177,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       rollbackTo: Type.Optional(
         Type.Integer({ description: "Flip the deployment named `name` back to this version number." }),
       ),
+      public: Type.Optional(
+        Type.Boolean({
+          description:
+            "Explicitly set whether anyone with the link can open the app without signing in. Defaults to private for new apps; omit to preserve the current setting on updates.",
+        }),
+      ),
       alwaysOn: Type.Optional(
         Type.Boolean({
           description:
@@ -1200,6 +1211,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const reach = describePublishAudience(r.audience);
         const alwaysOnNote = r.alwaysOn ? "\nAlways-on: the app is kept warm — no idle cold starts." : "";
         const embedNote = r.embedAncestors?.length ? `\nEmbeddable by: ${r.embedAncestors.join(", ")}` : "";
+        const publicNote = r.public ? "\nAccess: public — anyone with the link can open it without signing in." : "";
         const dataNote = r.dataDir
           ? `\nDurable data: runtime state written under ${r.dataDir} ($DATA_DIR) survives restarts and redeploys — keep SQLite at ${r.dataDir}/app.db (it gets the strongest durability the runtime offers). If this app writes runtime state anywhere else on disk, migrate it there (data deliberately baked into the repo stays where it is).`
           : "";
@@ -1216,7 +1228,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(r.dataDir ? { dataDir: r.dataDir } : {}),
           },
           text(
-            `Published ${r.name ?? r.id} (v${r.version}) → ${r.url}\n${reach}${alwaysOnNote}${embedNote}${dataNote}`,
+            `Published ${r.name ?? r.id} (v${r.version}) → ${r.url}\n${reach}${publicNote}${alwaysOnNote}${embedNote}${dataNote}`,
           ),
         );
       } catch (e) {
@@ -2328,6 +2340,37 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "outcome + anything the next fire must know. Overwrites the previous note.",
         }),
       ),
+      runtime: Type.Optional(
+        Type.Union(
+          [
+            Type.Null(),
+            Type.Object({
+              harnessId: Type.Union([
+                Type.Literal("pi"),
+                Type.Literal("opencode"),
+                Type.Literal("codex"),
+                Type.Literal("claude"),
+              ]),
+              modelId: Type.String(),
+              effortLevel: Type.Optional(
+                Type.Union([
+                  Type.Literal("low"),
+                  Type.Literal("medium"),
+                  Type.Literal("high"),
+                  Type.Literal("xhigh"),
+                  Type.Literal("max"),
+                  Type.Literal("ultracode"),
+                ]),
+              ),
+              fastMode: Type.Optional(Type.Boolean()),
+            }),
+          ],
+          {
+            description:
+              "create/patch: optional runtime override for an agent task. Omit to preserve defaults; null clears an override. Use runtime get to discover approved models/harnesses. Choose a cheaper model and explicit low effort when the whole task, including failure handling, is simple. Unavailable choices fail closed. Auto effort is not supported here yet.",
+          },
+        ),
+      ),
       enabled: Type.Optional(Type.Boolean({ description: "patch only: false pauses the cron, true resumes it." })),
       archived: Type.Optional(Type.Boolean({ description: "patch only: true archives the cron." })),
       limit: Type.Optional(
@@ -2368,6 +2411,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }
           const r = await tc.cronCreate({
             schedule: params.schedule,
+            ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
             ...(params.title !== undefined ? { title: params.title } : {}),
             ...(params.task !== undefined ? { action: params.task } : {}),
             ...(params.text !== undefined ? { text: params.text } : {}),
@@ -2499,6 +2543,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               true,
             );
           const r = await tc.cronPatch(id, {
+            ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
             ...(params.title !== undefined ? { title: params.title } : {}),
             ...(params.task !== undefined ? { action: params.task } : {}),
             ...(params.text !== undefined ? { text: params.text } : {}),
@@ -2955,17 +3000,47 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   function sharingTool(type: "file" | "skill" | "deploy" | "cron", move = false): ToolDefinition {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
     const action = move ? "move" : "share";
+    let description =
+      "Grant access to an artifact you own while keeping it in its current home. Only the owner can share; grantees cannot reshare.";
+    if (move)
+      description =
+        "Transfer the artifact to another context. Moving an app transfers ownership; existing shares survive. Moving a skill to the org requires an org admin in a user-started turn.";
+    else if (type === "deploy")
+      description =
+        "Change access to an app you own while keeping it in its current home. Set public to true or false for anonymous link access, or use toScope/email for authenticated access (external emails are view-only). Only the owner can share; grantees cannot reshare.";
     return defineTool({
       name: action,
       label: action,
-      description: move
-        ? "Transfer the artifact to another context. Moving an app transfers ownership; existing shares survive. Moving a skill to the org requires an org admin in a user-started turn."
-        : "Grant access to an artifact you own while keeping it in its current home. Only the owner can share; grantees cannot reshare.",
+      description,
       parameters: Type.Object({
         id: Type.String({ description: "Artifact ID; an app may also be named by its handle." }),
-        toScope: Type.String({
-          description: 'Destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name.',
-        }),
+        toScope:
+          type === "deploy" && !move
+            ? Type.Optional(
+                Type.String({
+                  description:
+                    'Authenticated destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name. Omit when setting public or email.',
+                }),
+              )
+            : Type.String({
+                description: 'Destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name.',
+              }),
+        ...(type === "deploy" && !move
+          ? {
+              email: Type.Optional(
+                Type.String({
+                  description:
+                    "Exact email to grant view access, including people outside the directory. Use instead of toScope.",
+                }),
+              ),
+              public: Type.Optional(
+                Type.Boolean({
+                  description:
+                    "true lets anyone with the link open the app without signing in; false makes it restricted again. Never enabled by default.",
+                }),
+              ),
+            }
+          : {}),
         ...(!move
           ? {
               permission: Type.Optional(
@@ -2977,15 +3052,44 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           : {}),
       }),
       async execute(callId, args) {
-        const params = args as { id: string; toScope: string; permission?: "read" | "write" };
+        const params = args as {
+          id: string;
+          toScope?: string;
+          email?: string;
+          public?: boolean;
+          permission?: "read" | "write";
+        };
         const tc = ref.current;
         if (!tc) return text("[error] no active tool context");
         const id = params.id;
         await recordCall(callId, { tool, action, type, id });
+        if (type === "deploy" && !move && params.public !== undefined) {
+          if (params.toScope !== undefined || params.email !== undefined)
+            return recordResult(
+              callId,
+              { tool, action, error: "bad_request" },
+              text("[error] set public, email, or toScope, not more than one"),
+              true,
+            );
+          const d = await tc.setDeploymentPublic(id, params.public);
+          return recordResult(
+            callId,
+            { tool, action, type, id: d.id, public: d.public },
+            text(`${d.name ?? d.id} is now ${d.public ? "public — anyone with the link can open it" : "restricted"}.`),
+          );
+        }
+        if (!params.toScope && !params.email)
+          return recordResult(
+            callId,
+            { tool, action, error: "bad_request" },
+            text("[error] toScope or email is required unless public is set"),
+            true,
+          );
         const r = await tc.shareArtifact({
           type,
           id,
-          ...splitToScope(params.toScope),
+          ...(params.toScope ? splitToScope(params.toScope) : {}),
+          ...(params.email !== undefined ? { email: params.email } : {}),
           ...(params.permission !== undefined ? { permission: params.permission } : {}),
           ...(move ? { move: true } : {}),
         });
@@ -2996,11 +3100,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             : "";
           return recordResult(callId, { tool, action, error: r.code }, text(`[error] ${r.message}${candidates}`), true);
         }
+        let invitationNote = "";
+        if (r.invitation) {
+          if (r.invitation.emailSent) invitationNote = " App invitation email sent.";
+          else if (r.invitation.alreadyShared) invitationNote = " Already shared; no duplicate email sent.";
+          else
+            invitationNote = ` Access granted, but invitation email was not sent: ${r.invitation.emailProblem ?? "delivery unavailable"}`;
+          if (r.invitation.appUrl) invitationNote += ` App link: ${r.invitation.appUrl}`;
+        }
         return recordResult(
           callId,
           { tool, action, verb: r.verb, type: r.type, id: r.id, target: r.target.scope },
           text(
-            `${r.verb === "move" ? "Moved" : "Shared"} ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.`,
+            `${r.verb === "move" ? "Moved" : "Shared"} ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.${invitationNote}`,
           ),
         );
       },

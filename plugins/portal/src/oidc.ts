@@ -1,3 +1,4 @@
+import type { EmailAdmission } from "../../chassis/src/external-members.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { createRemoteJWKSet, customFetch, jwtVerify, type JWTPayload } from "jose";
 
@@ -133,6 +134,7 @@ export interface PrincipalRule {
   claim: "sub" | "email";
   allowedEmailDomain?: string;
   allowedEmails?: readonly string[];
+  requireCoreAdmission?: boolean;
 }
 
 type PrincipalArgs = { sub: string; claims: Record<string, unknown>; userinfo: Record<string, unknown> };
@@ -156,17 +158,24 @@ function envRefusal(rule: PrincipalRule, email: string, args: PrincipalArgs): st
 export async function resolvePrincipal(
   rule: PrincipalRule,
   args: PrincipalArgs,
-  invited: (email: string) => Promise<boolean> = async () => false,
-): Promise<string> {
-  if (rule.claim === "sub") return args.sub;
+  invited: (email: string) => Promise<EmailAdmission> = async () => ({ allowed: false }),
+): Promise<{ sub: string; appOnly?: true }> {
+  if (rule.claim === "sub" && !rule.requireCoreAdmission) return { sub: args.sub };
   const rawEmail = args.userinfo.email;
   if (typeof rawEmail !== "string" || !rawEmail.includes("@")) throw new Error("identity provider returned no email");
   const verified = args.userinfo.email_verified;
   if (verified !== true && verified !== "true") throw new Error("email is not verified by the identity provider");
   const email = rawEmail.trim().toLowerCase();
   const refusal = envRefusal(rule, email, args);
-  if (refusal && !(await invited(email))) throw new Error(refusal);
-  return email;
+  if (refusal || rule.requireCoreAdmission) {
+    const admission = await invited(email);
+    if (!admission.allowed) throw new Error(refusal ?? "account is not permitted");
+    return {
+      sub: admission.appOnly || rule.claim === "email" ? email : args.sub,
+      ...(admission.appOnly ? { appOnly: true } : {}),
+    };
+  }
+  return { sub: email };
 }
 
 async function readJson(r: Response, what: string): Promise<Record<string, unknown>> {

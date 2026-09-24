@@ -1,3 +1,5 @@
+import type { InviteMailer } from "../admin/invite-email.ts";
+import type { DeploymentInvitation } from "../deploy/email-access.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
 import type { EventBus } from "../util/event-bus.ts";
 import type { RunStreamEvent } from "../runs/run-stream-events.ts";
@@ -130,6 +132,7 @@ export interface DeploymentView {
   status: Deployment["status"];
   alwaysOn?: boolean;
   embedAncestors?: string[];
+  public: boolean;
   lastAccessAt?: number;
   createdAt?: number;
   updatedAt?: number;
@@ -159,6 +162,7 @@ export function deploymentView(d: Deployment): DeploymentView {
     status: d.status,
     ...(d.alwaysOn ? { alwaysOn: true } : {}),
     ...(d.embedAncestors?.length ? { embedAncestors: d.embedAncestors } : {}),
+    public: d.public === true,
     ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),
     ...(versions[0] ? { createdAt: versions[0].createdAt } : {}),
     ...(versions.at(-1) ? { updatedAt: versions.at(-1)!.createdAt } : {}),
@@ -300,6 +304,7 @@ export interface App {
     startedAt: number | null;
     finishedAt: number | null;
   } | null>;
+  stopConversation(threadRef: string, viewer?: string): Promise<boolean>;
   activeRunForThread(
     threadRef: string,
     viewer?: string,
@@ -436,6 +441,7 @@ export interface App {
   listCronFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   cronFiresByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestCronFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
+  setCronRuntime(id: string, runtime: Exclude<Cron["runtime"], undefined>): Promise<Cron | null>;
   setCronDestination(id: string, destination: Destination | undefined): Promise<Cron | null>;
   setCronRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   createWebhook(input: CreateWebhookInput): Promise<Webhook>;
@@ -562,6 +568,7 @@ export interface App {
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
   setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
+  setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
   keepAlwaysOnWarm(): Promise<number>;
   reachDeployment(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   deploymentLogsFor(
@@ -575,6 +582,14 @@ export interface App {
     permission: Permission | null,
     actor: { createdBy: string },
   ): Promise<DeploymentGrantee[]>;
+  inviteToDeployment(
+    idOrName: string,
+    email: string,
+    actorId: string,
+  ): Promise<{
+    grantees: DeploymentGrantee[];
+    invitation: DeploymentInvitation;
+  }>;
   deploymentGrantees(idOrName: string): Promise<DeploymentGrantee[]>;
   deploymentGitRepoPath(id: string): Promise<string | null>;
   runDeploymentGitPush<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>): Promise<T>;
@@ -597,6 +612,7 @@ export interface AppDeps {
   swarms?: SwarmService;
   identity: IdentityService;
   publicWebUrl?: string;
+  inviteMailer?: InviteMailer;
   sessions: SessionStore;
   screenSecurity?: SecurityScreenProbe;
   orchestrator: Orchestrator;

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { runInNewContext } from "node:vm";
 import { mintDesktopLogin, openDesktopLogin } from "../src/desktop-login.ts";
 import { deriveKey, openSession, seal, type SessionClaims } from "../src/session.ts";
 
@@ -101,6 +102,29 @@ test("GET requires explicit confirmation and cannot mint a code", async () => {
   assert.equal(response.headers.get("cache-control"), "no-store");
 });
 
+test("confirmed sign-in launches the app with a CSP-authorized script and retains the fallback link", async () => {
+  const response = await fetch(`${base}${requestPath}`, { method: "POST", headers: { origin, cookie } });
+  const html = await response.text();
+  const callback = html.match(/id="desktop-launch"[^>]+href="([^"]+)"/)?.[1]?.replaceAll("&amp;", "&");
+  const script = html.match(/<script>([\s\S]*?)<\/script>/i)?.[1];
+  assert.ok(callback?.startsWith("qm-desktop://auth/callback?"));
+  assert.ok(script);
+  const hash = createHash("sha256").update(script).digest("base64");
+  assert.ok(response.headers.get("content-security-policy")?.includes(`script-src 'sha256-${hash}'`));
+  const location = { href: "" };
+  runInNewContext(script, {
+    window: { location },
+    document: {
+      getElementById: (id: string) => {
+        assert.equal(id, "desktop-launch");
+        return { href: callback };
+      },
+    },
+  });
+  assert.equal(location.href, callback);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+});
+
 test("cross-origin authorization and anonymous sessions cannot mint a desktop identity", async () => {
   const response = await fetch(`${base}${requestPath}`, {
     method: "POST",
@@ -177,4 +201,14 @@ test("desktop handoff renews a browser session near expiry without resetting its
   );
   assert.equal(effective?.session.auth, oldBrowser.auth);
   assert.ok(effective && effective.session.exp >= testNow + 604_800);
+});
+
+test("app-only sessions cannot mint desktop sessions", async () => {
+  assert.throws(() => mintDesktopLogin({ ...browser, appOnly: true }, secret, origin, challenge, state), /app-only/);
+  const appCookie = `portal_session=${seal({ ...browser, appOnly: true }, deriveKey(secret, "portal.session.v1"))}`;
+  for (const method of ["GET", "POST"]) {
+    const response = await fetch(`${base}${requestPath}`, { method, headers: { origin, cookie: appCookie } });
+    assert.equal(response.status, 403);
+    assert.equal(response.headers.get("set-cookie"), null);
+  }
 });

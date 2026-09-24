@@ -1,3 +1,5 @@
+import { availableRuntimeError } from "./api/runtime-config.ts";
+import { createApprovalStore } from "./core/approval-store.ts";
 import { createKeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
 import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
@@ -1631,7 +1633,6 @@ export function buildApp(
       "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset, sandbox is not aws) — deployed apps have NO durable /data",
     );
   }
-  const approvals = artifactMap<PendingApprovalRecord>("approvals");
   const adminGrantPersist = config.databaseUrl
     ? createPostgresAdminGrantStore(config.databaseUrl)
     : createMapAdminGrantPersistence(createMemoryMap<AdminGrant>());
@@ -1688,6 +1689,15 @@ export function buildApp(
     advisoryLock,
     canReadScope,
     canWriteScope,
+    canManageEmail: async (email) => {
+      await identity.refresh();
+      return (
+        identity.isInternal(identity.classify(email)) &&
+        ((await directory.get(email))?.type === "internal" ||
+          config.emailAuthPrincipals?.includes(email) ||
+          identity.externalMember(email) !== undefined)
+      );
+    },
     managesArtifactHome,
     ...(deployGitSecret && deployGitBase
       ? {
@@ -1781,6 +1791,7 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
+  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals"), deliveries);
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreenBackend === "proxy") {
     securityScreener = createSecurityScreenProxy({
@@ -1888,6 +1899,10 @@ export function buildApp(
     capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
+    ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
+    ...(config.resendApiKey && config.emailFrom
+      ? { inviteMailer: createResendMailer(config.resendApiKey, config.emailFrom) }
+      : {}),
     ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
     memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture },
     memoryStrategy,
@@ -2195,6 +2210,8 @@ export function buildApp(
           mailbox: sessionMailbox,
           prepareRequest: prepareSessionRequest,
           delegationEnabled: (actorId) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId)),
+          deliveries,
+          signals: runSignals,
         },
         run,
       );
@@ -2213,6 +2230,14 @@ export function buildApp(
       afterId = batch.at(-1)!.id;
     }
   };
+  const approvalDeliverySweeper = createSweeper(
+    () => advisoryLock.withLock("approval-deliveries", () => approvals.deliverPending()),
+    30_000,
+    {
+      label: "approval-deliveries",
+      immediate: true,
+    },
+  );
   const sessionReturnSweeper = createSweeper(
     () =>
       advisoryLock.tryWithLock
@@ -2383,6 +2408,22 @@ export function buildApp(
   );
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
   orchestratorDeps.control = createControlService(app, scheduler, admin);
+  orchestratorDeps.validateScheduledRuntime = (scope, choice) =>
+    availableRuntimeError(
+      {
+        deps: {
+          config: configStore,
+          harnessId: fallbackHarness,
+          baseModelDefault: fallback.modelId,
+          providerKeys: providerKeysPresent(config),
+          modelCredentials,
+          modelCredentialFetch: overrides.modelCredentialFetch,
+          refreshModels,
+        },
+      },
+      scope,
+      choice,
+    );
   orchestratorDeps.runtime = createRuntimeService(
     {
       config: configStore,
@@ -2576,6 +2617,7 @@ export function buildApp(
       swarms?.start();
       orphanedSignalSweeper.start();
       sessionReturnSweeper.start();
+      approvalDeliverySweeper.start();
     };
     if (backgroundStopping)
       void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
@@ -2603,6 +2645,7 @@ export function buildApp(
       swarms?.stop(),
       orphanedSignalSweeper.stop(),
       sessionReturnSweeper.stop(),
+      approvalDeliverySweeper.stop(),
       ...workers.map((worker) => worker.stopClaims()),
     ];
     backgroundClaimsStopping = Promise.all(stopping).then(() => {});

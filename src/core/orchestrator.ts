@@ -3136,6 +3136,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           requestedRuntime = choice;
         };
         if (restoredRuntime) await adoptRuntime(restoredRuntime);
+        if (automatedTurn && input.model && input.harness && isHarnessId(input.harness)) {
+          const error = await deps.validateScheduledRuntime?.(scopeId, {
+            harnessId: input.harness,
+            modelId: input.model,
+            effortLevel: input.thinkingLevel,
+            fastMode: input.fastMode,
+          });
+          if (error) throw new NonRetryableTurnError(error);
+        }
         const runHarnessSegment = (
           harnessInput: string,
           extras: {

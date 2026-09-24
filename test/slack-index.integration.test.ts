@@ -321,6 +321,11 @@ class FakeCore implements SlackCoreClient {
   async activeRunForThread(): Promise<string | undefined> {
     return this.activeRun;
   }
+  async stopConversation(): Promise<boolean> {
+    if (!this.activeRun) return false;
+    await this.signalRunAbort(this.activeRun);
+    return true;
+  }
   async signalRunAbort(runId: string): Promise<void> {
     this.abortedRuns.push(runId);
   }

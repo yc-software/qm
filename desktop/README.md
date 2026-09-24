@@ -23,6 +23,27 @@ When sign-in is needed, the app opens `/auth/desktop` in your default browser. S
 
 The portal preserves the browser session's identity, original authentication time, and expiration. Redemption uses the existing durable core claim store to prevent replay across portal instances and deployments. The desktop proof key exists only for the disposable, in-progress sign-in attempt and is never sent to the browser. Passwords and identity-provider cookies stay in your browser.
 
-Remote content is sandboxed with no Node.js or preload access. Off-origin links open in your browser. Microphone, camera, and notification permissions are disabled in this prototype.
+On macOS, the window controls sit inside the sidebar header. With a single session open, drag its title bar to move the window; tab dragging remains available in multi-pane layouts. Hold Command to reveal shortcuts for the first nine sessions in expanded sidebar groups, then press 1–9 to switch. Windows and Linux use Control. Collapsed groups and a hidden sidebar are excluded.
+
+Remote content is sandboxed with no Node.js access. An isolated desktop preload adds window styling and session shortcuts with one sender-validated operation for opening a same-instance setup page in the browser. Off-origin links open in your browser. Microphone, camera, and notification permissions are disabled in this prototype.
 
 The welcome screen uses _Becalmed off Halfway Rock_ (Fitz Henry Lane, 1860), sourced from [Ève Bouffard’s QM brand board](https://www.evebouffard.com/qm-brand). [National Gallery of Art collection record](https://www.nga.gov/artworks/76213-becalmed-halfway-rock).
+
+## Connection setup and previews
+
+Slack installation and personal app authorization start in your browser before QM creates the connection attempt. Finish setup there, then return to the desktop app; it refreshes connection status on focus. Settings contains both personal Slack linking and the app picker. This keeps provider callbacks, installation POSTs, cookies, and tab-local authorization state in one browser.
+
+Same-instance links opened in a new tab use a separate sandboxed window sharing the instance session. External links open in the browser. View → Back and Forward navigate the focused window. Closing the main window closes its previews.
+
+## Mac release
+
+`npm run package` builds the unsigned local app. For a signed and notarized build, install a Developer ID Application certificate in the Mac keychain and store notarization credentials using Apple's `notarytool`. Then run:
+
+```sh
+QM_MAC_SIGN_IDENTITY="Developer ID Application: Your Organization (TEAMID)" \
+QM_MAC_NOTARY_PROFILE="qm-notary" npm run package:release
+```
+
+The release command requires both values and fails if signing or notarization fails. Neither credentials nor certificates belong in this repository. Builds target the current machine's architecture. Automatic updates are not implemented.
+
+`npm run test:electron` exercises actual Electron preview windows, POST popups, session sharing, sandboxing, and browser handoff against a temporary local server.

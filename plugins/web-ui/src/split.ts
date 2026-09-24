@@ -1217,7 +1217,8 @@ class PaneTab implements ITabRenderer {
     const awaiting = paneAwaitsInput(panel);
     const background = paneBackground(panel);
     const sessionId = panelParams(panel).sessionId ?? paneSession(panel)?.id;
-    attachTooltip(this.element, crumb ? `${crumb} / ${title}` : title);
+    const parent = sessionId ? sessionParent(sessionId) : undefined;
+    attachTooltip(this.element, [crumb, parent ? sessionTitle(parent) : null, title].filter(Boolean).join(" / "));
     render(
       html`
         ${working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}
@@ -1234,6 +1235,24 @@ class PaneTab implements ITabRenderer {
         ${
           crumb
             ? html`<span class="split-pane-crumb">${crumb}</span><span class="split-pane-crumb-sep">/</span>`
+            : nothing
+        }
+        ${
+          parent
+            ? html`<button
+                  type="button"
+                  class="split-pane-parent"
+                  aria-label=${`Back to parent: ${sessionTitle(parent)}`}
+                  ${tip(sessionTitle(parent))}
+                  @pointerdown=${(event: Event) => event.stopPropagation()}
+                  @click=${(event: Event) => {
+                    event.stopPropagation();
+                    focusPane(panel.id);
+                    void openSession(parent);
+                  }}
+                >
+                  ${sessionTitle(parent)}</button
+                ><span class="split-pane-crumb-sep">/</span>`
             : nothing
         }
         <span class="split-pane-title-text" dir="auto">${title}</span>

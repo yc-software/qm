@@ -41,6 +41,7 @@ export interface TriggerDeps {
 }
 
 export interface TriggerSpec {
+  runtime?: import("../harness/harness.ts").RuntimeChoice | null;
   title?: string;
   owner: string;
   ownerScopeId: ScopeId;
@@ -331,7 +332,12 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(!isScopeFloor && !isScopeShared && spec.unattendedGrants
           ? { unattendedGrants: spec.unattendedGrants }
           : {}),
-        ...turnModelOptions({ triggered: true, ...(spec.thinkingLevel ? { thinkingLevel: spec.thinkingLevel } : {}) }),
+        ...(spec.runtime ? { model: spec.runtime.modelId, harness: spec.runtime.harnessId } : {}),
+        ...turnModelOptions({
+          triggered: true,
+          thinkingLevel: spec.runtime?.effortLevel ?? spec.thinkingLevel,
+          fastMode: spec.runtime?.fastMode,
+        }),
         ...(spec.readOnly ? { readOnly: true } : {}),
         ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
         ...(spec.destination ? { triggerDestination: spec.destination } : {}),

@@ -14,6 +14,7 @@ import type { ErrorLog } from "../admin/error-log.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import type {
   Delivery,
+  PendingApproval,
   ScopeId,
   SurfaceContextRequest,
   SurfaceContextResult,
@@ -67,12 +68,9 @@ export interface SlackAgentRequestContext {
   approvalRequestIds?: string[];
 }
 
-interface StoredApprovalView {
-  requestId: string;
-  command: string;
+interface StoredApprovalView extends Omit<PendingApproval, "reason"> {
+  createdAt?: number;
   reason?: string;
-  purpose?: string;
-  summary?: string;
   request?: Record<string, unknown>;
 }
 
@@ -113,6 +111,7 @@ export interface SlackCoreClient {
   waitRun(runId: string, hooks?: SlackRunHooks): Promise<TurnResult | null>;
   activeRunForThread(threadRef: string): Promise<string | undefined>;
   signalRunAbort(runId: string): Promise<void>;
+  stopConversation(threadRef: string): Promise<boolean>;
   ackRunDelivery(runId: string): Promise<void>;
   reportTurnMetrics(runId: string, patch: { deliverMs?: number; slackInflightMs?: number }): Promise<void>;
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
@@ -419,6 +418,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       return (await deps.app.activeRunForThread(threadRef))?.runId;
     },
 
+    stopConversation(threadRef) {
+      return deps.app.stopConversation(threadRef);
+    },
+
     async signalRunAbort(runId) {
       const outcome = await deps.app.signalRun(runId, { kind: "abort" });
       if (!outcome.accepted) throw new Error(`signal abort not accepted: ${outcome.reason ?? "unknown"}`);
@@ -442,10 +445,14 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       if (!record) return null;
       return {
         requestId: record.requestId,
+        ...(record.createdAt !== undefined ? { createdAt: record.createdAt } : {}),
         command: record.command,
         ...(record.reason !== undefined ? { reason: record.reason } : {}),
         ...(record.purpose !== undefined ? { purpose: record.purpose } : {}),
         ...(record.summary !== undefined ? { summary: record.summary } : {}),
+        ...(record.summaryDetail !== undefined ? { summaryDetail: record.summaryDetail } : {}),
+        ...(record.grantModes !== undefined ? { grantModes: record.grantModes } : {}),
+        ...(record.kind !== undefined ? { kind: record.kind } : {}),
         ...(record.request !== undefined ? { request: record.request as unknown as Record<string, unknown> } : {}),
       };
     },

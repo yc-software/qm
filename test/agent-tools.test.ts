@@ -51,6 +51,9 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         url: `/d/${input.name ?? "dep-1"}/`,
       };
     },
+    async setDeploymentPublic(id, isPublic) {
+      return { id, name: id, public: isPublic };
+    },
     async createPlayground(input) {
       return { kind: "playground", artifactId: "playground-1", title: input.title };
     },
@@ -3416,7 +3419,7 @@ test("resource catalog exposes one home per operation and leaves MCP tools intac
     ],
     [
       "apps",
-      { action: "publish", name: "demo" },
+      { action: "publish", name: "demo", public: true },
       { action: "publish", name: "demo", share: [{ scope: "org", permission: "read" }] },
     ],
     [
@@ -3437,11 +3440,16 @@ test("resource catalog exposes one home per operation and leaves MCP tools intac
 test("resource actions preserve sharing targets, transfer semantics and file contents", async () => {
   const writes: unknown[] = [];
   const shares: unknown[] = [];
+  const publicChanges: unknown[] = [];
   const tc = {
     ...fakeToolContext(),
     async write(...args: Parameters<ToolContext["write"]>) {
       writes.push(args);
       return { shared: [{ scope: "org:test", permission: "read" as const }] };
+    },
+    async setDeploymentPublic(id: string, isPublic: boolean) {
+      publicChanges.push({ id, isPublic });
+      return { id, name: id, public: isPublic };
     },
     async shareArtifact(req: Parameters<ToolContext["shareArtifact"]>[0]) {
       shares.push(req);
@@ -3475,6 +3483,26 @@ test("resource actions preserve sharing targets, transfer semantics and file con
       ...(action === "move" ? { move: true } : {}),
     });
   }
+  const publicResult = await call(
+    tools.find((tool) => tool.name === "apps"),
+    {
+      action: "share",
+      id: "artifact",
+      public: true,
+    },
+  );
+  assert.match(textOut(publicResult), /anyone with the link/);
+  assert.deepEqual(publicChanges, [{ id: "artifact", isPublic: true }]);
+  await call(
+    tools.find((tool) => tool.name === "apps"),
+    {
+      action: "share",
+      id: "artifact",
+      email: "guest@example.com",
+    },
+  );
+  assert.deepEqual(shares.at(-1), { type: "deploy", id: "artifact", email: "guest@example.com" });
+
   const before = writes.length;
   await call(files, { action: "read", path: "notes", data: "unexpected" });
   await call(files, { action: "write", path: "notes" });

@@ -201,6 +201,7 @@ export interface TriggerBase {
 export interface Destination {
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
+  commandApprovalId?: string;
   type: string;
   target: string;
   audienceScopeId?: ScopeId;
@@ -267,6 +268,7 @@ export interface CronFireNote {
 }
 
 export interface Cron extends TriggerBase {
+  runtime?: import("./harness/harness.ts").RuntimeChoice | null;
   schedule: CronSchedule;
   nextFireAt?: number;
   lastAttemptAt?: number;

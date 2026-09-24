@@ -272,6 +272,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           fireKey,
           threadRef,
           surface: "cron",
+          ...(cron.runtime ? { runtime: cron.runtime } : {}),
           ...(cron.title ? { title: cron.title } : {}),
           onClaimed: async () => {
             await deps.crons.beginFire(cron.id, runningEntry);

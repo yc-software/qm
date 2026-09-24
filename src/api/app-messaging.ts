@@ -21,6 +21,9 @@ import { externalMemberActive } from "../identity/external-members.ts";
 import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
+import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
+import { assertCronRuntime } from "../cron/runtime.ts";
+import type { Cron } from "../types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 
 import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
@@ -72,6 +75,7 @@ export function createMessagingMethods(
   | "cronFiresByThreadRefs"
   | "latestCronFireForThread"
   | "setCronDestination"
+  | "setCronRuntime"
   | "setCronRecipientConsent"
   | "createWebhook"
   | "getWebhook"
@@ -156,8 +160,17 @@ export function createMessagingMethods(
     return [...stored, ...viaEmail.filter((member) => !seen.has(personKey(member.principalId)))];
   };
 
+  const validateRuntime = async (cron: Pick<Cron, "runtime" | "ownerScopeId" | "loopId" | "action" | "message">) => {
+    assertCronRuntime(cron);
+    if (!cron.runtime) return;
+    const error =
+      validateRuntimeChoice(cron.runtime) ?? (await availableRuntimeError({ deps }, cron.ownerScopeId, cron.runtime));
+    if (error) throw new Error(error);
+  };
+
   return {
     async createCron(input) {
+      await validateRuntime(input);
       validateUserSchedule(input.schedule);
       if (input.runAs === "scopeShared") {
         if (input.ownerScopeId.startsWith("personal:"))
@@ -208,6 +221,7 @@ export function createMessagingMethods(
     async updateCron(id, patch) {
       const before = await deps.crons.get(id);
       if (!before) return null;
+      if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
       if (patch.schedule) validateUserSchedule(patch.schedule);
       if (patch.runAs === "scopeShared") {
         if (before.ownerScopeId.startsWith("personal:"))
@@ -260,6 +274,12 @@ export function createMessagingMethods(
         });
       }
       return outcome;
+    },
+    async setCronRuntime(id, runtime) {
+      const before = await deps.crons.get(id);
+      if (!before) return null;
+      await validateRuntime({ ...before, runtime });
+      return deps.crons.update(id, { runtime });
     },
     async setCronDestination(id, destination) {
       const before = await deps.crons.get(id);

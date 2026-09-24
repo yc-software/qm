@@ -2227,13 +2227,25 @@ const apiRoutes: readonly WebRoute[] = [
     method: "POST",
     path: "/api/deployments/:id/share",
     handle: async ({ req, res, params }) => {
-      const body = await readJson<{ scope?: unknown; recipient?: unknown; access?: unknown }>(req, res, false);
+      const body = await readJson<{
+        scope?: unknown;
+        recipient?: unknown;
+        email?: unknown;
+        access?: unknown;
+        public?: unknown;
+      }>(req, res, false);
       if (!body) return;
       return relayCap(
         res,
         "POST",
         `/v1/deployments/${encodeURIComponent(params.id!)}/share`,
-        JSON.stringify({ scope: body.scope, recipient: body.recipient, access: body.access }),
+        JSON.stringify({
+          scope: body.scope,
+          recipient: body.recipient,
+          email: body.email,
+          access: body.access,
+          public: body.public,
+        }),
       );
     },
   },
@@ -2980,7 +2992,14 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { req, res, user } = c;
       const id = c.params.id!;
-      let patch: { title?: string; task?: string; schedule?: unknown; enabled?: boolean; archived?: boolean } = {};
+      let patch: {
+        title?: string;
+        task?: string;
+        schedule?: unknown;
+        enabled?: boolean;
+        archived?: boolean;
+        runtime?: unknown;
+      } = {};
       try {
         const p = JSON.parse(await readBody(req)) as {
           title?: unknown;
@@ -2988,7 +3007,9 @@ const apiRoutes: readonly WebRoute[] = [
           schedule?: unknown;
           enabled?: unknown;
           archived?: unknown;
+          runtime?: unknown;
         };
+        if ("runtime" in p) patch = { ...patch, runtime: p.runtime };
         if ("title" in p) {
           if (typeof p.title !== "string")
             return json(res, 400, { error: "bad_request", message: "title must be a string" });
@@ -3017,7 +3038,7 @@ const apiRoutes: readonly WebRoute[] = [
       if (Object.keys(patch).length === 0)
         return json(res, 400, {
           error: "bad_request",
-          message: "expected title, task, schedule, enabled, or archived",
+          message: "expected title, task, schedule, enabled, archived, or runtime",
         });
       if (patch.archived === true) patch = { ...patch, enabled: false };
       return relayCore(

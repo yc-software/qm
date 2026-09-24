@@ -1,3 +1,4 @@
+import { openDesktopBrowser } from "../../chassis/src/desktop-browser";
 import {
   isConnectionReturn,
   takeConnectionReturn,
@@ -317,6 +318,7 @@ export class OnboardingWelcome extends LitElement {
     this.authorizing = service.name;
     this.authorizationError = "";
     try {
+      if (await openDesktopBrowser(`${this.base}settings`)) return;
       const state = crypto.randomUUID();
       const attempt: ConnectionAttempt = {
         state,

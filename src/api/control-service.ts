@@ -31,6 +31,7 @@ import { isSharedScope, parseScopeId, type Permission, type ScopeId } from "../t
 import type { App, VisibleCron } from "./app.ts";
 
 export interface CronCreateRequest {
+  runtime?: Cron["runtime"];
   schedule: CronSchedule;
   title?: string;
   action?: string;
@@ -84,6 +85,7 @@ export type WebhookCreateResult =
   | { ok: false; code: "bad_request" | "unknown_destination" | "webhook_create_failed"; message: string };
 
 export interface CronPatchRequest {
+  runtime?: Cron["runtime"];
   title?: string;
   action?: string;
   text?: string;
@@ -216,6 +218,7 @@ function scopeIsMembershipControlled(scope: string, cap: { scopeId: string; priv
 
 function hasCronPatchField(req: CronPatchRequest): boolean {
   return (
+    req.runtime !== undefined ||
     req.title !== undefined ||
     req.action !== undefined ||
     req.text !== undefined ||
@@ -312,6 +315,7 @@ async function patchFromCronPatchRequest(
     };
   }
   return {
+    ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
     ...(req.title !== undefined ? { title: req.title } : {}),
     ...(req.action !== undefined ? { action: req.action } : {}),
     ...(req.text !== undefined ? { message: req.text } : {}),
@@ -524,6 +528,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
       const input: CreateCronInput = {
         schedule: withDefaultTimezone(req.schedule, capability),
+        ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
         ...(req.action !== undefined ? { action: req.action } : {}),
         ...(req.text !== undefined ? { message: req.text } : {}),
         owner: capability.actorId,
@@ -630,6 +635,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         const cron = await app.updateCron(id, patch);
         if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
         const changeSummary: string[] = [];
+        if (req.runtime !== undefined) changeSummary.push("runtime");
         if (req.title !== undefined) changeSummary.push("title");
         if (req.action !== undefined || req.text !== undefined) changeSummary.push("task");
         if (req.schedule !== undefined) changeSummary.push("schedule");
@@ -947,16 +953,22 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           };
         }
 
-        await app.grant({
-          ownerScopeId: home.ownerScopeId,
-          ref: home.grantRef,
-          granteeScopeId: toScope,
-          permission,
-          grantedBy: capability.actorId,
-        });
+        const invite =
+          req.type === "deploy" && req.email !== undefined && permission === "read"
+            ? await app.inviteToDeployment(home.id, req.email, capability.actorId)
+            : undefined;
+        if (!invite)
+          await app.grant({
+            ownerScopeId: home.ownerScopeId,
+            ref: home.grantRef,
+            granteeScopeId: toScope,
+            permission,
+            grantedBy: capability.actorId,
+          });
         return {
           ok: true,
           verb: "share",
+          ...(invite ? { invitation: invite.invitation } : {}),
           type: req.type,
           id: home.id,
           target: { scope: toScope, label: target.label },
@@ -981,8 +993,9 @@ type ArtifactTarget =
 async function resolveArtifactTarget(app: App, req: ShareArtifactRequest): Promise<ArtifactTarget> {
   const r = await resolveShareTarget(
     app,
-    { scope: req.scope, recipient: req.recipient },
+    { scope: req.scope, recipient: req.recipient, email: req.email },
     {
+      allowEmail: req.type === "deploy" && !req.move,
       invalidScope: (scope) => `invalid scope "${scope}" — use "org" or a scope id like personal:<id> or channel:<id>`,
       targetRequired: 'a target is required: pass `toScope` ("org", a scope id, or a teammate\'s name)',
     },

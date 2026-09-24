@@ -40,7 +40,17 @@ async function fixture(t: { after(fn: () => void): void }) {
   const acl = createAclStore();
   const auditLog = createAuditLog();
   const deliveries = createDeliveryStore();
+  const identity = createIdentityService();
+  const directory = createDirectoryStore();
+  await directory.replace(
+    [owner, requester, "carol@example.com"].map((principalId) => ({
+      principalId,
+      displayName: principalId,
+      type: "internal" as const,
+    })),
+  );
   const deploy = createDeployService({
+    canManageEmail: async (email) => (await directory.get(email))?.type === "internal",
     deliveries,
     deployAppsDomain: "apps.example.com",
     deployStore: createDeployStore(),
@@ -53,8 +63,6 @@ async function fixture(t: { after(fn: () => void): void }) {
       destroy: async () => {},
     },
   });
-  const identity = createIdentityService();
-  const directory = createDirectoryStore();
   const app = createApp({
     deploy,
     acl,

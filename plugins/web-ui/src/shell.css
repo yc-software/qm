@@ -12269,6 +12269,9 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .permission-search .project-member-results:not(:has(button)) {
   display: none;
 }
+.permission-general-label {
+  margin-top: 20px;
+}
 .permission-section-label {
   font-size: 11px;
   font-weight: 500;
@@ -12856,4 +12859,22 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   outline: 2px solid var(--accent, #6474eb);
   outline-offset: 6px;
   border-radius: 8px;
+}
+
+.split-pane-parent {
+  min-width: 0;
+  max-width: 30%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.split-pane-parent:hover {
+  color: var(--foreground);
+  text-decoration: underline;
 }

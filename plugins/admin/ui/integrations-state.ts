@@ -1,3 +1,4 @@
+import { openDesktopBrowser } from "../../chassis/src/desktop-browser.ts";
 import { SettingState, settingRegistry } from "./setting-state.ts";
 export type Api = (
   method: string,
@@ -240,6 +241,9 @@ export class SlackInstallationState {
     this.busy = "start";
     this.render();
     try {
+      const browser = new URL(location.href);
+      browser.searchParams.set("slack", step);
+      if (await openDesktopBrowser(browser.href)) return;
       const result = await context.api("POST", "/api/slack-installation/start", { step });
       if (result.ok && result.data.url) {
         const form = document.createElement("form");
@@ -248,6 +252,8 @@ export class SlackInstallationState {
         document.body.appendChild(form);
         form.submit();
       } else this.setStatus("Could not start Slack installation. Please try again.", "err");
+    } catch {
+      this.setStatus("Could not start Slack installation. Please try again.", "err");
     } finally {
       this.busy = "";
       this.render();

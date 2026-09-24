@@ -17,7 +17,6 @@ import {
   type TaskListPresenter,
   DEFAULT_ACK_REACTIONS,
   REACTION_DETECT_GUIDANCE,
-  approvalMessage,
   botIdentityArgs,
   buildReactionTurnText,
   createAckPresenter,
@@ -363,6 +362,7 @@ export function createTurnHandler(deps: {
           (await core.activeRunForThread(ref).catch(swallowAs("slack: active-run lookup", undefined))) ??
           inFlightRunByThread.get(ref),
         signalAbort: (runId) => core.signalRunAbort(runId),
+        stopConversation: (ref) => core.stopConversation(ref),
       }).catch(swallowAs("slack: abort signal", true));
       if (intercepted) return;
     }
@@ -683,23 +683,6 @@ export function createTurnHandler(deps: {
             actionableAgentRequests,
           );
         }
-        if (result.pendingApprovals?.length) {
-          await approvals.postApprovalButtons(
-            client,
-            {
-              requesterId: inc.userId,
-              channel: inc.channel,
-              ...(replyThreadTs ? { replyThreadTs } : {}),
-              triggerTs: inc.ts,
-              threadOnly: inc.kind === "channel",
-              turn,
-              ...(allowedTs.size ? { allowedTs } : {}),
-              ...(slackIdsByPrincipal ? { slackIdsByPrincipal } : {}),
-              ...(ack?.postedAck() ? { ackedFirstBlock: ack.postedAck() } : {}),
-            },
-            result.pendingApprovals,
-          );
-        }
         await settleAck();
         await finishTaskAck();
       };
@@ -746,28 +729,8 @@ export function createTurnHandler(deps: {
         await finishTaskAck();
         return;
       }
-      const baseCtx = {
-        requesterId: inc.userId,
-        channel: inc.channel,
-        ...(replyThreadTs ? { replyThreadTs } : {}),
-        triggerTs: inc.ts,
-        threadOnly: inc.kind === "channel",
-        turn,
-        ...(allowedTs.size ? { allowedTs } : {}),
-        ...(slackIdsByPrincipal ? { slackIdsByPrincipal } : {}),
-        ...(ack?.postedAck() ? { ackedFirstBlock: ack.postedAck() } : {}),
-      };
       await settleAck();
-      if (inc.kind === "channel") {
-        await approvals.postApprovalButtons(client, baseCtx, pendingApprovals);
-      } else {
-        approvals.rememberSlackApprovals(pendingApprovals, { ...baseCtx, approvalChannel: inc.channel });
-        const msg = approvalMessage(pendingApprovals);
-        await client.chat.postMessage({
-          ...slackReplyArgs(inc.channel, msg.text, replyThreadTs, { threadOnly: false }),
-          blocks: msg.blocks,
-        });
-      }
+      await finishTaskAck();
     } else {
       await settleAck();
       const delivery = refusalDelivery(result, inc.unprompted === true);

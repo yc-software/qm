@@ -2434,6 +2434,8 @@ export function createChatSurface(
     const animating = active && !stopping;
     let label = stopping ? "Stop requested" : workLabel(work);
     if (stopped) label = `You stopped after ${goalElapsedLabel(0, workSeconds(work) * 1000)}`;
+    if (timeline.length === 1 && !tail.trim() && !stopped && !stopping && !work.stale && !work.pendingApprovals?.length)
+      return html`${renderTimelineItem(timeline[0]!, work)}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
     let fold =
       timeline.length || tail.trim() || work.pendingApprovals?.length
         ? html`<details
@@ -2449,7 +2451,7 @@ export function createChatSurface(
                 activityGroups(timeline),
                 (items) => timelineKey(items[0]!),
                 (items) => {
-                  if (items[0]?.kind === "text") return renderTimelineItem(items[0], work);
+                  if (items.length === 1 || items[0]?.kind === "text") return renderTimelineItem(items[0]!, work);
                   const summary = activityGroupSummary(items, work.status);
                   const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
                     summary.category
