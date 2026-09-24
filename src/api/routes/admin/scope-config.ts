@@ -15,9 +15,7 @@ import {
 } from "../../../model/pi-models.ts";
 import {
   builtInModelCatalog,
-  cachedModelCatalog,
   selectableCatalogForHarness,
-  selectableModelCatalog,
   type ModelCatalogEntry,
 } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
@@ -334,15 +332,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
   const configuredKeys = deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
   const providersFor = (harnessId: string) => modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys);
-  const cached =
-    deps.modelCredentials && managedKeys.openrouter && nonblocking
-      ? cachedModelCatalog(deps.modelCredentialFetch)
-      : undefined;
-  const catalog =
-    cached?.models ??
-    (deps.modelCredentials && managedKeys.openrouter
-      ? await selectableModelCatalog(deps.modelCredentialFetch)
-      : builtInModelCatalog());
+  const catalog = builtInModelCatalog();
   const runtime = values.runtime as { harnessId?: unknown; modelId?: unknown } | null | undefined;
   const approvedHarnesses = (await deps.config!.getApprovedHarnessesDurable()) ?? [deps.harnessId ?? "pi"];
   let currentId = defaultModelForHarness(deps.harnessId ?? "pi", deps.baseModelDefault);
@@ -368,7 +358,6 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     );
   };
   return {
-    ...(cached?.refreshing ? { modelCatalogRefreshing: true } : {}),
     baseModelDefault: defaultModelForHarness(deps.harnessId ?? "pi", deps.baseModelDefault),
     baseModelOptions: modelsFor(deps.harnessId ?? "pi"),
     harnessDefault: deps.harnessId ?? "pi",
