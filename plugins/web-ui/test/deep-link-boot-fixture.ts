@@ -24,6 +24,7 @@ interface HarnessOptions {
   holdTranscript?: boolean;
   holdApprovals?: boolean;
   listSessions?: unknown[];
+  entries?: unknown[];
   savedCanvas?: boolean;
   welcome?: boolean;
   connectionReturn?: boolean;
@@ -152,7 +153,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
           earlierEntries: older ? 0 : 80,
         });
       }
-      return Response.json({ session: SESSION, entries: [] });
+      return Response.json({ session: SESSION, entries: opts.entries ?? [] });
     }
     if (path === "/api/sessions") {
       await sessionsHeld;

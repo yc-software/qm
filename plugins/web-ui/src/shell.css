@@ -12857,3 +12857,21 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   outline-offset: 6px;
   border-radius: 8px;
 }
+
+.split-pane-parent {
+  min-width: 0;
+  max-width: 30%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.split-pane-parent:hover {
+  color: var(--foreground);
+  text-decoration: underline;
+}
