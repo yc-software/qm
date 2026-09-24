@@ -1,5 +1,6 @@
 import {
   KeychainError,
+  isBackendCredential,
   renderAskNotice,
   renderUseScript,
   type CredentialFieldInput,
@@ -203,10 +204,22 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
           message: 'expected { credential | ask, mode: "once"|"standing", purpose }',
         });
       }
-      const useBlock = (grant: { id: string }) => ({
-        command: keychainUseCommand({ grant: grant.id }),
-        note: "Run the task in that same shell. The secret never appears in output — do not cat the file.",
-      });
+      const useBlock = async (grant: { id: string; credentialId: string }) => {
+        const credential = await kc.getCredential(grant.credentialId);
+        if (credential && isBackendCredential(credential))
+          return {
+            note: "Composio keys stay in the backend. Use the composio skill and /v1/composio through the authenticated agent API.",
+          };
+        return {
+          command: keychainUseCommand({ grant: grant.id }),
+          ...(credential?.credentialHandle
+            ? { credentialHandle: credential.credentialHandle, credentials: [credential.credentialHandle] }
+            : {}),
+          note: credential?.credentialHandle
+            ? "Pass credentials to execute for the command needing this credential. This handle is available immediately; no keychain/use call is needed."
+            : "Run the task in that same shell. Do not echo or print the credential files.",
+        };
+      };
       if (typeof b.ask === "string") {
         if (typeof b.onBehalfOf === "string" && b.onBehalfOf.trim() && !samePerson(b.onBehalfOf, actorId)) {
           return sendJson(res, 403, {
@@ -230,12 +243,14 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         });
         void deps
           .fireAskResolution?.(ask, grant)
-          .then(() => kc.markAskNotified(ask.id))
+          .then(() => kc.markAskNotified(ask.id, ask.status))
           .catch((e) => swallow("keychain: ask resolution fire failed (sweep will retry)", e));
+        const grantedCredential = await kc.getCredential(grant.credentialId);
         return sendJson(res, 200, {
           grant,
           ask,
           use: {
+            ...(grantedCredential?.credentialHandle ? { credentialHandle: grantedCredential.credentialHandle } : {}),
             note: `Grant is active in ${grant.audienceScopeId} — the asking conversation resumes automatically. Do not load or consume the grant on this approval turn.`,
           },
         });
@@ -277,7 +292,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
           scopeLabel: capability.scopeId,
         });
       }
-      return sendJson(res, 200, { grant, use: useBlock(grant) });
+      return sendJson(res, 200, { grant, use: await useBlock(grant) });
     }
 
     if (method === "GET" && pathname === "/v1/keychain/grants") {
@@ -331,11 +346,19 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       const cronId = cronIdOf(capability.threadRef);
       const cron = cronId ? await app.getCron(cronId) : null;
       const dest = resolveCapabilityDestination(capability, undefined);
+      const originRun = capability.runId ? await deps.runs?.get(capability.runId) : null;
+      const requesterSeq = originRun && originRun.sessionId === capability.threadRef ? originRun?.turnUserSeq : null;
+      const requesterMessageTs =
+        originRun && originRun.sessionId === capability.threadRef && originRun.request.origin.kind === "human"
+          ? originRun.request.origin.messageTs
+          : undefined;
       const { ask, existing } = await kc.createAsk({
         ...(capability.triggered ? { triggered: true } : {}),
         credentialId: cred.id,
         requesterId: actorId,
         requesterScopeId: capability.scopeId,
+        ...(requesterSeq != null ? { requesterSeq } : {}),
+        ...(requesterMessageTs ? { requesterMessageTs } : {}),
         ...(dest.ok && dest.destination ? { requesterDestination: dest.destination } : {}),
         ...(capability.threadRef ? { requesterThreadRef: capability.threadRef } : {}),
         purpose: b.purpose,
@@ -351,7 +374,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         ...(cron?.ownerScopeId === capability.scopeId ? { taskTitle: cron.title ?? cron.id } : {}),
       });
       await deps.deliveries?.enqueue({
-        destination: principalDestination(cred.ownerId, actorId),
+        destination: { ...principalDestination(cred.ownerId, actorId), keychainAskId: ask.id },
         text: notice,
         idempotencyKey: `ask:${ask.id}:notice`,
       });
@@ -394,7 +417,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       });
       void deps
         .fireAskResolution?.(ask)
-        .then(() => kc.markAskNotified(ask.id))
+        .then(() => kc.markAskNotified(ask.id, ask.status))
         .catch((e) => swallow("keychain: ask resolution fire failed (sweep will retry)", e));
       return sendJson(res, 200, { ask });
     }

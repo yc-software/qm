@@ -85,7 +85,7 @@ async function scenario() {
           screenToolResult: turn.screenToolResult,
           pendingApprovals: [],
         };
-        const tool = createAgentTools(ref).find((tool) => tool.name === "session")!;
+        const tool = createAgentTools(ref).find((tool) => tool.name === "sessions")!;
         const execute = tool.execute as unknown as (id: string, input: unknown) => Promise<{ content: unknown[] }>;
         const result = await execute("wait-call", { action: "wait", timeoutMs: 0 });
         const reply = JSON.stringify(result.content);

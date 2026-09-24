@@ -42,10 +42,15 @@ test("public QM leads with manifest setup and hides hosted actions and instructi
 });
 
 test("hosted connection offers re-add and keeps custom setup secondary", async () => {
-  const el = await render({ configured: true, source: "service", installAvailable: true, teamName: "Development YC" });
+  const el = await render({
+    configured: true,
+    source: "service",
+    installAvailable: true,
+    teamName: "Development Acme",
+  });
   assert.equal(el("slack-installation-start-label").textContent.trim(), "Re-add to Slack");
   assert.equal(el("slack-installation-start").disabled, false);
-  assert.equal(el("slack-installation-state").textContent.trim(), "Development YC");
+  assert.equal(el("slack-installation-state").textContent.trim(), "Development Acme");
   assert.equal(el("slack-own-app-label").textContent.trim(), "Use your own Slack app");
   assert.equal(el("slack-own-app-guide").open, false);
 });

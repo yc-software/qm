@@ -115,8 +115,73 @@ test("deployment sharing uses the signed-in capability and drops caller identity
     ).status,
     200,
   );
+  assert.equal(
+    (
+      await fetch(`${base}/api/deployments/d1/share`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ public: true, actorId: "mallory", principalId: "mallory" }),
+      })
+    ).status,
+    200,
+  );
   const requests = calls.slice(before).filter((call) => call.url === "/v1/deployments/d1/share");
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 3);
   assert.ok(requests.every((call) => call.capability === "signed-in-user-capability"));
   assert.deepEqual(requests[1]?.body, { scope: "personal:bob", access: "view" });
+  assert.deepEqual(requests[2]?.body, { public: true });
+});
+
+test("embed-ancestors relays the origin list and never invents one", async () => {
+  let before = calls.length;
+  const saved = await fetch(`${base}/api/deployments/d1/embed-ancestors`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ embedAncestors: ["https://tools.example.com", "https://*.example.com"] }),
+  });
+  assert.equal(saved.status, 200);
+  const savedCall = calls
+    .slice(before)
+    .find((call) => call.method === "POST" && isNoncedCoreCall(call.url, "/v1/deployments/d1/embed-ancestors"));
+  assert.deepEqual(savedCall?.body, { embedAncestors: ["https://tools.example.com", "https://*.example.com"] });
+
+  before = calls.length;
+  assert.equal(
+    (
+      await fetch(`${base}/api/deployments/d1/embed-ancestors`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ embedAncestors: [] }),
+      })
+    ).status,
+    200,
+  );
+  const clearedCall = calls
+    .slice(before)
+    .find((call) => call.method === "POST" && isNoncedCoreCall(call.url, "/v1/deployments/d1/embed-ancestors"));
+  assert.deepEqual(clearedCall?.body, { embedAncestors: [] });
+
+  before = calls.length;
+  await fetch(`${base}/api/deployments/d1/embed-ancestors`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ embedAncestors: "https://tools.example.com" }),
+  });
+  const coercedCall = calls
+    .slice(before)
+    .find((call) => call.method === "POST" && isNoncedCoreCall(call.url, "/v1/deployments/d1/embed-ancestors"));
+  assert.deepEqual(coercedCall?.body, { embedAncestors: [] });
+});
+
+test("deployment share bridge forwards an exact email without caller identity", async () => {
+  const before = calls.length;
+  const r = await fetch(`${base}/api/deployments/d1/share`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ email: "Invitee@Example.com", access: "view", actorId: "mallory", principalId: "mallory" }),
+  });
+  assert.equal(r.status, 200);
+  const request = calls.slice(before).find((call) => call.url === "/v1/deployments/d1/share");
+  assert.deepEqual(request?.body, { email: "Invitee@Example.com", access: "view" });
+  assert.equal(request?.capability, "signed-in-user-capability");
 });

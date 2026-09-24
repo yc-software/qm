@@ -6,10 +6,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigInDir, type QmConfig } from "../src/config.ts";
 import {
+  CoreUnreachableError,
+  DEPLOYMENT_LAYER_UNAVAILABLE_ATTEMPTS,
   currentDeploymentLayerState,
   deploymentLayerBundle,
   syncDeploymentLayer,
   httpDeploymentLayerTransport,
+  type DeploymentLayerTransport,
 } from "../src/deployment-layer.ts";
 import { dockerDeploymentLayerTransport } from "../src/backends/docker.ts";
 import { flyDeploymentLayerTransport } from "../src/backends/fly.ts";
@@ -566,6 +569,7 @@ test("allowUnavailable swallows an unreachable core but NOT a local config error
         configDir: dir,
         sandboxDir: join(dir, "sandbox"),
         allowUnavailable: true,
+        wait: async () => {},
       }),
     );
     await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, () =>
@@ -589,6 +593,7 @@ test("allowUnavailable swallows an unreachable core but NOT a local config error
             configDir: dir,
             sandboxDir: join(dir, "sandbox"),
             allowUnavailable: true,
+            wait: async () => {},
           }),
         /CORE_SIGNING_SECRET is required/,
       ),
@@ -605,6 +610,57 @@ function fakeFly(dir: string, body: string): string {
   return bin;
 }
 
+function fakeFlyStatus(dir: string, extra = ""): string {
+  return fakeFly(
+    dir,
+    `
+const args = process.argv.slice(2);
+${extra}
+if (args[0] === "status") {
+  console.log(
+    JSON.stringify({
+      Machines: [
+        { id: "machine-stale", state: "stopped" },
+        { id: "machine-core", state: "started" },
+      ],
+    }),
+  );
+  process.exit(0);
+}
+process.exit(1);
+`,
+  );
+}
+
+interface CapturedFlyExec {
+  url: string;
+  authorization: string;
+  body: { command?: unknown; stdin?: unknown; timeout?: unknown };
+}
+
+async function withFlyMachineExec<T>(stdout: string, fn: (captured: CapturedFlyExec[]) => Promise<T>): Promise<T> {
+  const captured: CapturedFlyExec[] = [];
+  const previous = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string" || input instanceof URL ? String(input) : input.url;
+    const headers = new Headers(init?.headers);
+    captured.push({
+      url,
+      authorization: headers.get("authorization") ?? "",
+      body: init?.body ? (JSON.parse(String(init.body)) as CapturedFlyExec["body"]) : {},
+    });
+    return new Response(JSON.stringify({ stdout, exit_code: 0 }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  try {
+    return await fn(captured);
+  } finally {
+    globalThis.fetch = previous;
+  }
+}
+
 function flySyncOpts(dir: string, allowUnavailable?: boolean): Parameters<typeof syncDeploymentLayer>[0] {
   return {
     config: makeConfig("http://example.invalid"),
@@ -612,6 +668,7 @@ function flySyncOpts(dir: string, allowUnavailable?: boolean): Parameters<typeof
     configDir: dir,
     sandboxDir: join(dir, "sandbox"),
     ...(allowUnavailable !== undefined ? { allowUnavailable } : {}),
+    ...(allowUnavailable ? { wait: async () => {} } : {}),
   };
 }
 
@@ -619,24 +676,35 @@ test("fly sync succeeds on the response marker, piping the exact bundle over std
   const dir = mkdtempSync(join(tmpdir(), "qm-layer-fly-"));
   try {
     writeLayer(dir);
-    const stdinLog = join(dir, "stdin.log");
     const argsLog = join(dir, "args.log");
-    const bin = fakeFly(
+    const bin = fakeFlyStatus(
       dir,
-      [
-        `fs.writeFileSync(${JSON.stringify(argsLog)}, JSON.stringify(process.argv.slice(2)));`,
-        `fs.writeFileSync(${JSON.stringify(stdinLog)}, fs.readFileSync(0, "utf8"));`,
-        `console.log('QM_LAYER_RESPONSE=' + JSON.stringify({ status: 200, body: JSON.stringify({ version: 7, contentHash: "abcdef123456" }) }));`,
-      ].join("\n"),
+      `fs.writeFileSync(${JSON.stringify(argsLog)}, JSON.stringify(process.argv.slice(2)));`,
     );
-    await withEnv({ FLY_BIN: bin }, () => syncDeploymentLayer(flySyncOpts(dir)));
-    assert.equal(
-      readFileSync(stdinLog, "utf8"),
-      JSON.stringify(deploymentLayerBundle(join(dir, "sandbox"))),
-      "the full bundle reaches the remote script's stdin",
+    const bundle = JSON.stringify(deploymentLayerBundle(join(dir, "sandbox")));
+    await withFlyMachineExec(
+      `QM_LAYER_RESPONSE=${JSON.stringify({ status: 200, body: JSON.stringify({ version: 7, contentHash: "abcdef123456" }) })}`,
+      async (captured) => {
+        await withEnv({ FLY_BIN: bin, FLY_API_TOKEN: "test-token" }, () => syncDeploymentLayer(flySyncOpts(dir)));
+        assert.equal(captured.length, 1);
+        const request = captured[0]!;
+        assert.equal(request.url, "https://api.machines.dev/v1/apps/acme-core/machines/machine-core/exec");
+        assert.equal(request.authorization, "Bearer test-token");
+        assert.equal(request.body.stdin, bundle, "the full bundle reaches the remote script's stdin");
+        assert.equal(request.body.timeout, 120);
+        assert.ok(Array.isArray(request.body.command));
+        assert.deepEqual((request.body.command as string[]).slice(0, 2), ["node", "-e"]);
+        const remoteScript = (request.body.command as string[])[2] ?? "";
+        assert.match(remoteScript, /createHmac\("sha256"/, "the signing script is passed to node -e directly");
+        assert.doesNotMatch(remoteScript, /eval\(/, "no eval indirection");
+        assert.deepEqual(JSON.parse(readFileSync(argsLog, "utf8")) as string[], [
+          "status",
+          "-a",
+          "acme-core",
+          "--json",
+        ]);
+      },
     );
-    const args = JSON.parse(readFileSync(argsLog, "utf8")) as string[];
-    assert.deepEqual(args.slice(0, 4), ["ssh", "console", "-a", "acme-core"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -648,11 +716,11 @@ test("a 202 degraded response is accepted and warns with the core's persisted-bu
   t.mock.method(console, "warn", (...parts: unknown[]) => void warnings.push(parts.join(" ")));
   try {
     writeLayer(dir);
-    const bin = fakeFly(
-      dir,
-      `console.log('QM_LAYER_RESPONSE=' + JSON.stringify({ status: 202, body: JSON.stringify({ status: "degraded", version: 8, contentHash: "abc", durable: true, message: "skill collision" }) }));`,
+    const bin = fakeFlyStatus(dir);
+    await withFlyMachineExec(
+      `QM_LAYER_RESPONSE=${JSON.stringify({ status: 202, body: JSON.stringify({ status: "degraded", version: 8, contentHash: "abc", durable: true, message: "skill collision" }) })}`,
+      () => withEnv({ FLY_BIN: bin, FLY_API_TOKEN: "test-token" }, () => syncDeploymentLayer(flySyncOpts(dir))),
     );
-    await withEnv({ FLY_BIN: bin }, () => syncDeploymentLayer(flySyncOpts(dir)));
     assert.ok(warnings.some((line) => /persisted but only partially applied: skill collision/.test(line)));
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -663,15 +731,16 @@ test("a remote-script error (signing secret missing on core) is NOT deferrable a
   const dir = mkdtempSync(join(tmpdir(), "qm-layer-fly-"));
   try {
     writeLayer(dir);
-    const bin = fakeFly(
-      dir,
-      `console.log('QM_LAYER_ERROR=' + JSON.stringify({ message: "CORE_SIGNING_SECRET is not set on core" }));`,
-    );
-    await withEnv({ FLY_BIN: bin }, () =>
-      assert.rejects(
-        () => syncDeploymentLayer(flySyncOpts(dir, true)),
-        /could not sync deployment layer: .*CORE_SIGNING_SECRET is not set on core/,
-      ),
+    const bin = fakeFlyStatus(dir);
+    await withFlyMachineExec(
+      `QM_LAYER_ERROR=${JSON.stringify({ message: "CORE_SIGNING_SECRET is not set on core" })}`,
+      () =>
+        withEnv({ FLY_BIN: bin, FLY_API_TOKEN: "test-token" }, () =>
+          assert.rejects(
+            () => syncDeploymentLayer(flySyncOpts(dir, true)),
+            /could not sync deployment layer: .*CORE_SIGNING_SECRET is not set on core/,
+          ),
+        ),
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -682,14 +751,74 @@ test("a remote connection failure (core process down inside the VM) IS deferrabl
   const dir = mkdtempSync(join(tmpdir(), "qm-layer-fly-"));
   try {
     writeLayer(dir);
-    const bin = fakeFly(
-      dir,
-      `console.log('QM_LAYER_ERROR=' + JSON.stringify({ message: "fetch failed", code: "ECONNREFUSED" }));`,
+    const bin = fakeFlyStatus(dir);
+    await withFlyMachineExec(
+      `QM_LAYER_ERROR=${JSON.stringify({ message: "fetch failed", code: "ECONNREFUSED" })}`,
+      async () => {
+        await withEnv({ FLY_BIN: bin, FLY_API_TOKEN: "test-token" }, () => syncDeploymentLayer(flySyncOpts(dir, true)));
+        await withEnv({ FLY_BIN: bin, FLY_API_TOKEN: "test-token" }, () =>
+          assert.rejects(() => syncDeploymentLayer(flySyncOpts(dir)), /could not sync deployment layer/),
+        );
+      },
     );
-    await withEnv({ FLY_BIN: bin }, () => syncDeploymentLayer(flySyncOpts(dir, true)));
-    await withEnv({ FLY_BIN: bin }, () =>
-      assert.rejects(() => syncDeploymentLayer(flySyncOpts(dir)), /could not sync deployment layer/),
-    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("allowUnavailable retries an unreachable PUT until the core comes back", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-retry-recover-"));
+  const lines: string[] = [];
+  t.mock.method(console, "log", (...parts: unknown[]) => void lines.push(parts.join(" ")));
+  try {
+    writeLayer(dir);
+    let calls = 0;
+    const transport: DeploymentLayerTransport = async () => {
+      calls += 1;
+      if (calls < 3) {
+        const error = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+        throw error;
+      }
+      return { status: 200, body: JSON.stringify({ version: 4, contentHash: "abc123def456" }) };
+    };
+    await syncDeploymentLayer({
+      config: makeConfig("http://example.invalid"),
+      transport,
+      configDir: dir,
+      sandboxDir: join(dir, "sandbox"),
+      allowUnavailable: true,
+      wait: async () => {},
+    });
+    assert.equal(calls, 3);
+    assert.ok(lines.some((line) => /deployment layer: v4 abc123def456/.test(line)));
+    assert.equal(lines.filter((line) => /sync is deferred/.test(line)).length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("allowUnavailable retries then prints the deferred message once when the core stays unreachable", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-retry-exhaust-"));
+  const lines: string[] = [];
+  t.mock.method(console, "log", (...parts: unknown[]) => void lines.push(parts.join(" ")));
+  try {
+    writeLayer(dir);
+    let calls = 0;
+    const transport: DeploymentLayerTransport = async () => {
+      calls += 1;
+      throw new CoreUnreachableError("core is not reachable");
+    };
+    await syncDeploymentLayer({
+      config: makeConfig("http://example.invalid"),
+      transport,
+      configDir: dir,
+      sandboxDir: join(dir, "sandbox"),
+      allowUnavailable: true,
+      wait: async () => {},
+    });
+    assert.equal(calls, DEPLOYMENT_LAYER_UNAVAILABLE_ATTEMPTS);
+    assert.ok(calls > 1);
+    assert.equal(lines.filter((line) => /sync is deferred/.test(line)).length, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -700,9 +829,11 @@ test("a fly-ssh transport failure defers under allowUnavailable, but a missing a
   try {
     writeLayer(dir);
     const transport = fakeFly(dir, `console.error("Error: tunnel unavailable"); process.exit(1);`);
-    await withEnv({ FLY_BIN: transport }, () => syncDeploymentLayer(flySyncOpts(dir, true)));
+    await withEnv({ FLY_BIN: transport, FLY_API_TOKEN: "test-token" }, () =>
+      syncDeploymentLayer(flySyncOpts(dir, true)),
+    );
     const missingApp = fakeFly(dir, `console.error("Error: Could not find App 'acme-core'"); process.exit(1);`);
-    await withEnv({ FLY_BIN: missingApp }, () =>
+    await withEnv({ FLY_BIN: missingApp, FLY_API_TOKEN: "test-token" }, () =>
       assert.rejects(() => syncDeploymentLayer(flySyncOpts(dir, true)), /Fly app acme-core not found/),
     );
   } finally {

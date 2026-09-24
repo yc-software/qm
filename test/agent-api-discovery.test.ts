@@ -183,7 +183,7 @@ test("discovery advertises the deployment share endpoint, with guidance", async 
     assert.ok(p.includes("/v1/deployments/:id"), "deployment detail is discoverable");
     assert.ok(p.includes("/v1/deployments/:id/restore"), "restore is discoverable");
     assert.ok(
-      body.guidance.some((g: string) => /share it with everyone/i.test(g)),
+      body.guidance.some((g: string) => g.includes("POST /v1/deployments/:id/share") && g.includes('scope:"org"')),
       "share guidance is present",
     );
   } finally {

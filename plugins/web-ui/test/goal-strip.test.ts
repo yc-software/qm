@@ -19,7 +19,7 @@ test("latestGoal finds the newest goal snapshot across messages", () => {
     msg([
       {
         type: "tool_result",
-        payload: { tool: "create_goal", goal: record("active", { floor: { minMs: 1_200_000 } }) },
+        payload: { tool: "goal", action: "create", goal: record("active", { floor: { minMs: 1_200_000 } }) },
       },
     ]),
     msg([{ type: "tool_result", payload: { tool: "execute", ok: true } }]),

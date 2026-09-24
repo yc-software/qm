@@ -14,7 +14,8 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { portalSessionSub } from "../src/deploy/viewer-session.ts";
+import { PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
+import { portalSession } from "../src/deploy/viewer-session.ts";
 import { scopeId } from "../src/types.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
@@ -31,30 +32,36 @@ function mintPortalSession(sub: string, expInSeconds = 3600, secret = SESSION_SE
   return `${body}.${sig}`;
 }
 
-test("portalSessionSub: verifies, and rejects tampering, expiry, wrong kind, wrong secret", () => {
+test("portalSession: verifies, and rejects tampering, expiry, wrong kind, wrong secret", () => {
   const good = mintPortalSession("alice@example.com");
-  assert.equal(portalSessionSub(`portal_session=${good}`, SESSION_SECRET), "alice@example.com");
-  assert.equal(portalSessionSub(`other=1; portal_session=${good}; x=2`, SESSION_SECRET), "alice@example.com");
-  assert.equal(portalSessionSub(`portal_session=${good}x`, SESSION_SECRET), null, "tampered signature");
-  assert.equal(
-    portalSessionSub(`portal_session=junk; portal_session=${good}`, SESSION_SECRET),
-    "alice@example.com",
+  assert.deepEqual(portalSession(`portal_session=${good}`, SESSION_SECRET), {
+    sub: "alice@example.com",
+    appOnly: false,
+  });
+  assert.deepEqual(portalSession(`other=1; portal_session=${good}; x=2`, SESSION_SECRET), {
+    sub: "alice@example.com",
+    appOnly: false,
+  });
+  assert.deepEqual(portalSession(`portal_session=${good}x`, SESSION_SECRET), null, "tampered signature");
+  assert.deepEqual(
+    portalSession(`portal_session=junk; portal_session=${good}`, SESSION_SECRET),
+    { sub: "alice@example.com", appOnly: false },
     "an app's junk same-named cookie cannot shadow the real session",
   );
-  assert.equal(portalSessionSub(`portal_session=${good}`, "other-secret"), null, "wrong secret");
-  assert.equal(
-    portalSessionSub(`portal_session=${mintPortalSession("alice@example.com", -10)}`, SESSION_SECRET),
+  assert.deepEqual(portalSession(`portal_session=${good}`, "other-secret"), null, "wrong secret");
+  assert.deepEqual(
+    portalSession(`portal_session=${mintPortalSession("alice@example.com", -10)}`, SESSION_SECRET),
     null,
     "expired",
   );
-  assert.equal(portalSessionSub(undefined, SESSION_SECRET), null);
-  assert.equal(portalSessionSub("portal_session=", SESSION_SECRET), null);
+  assert.deepEqual(portalSession(undefined, SESSION_SECRET), null);
+  assert.deepEqual(portalSession("portal_session=", SESSION_SECRET), null);
   const key = createHmac("sha256", SESSION_SECRET).update("portal.session.v1").digest();
   const body = Buffer.from(
     JSON.stringify({ k: "impersonate", sub: "eve", exp: Math.floor(Date.now() / 1000) + 60 }),
   ).toString("base64url");
   const sig = createHmac("sha256", key).update(body).digest("base64url");
-  assert.equal(portalSessionSub(`portal_session=${body}.${sig}`, SESSION_SECRET), null, "non-session claims");
+  assert.deepEqual(portalSession(`portal_session=${body}.${sig}`, SESSION_SECRET), null, "non-session claims");
 });
 
 test("forwarded app hosts fail closed before core routes when gateway configuration is absent", async () => {
@@ -94,13 +101,16 @@ function httpGet(
 }
 
 test("app sign-in uses the configured trusted entry and preserves the app return address", async () => {
-  const server = createInsecureTestServer({} as Parameters<typeof createInsecureTestServer>[0], {
-    deployAppsDomain: "apps.example.com",
-    deployGateSecret: "gate",
-    deployAppsSessionSecret: SESSION_SECRET,
-    deployAppsLoginUrl: LOGIN_URL,
-    deployAppsLoginPath: "/auth/trusted/login",
-  });
+  const server = createInsecureTestServer(
+    { getDeployment: async () => null } as unknown as Parameters<typeof createInsecureTestServer>[0],
+    {
+      deployAppsDomain: "apps.example.com",
+      deployGateSecret: "gate",
+      deployAppsSessionSecret: SESSION_SECRET,
+      deployAppsLoginUrl: LOGIN_URL,
+      deployAppsLoginPath: "/auth/trusted/login",
+    },
+  );
   server.listen(0);
   try {
     const result = await httpGet((server.address() as AddressInfo).port, "/counter?x=1", {
@@ -135,9 +145,11 @@ function httpPost(
 
 test("subdomain ingress: portal sign-in admits the owner, denies strangers, bounces the signed-out", async () => {
   let upstreamCookie: string | undefined = "unset";
+  let upstreamIdentity: string | undefined = "unset";
   let upstreamUrl = "";
   const upstream = createHttpServer((req, res) => {
     upstreamCookie = req.headers.cookie as string | undefined;
+    upstreamIdentity = req.headers[PORTAL_IDENTITY_HEADER] as string | undefined;
     upstreamUrl = req.url ?? "";
     res.writeHead(200, {
       "content-type": "text/plain",
@@ -207,6 +219,26 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     const xhr = await httpGet(port, "/api/data", { Host: host, Accept: "application/json" });
     assert.equal(xhr.status, 401, "a non-HTML request never gets a login redirect");
     assert.match(xhr.body, /loginUrl/, "…but is told where sign-in lives");
+
+    await app.setDeploymentPublic("mysite", true, { createdBy: "alice@example.com" });
+    const publicVisitor = await httpGet(port, "/consultants?x=1", { Host: host, Accept: "text/html,*/*" });
+    assert.equal(publicVisitor.status, 200, "a public app is reachable without a portal session");
+    assert.equal(publicVisitor.body, "UPSTREAM OK");
+    assert.equal(upstreamCookie, undefined, "an anonymous request forwards no gateway cookies");
+    assert.equal(upstreamIdentity, undefined, "an anonymous request forwards no viewer identity");
+
+    const signedInPublicVisitor = await httpGet(port, "/consultants", {
+      Host: host,
+      Accept: "text/html",
+      Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
+    });
+    assert.equal(signedInPublicVisitor.status, 200);
+    assert.equal(
+      upstreamIdentity,
+      undefined,
+      "a link-only public visitor stays anonymous even when a portal session cookie is present",
+    );
+    await app.setDeploymentPublic("mysite", false, { createdBy: "alice@example.com" });
 
     const backFromLogin = await httpGet(port, "/consultants?x=1&dpl_signin=1", {
       Host: host,
@@ -291,6 +323,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
       target: "alice@example.com",
       audienceScopeId: "personal:alice@example.com",
       onBehalfOf: "mallory@example.com",
+      deploymentAccess: { deploymentId: (await app.getDeployment("mysite"))!.id, requesterId: "mallory@example.com" },
     });
 
     const signedOutAsk = await httpPost(port, "/__claw__/request-access", { Host: host });

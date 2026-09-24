@@ -104,6 +104,7 @@ test("the curated catalog contains only current model families", () => {
   assert.deepEqual(
     SELECTABLE_BASE_MODELS.map((model) => model.id),
     [
+      "claude-opus-5-5",
       "claude-fable-5-1",
       "claude-fable-5",
       "claude-opus-5",
@@ -114,11 +115,29 @@ test("the curated catalog contains only current model families", () => {
       "gpt-5.6-terra",
       "gpt-5.6-luna",
       "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
       "openrouter/auto",
     ],
   );
   assert.equal(getRequiredModel("gpt-5.6-sol").contextWindow, 1_050_000);
   assert.equal(getRequiredModel("gpt-6-astra").contextWindow, 1_050_000);
+  assert.equal(getRequiredModel("gpt-6-sol").contextWindow, 1_050_000);
+  assert.equal(getRequiredModel("gpt-6-luna").contextWindow, 1_050_000);
+  assert.deepEqual(getRequiredModel("gpt-6-sol").cost, {
+    input: 2,
+    output: 10,
+    cacheRead: 0.2,
+    cacheWrite: 2.5,
+    tiers: [{ inputTokensAbove: 272_000, input: 4, output: 15, cacheRead: 0.4, cacheWrite: 5 }],
+  });
+  assert.deepEqual(getRequiredModel("gpt-6-luna").cost, {
+    input: 0.1,
+    output: 0.5,
+    cacheRead: 0.01,
+    cacheWrite: 0.125,
+    tiers: [{ inputTokensAbove: 272_000, input: 0.2, output: 0.75, cacheRead: 0.02, cacheWrite: 0.25 }],
+  });
 });
 
 test("auxiliary models come from the configured base model's own provider", () => {
@@ -127,6 +146,7 @@ test("auxiliary models come from the configured base model's own provider", () =
     "claude-haiku-4-5",
     "the deployment default resolves an Anthropic auxiliary",
   );
+  assert.equal(auxiliaryModelFor("claude-opus-5-5"), "claude-haiku-4-5");
   assert.equal(auxiliaryModelFor("claude-opus-4-8"), "claude-haiku-4-5");
   assert.equal(auxiliaryModelFor("claude-fable-5-1"), "claude-haiku-4-5");
   assert.equal(auxiliaryModelFor("claude-fable-5"), "claude-haiku-4-5");
@@ -193,6 +213,12 @@ test("context token budget is half of each model's real input room", () => {
     tiers: undefined,
   });
   assert.equal(contextTokenBudgetForModel("claude-fable-5-1"), 150_000, "a 1M window is capped, not halved");
+  const opus55 = getRequiredModel("claude-opus-5-5");
+  assert.equal(opus55.contextWindow, 1_000_000);
+  assert.equal(opus55.maxTokens, 128_000);
+  assert.equal(String(opus55.provider), "anthropic");
+  assert.deepEqual(opus55.cost, { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, tiers: undefined });
+  assert.equal(contextTokenBudgetForModel("claude-opus-5-5"), 150_000);
   assert.equal(getRequiredModel("claude-fable-5").contextWindow, 1_000_000);
   assert.equal(contextTokenBudgetForModel("claude-fable-5"), 150_000);
   assert.equal(contextTokenBudgetForModel("gpt-5.6-sol"), 150_000);

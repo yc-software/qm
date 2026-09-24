@@ -37,6 +37,9 @@
         "docs/qa/resource-search-demo.mjs"
       ]
     },
+    "desktop": {
+      "entry": ["preload.cjs", "setup.js", "test/**/*.test.mjs"]
+    },
     "cli": {
       "entry": ["bin/qm.ts"]
     },

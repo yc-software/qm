@@ -94,7 +94,7 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         ADMIN_UPSTREAM: `http://localhost:${i.ports.web}/admin`,
         PORTAL_SESSION_SECRET: i.portalSessionSecret,
         NODE_ENV: "development",
-        PORTAL_LOCAL_AUTH_BYPASS: "1",
+        PORTAL_LOCAL_AUTH_BYPASS: i.baseEnv.PORTAL_LOCAL_AUTH_BYPASS ?? "1",
         PORTAL_DEV_PRINCIPAL: i.portalDevPrincipal,
       },
       port: i.ports.portal,

@@ -9,14 +9,7 @@ import {
 } from "../api/runtime-config.ts";
 import { livePersonCapability } from "../api/artifact-share.ts";
 import { parseScopeId } from "../types.ts";
-import {
-  ALL_PROVIDERS_AVAILABLE,
-  isHarnessId,
-  thinkingLevelsForHarness,
-  safeModelMetadata,
-  modelSupportedByHarness,
-  codexSubscriptionModelId,
-} from "../model/pi-models.ts";
+import { isHarnessId, thinkingLevelsForHarness } from "../model/pi-models.ts";
 
 export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authorizesCapabilityScope">): RuntimeService {
   return async (claims, active, request, authorizeChoice, individualAuth, signal) => {
@@ -29,31 +22,7 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
     )
       return { ok: false, error: "forbidden" };
     await deps.refreshModels?.();
-    const snapshot = await runtimeConfigBody(
-      { deps: individualAuth ? { ...deps, providerKeys: ALL_PROVIDERS_AVAILABLE, modelCredentials: undefined } : deps },
-      claims.scopeId,
-    );
-    if (individualAuth && authorizeChoice) {
-      if (snapshot.approvedHarnesses.includes("pi")) {
-        const piModels = snapshot.modelsByHarness.pi ?? [];
-        for (const id of piModels) {
-          const subscriptionId = codexSubscriptionModelId(id);
-          if (subscriptionId === id) continue;
-          if (modelSupportedByHarness(subscriptionId, "pi") && !piModels.includes(subscriptionId)) {
-            piModels.push(subscriptionId);
-            const metadata = safeModelMetadata(subscriptionId);
-            if (metadata) snapshot.modelCatalog[subscriptionId] = metadata;
-          }
-        }
-      }
-      for (const harnessId of snapshot.approvedHarnesses) {
-        const candidates = snapshot.modelsByHarness[harnessId] ?? [];
-        const allowed = await Promise.all(
-          candidates.map((modelId) => authorizeChoice({ harnessId, modelId, effortLevel: "auto", fastMode: false })),
-        );
-        snapshot.modelsByHarness[harnessId] = candidates.filter((_, index) => !allowed[index]);
-      }
-    }
+    const snapshot = await runtimeConfigBody({ deps }, claims.scopeId, individualAuth ? authorizeChoice : undefined);
     if (request.action === "get")
       return {
         ok: true,

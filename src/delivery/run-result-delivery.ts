@@ -1,3 +1,4 @@
+import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
@@ -39,7 +40,7 @@ export function runResultDelivery(
   taskList: Task[] = [],
   adminUrlFor?: AdminUrlFor,
 ): RunResultDelivery | null {
-  if (run.request.swarm || run.request.privateSessionMessage) return null;
+  if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
   const target = run.request.deliveryTarget;
   const surface = run.request.surface;
   if (!target || !surface) return null;

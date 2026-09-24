@@ -14,6 +14,8 @@ import {
   type SDKUserMessage,
   type SpawnOptions,
   type SpawnedProcess,
+  type HookInput,
+  type HookJSONOutput,
 } from "@anthropic-ai/claude-agent-sdk";
 import { fromJSONSchema, type ZodObject } from "zod";
 import { contentText, createAssistantMessageEventStream } from "@earendil-works/pi-ai";
@@ -37,6 +39,7 @@ import { buildDetectionPrompt, parseDetectVerdict, renderDetectPrompt } from "./
 import { coreToolOptions } from "./agent-tools.ts";
 import {
   bridgedTools,
+  nativeChildToolAllowed,
   bridgedToolText,
   harnessToolContext,
   harnessToolOptions,
@@ -78,7 +81,6 @@ export function claudeHarnessConfigOptions(config: Config): ClaudeHarnessOptions
   };
 }
 
-const CHILD_TOOL_NAMES = new Set(["execute", "read", "write", "publish", "memory", "history", "background"]);
 const CLAUDE_CHILD_AGENT_TYPES = new Set(["research", "code", "consult"]);
 const CLAUDE_ENV_PASSTHROUGH = [
   "PATH",
@@ -128,6 +130,22 @@ export function spawnClaudeProcess(options: SpawnOptions, identity?: { uid: numb
     stdio: ["pipe", "pipe", "inherit"],
     ...identity,
   });
+}
+
+export function claudeChildToolHook(input: HookInput): HookJSONOutput {
+  if (
+    input.hook_event_name !== "PreToolUse" ||
+    !input.agent_id ||
+    nativeChildToolAllowed(input.tool_name.replace(/^mcp__qm__/, ""), input.tool_input)
+  )
+    return { continue: true };
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: "This resource action is unavailable to native subagents.",
+    },
+  };
 }
 
 export function claudeChildAgentAllowed(input: unknown): boolean {
@@ -311,7 +329,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const bridged = toolsEnabled ? bridgedTools(ref, harnessToolOptions(opts, turn)) : [];
     const bridgedNames = bridged.map((definition) => `mcp__qm__${definition.name}`);
     const childToolNames = bridged
-      .filter((definition) => CHILD_TOOL_NAMES.has(definition.name))
+      .filter((definition) => nativeChildToolAllowed(definition.name))
       .map((definition) => `mcp__qm__${definition.name}`);
     const allowSubagents = !turn.readOnly && !turn.delegateWork;
     const childPolicy = `${turn.systemPrompt}\n\nComplete only the delegated task. Do not contact people, schedule work, change standing configuration, or suppress the parent reply.`;
@@ -422,6 +440,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           ? {
               hooks: {
                 PreToolUse: [
+                  {
+                    matcher: "mcp__qm__.*",
+                    hooks: [async (input) => claudeChildToolHook(input)],
+                  },
                   {
                     matcher: "Agent",
                     hooks: [

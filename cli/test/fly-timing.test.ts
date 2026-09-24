@@ -45,8 +45,6 @@ if (args[0] === "apps" && args[1] === "create") {
   ]));
 } else if (args[0] === "deploy") {
   console.log("deployed");
-} else if (args[0] === "ssh" && args[1] === "console") {
-  console.log('QM_LAYER_RESPONSE=' + JSON.stringify({ status: 200, body: JSON.stringify({ version: 1, contentHash: "0123456789abcdef" }) }));
 } else {
   console.error("unexpected fake fly command: " + cmd);
   process.exit(42);
@@ -78,6 +76,7 @@ test("fly up emits phase timings and appends a GitHub step summary", () => {
       env: {
         ...process.env,
         FLY_BIN: fakeFlyBin(dir),
+        FLY_API_TOKEN: "",
         GITHUB_STEP_SUMMARY: summaryPath,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -123,6 +122,7 @@ test("fly up can deploy a tagged image without consulting the source stack's run
       env: {
         ...process.env,
         FLY_BIN: fakeFlyBin(dir),
+        FLY_API_TOKEN: "",
         FAKE_FLY_LOG: logPath,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -136,7 +136,7 @@ test("fly up can deploy a tagged image without consulting the source stack's run
     .split("\n")
     .map((line) => JSON.parse(line) as string[]);
   assert.equal(
-    commands.some((args) => args[0] === "status"),
+    commands.some((args) => args[0] === "status" && args.includes("qm-core")),
     false,
   );
   assert.equal(
@@ -167,6 +167,7 @@ test("fly image-from fails closed when Fly cannot resolve the running tag to a d
       env: {
         ...process.env,
         FLY_BIN: fakeFlyBin(dir),
+        FLY_API_TOKEN: "",
         FAKE_FLY_NO_IMAGE_DIGEST: "1",
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -199,6 +200,7 @@ test("fly image-from resolves by machine id during a mixed rollout", () => {
       env: {
         ...process.env,
         FLY_BIN: fakeFlyBin(dir),
+        FLY_API_TOKEN: "",
         FAKE_FLY_LOG: logPath,
         FAKE_FLY_MIXED_IMAGES: "1",
       },
@@ -236,6 +238,7 @@ test("a fresh Fly deploy stages the direct Managed Postgres URL without attachin
       env: {
         ...process.env,
         FLY_BIN: fakeFlyBin(dir),
+        FLY_API_TOKEN: "",
         FAKE_FLY_LOG: logPath,
         FAKE_FLY_FRESH_PG: "1",
       },
@@ -280,6 +283,7 @@ test("Fly preserves an existing DATABASE_URL even when a same-name Managed Postg
       env: {
         ...process.env,
         FLY_BIN: fakeFlyBin(dir),
+        FLY_API_TOKEN: "",
         FAKE_FLY_LOG: logPath,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -320,6 +324,7 @@ test("Fly redacts credential-bearing Managed Postgres status failures", () => {
       env: {
         ...process.env,
         FLY_BIN: fakeFlyBin(dir),
+        FLY_API_TOKEN: "",
         FAKE_FLY_FRESH_PG: "1",
         FAKE_FLY_STATUS_FAIL: "1",
       },
@@ -354,6 +359,7 @@ test("fly up build-only pushes a tagged image without checking runtime deploy se
       env: {
         ...process.env,
         FLY_BIN: fakeFlyBin(dir),
+        FLY_API_TOKEN: "",
         FAKE_FLY_LOG: logPath,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -410,6 +416,7 @@ test("fly up build-only dry-run plans without pushing an image", () => {
       env: {
         ...process.env,
         FLY_BIN: fakeFlyBin(dir),
+        FLY_API_TOKEN: "",
         FAKE_FLY_LOG: logPath,
       },
       stdio: ["ignore", "pipe", "pipe"],

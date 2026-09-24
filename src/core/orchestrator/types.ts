@@ -143,6 +143,7 @@ export interface OrchestratorDeps {
   harness: Harness;
   signingSecret?: string;
   capabilitySecret?: string;
+  capabilityTokenCompression?: boolean;
   apiBaseUrl?: string;
   publicWebUrl?: string;
   /** The public base for an inbound webhook URL (PUBLIC_WEB_URL ?? api url) — what the webhook
@@ -175,12 +176,15 @@ export interface OrchestratorDeps {
   webhooks?: WebhookStore;
   control?: ControlService;
   runtime?: RuntimeService;
+  validateScheduledRuntime?: (
+    scope: import("../../types.ts").ScopeId,
+    choice: import("../../harness/harness.ts").RuntimeChoice,
+  ) => Promise<string | null>;
   livenessCache?: LivenessCache;
   connectorTokens?: ConnectorTokenStore;
   connectorStatusCache?: ConnectorStatusCache;
   resolveConnectorClient?: OAuthClientResolver;
   scratchExec?: boolean;
-  sharedOwnerAuthIsolation?: boolean;
   deviceFlowCutover?: DeviceFlowCutoverStore;
   featureFlags?: FeatureFlagStore;
   credentialUsage?: CredentialUsageSink;

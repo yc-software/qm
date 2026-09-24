@@ -33,3 +33,18 @@ test("Slack and apps render independently", () => {
     [{ type: "slack" }, { type: "setup" }],
   );
 });
+
+test("personal Slack linking has its own standalone widget trigger", () => {
+  assert.deepEqual(setupContent("::link-slack-account{}"), [{ type: "slack-account" }]);
+  for (const text of [
+    "`::link-slack-account{}`",
+    "> ::link-slack-account{}",
+    "Use ::link-slack-account{} here",
+    "```text\n::link-slack-account{}\n```",
+    "::link-slack-account{",
+  ])
+    assert.equal(
+      setupContent(text).some((part) => part.type === "slack-account"),
+      false,
+    );
+});

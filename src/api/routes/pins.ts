@@ -1,8 +1,9 @@
+import { isSubagentThreadRef, sessionTreeRoot } from "../../sessions/session-syscalls.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
-function conversationRef(ctx: ApiCtx): string | null {
+async function conversationRef(ctx: ApiCtx): Promise<string | null> {
   const { res, capability } = ctx;
   if (!capability) {
     sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
@@ -12,12 +13,24 @@ function conversationRef(ctx: ApiCtx): string | null {
     sendJson(res, 400, { error: "no_conversation", message: "this token isn't bound to a conversation" });
     return null;
   }
-  return capability.threadRef;
+  if (!isSubagentThreadRef(capability.threadRef)) return capability.threadRef;
+  const sessions = ctx.deps.sessions;
+  const session = await sessions?.getByThread(capability.threadRef);
+  const root = session && sessions ? await sessionTreeRoot(sessions, session) : null;
+  if (
+    !root ||
+    root.scopeId !== capability.scopeId ||
+    !(await sessions!.getForParticipant(root.id, capability.actorId))
+  ) {
+    sendJson(res, 403, { error: "forbidden", message: "the originating conversation is no longer accessible" });
+    return null;
+  }
+  return root.threadRef;
 }
 
 async function addPin(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
-  const threadRef = conversationRef(ctx);
+  const threadRef = await conversationRef(ctx);
   if (!threadRef) return;
   const b = isObj(body) ? body : {};
   const text = typeof b.text === "string" && b.text.trim() ? b.text.trim() : undefined;
@@ -50,7 +63,7 @@ async function addPin(ctx: ApiCtx): Promise<void> {
 
 async function listPins(ctx: ApiCtx): Promise<void> {
   const { res, app, capability } = ctx;
-  const threadRef = conversationRef(ctx);
+  const threadRef = await conversationRef(ctx);
   if (!threadRef) return;
   const pins = await app.listConversationPins(threadRef, capability!.actorId);
   if (pins === null) return sendJson(res, 404, { error: "not_found", message: "no such conversation" });
@@ -59,7 +72,7 @@ async function listPins(ctx: ApiCtx): Promise<void> {
 
 async function removePin(ctx: ApiCtx): Promise<void> {
   const { res, app } = ctx;
-  const threadRef = conversationRef(ctx);
+  const threadRef = await conversationRef(ctx);
   if (!threadRef) return;
   const removed = await app.unpinConversationItem(threadRef, ctx.params.id!);
   if (removed === null) return sendJson(res, 404, { error: "not_found", message: "no such conversation" });

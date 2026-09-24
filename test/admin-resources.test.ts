@@ -414,15 +414,15 @@ test("feature flag table changes one scope live without restart", async () => {
   const srv = start();
   try {
     const endpoint = `${srv.base}/v1/admin/scopes/org:default-org/feature-flags`;
-    assert.equal(await srv.built.featureFlags.enabled("command_scoped_credentials", "channel:C1"), false);
+    assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "channel:C1"), false);
     const enable = await fetch(endpoint, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ featureName: "command_scoped_credentials", scopeId: "channel:C1", on: true }),
+      body: JSON.stringify({ featureName: "inbox_loops", scopeId: "channel:C1", on: true }),
     });
     assert.equal(enable.status, 200);
-    assert.equal(await srv.built.featureFlags.enabled("command_scoped_credentials", "channel:C1"), true);
-    assert.equal(await srv.built.featureFlags.enabled("command_scoped_credentials", "channel:C2"), false);
+    assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "channel:C1"), true);
+    assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "channel:C2"), false);
     const read = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
     const flags = ((await read.json()) as { featureFlags: Array<{ enabledScopes: string[] }> }).featureFlags;
     assert.deepEqual(flags[0]?.enabledScopes, ["channel:C1"]);

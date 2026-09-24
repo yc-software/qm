@@ -59,6 +59,7 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { provider: "openrouter", configured: false, source: "absent" },
       ],
       models: [
+        { id: "claude-opus-5-5", name: "Claude Opus 5.5", provider: "anthropic" },
         { id: "claude-fable-5-1", name: "Claude Fable 5.1", provider: "anthropic" },
         { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
         { id: "claude-opus-5", name: "Claude Opus 5", provider: "anthropic" },
@@ -69,6 +70,8 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
         { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
         { id: "gpt-6-astra", name: "GPT-6 Astra", provider: "openai" },
+        { id: "gpt-6-sol", name: "GPT-6 Sol", provider: "openai" },
+        { id: "gpt-6-luna", name: "GPT-6 Luna", provider: "openai" },
         { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter" },
       ],
     });

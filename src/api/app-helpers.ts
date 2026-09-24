@@ -499,12 +499,20 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   }
 
   async function effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null> {
-    if (!principalId) return null;
+    if (!principalId || deps.identity.deactivationSource?.(principalId) === "manual") return null;
     if (await principalCanWriteScope(principalId, d.ownerScopeId)) return "write";
     let best: Permission | null = (await principalCanAccessCurrentScope(principalId, d.ownerScopeId)) ? "read" : null;
     const grants = (await deps.acl?.grantsFor(d.ownerScopeId, encodeRef(deployRef(d.id))).catch(() => [])) ?? [];
     for (const g of grants) {
       if (g.permission !== "read" && g.permission !== "write") continue;
+      if (
+        g.permission === "read" &&
+        principalId.includes("@") &&
+        g.granteeScopeId === `personal:${principalId.trim().toLowerCase()}`
+      ) {
+        best = "read";
+        continue;
+      }
       if (!(await principalCanAccessCurrentScope(principalId, g.granteeScopeId))) continue;
       if (g.permission === "write" && (await principalCanUseWriteGrant(principalId, g.granteeScopeId))) return "write";
       best = "read";

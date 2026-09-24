@@ -84,3 +84,18 @@ export function reportFailureAs<T>(context: string, fallback: T, detail?: string
     return fallback;
   };
 }
+
+const REQUEST_ID_HEADERS = ["x-request-id", "x-amzn-requestid", "fly-request-id"];
+
+export function withRequestId(message: string, headers: Headers): string {
+  for (const name of REQUEST_ID_HEADERS) {
+    const value = headers.get(name);
+    if (value) return `${message} [request id ${value}]`;
+  }
+  return message;
+}
+
+export async function httpFailure(res: Response, bodyChars = 200): Promise<string> {
+  const body = (await res.text().catch(() => "")).slice(0, bodyChars);
+  return withRequestId(`http ${res.status} ${body}`, res.headers);
+}

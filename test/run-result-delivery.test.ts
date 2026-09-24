@@ -387,3 +387,32 @@ test("failed internal swarm notifications never append user-facing failure entri
   } as unknown as TurnFailureSessions;
   assert.equal(await recordRunFailureEntry(sessions, failed), false);
 });
+
+for (const surface of ["slack", "web"] as const) {
+  for (const result of [
+    { status: "ok", reply: "INTERNAL_CHILD_REPORT" },
+    { status: "failed", reason: "internal child failure" },
+    { status: "refused", refusalKind: "security_quarantine", reason: "internal screening" },
+    { status: "pending_approval", pendingApprovals: [{ requestId: "a", command: "cmd", reason: "approval" }] },
+  ] satisfies TurnResult[]) {
+    test(`${surface}: child ${result.status} never becomes an automatic public delivery`, () => {
+      const threadRef = "agent:main:subagent:child";
+      assert.equal(
+        runResultDelivery(
+          run({
+            sessionId: threadRef,
+            status: result.status === "failed" ? "failed" : "done",
+            request: {
+              ...turn("child", "D1"),
+              surface,
+              addressed: true,
+              conversation: { kind: "dm", threadRef, audience: [actor] },
+            },
+            result,
+          }),
+        ),
+        null,
+      );
+    });
+  }
+}

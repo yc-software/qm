@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { litFixture } from "./lit-fixture.ts";
 
-test("external invitation form stays in External users and preserves draft through async counts", async () => {
+test("teammate invitation form stays in Users and preserves draft through async counts", async () => {
   const f = litFixture();
   let resolve!: (v: any) => void;
   const pending = new Promise((r) => {
@@ -15,9 +15,9 @@ test("external invitation form stays in External users and preserves draft throu
   );
   assert.deepEqual(
     [...f.root.querySelectorAll("h2")].map((e) => e.textContent),
-    ["External users", "Users"],
+    ["Users", "Invitations", "Company access"],
   );
-  const invite = f.root.querySelector<HTMLButtonElement>('[aria-label="Invite external user"]')!;
+  const invite = f.root.querySelector<HTMLButtonElement>('[aria-label="Invite teammate"]')!;
   invite.click();
   const input = f.root.querySelector<HTMLInputElement>("#users-email")!;
   input.value = "guest@example.com";
@@ -28,6 +28,6 @@ test("external invitation form stays in External users and preserves draft throu
   assert.equal(controller.email, "guest@example.com");
   assert.equal(input, f.root.querySelector("#users-email"));
   assert.equal(input.value, "guest@example.com");
-  assert.equal(input.closest("section")!.querySelector("h2")!.textContent, "External users");
+  assert.equal(input.closest("section")!.querySelector("h2")!.textContent, "Users");
   f.dom.window.close();
 });

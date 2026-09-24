@@ -212,6 +212,14 @@ function healDanglingCalls(out: unknown[], at: number): void {
   }
 }
 
+function withoutThinking(messages: readonly unknown[]): unknown[] {
+  return messages.map((m) => {
+    const msg = m as { role?: unknown; content?: unknown };
+    if (msg?.role !== "assistant" || !Array.isArray(msg.content)) return m;
+    return { ...msg, content: msg.content.filter((b) => (b as { type?: unknown } | null)?.type !== "thinking") };
+  });
+}
+
 export function foldTape(rows: readonly TapeRecord[]): unknown[] {
   const f: Foldable = { out: [], boundaries: [] };
   for (const row of rows) {
@@ -234,7 +242,7 @@ export function foldTape(rows: readonly TapeRecord[]): unknown[] {
           row.coversEntrySeq !== undefined
             ? [...f.boundaries].reverse().find((b) => b.entrySeq <= row.coversEntrySeq!)
             : undefined;
-        const kept = cut ? f.out.slice(cut.pos) : [...f.out];
+        const kept = withoutThinking(cut ? f.out.slice(cut.pos) : f.out);
         f.out = [
           {
             role: "user",

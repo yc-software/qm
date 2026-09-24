@@ -14,7 +14,7 @@ test("parseAllowFrom splits, lowercases, strips @-prefixes, and dedupes", () => 
 });
 
 test("normalizeAllowFrom accepts only strings", () => {
-  assert.deepEqual(normalizeAllowFrom(["YC.com", 7, null, "a@b.co"]), ["yc.com", "a@b.co"]);
+  assert.deepEqual(normalizeAllowFrom(["Acme.test", 7, null, "a@b.co"]), ["acme.test", "a@b.co"]);
   assert.deepEqual(normalizeAllowFrom(undefined), []);
 });
 
@@ -39,20 +39,20 @@ test("slackAccountConfigsFromEnv parses accounts as non-singleton email-keyed co
   const accounts = slackAccountConfigsFromEnv({
     SLACK_ACCOUNTS: JSON.stringify([
       {
-        id: "w26",
+        id: "workspace-a",
         botToken: "xoxb-a",
         appToken: "xapp-a",
-        allowFrom: ["YC.com", "alice@example.com"],
+        allowFrom: ["Acme.test", "alice@example.com"],
         denyMessage: " Staff only. ",
       },
       {
-        id: "s26",
+        id: "workspace-b",
         botToken: "xoxb-b",
         eventsMode: "http",
         signingSecret: "sig",
         eventsPort: 3111,
         apiUrl: "https://twin.example/api",
-        allowFrom: "yc.com",
+        allowFrom: "acme.test",
       },
     ]),
   });
@@ -60,8 +60,8 @@ test("slackAccountConfigsFromEnv parses accounts as non-singleton email-keyed co
   assert.deepEqual(
     accounts.map((a) => [a.accountId, a.coreSingleton, a.identityEmail, a.allowFrom]),
     [
-      ["w26", false, "1", ["yc.com", "alice@example.com"]],
-      ["s26", false, "1", ["yc.com"]],
+      ["workspace-a", false, "1", ["acme.test", "alice@example.com"]],
+      ["workspace-b", false, "1", ["acme.test"]],
     ],
   );
   assert.equal(accounts[0]!.denyMessage, "Staff only.");

@@ -22,6 +22,34 @@ the account, region, service coordinates, and an operator-owned GitHub
 repository and exact branch in the generated config and Terraform variables.
 Never trust the upstream QM repository.
 
+The account must permit the selected RDS class and backup retention in the
+configured region and account plan. Set `aws.dbInstanceClass` before
+`qm infra render` to override the `db.t4g.small` default. Set
+`db_backup_retention_days` in `infra/terraform.tfvars` to override the 35-day
+retention default. `aws.dbRetentionMinDays` only sets the minimum that `qm up`
+accepts during its restore-point check and does not configure RDS.
+Confirm all other billable AWS resources separately; this deployment does not
+promise whole-stack free-tier compatibility.
+
+Upgrading the CLI does not update an existing deployment's vendored Terraform.
+Before setting `aws.dbInstanceClass`, preserve all local Terraform and tfvars
+customizations, add this variable to `infra/variables.tf`, and change only the
+RDS `instance_class` assignment in `infra/main.tf` to
+`instance_class = var.db_instance_class`:
+
+```hcl
+variable "db_instance_class" {
+  type    = string
+  default = "db.t4g.small"
+  validation {
+    condition     = can(regex("^db\\.[a-z0-9]+\\.[a-z0-9]+$", var.db_instance_class))
+    error_message = "db_instance_class must be a valid RDS DB instance class such as db.t4g.small"
+  }
+}
+```
+
+Then run `qm infra render` and review the Terraform plan before applying.
+
 Configure a private encrypted Terraform backend, then:
 
 ```bash

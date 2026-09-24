@@ -12,7 +12,7 @@
 > <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 > ```
 >
-> Use `write` to create the HTML, then serve it with the `publish` skill.
+> Use `files` action `write` to create the HTML, then serve it with the `publish` skill.
 > Verify visual accuracy with `browse` after generating.
 
 ## 1. Visual Theme & Atmosphere

@@ -51,6 +51,9 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         url: `/d/${input.name ?? "dep-1"}/`,
       };
     },
+    async setDeploymentPublic(id, isPublic) {
+      return { id, name: id, public: isPublic };
+    },
     async createPlayground(input) {
       return { kind: "playground", artifactId: "playground-1", title: input.title };
     },
@@ -381,24 +384,25 @@ test("each agent tool emits a tool_call then a tool_result", async () => {
     },
     scopeLabel: "personal:U1",
   };
-  const [execute, , read, write] = createAgentTools(ref);
+  const [execute, , read] = createAgentTools(ref, { controlTools: true });
+  const write = read;
 
   await call(execute, { command: "echo hi" });
-  await call(read, { path: "a.txt" });
-  await call(write, { path: "out.txt", data: "xyz" });
-  await call(write, { path: "out.txt", share: [{ scope: "org" }] });
+  await call(read, { action: "read", path: "a.txt" });
+  await call(write, { action: "write", path: "out.txt", data: "xyz" });
+  await call(write, { action: "share", path: "out.txt", scope: "org" });
 
   assert.deepEqual(
     emitted.map((e) => `${e.type}:${e.payload.tool}`),
     [
       "tool_call:execute",
       "tool_result:execute",
-      "tool_call:read",
-      "tool_result:read",
-      "tool_call:write",
-      "tool_result:write",
-      "tool_call:write",
-      "tool_result:write",
+      "tool_call:files",
+      "tool_result:files",
+      "tool_call:files",
+      "tool_result:files",
+      "tool_call:files",
+      "tool_result:files",
     ],
   );
   assert.equal(emitted[1]!.payload.code, 0);
@@ -493,6 +497,14 @@ test("sandbox advertises available management actions and retires migrate", asyn
   ]);
   assert.match(textOut(await call(sandbox, { action: "migrate", purpose: "p" })), /unsupported sandbox action/);
   await assert.rejects(() => call(execute, { command: "", computer: "migrate" }), /migrate has been retired/);
+});
+
+test("sandbox tells the agent to provision a missing default before reporting a blocker", () => {
+  const ref: ToolContextRef = { current: fakeToolContext(), emit: () => {}, scopeLabel: "group:C1" };
+  const sandbox = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
+  assert.match(sandbox.description, /needs a computer and this scope has no default/i);
+  assert.match(sandbox.description, /list.*create.*set_default.*retry/is);
+  assert.match(sandbox.description, /report.*blocked.*creation fails/is);
 });
 
 test("sandbox creation and default routing remain independent", async () => {
@@ -1418,11 +1430,11 @@ test("readOnly exposes observation and constrained session coordination without 
   const readOnly = createAgentTools(ref, { controlTools: true, scratchExec: true, reachExec: true, readOnly: true });
 
   const names = (ts: ReturnType<typeof createAgentTools>) => new Set(ts.map((t) => t.name));
-  for (const t of ["execute", "background", "read", "write", "publish", "cron", "webhook", "guidance"]) {
+  for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
     assert.ok(names(full).has(t), `full toolset has ${t}`);
   }
-  assert.deepEqual([...names(readOnly)].sort(), ["finish_silently", "history", "memory", "runtime", "session"]);
-  for (const t of ["execute", "background", "read", "write", "publish", "cron", "webhook", "guidance"]) {
+  assert.deepEqual([...names(readOnly)].sort(), ["finish_silently", "history", "memory", "runtime", "sessions"]);
+  for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
     assert.ok(!names(readOnly).has(t), `read-only toolset drops ${t}`);
   }
 });
@@ -1503,8 +1515,8 @@ test("a cross-scope read's tool_result keeps the SOURCE scope label so the audie
   };
   const [execute, , read] = createAgentTools(ref);
 
-  await call(read, { path: "a.txt" });
-  await call(read, { path: "missing.txt" });
+  await call(read, { action: "read", path: "a.txt" });
+  await call(read, { action: "read", path: "missing.txt" });
   await call(execute, { command: "echo hi" });
 
   const labelOf = (type: EntryType, match: (p: any) => boolean) =>
@@ -1568,8 +1580,8 @@ test("a cross-scope result's classified label is recorded by callId for the tape
   };
   const [execute, , read] = createAgentTools(ref);
 
-  await callWith(read, "call-private", { path: "a.txt" });
-  await callWith(read, "call-missing", { path: "missing.txt" });
+  await callWith(read, "call-private", { action: "read", path: "a.txt" });
+  await callWith(read, "call-missing", { action: "read", path: "missing.txt" });
   await callWith(execute, "call-exec", { command: "echo hi" });
 
   assert.equal(ref.tapeResultScopes?.get("call-private"), "personal:U1", "the tape row gets the source scope");
@@ -1586,10 +1598,10 @@ test("tool entries carry the call id + faithful model-facing result (WAL replay 
     },
     scopeLabel: "personal:U1",
   };
-  const [execute, , read, , , memory] = createAgentTools(ref);
+  const [execute, , read, , memory] = createAgentTools(ref);
 
   await callWith(execute, "call-exec", { command: "echo hi" });
-  await callWith(read, "call-read", { path: "a.txt" });
+  await callWith(read, "call-read", { action: "read", path: "a.txt" });
   await callWith(memory, "call-recall", { action: "search", query: "billing" });
 
   for (const id of ["call-exec", "call-read", "call-recall"]) {
@@ -1755,13 +1767,13 @@ test("not-found read and denied command record isError + the faithful error text
   };
   const [execute, , read] = createAgentTools(ref);
   await callWith(execute, "c1", { command: "rm -rf /" });
-  await callWith(read, "c2", { path: "missing.txt" });
+  await callWith(read, "c2", { action: "read", path: "missing.txt" });
 
   const denied = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "execute")!.payload;
   assert.equal(denied.isError, true);
   assert.match(denied.result, /denied by policy/);
 
-  const missing = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "read")!.payload;
+  const missing = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "files")!.payload;
   assert.equal(missing.found, false);
   assert.equal(missing.isError, true);
   assert.match(missing.result, /no such file/);
@@ -1786,11 +1798,11 @@ test("a denied command still emits a tool_result (denied), and a missing read re
   const [execute, , read] = createAgentTools(ref);
 
   await call(execute, { command: "rm -rf /" });
-  await call(read, { path: "missing.txt" });
+  await call(read, { action: "read", path: "missing.txt" });
 
   const denied = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "execute");
   assert.equal(denied?.payload.denied, true);
-  const missing = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "read");
+  const missing = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "files");
   assert.equal(missing?.payload.found, false);
 });
 
@@ -1811,73 +1823,6 @@ test("execute forwards the agent's timeout_seconds into tc.execute; omitting it 
   assert.equal(sink.lastExecOpts, undefined);
 });
 
-test("credential_exec is turn-scoped, typed, and forwards only service plus literal argv", async () => {
-  const calls: unknown[] = [];
-  const tc: ToolContext = {
-    ...fakeToolContext(),
-    credentialExecServices: [{ service: "acme", binary: "acmecli" }],
-    async credentialExec(service, args, opts) {
-      calls.push({ service, args, opts });
-      return { stdout: "authenticated", stderr: "", code: 0, timedOut: false };
-    },
-  };
-  const absent = createAgentTools({ current: fakeToolContext() });
-  assert.equal(
-    absent.some((tool) => tool.name === "credential_exec"),
-    false,
-  );
-  const tools = createAgentTools(
-    { current: tc },
-    { credentialExecServices: tc.credentialExecServices, execTimeoutCeilingMs: 10_000 },
-  );
-  const tool = tools.find((candidate) => candidate.name === "credential_exec")!;
-  assert.match(tool.description, /acme \(acmecli\)/);
-  assert.match(tool.description, /Shell operators and pipelines are not supported/);
-  const args = ["; env", "$(env)", "a|b", "> out", "two words"];
-  const result = await call(tool, { service: "acme", args, timeout_seconds: 7 });
-  assert.deepEqual(calls, [{ service: "acme", args, opts: { timeoutSeconds: 7 } }]);
-  assert.match((result as { content: Array<{ text: string }> }).content[0]!.text, /authenticated/);
-});
-
-test("credential_exec surfaces NeedsApproval and CommandDenied like execute", async () => {
-  const gated: ToolContext = {
-    ...fakeToolContext(),
-    credentialExecServices: [{ service: "acme", binary: "acmecli" }],
-    async credentialExec() {
-      throw new NeedsApproval("'acmecli' 'tool'", "mutating subcommand", "approval", "tool", "\\bacmecli\\s+tool\\b");
-    },
-  };
-  const ref = { current: gated, pendingApprovals: [] as NonNullable<ToolContextRef["pendingApprovals"]> };
-  const tool = createAgentTools(ref, { credentialExecServices: gated.credentialExecServices }).find(
-    (candidate) => candidate.name === "credential_exec",
-  )!;
-  const blocked = (await call(tool, { service: "acme", args: ["tool"] })) as {
-    content: Array<{ text: string }>;
-    terminate?: boolean;
-  };
-  assert.match(blocked.content[0]!.text, /needs human approval/);
-  assert.equal(blocked.terminate, true);
-  assert.equal(ref.pendingApprovals.length, 1);
-  assert.equal(ref.pendingApprovals[0]!.approvalKey, "\\bacmecli\\s+tool\\b");
-  assert.equal((ref as { pausedOnApproval?: boolean }).pausedOnApproval, true);
-
-  const denied: ToolContext = {
-    ...fakeToolContext(),
-    credentialExecServices: [{ service: "acme", binary: "acmecli" }],
-    async credentialExec() {
-      throw new CommandDenied("'acmecli'", "must be run with credential_exec");
-    },
-  };
-  const deniedTool = createAgentTools(
-    { current: denied },
-    { credentialExecServices: denied.credentialExecServices },
-  ).find((candidate) => candidate.name === "credential_exec")!;
-  const deniedResult = (await call(deniedTool, { service: "acme", args: [] })) as {
-    content: Array<{ text: string }>;
-  };
-  assert.match(deniedResult.content[0]!.text, /denied by policy/);
-});
-
 test('execute scope:"owner" routes only when the owner-auth surface is enabled', async () => {
   const sink: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] } = {};
   const execute = createAgentTools({ current: fakeToolContext(sink) }, { ownerAuthExec: true })[0]!;
@@ -1890,6 +1835,15 @@ test('execute scope:"owner" routes only when the owner-auth surface is enabled',
     (result as { content: Array<{ text: string }> }).content[0]?.text ?? "",
     /owner-auth box is not available/,
   );
+});
+
+test("publish instructions prevent malformed app configs", () => {
+  const apps = createAgentTools({ current: fakeToolContext() }).find((tool) => tool.name === "apps");
+  assert.ok(apps);
+  assert.match(apps.description, /always pass `entrypoint`/);
+  assert.match(apps.description, /workspace-relative/);
+  assert.match(apps.description, /verify.*directory.*contains files/i);
+  assert.match(apps.description, /`renameFrom`.*deployment name.*not.*ID/i);
 });
 
 test("publish reply states owner + resolved audience in human terms (ADR 0003 D7)", async () => {
@@ -1908,24 +1862,37 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
   });
 
   const org = textOf(
-    await call(createAgentTools({ current: withAudience({ kind: "org", orgId: "acme" }) })[4], {
-      entrypoint: "x",
-      name: "site",
-    }),
+    await call(
+      createAgentTools({ current: withAudience({ kind: "org", orgId: "acme" }) }).find((tool) => tool.name === "apps"),
+      {
+        action: "publish",
+        entrypoint: "x",
+        name: "site",
+      },
+    ),
   );
   assert.match(org, /Owned by you/);
   assert.match(org, /anyone at acme/);
 
   const members = textOf(
-    await call(createAgentTools({ current: withAudience({ kind: "members", channelRef: "C1", memberCount: 3 }) })[4], {
-      entrypoint: "x",
-      name: "site",
-    }),
+    await call(
+      createAgentTools({ current: withAudience({ kind: "members", channelRef: "C1", memberCount: 3 }) }).find(
+        (tool) => tool.name === "apps",
+      ),
+      {
+        action: "publish",
+        entrypoint: "x",
+        name: "site",
+      },
+    ),
   );
   assert.match(members, /reachable by the 3 people currently in #C1/);
 
   const owner = textOf(
-    await call(createAgentTools({ current: withAudience({ kind: "owner" }) })[4], { entrypoint: "x", name: "site" }),
+    await call(
+      createAgentTools({ current: withAudience({ kind: "owner" }) }).find((tool) => tool.name === "apps"),
+      { action: "publish", entrypoint: "x", name: "site" },
+    ),
   );
   assert.match(owner, /owner-only/);
 
@@ -1936,8 +1903,8 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
           kind: "owner",
           note: "couldn't enumerate the channel's members to auto-share — share manually",
         }),
-      })[4],
-      { entrypoint: "x", name: "site" },
+      }).find((tool) => tool.name === "apps"),
+      { action: "publish", entrypoint: "x", name: "site" },
     ),
   );
   assert.match(noted, /share manually/);
@@ -1957,7 +1924,12 @@ test("publish reply: the reply never carries a capability token, even from a sta
       } as never;
     },
   };
-  const out = textOf(await call(createAgentTools({ current: stale })[4], { entrypoint: "x", name: "site" }));
+  const out = textOf(
+    await call(
+      createAgentTools({ current: stale }).find((tool) => tool.name === "apps"),
+      { action: "publish", entrypoint: "x", name: "site" },
+    ),
+  );
   assert.match(out, /https:\/\/site\.apps\.example\.com\//, "the bare URL is in the reply");
   assert.doesNotMatch(out, /access=/, "no capability token in the reply");
   assert.doesNotMatch(out, /anyone with this link/, "reach is described by the audience, never a bearer claim");
@@ -1977,7 +1949,7 @@ test("background dispatches each action and emits tool_call/tool_result", async 
   assert.ok(background);
   assert.match(background.description, /same environment a foreground `execute` does/);
   assert.match(background.description, /\$AGENT_CREDENTIAL_TOKEN all work/);
-  assert.match(background.description, /expire 60 minutes after the turn/);
+  assert.match(background.description, /expire 48 hours after the turn/);
 
   const started = textOf(await call(background, { action: "start", command: "npm run build" }));
   assert.match(started, /started bg-1/);
@@ -2149,7 +2121,7 @@ test("cron note admits it when a newer note superseded the write, instead of cla
   assert.doesNotMatch(out, /Noted — the next fire/);
 });
 
-test("cron note surfaces the control-plane cap rejection verbatim", async () => {
+test("cron note rejects arguments exceeding the advertised cap before dispatch", async () => {
   const tc: ToolContext = {
     ...fakeToolContext(),
     async cronNote() {
@@ -2158,7 +2130,7 @@ test("cron note surfaces the control-plane cap rejection verbatim", async () => 
   };
   assert.match(
     textOut(await call(tool("cron", tc), { action: "note", id: "cron-1", note: "x".repeat(401) })),
-    /\[error\] the note is 401 chars — the cap is 400\./,
+    /\[error\] Invalid arguments for cron action note/,
   );
 });
 
@@ -2603,10 +2575,10 @@ test("read reports workspace provenance for the agent's own files and external f
       return { outcome: "allow" };
     },
   };
-  const read = createAgentTools(ref).find((t) => t.name === "read")!;
-  await call(read, { path: "skills/onboarding/SKILL.md" });
-  await call(read, { path: "shared/notes.md" });
-  await call(read, { path: "shared/open-personal-U2/notes.md" });
+  const read = createAgentTools(ref).find((t) => t.name === "files")!;
+  await call(read, { action: "read", path: "skills/onboarding/SKILL.md" });
+  await call(read, { action: "read", path: "shared/notes.md" });
+  await call(read, { action: "read", path: "shared/open-personal-U2/notes.md" });
   assert.deepEqual(seen, [
     { provenance: "workspace" },
     { provenance: "external", source: "shared file" },
@@ -3068,8 +3040,8 @@ test("runtime persists its decision before terminating and blocks later effects"
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(ref.runtimeHandoff, undefined);
   const blocked = (await call(
-    tools.find((t) => t.name === "write"),
-    { path: "should-not-exist", data: "x" },
+    tools.find((t) => t.name === "files"),
+    { action: "write", path: "should-not-exist", data: "x" },
   )) as { terminate: boolean };
   assert.equal(blocked.terminate, false);
   release();
@@ -3154,8 +3126,8 @@ test("runtime inspection is read-only but runtime changes cannot escape read-onl
   assert.match(textOut(await call(runtime, { action: "set", model: "Astra" })), /read_only/);
   const tools = createAgentTools(ref);
   await call(
-    tools.find((t) => t.name === "create_goal"),
-    { objective: "finish the work" },
+    tools.find((t) => t.name === "goal"),
+    { action: "create", objective: "finish the work" },
   );
   assert.match(
     textOut(
@@ -3229,8 +3201,8 @@ test("read passes turn cancellation through and cannot record a late success", a
     emit: (e) => {
       emitted.push(e as Emitted);
     },
-  }).find((t) => t.name === "read");
-  const result = call(read, { path: "notes.md" });
+  }).find((t) => t.name === "files");
+  const result = call(read, { action: "read", path: "notes.md" });
   await started.promise;
   controller.abort();
   pending.resolve({ content: "late data", sourceScopeId: "personal:U1" });
@@ -3241,7 +3213,7 @@ test("read passes turn cancellation through and cannot record a late success", a
 
 test("session tools are omitted when the actor feature is disabled", () => {
   assert.equal(
-    createAgentTools({ current: fakeToolContext() }, { sessionTools: false }).some((tool) => tool.name === "session"),
+    createAgentTools({ current: fakeToolContext() }, { sessionTools: false }).some((tool) => tool.name === "sessions"),
     false,
   );
 });
@@ -3282,8 +3254,11 @@ test("agent mail is screened separately, logged privately, and delivered once ac
       return { outcome: "allow" };
     },
   };
-  const read = createAgentTools(ref).find((tool) => tool.name === "read");
-  const results = await Promise.all([call(read, { path: "a.txt" }), call(read, { path: "b.txt" })]);
+  const read = createAgentTools(ref).find((tool) => tool.name === "files");
+  const results = await Promise.all([
+    call(read, { action: "read", path: "a.txt" }),
+    call(read, { action: "read", path: "b.txt" }),
+  ]);
   assert.equal(results.filter((result) => JSON.stringify(result).includes("child finding")).length, 1);
   assert.ok(
     screens.some((input) => input.result === "child finding" && input.provenance === "external" && !input.unscreenable),
@@ -3330,8 +3305,8 @@ test("quarantined mail remains pending for release and mailbox failures preserve
     }),
   };
   const first = await call(
-    createAgentTools(ref).find((tool) => tool.name === "read"),
-    { path: "a.txt" },
+    createAgentTools(ref).find((tool) => tool.name === "files"),
+    { action: "read", path: "a.txt" },
   );
   assert.ok(JSON.stringify(first).includes("data"));
   assert.ok(!JSON.stringify(first).includes("held finding"));
@@ -3339,8 +3314,8 @@ test("quarantined mail remains pending for release and mailbox failures preserve
   assert.equal(ref.pausedOnApproval, true);
   release = true;
   const second = await call(
-    createAgentTools(ref).find((tool) => tool.name === "read"),
-    { path: "a.txt" },
+    createAgentTools(ref).find((tool) => tool.name === "files"),
+    { action: "read", path: "a.txt" },
   );
   assert.ok(JSON.stringify(second).includes("held finding"));
   assert.equal(pending, false);
@@ -3348,8 +3323,8 @@ test("quarantined mail remains pending for release and mailbox failures preserve
     throw new Error("flag disabled");
   };
   const third = await call(
-    createAgentTools(ref).find((tool) => tool.name === "read"),
-    { path: "a.txt" },
+    createAgentTools(ref).find((tool) => tool.name === "files"),
+    { action: "read", path: "a.txt" },
   );
   assert.ok(JSON.stringify(third).includes("data"));
 });
@@ -3361,10 +3336,8 @@ test("conversation coordinators cannot execute commands through any command tool
       const tools = createAgentTools(ref, {
         ...options,
         sandboxResources,
-        credentialExecServices: [{ service: "aws", binary: "aws" }],
       });
-      for (const name of ["execute", "background", "credential_exec"])
-        assert.ok(!tools.some((tool) => tool.name === name));
+      for (const name of ["execute", "background"]) assert.ok(!tools.some((tool) => tool.name === name));
       const sandbox = tools.find((tool) => tool.name === "sandbox")!;
       assert.match(
         textOut(await call(sandbox, { action: "exec", command: "echo forbidden" })),
@@ -3374,7 +3347,7 @@ test("conversation coordinators cannot execute commands through any command tool
         textOut(await call(sandbox, { action: "start_process", command: "echo forbidden" })),
         /unsupported sandbox action/,
       );
-      assert.ok(tools.some((tool) => tool.name === "session"));
+      assert.ok(tools.some((tool) => tool.name === "sessions"));
     }
   }
   assert.ok(
@@ -3394,8 +3367,229 @@ test("conversation coordinator mailbox checks never block on children", async ()
     write: async () => ({ ok: false, message: "unused" }),
     read: async () => ({ ok: false, message: "unused" }),
   };
-  const session = createAgentTools({ current: tc }, { delegateWork: true }).find((tool) => tool.name === "session")!;
+  const session = createAgentTools({ current: tc }, { delegateWork: true }).find((tool) => tool.name === "sessions")!;
   await call(session, { action: "wait", timeoutMs: 60000 });
   assert.ok(waits.length > 0);
   assert.ok(waits.every((timeout) => timeout === 0));
+});
+
+test("resource catalog exposes one home per operation and leaves MCP tools intact", async () => {
+  const tools = createAgentTools(
+    { current: fakeToolContext() },
+    {
+      controlTools: true,
+      mcpTools: () => [
+        {
+          name: "example_search",
+          serverId: "example",
+          remoteName: "search",
+          description: "Search",
+          inputSchema: { type: "object", properties: {} },
+          readOnly: true,
+        },
+      ],
+    },
+  );
+  const names = tools.map((tool) => tool.name);
+  for (const name of ["files", "apps", "skills", "sessions", "goal", "cron", "example_search"])
+    assert.ok(names.includes(name));
+  for (const name of [
+    "read",
+    "write",
+    "publish",
+    "share",
+    "skill",
+    "session",
+    "create_goal",
+    "get_goal",
+    "update_goal",
+  ])
+    assert.ok(!names.includes(name));
+  for (const [name, valid, invalid] of [
+    ["files", { action: "write", path: "a", data: "" }, { action: "write", path: "a" }],
+    ["files", { action: "read", path: "a" }, { action: "read", path: "a", data: "oops" }],
+    [
+      "files",
+      { action: "share", path: "a", scope: "org" },
+      { action: "write", path: "a", data: "x", share: [{ scope: "org" }] },
+    ],
+    [
+      "apps",
+      { action: "publish", name: "demo", public: true },
+      { action: "publish", name: "demo", share: [{ scope: "org", permission: "read" }] },
+    ],
+    [
+      "apps",
+      { action: "move", id: "app", toScope: "personal:bob" },
+      { action: "move", id: "app", toScope: "personal:bob", permission: "write" },
+    ],
+    ["goal", { action: "create", objective: "finish" }, { action: "get", objective: "finish" }],
+    ["skills", { action: "read", name: "design" }, { action: "read", name: "design", toScope: "org" }],
+  ] as const) {
+    const tool = tools.find((tool) => tool.name === name)!;
+    assert.ok(Check(tool.parameters, valid), JSON.stringify(valid));
+    assert.match(textOut(await call(tool, invalid)), /Invalid arguments/, JSON.stringify(invalid));
+  }
+  assert.ok(JSON.stringify(tools.find((tool) => tool.name === "cron")!.parameters).length < 20000);
+});
+
+test("resource actions preserve sharing targets, transfer semantics and file contents", async () => {
+  const writes: unknown[] = [];
+  const shares: unknown[] = [];
+  const publicChanges: unknown[] = [];
+  const tc = {
+    ...fakeToolContext(),
+    async write(...args: Parameters<ToolContext["write"]>) {
+      writes.push(args);
+      return { shared: [{ scope: "org:test", permission: "read" as const }] };
+    },
+    async setDeploymentPublic(id: string, isPublic: boolean) {
+      publicChanges.push({ id, isPublic });
+      return { id, name: id, public: isPublic };
+    },
+    async shareArtifact(req: Parameters<ToolContext["shareArtifact"]>[0]) {
+      shares.push(req);
+      return { ok: false as const, code: "forbidden" as const, message: "not the owner" };
+    },
+  };
+  const tools = createAgentTools({ current: tc }, { controlTools: true });
+  const files = tools.find((tool) => tool.name === "files")!;
+  await call(files, { action: "write", path: "notes", data: "" });
+  await call(files, { action: "share", path: "notes", scope: "org" });
+  assert.deepEqual(writes, [
+    ["notes", ""],
+    ["notes", undefined, [{ scope: "org", permission: undefined }]],
+  ]);
+  for (const [name, type, action] of [
+    ["apps", "deploy", "share"],
+    ["apps", "deploy", "move"],
+    ["skills", "skill", "share"],
+    ["skills", "skill", "move"],
+    ["cron", "cron", "share"],
+  ]) {
+    const result = await call(
+      tools.find((tool) => tool.name === name),
+      { action, id: "artifact", toScope: "Bob" },
+    );
+    assert.match(textOut(result), /not the owner/);
+    assert.deepEqual(shares.at(-1), {
+      type,
+      id: "artifact",
+      recipient: "Bob",
+      ...(action === "move" ? { move: true } : {}),
+    });
+  }
+  const publicResult = await call(
+    tools.find((tool) => tool.name === "apps"),
+    {
+      action: "share",
+      id: "artifact",
+      public: true,
+    },
+  );
+  assert.match(textOut(publicResult), /anyone with the link/);
+  assert.deepEqual(publicChanges, [{ id: "artifact", isPublic: true }]);
+  await call(
+    tools.find((tool) => tool.name === "apps"),
+    {
+      action: "share",
+      id: "artifact",
+      email: "guest@example.com",
+    },
+  );
+  assert.deepEqual(shares.at(-1), { type: "deploy", id: "artifact", email: "guest@example.com" });
+
+  const before = writes.length;
+  await call(files, { action: "read", path: "notes", data: "unexpected" });
+  await call(files, { action: "write", path: "notes" });
+  assert.equal(writes.length, before);
+});
+
+test("a files read approval cannot authorize writes or sharing", async () => {
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    pendingApprovals: [],
+    toolApprovalGate: (identity) => identity === "files:read",
+  };
+  const files = createAgentTools(ref).find((tool) => tool.name === "files")!;
+  assert.equal(textOut(await call(files, { action: "read", path: "a.txt" })), "data");
+  for (const params of [
+    { action: "write", path: "a.txt", data: "new" },
+    { action: "share", path: "a.txt", scope: "org" },
+  ]) {
+    ref.pausedOnApproval = false;
+    assert.match(textOut(await call(files, params)), /needs human approval/);
+    assert.equal(ref.pendingApprovals!.at(-1)!.approvalKey, `tool:files:${params.action}`);
+  }
+});
+
+test("apps preserves publication-time audience opt-out without control-plane tools", async () => {
+  const inputs: unknown[] = [];
+  const tc = {
+    ...fakeToolContext(),
+    async publish(input: Parameters<ToolContext["publish"]>[0]) {
+      inputs.push(input);
+      return { id: "app", version: 1, url: "https://app.example" };
+    },
+  };
+  const apps = createAgentTools({ current: tc }).find((tool) => tool.name === "apps")!;
+  await call(apps, { action: "publish", name: "private", audience: [] });
+  assert.deepEqual((inputs[0] as { share: unknown }).share, []);
+  await call(apps, { action: "publish", audience: [{ scope: "personal:bob", permission: "read" }] });
+  assert.deepEqual((inputs[1] as { share: unknown }).share, [{ scope: "personal:bob", permission: "read" }]);
+});
+
+test("files share preserves artifact IDs, recipient resolution and authorization failures", async () => {
+  const requests: unknown[] = [];
+  const tc = {
+    ...fakeToolContext(),
+    async shareArtifact(req: Parameters<ToolContext["shareArtifact"]>[0]) {
+      requests.push(req);
+      return { ok: false as const, code: "forbidden" as const, message: "not the owner" };
+    },
+  };
+  const files = createAgentTools({ current: tc }, { controlTools: true }).find((tool) => tool.name === "files")!;
+  assert.match(
+    textOut(await call(files, { action: "share", id: "file-artifact", toScope: "Bob", permission: "write" })),
+    /not the owner/,
+  );
+  assert.deepEqual(requests, [{ type: "file", id: "file-artifact", recipient: "Bob", permission: "write" }]);
+  for (const params of [
+    { action: "share", path: "notes", scope: "org", id: "file-artifact", toScope: "Bob" },
+    { action: "share", id: "file-artifact" },
+  ])
+    assert.match(textOut(await call(files, params)), /Invalid arguments/);
+  assert.equal(requests.length, 1);
+});
+
+test("the retired credential tool is absent and execute accepts credential handles", () => {
+  const tools = createAgentTools({ current: fakeToolContext() }, { commandCredentialHandles: ["kc_test123456"] });
+  assert.equal(
+    tools.some((tool) => tool.name === "credential_exec"),
+    false,
+  );
+  assert.ok(tools.some((tool) => tool.name === "execute"));
+});
+
+test("sandbox call traces preserve purpose across execution, management, processes, and invalid routes", async () => {
+  const calls: Record<string, unknown>[] = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    scopeLabel: "personal:U1",
+    emit: (event) => {
+      if (event.type === "tool_call") calls.push(event.payload as Record<string, unknown>);
+    },
+  };
+  const sandbox = createAgentTools(ref, { sandboxResources: true }).find((tool) => tool.name === "sandbox")!;
+  for (const params of [
+    { action: "exec", command: "pwd" },
+    { action: "status" },
+    { action: "start_process", command: "echo ready" },
+    { action: "exec", command: "pwd", scope: "scratch" },
+    { action: "exec" },
+  ]) {
+    await call(sandbox, { ...params, purpose: "Inspect the demo workspace" });
+  }
+  assert.equal(calls.length, 5);
+  assert.ok(calls.every((entry) => entry.purpose === "Inspect the demo workspace"));
 });

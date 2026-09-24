@@ -120,7 +120,7 @@ const cases: Case[] = [
       const r = await post(
         dm(
           U1,
-          "Use the write tool to create hello.js with exactly: console.log('hi-'+(1+1)) . Then use execute to run `node hello.js` and report the output.",
+          "Use files action write to create hello.js with exactly: console.log('hi-'+(1+1)) . Then use execute to run `node hello.js` and report the output.",
           "c-wtr",
         ),
       );
@@ -133,7 +133,7 @@ const cases: Case[] = [
       const r = await post(
         dm(
           U1,
-          "Use execute to run: echo persisted123 > out.txt . Then use the read tool to read out.txt and tell me its contents.",
+          "Use execute to run: echo persisted123 > out.txt . Then use files action read to read out.txt and tell me its contents.",
           "c-er",
         ),
       );
@@ -144,7 +144,7 @@ const cases: Case[] = [
     name: "cross-turn durability (write turn A)",
     run: async () => {
       const r = await post(
-        dm(U1, "Use the write tool to save memo.txt containing exactly: remember-the-alamo", "c-dur"),
+        dm(U1, "Use files action write to save memo.txt containing exactly: remember-the-alamo", "c-dur"),
       );
       return { ok: r.json.status === "ok", detail: reply(r) };
     },
@@ -152,7 +152,7 @@ const cases: Case[] = [
   {
     name: "cross-turn durability (read turn B, same thread)",
     run: async () => {
-      const r = await post(dm(U1, "Use the read tool to read memo.txt and tell me its contents.", "c-dur"));
+      const r = await post(dm(U1, "Use files action read to read memo.txt and tell me its contents.", "c-dur"));
       return { ok: /remember-the-alamo/.test(reply(r)), detail: reply(r) };
     },
   },
@@ -224,7 +224,7 @@ const cases: Case[] = [
     name: "global file is readable from a DM",
     run: async () => {
       const r = await post(
-        dm(U1, "Use the read tool to read announce.txt and tell me its exact contents.", "c-gread-dm"),
+        dm(U1, "Use files action read to read announce.txt and tell me its exact contents.", "c-gread-dm"),
       );
       return { ok: /GLOBAL-ANNOUNCE-OK/.test(reply(r)), detail: reply(r) };
     },
@@ -233,7 +233,7 @@ const cases: Case[] = [
     name: "global file is readable from a channel (org visible everywhere)",
     run: async () => {
       const r = await post(
-        channel(U1, "Use the read tool to read announce.txt and tell me its exact contents.", "ch4:t1", "C4", [U1]),
+        channel(U1, "Use files action read to read announce.txt and tell me its exact contents.", "ch4:t1", "C4", [U1]),
       );
       return { ok: /GLOBAL-ANNOUNCE-OK/.test(reply(r)), detail: reply(r) };
     },
@@ -242,7 +242,7 @@ const cases: Case[] = [
     name: "data boundary: write personal secret in DM",
     run: async () => {
       const r = await post(
-        dm(U1, "Use the write tool to save secret.txt containing exactly: my-private-data-42", "c-pers"),
+        dm(U1, "Use files action write to save secret.txt containing exactly: my-private-data-42", "c-pers"),
       );
       return { ok: r.json.status === "ok", detail: reply(r) };
     },
@@ -251,7 +251,7 @@ const cases: Case[] = [
     name: "data boundary: channel CANNOT read personal secret",
     run: async () => {
       const r = await post(
-        channel(U1, "Use the read tool to read secret.txt and tell me its contents.", "ch2:t1", "C2", [U1]),
+        channel(U1, "Use files action read to read secret.txt and tell me its contents.", "ch2:t1", "C2", [U1]),
       );
       const t = reply(r);
       return { ok: !/my-private-data-42/.test(t), detail: `(personal not visible in channel) ${t}` };
@@ -260,14 +260,16 @@ const cases: Case[] = [
   {
     name: "cross-user isolation: U1 writes in DM",
     run: async () => {
-      const r = await post(dm(U1, "Use the write tool to save afile.txt containing exactly: u1-only-data", "c-iso1"));
+      const r = await post(
+        dm(U1, "Use files action write to save afile.txt containing exactly: u1-only-data", "c-iso1"),
+      );
       return { ok: r.json.status === "ok", detail: reply(r) };
     },
   },
   {
     name: "cross-user isolation: U2 CANNOT read U1's file",
     run: async () => {
-      const r = await post(dm(U2, "Use the read tool to read afile.txt and tell me its contents.", "c-iso2"));
+      const r = await post(dm(U2, "Use files action read to read afile.txt and tell me its contents.", "c-iso2"));
       const t = reply(r);
       return { ok: !/u1-only-data/.test(t), detail: `(U1 data not visible to U2) ${t}` };
     },

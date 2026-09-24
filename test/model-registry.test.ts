@@ -7,6 +7,9 @@ import {
   FAST_MODE_MODEL_IDS,
   resolveModel,
   modelSupportsFastMode,
+  modelSupportedByHarness,
+  defaultModelForHarness,
+  safeModelMetadata,
   modelServiceable,
   serviceableModelIds,
   modelProviderAvailabilityFor,
@@ -69,6 +72,50 @@ test("gpt-6-astra is offered with its published context, output ceiling, and rat
   ]);
   assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes("gpt-6-astra"));
   assert.equal(validateWebTurnModelOptions({ model: "gpt-6-astra" }, null), null);
+});
+
+test("Opus 5.5 inherits adaptive thinking without off, with its own rates and limits", () => {
+  const model = resolveModel("claude-opus-5-5");
+  assert.ok(model);
+  assert.equal(model.provider, "anthropic");
+  assert.equal(model.api, "anthropic-messages");
+  assert.equal(model.reasoning, true);
+  assert.deepEqual(model.input, ["text", "image"]);
+  assert.equal(model.contextWindow, 1_000_000);
+  assert.equal(model.maxTokens, 128_000);
+  assert.deepEqual(model.cost, { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, tiers: undefined });
+  assert.deepEqual(model.thinkingLevelMap, { xhigh: "xhigh", max: "max", off: null });
+  assert.deepEqual(model.compat, {
+    forceAdaptiveThinking: true,
+    supportsTemperature: false,
+    supportsStrictTools: true,
+  });
+  assert.equal(resolveModel("claude-opus-4-8")?.thinkingLevelMap?.off, undefined);
+  assert.equal(resolveModel("claude-opus-5")?.thinkingLevelMap?.off, undefined);
+  model.thinkingLevelMap!.xhigh = "high";
+  assert.equal(resolveModel("claude-opus-5-5")?.thinkingLevelMap?.xhigh, "xhigh");
+  assert.equal(resolveModel("claude-opus-4-8")?.thinkingLevelMap?.xhigh, "xhigh");
+});
+
+test("Opus 5.5 is selectable with compatible harnesses and credentials, without changing defaults", () => {
+  const id = "claude-opus-5-5";
+  assert.ok(SELECTABLE_BASE_MODELS.some((model) => model.id === id));
+  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
+  assert.ok(FAST_MODE_MODEL_IDS.includes(id));
+  assert.equal(safeModelMetadata(id)?.label, "Opus 5.5");
+  for (const harness of ["pi", "claude", "opencode", "mock"]) {
+    assert.equal(modelSupportedByHarness(id, harness), true);
+    assert.equal(defaultModelForHarness(harness), "claude-opus-5");
+  }
+  assert.equal(modelSupportedByHarness(id, "codex"), false);
+  assert.match(
+    validateWebTurnModelOptions({ model: id }, null, { anthropic: false, openai: true, openrouter: false }) ?? "",
+    /provider isn't configured/,
+  );
+  assert.equal(
+    validateWebTurnModelOptions({ model: id }, null, { anthropic: true, openai: false, openrouter: false }),
+    null,
+  );
 });
 
 test("FAST_MODE_MODEL_IDS derives from the registry — the web-ui client reads this, keeps no copy", () => {

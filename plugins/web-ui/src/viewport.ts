@@ -23,30 +23,13 @@ export function onPhoneChange(fn: (phone: boolean) => void): () => void {
 export function trackVisualViewport(): void {
   const vv = window.visualViewport;
   if (!vv) return;
-  let wasOpen = false;
   const apply = () => {
-    const h = Math.round(vv.height);
-    document.documentElement.style.setProperty("--vvh", `${h}px`);
-
-    const open = window.innerHeight - h > 120;
-    document.documentElement.classList.toggle("kbd-open", open);
-    if (open) {
-      if (window.scrollY !== 0) window.scrollTo(0, 0);
-      document.documentElement.style.setProperty("--vv-top", `${Math.round(vv.offsetTop)}px`);
-    } else {
-      document.documentElement.style.setProperty("--vv-top", "0px");
-    }
-    if (open === wasOpen) return;
-    wasOpen = open;
-    if (!open) return;
-
-    for (const el of document.querySelectorAll<HTMLElement>(".chat-scroll")) {
-      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
-      if (nearBottom) el.scrollTop = el.scrollHeight;
-    }
+    if (vv.scale !== 1) return;
+    document.documentElement.style.setProperty("--vvh", `${Math.round(vv.height)}px`);
+    document.documentElement.style.setProperty("--vv-top", `${Math.round(vv.offsetTop)}px`);
   };
   vv.addEventListener("resize", apply);
   vv.addEventListener("scroll", apply);
-  window.addEventListener("scroll", apply, { passive: true });
+  window.addEventListener("resize", apply);
   apply();
 }

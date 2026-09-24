@@ -85,6 +85,14 @@ variable "db_username" {
   type    = string
   default = "qm"
 }
+variable "db_instance_class" {
+  type    = string
+  default = "db.t4g.small"
+  validation {
+    condition     = can(regex("^db\\.[a-z0-9]+\\.[a-z0-9]+$", var.db_instance_class))
+    error_message = "db_instance_class must be a valid RDS DB instance class such as db.t4g.small"
+  }
+}
 variable "db_backup_retention_days" {
   type    = number
   default = 35

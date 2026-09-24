@@ -26,6 +26,7 @@ function showTooltip(target: Element, text: string): void {
   target.setAttribute("data-qm-tooltip-anchor", "");
   const el = ensureEl();
   el.textContent = text;
+  el.classList.toggle("sidebar-status", target.matches(".sidebar .session-status"));
   el.classList.toggle("beside", !!target.closest('[data-tip-placement="right"]'));
   el.classList.add("visible");
   el.showPopover?.();

@@ -242,7 +242,14 @@ test("reachExec OFF: the execute scope never accepts a room", () => {
 test("reachExec ON (no scratch): scope is a free string; a room routes to reachTarget; default is scoped", async () => {
   const { tc, seen } = sinkToolContext();
   const [execute] = createAgentTools({ current: tc }, { reachExec: true });
-  assert.deepEqual(schemaProps(execute!), ["command", "sandbox_id", "purpose", "timeout_seconds", "scope"]);
+  assert.deepEqual(schemaProps(execute!), [
+    "command",
+    "sandbox_id",
+    "purpose",
+    "timeout_seconds",
+    "credentials",
+    "scope",
+  ]);
   await call(execute, { command: "cat x", scope: "#project-alpha" });
   assert.deepEqual(seen.at(-1)!.opts, { reachTarget: "#project-alpha" });
   await call(execute, { command: "echo hi" });
@@ -256,7 +263,15 @@ test("reachExec ON (no scratch): scope is a free string; a room routes to reachT
 test("reachExec ON + scratchExec ON: scope accepts scoped, scratch, AND a room", async () => {
   const { tc, seen } = sinkToolContext();
   const [execute] = createAgentTools({ current: tc }, { reachExec: true, scratchExec: true });
-  assert.deepEqual(schemaProps(execute!), ["command", "sandbox_id", "purpose", "timeout_seconds", "scope", "durable"]);
+  assert.deepEqual(schemaProps(execute!), [
+    "command",
+    "sandbox_id",
+    "purpose",
+    "timeout_seconds",
+    "credentials",
+    "scope",
+    "durable",
+  ]);
   await call(execute, { command: "x", scope: "scratch" });
   assert.deepEqual(seen.at(-1)!.opts, { scratch: true });
   await call(execute, { command: "x", scope: "#ops" });
@@ -348,7 +363,7 @@ test("DM + directory + flag: execute(scope:#room) runs on that channel's own com
   assert.equal(res.status, "ok");
   assert.equal(res.reply, "still here");
   assert.ok(
-    fakeSprites.calls.some((c) => c.method === "POST" && /\/sprites\/qm-channel-c-ph-[^/]+\/exec$/.test(c.path)),
+    fakeSprites.calls.some((c) => c.method === "WS" && /\/sprites\/qm-channel-c-ph-[^/]+\/exec$/.test(c.path)),
     "the command landed on the channel's computer",
   );
 });

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { createKeyedQueue, sleep } from "../util/async.ts";
-import { swallowAs, errMessage } from "../util/errors.ts";
+import { createKeyedQueue, fetchWithRetry, sleep } from "../util/async.ts";
+import { httpFailure, swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
@@ -109,7 +109,13 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
 
-  async function api(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<Response> {
+  function send(
+    method: string,
+    path: string,
+    body?: unknown,
+    timeoutMs = 60_000,
+    signal?: AbortSignal,
+  ): Promise<Response> {
     return fetchImpl(`${baseUrl}${path}`, {
       method,
       headers: {
@@ -117,14 +123,21 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: signal ?? AbortSignal.timeout(timeoutMs),
     });
+  }
+
+  function api(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<Response> {
+    const operation = (signal?: AbortSignal) => send(method, path, body, timeoutMs, signal);
+    return method === "GET" || method === "DELETE"
+      ? fetchWithRetry(operation, "idempotent", { timeoutMs })
+      : operation();
   }
 
   async function apiJson<T>(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<T> {
     const res = await api(method, path, body, timeoutMs);
     if (!res.ok) {
-      throw new Error(`agent37 ${method} ${path}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
+      throw new Error(`agent37 ${method} ${path}: ${await httpFailure(res)}`);
     }
     return (await res.json()) as T;
   }
@@ -146,7 +159,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
         const res = await api("POST", `/v1/instances/${encodeURIComponent(id)}/start`, undefined, START_TIMEOUT_MS);
         if (res.ok) continue;
         if (res.status !== 400 && res.status !== 409) {
-          throw new Error(`agent37 start ${id}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
+          throw new Error(`agent37 start ${id}: ${await httpFailure(res)}`);
         }
       }
       await sleep(READY_POLL_MS);
@@ -154,12 +167,14 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
   }
 
   async function createInstance(name: string): Promise<InstanceInfo> {
-    const info = await apiJson<InstanceInfo>(
-      "POST",
-      "/v1/instances",
-      { template, name, resources, auto_sleep: true },
-      CREATE_TIMEOUT_MS,
+    const res = await fetchWithRetry(
+      (signal) =>
+        send("POST", "/v1/instances", { template, name, resources, auto_sleep: true }, CREATE_TIMEOUT_MS, signal),
+      "refused",
+      { timeoutMs: CREATE_TIMEOUT_MS },
     );
+    if (!res.ok) throw new Error(`agent37 create ${name}: ${await httpFailure(res)}`);
+    const info = (await res.json()) as InstanceInfo;
     await ensureRunning(info.id);
     return info;
   }
@@ -181,7 +196,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     }
     const res = await api("DELETE", `/v1/instances/${encodeURIComponent(found)}`, undefined, 120_000);
     if (!res.ok && res.status !== 404) {
-      throw new Error(`agent37 delete ${name}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
+      throw new Error(`agent37 delete ${name}: ${await httpFailure(res)}`);
     }
     idByName.delete(name);
   }
@@ -190,21 +205,21 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     const id = await instanceIdFor(name);
     const body = { command: script };
     const timeoutMs = timeoutSec * 1000 + 2 * EXIT_GRACE_MS;
-    const first = await api("POST", `/v1/instances/${encodeURIComponent(id)}/exec`, body, timeoutMs);
+    const first = await send("POST", `/v1/instances/${encodeURIComponent(id)}/exec`, body, timeoutMs);
     let res = first;
     if (!first.ok) {
-      const detail = (await first.text()).slice(0, 200);
+      const detail = await httpFailure(first);
       if (first.status === 404) idByName.delete(name);
       const notRunning = first.status === 400 && /running instances/i.test(detail);
       const freezing = first.status === 409;
       if (first.status !== 404 && !notRunning && !freezing) {
-        throw new Error(`agent37 exec ${name}: http ${first.status} ${detail}`);
+        throw new Error(`agent37 exec ${name}: ${detail}`);
       }
       const retryId = await instanceIdFor(name);
       await ensureRunning(retryId);
-      res = await api("POST", `/v1/instances/${encodeURIComponent(retryId)}/exec`, body, timeoutMs);
+      res = await send("POST", `/v1/instances/${encodeURIComponent(retryId)}/exec`, body, timeoutMs);
       if (!res.ok) {
-        throw new Error(`agent37 exec ${name}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
+        throw new Error(`agent37 exec ${name}: ${await httpFailure(res)}`);
       }
     }
     const parsed = (await res.json()) as InstanceExecResponse;

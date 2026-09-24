@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { shq } from "../util/shell.ts";
 
 export function pgidMarkerPath(uid: string): string {
@@ -10,7 +11,14 @@ export function killableScript(innerScript: string, uid: string): string {
 __pi_exec_rc=$?
 rm -f ${marker} 2>/dev/null
 exit $__pi_exec_rc`;
-  return `exec setsid sh -c ${shq(inner)}`;
+  if (Buffer.byteLength(inner, "utf8") <= 64 * 1024) return `exec setsid sh -c ${shq(inner)}`;
+  const script = shq(`/tmp/.exec-${uid}.sh`);
+  const delimiter = `QM_EXEC_${randomUUID().replaceAll("-", "")}`;
+  return `(umask 077; cat > ${script} <<'${delimiter}'
+rm -f ${script}
+${inner}
+${delimiter}
+) && exec setsid sh ${script}`;
 }
 
 export function killScript(uid: string): string {

@@ -1,3 +1,4 @@
+import { availableRuntimeError } from "../src/api/runtime-config.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -201,4 +202,35 @@ test("durable runtime resolution hydrates the model catalog before rejecting an 
   const before = hydrations;
   await resolveRuntimeChoiceDurable(config, ORG, PERSONAL, fallback, undefined, hydrate);
   assert.equal(hydrations, before);
+});
+
+test("explicit runtime validation rejects a revoked scoped model and unsupported fast mode", async () => {
+  const config = createMemoryConfigStore("default-org");
+  config.setApprovedHarnesses(["pi"]);
+  config.setRuntimeSelection(ORG, { harnessId: "pi", modelId: "claude-sonnet-5" });
+  config.setRuntimeSelection(PERSONAL, { harnessId: "pi", modelId: "gpt-6-astra" });
+  config.setWebuiModels(ORG, ["claude-sonnet-5"]);
+  await config.flushScope(ORG);
+  await config.flushScope(PERSONAL);
+  const ctx = { deps: { config, harnessId: "pi" } };
+  assert.match(
+    (await availableRuntimeError(ctx, PERSONAL, { harnessId: "pi", modelId: "gpt-6-astra" }))!,
+    /no longer available/,
+  );
+  assert.equal(
+    await availableRuntimeError(ctx, PERSONAL, { harnessId: "pi", modelId: "claude-sonnet-5", fastMode: true }),
+    "fast_mode_not_supported",
+  );
+});
+
+test("runtime availability preserves the existing harness normalization of inherited scheduled effort", async () => {
+  const config = createMemoryConfigStore("default-org");
+  config.setApprovedHarnesses(["opencode"]);
+  config.setWebuiModels(ORG, ["claude-sonnet-5"]);
+  await config.flushScope(ORG);
+  const choice = { harnessId: "opencode" as const, modelId: "claude-sonnet-5", effortLevel: "xhigh", fastMode: false };
+  assert.equal(await availableRuntimeError({ deps: { config, harnessId: "opencode" } }, PERSONAL, choice), null);
+  const resolved = resolveRuntimeChoice(config, ORG, PERSONAL, choice, choice);
+  assert.equal(resolved.modelId, choice.modelId);
+  assert.equal(resolved.effortLevel, undefined);
 });

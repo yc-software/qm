@@ -600,7 +600,7 @@ test("removeDir wipes a per-turn spool dir (and only it), tolerating an absent d
   const ff = installFakeSprites();
   after(() => ff.cleanup());
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-rm-")));
-  const sandbox = createSpritesSandbox(ws, { token: "test-token", client: ff.client, fetchImpl: ff.fetchImpl });
+  const sandbox = createSpritesSandbox(ws, { token: "test-token", baseUrl: ff.baseUrl });
   const handle = await sandbox.provision([{ scopeId: "personal:U1", mountPath: "", mode: "rw" }]);
   await sandbox.writeFileBytes(handle, "spool/one.txt", new Uint8Array(Buffer.from("1")));
   await sandbox.writeFileBytes(handle, "spool/two.txt", new Uint8Array(Buffer.from("2")));
@@ -620,7 +620,7 @@ test("a binary file round-trips through the sandbox (base64-over-exec) without u
   const ff = installFakeSprites();
   after(() => ff.cleanup());
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-bin-")));
-  const sandbox = createSpritesSandbox(ws, { token: "test-token", client: ff.client, fetchImpl: ff.fetchImpl });
+  const sandbox = createSpritesSandbox(ws, { token: "test-token", baseUrl: ff.baseUrl });
   const handle = await sandbox.provision([{ scopeId: "personal:U1", mountPath: "", mode: "rw" }]);
   const raw = new Uint8Array([0x00, 0x9f, 0x92, 0x96, 0xff, 0xfe]);
   await sandbox.writeFileBytes(handle, "keep.bin", raw);

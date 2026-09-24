@@ -457,3 +457,20 @@ test("a deployment token is refused when the credential is switched off for publ
   );
   assert.equal(agent.status, 200, "an agent turn's token is not affected by the published-apps switch");
 });
+
+test("generic credential broker cannot bypass Composio identity binding", async () => {
+  const cap = captureFetch();
+  const result = await brokerCredentialCall(
+    base({
+      reader: reader({ slug: "x-firehose", host: "backend.composio.dev", allowedMethods: ["POST"] }),
+      body: {
+        credential: "x-firehose",
+        method: "POST",
+        url: "https://backend.composio.dev/api/v3.1/tools/execute/GMAIL_FETCH_EMAILS",
+      },
+      fetchImpl: cap.fetch,
+    }),
+  );
+  assert.equal(result.status, 403);
+  assert.equal(cap.calls.length, 0);
+});

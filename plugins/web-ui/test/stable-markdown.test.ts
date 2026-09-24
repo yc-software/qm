@@ -510,3 +510,54 @@ test("literal HTML remains inert while code and autolinks retain Markdown semant
   assert.equal(block.querySelector("a")?.href, "https://example.test/");
   block.remove();
 });
+
+test("Mermaid fences become diagrams while other code remains code", async () => {
+  const block = await mount("```mermaid\nflowchart LR\nA-->B\n```\n\n```js\nconst x = 1\n```");
+  assert.equal(block.querySelector("qm-mermaid")?.getAttribute("code")?.trimEnd(), "flowchart LR\nA-->B");
+  assert.equal(block.querySelectorAll("code-block").length, 1);
+  block.remove();
+});
+
+test("streaming Mermaid keeps source and preserves the component on completion", async () => {
+  const block = new StableMarkdown();
+  block.isStreaming = true;
+  block.content = "```mermaid\nflowchart LR\nA-->";
+  document.body.append(block);
+  await block.updateComplete;
+  const diagram = block.querySelector("qm-mermaid")!;
+  assert.ok(diagram.hasAttribute("pending"));
+  block.content += "B\n```";
+  await block.updateComplete;
+  assert.equal(block.querySelector("qm-mermaid"), diagram);
+  assert.equal(diagram.getAttribute("code")?.trimEnd(), "flowchart LR\nA-->B");
+  block.isStreaming = false;
+  await block.updateComplete;
+  assert.equal(block.querySelector("qm-mermaid"), diagram);
+  assert.equal(diagram.hasAttribute("pending"), false);
+  block.remove();
+});
+
+test("Mermaid image metadata is rejected before rendering can fetch a URL", async () => {
+  const { renderMermaid } = await import("../src/mermaid-block.ts");
+  for (const metadata of [
+    'img: "/api/private.png", label: "Image", h: 60',
+    '"img": "https://example.com/track.png", label: "Image", h: 60',
+  ]) {
+    const staging = document.createElement("div");
+    document.body.append(staging);
+    await assert.rejects(
+      renderMermaid(`flowchart LR\nA@{ ${metadata} }`, "image-test", staging),
+      /Images are not supported/,
+    );
+    assert.equal(staging.childElementCount, 0);
+    staging.remove();
+  }
+});
+
+test("oversized Mermaid sources are rejected before parsing", async () => {
+  const { renderMermaid } = await import("../src/mermaid-block.ts");
+  await assert.rejects(
+    renderMermaid("A".repeat(50001), "large-test", document.createElement("div")),
+    /Diagram is too large/,
+  );
+});

@@ -107,6 +107,7 @@ test("the harness router mirrors for foreign adapters and leaves native-tape ada
       ...base,
       session: { id: `s-${harnessId}` },
       runtime: { harnessId },
+      history: [],
     } as unknown as HarnessTurnInput);
     seen[harnessId] = taped.length;
   }

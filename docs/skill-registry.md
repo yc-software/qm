@@ -73,7 +73,7 @@ ungoverned files on each box.
 
 ## Loading published skills
 
-The skill index lists each visible skill. The agent's `skill` tool resolves the currently
+The skill index lists each visible skill. The agent's `skills` tool resolves the currently
 visible, screened published skill and returns its SKILL.md, or a relative manifest file
 named by `path`, without creating or waking a sandbox. Unavailable skills and invalid
 paths return no file.

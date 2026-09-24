@@ -883,8 +883,6 @@ test("the orchestrator sandbox path selects worker storage without changing auth
     connectorEnv: {},
     isolateOwnerKeychain: false,
     ownerAuthAvailable: false,
-    ownerAuthEnv: {},
-    ownerEnvCredentialIds: [],
     credentialTools: [],
     credentialServices: [],
     credentialCutoverServices: [],

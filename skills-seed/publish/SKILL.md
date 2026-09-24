@@ -11,10 +11,10 @@ dashboard you generated from a query. A turn's sandbox is torn down when the tur
 ends; publishing ships your files to a separate, long-lived runtime that keeps running
 and gets a stable link.
 
-Publishing is a **first-class primitive**: the `publish` tool, alongside
-`execute`/`read`/`write`. Build the app in the workspace as usual (write files, install
-deps with `execute`, test it), then call `publish` on the directory. The app must listen
-on the `PORT` env var (the runtime sets it).
+Publish with the `apps` tool, action `publish`. Build the app in the workspace with
+`files` actions `write` / `read`; install dependencies and test with `sandbox` action
+`exec` (`execute` before sandbox-resource activation). Then publish the directory.
+The app must listen on the `PORT` env var (the runtime sets it).
 
 ## Match the house style (the default)
 
@@ -38,22 +38,22 @@ no UI.
 First publish, and every later update — same call, same `name`, a new immutable version:
 
 ```
-publish({ dir: "dist", entrypoint: "node server.js", name: "status-board" })
+apps({ action: "publish", dir: "dist", entrypoint: "node server.js", name: "status-board" })
 ```
 
 Roll back to an earlier version (an instant pointer flip):
 
 ```
-publish({ name: "status-board", rollbackTo: 3 })
+apps({ action: "publish", name: "status-board", rollbackTo: 3 })
 ```
 
 Give an auto-named deployment a friendly link:
 
 ```
-publish({ renameFrom: "s-1176-p-5050", name: "status-board" })
+apps({ action: "publish", renameFrom: "s-1176-p-5050", name: "status-board" })
 ```
 
-`publish` returns `{ id, name, version, url, dataDir? }` — give the user the `url` (`/d/<name>/`).
+`apps` action `publish` returns `{ id, name, version, url, dataDir? }` — give the user the full absolute `url`, whose path is `/d/<name>/`.
 
 ## App bar and editing
 
@@ -96,7 +96,8 @@ the same as the app _working_. So for anything browsable, sanity-check it locall
 publish:
 
 1. Run it locally. Start the server in the background on a port — e.g.
-   `PORT=8080 node server.js` via the `background` tool, so it keeps serving while you check.
+   `PORT=8080 node server.js` via `sandbox` action `start_process` (`background` action `start`
+   before sandbox-resource activation), so it keeps serving while you check.
 2. Probe it with `curl` — confirm it answers, returns the status you expect, and the main
    page/endpoint is actually there (real content, not a stack trace or a blank 500):
 
@@ -105,19 +106,27 @@ publish:
    ```
 
 3. If it's broken, fix it and check again — don't tell the user a site is ready before you've
-   confirmed it serves. Only once it checks out do you `publish` and hand over the
+   confirmed it serves. Only once it checks out do you call `apps` action `publish` and hand over the
    `/d/<name>/` link.
 
 ## Sharing — say who can reach it
 
-By default a deployment is reachable only by its **owner scope** (personal for a DM, the
-team/channel for a channel turn). Share it the same way you'd share a file:
+Publication uses the conversation's default audience when `audience` is omitted.
+Pass `audience: []` to suppress default grants for an owner-only publication; this does
+not revoke existing explicit grants. Supply publication-time grants with `audience`:
 
 ```
-publish({
+apps({
+  action: "publish",
   dir: "dist", entrypoint: "node server.js", name: "status-board",
-  share: [{ scope: "org:acme", permission: "read" }],
+  audience: [{ scope: "org:acme", permission: "read" }],
 })
+```
+
+For a later grant, use the app ID or handle:
+
+```
+apps({ action: "share", id: "status-board", toScope: "org", permission: "read" })
 ```
 
 - **read** = can reach the app. **write** = can also manage it (redeploy/rollback).
@@ -154,7 +163,7 @@ publish({
 
 ## If you can't publish
 
-Publishing needs the deployment runtime to be available on this computer. If `publish`
+Publishing needs the deployment runtime to be available on this computer. If `apps` action `publish`
 errors (e.g. the runtime/Docker isn't present, the command is missing), **do not silently
 fall back to sending the files and tell the user they can "view the site" there.** Sending
 a file delivers it as a **downloadable attachment**, not a hosted, browsable site — a

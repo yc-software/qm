@@ -37,8 +37,7 @@ function sprites(): Sandbox {
   const dir = mkdtempSync(join(tmpdir(), "sprites-kill-ws-"));
   return createSpritesSandbox(createLocalWorkspaceStore(dir), {
     token: "test-token",
-    client: ff.client,
-    fetchImpl: ff.fetchImpl,
+    baseUrl: ff.baseUrl,
   });
 }
 const rw = [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" as const }];

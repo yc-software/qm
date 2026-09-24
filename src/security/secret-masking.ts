@@ -31,3 +31,23 @@ export function createSecretValueMasker(env: Record<string, string> | undefined)
     return text;
   };
 }
+
+export class MaskedExecutionError extends Error {}
+
+export function createExactSecretValueMasker(values: Iterable<string>): (text: string) => string {
+  const secrets = [...new Set(values)].filter(Boolean).sort((a, b) => b.length - a.length);
+  if (!secrets.length) return (text) => text;
+  const pattern = new RegExp(secrets.map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
+  return (text) => text.replace(pattern, () => "<redacted:credential>");
+}
+
+export function executionSecretEnv(
+  env: Record<string, string> | undefined,
+  fields: readonly { key: string; value: string; secret?: boolean }[] = [],
+): Record<string, string> {
+  const secrets = Object.fromEntries(Object.entries(env ?? {}).filter(([key]) => !NON_SECRET_ENV_KEYS.has(key)));
+  const injected = fields.filter((field) => env?.[field.key] === field.value);
+  for (const field of injected) if (field.secret === false) delete secrets[field.key];
+  for (const field of injected) if (field.secret !== false) secrets[field.key] = field.value;
+  return secrets;
+}

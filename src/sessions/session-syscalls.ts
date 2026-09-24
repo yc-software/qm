@@ -1,3 +1,6 @@
+import { principalDestination } from "../reach/reach.ts";
+import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
@@ -205,8 +208,8 @@ export interface SessionSyscallDeps {
     | "visibleEntries"
     | "getForParticipant"
   >;
-  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "latestForThread" | "getByDedupKey">;
-  signals: Pick<RunSignalStore, "send">;
+  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "latestForThread" | "getByDedupKey" | "get" | "withdraw">;
+  signals: Pick<RunSignalStore, "send" | "pending">;
   maxAttempts: number;
   treeRunCap?: number;
   advisoryLock?: AdvisoryLock;
@@ -281,7 +284,7 @@ export function renderSubagentMail(input: {
     `<wake reason="subagent" name="${xmlAttrEscape(input.title)}" sessionId="${input.sessionId}" kind="${input.kind}" at="${new Date().toISOString()}">`,
     `  <why>Your subagent session "${xmlEscape(input.title)}" ${why[input.kind]}.</why>`,
     `  <content>${xmlEscape(input.body)}</content>`,
-    `  <instructions>If the person who asked for this work is waiting on it, relay what matters in your own words. Otherwise act on it internally without acknowledging it. Never repeat a result already reported or send a no-action-needed update. The subagent's full transcript is in its own session; use the session tool to read it or send it another task.</instructions>`,
+    `  <instructions>If the person who asked for this work is waiting on it, relay what matters in your own words. Otherwise act on it internally without acknowledging it. Never repeat a result already reported or send a no-action-needed update. The subagent's full transcript is in its own session; use the sessions tool to read it or send it another task.</instructions>`,
     "</wake>",
   ].join("\n");
 }
@@ -291,10 +294,15 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.scopeVersion ? { scopeVersion: meta.scopeVersion } : {}),
     ...(meta.sessionParticipantIds ? { sessionParticipantIds: meta.sessionParticipantIds } : {}),
     surface: meta.surface,
+    ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
+    ...(meta.deliveryCandidates ? { deliveryCandidates: meta.deliveryCandidates } : {}),
     actor: meta.actor,
     conversation: { ...meta.conversation, threadRef: child.threadRef },
     origin: {
       kind: "automation",
+      ...(meta.origin?.kind === "automation" && meta.origin.destination
+        ? { destination: meta.origin.destination }
+        : {}),
       ...(meta.origin?.kind === "automation" && meta.origin.useOwnerKeychain ? { useOwnerKeychain: true } : {}),
       screenData: text,
     },
@@ -347,6 +355,44 @@ async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Se
     }
   }
   return all;
+}
+
+async function sessionRunCancelled(
+  runs: Pick<RunStore, "get">,
+  signals: Pick<RunSignalStore, "pending">,
+  runId: string | undefined,
+): Promise<boolean> {
+  const seen = new Set<string>();
+  while (runId) {
+    if (seen.has(runId)) return true;
+    seen.add(runId);
+    const run = await runs.get(runId);
+    if (!run) return true;
+    if (run.result?.stopped || (await signals.pending(runId)).some(({ signal }) => signal.kind === "abort"))
+      return true;
+    runId = run.request.delegatingRunId;
+  }
+  return false;
+}
+
+export async function stopSessionTree(
+  deps: {
+    sessions: Pick<SessionStore, "childrenOf">;
+    runs: Pick<RunStore, "inFlightForThread" | "withdraw" | "get">;
+    signals: Pick<RunSignalStore, "send">;
+  },
+  root: Session,
+): Promise<boolean> {
+  let stopped = false;
+  for (const session of await treeSessions(deps.sessions, root)) {
+    if (session.scopeId !== root.scopeId) continue;
+    for (const run of await deps.runs.inFlightForThread(session.threadRef)) {
+      await deps.signals.send(run.id, { kind: "abort" });
+      if (run.status === "pending") await deps.runs.withdraw(run.id);
+      stopped = true;
+    }
+  }
+  return stopped;
 }
 
 export async function sessionTreeRunCount(
@@ -410,6 +456,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       }
 
       async function currentCaller(): Promise<OrchestratorInput> {
+        binding.request.cancel?.throwIfAborted();
+        if (await sessionRunCancelled(deps.runs, deps.signals, binding.request.runId))
+          throw new Error("this delegated task was stopped");
         if (deps.enabled && !(await deps.enabled(binding.request.actor.id)))
           throw new Error("persistent subagents are not enabled for this user");
         const current = await deps.sessions.get(binding.session.id);
@@ -628,20 +677,15 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const request = deps.prepareRequest ? await deps.prepareRequest(prepared) : prepared;
               assertAudienceCompatible(caller, request);
               const title = target.title?.trim() || target.id;
-              const inFlight = await deps.runs.inFlightForThread(target.threadRef);
-              const running = inFlight.find((r) => r.status === "running");
               if (input.interrupt) {
                 if (privateMessage)
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
-                if (caller.readOnly && !running?.request.readOnly)
-                  return { ok: false, message: "a read-only session cannot interrupt a writable turn" };
-                if (!running)
-                  return {
-                    ok: false,
-                    message: `subagent "${title}" is not running — nothing to interrupt. Use followup_task to assign new work.`,
-                  };
-                await deps.signals.send(running.id, { kind: "abort" });
-                return { ok: true, sessionId: target.id, title, delivered: "interrupted" };
+                if (caller.readOnly && !target.spawnMeta?.readOnly)
+                  return { ok: false, message: "a read-only session cannot interrupt a writable task" };
+                const stopped = await stopSessionTree(deps, target);
+                return stopped
+                  ? { ok: true, sessionId: target.id, title, delivered: "interrupted" }
+                  : { ok: false, message: `subagent "${title}" is not running — nothing to interrupt.` };
               }
               const text = input.text?.trim();
               if (!text) return { ok: false, message: "write requires text (or interrupt: true)." };
@@ -766,6 +810,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
 }
 
 export interface SubagentMailDeps {
+  signals?: Pick<RunSignalStore, "pending">;
+  deliveries?: Pick<DeliveryStore, "enqueue">;
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
   sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
@@ -777,6 +823,11 @@ export interface SubagentMailDeps {
 
 export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Promise<boolean> {
   if (!isSubagentThreadRef(run.sessionId) || run.request.privateSessionMessage) return true;
+  if (
+    run.result?.stopped ||
+    (deps.signals && deps.runs.get && (await sessionRunCancelled({ get: deps.runs.get }, deps.signals, run.id)))
+  )
+    return true;
   const child = await deps.sessions.getByThread(run.sessionId);
   if (!child?.parentSessionId || !child.spawnMeta) return true;
   const parent = await deps.sessions.get(child.parentSessionId);
@@ -810,7 +861,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   if (run.status === "failed" || result?.status === "failed") {
     kind = "errored";
     body = snippet(result?.reason ?? "the turn failed", MAIL_ERROR_CAP);
-  } else if (result?.status === "pending_approval") {
+  } else if (result?.pendingApprovals?.length || result?.status === "pending_approval") {
     kind = "awaiting_input";
     body = snippet(
       result.pendingApprovals?.map((a) => a.command).join("; ") ?? "a command needs human approval",
@@ -819,9 +870,9 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   } else if (result?.status === "refused") {
     kind = "refused";
     body = snippet(result.reason ?? "the turn was refused", MAIL_ERROR_CAP);
-  } else if (result?.status === "ok" && result.reply?.trim()) {
+  } else if (result?.status === "ok" && (result.reply?.trim() || result.attachments?.length)) {
     kind = "final_answer";
-    body = result.reply.trim();
+    body = result.reply?.trim() || `Produced ${result.attachments!.map((file) => file.name).join(", ")}.`;
   } else {
     kind = "no_reply";
     body = "completed without sending a reply.";
@@ -833,10 +884,11 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     body:
       body.length > 16_000 ? `${body.slice(0, 16_000)}\n[truncated; read the child session for the full result]` : body,
   });
+  const inherited = { ...meta };
+  delete (inherited as Partial<SpawnMeta>).openFingerprint;
   const request: OrchestratorInput = {
+    ...inherited,
     sessionSenderId: child.id,
-    surface: meta.surface,
-    actor: meta.actor,
     conversation: {
       ...meta.conversation,
       ...(currentContext
@@ -844,19 +896,43 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
         : {}),
       threadRef: parent.threadRef,
     },
-    origin: { kind: "automation", screenData: text },
-    ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
-    ...(meta.scopeVersion ? { scopeVersion: meta.scopeVersion } : {}),
-    ...(meta.sessionParticipantIds ? { sessionParticipantIds: meta.sessionParticipantIds } : {}),
-    ...(meta.timezone ? { timezone: meta.timezone } : {}),
-    ...(meta.readOnly ? { readOnly: true } : {}),
-    ...(meta.model ? { model: meta.model } : {}),
-    ...(meta.harness ? { harness: meta.harness } : {}),
-    ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
+    origin: {
+      ...(meta.origin?.kind === "automation" ? meta.origin : { kind: "automation" as const }),
+      screenData: text,
+    },
     text,
     displayText: `[subagent ${title}: ${kind.replace("_", " ")}]`,
     envelopeWrapped: true,
   };
+  for (const key of [
+    "runId",
+    "attempt",
+    "runLeaseToken",
+    "runStartedAt",
+    "finalAttempt",
+    "background",
+    "cancel",
+    "queueMs",
+    "modelAccount",
+    "privateSessionMessage",
+    "sessionMessageDepth",
+    "delegatingRunId",
+    "swarm",
+    "approval",
+    "proactiveOpener",
+    "redeliveryKey",
+    "intakePreambleMs",
+    "clientSentAt",
+    "attachments",
+    "inboundNotes",
+    "priorTurns",
+    "overheard",
+    "detectContext",
+    "detectOpener",
+    "conversationHeader",
+  ] as const)
+    delete request[key];
+  if (!originalParent) request.addressed = false;
   const prepared = deps.prepareRequest ? await deps.prepareRequest(request) : request;
   assertAudienceCompatible(run.request, prepared);
   const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
@@ -866,6 +942,28 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
       if (!visible.some((entry) => entry.seq === outputSeq && entry.scopeLabel === child.scopeId))
         throw new Error("the current parent audience cannot read this child result");
     }
+  }
+  if (result?.attachments?.length && deps.deliveries) {
+    const delivery = deliveryCandidatesFor(meta.surface, meta.deliveryTarget, meta.deliveryCandidates, parent.scopeId);
+    const candidate = delivery.candidates.find((item) => item.key === delivery.defaultKey);
+    const destination =
+      candidate ??
+      (meta.origin?.kind === "automation" ? meta.origin.destination : undefined) ??
+      principalDestination(meta.actor.id, meta.actor.id);
+    await deps.deliveries.enqueue({
+      destination,
+      text: "",
+      attachments: result.attachments,
+      idempotencyKey: `subagent-files:${run.id}`,
+      provenance: {
+        trigger: "subagent",
+        surface: meta.surface ?? "unknown",
+        fireKey: `subagent-files:${run.id}`,
+        sourceScopeId: child.scopeId,
+        sourceThreadRef: child.threadRef,
+        sourceSessionId: child.id,
+      },
+    });
   }
   await deps.mailbox.send({
     id: `subagent-mail-${run.id}`,
@@ -893,7 +991,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     if (existing && (existing.status === "done" || existing.status === "failed")) return true;
     if ((await deps.runs.inFlightForThread(parent.threadRef)).length) return false;
     const wake =
-      "A delegated task finished. Check internal messages with session wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
+      "A delegated task finished. Check internal messages with sessions wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
     await deps.runs.enqueue({
       sessionId: parent.threadRef,
       dedupKey,
@@ -901,12 +999,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
         ...prepared,
         surfaceTools: true,
         ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}),
-        ...(meta.unattendedGrants ? { unattendedGrants: [...meta.unattendedGrants] } : {}),
-        ...(meta.deliveryCandidates ? { deliveryCandidates: meta.deliveryCandidates } : {}),
-        origin: {
-          ...(meta.origin?.kind === "automation" ? meta.origin : { kind: "automation" as const }),
-          screenData: wake,
-        },
+        origin: { ...prepared.origin, kind: "automation", screenData: wake },
         text: wake,
         displayText: "Delegated task completed",
       },

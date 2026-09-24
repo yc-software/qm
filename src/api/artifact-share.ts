@@ -1,3 +1,5 @@
+import type { DeploymentInvitation } from "../deploy/email-access.ts";
+import { validEmail } from "../identity/external-members.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { isSharedScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
 import type { ResourceKind } from "../acl/resource-ref.ts";
@@ -29,9 +31,17 @@ export type ResolvedShareTarget =
 
 export async function resolveShareTarget(
   app: { resolveRecipient(recipient: string): Promise<RecipientResolution> },
-  input: { scope?: string; recipient?: string },
-  hints: { invalidScope: (scope: string) => string; targetRequired: string },
+  input: { scope?: string; recipient?: string; email?: string },
+  hints: { invalidScope: (scope: string) => string; targetRequired: string; allowEmail?: boolean },
 ): Promise<ResolvedShareTarget> {
+  if (input.email !== undefined) {
+    if (!hints.allowEmail) return { kind: "invalid", message: "email grants are only supported for app sharing" };
+    if (input.scope !== undefined || input.recipient !== undefined)
+      return { kind: "invalid", message: "pass only one of email, scope, or recipient" };
+    const email = input.email.trim().toLowerCase();
+    if (!validEmail(email)) return { kind: "invalid", message: "a valid email address is required" };
+    return { kind: "ok", scope: scopeId("personal", email), label: email };
+  }
   const scope = (input.scope ?? "").trim();
   const recipient = (input.recipient ?? "").trim();
   if (scope && recipient) return { kind: "invalid", message: "pass either scope or recipient, not both" };
@@ -70,6 +80,7 @@ export interface ShareArtifactRequest {
   id: string;
   scope?: string;
   recipient?: string;
+  email?: string;
   permission?: Permission;
   move?: boolean;
 }
@@ -82,6 +93,7 @@ export type ShareArtifactResult =
       id: string;
       target: { scope: ScopeId; label: string };
       permission: Permission;
+      invitation?: DeploymentInvitation;
     }
   | {
       ok: false;

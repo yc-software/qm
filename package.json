@@ -41,6 +41,7 @@
     "smoke:aws-sandbox": "node scripts/aws-sandbox-smoke.ts",
     "smoke:local-sandbox": "node scripts/local-sandbox-smoke.ts",
     "build:modal-image": "node scripts/modal-build-image.ts",
+    "build:e2b-template": "node scripts/e2b-build-template.ts",
     "build:aws-image": "node scripts/aws-build-sandbox-image.ts",
     "sandbox:local:build": "bash scripts/local-sandbox-build.sh",
     "sandbox:porter:build": "docker build --platform linux/amd64 -t \"${PORTER_SANDBOX_IMAGE:?Set PORTER_SANDBOX_IMAGE to the registry tag to publish}\" porter && docker push \"$PORTER_SANDBOX_IMAGE\"",
@@ -63,7 +64,7 @@
     "*": "prettier --write --ignore-unknown"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.211",
+    "@anthropic-ai/claude-agent-sdk": "0.3.280",
     "@anthropic-ai/tokenizer": "^0.0.4",
     "@aws-crypto/sha256-js": "^5.2.0",
     "@aws-sdk/client-ecs": "3.1096.0",
@@ -74,10 +75,10 @@
     "@aws-sdk/s3-request-presigner": "^3.1061.0",
     "@earendil-works/pi-ai": "0.82.0",
     "@earendil-works/pi-coding-agent": "https://github.com/yc-software/pi/releases/download/qm-pi-coding-agent-0.82.0-security.3/earendil-works-pi-coding-agent-0.82.0-qm-security.3.tgz",
-    "@fly/sprites": "0.0.1",
-    "@openai/codex": "0.144.5",
-    "@opencode-ai/plugin": "1.17.18",
-    "@opencode-ai/sdk": "1.17.18",
+    "@fly/sprites": "0.2.3",
+    "@openai/codex": "0.154.0",
+    "@opencode-ai/plugin": "1.18.31",
+    "@opencode-ai/sdk": "1.18.31",
     "@sentry/node": "10.75.0",
     "@slack/bolt": "^4.7.3",
     "@slack/socket-mode": "^2.0.7",
@@ -85,21 +86,20 @@
     "@smithy/signature-v4": "^5.6.6",
     "@superserve/sdk": "^0.8.3",
     "croner": "^10.0.1",
-    "e2b": "^2.39.0",
+    "e2b": "^2.51.0",
     "emoji-datasource": "^16.0.0",
     "fastify": "^5.12.1",
     "jose": "^6.2.3",
     "lru-cache": "^11.5.2",
-    "modal": "^0.10.0",
+    "modal": "^0.10.1",
     "officeparser": "^8.0.0",
-    "opencode-ai": "1.17.18",
+    "opencode-ai": "1.18.31",
     "pg": "^8.13.1",
     "pg-boss": "^12.26.1",
     "porter-sandbox": "^0.1.41",
     "socks-proxy-agent": "10.1.0",
     "tar-stream": "^3.2.0",
     "typebox": "^1.1.38",
-    "undici": "^8.9.0",
     "zod": "4.4.3"
   },
   "overrides": {
@@ -115,7 +115,7 @@
     "fast-json-stringify": {
       "fast-uri": "4.1.4"
     },
-    "undici": "$undici",
+    "undici": "8.9.0",
     "protobufjs": "7.6.5"
   },
   "devDependencies": {

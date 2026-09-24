@@ -265,3 +265,62 @@ test("profile advertises resident disk and process sessions", () => {
   assert.equal(sandbox.profile.processSessions, true);
   assert.equal(sandbox.profile.egressEnforcement, "none");
 });
+
+test("instance create retries 429 refusals but not an ambiguous 5xx", async () => {
+  fake.failNext(429, {
+    headers: { "retry-after": "0" },
+    match: (c) => c.method === "POST" && c.path === "/v1/instances",
+  });
+  const h = await sandbox.provision(layers);
+  assert.equal(h.coldStart, true);
+  assert.equal(fake.calls.filter((c) => c.method === "POST" && c.path === "/v1/instances").length, 2);
+
+  const otherScope = scopeId("personal", "other");
+  fake.failNext(500, {
+    headers: { "x-request-id": "req-create" },
+    match: (c) => c.method === "POST" && c.path === "/v1/instances",
+  });
+  const posts = fake.calls.filter((c) => c.method === "POST" && c.path === "/v1/instances").length;
+  await assert.rejects(
+    sandbox.provision([{ scopeId: otherScope, mountPath: "/", mode: "rw" }]),
+    /agent37 create .*: http 500 .*\[request id req-create\]/,
+  );
+  assert.equal(fake.calls.filter((c) => c.method === "POST" && c.path === "/v1/instances").length, posts + 1);
+});
+
+for (const failure of ["disconnect", "503"]) {
+  test(`accepted create followed by ${failure} never duplicates the instance`, async () => {
+    let injected = false;
+    const adapter = make({
+      fetchImpl: async (input: string | URL | Request, init?: RequestInit) => {
+        const response = await fake.fetchImpl(input, init);
+        if (!injected && init?.method === "POST" && new URL(String(input)).pathname === "/v1/instances") {
+          injected = true;
+          if (failure === "disconnect") throw new TypeError("connection lost after create");
+          return new Response("upstream unavailable", { status: 503, headers: { "retry-after": "0" } });
+        }
+        return response;
+      },
+    });
+    await assert.rejects(adapter.provision(layers), /connection lost after create|http 503/);
+    assert.equal(fake.names().length, 1);
+    const recovered = await adapter.provision(layers);
+    assert.equal(fake.names().length, 1);
+    assert.equal((await adapter.run(recovered, "echo recovered")).stdout.trim(), "recovered");
+    assert.equal(fake.calls.filter((c) => c.method === "POST" && c.path === "/v1/instances").length, 1);
+  });
+}
+
+test("instance listing retries 429 with Retry-After; exec is never retried and names the request id", async () => {
+  fake.failNext(429, {
+    headers: { "retry-after": "0" },
+    match: (c) => c.method === "GET" && c.path === "/v1/instances",
+  });
+  const h = await sandbox.provision(layers);
+  assert.equal(fake.calls.filter((c) => c.method === "GET" && c.path === "/v1/instances").length, 2);
+
+  const before = fake.calls.filter((c) => c.path.endsWith("/exec")).length;
+  fake.failNext(502, { headers: { "x-request-id": "req-exec" }, match: (c) => c.path.endsWith("/exec") });
+  await assert.rejects(sandbox.run(h, "echo hi"), /agent37 exec .*: http 502 .*\[request id req-exec\]/);
+  assert.equal(fake.calls.filter((c) => c.path.endsWith("/exec")).length, before + 1);
+});

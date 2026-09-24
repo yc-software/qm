@@ -32,6 +32,14 @@ or replace image-installed dependencies. Core validates the baked artifact again
 its own bundle and exposes the matching copy through the usual home launcher path;
 an older image can use the runtime bundle fallback.
 
+Native home checkpoints are directory snapshots of `/root`, so everything installed
+under the home is captured again in every checkpoint. Deployment-layer tool files are
+converged under `/usr/local/bin` and `/usr/local/lib` and stay out of checkpoints;
+the runtime connector bundle fallback lands under `/root/.qm/composio` and adds about
+1.3 MB to each checkpoint until `MODAL_IMAGE` points at a baked image, after which
+only a symlink remains in the home. Set `MODAL_IMAGE` before enabling native
+checkpoints on a deployment with many active users.
+
 Rebuild the image when updating the SDK lockfile or builder, and retain the previous
 image ID with the previous core release for rollback. Existing running sandboxes
 keep their current image until normal replacement. Do not delete image IDs still

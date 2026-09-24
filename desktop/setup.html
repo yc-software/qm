@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'"
+    />
+    <title>Welcome to QM</title>
+    <link rel="stylesheet" href="setup.css" />
+  </head>
+  <body>
+    <main>
+      <figure class="harbour">
+        <img
+          src="assets/becalmed-off-halfway-rock.webp"
+          alt="Sailing ships resting on still, sunlit water in Becalmed off Halfway Rock by Fitz Henry Lane."
+        />
+        <header class="masthead">
+          <span class="wordmark" aria-label="QM">QM</span>
+        </header>
+        <figcaption>Becalmed off Halfway Rock<span>Fitz Henry Lane, 1860</span></figcaption>
+      </figure>
+      <section class="connection" aria-label="Connect to your workspace">
+        <form>
+          <label for="url">Connect to your workspace</label>
+          <p id="url-help" class="hint">Enter the web address you use to open QM.</p>
+          <input
+            id="url"
+            name="url"
+            type="url"
+            placeholder="https://qm.your-company.com"
+            required
+            autofocus
+            autocomplete="url"
+            spellcheck="false"
+            aria-describedby="url-help error"
+          />
+          <div id="error" role="alert"></div>
+          <button type="submit"><span class="button-label">Open QM</span><span aria-hidden="true">→</span></button>
+        </form>
+        <p class="settings-hint">Your workspace will be remembered on this Mac.</p>
+        <p id="login-status" role="status"></p>
+      </section>
+    </main>
+    <script src="setup.js"></script>
+  </body>
+</html>

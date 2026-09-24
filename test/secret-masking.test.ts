@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSecretValueMasker } from "../src/security/secret-masking.ts";
+import {
+  createSecretValueMasker,
+  createExactSecretValueMasker,
+  executionSecretEnv,
+} from "../src/security/secret-masking.ts";
 
 const SECRET = "ghp_secretvalue12345";
 
@@ -62,5 +66,36 @@ test("a JWT-shaped (base64url) form of a secret is masked", () => {
   assert.equal(
     mask(`curl -H "authorization: Bearer ${b64url}"`),
     'curl -H "authorization: Bearer <redacted:VAULT_PASS>"',
+  );
+});
+
+test("exact masking preserves surrounding output, handles overlapping values and short secrets once", () => {
+  const mask = createExactSecretValueMasker(["a+b", "a", "", "a+b", "<redacted:credential>"]);
+  assert.equal(mask("prefix a+b a suffix"), "prefix <redacted:credential> <redacted:credential> suffix");
+  assert.equal(createExactSecretValueMasker([])("safe"), "safe");
+  assert.equal(createExactSecretValueMasker(["secret"])("c2VjcmV0"), "c2VjcmV0");
+});
+
+test("explicit secret fields override configuration names while public fields stay public", () => {
+  const env = { AWS_REGION: "credential", USERNAME: "a", PASSWORD: "short", TOKEN: "" };
+  const secrets = executionSecretEnv(env, [
+    { key: "AWS_REGION", value: "credential", secret: true },
+    { key: "USERNAME", value: "a", secret: false },
+    { key: "UNRELATED", value: "other", secret: true },
+  ]);
+  assert.deepEqual(secrets, { AWS_REGION: "credential", PASSWORD: "short", TOKEN: "" });
+  assert.equal(createExactSecretValueMasker(Object.values(secrets))("safe unrelated data"), "safe unrelated data");
+  assert.equal(createExactSecretValueMasker(Object.values(secrets))("credential"), "<redacted:credential>");
+  const mask = createExactSecretValueMasker(Object.values(executionSecretEnv({ AWS_REGION: "us-west-2", TOKEN: "" })));
+  assert.equal(mask("us-west-2"), "us-west-2");
+});
+
+test("conflicting public metadata cannot exempt an explicitly secret value", () => {
+  assert.deepEqual(
+    executionSecretEnv({ TOKEN: "protected" }, [
+      { key: "TOKEN", value: "protected", secret: true },
+      { key: "TOKEN", value: "protected", secret: false },
+    ]),
+    { TOKEN: "protected" },
   );
 });

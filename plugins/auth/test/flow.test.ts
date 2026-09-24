@@ -787,3 +787,15 @@ test("trusted sign-in remains available when email is unavailable", async () => 
     await h.close();
   }
 });
+
+test("AUTH_FAVICON_SVG replaces the envelope favicon", async (t) => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8"/></svg>';
+  const h = await startHarness({ env: { AUTH_FAVICON_SVG: svg } });
+  t.after(() => h.close());
+  const r = await fetch(`${h.base}/favicon.svg`);
+  assert.equal(r.headers.get("content-type"), "image/svg+xml; charset=utf-8");
+  assert.equal(await r.text(), svg);
+  const plain = await startHarness();
+  t.after(() => plain.close());
+  assert.match(await (await fetch(`${plain.base}/favicon.ico`)).text(), /✉️/);
+});

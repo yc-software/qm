@@ -163,3 +163,37 @@ test("relayRecord reports success on a clean exit, and on nothing to offer", asy
   assert.deepEqual(await relayRecord(bin, capture, undefined, { env: { PATH: process.env.PATH } }), { ok: true });
   assert.deepEqual(await relayRecord(bin, { ...capture, workflows: [] }), { ok: true });
 });
+
+test("relay preserves resource operations through the CLI's input-field filter without changing the capture", async () => {
+  const { bin, marker } = stub(
+    `import { readFileSync, writeFileSync } from "node:fs";
+writeFileSync(MARKER, readFileSync(0, "utf8"));
+`,
+  );
+  const calls = [
+    { name: "files", input: { action: "write", path: "note.txt" }, result: { ok: true } },
+    { name: "files", input: { action: "read", path: "note.txt" }, result: { ok: false } },
+    { name: "sandbox", input: { action: "exec", command: "cat note.txt" }, result: { ok: true, exit_code: 0 } },
+    { name: "files", input: { action: "share", path: "note.txt" } },
+    { name: "sandbox", input: { action: "retire", sandbox_id: "sb1" } },
+    { name: "custom", input: { action: "write" } },
+  ];
+  const current = { ...capture, workflows: [{ ...capture.workflows[0]!, tool_calls: calls }] };
+  const original = structuredClone(current);
+  assert.deepEqual(await relayRecord(bin, current), { ok: true });
+  const offered = JSON.parse(readFileSync(marker, "utf8")) as MemorableCapture;
+  const translated = offered.workflows[0]!.tool_calls;
+  assert.deepEqual(
+    translated.map((call) => call.name),
+    ["write", "read", "execute", "files", "sandbox", "custom"],
+  );
+  assert.deepEqual(
+    translated.map((call) => call.input),
+    calls.map((call) => call.input),
+  );
+  assert.deepEqual(
+    translated.map((call) => call.result),
+    calls.map((call) => call.result),
+  );
+  assert.deepEqual(current, original);
+});

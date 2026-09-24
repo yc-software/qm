@@ -266,3 +266,28 @@ test("a private-channel MEMBER may manage a shared cron via the web; a public-ch
 
   for (const id of [privCron.id, pubCron.id]) await built.app.deleteCron(id);
 });
+
+test("cron runtime patches pass through the web API, validate, and clear", async () => {
+  built.config.setApprovedHarnesses(["mock"]);
+  const cron = await built.app.createCron({
+    title: "runtime",
+    action: "check",
+    schedule: { everyMs: 60_000 },
+    owner: "alice",
+    createdBy: "alice",
+    ownerScopeId: "personal:alice",
+  });
+  const runtime = { harnessId: "mock", modelId: "claude-sonnet-5" };
+  const patch = (value: unknown) =>
+    fetch(
+      `${webBase}/api/crons/${cron.id}`,
+      asUser("alice", { method: "PATCH", body: JSON.stringify({ runtime: value }) }),
+    );
+  const selected = await patch(runtime);
+  assert.equal(selected.status, 200, await selected.clone().text());
+  assert.deepEqual((await built.app.getCron(cron.id))?.runtime, runtime);
+  assert.equal((await patch({ modelId: "does-not-exist" })).status, 400);
+  assert.equal((await patch({ ...runtime, modelId: "does-not-exist" })).status, 400);
+  assert.equal((await patch(null)).status, 200);
+  assert.equal((await built.app.getCron(cron.id))?.runtime, null);
+});

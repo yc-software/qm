@@ -99,8 +99,28 @@ export function appShellHtml(opts: { slug: string; name?: string; portalUrl: str
   const drag = document.getElementById("drag");
   const openKey = "qmChat:" + slug;
 
+  const portalOrigin = new URL(portal).origin;
+  const themeColors = ["--background", "--foreground", "--secondary", "--muted-foreground", "--border", "--brand-accent"];
+  window.addEventListener("message", (event) => {
+    if (event.source !== chat.contentWindow || event.origin !== portalOrigin) return;
+    const theme = event.data;
+    if (theme?.type !== "qm:theme" || typeof theme.dark !== "boolean" || !theme.colors) return;
+    if (!themeColors.every((key) => typeof theme.colors[key] === "string" && CSS.supports("color", theme.colors[key]))) return;
+    for (const key of themeColors) document.documentElement.style.setProperty(key, theme.colors[key]);
+    document.documentElement.style.colorScheme = theme.dark ? "dark" : "light";
+  });
+  chat.addEventListener("load", () => {
+    chat.contentWindow.postMessage({ type: "qm:theme-request" }, portalOrigin);
+  });
+  const chatUrl = portal + "/app-edit?slug=" + encodeURIComponent(slug) + "&embed=1";
+  chat.src = chatUrl + "&themeOnly=1";
+  let chatLoaded = false;
+
   const setOpen = (on) => {
-    if (on && !chat.src) chat.src = portal + "/app-edit?slug=" + encodeURIComponent(slug) + "&embed=1";
+    if (on && !chatLoaded) {
+      chatLoaded = true;
+      chat.src = chatUrl;
+    }
     panel.classList.toggle("open", on);
     toggle.dataset.on = on ? "1" : "0";
     toggle.setAttribute("aria-expanded", String(on));

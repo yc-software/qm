@@ -10,10 +10,92 @@ import {
   modelUnavailableReason,
   type HarnessId,
 } from "../model/pi-models.ts";
-import type { ScopeId } from "../types.ts";
-import type { Harness, HarnessTurnInput, RuntimeChoice } from "./harness.ts";
+import type { ScopeId, SessionEntry } from "../types.ts";
+import type { Harness, HarnessTurnInput, HarnessTurnResult, RuntimeChoice } from "./harness.ts";
 import { withTapedEntryMirrors } from "./harness-shared.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { createGrindMeter } from "./grind.ts";
+import { enforceGoal, latestGoalRecord, rehydrateOpenGoal, type GoalRecord } from "./goal.ts";
+
+const GOAL_ROUND_MIN_WALL_MS = 30_000;
+
+function turnCompleted(result: HarnessTurnResult): boolean {
+  return !result.stopped && !result.runtimeHandoff && !result.pausedOnApproval && !result.pendingApprovals?.length;
+}
+
+function inputTokens(result: HarnessTurnResult): number {
+  const usage = result.cacheUsage;
+  return usage ? usage.cacheRead + usage.cacheWrite + usage.uncachedInput : 0;
+}
+
+async function runTurnEnforcingGoal(
+  adapter: Harness,
+  input: HarnessTurnInput,
+  harnessId: HarnessId,
+): Promise<HarnessTurnResult> {
+  const emitted: SessionEntry[] = [];
+  const dispatched: HarnessTurnInput = {
+    ...input,
+    emit: async (entry) => {
+      const stored = await input.emit(entry);
+      emitted.push(stored);
+      return stored;
+    },
+  };
+  const startedAt = Date.now();
+  const meter = createGrindMeter(startedAt);
+  let result = await adapter.turns.runTurn(dispatched);
+  const goal: GoalRecord | null = latestGoalRecord(emitted) ?? rehydrateOpenGoal(input.history);
+  if (!goal) return result;
+  const account = () => {
+    meter.turns += result.modelCalls ?? 1;
+    const tokens = inputTokens(result);
+    meter.tokens += tokens;
+    goal.tokensUsed += tokens;
+  };
+  account();
+  const remainingWallMs = () =>
+    input.turnWallClockMs && input.turnWallClockMs > 0 ? input.turnWallClockMs - (Date.now() - startedAt) : undefined;
+  const blocked = () => {
+    const remaining = remainingWallMs();
+    return (
+      !!input.cancel?.aborted ||
+      !turnCompleted(result) ||
+      (remaining !== undefined && remaining < GOAL_ROUND_MIN_WALL_MS)
+    );
+  };
+  const enforced = await enforceGoal<"ok" | "halted">({
+    goal,
+    meter,
+    outcome: blocked() ? "halted" : "ok",
+    ok: "ok",
+    toolCalls: () => emitted.filter((entry) => entry.type === "tool_call").length,
+    blocked,
+    beforePrompt: () => {
+      console.error(`[goal] continuation session=${input.session.id} harness=${harnessId} turns=${meter.turns}`);
+    },
+    prompt: async (note) => {
+      const remaining = remainingWallMs();
+      result = await adapter.turns.runTurn({
+        ...dispatched,
+        input: note,
+        history: [...input.history, ...emitted],
+        goal,
+        ...(remaining !== undefined ? { turnWallClockMs: Math.max(1, remaining) } : {}),
+      });
+      account();
+      return blocked() ? "halted" : "ok";
+    },
+  });
+  if (result.stopped && goal.status === "active") {
+    goal.status = "paused";
+    goal.updatedAt = Date.now();
+  }
+  await dispatched.emit({ type: "system", payload: { kind: "goal", goal: { ...goal } }, scopeLabel: input.scopeLabel });
+  if (!enforced.waiverNote) return result;
+  await dispatched.emit({ type: "assistant", payload: { text: enforced.waiverNote }, scopeLabel: input.scopeLabel });
+  return { ...result, reply: [result.reply, enforced.waiverNote].filter(Boolean).join("\n\n") };
+}
 
 function normalizeRuntimeChoice(choice: RuntimeChoice): RuntimeChoice {
   return {
@@ -156,9 +238,10 @@ export function createHarnessRouter(
             ? { ...input.tools, runtime: (request, signal) => input.runtimeControl!(choice, request, signal) }
             : input.tools,
         };
-        return adapter.turns.runTurn(
-          adapter.profile.capabilities.has("native-tape") ? dispatched : withTapedEntryMirrors(dispatched),
-        );
+        const taped = adapter.profile.capabilities.has("native-tape") ? dispatched : withTapedEntryMirrors(dispatched);
+        return adapter.profile.capabilities.has("goal-enforcement")
+          ? adapter.turns.runTurn(taped)
+          : runTurnEnforcingGoal(adapter, taped, choice.harnessId);
       },
       async resetSession(sessionId) {
         lastHarness.delete(sessionId);

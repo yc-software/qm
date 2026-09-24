@@ -3,7 +3,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import type { QmConfig } from "./config.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
-import { deploymentSecretValue, readEnvFile } from "./util.ts";
+import { deploymentSecretValue, readEnvFile, sleep } from "./util.ts";
 import { parseToolDescriptor } from "./sandbox-layer.ts";
 
 interface DeploymentLayerFile {
@@ -165,6 +165,9 @@ export const CONNECTIVITY_CODES = new Set([
   "UND_ERR_SOCKET",
 ]);
 
+export const DEPLOYMENT_LAYER_UNAVAILABLE_ATTEMPTS = 5;
+const DEPLOYMENT_LAYER_UNAVAILABLE_BACKOFF_MS = 2_000;
+
 function isCoreUnreachable(error: unknown): boolean {
   if (error instanceof CoreUnreachableError) return true;
   if (error instanceof CliError) return false;
@@ -244,6 +247,7 @@ export async function syncDeploymentLayer(opts: {
   sandboxDir: string;
   envFile?: string;
   allowUnavailable?: boolean;
+  wait?: (ms: number) => Promise<void>;
 }): Promise<void> {
   if (!existsSync(opts.sandboxDir)) {
     step(`deployment layer: skipped (no sandbox directory at ${opts.sandboxDir})`);
@@ -301,25 +305,35 @@ export async function syncDeploymentLayerBody(
     configDir: string;
     envFile?: string;
     allowUnavailable?: boolean;
+    wait?: (ms: number) => Promise<void>;
   },
   body: string,
 ): Promise<DeploymentLayerSyncResult | undefined> {
+  const wait = opts.wait ?? sleep;
   let response: { status: number; body: string };
-  try {
-    response = await deploymentLayerRequest({
-      config: opts.config,
-      configDir: opts.configDir,
-      method: "PUT",
-      body,
-      transport: opts.transport,
-      ...(opts.envFile ? { envFile: opts.envFile } : {}),
-    });
-  } catch (error) {
-    if (opts.allowUnavailable && isCoreUnreachable(error)) {
-      step(`deployment layer: core is not reachable; deployment succeeded and sync is deferred until the next up`);
-      return;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      response = await deploymentLayerRequest({
+        config: opts.config,
+        configDir: opts.configDir,
+        method: "PUT",
+        body,
+        transport: opts.transport,
+        ...(opts.envFile ? { envFile: opts.envFile } : {}),
+      });
+      break;
+    } catch (error) {
+      const retryable = opts.allowUnavailable && isCoreUnreachable(error);
+      if (retryable && attempt < DEPLOYMENT_LAYER_UNAVAILABLE_ATTEMPTS) {
+        await wait(DEPLOYMENT_LAYER_UNAVAILABLE_BACKOFF_MS);
+        continue;
+      }
+      if (retryable) {
+        step(`deployment layer: core is not reachable; deployment succeeded and sync is deferred until the next up`);
+        return;
+      }
+      throw new CliError(`could not sync deployment layer: ${errMessage(error)}`);
     }
-    throw new CliError(`could not sync deployment layer: ${errMessage(error)}`);
   }
   if (response.status < 200 || response.status >= 300)
     throw new CliError(`deployment layer sync failed (${response.status}): ${response.body}`);

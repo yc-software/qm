@@ -134,6 +134,7 @@ export class CodexAppServer {
   private readonly cancelledRequestIds = new Set<JsonRpcId>();
   private writeTail = Promise.resolve();
   private eventTail = Promise.resolve();
+  private notificationTail = Promise.resolve();
   private stderr = "";
   private closed = false;
   private closeError: Error | null = null;
@@ -297,11 +298,14 @@ export class CodexAppServer {
       return;
     }
     if (!message.method) return;
+    const method = message.method;
     if (message.id === undefined) {
-      await this.options.onNotification(message.method, message.params);
+      this.notificationTail = this.notificationTail
+        .then(() => this.options.onNotification(method, message.params))
+        .catch((error) => this.failTransport(error));
       return;
     }
-    void this.respond(message.id, message.method, message.params).catch((error) => this.failTransport(error));
+    void this.respond(message.id, method, message.params).catch((error) => this.failTransport(error));
   }
 
   private async respond(id: JsonRpcId, method: string, params: unknown): Promise<void> {

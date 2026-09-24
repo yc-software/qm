@@ -50,6 +50,7 @@ test("declaredVariables reads the scaffolded variables.tf", () => {
     "core_public_hosts",
     "db_name",
     "db_username",
+    "db_instance_class",
     "github_repository",
     "github_subject_prefix",
     "github_oidc_provider_arn",
@@ -62,6 +63,27 @@ test("declaredVariables reads the scaffolded variables.tf", () => {
   ]) {
     assert.ok(declared.includes(name), `variables.tf declares ${name}`);
   }
+});
+
+test("database class config renders only an explicit override", () => {
+  const defaults = terraformVars(config, "", declared);
+  assert.doesNotMatch(defaults, /db_instance_class/);
+
+  const overridden = terraformVars(
+    {
+      ...config,
+      aws: { ...config.aws!, dbInstanceClass: "db.t4g.micro" },
+    },
+    defaults,
+    declared,
+  );
+  assert.match(overridden, /db_instance_class\s*= "db\.t4g\.micro"/);
+
+  const upgraded = terraformVars(config, "db_backup_retention_days = 7\n", declared);
+  assert.match(upgraded, /db_backup_retention_days = 7/);
+
+  const operatorClass = terraformVars(config, 'db_instance_class = "db.m7g.large"\n', declared);
+  assert.match(operatorClass, /db_instance_class = "db\.m7g\.large"/);
 });
 
 test("the ECS execution role can read every declared contract secret independent of Terraform state", () => {
@@ -299,6 +321,23 @@ test("assume-role config rejects vendored AWS scaffolds that predate workload ro
     assert.throws(
       () => renderTerraformVars(configured, dir),
       /AWS scaffold predates aws\.services\.\*\.assumeRoleArns[\s\S]*variables\.tf[\s\S]*main\.tf/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("database class overrides reject vendored AWS scaffolds that cannot render them", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-legacy-database-"));
+  try {
+    const infra = join(dir, "infra");
+    mkdirSync(infra);
+    writeFileSync(join(infra, "terraform.tfvars"), "services = {}\n");
+    writeFileSync(join(infra, "variables.tf"), 'variable "services" { type = map(any) }\n');
+    writeFileSync(join(infra, "main.tf"), "");
+    assert.throws(
+      () => renderTerraformVars({ ...config, aws: { ...config.aws!, dbInstanceClass: "db.t4g.micro" } }, dir),
+      /AWS scaffold predates aws\.dbInstanceClass/,
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -697,6 +736,7 @@ test("AWS module provisions durable encrypted object storage and configurable sa
     mainTf,
     /id\s*= "qm-transfer-expiry"[\s\S]*?abort_incomplete_multipart_upload\s*\{\s*days_after_initiation\s*= 1\s*\}/,
   );
+  assert.match(mainTf, /instance_class\s*= var\.db_instance_class/);
   assert.match(mainTf, /backup_retention_period\s*= var\.db_backup_retention_days/);
   assert.match(mainTf, /multi_az\s*= var\.db_multi_az/);
   assert.match(mainTf, /skip_final_snapshot\s*= var\.db_skip_final_snapshot/);

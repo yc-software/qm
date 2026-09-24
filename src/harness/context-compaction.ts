@@ -19,7 +19,7 @@ export const INTERRUPTED_TOOL_RESULT =
   "[interrupted — the platform restarted while this tool call was running and its outcome was not recorded. Check what actually happened before redoing anything with side effects.]";
 
 export const CONTEXT_SUMMARY_HEADER =
-  "[Earlier conversation summary — an index of turns compacted out of your context. The full transcript is still stored: reopen any type#seq it cites with the history tool (seq parameter; a very long entry returns as head and tail), or search it (query).]";
+  "[Earlier conversation summary — an index of turns compacted out of your context. Conversation turns and tool calls can be reopened with the history tool (seq parameter; a very long entry returns as head and tail), or searched (query). Tool results are excluded.]";
 
 function modelReplayable(entries: SessionEntry[]): SessionEntry[] {
   return entries.filter(
@@ -49,7 +49,9 @@ export function forModelContext(
 export function forSearchView(entries: SessionEntry[]): SessionEntry[] {
   const replayable = modelReplayable(entries);
   const latest = replayable.findLast((e) => contextSummaryPayload(e));
-  return replayable.filter((e) => !entrySecurityTainted(e) && (!contextSummaryPayload(e) || e === latest));
+  return replayable.filter(
+    (e) => e.type !== "tool_result" && !entrySecurityTainted(e) && (!contextSummaryPayload(e) || e === latest),
+  );
 }
 
 const entryTokenCache = new Map<string, number>();

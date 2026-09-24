@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import {
   getRuntimeConfig,
+  invalidateRuntimeConfigs,
   loadRuntimeConfig,
   saveRuntimeConfig,
   seedRuntimeConfig,
@@ -175,4 +176,38 @@ test("cached configuration is revalidated when returning to a view after the fre
   } finally {
     Date.now = now;
   }
+});
+
+test("account changes invalidate all scopes and prevent stale requests from republishing", async () => {
+  const scope = "scope:account-race";
+  const other = "scope:account-other";
+  const stale = deferred<Response>();
+  const old = runtimeConfig(scope);
+  seedRuntimeConfig(other, runtimeConfig(other));
+  let reads = 0;
+  globalThis.fetch = async () => {
+    reads++;
+    return stale.promise;
+  };
+  const pending = loadRuntimeConfig(scope);
+  invalidateRuntimeConfigs();
+  assert.equal(getRuntimeConfig(other), null);
+  const personal = runtimeConfig(scope, { effective: { harnessId: "pi", modelId: "personal" } });
+  globalThis.fetch = async () => {
+    reads++;
+    return Response.json(personal);
+  };
+  await loadRuntimeConfig(scope, true);
+  stale.resolve(Response.json(old));
+  await pending;
+  assert.equal(reads, 2);
+  assert.deepEqual(getRuntimeConfig(scope), personal);
+
+  const saving = deferred<Response>();
+  globalThis.fetch = async () => saving.promise;
+  const write = saveRuntimeConfig(scope, { modelId: "old-account" });
+  invalidateRuntimeConfigs();
+  saving.resolve(Response.json(old));
+  await write;
+  assert.equal(getRuntimeConfig(scope), null);
 });

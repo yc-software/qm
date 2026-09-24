@@ -78,6 +78,7 @@ export async function fireAskResolution(
     input: resolutionInput(ask, grant),
     fireKey: `ask:${ask.id}:${ask.status}`,
     surface: "keychain-ask",
+    ...(cron?.runtime ? { runtime: cron.runtime } : {}),
     deferWhenBusy: true,
     ...(cron
       ? {
@@ -184,7 +185,7 @@ export function createAskExpirySweep(deps: {
       }
       try {
         await deps.fire(ask);
-        await deps.keychain.markAskNotified(ask.id);
+        await deps.keychain.markAskNotified(ask.id, ask.status);
       } catch (e) {
         swallow(`keychain: ask sweep fire failed for ${ask.id} (will retry next tick)`, e);
       }

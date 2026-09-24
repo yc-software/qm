@@ -249,6 +249,28 @@ test("compaction replaces the prefix up to its watermark boundary, keeps recent 
   );
 });
 
+test("compaction strips thinking from kept turns so later blocks bind to a stable prefix", () => {
+  seq = 0;
+  const think = (sig: string) => ({ type: "thinking", thinking: "", thinkingSignature: sig });
+  const rows = [
+    user("old q"),
+    assistant([think("old"), { type: "text", text: "old a" }]),
+    turnEnd(1),
+    user("recent q"),
+    assistant([think("recent"), { type: "text", text: "recent a" }]),
+    turnEnd(3),
+    row({ kind: "context_event", payload: { event: "compaction", text: "the old stuff" }, coversEntrySeq: 1 }),
+    user("post q"),
+    assistant([think("post"), { type: "text", text: "post a" }]),
+  ];
+  const out = foldTape(rows) as Array<{ role: string; content: Array<{ type: string; text?: string }> }>;
+  assert.deepEqual(
+    out.map((m) => m.content.map((b) => b.type)),
+    [["text"], ["text"], ["text"], ["text"], ["thinking", "text"]],
+  );
+  assert.deepEqual(out[2]!.content, [{ type: "text", text: "recent a" }]);
+});
+
 test("interrupt event heals dangling tool calls with error results", () => {
   seq = 0;
   const rows = [

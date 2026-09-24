@@ -675,6 +675,14 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
       assert.throws(() => loadConfigAt(path), /aws\.rdsInstance/);
     });
   }
+  withConfig({ target: "aws", aws: { ...aws, dbInstanceClass: "db.t4g.micro" } }, ({ path }) => {
+    assert.equal(loadConfigAt(path).config.aws!.dbInstanceClass, "db.t4g.micro");
+  });
+  for (const dbInstanceClass of ["", "t4g.micro", "db.T4g.micro", "db.t4g", "db..micro", "db.t4g.nano.micro"]) {
+    withConfig({ target: "aws", aws: { ...aws, dbInstanceClass } }, ({ path }) => {
+      assert.throws(() => loadConfigAt(path), /aws\.dbInstanceClass/);
+    });
+  }
   for (const objectStoreBucket of ["legacy-bucket", "assets.acme.example", "192.168.5.bucket"]) {
     withConfig({ target: "aws", aws: { ...aws, objectStoreBucket } }, ({ path }) => {
       assert.equal(loadConfigAt(path).config.aws!.objectStoreBucket, objectStoreBucket);

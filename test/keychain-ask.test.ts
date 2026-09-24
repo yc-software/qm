@@ -273,7 +273,7 @@ test("expiry: lazy flip on read, sweep returns each expired ask exactly once", a
     [ask.id],
     "still returned until the resolution actually fired",
   );
-  await k.markAskNotified(ask.id);
+  await k.markAskNotified(ask.id, "expired");
   assert.deepEqual(await k.unnotifiedResolvedAsks(t), []);
 });
 

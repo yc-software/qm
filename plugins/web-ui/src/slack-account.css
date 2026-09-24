@@ -1,0 +1,100 @@
+qm-slack-account,
+qm-onboarding-slack {
+  display: block;
+}
+
+.welcome-slack {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 480px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  color: var(--foreground);
+  text-decoration: none;
+  margin-bottom: 16px;
+  background: var(--background);
+}
+.welcome-slack > span {
+  flex: 1;
+}
+.welcome-slack strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+}
+.welcome-slack small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  margin-top: 4px;
+}
+.welcome-slack:hover {
+  background: var(--secondary);
+}
+.welcome-slack:focus-visible {
+  outline: 2px solid var(--foreground);
+  outline-offset: 3px;
+}
+
+.slack-connected {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  margin: 0 0 16px;
+}
+.slack-connected svg {
+  color: var(--success);
+  flex: none;
+}
+.slack-link-icon {
+  position: relative;
+  width: 44px;
+  height: 39px;
+  flex: none;
+}
+.slack-link-person,
+.slack-link-service {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 27px;
+  height: 27px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--background);
+}
+.slack-link-person {
+  top: 0;
+  left: 0;
+  background: var(--secondary);
+  color: var(--foreground);
+}
+.slack-link-service {
+  top: 10px;
+  right: 0;
+}
+.slack-link-chain {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  bottom: 0;
+  left: 10px;
+  width: 19px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  transform: rotate(-35deg);
+}
+.slack-account-error {
+  font-size: 12px;
+  margin: 0 0 12px;
+}

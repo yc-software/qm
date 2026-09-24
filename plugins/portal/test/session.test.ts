@@ -8,6 +8,7 @@ import {
   openImpersonation,
   openTmp,
   setCookie,
+  sessionCookieHeaders,
   clearCookie,
   readCookie,
   safeEqual,
@@ -174,6 +175,15 @@ test("cookie helpers set HttpOnly/SameSite/Path and Secure only when asked", () 
   assert.match(clearCookie("portal_session", "/", true), /Max-Age=0/);
 });
 
+test("a cross-site cookie is only emitted when it is also Secure", () => {
+  const crossSite = setCookie("portal_session_x", "v", { path: "/", maxAge: 100, secure: true, sameSite: "None" });
+  assert.match(crossSite, /SameSite=None/);
+  assert.match(crossSite, /Secure/);
+  const insecure = setCookie("portal_session_x", "v", { path: "/", maxAge: 100, secure: false, sameSite: "None" });
+  assert.match(insecure, /SameSite=Lax/);
+  assert.ok(!insecure.includes("Secure"));
+});
+
 test("readCookie extracts a named cookie and survives other pairs", () => {
   const header = "a=1; portal_session=abc.def; webuiuser=EVIL";
   assert.equal(readCookie(header, "portal_session"), "abc.def");
@@ -241,5 +251,44 @@ test("sanitizeReturnTo accepts same-origin paths and rejects redirect escapes", 
     null,
   ]) {
     assert.equal(sanitizeReturnTo(bad, origin), "/", `expected "/" for ${JSON.stringify(bad)}`);
+  }
+});
+
+test("login preserves opaque callback query values while rejecting normalized redirect escapes", () => {
+  const callback =
+    "/api/composio/callback?session_uri=" + encodeURIComponent("https://backend.composio.dev/session/opaque");
+  assert.equal(sanitizeReturnTo(callback, "https://qm.example"), callback);
+  assert.equal(sanitizeReturnTo("/path/..//evil.example", "https://qm.example"), "/");
+  assert.equal(sanitizeReturnTo("/%2f%2fevil.example?session_uri=ok", "https://qm.example"), "/");
+});
+
+for (const domain of [undefined, "example.test"]) {
+  test(`framed session issuance is staged and clears existing twins (${domain ?? "host-only"})`, () => {
+    const attrs = { path: "/", maxAge: 100, secure: true, domain };
+    const headers = sessionCookieHeaders("signed-session", attrs);
+    assert.ok(headers.some((header) => header.startsWith("portal_session=signed-session;")));
+    const twins = headers.filter((header) => header.startsWith("portal_session_x="));
+    assert.equal(twins.length, domain ? 2 : 1);
+    assert.ok(twins.every((header) => header.startsWith("portal_session_x=;") && header.includes("Max-Age=0")));
+    if (domain) assert.ok(twins.some((header) => header.includes(`Domain=${domain}`)));
+    const enabled = sessionCookieHeaders("signed-session", attrs, true);
+    assert.ok(
+      enabled.some(
+        (header) =>
+          header.startsWith("portal_session_x=signed-session;") &&
+          header.includes("SameSite=None") &&
+          header.includes("Secure"),
+      ),
+    );
+  });
+}
+
+test("openSession preserves signed app-only authority and rejects malformed markers", () => {
+  const now = Math.floor(Date.now() / 1000);
+  const claims = { k: "session", sub: "guest@partner.test", org: "acme", iat: now, exp: now + 3600 };
+  assert.equal(openSession(seal({ ...claims, appOnly: true }, sessionKey), sessionKey, Date.now())?.appOnly, true);
+  assert.equal(openSession(seal(claims, sessionKey), sessionKey, Date.now())?.appOnly, undefined);
+  for (const appOnly of ["true", "false", 1, 0, null, {}]) {
+    assert.equal(openSession(seal({ ...claims, appOnly }, sessionKey), sessionKey, Date.now()), null);
   }
 });

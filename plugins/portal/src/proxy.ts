@@ -105,6 +105,7 @@ export interface SurfaceTarget {
   displayName?: string;
   impersonator?: string;
   identitySecret?: string;
+  authenticatedPrincipal?: string;
   nowMs?: number;
 }
 
@@ -120,6 +121,7 @@ export function proxyToSurface(req: IncomingMessage, res: ServerResponse, t: Sur
     base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
       {
         p: t.principal,
+        ...(t.authenticatedPrincipal ? { authenticatedAs: t.authenticatedPrincipal } : {}),
         ...(t.displayName ? { n: t.displayName } : {}),
         ...(t.impersonator ? { imp: t.impersonator } : {}),
         exp: now + IDENTITY_TTL_MS,

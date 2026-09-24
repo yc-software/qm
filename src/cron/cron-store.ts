@@ -22,10 +22,12 @@ import {
   setTriggerRecipientConsent,
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
+import { assertCronRuntime } from "./runtime.ts";
 import { hashId } from "../util/crypto.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
 
 export interface CreateCronInput extends CreateTriggerInput {
+  runtime?: Cron["runtime"];
   enabled?: boolean;
   schedule: Cron["schedule"];
   title?: string;
@@ -38,6 +40,7 @@ export interface CreateCronInput extends CreateTriggerInput {
 }
 
 export interface CronPatch {
+  runtime?: Cron["runtime"];
   title?: string;
   action?: string;
   message?: string;
@@ -103,6 +106,7 @@ export function createCronStore(
   return {
     async create(input) {
       assertNoEscalation(input);
+      assertCronRuntime(input);
       const now = Date.now();
       const title = normalizeTitle(input.title);
       const { schedule, nextFireAt } = normalizeSchedule(input.schedule, now);
@@ -118,6 +122,7 @@ export function createCronStore(
         contentPart(input.unattendedGrants),
         contentPart(title),
         ...(input.loopId !== undefined ? [contentPart(input.loopId)] : []),
+        ...(input.runtime ? [contentPart(input.runtime)] : []),
       ]);
       return createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
@@ -131,12 +136,17 @@ export function createCronStore(
         ...(input.members ? { members: input.members } : {}),
         ...(input.unattendedGrants ? { unattendedGrants: input.unattendedGrants } : {}),
         ...(input.loopId ? { loopId: input.loopId } : {}),
+        ...(input.runtime ? { runtime: input.runtime } : {}),
       }));
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
     async update(id, patch) {
+      const before = await backing.get(id);
+      if (!before) return null;
+      assertCronRuntime({ ...before, ...patch });
       const fields: Partial<Cron> = {};
+      if (patch.runtime !== undefined) fields.runtime = patch.runtime;
       if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
       if (patch.action !== undefined) fields.action = patch.action;
       if (patch.message !== undefined) fields.message = patch.message;

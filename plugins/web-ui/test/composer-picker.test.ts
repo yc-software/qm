@@ -25,7 +25,7 @@ function model(id: string, label: string, provider = "anthropic"): ModelMetadata
   };
 }
 
-test("the shared picker preserves composer choices and saves context defaults", async () => {
+test("the personal-account picker preserves composer choices and saves context defaults", async () => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><div id="composer"></div>', {
     url: "http://localhost/web-ui/",
     pretendToBeVisual: true,
@@ -48,6 +48,7 @@ test("the shared picker preserves composer choices and saves context defaults", 
   };
   const updates: Record<string, unknown>[] = [];
   let failNextGet = true;
+  let runtimeReads = 0;
   let failNextPut = false;
   let deferNextPut = false;
   let pendingPut: Promise<void> | undefined;
@@ -78,6 +79,7 @@ test("the shared picker preserves composer choices and saves context defaults", 
     },
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input).startsWith("/api/runtime-config") && init?.method !== "PUT") {
+        runtimeReads++;
         if (failNextGet) {
           failNextGet = false;
           return Response.json({ error: "initial load failed" }, { status: 500 });
@@ -160,7 +162,7 @@ test("the shared picker preserves composer choices and saves context defaults", 
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { createComposerSurface } = await vite.ssrLoadModule("/src/composer.ts");
     const { render } = await vite.ssrLoadModule("lit");
-    appState.me = { user: "tester", org: "test" };
+    appState.me = { user: "tester", org: "test", individualModelAuth: true, modelAuthConnected: true };
     const host = document.querySelector<HTMLElement>("#composer")!;
     const agent = { state: { isStreaming: false, messages: [] } } as unknown as Agent;
     const draw = (): void => render(composer!.composerForm(agent), host);
@@ -217,6 +219,14 @@ test("the shared picker preserves composer choices and saves context defaults", 
     await composer!.refreshRuntimeSelection(null, agent, true);
     assert.equal(composer!.state.effortLevel, "high", "identical refresh preserves restored effort");
     assert.equal(composer!.state.fastMode, true, "identical refresh preserves restored Fast");
+    const readsBeforeAccountChange = runtimeReads;
+    appState.me.individualModelAuth = false;
+    window.dispatchEvent(new dom.window.CustomEvent("model-account-changed"));
+    await tick();
+    assert.equal(runtimeReads, readsBeforeAccountChange + 1);
+    assert.ok(host.querySelector(".loadout-button"));
+    appState.me.individualModelAuth = true;
+    draw();
     const siblingHost = document.createElement("section");
     document.body.append(siblingHost);
     const siblingAgent = { state: { isStreaming: false, messages: [] } } as unknown as Agent;

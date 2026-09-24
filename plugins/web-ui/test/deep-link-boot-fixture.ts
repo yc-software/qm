@@ -18,14 +18,17 @@ export interface Harness {
 
 interface HarnessOptions {
   path: string;
+  messageLink?: boolean;
   transcriptStatus?: number;
   transcriptFailures?: number;
   holdTranscript?: boolean;
   holdApprovals?: boolean;
   listSessions?: unknown[];
+  entries?: unknown[];
   savedCanvas?: boolean;
   welcome?: boolean;
   connectionReturn?: boolean;
+  slackReturn?: "success" | "expired" | "cancelled" | "wrong-account";
   returnWidget?: string;
 }
 
@@ -54,6 +57,16 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         },
       }),
     );
+  if (opts.slackReturn)
+    dom.window.sessionStorage.setItem(
+      "qm-slack-account",
+      JSON.stringify({
+        user: opts.slackReturn === "wrong-account" ? "test:other" : "test:tester",
+        state: "qa-slack-nonce",
+        ticket: "signed-test-ticket",
+        expiresAt: Date.now() + (opts.slackReturn === "expired" ? -60000 : 60000),
+      }),
+    );
   let connectedItems: unknown[] = opts.connectionReturn ? [{ id: "ca_test", toolkit: "gmail" }] : [];
   let connectedStatus = 200;
   if (opts.connectionReturn)
@@ -71,6 +84,9 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         scrollTop: 0,
       }),
     );
+  dom.window.HTMLElement.prototype.scrollIntoView = function () {
+    this.setAttribute("data-scrolled", "true");
+  };
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const realSetTimeout = globalThis.setTimeout;
   const realSetInterval = globalThis.setInterval;
@@ -93,6 +109,9 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         permissions: [],
         ...(opts.welcome ? { welcomeCohort: "F26" } : {}),
       });
+    if (path === "/api/composio/slack/complete")
+      return Response.json({ connected: true, user: "Alice", workspace: "Acme" });
+    if (path === "/api/composio/slack") return Response.json({ connected: false, workspaceInstalled: true });
     if (path.startsWith("/api/composio/connections"))
       return Response.json({ items: connectedItems, nextCursor: null }, { status: connectedStatus });
     if (path.startsWith("/api/composio/toolkits"))
@@ -120,7 +139,21 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         failuresLeft--;
         return Response.json({ error: "not_found" }, { status: opts.transcriptStatus ?? 500 });
       }
-      return Response.json({ session: SESSION, entries: [] });
+      if (opts.messageLink) {
+        const older = path.includes("beforeSeq=");
+        const seqs = older ? [10, 11] : [80, 81];
+        return Response.json({
+          session: SESSION,
+          entries: seqs.map((seq) => ({
+            seq,
+            type: seq % 2 ? "assistant" : "user",
+            createdAt: Date.now(),
+            payload: { text: `Linked QA message ${seq}` },
+          })),
+          earlierEntries: older ? 0 : 80,
+        });
+      }
+      return Response.json({ session: SESSION, entries: opts.entries ?? [] });
     }
     if (path === "/api/sessions") {
       await sessionsHeld;

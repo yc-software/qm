@@ -12,20 +12,13 @@ const fn = (src: string, name: string): string => {
   return body;
 };
 
-test("a tab offers an archive button beside close, for real sessions only", () => {
-  assert.match(
-    split,
-    /this\.inStrip[\s\S]*?split-tab-actions[\s\S]*?sessionId \? sessionActions\(sessionId, true, panel\.id\)/,
-  );
-  const btn = fn(split, "sessionActions");
-  assert.match(btn, /archiveSessionById\(sessionId\)/);
-  assert.match(btn, /@pointerdown=[\s\S]*?if \(inTab\) e\.stopPropagation\(\)/);
-  assert.match(btn, /@click=[\s\S]*?if \(inTab\) e\.stopPropagation\(\)/);
-  const archiveAt = split.indexOf("split-tab-archive");
-  assert.ok(
-    archiveAt !== -1 && split.indexOf('tip("Close pane")', archiveAt) !== -1,
-    "archive sits before (next to) the close button",
-  );
+test("a tab archives its own session through the shared action list", () => {
+  const tab = split.slice(split.indexOf("class PaneTab"), split.indexOf("class StripDrop"));
+  assert.match(tab, /split-tab-actions[\s\S]*?tip\("Close pane"\)/);
+  assert.match(tab, /split-tab-session/);
+  assert.doesNotMatch(tab, /archiveSessionById/);
+  const items = fn(split, "sessionActionItems");
+  assert.match(items, /split-tab-archive[\s\S]*?archiveSessionById\(sessionId\)/);
 });
 
 test("archiveSessionById routes through setArchived so surfaces close and Recents updates at once", () => {
@@ -41,9 +34,10 @@ test("archiveSessionById routes through setArchived so surfaces close and Recent
   );
 });
 
-test("a lone session keeps archive in the group header instead of the tab", () => {
+test("archive lives in the header only while the tab is alone; tabs take it over", () => {
   const css = read("shell.css");
   assert.match(css, /\.dv-single-tab \.split-tab-actions\s*\{\s*display: none/);
-  assert.match(css, /\.dv-single-tab \.split-group-session-action\s*\{\s*display: inline-flex/);
-  assert.match(split, /sessionId \? sessionActions\(sessionId, false, panel!\.id\) : nothing/);
+  assert.match(css, /\.split-group-session-action\s*\{\s*display: inline-flex/);
+  assert.match(css, /:not\(\.dv-single-tab\) \.split-group-session-action \{\s*display: none;/);
+  assert.match(split, /sessionId \? sessionActions\(sessionId, panel!\.id, "split-group-session-action"\) : nothing/);
 });

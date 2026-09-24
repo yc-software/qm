@@ -29,7 +29,19 @@ test("only full standalone chats render their own session topbar", () => {
 test("the pane tab carries the scope / title breadcrumb", () => {
   assert.match(split, /function paneCrumb\(panel: IDockviewPanel\): string \| null/);
   assert.match(split, /class="split-pane-crumb"/);
-  assert.match(split, /attachTooltip\(this\.element, crumb \? `\$\{crumb\} \/ \$\{title\}` : title\);/);
+  const tooltip = split.match(/attachTooltip\(this\.element, (.*crumb.*)\);/)?.[1];
+  assert.ok(tooltip);
+  for (const crumb of [null, "Project"]) {
+    for (const parent of [undefined, { title: "Parent" }]) {
+      const actual = runInNewContext(tooltip, {
+        crumb,
+        parent,
+        title: "Child",
+        sessionTitle: (session: { title: string }) => session.title,
+      });
+      assert.equal(actual, `${crumb ? "Project / " : ""}${parent ? "Parent / " : ""}Child`);
+    }
+  }
   // crumb changes must retrigger a header redraw
   assert.match(split, /\$\{paneCrumb\(p\) \?\? ""\}\|\$\{paneTitle\(p\)\}/);
   assert.match(css, /\.split-pane-crumb \{/);

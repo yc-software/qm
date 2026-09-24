@@ -207,7 +207,7 @@ export function goalViewFromEntry(type: string, payload: unknown): GoalView | nu
   const carrier =
     type === "system"
       ? p.kind === "goal"
-      : p.tool === "create_goal" || p.tool === "update_goal" || p.tool === "get_goal";
+      : p.tool === "goal" || p.tool === "create_goal" || p.tool === "update_goal" || p.tool === "get_goal";
   if (!carrier) return null;
   const goal = p.goal as
     | {
