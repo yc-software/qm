@@ -1369,6 +1369,7 @@ test("nested delegated work retains the reminder destination without exposing su
     scope,
   );
   const control = createControlService({
+    isOpenScopeMember: async () => false,
     createCron: async (input: unknown) => ({ id: "reminder", ...(input as object) }),
   } as never);
   const reminder = await control.createCron(
