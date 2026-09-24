@@ -922,7 +922,7 @@ test("delegated automation retains explicit unattended grants and owner-keychain
       actor,
       conversation,
       surface: "slack",
-      origin: { kind: "automation", useOwnerKeychain: true },
+      origin: { kind: "automation", useOwnerKeychain: true, ownerResourcesRequireOpen: true },
       unattendedGrants: ["admin.sessions.read"],
     },
   });
@@ -933,6 +933,7 @@ test("delegated automation retains explicit unattended grants and owner-keychain
   assert.deepEqual(queued.request.unattendedGrants, ["admin.sessions.read"]);
   assert.ok(queued.request.origin.kind === "automation");
   assert.equal(queued.request.origin.useOwnerKeychain, true);
+  assert.equal(queued.request.origin.ownerResourcesRequireOpen, true);
   const claimed = await r.runs.claimById(queued.id, "w1", 60000);
   await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
   assert.ok((await api.write({ target: child.id, text: "finish the report", followup: true })).ok);
@@ -940,6 +941,7 @@ test("delegated automation retains explicit unattended grants and owner-keychain
   assert.deepEqual(followup.request.unattendedGrants, ["admin.sessions.read"]);
   assert.ok(followup.request.origin.kind === "automation");
   assert.equal(followup.request.origin.useOwnerKeychain, true);
+  assert.equal(followup.request.origin.ownerResourcesRequireOpen, true);
 });
 
 test("follow-up tasks cannot inherit a prior caller's automation authority", async () => {
