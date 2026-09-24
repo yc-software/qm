@@ -1,3 +1,4 @@
+import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { reportBackendError, startTiming } from "../../plugins/chassis/src/error-reporting.ts";
 import { traceStatus } from "../../plugins/chassis/src/timing.ts";
 import {
@@ -351,6 +352,11 @@ function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): Bas
 }
 
 function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): void {
+  if (err instanceof MemoryDisclosureDenied) {
+    if (!res.headersSent) sendJson(res, 403, { error: "forbidden", message: err.message });
+    else res.destroy();
+    return;
+  }
   if (err instanceof PayloadTooLargeError) {
     if (!res.headersSent) sendJson(res, 413, { error: "payload_too_large", message: errMessage(err) });
     else res.destroy();

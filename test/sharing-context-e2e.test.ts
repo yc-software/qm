@@ -82,7 +82,7 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
     await b.memory.capture(`personal:${id}`, [`OWN_MEMORY_${id}`], Date.now(), id!);
   }
   assert.equal(await b.turn("!read shared/open-personal-U1/notes.txt", true), "ALICE_PAYLOAD");
-  assert.match(await b.turn("!memorysearch OWN_MEMORY", true), /OWN_MEMORY_U1/);
+  assert.doesNotMatch(await b.turn("!memorysearch OWN_MEMORY", true), /OWN_MEMORY_U1/);
   assert.doesNotMatch(await b.turn("!sysprompt", true), /OWN_MEMORY_U2|open-personal-U2/);
   assert.match(await b.turn("!read shared/open-personal-U1/notes.txt", true, "U2"), /no file/);
   assert.equal(await b.turn("!read shared/open-personal-U2/notes.txt", true, "U2"), "BOB_PAYLOAD");
@@ -184,7 +184,7 @@ test("sharing e2e: room file and memory access is revoked on the next DM turn", 
   await b.memory.capture("channel:C1", ["ROOM_MEMORY"], Date.now(), "U1");
   await b.turn("hello", true);
   assert.equal(await b.turn("!read shared/open-channel-C1/plan.txt"), "ROOM_FILE");
-  assert.match(await b.turn("!memorysearch ROOM_MEMORY"), /ROOM_MEMORY/);
+  assert.doesNotMatch(await b.turn("!memorysearch ROOM_MEMORY"), /ROOM_MEMORY/);
   await b.config.setSharingPosture("channel:C1", "isolated");
   assert.match(await b.turn("!read shared/open-channel-C1/plan.txt"), /no file/);
   assert.doesNotMatch(await b.turn("!memorysearch ROOM_MEMORY"), /ROOM_MEMORY/);
@@ -396,7 +396,7 @@ test("sharing e2e: the execution capability excludes carried memories in both di
   assert.equal(dmClaims.memory.read.includes("channel:C1"), false);
 });
 
-test("sharing e2e: complete notebooks retain provenance without truncating late facts", async (t) => {
+test("sharing e2e: local notebooks retain late facts while unclassified carried memory stays private", async (t) => {
   const b = await fixture(t);
   await b.memory.capture(
     "personal:U1",
@@ -406,9 +406,10 @@ test("sharing e2e: complete notebooks retain provenance without truncating late 
   );
   await b.memory.capture("channel:C1", ["ROOM_FACT_END"], Date.now(), "U1");
   const p = await b.turn("!sysprompt", true);
-  assert.match(p, /### personal:U1[\s\S]*PERSONAL_FACT_119/);
+  assert.doesNotMatch(p, /PERSONAL_FACT_119/);
   assert.match(p, /### channel:C1[\s\S]*ROOM_FACT_END/);
-  assert.match(await b.turn("!memorysearch PERSONAL_FACT_119", true), /\[personal:U1\].*PERSONAL_FACT_119/);
+  assert.match(await b.turn("!sysprompt"), /PERSONAL_FACT_119/);
+  assert.doesNotMatch(await b.turn("!memorysearch PERSONAL_FACT_119", true), /PERSONAL_FACT_119/);
 });
 
 test("sharing e2e: screening off preserves carried skills without model calls", async (t) => {

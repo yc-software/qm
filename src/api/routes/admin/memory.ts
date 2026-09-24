@@ -1,3 +1,5 @@
+import { parseScopeId } from "../../../types.ts";
+import { memoryForRequest } from "../memory-access.ts";
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
@@ -50,7 +52,9 @@ export async function getAdminMemory(ctx: ApiCtx): Promise<void> {
   const { actor, scope } = authz;
   if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
   audit(deps, { principalId: actor.id, action: "memory.read", resource: "memory", scopeLabel: scope });
-  return sendJson(res, 200, { scopeId: scope, content: await deps.memory.read(scope) });
+  const memory =
+    ctx.capability && parseScopeId(ctx.capability.scopeId).kind !== "personal" ? memoryForRequest(ctx)! : deps.memory;
+  return sendJson(res, 200, { scopeId: scope, content: await memory.read(scope) });
 }
 
 export async function putAdminMemory(ctx: ApiCtx): Promise<void> {

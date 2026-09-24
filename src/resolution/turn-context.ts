@@ -1,3 +1,4 @@
+import { disclosedMemory, type MemoryDisclosure } from "../memory/disclosure.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import { principalEntitledToScope } from "./context-filter.ts";
@@ -12,6 +13,8 @@ import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
 import type { Resolution, ScopeId, Principal } from "../types.ts";
 import { carriedFileHandles, sharingSourcesForTurn } from "./sharing-access.ts";
 
+import type { CurrentScopeMembers } from "./scope-membership.ts";
+
 type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture"> & {
   resolution: Resolution;
   audience: Principal[];
@@ -23,6 +26,7 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   files: FileArtifactStore;
   skills?: SkillStore;
   auditLog?: AuditLog;
+  currentScopeMembers?: CurrentScopeMembers;
 };
 
 interface MemoryReaderInput {
@@ -30,9 +34,20 @@ interface MemoryReaderInput {
   scopes: readonly ScopeId[];
   actorId: string;
   onRead?: (scope: ScopeId) => void;
+  disclosure?: MemoryDisclosure;
 }
 
-export function contextMemory({ memory, scopes, actorId, onRead }: MemoryReaderInput) {
+export function contextMemory({ memory: raw, scopes, actorId, onRead, disclosure }: MemoryReaderInput) {
+  const memory = disclosedMemory(
+    raw,
+    disclosure ?? {
+      actor: { id: actorId, type: "internal" },
+      targetScope: `personal:${actorId}`,
+      nativeScopes: scopes.filter((scope) => scope === `personal:${actorId}` || scope.startsWith("org:")),
+      audience: [{ id: actorId, type: "internal" }],
+      open: false,
+    },
+  );
   return {
     async recall(): Promise<string> {
       const sections: string[] = [];
@@ -90,8 +105,20 @@ export async function resolveTurnContext(input: ContextInput) {
       detail: JSON.stringify({ actor: input.actor.id, source: scope, target: input.targetScope }),
     });
   };
+  const disclosure: MemoryDisclosure = {
+    actor: input.actor,
+    targetScope: input.targetScope,
+    nativeScopes: baseRecallScopes,
+    audience: input.audience,
+    open: resolution.sharingPosture === "open",
+    config: input.config,
+    isCurrentSharedScopeMember: input.isCurrentSharedScopeMember,
+    currentScopeMembers: input.currentScopeMembers,
+  };
+  const memory = disclosedMemory(input.memory, disclosure);
   const memories = contextMemory({
     memory: input.memory,
+    disclosure,
     scopes: read,
     actorId: input.actor.id,
     onRead: (scope) => recordRead(scope, "memory"),
@@ -116,6 +143,7 @@ export async function resolveTurnContext(input: ContextInput) {
     memoryScopeId,
     baseRecallScopes,
     memoryAccess,
+    memory,
     recall: memories.recall,
     searchMemory: memories.search,
     listFiles: () => handles,

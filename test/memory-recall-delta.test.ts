@@ -26,7 +26,8 @@ test("changed notes emit additions and withdrawals with scope provenance, omitti
   const delta = memoryRecallDelta(notebook("- ALPHA\n- GAMMA"), [entry(notebook("- ALPHA\n- BETA"))]);
   assert.doesNotMatch(delta.text, /ALPHA/);
   assert.match(delta.text, /New or updated memory facts:[\s\S]*personal:alice[\s\S]*GAMMA/);
-  assert.match(delta.text, /withdrawn[\s\S]*BETA/);
+  assert.match(delta.text, /withdrawn/);
+  assert.doesNotMatch(delta.text, /BETA/);
   assert.equal(delta.record.anchorSeq, 1);
 });
 
@@ -55,13 +56,14 @@ test("compacting away the recall anchor restores a current baseline", () => {
 
 test("all removed facts are withdrawn and repeated empty memory adds nothing", () => {
   const before = notebook("- OLD");
-  assert.match(memoryRecallDelta("", [entry(before)], ["personal:alice"]).text, /withdrawn[\s\S]*OLD/);
+  assert.match(memoryRecallDelta("", [entry(before)]).text, /withdrawn/);
+  assert.doesNotMatch(memoryRecallDelta("", [entry(before)]).text, /OLD/);
   assert.equal(memoryRecallDelta("", [entry(before), entry("", 3, 1)]).text, "");
 });
 
 test("withdrawals never quote facts from a revoked or disabled memory scope", () => {
   const body = notebook("- PRIVATE_FACT");
-  const result = memoryRecallDelta("", [entry(body)], []);
+  const result = memoryRecallDelta("", [entry(body)]);
   assert.doesNotMatch(result.text, /PRIVATE_FACT|personal:alice/);
   assert.match(result.text, /no longer included/);
 });

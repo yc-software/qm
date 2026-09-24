@@ -53,6 +53,7 @@ describe("agent memory history and restore", () => {
     const revisions = new Map<ScopeId, MemoryRevision[]>();
     memory = {
       ...built.memory,
+      replaceIfRevision: undefined,
       async replace(scope, content, author) {
         await built.memory.replace(scope, content, author);
         const history = revisions.get(scope) ?? [];

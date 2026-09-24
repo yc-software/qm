@@ -1,3 +1,4 @@
+import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
 import { sessionTreeRoot, sessionTreeRunCount, SUBAGENT_TREE_RUN_CAP } from "../sessions/session-syscalls.ts";
@@ -77,6 +78,7 @@ export function createSessionMethods(
   | "managesScope"
   | "isOpenScopeMember"
   | "isCurrentSharedScopeMember"
+  | "currentScopeMembers"
   | "membershipControlsScope"
   | "authorizesCapabilityScope"
   | "updateSession"
@@ -732,6 +734,14 @@ export function createSessionMethods(
       return principalCanManageScope(principalId, scope);
     },
 
+    currentScopeMembers: createCurrentScopeMembers(
+      {
+        managedGroups: deps.projects,
+        directory: deps.directory,
+        identity: deps.identity,
+      },
+      true,
+    ),
     isCurrentSharedScopeMember(principalId, scope) {
       const { kind } = parseScopeId(scope);
       return kind === "channel" || kind === "group"

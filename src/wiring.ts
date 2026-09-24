@@ -1937,6 +1937,7 @@ export function buildApp(
     ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
     directory,
     isCurrentSharedScopeMember,
+    currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
     managedGroups: projects,
     ...(config.reachExecEnabled ? { reachExec: true } : {}),
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),

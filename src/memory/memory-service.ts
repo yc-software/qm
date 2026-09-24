@@ -4,6 +4,7 @@ import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { RECALL_MAX_CHARS, bullets, capTail, dateStr, isBullet, normalize } from "./notebook.ts";
 
+import type { MemoryDisclosure } from "./disclosure.ts";
 import type { MemoryCaptureMetadata, MemoryRecords } from "./records.ts";
 
 export const MEMORY_FILE = "memory/MEMORY.md";
@@ -48,6 +49,7 @@ export interface MemoryCaptureContext extends MemoryCaptureMetadata {
 }
 
 export interface MemoryService {
+  withDisclosure?(access: MemoryDisclosure): MemoryService;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<string>;
   capture(
     scopeId: ScopeId,

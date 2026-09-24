@@ -401,6 +401,7 @@ export interface App {
   ): Promise<FileListItem | null>;
   listScopeResources(principalId: string, scope: ScopeId): Promise<ScopeResources | null>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
+  currentScopeMembers(scope: ScopeId): Promise<Principal[] | undefined>;
   isCurrentSharedScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
   isOpenScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
   membershipControlsScope(scope: ScopeId): Promise<boolean>;

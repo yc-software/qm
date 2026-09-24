@@ -43,7 +43,6 @@ function facts(body: string): Map<string, string> {
 export function memoryRecallDelta(
   body: string,
   history: readonly SessionEntry[],
-  authorizedScopes: readonly string[] = [...body.matchAll(/^### ([^\s:]+:[^\n]+)$/gm)].map((match) => match[1]!),
 ): { text: string; record: RecallRecord } {
   const previousEntry = history.findLast(
     (entry) =>
@@ -60,16 +59,11 @@ export function memoryRecallDelta(
   const newFacts = facts(body);
   const added = [...newFacts].filter(([key]) => !oldFacts.has(key)).map(([, text]) => text);
   const removed = [...oldFacts].filter(([key]) => !newFacts.has(key)).map(([, text]) => text);
-  const mayQuote = (fact: string) => authorizedScopes.some((scope) => fact.startsWith(`### ${scope}\n`));
-  const withdrawn = removed.filter(mayQuote);
   return {
     text: [
       added.length ? `New or updated memory facts:\n\n${added.join("\n\n")}` : "",
-      withdrawn.length
-        ? `These earlier memory facts have been withdrawn; do not continue relying on them:\n\n${withdrawn.join("\n\n")}`
-        : "",
-      removed.length > withdrawn.length
-        ? "Some previously recalled memory sources are no longer included. Do not rely on memory from sources that are not currently authorized."
+      removed.length
+        ? "Some previously recalled memory facts have been withdrawn or are no longer included. Do not rely on earlier memory that is absent from the current authorized notebook."
         : "",
     ]
       .filter(Boolean)

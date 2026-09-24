@@ -1,3 +1,4 @@
+import { disclosedMemory } from "./disclosure.ts";
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { MemoryRevision, MemoryService } from "./memory-service.ts";
 
@@ -40,6 +41,14 @@ export function createRoutedMemoryService(opts: {
   };
 
   return {
+    withDisclosure(access) {
+      return createRoutedMemoryService({
+        ...opts,
+        providers: Object.fromEntries(
+          Object.entries(opts.providers).map(([name, provider]) => [name, disclosedMemory(provider, access)]),
+        ),
+      });
+    },
     async recall(scopeId, context) {
       const routes = routesFor(scopeId).filter((route) => route.recall !== false);
       const recalled = await Promise.all(

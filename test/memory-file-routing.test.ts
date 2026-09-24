@@ -88,11 +88,11 @@ test("read(MEMORY_FILE) returns the MemoryService notebook, not the sandbox/work
   assert.equal(r.sourceScopeId, personal);
 });
 
-test("read(MEMORY_FILE) falls back to the workspace/sandbox copy only when the notebook is empty", async () => {
+test("read(MEMORY_FILE) never falls back to an unfiltered workspace copy", async () => {
   const { ctx, sandboxFiles } = harness({ memoryStart: "" });
   sandboxFiles.set(MEMORY_FILE, "pre-migration notebook");
   const r = await ctx.read(MEMORY_FILE);
-  assert.equal(r.content, "pre-migration notebook");
+  assert.equal(r.content, "");
 });
 
 test("read(MEMORY_FILE) cannot bypass disabled recall or fall back to a sandbox copy", async () => {

@@ -1,8 +1,9 @@
+import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort } from "../util/async.ts";
 import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-types.ts";
 import { readContextFile } from "../resolution/context-files.ts";
-import { contextMemory, type TurnContext } from "../resolution/turn-context.ts";
+import { type TurnContext } from "../resolution/turn-context.ts";
 import { randomUUID } from "node:crypto";
 import type { SandboxAccessPlan, SandboxResources } from "../sandbox/sandbox-resources.ts";
 import { join } from "node:path";
@@ -515,6 +516,20 @@ export interface ToolContextDeps {
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
   const writableScopeId = deps.layers.find((l) => l.mode === "rw")?.scopeId ?? null;
+  const memory =
+    deps.context?.memory ??
+    (deps.memory
+      ? disclosedMemory(deps.memory, {
+          actor: { id: deps.createdBy, type: "internal" },
+          targetScope: writableScopeId ?? `personal:${deps.createdBy}`,
+          nativeScopes: [
+            ...deps.layers.map((layer) => layer.scopeId),
+            ...(deps.memoryAccess?.read ?? []).filter((scope) => scope.startsWith("org:")),
+          ],
+          audience: deps.publishContext?.publishMembers ?? [{ id: deps.createdBy, type: "internal" }],
+          open: false,
+        })
+      : undefined);
   const fallbackMounts = deps.layers.filter((l) => l.mode === "ro" && l.mountPath);
   const persistExclude = deps.persistWritesToStore?.excludeDirs;
   const orgScopeId = deps.layers.find((l) => l.mountPath === "global")?.scopeId ?? null;
@@ -897,12 +912,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async read(path: string, signal?: AbortSignal): Promise<ReadResult> {
       signal?.throwIfAborted();
-      if (path === MEMORY_FILE && deps.memory && deps.memoryScopeId) {
+      if (path === MEMORY_FILE && memory && deps.memoryScopeId) {
         if (!deps.memoryAccess?.read.includes(deps.memoryScopeId)) {
           throw new Error("memory recall is not enabled for this conversation; use the `memory` tool when enabled");
         }
-        const content = await withAbort(() => deps.memory!.read(deps.memoryScopeId!), signal);
-        if (content) return { content, sourceScopeId: deps.memoryScopeId };
+        const content = await withAbort(() => memory.read(deps.memoryScopeId!), signal);
+        return { content, sourceScopeId: deps.memoryScopeId };
       }
       const sharedFile = deps.context
         ? await withAbort(() => deps.context!.readFile(path), signal)
@@ -1170,24 +1185,30 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async memorySearch(q: string, limit?: number): Promise<string[] | null> {
       if (deps.context) return timed("recall", () => deps.context!.searchMemory(q, limit));
       const read = deps.memoryAccess?.read ?? [];
-      if (!deps.memory || read.length === 0) return null;
+      if (!memory || read.length === 0) return null;
       return timed("recall", () =>
-        contextMemory({ memory: deps.memory!, scopes: read, actorId: deps.createdBy }).search(q, limit),
+        Promise.all(
+          read.map(async (scope) =>
+            (await memory!.query(scope, q, limit, { actorId: deps.createdBy })).map((fact) =>
+              read.length > 1 ? `[${scope}] ${fact}` : fact,
+            ),
+          ),
+        ).then((rows) => rows.flat().slice(0, limit ?? 20)),
       );
     },
 
     async memoryRead(): Promise<string | null> {
       const write = deps.memoryAccess?.write;
-      if (!deps.memory || !write) return null;
-      return timed("recall", () => deps.memory!.read(write));
+      if (!memory || !write) return null;
+      return timed("recall", () => memory!.read(write));
     },
 
     async memoryRemember(facts: string[]): Promise<number | null> {
       const write = deps.memoryAccess?.write;
-      if (!deps.memory || !write) return null;
+      if (!memory || !write) return null;
       return once(() =>
         timed("memory_write", () =>
-          deps.memory!.capture(write, facts, Date.now(), deps.createdBy, {
+          memory!.capture(write, facts, Date.now(), deps.createdBy, {
             mode: "explicit",
             actorId: deps.createdBy,
             conversationScopeId: writableScopeId ?? write,
@@ -1198,10 +1219,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async memoryRewrite(content: string): Promise<true | null> {
       const write = deps.memoryAccess?.write;
-      if (!deps.memory || !write) return null;
+      if (!memory || !write) return null;
       return once(() =>
         timed("memory_write", async () => {
-          await deps.memory!.replace(write, content, deps.createdBy);
+          await memory!.replace(write, content, deps.createdBy);
           return true as const;
         }),
       );
