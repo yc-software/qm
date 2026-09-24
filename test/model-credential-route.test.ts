@@ -412,7 +412,14 @@ test("admin scope keeps the selected runtime model visible when its provider is 
     };
     assert.deepEqual(data.runtime, { harnessId: "pi", modelId: "claude-opus-5", orgRevision: 1, revision: 1 });
     assert.deepEqual(data.harnessOptions, ["pi"]);
-    assert.deepEqual(data.modelsByHarness.pi, [{ id: "claude-opus-5", name: "Claude Opus 5", provider: "anthropic" }]);
+    assert.deepEqual(data.modelsByHarness.pi, [
+      {
+        id: "claude-opus-5",
+        name: "Claude Opus 5",
+        provider: "anthropic",
+        effortLevels: ["auto", "default", "adaptive", "low", "medium", "high", "xhigh", "max", "ultracode"],
+      },
+    ]);
   } finally {
     await srv.close();
   }
