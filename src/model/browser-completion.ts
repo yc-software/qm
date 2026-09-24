@@ -1,8 +1,13 @@
 import { Type } from "typebox";
 import type { Context, ImageContent, TextContent } from "@earendil-works/pi-ai";
-import { buildModelRuntime } from "../harness/pi-harness.ts";
+import { buildModelRuntime, type ProviderKeys } from "../harness/pi-harness.ts";
 import { zeroUsage } from "../harness/replay.ts";
-import { CODEX_SUBSCRIPTION_PROVIDER, resolveModel } from "./pi-models.ts";
+import {
+  CODEX_SUBSCRIPTION_PROVIDER,
+  codexSubscriptionModelId,
+  resolveModel,
+  type ModelProvider,
+} from "./pi-models.ts";
 import type { resolveBrowserModel } from "./browser-model.ts";
 import type { UserModelCredentialStore } from "./user-model-credential-store.ts";
 
@@ -18,10 +23,12 @@ export class BrowserCompletionError extends Error {
   }
 }
 
-export async function personalBrowserCompletion(
+export async function nativeBrowserCompletion(
   input: {
     selection: Awaited<ReturnType<typeof resolveBrowserModel>>;
-    credentials: UserModelCredentialStore;
+    credentials?: UserModelCredentialStore;
+    companyProviderKeys?: ProviderKeys;
+    companySubscriptionProvider?: ModelProvider;
     actorId: string;
     body: Record<string, unknown>;
     signal: AbortSignal;
@@ -32,9 +39,18 @@ export async function personalBrowserCompletion(
 ) {
   const { selection, body } = input;
   const routing = selection.routing;
-  const model = selection.model ? resolveModel(selection.model, false) : undefined;
-  if (!routing || !model) throw new BrowserCompletionError("Selected browser model is unavailable", 409);
-  if (routing.kind === "oauth" && routing.provider !== "openai")
+  let model = selection.model ? resolveModel(selection.model, selection.account === "company") : undefined;
+  if ((!routing && selection.account !== "company") || !model)
+    throw new BrowserCompletionError("Selected browser model is unavailable", 409);
+  if (selection.account === "company" && input.companySubscriptionProvider === model.provider) {
+    if (model.provider === "anthropic")
+      throw new BrowserCompletionError("Claude subscription access does not support browser inference", 422);
+    if (model.provider === "openai") {
+      model = resolveModel(codexSubscriptionModelId(selection.model!), false);
+      if (!model) throw new BrowserCompletionError("Selected browser model is unavailable", 409);
+    }
+  }
+  if (routing?.kind === "oauth" && routing.provider !== "openai")
     throw new BrowserCompletionError("Claude subscription access does not support browser inference", 422);
   if (body.tools || body.tool_choice || body.parallel_tool_calls || !Array.isArray(body.messages))
     throw new BrowserCompletionError("Unsupported browser completion request");
@@ -96,14 +112,22 @@ export async function personalBrowserCompletion(
   const limit = body.max_completion_tokens ?? body.max_tokens ?? 4096;
   if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit <= 0)
     throw new BrowserCompletionError("Invalid browser output token limit");
-  const auth =
-    routing.kind === "apikey"
-      ? routing.apiKey
-      : (await input.credentials.derivedOAuth(input.actorId, "openai"))?.accessToken;
-  if (!auth) throw new BrowserCompletionError("Reconnect your selected AI account in Settings", 409);
-  const runtime = await runtimeFactory({
-    [routing.kind === "apikey" ? routing.provider : CODEX_SUBSCRIPTION_PROVIDER]: auth,
-  });
+  let keys: ProviderKeys;
+  if (selection.account === "company") {
+    const key = input.companyProviderKeys?.[model.provider];
+    if (!key) throw new BrowserCompletionError("Company model credentials are unavailable", 503);
+    keys = { [model.provider]: key };
+  } else {
+    if (!routing) throw new BrowserCompletionError("Selected browser model is unavailable", 409);
+    const auth =
+      routing.kind === "apikey"
+        ? routing.apiKey
+        : (await input.credentials?.derivedOAuth(input.actorId, "openai"))?.accessToken;
+    if (!auth) throw new BrowserCompletionError("Reconnect your selected AI account in Settings", 409);
+    keys = { [routing.kind === "apikey" ? routing.provider : CODEX_SUBSCRIPTION_PROVIDER]: auth };
+  }
+  const runtime = await runtimeFactory(keys);
+  const modelApi = model.api;
   const result = await runtime.completeSimple(model, context, {
     signal: input.signal,
     maxTokens: Math.min(limit, model.maxTokens),
@@ -113,8 +137,8 @@ export async function personalBrowserCompletion(
           const payload = object(raw);
           if (!payload) throw new BrowserCompletionError("Invalid model request");
           let toolChoice: object = { type: "function", name: "browser_result" };
-          if (model.api === "anthropic-messages") toolChoice = { type: "tool", name: "browser_result" };
-          if (model.api === "openai-completions")
+          if (modelApi === "anthropic-messages") toolChoice = { type: "tool", name: "browser_result" };
+          if (modelApi === "openai-completions")
             toolChoice = { type: "function", function: { name: "browser_result" } };
           return { ...payload, tool_choice: toolChoice };
         }

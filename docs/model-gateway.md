@@ -19,7 +19,8 @@ LiteLLM group metadata may combine capabilities and maximum limits from multiple
 ## Browser agent
 
 The browse skill follows the user's saved AI access and default model. Company
-access uses the configured model gateway; ChatGPT access uses the user's connected
+access uses the configured model gateway, or the deployment's default provider
+credentials when no gateway is configured; ChatGPT access uses the user's connected
 OpenAI account, including refreshed subscription access; Claude access supports
 API keys. Claude subscription access is unavailable for the inner browser agent
 and returns an actionable error. No account silently falls back to another.
@@ -29,7 +30,10 @@ Core gives internal, non-strict turns a one-hour capability bound to the account
 model and conversation scope. The sandbox sends OpenAI-compatible, non-streaming
 chat completions to `/v1/browser-model/chat/completions`; core reloads the saved
 selection and credentials for each request. Changing the account or model requires
-a fresh turn. Credentials stay on core. Personal inference uses native provider
+a fresh turn. Credentials stay on core. Without a gateway, company inference reloads the same provider credentials as normal
+agent inference, including administrator changes and configured provider endpoints.
+No separate browser model key is needed. Missing credentials fail closed.
+Personal inference uses native provider
 transports, bypassing organization endpoint overrides, and converts structured
 browser responses and screenshots through the existing model runtime.
 

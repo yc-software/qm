@@ -1,5 +1,4 @@
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
-import type { ModelGatewayTransportConfig } from "../../model/provider-endpoints.ts";
 import type { RuntimeService } from "../../harness/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
@@ -113,7 +112,6 @@ export interface OrchestratorInput extends Omit<
 
 export interface OrchestratorDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
-  browserModelGateway?: ModelGatewayTransportConfig;
   swarms?: SwarmService;
   refreshModels?: () => Promise<void>;
   identity: IdentityService;

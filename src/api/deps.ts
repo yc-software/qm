@@ -1,4 +1,5 @@
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
+import type { ProviderKeys } from "../harness/pi-harness.ts";
 import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { BackgroundOwnershipStore } from "../runs/background-ownership.ts";
@@ -83,6 +84,7 @@ export interface ServerDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
   browserModelGateway?: ModelGatewayTransportConfig;
+  resolveBrowserCompanyKeys?: () => Promise<ProviderKeys>;
   slackAccounts?: DurableMap<SlackAccountLink>;
   composioReturns?: DurableMap<ComposioReturn>;
   composioFetch?: typeof fetch;
