@@ -1949,6 +1949,8 @@ export function createChatSurface(
         forked.session,
         entriesToMessages(split.inherited, transcriptModel()),
       );
+      const mountedAgent = chatState.agent;
+      if (mountedAgent) await refreshTranscriptFromEntries(mountedAgent);
       await refreshSessions({ silent: true });
       renderList();
       resumeIfIdle();

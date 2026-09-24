@@ -368,6 +368,46 @@ test("post replies remain visible in new and continuing conversations", async (t
       assert.equal(conv!.state.threadRef, "web:owner:replacement");
       clearAllDrafts();
     });
+    await t.test("a submitted edit that finishes before mount renders its authoritative transcript", async () => {
+      const editable = { ...user, editable: true, payload: { text: "Wrong opening", runId: "r-edit" } };
+      await mount([editable]);
+      const fork = { ...row, id: "fast-fork", threadRef: "web:owner:fast-fork" };
+      const corrected = "Corrected opening";
+      const finishedAnswer = "Finished edited answer";
+      let transcriptCalls = 0;
+      intercept = (path) => {
+        if (path.includes("/messages/0/edit")) {
+          return Promise.resolve(
+            Response.json({ session: fork, entries: [], turn: { status: "queued", runId: "finished-edit" } }),
+          );
+        }
+        if (path.startsWith("/api/sessions/fast-fork") && !path.endsWith("/approvals")) {
+          transcriptCalls++;
+          return Promise.resolve(
+            Response.json({
+              session: fork,
+              entries: [
+                { ...user, payload: { text: corrected } },
+                { seq: 1, type: "assistant", createdAt: Date.now(), payload: { text: finishedAnswer } },
+              ],
+              earlierEntries: 0,
+            }),
+          );
+        }
+        if (path === "/api/sessions") return Promise.resolve(Response.json({ sessions: [row, fork] }));
+        return undefined;
+      };
+      host.querySelector<HTMLButtonElement>('[aria-label="Edit message and rerun in a fork"]')!.click();
+      const editor = host.querySelector<HTMLTextAreaElement>(".submitted-edit-input")!;
+      editor.value = corrected;
+      editor.dispatchEvent(new dom.window.InputEvent("input", { bubbles: true }));
+      host.querySelector<HTMLButtonElement>(".submitted-edit .queued-steer")!.click();
+      await until(() => host.textContent?.includes(finishedAnswer) === true);
+      assert.equal(conv!.state.threadRef, fork.threadRef);
+      assert.equal(transcriptCalls, 1);
+      assert.match(host.textContent ?? "", new RegExp(`${corrected}.*${finishedAnswer}`, "s"));
+      intercept = undefined;
+    });
     await t.test("fork history follows the same refresh generation and preserves fully loaded history", async () => {
       await mount();
       conv!.state.forkSession = { ...row, forkedFrom: { sessionId: "source" }, forkBoundarySeq: 0 } as never;

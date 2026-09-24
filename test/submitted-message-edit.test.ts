@@ -8,12 +8,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
+import { collectBlob } from "../src/persistence/blob-transfer.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "submitted-edit-secret".repeat(3);
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "submitted-edit-")) }));
-const core = createServer(built.app, { signingSecret: SECRET, runs: built.runs, sessions: built.sessions });
+const core = createServer(built.app, {
+  signingSecret: SECRET,
+  runs: built.runs,
+  sessions: built.sessions,
+  blobTransfer: built.blobTransfer,
+});
 core.listen(0);
 const base = `http://localhost:${(core.address() as AddressInfo).port}`;
 
@@ -92,6 +98,7 @@ test("submitted web messages edit by rerunning an authorized durable fork", asyn
 
   const sourceEntriesBeforeEdit = structuredClone((await built.app.getSession(source.session.id))!.entries);
   const sourceTapeBeforeEdit = structuredClone(await built.sessions.getTape(source.session.id));
+  await built.blobTransfer.delete(blob.blobId);
 
   const response = await edit(source.session.id, target.seq, "U1", "fixed detail");
   assert.equal(response.status, 202);
@@ -102,7 +109,10 @@ test("submitted web messages edit by rerunning an authorized durable fork", asyn
   assert.ok(forkEntries.every((entry) => entry.editable !== true));
   const rerun = await built.runs.get(result.turn.runId);
   assert.equal(rerun?.request.text, "fixed detail");
-  assert.deepEqual(rerun?.request.attachments, originalRun.request.attachments);
+  assert.equal(rerun?.request.attachments?.length, 1);
+  assert.notEqual(rerun?.request.attachments?.[0]?.blobId, blob.blobId);
+  const restaged = await built.blobTransfer.open(rerun!.request.attachments![0]!.blobId);
+  assert.equal((await collectBlob(restaged!.stream)).toString(), "attachment stays");
   assert.deepEqual((await built.app.getSession(source.session.id))!.entries, sourceEntriesBeforeEdit);
   assert.deepEqual(await built.sessions.getTape(source.session.id), sourceTapeBeforeEdit);
 
@@ -115,14 +125,40 @@ test("submitted web messages edit by rerunning an authorized durable fork", asyn
   const finished = await built.runs.waitFor(result.turn.runId, 5_000);
   assert.equal(finished.status, "done");
   const durable = (await built.app.getSession(result.session.id))!.entries;
+  const durableUser = durable.filter((entry) => entry.type === "user").at(-1)!;
   assert.equal(
-    durable.filter((entry) => entry.type === "user").at(-1)?.payload &&
-      (durable.filter((entry) => entry.type === "user").at(-1)!.payload as { text?: string }).text,
+    durableUser.payload && (durableUser.payload as { text?: string }).text,
     "fixed detail",
   );
+  assert.equal((durableUser.payload as { attachments?: unknown[] }).attachments?.length, 1);
+  assert.match(JSON.stringify(durableUser.payload), /notes\.txt/);
   assert.doesNotMatch(durable.map((entry) => JSON.stringify(entry.payload)).join("\n"), /wrong detail|later turn must not survive/);
   const modelContext = JSON.stringify(await built.sessions.getTape(result.session.id));
   assert.match(modelContext, /context that stays/);
   assert.match(modelContext, /fixed detail/);
   assert.doesNotMatch(modelContext, /wrong detail|later turn must not survive/);
+
+  const slack = await built.app.turn({
+    surface: "slack",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "dm:U1" },
+    text: "slack source",
+  });
+  const slackSession = (await built.app.getSession(slack.sessionId!))!;
+  const slackEntry = slackSession.entries.find((entry) => entry.type === "user")!;
+  assert.equal((await edit(slackSession.session.id, slackEntry.seq, "U1", "unsupported edit")).status, 404);
+
+  const refusedThread = "web:U1:refused-submitted-edit";
+  await turn("refusal context", refusedThread);
+  const refusedTarget = await turn("refusal target", refusedThread);
+  const refusedSource = (await built.app.getSession(refusedTarget.sessionId!))!;
+  const refusedEntry = refusedSource.entries.find(
+    (entry) => entry.type === "user" && (entry.payload as { text?: string }).text === "refusal target",
+  )!;
+  const sessionsBeforeRefusal = await built.sessions.listByParticipant("U1");
+  await built.identity.deactivate("U1");
+  const refused = await edit(refusedSource.session.id, refusedEntry.seq, "U1", "refused edit");
+  assert.equal(refused.status, 409);
+  assert.match(((await refused.json()) as { message: string }).message, /internal-only/);
+  assert.equal((await built.sessions.listByParticipant("U1")).length, sessionsBeforeRefusal.length);
 });

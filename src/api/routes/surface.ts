@@ -2,8 +2,7 @@ import { isSessionStatus } from "../../sessions/session-status.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeFallback, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
-import type { Grant, ScopeId, Session } from "../../types.ts";
-import type { TurnRequest } from "../../types.ts";
+import type { AttachmentMeta, Grant, IncomingAttachment, ScopeId, Session, TurnRequest } from "../../types.ts";
 import { isTerminal } from "../../runs/run-store.ts";
 import { samePerson } from "../../directory/person.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
@@ -145,6 +144,8 @@ async function editSubmittedMessage(ctx: ApiCtx): Promise<void> {
   if (
     visible?.entry.type !== "user" ||
     !session ||
+    session.session.surface !== "web" ||
+    !deps.sessions ||
     !run ||
     run.request.conversation.threadRef !== session.session.threadRef ||
     run.turnUserSeq !== seq ||
@@ -153,8 +154,39 @@ async function editSubmittedMessage(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 404, { error: "not_found" });
   }
   if (!isTerminal(run.status)) return sendJson(res, 409, { error: "message_busy" });
+  const entryAttachments = (visible.entry.payload as { attachments?: unknown }).attachments;
+  const stagedAttachments: IncomingAttachment[] = [];
+  const discardStaged = () =>
+    Promise.all(stagedAttachments.map((attachment) => deps.blobTransfer?.delete(attachment.blobId).catch(() => undefined)));
+  if (Array.isArray(entryAttachments) && entryAttachments.length) {
+    if (!deps.blobTransfer) {
+      return sendJson(res, 409, { error: "attachment_unavailable", message: "The original attachments are unavailable." });
+    }
+    try {
+      for (const attachment of entryAttachments as AttachmentMeta[]) {
+        if (!attachment.artifactId) throw new Error("attachment has no durable artifact");
+        const opened = await app.openFileForViewer(attachment.artifactId, b.principalId);
+        if (!opened) throw new Error("attachment artifact is unavailable");
+        const staged = await deps.blobTransfer.put(opened.stream);
+        stagedAttachments.push({
+          name: opened.name,
+          mimetype: opened.mimetype,
+          sizeBytes: staged.sizeBytes,
+          blobId: staged.blobId,
+          ...(attachment.author ? { author: attachment.author } : {}),
+          ...(attachment.sourceId ? { sourceId: attachment.sourceId } : {}),
+        });
+      }
+    } catch {
+      await discardStaged();
+      return sendJson(res, 409, { error: "attachment_unavailable", message: "The original attachments are unavailable." });
+    }
+  }
   const fork = await app.forkSession(sessionId, b.principalId, { upToSeq: seq - 1 });
-  if (!fork) return sendJson(res, 404, { error: "not_found" });
+  if (!fork) {
+    await discardStaged();
+    return sendJson(res, 404, { error: "not_found" });
+  }
   const source = run.request;
   const request: TurnRequest = {
     surface: "web",
@@ -179,7 +211,7 @@ async function editSubmittedMessage(ctx: ApiCtx): Promise<void> {
         : {}),
     },
     text: b.text.trim(),
-    ...(source.attachments?.length ? { attachments: source.attachments } : {}),
+    ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
     ...(source.model ? { model: source.model } : {}),
     ...(source.harness ? { harness: source.harness } : {}),
     ...(source.thinkingLevel ? { thinkingLevel: source.thinkingLevel } : {}),
@@ -187,7 +219,15 @@ async function editSubmittedMessage(ctx: ApiCtx): Promise<void> {
     async: true,
   };
   const turn = await app.turn(request);
-  return sendJson(res, turn.status === "queued" ? 202 : 409, { ...fork, turn });
+  if (turn.status === "refused") {
+    await discardStaged();
+    if (!(await app.discardSession(fork.session.id, b.principalId))) await deps.sessions.deleteSession(fork.session.id);
+    return sendJson(res, 409, {
+      error: "edit_turn_refused",
+      message: turn.reason ?? "The edited message was refused.",
+    });
+  }
+  return sendJson(res, 202, { ...fork, turn });
 }
 
 async function spawnAgentConversation(ctx: ApiCtx): Promise<void> {
