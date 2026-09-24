@@ -1,4 +1,10 @@
-import { desktopChallenge, mintDesktopLogin, openDesktopLogin } from "./desktop-login.ts";
+import {
+  DESKTOP_LAUNCH_SCRIPT,
+  DESKTOP_LAUNCH_SCRIPT_HASH,
+  desktopChallenge,
+  mintDesktopLogin,
+  openDesktopLogin,
+} from "./desktop-login.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
@@ -1427,12 +1433,13 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
     200,
     cardPage({
       title: "Ready to open QM",
-      heading: "Your desktop sign-in is ready",
+      heading: "Opening QM Desktop…",
       icon: LOCK_ICON,
-      msg: "Return to the app to finish signing in.",
-      actions: `<a class="btn primary" href="${escapeHtml(callback.href)}">Open QM Desktop</a>`,
+      msg: "If QM doesn’t open automatically, use the button below.",
+      actions: `<a id="desktop-launch" class="btn primary" href="${escapeHtml(callback.href)}">Open QM Desktop</a><script>${DESKTOP_LAUNCH_SCRIPT}</script>`,
       help: "This link expires in two minutes and works only for the app that requested it.",
     }),
+    `${PAGE_CSP}; script-src '${DESKTOP_LAUNCH_SCRIPT_HASH}'`,
   );
 }
 
