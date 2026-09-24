@@ -55,6 +55,7 @@ import { deleteModelProvider, getModelProviders, putModelProvider } from "./admi
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
 import { listSecurityFlags, releaseSecurityTaint } from "./admin/security.ts";
+import { spend } from "./admin/spend.ts";
 import { createPrincipalLink, deletePrincipalLink, listPrincipalLinks } from "./admin/principal-links.ts";
 
 const timed =
@@ -116,6 +117,7 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/admin/resources", auth: "either", handle: getAdminResources },
   { method: "GET", path: "/v1/admin/retention", auth: "either", handle: retention },
   { method: "GET", path: "/v1/admin/metrics", auth: "either", handle: metrics },
+  { method: "GET", path: "/v1/admin/spend", auth: "either", handle: spend },
   { method: "GET", path: "/v1/admin/egress", auth: "either", handle: egress },
   { method: "GET", path: "/v1/admin/sessions", auth: "either", handle: listAdminSessions },
   { method: "GET", path: "/v1/admin/sessions/:id/llm", auth: "either", handle: getAdminSessionLlm },

@@ -313,6 +313,7 @@ const WRITES = new Map<string, string[]>([
 
 const READS = [
   "metrics",
+  "spend",
   "egress",
   "errors",
   "audit",
@@ -480,6 +481,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (method === "GET" && pathname === "/api/files/download") {
     if (!principal) return json(res, 401, { error: "signed_out" });
     return forwardDownload(res, principal, `/v1/admin/files/download${url.search}`);
+  }
+
+  if (method === "GET" && pathname === "/api/spend" && url.searchParams.get("format") === "csv") {
+    if (!principal) return json(res, 401, { error: "signed_out" });
+    return forwardDownload(res, principal, `/v1/admin/spend${url.search}`);
   }
 
   if (method === "POST" && pathname === "/api/files/upload") {

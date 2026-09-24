@@ -29,6 +29,7 @@ import type {
   SessionRef,
   SessionStore,
   SessionSummary,
+  SpendRow,
   StoreOptions,
   TapeRecord,
 } from "./session-store.ts";
@@ -169,6 +170,21 @@ export function rowToEntry(r: Record<string, unknown>): SessionEntry {
     payload: r.payload != null ? JSON.parse(r.payload as string) : null,
     scopeLabel: r.scope_label as ScopeId,
     createdAt: Number(r.created_at),
+  };
+}
+
+function rowToSpendRow(r: Record<string, unknown>): SpendRow {
+  return {
+    day: Number(r.day),
+    model: (r.model as string | null) ?? null,
+    scopeId: r.scope_id as ScopeId,
+    origin: r.origin as SessionOrigin,
+    calls: Number(r.calls),
+    costUsd: Number(r.cost_usd),
+    input: Number(r.input),
+    output: Number(r.output),
+    cacheRead: Number(r.cache_read),
+    cacheWrite: Number(r.cache_write),
   };
 }
 
@@ -570,6 +586,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       {
         id: "sessions/store/0016-status",
         statements: ["ALTER TABLE sessions ADD COLUMN IF NOT EXISTS status JSONB"],
+      },
+      {
+        id: "sessions/store/0018-llm-requests-created-at",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `CREATE INDEX IF NOT EXISTS session_llm_requests_created_at
+        ON session_llm_requests(created_at)`,
+        ],
       },
     ],
     [
@@ -1604,6 +1628,35 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         firstAt: Number(r.first_at),
         lastAt: Number(r.last_at),
       }));
+    },
+
+    async spendRollup(range): Promise<SpendRow[]> {
+      const rows = await q(
+        `SELECT day, scope_id, origin, model,
+                COUNT(*) AS calls,
+                COALESCE(SUM(cost_usd), 0) AS cost_usd,
+                COALESCE(SUM(input), 0) AS input,
+                COALESCE(SUM(output), 0) AS output,
+                COALESCE(SUM(cache_read), 0) AS cache_read,
+                COALESCE(SUM(cache_write), 0) AS cache_write
+           FROM (SELECT (r.created_at / 86400000)::bigint AS day,
+                        s.scope_id,
+                        r.model,
+                        ${originExpr("s")} AS origin,
+                        (u.j ->> 'costUsd')::double precision AS cost_usd,
+                        (u.j ->> 'input')::bigint AS input,
+                        (u.j ->> 'output')::bigint AS output,
+                        (u.j ->> 'cacheRead')::bigint AS cache_read,
+                        (u.j ->> 'cacheWrite')::bigint AS cache_write
+                   FROM session_llm_requests r
+                   JOIN sessions s ON s.id = r.session_id
+                   CROSS JOIN LATERAL (SELECT r.usage_json::jsonb AS j) u
+                  WHERE r.created_at >= $1 AND r.created_at < $2
+                    AND r.usage_json IS NOT NULL) t
+          GROUP BY day, scope_id, origin, model`,
+        [range.from, range.to],
+      );
+      return rows.map(rowToSpendRow);
     },
 
     async listParticipants(): Promise<ParticipantWindow[]> {

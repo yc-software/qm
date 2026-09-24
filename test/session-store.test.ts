@@ -7,6 +7,7 @@ import { acquireLeaseWithin, cronIdOf, sessionCategory, sessionOrigin } from "..
 import { parseSessionWakeRef } from "../src/api/routes/admin/origins.ts";
 import { scopeId } from "../src/types.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
+import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
 import { byScopeId, rollupsFromSummaries } from "./support/scope-rollup-oracle.ts";
 
 test("sessionOrigin classifies trigger threads by prefix", () => {
@@ -731,6 +732,10 @@ for (const [name, make] of backends) {
     const store = make();
     await assertParticipantSessionParity(store, `parity-${name}-a`);
     await assertParticipantSessionParity(store, `parity-${name}-b`);
+  });
+
+  test(`${name}: spendRollup groups model-call cost by UTC day, scope, origin and model`, async () => {
+    await assertSpendRollupParity((now) => createMemorySessionStore({ now }), `spend-${name}`);
   });
 
   test(`${name}: countSessions and distinctParticipants aggregate without loading rows`, async () => {
