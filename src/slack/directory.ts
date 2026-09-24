@@ -67,11 +67,18 @@ function withInternalOverride(
   actor: ActorAssertion,
   email: string | undefined,
   overrides: ReadonlySet<string>,
+  identityMode: SlackIdentityMode,
 ): ActorAssertion {
   if (!actor.isExternalGuest || overrides.size === 0) return actor;
   const mail = (email ?? "").trim().toLowerCase();
   if (overrides.has(actor.externalId.toLowerCase()) || (mail && overrides.has(mail))) {
-    return { ...actor, isExternalGuest: false };
+    return {
+      ...actor,
+      isExternalGuest: false,
+      ...(identityMode === "email" && !actor.isBot && !mail.includes("@")
+        ? { identityFailure: "unresolved_principal" as const }
+        : {}),
+    };
   }
   return actor;
 }
@@ -81,6 +88,7 @@ export interface Directory {
   forceDirectorySync(client: any, invalidateChannelId?: string, invalidatePrincipalId?: string): Promise<void>;
   classifyUserCached(client: any, userId: string | undefined): Promise<CachedUser & { ok: boolean }>;
   classifyActor(client: any, userId: string): Promise<ActorAssertion>;
+  channelIdentityResolved(client: any, channel: string): Promise<boolean>;
   getChannelInfo(client: any, channel: string): Promise<ChannelMeta | undefined>;
   channelMembership(
     client: any,
@@ -151,6 +159,7 @@ export function createDirectory(deps: {
           classifyUser(u, ids.ownTeamId, ids.identityMode),
           u.profile?.email,
           overrides,
+          ids.identityMode,
         );
         if (ids.identityMode === "email" && !u.is_bot && actor.externalId === u.id && u.team_id === ids.ownTeamId)
           missingEmails++;
@@ -234,6 +243,17 @@ export function createDirectory(deps: {
       if (internalIds) rosters.set(ref.id, internalIds);
     }
     return rosters;
+  }
+
+  async function channelIdentityResolved(client: any, channel: string): Promise<boolean> {
+    const rosters = await allClassifiedRosters(client, [{ id: channel }], {
+      plural: "ambient rooms",
+      authz: "ambient-work",
+      item: "room",
+      requireComplete: true,
+    });
+    const roster = rosters.get(channel);
+    return roster !== undefined && roster.actors.every((actor) => !actor.identityFailure);
   }
 
   async function allClassifiedRosters(
@@ -664,6 +684,7 @@ export function createDirectory(deps: {
         classifyUser(user, ids.ownTeamId, ids.identityMode),
         user?.profile?.email,
         await internalOverrides(),
+        ids.identityMode,
       );
       const timezone = slackUserTimezone(user);
       const classified = { actor, ...(timezone ? { timezone } : {}) };
@@ -743,6 +764,7 @@ export function createDirectory(deps: {
     forceDirectorySync,
     classifyUserCached,
     classifyActor,
+    channelIdentityResolved,
     getChannelInfo,
     channelMembership,
     allInternalRosters,

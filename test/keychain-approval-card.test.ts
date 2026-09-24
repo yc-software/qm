@@ -196,6 +196,48 @@ test("Slack action records the authenticated clicker before displaying success",
   assert.equal(updates.length, 1);
 });
 
+test("an unresolved approver cannot decide a keychain request", async () => {
+  let handler: (args: any) => Promise<void> = async () => {};
+  let decisions = 0;
+  const errors: unknown[] = [];
+  registerKeychainApprovalActions(
+    {
+      action: (_pattern, fn) => {
+        handler = fn;
+      },
+    },
+    {
+      core: {
+        keychainApprovals: {
+          decide: async () => {
+            decisions++;
+          },
+        },
+      } as unknown as SlackCoreClient,
+      directory: {
+        classifyActor: async () => ({
+          externalId: "U1",
+          identityFailure: "unresolved_principal",
+        }),
+      } as unknown as Directory,
+    },
+  );
+  await handler({
+    ack: async () => {},
+    body: { user: { id: "U1" }, channel: { id: "D1" }, message: { ts: "1.2" } },
+    action: { action_id: "keychain_allow_once", value: "ask-1" },
+    client: {
+      chat: {
+        postEphemeral: async (body: unknown) => {
+          errors.push(body);
+        },
+      },
+    },
+  });
+  assert.equal(decisions, 0);
+  assert.equal(errors.length, 1);
+});
+
 test("a crash after grant persistence recovers approval before denial or expiry", async () => {
   for (const expire of [false, true]) {
     const f = await fixture();

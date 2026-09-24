@@ -181,6 +181,7 @@ export function createConversationSerializer(deps: {
       files: [],
       omittedFiles: [],
     };
+    if (ctx.audience.some((a) => a.identityFailure)) return { view: empty };
     if (ctx.audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled())) return { view: empty };
 
     const nameById = new Map<string, string>();

@@ -248,12 +248,13 @@ class FakeCore implements SlackCoreClient {
   readonly modelChangeListeners: Array<(scope: any) => void> = [];
   readonly headerPinChangeListeners: Array<(scope: any) => void> = [];
   readonly headerPinScopes = new Set<string>();
+  internalOverrides: string[] = [];
 
   async externalSlackParticipants(): Promise<boolean> {
     return this.externalParticipants;
   }
   async internalMemberOverrides(): Promise<string[]> {
-    return [];
+    return this.internalOverrides;
   }
   async ackEmojiOverride(): Promise<string[] | null> {
     return null;
@@ -411,10 +412,13 @@ async function fixture(
     denyMessage?: string;
     coreSingleton?: boolean;
     unresolvedUser?: string;
+    overriddenUnresolvedUser?: string;
+    internalOverrides?: string[];
   } = {},
 ) {
   const core = new FakeCore();
   core.externalParticipants = options.externalParticipants ?? false;
+  core.internalOverrides = options.internalOverrides ?? [];
   const started = startSlackPlugin(
     {
       botToken: "xoxb-test",
@@ -434,6 +438,14 @@ async function fixture(
   if (options.unresolvedUser) {
     const user = app.client.usersById.get(options.unresolvedUser);
     app.client.usersById.set(options.unresolvedUser, { ...user, profile: { ...user.profile, email: undefined } });
+  }
+  if (options.overriddenUnresolvedUser) {
+    const user = app.client.usersById.get(options.overriddenUnresolvedUser);
+    app.client.usersById.set(options.overriddenUnresolvedUser, {
+      ...user,
+      is_restricted: true,
+      profile: { ...user.profile, email: undefined },
+    });
   }
   app.client.usersById.set("UX", { id: "UX", team_id: "T2", name: "mallory", profile: { display_name: "Mallory" } });
   app.client.channelsById.set("C1", { id: "C1", name: "engineering", is_member: true, is_private: false });
@@ -1068,6 +1080,28 @@ test("a directory lookup failure is refused with its own observable reason", asy
     assert.equal(f.client.posts.length, 1);
     assert.match(f.client.posts[0].text, /right now/i);
     assert.doesNotMatch(f.client.posts[0].text, /fully internal/i);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("an overridden restricted member without email cannot mint an internal Slack-ID principal", async () => {
+  const f = await fixture({
+    identityEmail: "1",
+    overriddenUnresolvedUser: "U1",
+    internalOverrides: ["u1"],
+  });
+  try {
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello", ts: "101.46" });
+    assert.equal(f.core.turns.length, 0);
+    assert.equal(f.core.ingests.length, 0);
+    assert.match(f.client.posts[0].text, /email identity/i);
+    assert.equal(
+      f.core.directories.some((directory: any) =>
+        directory.members?.some((member: any) => member.principalId === "U1"),
+      ),
+      false,
+    );
   } finally {
     await f.stop();
   }
