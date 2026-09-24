@@ -4,6 +4,7 @@ import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
+import { pgTextSafe } from "../util/text.ts";
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { errMessage } from "../util/errors.ts";
 import { filterHistoryForAudience } from "../resolution/context-filter.ts";
@@ -721,7 +722,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (dedupKey) {
                 const existing = await deps.runs.getByDedupKey(dedupKey);
                 if (existing) {
-                  if (existing.sessionId !== target.threadRef || existing.request.text !== stamped)
+                  if (
+                    existing.sessionId !== target.threadRef ||
+                    (existing.request.text !== stamped && existing.request.text !== pgTextSafe(stamped))
+                  )
                     return { ok: false, message: "the requestId was already used for different work" };
                   return { ok: true, sessionId: target.id, title, delivered: "queued_turn" };
                 }

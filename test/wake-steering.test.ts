@@ -6,6 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
+import { jsonbStringify } from "../src/persistence/durable-map.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
@@ -762,10 +763,10 @@ test("signalRun: a steer already terminal at send is refused up front", async ()
   assert.equal((await built.signals.takePending(liveRunId)).length, 0, "nothing left rotting in the queue");
 });
 
-function completeOnSend(built: ReturnType<typeof freshApp>): void {
+function completeOnSend(built: ReturnType<typeof freshApp>, sanitize = false): void {
   const origSend = built.signals.send.bind(built.signals);
   built.signals.send = async (runId, signal) => {
-    const sent = await origSend(runId, signal);
+    const sent = await origSend(runId, sanitize ? JSON.parse(jsonbStringify(signal)) : signal);
     const claimed = await built.runs.claim("w1", 30_000);
     if (claimed) await built.runs.complete(claimed.id, claimed.leaseToken!, { status: "silent" });
     return sent;
@@ -786,28 +787,51 @@ test("signalRun: a steer whose run goes terminal mid-send is REFUSED, never a fa
   assert.equal((await built.signals.takePending(liveRunId)).length, 0, "nothing left rotting in the queue");
 });
 
-test("steer path: a message whose run goes terminal mid-send is replayed and the caller gets the FRESH run", async () => {
-  const built = freshApp();
-  const channel = "C13";
-  const root = "1300.1";
-  const threadRef = `ch:${channel}:${root}`;
-  const first = await built.app.turn(mention("@bot go", channel, root));
-  const liveRunId = first.runId!;
-  completeOnSend(built);
-  built.app.replayOrphanedRunSignals = async () => {};
+for (const sanitize of [false, true])
+  test(`steer path: a message whose run goes terminal mid-send returns the fresh run (sanitize=${sanitize})`, async () => {
+    const built = freshApp();
+    const channel = "C13";
+    const root = "1300.1";
+    const threadRef = `ch:${channel}:${root}`;
+    const first = await built.app.turn(mention("@bot go", channel, root));
+    const liveRunId = first.runId!;
+    completeOnSend(built, sanitize);
+    built.app.replayOrphanedRunSignals = async () => {};
 
-  const second = await built.app.turn({ ...mention("@bot and another thing", channel, root), triggerTs: "1300.010" });
+    const second = await built.app.turn({
+      ...mention("@bot and another thing\u0000\ud800", channel, root),
+      triggerTs: "1300.010",
+    });
+    assert.equal(second.status, "queued");
+    assert.notEqual(second.runId, liveRunId, "the caller follows the replayed run, not the dead one");
+    const replayed = (await built.runs.list()).find((r) => r.id === second.runId);
+    assert.equal(replayed?.sessionId, threadRef);
+    const text = `${replayed?.request.text ?? ""} ${replayed?.request.displayText ?? ""}`;
+    assert.ok(
+      text.includes("and another thing"),
+      `the fresh run carries the raced message (got: ${text.slice(0, 120)})`,
+    );
+    assert.equal(
+      (await built.signals.takePending(liveRunId)).length,
+      0,
+      "the raced signal was consumed by the inline drain",
+    );
+  });
+
+test("reverse race: a sanitized mention follows its fresh run after the ambient run ends", async () => {
+  const built = freshApp();
+  const channel = "C-ambient-unicode";
+  const askTs = "1600.2";
+  const ambientRef = `slack:${channel}:ambient:${askTs}`;
+  await built.sessions.getOrCreateByThread(ambientRef, "channel", `channel:${channel}`);
+  const ambient = await built.app.turn(spawnedWorker(channel, askTs));
+  completeOnSend(built, true);
+  built.app.replayOrphanedRunSignals = async () => {};
+  const second = await built.app.turn({ ...mention("@bot more\u0000 work\ud800", channel, askTs), triggerTs: askTs });
   assert.equal(second.status, "queued");
-  assert.notEqual(second.runId, liveRunId, "the caller follows the replayed run, not the dead one");
-  const replayed = (await built.runs.list()).find((r) => r.id === second.runId);
-  assert.equal(replayed?.sessionId, threadRef);
-  const text = `${replayed?.request.text ?? ""} ${replayed?.request.displayText ?? ""}`;
-  assert.ok(text.includes("and another thing"), `the fresh run carries the raced message (got: ${text.slice(0, 120)})`);
-  assert.equal(
-    (await built.signals.takePending(liveRunId)).length,
-    0,
-    "the raced signal was consumed by the inline drain",
-  );
+  assert.notEqual(second.runId, ambient.runId);
+  const replayed = await built.runs.get(second.runId!);
+  assert.ok(`${replayed?.request.text} ${replayed?.request.displayText}`.includes("@bot more work�"));
 });
 
 test("screening off delivers ambient updates to the existing run without a classifier", async () => {

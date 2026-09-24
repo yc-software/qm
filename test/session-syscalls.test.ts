@@ -2,7 +2,7 @@ import { wireRunResultDeliveries, runResultDelivery } from "../src/delivery/run-
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { deliveryCandidatesFor } from "../src/core/orchestrator/turn-helpers.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createMemoryMap, jsonbStringify } from "../src/persistence/durable-map.ts";
 import { createSessionMailbox, type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -753,14 +753,14 @@ test("follow-up retries recover the accepted run before checking full capacity",
   const enqueue = r.runs.enqueue.bind(r.runs);
   let first = true;
   t.mock.method(r.runs, "enqueue", async (input: Parameters<RunStore["enqueue"]>[0]) => {
-    const receipt = await enqueue(input);
+    const receipt = await enqueue({ ...input, request: JSON.parse(jsonbStringify(input.request)) });
     if (first) {
       first = false;
       throw new Error("lost receipt");
     }
     return receipt;
   });
-  const request = { target: opened.sessionId, text: "more work", followup: true, requestId: "stable" };
+  const request = { target: opened.sessionId, text: "more\u0000 work\ud800", followup: true, requestId: "stable" };
   assert.equal((await api.write(request)).ok, false);
   assert.equal((await api.write(request)).ok, true);
   assert.equal((await api.write({ ...request, text: "changed" })).ok, false);

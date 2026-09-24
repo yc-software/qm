@@ -13,7 +13,8 @@ import {
 } from "../src/sessions/postgres-session-store.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { scopeId, type Principal, type TurnResult } from "../src/types.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { scopeId, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { byScopeId, rollupsFromSummaries } from "./support/scope-rollup-oracle.ts";
@@ -1273,6 +1274,71 @@ test("pg session counters: boot backfill fills pre-column rows", { skip }, async
   const stats = await s3.scopeSessionStats(scope, false);
   assert.equal(stats.total, 2, "stats count sessions in scope");
   assert.equal(stats.turns, 3 + 7, "stats sum the stored turns counters, never the entries");
+});
+
+test("pg run store: Unicode stays jsonb-safe through enqueue, edit and both steering paths", { skip }, async () => {
+  const { runs, close } = createPostgresRunStore(URL!);
+  const signals = createPostgresRunSignalStore(URL!);
+  const thread = `unicode-${randomUUID()}`;
+  const unsafe = "nul\u0000 lone\ud800 low\udfff emoji😀 literal\\u0000";
+  const safe = "nul lone� low� emoji😀 literal\\u0000";
+  const inbound: TurnRequest = {
+    surface: "web",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: thread },
+    text: unsafe,
+  };
+  const request = {
+    ...turn(unsafe),
+    attachments: [{ name: unsafe, mimetype: "text/plain", sizeBytes: 5, blobId: "notes-blob" }],
+  };
+  try {
+    const first = (await runs.enqueue({ sessionId: thread, request })).run;
+    assert.equal(first.request.text, safe);
+    assert.equal(first.request.attachments?.[0]?.name, safe);
+    assert.equal(request.text, unsafe);
+    const privateRun = (
+      await runs.enqueue({ sessionId: thread, request: { ...turn(unsafe), privateSessionMessage: true } })
+    ).run;
+    assert.equal((await runs.latestForThread(thread))?.id, privateRun.id);
+    assert.equal((await runs.latestForThread(thread, { excludePrivateMessages: true }))?.id, first.id);
+    assert.equal(await runs.editPendingText(first.id, `edit ${unsafe}`, unsafe), true);
+    assert.equal(await runs.editPendingText(first.id, "stale", unsafe), false);
+    assert.equal((await runs.get(first.id))?.request.displayText, `edit ${safe}`);
+    assert.equal(
+      await runs.steerQueued(
+        first.id,
+        privateRun.id,
+        {
+          kind: "steer",
+          text: `edit ${unsafe}`,
+          request: { ...inbound, text: `edit ${unsafe}` },
+          dedupeKey: `${thread}-queued`,
+        },
+        signals,
+      ),
+      true,
+    );
+    assert.equal(await runs.get(first.id), null);
+    const queued = await signals.takePending(privateRun.id);
+    assert.equal(queued[0]?.text, `edit ${safe}`);
+    assert.equal(queued[0]?.request?.text, `edit ${safe}`);
+    assert.equal(
+      await signals.send(privateRun.id, {
+        kind: "steer",
+        text: unsafe,
+        request: inbound,
+      }),
+      true,
+    );
+    const direct = await signals.takePending(privateRun.id);
+    assert.equal(direct[0]?.text, safe);
+    assert.equal(direct[0]?.request?.text, safe);
+  } finally {
+    for (const run of await runs.inFlightForThread(thread)) await runs.withdraw(run.id);
+    await signals.close?.();
+    await close();
+  }
 });
 
 test("pg run store: a session_busy completion frees the dedup key so the same key runs again", { skip }, async () => {

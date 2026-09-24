@@ -27,6 +27,7 @@ import { selectableCatalogForHarness, selectableModelCatalog } from "../model/mo
 import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
+import { pgTextSafe } from "../util/text.ts";
 import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
@@ -511,7 +512,10 @@ export function createTurnMethods(
               const after = await deps.runs.get(targetRun.id);
               if (!after || isTerminal(after.status)) {
                 const own = (await replayOrphanedRunSignals(targetRun.id)).find(
-                  (d) => d.signal.text === route.text && d.signal.ts === steerTs,
+                  (d) =>
+                    (d.signal.text === route.text ||
+                      (route.text !== undefined && d.signal.text === pgTextSafe(route.text))) &&
+                    d.signal.ts === steerTs,
                 );
                 if (own?.replayRunId)
                   return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
@@ -562,7 +566,9 @@ export function createTurnMethods(
             const after = await deps.runs.get(liveAmbient.id);
             if (!after || isTerminal(after.status)) {
               const own = (await replayOrphanedRunSignals(liveAmbient.id)).find(
-                (d) => d.signal.text === req.text && d.signal.ts === origin.messageTs,
+                (d) =>
+                  (d.signal.text === req.text || d.signal.text === pgTextSafe(req.text)) &&
+                  d.signal.ts === origin.messageTs,
               );
               if (own?.replayRunId)
                 return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
