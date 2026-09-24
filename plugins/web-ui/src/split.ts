@@ -1021,27 +1021,27 @@ class PaneContent implements IContentRenderer {
       conversation.newChat(context ? { scopeId: context.scopeId, name: context.name ?? null } : undefined);
       return;
     }
-    conversation.mountLoadingPane();
+    const isCurrent = conversation.mountLoadingPane();
     let session = sessionsState.list.find((s) => s.id === wanted);
     if (!session) {
       await sessionsReady();
-      if (this.disposed) return;
+      if (this.disposed || !isCurrent()) return;
       session = sessionsState.list.find((s) => s.id === wanted);
     }
     if (!session) {
       await refreshSessions({ silent: true });
-      if (this.disposed) return;
+      if (this.disposed || !isCurrent()) return;
       session = sessionsState.list.find((s) => s.id === wanted);
     }
     if (!session) {
       const page = await fetchTranscript(wanted, { tailTurns: TAIL_TURNS }).catch(() => null);
-      if (this.disposed) return;
+      if (this.disposed || !isCurrent()) return;
       session = page?.session;
       if (!session) {
-        conversation.mountReadOnly(
-          { id: wanted, threadRef: threadRef ?? "", scopeId: "", title: "" } as CoreSession,
-          [],
-        );
+        conversation.mountLoadError(() => {
+          this.loaded = false;
+          void this.load();
+        });
         return;
       }
       await openSessionInto(conversation, session, Promise.resolve(page));

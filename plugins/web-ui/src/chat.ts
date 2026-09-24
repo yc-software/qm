@@ -969,15 +969,31 @@ export function createChatSurface(
     }
   }
 
-  function mountLoadingPane(): void {
+  function mountLoadingPane(): () => boolean {
+    dropAbandonedNewChat(null);
+    teardownActiveChat();
     const container = ctx.container();
-    if (!container || !ctx.visible()) return;
+    if (!container || !ctx.visible()) return () => false;
     const host = document.createElement("div");
     host.className = "custom-chat";
     render(
       html`<div class="custom-chat-shell">
         <div class="chat-loading">${waveLoader()}</div>
       </div>`,
+      host,
+    );
+    container.replaceChildren(host);
+    return () => container.contains(host);
+  }
+
+  function mountLoadError(retry: () => void): void {
+    const container = ctx.container();
+    if (!container) return;
+    const host = document.createElement("div");
+    host.className = "empty compact";
+    render(
+      html`<p role="alert">Couldn't load this conversation.</p>
+        <button class="btn" @click=${retry}>Retry</button>`,
       host,
     );
     container.replaceChildren(host);
@@ -3007,6 +3023,7 @@ export function createChatSurface(
     mountContinuable,
     mountReadOnly,
     mountLoadingPane,
+    mountLoadError,
     scrollToBottom,
     revealEntry: (seq: number) => {
       if (chatState.inheritedMessages.some((message) => messageEntrySeqs(message).includes(seq))) {

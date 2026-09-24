@@ -91,7 +91,8 @@ export interface ChatSurface {
     anchorSeq?: number | null,
     inheritedMessages?: ReturnType<typeof entriesToMessages>,
   ): void;
-  mountLoadingPane(): void;
+  mountLoadingPane(): () => boolean;
+  mountLoadError(retry: () => void): void;
   scrollToBottom(): void;
   revealEntry(seq: number): boolean;
   drawActiveChat(agent?: Agent | null, opts?: { forceScroll?: boolean }): void;

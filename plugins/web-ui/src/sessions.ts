@@ -81,14 +81,7 @@ import {
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
 import { transcriptModel } from "./model-options";
-import {
-  appState,
-  closeSidebarOnNarrowView,
-  renderSidebarTop,
-  showMainEmpty,
-  syncDocumentTitle,
-  syncUrlFromState,
-} from "./shell";
+import { appState, closeSidebarOnNarrowView, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
 import { allConversations, isLiveConversation, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {
@@ -1648,7 +1641,8 @@ export async function openSessionInto(
     sessionsState.openingKey = opening;
     renderList();
   }
-  if (isLiveConversation(conv) && (!tracked || sessionsState.openingKey === opening)) conv.mountLoadingPane();
+  if (!isLiveConversation(conv)) return;
+  const isCurrent = conv.mountLoadingPane();
 
   const fetchEntries = (): Promise<TranscriptPage | null> =>
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(() => null);
@@ -1657,7 +1651,7 @@ export async function openSessionInto(
     entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries(),
     continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : Promise.resolve(null),
   ]);
-  if (!isLiveConversation(conv)) return;
+  if (!isLiveConversation(conv) || !isCurrent()) return;
 
   if (tracked) {
     if (sessionsState.openingKey !== opening) return;
@@ -1669,7 +1663,7 @@ export async function openSessionInto(
   }
 
   if (!entriesRes) {
-    if (tracked) showMainEmpty("Couldn't load this conversation. Check your connection and click it again.");
+    conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
     return;
   }
