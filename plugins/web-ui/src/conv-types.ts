@@ -134,6 +134,7 @@ export interface ComposerSurface {
   setQueuedRuns(threadRef: string, runs: QueuedRun[]): void;
   resetComposer(): void;
   focusComposerEnd(): void;
+  appendAnnotation(text: string): void;
   fillSuggestedPrompt(prompt: string, agent: Agent): void;
   sendSuggestedPrompt(prompt: string, agent: Agent): Promise<void>;
   resizeComposer(): void;

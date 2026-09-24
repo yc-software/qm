@@ -1852,6 +1852,12 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     setQueuedRuns,
     resetComposer,
     focusComposerEnd,
+    appendAnnotation(text: string): void {
+      composerState.draft = [composerState.draft.trimEnd(), text].filter(Boolean).join("\n\n");
+      persistDraft();
+      if (ctx.chat.state.agent) ctx.chat.drawActiveChat(ctx.chat.state.agent);
+      focusComposerEnd();
+    },
     fillSuggestedPrompt,
     sendSuggestedPrompt: async (prompt: string, agent: Agent): Promise<void> => {
       if (

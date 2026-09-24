@@ -1,3 +1,4 @@
+import { annotate } from "./annotation";
 import { loopIcon } from "./loop-icon";
 import {
   ensureSentMail,
@@ -1124,6 +1125,23 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
   </div>`;
 }
 
+function itemAnnotation(item: InboxItem) {
+  return annotate({
+    key: item.id,
+    selector:
+      ".inbox-draft-body, .inbox-context-text, .inbox-chat-text, .inbox-replied-text, .inbox-proposal-data, .loop-output",
+    add: (text, root) => {
+      chatDrafts.set(item.id, [chatDrafts.get(item.id)?.trimEnd(), text].filter(Boolean).join("\n\n"));
+      drawAll();
+      const box = (root.closest(".inbox-item, .inbox-page") ?? root).querySelector<HTMLTextAreaElement>(
+        ".inbox-chat-input",
+      );
+      box?.focus();
+      box?.setSelectionRange(box.value.length, box.value.length);
+    },
+  });
+}
+
 export function chatTpl(item: InboxItem): TemplateResult {
   const busy = chatting.has(item.id);
   let suggestions = DRAFT_SUGGESTIONS;
@@ -1139,7 +1157,7 @@ export function chatTpl(item: InboxItem): TemplateResult {
   };
   const empty = item.thread.length === 0;
   return html`
-    <div class="inbox-chat">
+    <div class="inbox-chat" ${itemAnnotation(item)}>
       ${
         empty
           ? html`<div class="inbox-chat-empty">
@@ -1239,7 +1257,7 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
   const gmail = item.source === "gmail";
   const showCc = gmail && ((draft.cc?.length ?? 0) > 0 || (item.gmail?.cc?.length ?? 0) > 0);
   return html`
-    <div class="inbox-draft ${gmail ? "email" : "slack"}">
+    <div class="inbox-draft ${gmail ? "email" : "slack"}" ${itemAnnotation(item)}>
       <div class="inbox-draft-head">
         <span class="inbox-draft-label">Draft reply</span>
         ${
@@ -1431,8 +1449,8 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
       </div>
       ${
         expanded
-          ? html`<div class="inbox-item-detail">
-              ${usesOutputReview(item) ? reviewTpl(item) : html`${contextTpl(item)} ${handled ? handledNoteTpl(item) : draftEditorTpl(item)}`}
+          ? html`<div class="inbox-item-detail" ${itemAnnotation(item)}>
+              ${usesOutputReview(item) ? reviewTpl(item) : html`${contextTpl(item)} ${handled ? html`${handledNoteTpl(item)}${chatTpl(item)}` : draftEditorTpl(item)}`}
             </div>`
           : nothing
       }
@@ -1747,7 +1765,7 @@ function itemPageTpl(item: InboxItem): TemplateResult {
       </div>
     </div>
     <div class="inbox-surface inbox-item-surface">
-      <div class="inbox-scroll inbox-item-thread">
+      <div class="inbox-scroll inbox-item-thread" ${itemAnnotation(item)}>
         ${inboxState.notice ? html`<div class="inbox-notice" role="status">${inboxState.notice}</div>` : nothing}
         ${itemDetailTpl(item, handled)}
       </div>
