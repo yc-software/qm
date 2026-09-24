@@ -186,3 +186,13 @@ test("feature flag denial blocks Inbox and Loop API access despite the environme
     previewEnabled = true;
   }
 });
+
+test("inbox requests forward the pinned refresh filter", async () => {
+  const response = await fetch(`${base}/api/inbox?filter=all&view=handled&cursor=next`, { headers });
+  assert.equal(response.status, 200);
+  const call = lastCallTo("/v1/inbox");
+  assert.ok(call);
+  assert.equal(coreQuery(call.url, "filter"), "all");
+  assert.equal(coreQuery(call.url, "view"), "handled");
+  assert.equal(coreQuery(call.url, "cursor"), "next");
+});

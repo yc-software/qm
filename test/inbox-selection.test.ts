@@ -472,7 +472,13 @@ test("automated messages remain in All after ingress work completes without a dr
   const w = world();
   const [loop] = await ensureDefaultInboxLoops(w.deps.store, "alice");
   await w.deps.items.ingest([
-    { loopId: loop!.id, dedupeKey: "receipt", source: "gmail", sourceAt: 1_000, sourcePayload: { title: "Receipt" } },
+    {
+      loopId: loop!.id,
+      dedupeKey: "receipt",
+      source: "gmail",
+      sourceAt: Date.now(),
+      sourcePayload: { title: "Receipt" },
+    },
   ]);
   await runLoopFire(
     loop!,
@@ -505,4 +511,43 @@ test("automated messages remain in All after ingress work completes without a dr
   const feed = (await w.call()).data;
   assert.equal(feed.total, 1);
   assert.equal(feed.items[0].id, item.id);
+});
+
+test("explicit refresh filters stay consistent across saved preference changes without overwriting them", async () => {
+  const w = world();
+  const [loop] = await ensureDefaultInboxLoops(w.deps.store, "alice");
+  await w.deps.items.ingest([
+    { loopId: loop!.id, dedupeKey: "receipt", source: "gmail", sourcePayload: { automated: true } },
+    { loopId: loop!.id, dedupeKey: "question", source: "gmail", sourcePayload: { automated: false } },
+  ]);
+  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "all", updatedAt: Date.now() });
+  const first = (await w.call()).data;
+  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "human", updatedAt: Date.now() + 1 });
+  const pinned = (await w.call("GET", null, `filter=${first.filter}`)).data;
+  assert.equal(pinned.filter, "all");
+  assert.equal(pinned.total, 2);
+  assert.equal(pinned.items.length, 2);
+  const latest = (await w.call()).data;
+  assert.equal(latest.filter, "human");
+  assert.equal(latest.total, 1);
+  assert.equal((await w.call("GET", null, "filter=invalid")).status, 400);
+});
+
+test("reading the inbox expires untouched automated messages without waiting for another ingest", async () => {
+  const w = world();
+  const [loop] = await ensureDefaultInboxLoops(w.deps.store, "alice");
+  await w.deps.items.ingest([
+    { loopId: loop!.id, dedupeKey: "old", source: "gmail", sourceAt: 1, sourcePayload: { automated: true } },
+    {
+      loopId: loop!.id,
+      dedupeKey: "recent",
+      source: "gmail",
+      sourceAt: Date.now(),
+      sourcePayload: { automated: true },
+    },
+    { loopId: loop!.id, dedupeKey: "human", source: "gmail", sourceAt: 1, sourcePayload: { automated: false } },
+  ]);
+  const feed = (await w.call("GET", null, "filter=all")).data;
+  assert.equal(feed.total, 2);
+  assert.deepEqual((await w.deps.items.byLoop(loop!.id)).map((item) => item.sourceKey).sort(), ["human", "recent"]);
 });

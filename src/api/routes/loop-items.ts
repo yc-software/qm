@@ -150,7 +150,11 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
     entries.push(sessionId && parsed.proposal ? { ...parsed, proposal: { ...parsed.proposal, sessionId } } : parsed);
   }
   const outcome = await deps.items.ingest(entries);
-  await deps.items.prune(loop.id, { maxItems: INBOX_LEDGER_MAX_ITEMS, retentionMs: INBOX_LEDGER_RETENTION_MS });
+  await deps.items.prune(loop.id, {
+    maxItems: INBOX_LEDGER_MAX_ITEMS,
+    retentionMs: INBOX_LEDGER_RETENTION_MS,
+    includeAutomated: loop.surface === "inbox" || loop.surface?.startsWith("inbox:"),
+  });
   sendJson(ctx.res, 200, outcome);
 }
 

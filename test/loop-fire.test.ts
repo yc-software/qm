@@ -876,3 +876,51 @@ test("event-only Email work skips scanning and holds its draft instead of markin
   assert.deepEqual(result.summary?.shipped, []);
   assert.deepEqual(result.summary?.ready, [item?.id]);
 });
+
+test("existing inboxes use current classification instructions for unclassified realtime items", async () => {
+  for (const surface of ["inbox", "inbox:gmail", "inbox:slack"]) {
+    const source = surface === "inbox:slack" ? "slack" : "gmail";
+    const s = service(async (req) => {
+      if (stage(req) === "judge") return '{"outcome":"met","reason":"Automated receipt retained"}';
+      assert.equal(stage(req), "work");
+      assert.ok(req.text?.includes(renderInboxSyncTask(loop.id)));
+      assert.doesNotMatch(req.text ?? "", /SKIP machine noise/);
+      assert.match(req.text ?? "", /skip any playbook steps for scanning/);
+      if (surface !== "inbox") assert.ok(req.text?.includes(`Source restriction: scan only ${source}.`));
+      await s.items.ingest([
+        {
+          loopId: loop.id,
+          dedupeKey: "receipt",
+          source,
+          sourceAt: 1000,
+          sourcePayload: { source, title: "Your receipt", automated: true, probablyResolved: false },
+        },
+      ]);
+      return '{"outputs":[]}';
+    });
+    const loop = await makeLoop(s.loops, {
+      surface,
+      sources: [source],
+      playbook: "Inbox sync v4. SKIP machine noise.",
+      shipActions: [{ action: "send", gate: "hold" }],
+    });
+    await s.items.ingest([
+      {
+        loopId: loop.id,
+        dedupeKey: "receipt",
+        source,
+        sourceAt: 1000,
+        sourcePayload: { source, title: "Your receipt" },
+      },
+    ]);
+    const result = await s.fire.fire(loop.id, "push:receipt", undefined, { enumerate: false });
+    const [item] = await s.items.byLoop(loop.id);
+    assert.equal(result.status, "ok");
+    assert.equal(item?.status, "ready");
+    assert.equal(item?.sourcePayload?.automated, true);
+    assert.equal(item?.proposal, undefined);
+    assert.deepEqual(result.summary?.shipped, []);
+    await s.fire.fire(loop.id, "push:receipt-again", undefined, { enumerate: false });
+    assert.deepEqual(s.turns.map(stage), ["work", "judge"]);
+  }
+});

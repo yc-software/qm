@@ -29,6 +29,8 @@ test("inbox filters persist, preserve Sent, and guard newly visible replies", as
   let pane: { dispose(): void } | undefined;
   let saved = "triaged";
   let failSave = false;
+  let race: "preference" | "mismatch" | undefined;
+  let requests: URL[] = [];
   const writes: unknown[] = [];
   const replyEntries = new Map<string, LedgerItem>();
   const actions: string[] = [];
@@ -49,19 +51,27 @@ test("inbox filters persist, preserve Sent, and guard newly visible replies", as
       return Response.json({ ok: true });
     }
     if (url.pathname.endsWith("/api/inbox")) {
+      requests.push(url);
+      const filter = race === "mismatch" ? saved : (url.searchParams.get("filter") ?? saved);
       const items = entries.filter(
         (item) =>
-          saved === "all" ||
+          filter === "all" ||
           (!item.sourcePayload.automated &&
-            (saved === "human" || (item.state === "held" && !item.sourcePayload.probablyResolved))),
+            (filter === "human" || (item.state === "held" && !item.sourcePayload.probablyResolved))),
       );
+      if (race && requests.length === 1) saved = "human";
+      const more = race && !url.searchParams.has("cursor") && !url.searchParams.has("view");
+      let pageItems = items;
+      if (url.searchParams.has("view")) pageItems = [];
+      else if (more) pageItems = items.slice(0, 2);
+      else if (race) pageItems = items.slice(2);
       return Response.json({
-        filter: saved,
+        filter,
         selected: [{ id: "email", name: "Email", count: items.length }],
         available: [],
-        items: url.searchParams.has("view") ? [] : items,
-        total: items.length,
-        nextCursor: null,
+        items: pageItems,
+        total: race === "mismatch" ? 999 : items.length,
+        nextCursor: more ? "page-2" : null,
       });
     }
     const actionId = url.pathname.match(/\/items\/([^/]+)\/action$/)?.[1];
@@ -127,6 +137,34 @@ test("inbox filters persist, preserve Sent, and guard newly visible replies", as
     await refreshInbox();
     assert.equal(button("All emails").getAttribute("aria-pressed"), "true");
     assert.equal(titles().length, 4);
+    race = "preference";
+    requests = [];
+    await refreshInbox();
+    assert.equal(saved, "human");
+    assert.equal(inboxState.filter, "all");
+    assert.equal(inboxState.total, 4);
+    assert.equal(titles().length, 4);
+    assert.ok(requests.some((url) => url.searchParams.has("cursor")));
+    assert.ok(requests.some((url) => url.searchParams.has("view")));
+    assert.equal(requests[0]!.searchParams.get("filter"), null);
+    assert.ok(requests.slice(1).every((url) => url.searchParams.get("filter") === "all"));
+    const previousItems = inboxState.items;
+    const previousSelected = inboxState.selected;
+    race = "mismatch";
+    saved = "all";
+    requests = [];
+    await refreshInbox();
+    assert.match(inboxState.error!, /Inbox filter changed/);
+    assert.equal(inboxState.items, previousItems);
+    assert.equal(inboxState.selected, previousSelected);
+    assert.equal(inboxState.total, 4);
+    assert.equal(inboxState.filter, "all");
+    race = undefined;
+    await refreshInbox();
+    assert.equal(inboxState.filter, "human");
+    assert.equal(inboxState.total, 3);
+    saved = "all";
+    await refreshInbox();
     failSave = true;
     button("Loop triaged").click();
     await settled();

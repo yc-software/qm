@@ -418,3 +418,24 @@ test("a quiet fire that needs nobody says so", async () => {
   const summary = await runLoopFire(loop, s, effects(s));
   assert.equal(fireNeedsAttention(summary), false);
 });
+
+test("already classified automated inbox messages stay visible without model work and newer human messages resume work", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { surface: "inbox:gmail" });
+  await s.items.ingest([
+    { loopId: loop.id, dedupeKey: "receipt", source: "gmail", sourceAt: 1, sourcePayload: { automated: true } },
+  ]);
+  const noWork = effects(s, {
+    enumerate: async () => [],
+    work: async () => assert.fail("Classified automated messages must not consume model work"),
+  });
+  assert.equal((await runLoopFire(loop, s, noWork)).worked, 0);
+  const [retained] = await s.items.byLoop(loop.id);
+  assert.equal(retained!.status, "ready");
+  assert.equal((await runLoopFire(loop, s, noWork)).worked, 0);
+  await s.items.ingest([
+    { loopId: loop.id, dedupeKey: "receipt", source: "gmail", sourceAt: 2, sourcePayload: { automated: false } },
+  ]);
+  const next = await runLoopFire(loop, s, effects(s, { enumerate: async () => [] }));
+  assert.equal(next.worked, 1);
+});

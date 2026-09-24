@@ -475,6 +475,17 @@ export async function refreshInbox(
     const viewIds = new Set(["all", fullViewId, ...[...surfaces].map((surface) => surface.viewId)]);
     const moreView = opts.viewId ?? fullViewId;
     const combined = new Map<string, InboxItem>();
+    const windows = new Map(feedWindows);
+    let metadata: Feed | undefined;
+    let refreshFilter: InboxFilter | undefined;
+    const fetchFeed = async (qs: URLSearchParams): Promise<Feed> => {
+      if (refreshFilter) qs.set("filter", refreshFilter);
+      const feed = await api<Feed>(`/api/inbox?${qs}`);
+      const filter = feed.filter ?? "triaged";
+      if (refreshFilter && filter !== refreshFilter) throw new Error("Inbox filter changed during refresh. Try again.");
+      refreshFilter = filter;
+      return feed;
+    };
     for (const viewId of [...viewIds, ...[...viewIds].filter((id) => id !== "sent").map((id) => `handled:${id}`)]) {
       const handled = viewId.startsWith("handled:");
       const filterView = handled ? viewId.slice(8) : viewId;
@@ -484,21 +495,28 @@ export async function refreshInbox(
       if (handled) qs.set("view", "handled");
       else if (filterView === "sent") qs.set("view", "sent");
       if (filterView !== "all" && filterView !== "sent")
-        qs.set("loopId", inboxState.selected.find((loop) => loop.source === filterView)?.id ?? filterView);
-      let found = await api<Feed>(`/api/inbox?${qs}`);
+        qs.set(
+          "loopId",
+          (metadata?.selected ?? inboxState.selected).find((loop) => loop.source === filterView)?.id ?? filterView,
+        );
+      let found = await fetchFeed(qs);
       while (found.nextCursor && found.items.length < limit) {
         qs.set("cursor", found.nextCursor);
-        const page = await api<Feed>(`/api/inbox?${qs}`);
+        const page = await fetchFeed(qs);
         found = { ...page, items: [...found.items, ...page.items] };
       }
-      feedWindows.set(viewId, { limit, nextCursor: found.nextCursor });
-      inboxState.selected = found.selected;
-      inboxState.available = found.available;
-      inboxState.total = found.total;
-      inboxState.filter = found.filter ?? "triaged";
-      inboxState.migrationPending = found.migrationPending;
+      windows.set(viewId, { limit, nextCursor: found.nextCursor });
+      metadata = found;
       for (const entry of found.items) combined.set(entry.id, toInboxItem(entry));
     }
+    if (!metadata) return;
+    feedWindows.clear();
+    for (const [view, window] of windows) feedWindows.set(view, window);
+    inboxState.selected = metadata.selected;
+    inboxState.available = metadata.available;
+    inboxState.total = metadata.total;
+    inboxState.filter = refreshFilter!;
+    inboxState.migrationPending = metadata.migrationPending;
     const next = [...combined.values()];
     const openId = fullSurface?.selectedId;
     const detail = openId ? inboxState.items.find((item) => item.id === openId && item.detailLoaded) : undefined;

@@ -190,7 +190,7 @@ test("automated retention uses message age and preserves drafts, outputs, claims
   await ledger.ingest([
     entry({ dedupeKey: "old-gmail", sourceAt: 1_000, sourcePayload: { automated: true, from: "Enriched today" } }),
   ]);
-  assert.equal(await ledger.prune(LOOP, { maxItems: 500, retentionMs: 86_400_000, now }), 3);
+  assert.equal(await ledger.prune(LOOP, { includeAutomated: true, maxItems: 500, retentionMs: 86_400_000, now }), 3);
   assert.deepEqual((await ledger.byLoop(LOOP)).map((item) => item.sourceKey).sort(), [
     "agent-draft",
     "deciding",
@@ -208,7 +208,7 @@ test("automated retention bounds the oldest messages without deleting unresolved
     await ledger.ingest([entry({ dedupeKey: String(n), sourceAt: n, sourcePayload: { automated: true } })]);
   }
   await ledger.ingest([entry({ dedupeKey: "human", sourceAt: 1 })]);
-  assert.equal(await ledger.prune(LOOP, { maxItems: 2, retentionMs: 10_000, now: 4 }), 2);
+  assert.equal(await ledger.prune(LOOP, { includeAutomated: true, maxItems: 2, retentionMs: 10_000, now: 4 }), 2);
   assert.deepEqual((await ledger.byLoop(LOOP)).map((item) => item.sourceKey).sort(), ["3", "human"]);
 });
 
@@ -217,7 +217,10 @@ test("automated retention falls back to creation time rather than enrichment tim
   await ledger.ingest([entry({ sourceAt: undefined, sourcePayload: { automated: true } })]);
   const [item] = await ledger.byLoop(LOOP);
   await ledger.annotate(item!.id, { from: "Updated later" });
-  assert.equal(await ledger.prune(LOOP, { maxItems: 500, retentionMs: 100, now: item!.createdAt + 100 }), 1);
+  assert.equal(
+    await ledger.prune(LOOP, { includeAutomated: true, maxItems: 500, retentionMs: 100, now: item!.createdAt + 100 }),
+    1,
+  );
 });
 
 test("automated retention cannot delete a draft or newer source written after its snapshot", async () => {
@@ -238,7 +241,7 @@ test("automated retention cannot delete a draft or newer source written after it
       }
       return conditionalDelete(id, predicate);
     };
-    assert.equal(await ledger.prune(LOOP, { maxItems: 500, retentionMs: 100, now: 10_000 }), 1);
+    assert.equal(await ledger.prune(LOOP, { includeAutomated: true, maxItems: 500, retentionMs: 100, now: 10_000 }), 1);
     const remaining = await ledger.byLoop(LOOP);
     assert.deepEqual(
       remaining.map((item) => item.id),
@@ -249,13 +252,70 @@ test("automated retention cannot delete a draft or newer source written after it
   }
 });
 
-test("automated retention skips open messages when the backing lacks atomic deletion", async () => {
+test("retention skips all messages when the backing lacks atomic deletion", async () => {
   const backing = createMemoryMap<LoopItem>();
   delete backing.deleteIf;
   const ledger = createLoopItemLedger(backing);
+  await ledger.ingest([entry({ sourcePayload: { automated: true } }), entry({ dedupeKey: "resolved" })]);
+  await ledger.recordAction(loopItemId(LOOP, "resolved"), { kind: "dismiss", outcome: "dismissed" });
+  backing.delete = async () => assert.fail("Pruning must not use unconditional deletion");
+  assert.equal(await ledger.prune(LOOP, { includeAutomated: true, maxItems: 0, retentionMs: 100, now: 10_000 }), 0);
+  assert.equal((await ledger.byLoop(LOOP)).length, 2);
+});
+
+test("automated classification clears stale agent drafts even when the payload is unchanged", async () => {
+  for (const automated of [false, true]) {
+    const ledger = createLoopItemLedger();
+    await ledger.ingest([
+      entry({ sourcePayload: { automated }, proposal: { by: "agent", data: { body: "Stale reply" } } }),
+    ]);
+    const [before] = await ledger.byLoop(LOOP);
+    assert.deepEqual(await ledger.ingest([entry({ sourcePayload: { automated: true } })]), {
+      created: 0,
+      updated: 1,
+      skipped: 0,
+    });
+    const item = (await ledger.get(before!.id))!;
+    assert.equal(item.proposal, undefined);
+    assert.equal(item.status, "ready");
+    assert.equal(item.sourcePayload!.automated, true);
+    assert.deepEqual(item.agentDrafts, before!.agentDrafts);
+  }
+});
+
+test("automated reclassification waits for an active decision before removing an agent draft", async () => {
+  const ledger = createLoopItemLedger();
+  await ledger.ingest([entry({ proposal: { by: "agent", data: { body: "Under review" } } })]);
+  const [item] = await ledger.byLoop(LOOP);
+  const token = await ledger.acquireDecision(item!.id);
+  const before = await ledger.get(item!.id);
+  await assert.rejects(ledger.ingest([entry({ sourcePayload: { automated: true } })]), /active decision/);
+  assert.deepEqual(await ledger.get(item!.id), before);
+  await ledger.releaseDecision(item!.id, token!);
   await ledger.ingest([entry({ sourcePayload: { automated: true } })]);
-  assert.equal(await ledger.prune(LOOP, { maxItems: 0, retentionMs: 100, now: 10_000 }), 0);
-  assert.equal((await ledger.byLoop(LOOP)).length, 1);
+  assert.equal((await ledger.get(item!.id))!.proposal, undefined);
+});
+
+test("classification prevents an in-flight worker from restoring an automated reply draft", async () => {
+  const ledger = createLoopItemLedger();
+  await ledger.ingest([entry()]);
+  const [item] = await ledger.byLoop(LOOP);
+  const claimed = await ledger.claim(item!.id);
+  await ledger.ingest([entry({ sourcePayload: { automated: true } })]);
+  assert.equal(
+    await ledger.setProposal(
+      item!.id,
+      { by: "agent", data: { body: "Outdated background reply" } },
+      { expectedClaimToken: claimed!.claimToken! },
+    ),
+    null,
+  );
+  assert.equal((await ledger.get(item!.id))!.proposal, undefined);
+  await ledger.markReady(item!.id, [], claimed!.claimToken!);
+  assert.ok(await ledger.setProposal(item!.id, { by: "agent", data: { body: "Explicitly requested reply" } }));
+  assert.ok(await ledger.setProposal(item!.id, { by: "human", data: { body: "My edited reply" } }));
+  await ledger.ingest([entry({ sourcePayload: { automated: true } })]);
+  assert.equal((await ledger.get(item!.id))!.proposal!.data.body, "My edited reply");
 });
 
 test("a newer source event refreshes the payload and the proposal", async () => {
@@ -590,4 +650,11 @@ test("continuing a sent reply clears the old draft without losing chat or allowi
   const ordinary = (await ledger.byLoop(LOOP)).find((item) => item.sourceKey === "ordinary")!;
   await ledger.recordAction(ordinary.id, { kind: "send", outcome: "actioned" });
   assert.equal(await ledger.reopen(ordinary.id, { sentReply: true }), null);
+});
+
+test("generic loop pruning keeps unresolved automated inputs unless inbox retention is requested", async () => {
+  const ledger = createLoopItemLedger();
+  await ledger.ingest([entry({ sourceAt: 1, sourcePayload: { automated: true } })]);
+  assert.equal(await ledger.prune(LOOP, { maxItems: 0, retentionMs: 1, now: 100 }), 0);
+  assert.equal((await ledger.byLoop(LOOP)).length, 1);
 });

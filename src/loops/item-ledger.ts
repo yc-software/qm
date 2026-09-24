@@ -46,6 +46,7 @@ interface IngestOutcome {
 interface PruneOptions {
   maxItems: number;
   retentionMs: number;
+  includeAutomated?: boolean;
   now?: number;
 }
 
@@ -148,8 +149,17 @@ function mergeIngest(item: LoopItem, entry: IngestEntryInput, now: number): Loop
     )
       return null;
     const sourcePayload = { ...item.sourcePayload, ...entry.sourcePayload };
-    if (canonicalJson(sourcePayload) === canonicalJson(item.sourcePayload ?? {})) return null;
-    return { ...item, sourcePayload, inboxPreview: inboxPreview(sourcePayload), updatedAt: now };
+    const clearAgentProposal = sourcePayload.automated === true && item.proposal?.by === "agent";
+    if (!clearAgentProposal && canonicalJson(sourcePayload) === canonicalJson(item.sourcePayload ?? {})) return null;
+    if (clearAgentProposal && item.decisionToken && (item.decisionAt ?? 0) + DECISION_LEASE_MS > now)
+      throw new Error("Item has an active decision; retry the source update");
+    return {
+      ...item,
+      ...(clearAgentProposal ? { proposal: undefined } : {}),
+      sourcePayload,
+      inboxPreview: inboxPreview(sourcePayload),
+      updatedAt: now,
+    };
   }
   const keepHumanProposal = item.proposal?.by === "human" && !newerSource;
   const incoming = entry.proposal ? { ...entry.proposal, at: now } : item.proposal;
@@ -348,6 +358,8 @@ export function createLoopItemLedger(
       const after = await update(id, (item) => {
         if (item.status === "shipped") return item;
         if (opts?.expectedClaimToken !== undefined && item.claimToken !== opts.expectedClaimToken) return item;
+        if (opts?.expectedClaimToken !== undefined && proposal.by === "agent" && item.sourcePayload?.automated === true)
+          return item;
         if (opts?.expectedAt !== undefined && item.proposal?.at !== opts.expectedAt) return item;
         applied = true;
         const now = Date.now();
@@ -443,11 +455,13 @@ export function createLoopItemLedger(
       return applied ? after : null;
     },
     async prune(loopId, options) {
+      if (!backing.deleteIf) return 0;
       const now = options.now ?? Date.now();
       const items = await forLoop(loopId);
       const canPrune = (item: LoopItem): boolean =>
         isResolved(item) ||
-        (["gmail", "slack"].includes(item.source ?? String(item.sourcePayload?.source ?? "")) &&
+        (options.includeAutomated === true &&
+          ["gmail", "slack"].includes(item.source ?? String(item.sourcePayload?.source ?? "")) &&
           item.sourcePayload?.automated === true &&
           !item.proposal &&
           item.outputIds.length === 0 &&
@@ -464,14 +478,9 @@ export function createLoopItemLedger(
       }
       let deleted = 0;
       for (const [id, snapshot] of doomed) {
-        if (backing.deleteIf) {
-          const unchanged = canonicalJson(snapshot);
-          if (await backing.deleteIf(id, (current) => canPrune(current) && canonicalJson(current) === unchanged))
-            deleted++;
-        } else if (isResolved(snapshot)) {
-          await backing.delete(id);
+        const unchanged = canonicalJson(snapshot);
+        if (await backing.deleteIf(id, (current) => canPrune(current) && canonicalJson(current) === unchanged))
           deleted++;
-        }
       }
       return deleted;
     },
