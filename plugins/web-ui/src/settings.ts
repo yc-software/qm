@@ -3,7 +3,7 @@ import "./slack-account";
 import { openModelConnectManager, type StatusResponse } from "./model-connect";
 import { api, withBase } from "./core-bridge";
 import { html, nothing, render, type TemplateResult } from "lit";
-import { BookOpen, Download, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type IconNode } from "lucide";
+import { Download, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type IconNode } from "lucide";
 import { icon } from "./ui";
 import { ADMIN_HOME_URL, appState, can, signOut } from "./shell";
 import { sessionsState, setWebOnly } from "./sessions";
@@ -17,7 +17,6 @@ const CUSTOM_THEME_KEY = "theme:custom";
 const CUSTOM_THEME_STYLE_ID = "custom-theme";
 const THEME_FILE_ACCEPT = ".itermcolors,.plist,.json,.jsonc,application/json,text/xml,application/xml";
 
-const QM_ABOUT_URL = "https://github.com/yc-software/qm";
 const QM_MAC_DOWNLOAD_URL = "https://github.com/yc-software/qm/releases/download/desktop-v0.1.0/QM-mac-arm64.zip";
 
 const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string; glyph: IconNode }> = [
@@ -403,22 +402,6 @@ function desktopRow(): TemplateResult {
   `;
 }
 
-function aboutRow(): TemplateResult {
-  return html`
-    <div class="settings-row">
-      <div class="settings-row-copy">
-        <div class="settings-row-title">Learn more about QM</div>
-        <div class="settings-row-note">
-          Why Y Combinator built this open-source agent harness, and how to run your own.
-        </div>
-      </div>
-      <a class="btn settings-row-action" href=${QM_ABOUT_URL} target="_blank" rel="noreferrer noopener">
-        ${icon(BookOpen, 15)}<span>Read the announcement</span>${icon(ExternalLink, 14)}
-      </a>
-    </div>
-  `;
-}
-
 function accountRow(): TemplateResult {
   const me = appState.me;
   return html`
@@ -443,7 +426,7 @@ function settingsPane(): TemplateResult {
     </div>
     <div class="settings-group">
       ${aiAccountsRow()} ${themeRow()} ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${desktopRow()}
-      ${aboutRow()} ${accountRow()}
+      ${accountRow()}
       <div class="settings-row settings-slack-account">
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
       </div>
