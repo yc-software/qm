@@ -10,16 +10,11 @@ export function recoveredRuntime(
 ): RuntimeChoice | undefined {
   for (const entry of [...entries].reverse()) {
     const p = entry.payload;
-    if (
-      entry.type !== "tool_result" ||
-      !isObj(p) ||
-      p.tool !== "runtime" ||
-      p.runId !== runId ||
-      p.actorId !== actorId ||
-      !isObj(p.runtimeHandoff)
-    )
-      continue;
-    const choice = p.runtimeHandoff.choice;
+    if (!isObj(p) || p.runId !== runId || p.actorId !== actorId) continue;
+    let choice: unknown;
+    if (entry.type === "tool_result" && p.tool === "runtime" && isObj(p.runtimeHandoff))
+      choice = p.runtimeHandoff.choice;
+    else if (entry.type === "system" && p.kind === "runtime_active") choice = p.choice;
     if (
       isObj(choice) &&
       isHarnessId(choice.harnessId) &&
@@ -28,6 +23,32 @@ export function recoveredRuntime(
       (choice.fastMode === undefined || typeof choice.fastMode === "boolean")
     )
       return choice as unknown as RuntimeChoice;
+  }
+  return undefined;
+}
+
+export function recoveredModelAccount(
+  entries: readonly SessionEntry[],
+  runId: string,
+  actorId: string,
+): import("../resolution/config-store.ts").ModelAccount | undefined {
+  for (const entry of [...entries].reverse()) {
+    const p = entry.payload;
+    if (
+      entry.type !== "system" ||
+      !isObj(p) ||
+      p.kind !== "runtime_active" ||
+      p.runId !== runId ||
+      p.actorId !== actorId
+    )
+      continue;
+    if (
+      p.modelAccount === "company" ||
+      p.modelAccount === "personal" ||
+      p.modelAccount === "anthropic" ||
+      p.modelAccount === "openai"
+    )
+      return p.modelAccount;
   }
   return undefined;
 }

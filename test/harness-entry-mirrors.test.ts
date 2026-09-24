@@ -98,7 +98,11 @@ test("the harness router mirrors for foreign adapters and leaves native-tape ada
   const router = createHarnessRouter(
     adapters as never,
     adapters.get("pi")!,
-    (input) => ({ harnessId: (input as { runtime?: { harnessId?: string } }).runtime?.harnessId ?? "pi" }) as never,
+    (input) =>
+      ({
+        harnessId: (input as { runtime?: { harnessId?: string } }).runtime?.harnessId ?? "pi",
+        modelId: "gpt-5.6-terra",
+      }) as never,
   );
   for (const harnessId of ["pi", "codex"]) {
     const taped: NewTapeRecord[] = [];
@@ -106,6 +110,7 @@ test("the harness router mirrors for foreign adapters and leaves native-tape ada
     await router.turns.runTurn({
       ...base,
       session: { id: `s-${harnessId}` },
+      tools: {},
       runtime: { harnessId },
       history: [],
     } as unknown as HarnessTurnInput);

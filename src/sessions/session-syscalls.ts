@@ -1,3 +1,7 @@
+import { isHarnessId } from "../model/pi-models.ts";
+import { recoveredRuntime, recoveredModelAccount } from "../harness/runtime-recovery.ts";
+import type { ModelSelector } from "../harness/model-selector.ts";
+import type { RuntimeChoice } from "../harness/harness.ts";
 import { principalDestination } from "../reach/reach.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
@@ -38,14 +42,18 @@ export function requiresDelegation(
 
 export async function delegatedAuthorizationOrigin(
   request: OrchestratorInput,
-  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "getByThread" | "getForParticipant"> },
+  deps: {
+    runs: Pick<RunStore, "get">;
+    sessions: Pick<SessionStore, "getByThread" | "getForParticipant" | "getEntries">;
+  },
+  purpose: "tools" | "model" = "tools",
 ): Promise<OrchestratorInput["origin"] | undefined> {
   const seen = new Set<string>();
   let current = request;
   for (let depth = 0; depth < 32; depth++) {
     if (
       current.origin.kind !== "automation" ||
-      current.readOnly ||
+      (purpose === "tools" && current.readOnly) ||
       current.privateSessionMessage ||
       current.swarm ||
       !current.delegatingRunId ||
@@ -69,11 +77,20 @@ export async function delegatedAuthorizationOrigin(
       source.sessionId === child.threadRef;
     if (!delegated && !continued) return;
     const parent = source.request;
+    const parentAccount =
+      purpose === "model"
+        ? (recoveredModelAccount(
+            await deps.sessions.getEntries(delegated ? sender.id : child.id),
+            source.id,
+            parent.actor.id,
+          ) ?? parent.modelAccount)
+        : undefined;
     const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
     if (
       parent.actor.id !== request.actor.id ||
       parent.actor.type !== "internal" ||
-      parent.readOnly ||
+      (purpose === "tools" && parent.readOnly) ||
+      (purpose === "model" && parentAccount !== request.modelAccount) ||
       parent.privateSessionMessage ||
       parent.swarm ||
       sender.scopeId !== child.scopeId ||
@@ -110,7 +127,7 @@ export interface SessionOpenInput {
   task: string;
   name?: string;
   readOnly?: boolean;
-  model?: string;
+  model?: string | ModelSelector;
   harness?: string;
   thinkingLevel?: string;
 }
@@ -154,6 +171,8 @@ type SessionReadResult =
   | { ok: false; message: string };
 
 interface SessionSyscallBinding {
+  modelAccount?: () => OrchestratorInput["modelAccount"];
+  authorizeRuntime?: (choice: RuntimeChoice) => Promise<string | null>;
   session: Session;
   scopeId: ScopeId;
   orgScopeId?: ScopeId;
@@ -181,7 +200,7 @@ interface SessionSyscallBinding {
 export interface SessionSyscalls {
   receive?(timeoutMs?: number): Promise<SessionMessage[]>;
   acknowledge?(ids: string[]): Promise<void>;
-  open(input: SessionOpenInput): Promise<SessionOpenResult>;
+  open(input: SessionOpenInput, active?: RuntimeChoice): Promise<SessionOpenResult>;
   write(input: SessionWriteInput): Promise<SessionWriteResult>;
   read(input: SessionReadInput): Promise<SessionReadResult>;
 }
@@ -216,7 +235,12 @@ export interface SessionSyscallDeps {
   advisoryLock?: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
   authorize?: (session: Session, actorId: string) => Promise<boolean>;
-  validateRuntime?: (input: SessionOpenInput, scopeId: ScopeId) => Promise<void>;
+  resolveRuntime?: (
+    selector: "inherit" | ModelSelector,
+    scopeId: ScopeId,
+    active?: RuntimeChoice,
+    authorize?: (choice: RuntimeChoice) => Promise<string | null>,
+  ) => Promise<RuntimeChoice>;
 }
 
 function autoTitle(task: string): string {
@@ -318,6 +342,8 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.model ? { model: meta.model } : {}),
     ...(meta.harness ? { harness: meta.harness } : {}),
     ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
+    ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
+    ...(meta.modelAccount ? { modelAccount: meta.modelAccount } : {}),
     ...(meta.timezone ? { timezone: meta.timezone } : {}),
   };
 }
@@ -525,7 +551,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         async acknowledge(ids) {
           await deps.mailbox?.acknowledge(binding.session.id, ids);
         },
-        async open(input) {
+        async open(input, active) {
           return lock
             .withLock("session-tree-admission", async (): Promise<SessionOpenResult> => {
               if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
@@ -537,7 +563,18 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const task = input.task?.trim();
               if (!task)
                 return { ok: false, message: "open requires a task: the full instruction the subagent works from." };
-              await deps.validateRuntime?.(input, binding.scopeId);
+              if (typeof input.model === "object" && (input.harness || input.thinkingLevel))
+                throw new Error("model selector cannot be combined with legacy harness or thinkingLevel overrides");
+              if (input.harness && !isHarnessId(input.harness)) throw new Error("harness_not_approved");
+              let selector: "inherit" | ModelSelector = "inherit";
+              if (typeof input.model === "object") selector = input.model;
+              else if ((input.model && input.model !== "inherit") || input.harness || input.thinkingLevel) {
+                selector = {
+                  modelId: input.model && input.model !== "inherit" ? input.model : (active?.modelId ?? ""),
+                  ...(input.harness && isHarnessId(input.harness) ? { harnessId: input.harness } : {}),
+                  ...(input.thinkingLevel ? { effortLevel: input.thinkingLevel } : {}),
+                };
+              }
               const threadRef = `${SUBAGENT_THREAD_PREFIX}${
                 input.requestId
                   ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
@@ -566,6 +603,25 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   message: `all ${cap} subagent run slots for this conversation are in use — wait for one to finish, read their sessions, or interrupt one you no longer need.`,
                 };
               }
+              const stored = existing?.spawnMeta;
+              const persistedRuntime =
+                stored?.model && isHarnessId(stored.harness)
+                  ? {
+                      modelId: stored.model,
+                      harnessId: stored.harness,
+                      effortLevel: stored.thinkingLevel,
+                      fastMode: stored.fastMode,
+                    }
+                  : undefined;
+              const runtime =
+                (await deps.resolveRuntime?.(
+                  persistedRuntime ? "inherit" : selector,
+                  binding.scopeId,
+                  persistedRuntime ?? active,
+                  binding.modelAccount?.() !== "company" ? binding.authorizeRuntime : undefined,
+                )) ??
+                persistedRuntime ??
+                active;
               const child = await deps.sessions.getOrCreateByThread(
                 threadRef,
                 binding.session.type,
@@ -574,7 +630,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 binding.session.surface ?? binding.request.surface,
               );
               const title = existing?.title || input.name?.trim() || autoTitle(task);
-              const meta: SpawnMeta = {
+              const meta: SpawnMeta = existing?.spawnMeta ?? {
                 ...(caller.origin.kind === "automation"
                   ? {
                       origin: {
@@ -601,9 +657,19 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 ...(binding.request.deliveryTarget ? { deliveryTarget: binding.request.deliveryTarget } : {}),
                 ...(binding.request.timezone ? { timezone: binding.request.timezone } : {}),
                 ...(input.readOnly || binding.request.readOnly ? { readOnly: true } : {}),
-                ...(input.model ? { model: input.model } : {}),
-                ...(input.harness ? { harness: input.harness } : {}),
-                ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+                ...(runtime
+                  ? {
+                      model: runtime.modelId,
+                      harness: runtime.harnessId,
+                      thinkingLevel: runtime.effortLevel,
+                      fastMode: runtime.fastMode,
+                    }
+                  : {
+                      ...(typeof input.model === "string" && input.model !== "inherit" ? { model: input.model } : {}),
+                      ...(input.harness ? { harness: input.harness } : {}),
+                      ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+                    }),
+                ...(binding.modelAccount ? { modelAccount: binding.modelAccount() } : {}),
               };
               if (!existing?.spawnMeta) {
                 await deps.sessions.setParentSession(child.id, binding.session.id);
@@ -661,6 +727,17 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const previous = await deps.runs.latestForThread(target.threadRef, { excludePrivateMessages: true });
               const meta = previous?.request ?? target.spawnMeta;
               if (!meta) return { ok: false, message: "the target has no verified runtime context yet" };
+              if (
+                input.followup &&
+                meta.modelAccount &&
+                meta.modelAccount !== "company" &&
+                (meta.actor.id !== caller.actor.id ||
+                  (binding.request.origin?.kind === "automation" && binding.modelAccount?.() === "company"))
+              )
+                throw new Error("this caller cannot continue a child using another runtime account");
+              const previousRuntime = previous
+                ? recoveredRuntime(await deps.sessions.getEntries(target.id), previous.id, previous.request.actor.id)
+                : undefined;
               const privateChild = isSubagentThreadRef(target.threadRef);
               const privateMessage = binding.request.privateSessionMessage === true || !privateChild;
               const messageDepth = (binding.request.sessionMessageDepth ?? 0) + 1;
@@ -670,6 +747,14 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 target,
                 {
                   ...meta,
+                  ...(previousRuntime
+                    ? {
+                        model: previousRuntime.modelId,
+                        harness: previousRuntime.harnessId,
+                        thinkingLevel: previousRuntime.effortLevel,
+                        fastMode: previousRuntime.fastMode,
+                      }
+                    : {}),
                   surface: meta.surface ?? target.surface ?? "web",
                   actor: caller.actor,
                   origin: caller.origin,
@@ -894,8 +979,18 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   });
   const inherited = { ...meta };
   delete (inherited as Partial<SpawnMeta>).openFingerprint;
+  const parentRun = latestParent?.request.actor.id === run.request.actor.id ? latestParent : initiatingRun;
+  const parentRequest = parentRun?.request ?? parent.spawnMeta;
+  const parentRuntime = parentRun
+    ? recoveredRuntime(await deps.sessions.getEntries(parent.id), parentRun.id, parentRun.request.actor.id)
+    : undefined;
   const request: OrchestratorInput = {
     ...inherited,
+    model: parentRuntime?.modelId ?? parentRequest?.model,
+    harness: parentRuntime?.harnessId ?? parentRequest?.harness,
+    thinkingLevel: parentRuntime?.effortLevel ?? parentRequest?.thinkingLevel,
+    fastMode: parentRuntime?.fastMode ?? parentRequest?.fastMode,
+    modelAccount: parentRequest?.modelAccount ?? (originalParent ? child.spawnMeta.modelAccount : undefined),
     sessionSenderId: child.id,
     conversation: {
       ...meta.conversation,
@@ -921,7 +1016,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "background",
     "cancel",
     "queueMs",
-    "modelAccount",
     "privateSessionMessage",
     "sessionMessageDepth",
     "delegatingRunId",
@@ -940,7 +1034,10 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "conversationHeader",
   ] as const)
     delete request[key];
-  if (!originalParent) request.addressed = false;
+  if (!originalParent) {
+    request.addressed = false;
+    delete request.modelAccount;
+  }
   const prepared = deps.prepareRequest ? await deps.prepareRequest(request) : request;
   assertAudienceCompatible(run.request, prepared);
   const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
@@ -983,6 +1080,11 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     audience: prepared.conversation.audience,
     createdAt: Date.now(),
   });
+  if (
+    !originalParent &&
+    [currentContext?.modelAccount, child.spawnMeta.modelAccount].some((account) => account && account !== "company")
+  )
+    return true;
   if (
     requiresDelegation(
       { ...prepared, surfaceTools: meta.surfaceTools },

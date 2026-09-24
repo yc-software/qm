@@ -1,6 +1,7 @@
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import {
   defaultModelForHarness,
+  defaultInteractiveThinkingLevel,
   fastModeModelIds,
   harnessSupportsFastMode,
   isHarnessId,
@@ -222,7 +223,15 @@ export function createHarnessRouter(
     tools: utility.tools,
     turns: {
       async runTurn(input) {
-        const choice = await resolve(input);
+        const resolved = await resolve(input);
+        const model = resolveModel(resolved.modelId);
+        const choice: RuntimeChoice = {
+          ...resolved,
+          effortLevel:
+            resolved.effortLevel ??
+            (resolved.harnessId === "pi" && model ? defaultInteractiveThinkingLevel(model) : "auto"),
+          fastMode: resolved.fastMode ?? false,
+        };
         const adapter = adapters.get(choice.harnessId);
         if (!adapter) throw new Error(`harness ${choice.harnessId} is unavailable`);
         const prior = lastHarness.get(input.session.id);
@@ -231,12 +240,35 @@ export function createHarnessRouter(
           await adapter.turns.resetSession?.(input.session.id);
         }
         lastHarness.set(input.session.id, choice.harnessId);
+        if (input.runId && input.runtimeActorId)
+          await input.emit({
+            type: "system",
+            payload: {
+              kind: "runtime_active",
+              runId: input.runId,
+              actorId: input.runtimeActorId,
+              choice,
+              modelAccount: input.runtimeAccount,
+            },
+            scopeLabel: input.scopeLabel,
+          });
         const dispatched: HarnessTurnInput = {
           ...input,
           runtime: choice,
-          tools: input.runtimeControl
-            ? { ...input.tools, runtime: (request, signal) => input.runtimeControl!(choice, request, signal) }
-            : input.tools,
+          tools: {
+            ...input.tools,
+            ...(input.runtimeControl
+              ? { runtime: (request, signal) => input.runtimeControl!(choice, request, signal) }
+              : {}),
+            ...(input.tools.sessionSyscalls
+              ? {
+                  sessionSyscalls: {
+                    ...input.tools.sessionSyscalls,
+                    open: (request) => input.tools.sessionSyscalls!.open(request, choice),
+                  },
+                }
+              : {}),
+          },
         };
         const taped = adapter.profile.capabilities.has("native-tape") ? dispatched : withTapedEntryMirrors(dispatched);
         return adapter.profile.capabilities.has("goal-enforcement")

@@ -1,4 +1,5 @@
-import { availableRuntimeError } from "./api/runtime-config.ts";
+import { resolveModelSelector } from "./harness/model-selector.ts";
+import { availableRuntimeError, runtimeConfigBody, webuiModelEnabled } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
 import { createKeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
@@ -1849,12 +1850,24 @@ export function buildApp(
     advisoryLock,
     prepareRequest: prepareSessionRequest,
     authorize: (session, actorId) => canWriteScope(actorId, session.scopeId),
-    async validateRuntime(input, scope) {
-      await resolveRuntimeChoiceDurable(configStore, runtimeOrgScope, scope, fallback, {
-        ...(input.harness ? { harnessId: input.harness as HarnessId } : {}),
-        ...(input.model ? { modelId: input.model } : {}),
-        ...(input.thinkingLevel ? { effortLevel: input.thinkingLevel } : {}),
-      });
+    async resolveRuntime(selector, scope, active, authorize) {
+      await refreshModels();
+      const deps = {
+        config: configStore,
+        harnessId: fallbackHarness,
+        baseModelDefault: fallback.modelId,
+        providerKeys: providerKeysPresent(config),
+        modelCredentials,
+        modelCredentialFetch: overrides.modelCredentialFetch,
+      };
+      const inherited = active ?? (await resolveRuntimeChoiceDurable(configStore, runtimeOrgScope, scope, fallback));
+      const catalog = await runtimeConfigBody({ deps }, scope, authorize);
+      const result = resolveModelSelector(selector, inherited, catalog);
+      if (!result.ok) throw new Error(result.error);
+      if (!(await webuiModelEnabled({ deps }, result.choice.modelId))) throw new Error("model_not_enabled");
+      const authError = await authorize?.(result.choice);
+      if (authError) throw new Error(authError);
+      return result.choice;
     },
   });
   const orchestratorDeps: OrchestratorDeps = {
@@ -2409,7 +2422,7 @@ export function buildApp(
   );
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
   orchestratorDeps.control = createControlService(app, scheduler, admin);
-  orchestratorDeps.validateScheduledRuntime = (scope, choice) =>
+  orchestratorDeps.validateScheduledRuntime = (scope, choice, authorizeChoice) =>
     availableRuntimeError(
       {
         deps: {
@@ -2424,6 +2437,7 @@ export function buildApp(
       },
       scope,
       choice,
+      authorizeChoice,
     );
   orchestratorDeps.runtime = createRuntimeService(
     {

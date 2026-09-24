@@ -180,6 +180,7 @@ export interface OrchestratorDeps {
   validateScheduledRuntime?: (
     scope: import("../../types.ts").ScopeId,
     choice: import("../../harness/harness.ts").RuntimeChoice,
+    authorizeChoice?: (choice: import("../../harness/harness.ts").RuntimeChoice) => Promise<string | null>,
   ) => Promise<string | null>;
   livenessCache?: LivenessCache;
   connectorTokens?: ConnectorTokenStore;

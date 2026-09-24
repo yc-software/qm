@@ -8,7 +8,7 @@ import {
   isTextDocument,
   loadDocumentInputs,
 } from "./document-inputs.ts";
-import { recoveredRuntime } from "../harness/runtime-recovery.ts";
+import { recoveredRuntime, recoveredModelAccount } from "../harness/runtime-recovery.ts";
 import { createCanWriteScope, withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { goalViewFromEntry } from "../runs/turn-stream.ts";
 import type {
@@ -2618,6 +2618,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   session,
                   scopeId: scopeId as ScopeId,
                   orgScopeId: resolution.orgScopeId,
+                  modelAccount: () => modelAccount,
+                  authorizeRuntime: async (choice) => (modelAccount !== "company" ? checkRuntimeAuth(choice) : null),
                   request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
                 }),
               }
@@ -3075,6 +3077,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const wantsOrgFastMode =
           typeof input.fastMode !== "boolean" && humanTurn && (await deps.config?.getInteractiveFastModeDurable());
         const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanTurn, wantsOrgFastMode === true);
+        const modelAccount =
+          input.modelAccount ??
+          (input.runId && isRetry ? recoveredModelAccount(history, input.runId, actor.id) : undefined) ??
+          (humanTurn ? await deps.config?.getModelAccountDurable(actor.id) : undefined) ??
+          "company";
+        if (
+          modelAccount !== "company" &&
+          !humanTurn &&
+          (!deps.runs ||
+            !(await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions }, "model")))
+        )
+          throw new NonRetryableTurnError(
+            "This automated task has no originating authorization for the selected personal AI account.",
+          );
         const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
           let userProviderKeys: ProviderKeys | undefined;
           let userModelOverride: string | undefined;
@@ -3082,8 +3098,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let claudeOauthToken: string | undefined;
           let codexTurnAuth: CodexTurnAuth | undefined;
           const userCredStore = deps.userModelCredentials;
-          const account = input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company";
-          if (userCredStore && humanTurn && account !== "company") {
+          const account = modelAccount;
+          if (account !== "company") {
+            if (!userCredStore)
+              throw new NonRetryableTurnError(
+                "Your personal AI account is unavailable; this task cannot continue on company access.",
+              );
             const [anthCred, oaiCred] = await Promise.all([
               account === "openai" ? null : userCredStore.get(actor.id, "anthropic"),
               account === "anthropic" ? null : userCredStore.get(actor.id, "openai"),
@@ -3093,8 +3113,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const routing = resolveIndividualAuthRouting(
               anthCred ?? null,
               oaiCred ?? null,
-              account === "personal" || input.surface === "web" ? (runtime.modelId ?? input.model) : runtime.modelId,
-              account === "personal" || input.surface === "web" ? preferredHarness : runtime.harnessId,
+              account === "personal" || input.surface === "web" || !humanTurn
+                ? (runtime.modelId ?? input.model)
+                : runtime.modelId,
+              account === "personal" || input.surface === "web" || !humanTurn ? preferredHarness : runtime.harnessId,
             );
             if (routing?.kind === "apikey") {
               userHarnessOverride = "pi";
@@ -3143,7 +3165,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let { userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken, codexTurnAuth } =
           await loadRuntimeAuth({});
         if (
-          input.surface === "web" &&
+          (input.surface === "web" || !humanTurn) &&
           userHarnessOverride &&
           ((input.model && input.model !== userModelOverride) ||
             (input.harness && input.harness !== userHarnessOverride))
@@ -3200,12 +3222,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
         if (restoredRuntime) await adoptRuntime(restoredRuntime);
         if (automatedTurn && input.model && input.harness && isHarnessId(input.harness)) {
-          const error = await deps.validateScheduledRuntime?.(scopeId, {
-            harnessId: input.harness,
-            modelId: input.model,
-            effortLevel: input.thinkingLevel,
-            fastMode: input.fastMode,
-          });
+          const error = await deps.validateScheduledRuntime?.(
+            scopeId,
+            {
+              harnessId: input.harness,
+              modelId: input.model,
+              effortLevel: input.thinkingLevel,
+              fastMode: input.fastMode,
+            },
+            userHarnessOverride ? checkRuntimeAuth : undefined,
+          );
           if (error) throw new NonRetryableTurnError(error);
         }
         const runHarnessSegment = (
@@ -3376,6 +3402,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(claudeOauthToken ? { claudeOauthToken } : {}),
             ...(userHarnessOverride && !restoredRuntime && runtimeHandoffs === 0 ? { runtimePinned: true } : {}),
             runtimeActorId: actor.id,
+            runtimeAccount: modelAccount,
             ...(deps.runtime && input.runId
               ? {
                   runtimeControl: (

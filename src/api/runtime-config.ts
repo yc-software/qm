@@ -241,9 +241,10 @@ export async function availableRuntimeError(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
   choice: RuntimeChoice,
+  authorizeChoice?: (choice: RuntimeChoice) => Promise<string | null>,
 ): Promise<string | null> {
   await ctx.deps.refreshModels?.();
-  const choices = await runtimeConfigBody(ctx, scope);
+  const choices = await runtimeConfigBody(ctx, scope, authorizeChoice);
   if (
     !choices.modelsByHarness[choice.harnessId]?.includes(choice.modelId) ||
     !(await webuiModelEnabled(ctx, choice.modelId))

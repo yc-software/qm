@@ -110,6 +110,7 @@ export interface HarnessTurnInput {
   runtime?: Partial<RuntimeChoice>;
   runtimeControl?: RuntimeControl;
   runtimeActorId?: string;
+  runtimeAccount?: import("../resolution/config-store.ts").ModelAccount;
   readOnly?: boolean;
   surfaceTools?: boolean;
   delegateWork?: boolean;

@@ -1553,3 +1553,198 @@ for (const surface of ["slack", "web"] as const) {
     });
   }
 }
+
+test("child runtime and billing survive a factory restart and followup after a runtime handoff", async () => {
+  const r = await delegatedHumanRig({ modelAccount: "openai" });
+  const api = () =>
+    createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+      session: r.room,
+      scopeId: scope,
+      modelAccount: () => "openai",
+      request: { ...r.parent.request, runId: r.parent.id },
+    });
+  const active = { harnessId: "pi" as const, modelId: "gpt-5.6-terra", effortLevel: "high", fastMode: true };
+  const opened = await api().open({ task: "keep config", model: "inherit" }, active);
+  assert.ok(opened.ok);
+  const child = (await r.sessions.get(opened.sessionId))!;
+  const run = (await r.runs.latestForThread(child.threadRef))!;
+  assert.equal(run.request.fastMode, true);
+  assert.equal(run.request.modelAccount, "openai");
+  const selected = { harnessId: "pi", modelId: "gpt-5.6-luna", effortLevel: "low", fastMode: false };
+  const childLease = (await r.sessions.acquireLease(child.id)).lease!;
+  await r.sessions.append(childLease, {
+    type: "tool_result",
+    payload: {
+      tool: "runtime",
+      runId: run.id,
+      actorId: actor.id,
+      runtimeHandoff: { choice: selected, lifetime: "task" },
+    },
+    scopeLabel: scope,
+  });
+  const claimed = await r.runs.claimById(run.id, "child", 60000);
+  await r.runs.complete(run.id, claimed!.leaseToken!, { status: "ok" });
+  const next = await api().write({ target: child.id, text: "continue", followup: true });
+  assert.ok(next.ok, JSON.stringify(next));
+  const request = (await r.runs.latestForThread(child.threadRef))!.request;
+  assert.equal(request.model, selected.modelId);
+  assert.equal(request.harness, selected.harnessId);
+  assert.equal(request.thinkingLevel, "low");
+  assert.equal(request.fastMode, false);
+  assert.equal(request.modelAccount, "openai");
+  const floor = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: r.room,
+    scopeId: scope,
+    modelAccount: () => "company",
+    request: { ...r.parent.request, origin: { kind: "automation" } },
+  });
+  assert.equal(
+    (await floor.write({ target: child.id, text: "cron must not borrow personal billing", followup: true })).ok,
+    false,
+  );
+});
+
+test("retrying an open interrupted after spawn metadata preserves the original runtime snapshot", async () => {
+  const r = await rig();
+  let fail = true;
+  const factory = createSessionSyscalls({
+    ...r,
+    maxAttempts: 3,
+    async resolveRuntime(_selector, _scope, active) {
+      assert.equal(active?.modelId, "gpt-5.6-terra");
+      return active!;
+    },
+    runs: {
+      ...r.runs,
+      async enqueue(input) {
+        if (fail) {
+          fail = false;
+          throw new Error("interrupted");
+        }
+        return r.runs.enqueue(input);
+      },
+    },
+  });
+  const api = factory.forTurn({
+    session: r.room,
+    scopeId: scope,
+    modelAccount: () => "company",
+    request: { actor, conversation, origin: { kind: "human" } },
+  });
+  const task = { requestId: "stable", task: "work" };
+  assert.equal((await api.open(task, { harnessId: "pi", modelId: "gpt-5.6-terra", fastMode: true })).ok, false);
+  const second = await api.open(task, { harnessId: "codex", modelId: "gpt-5.6-sol", fastMode: false });
+  assert.ok(second.ok);
+  const child = (await r.sessions.get(second.sessionId))!;
+  const request = (await r.runs.latestForThread(child.threadRef))!.request;
+  assert.equal(request.model, "gpt-5.6-terra");
+  assert.equal(request.harness, "pi");
+  assert.equal(request.fastMode, true);
+});
+
+for (const latestActor of [actor, { id: "U2", type: "internal" as const }]) {
+  test(`child completion uses authoritative parent runtime without borrowing ${latestActor.id}'s account`, async () => {
+    const r = await delegatedHumanRig({ modelAccount: "openai" });
+    const initial = { harnessId: "pi", modelId: "gpt-5.6-terra", effortLevel: "high", fastMode: true };
+    const parentLease = (await r.sessions.acquireLease(r.room.id)).lease!;
+    await r.sessions.append(parentLease, {
+      type: "system",
+      scopeLabel: scope,
+      payload: {
+        kind: "runtime_active",
+        runId: r.parent.id,
+        actorId: actor.id,
+        choice: initial,
+        modelAccount: "openai",
+      },
+    });
+    const parent = await r.runs.claimById(r.parent.id, "parent", 60000);
+    await r.runs.complete(parent!.id, parent!.leaseToken!, { status: "silent" });
+    const latest = await r.runs.enqueue({
+      sessionId: r.room.threadRef,
+      request: {
+        ...r.parent.request,
+        actor: latestActor,
+        model: "gpt-5.6-sol",
+        modelAccount: latestActor.id === actor.id ? "openai" : "anthropic",
+        text: "new task",
+      },
+    });
+    const newChoice = { ...initial, modelId: "gpt-5.6-sol", effortLevel: "low", fastMode: false };
+    await r.sessions.append(parentLease, {
+      type: "system",
+      scopeLabel: scope,
+      payload: { kind: "runtime_active", runId: latest.run.id, actorId: latestActor.id, choice: newChoice },
+    });
+    const latestClaim = await r.runs.claimById(latest.run.id, "parent", 60000);
+    await r.runs.complete(latest.run.id, latestClaim!.leaseToken!, { status: "silent" });
+    const child = await r.runs.claimById(r.run.id, "child", 60000);
+    await r.runs.complete(child!.id, child!.leaseToken!, { status: "ok", reply: "done" });
+    await deliverSubagentMail(
+      { ...r, maxAttempts: 3, delegationEnabled: async () => true },
+      (await r.runs.get(r.run.id))!,
+    );
+    const wake = (await r.runs.getByDedupKey(`subagent-return:${r.run.id}`))!;
+    const expected = latestActor.id === actor.id ? newChoice : initial;
+    assert.equal(wake.request.model, expected.modelId);
+    assert.equal(wake.request.fastMode, expected.fastMode);
+    assert.equal(wake.request.thinkingLevel, expected.effortLevel);
+    assert.equal(wake.request.modelAccount, "openai");
+    assert.equal(wake.request.actor.id, actor.id);
+  });
+}
+
+test("personal model authority follows verified delegation, permits read-only work, and refuses unrelated automation", async () => {
+  const r = await delegatedHumanRig({ modelAccount: "openai" });
+  const request = { ...r.run.request, modelAccount: "openai" as const, readOnly: true };
+  assert.equal((await delegatedAuthorizationOrigin(request, r, "model"))?.kind, "human");
+  assert.equal(await delegatedAuthorizationOrigin(request, r), undefined);
+  for (const patch of [
+    { modelAccount: "anthropic" as const },
+    { delegatingRunId: undefined },
+    { actor: { ...actor, id: "U2" } },
+  ]) {
+    assert.equal(await delegatedAuthorizationOrigin({ ...request, ...patch }, r, "model"), undefined);
+  }
+  const floor = await r.runs.enqueue({
+    sessionId: r.room.threadRef,
+    request: { ...r.parent.request, modelAccount: "company", origin: { kind: "automation" }, text: "scope-floor work" },
+  });
+  assert.equal(
+    await delegatedAuthorizationOrigin({ ...request, delegatingRunId: floor.run.id }, r, "model"),
+    undefined,
+  );
+});
+
+for (const adopter of [actor, { id: "U2", type: "internal" as const }]) {
+  test(`personal child adoption by ${adopter.id} leaves passive mail without a company-billed wake`, async () => {
+    const r = await delegatedHumanRig({ modelAccount: "openai" });
+    const destination = await r.sessions.getOrCreateByThread("slack:dm:adopter", "dm", scope, undefined, "slack");
+    await r.sessions.addParticipant(destination.id, actor.id);
+    await r.sessions.setParentSession(r.child.id, destination.id);
+    const target = await r.runs.enqueue({
+      sessionId: destination.threadRef,
+      request: {
+        actor: adopter,
+        conversation: { ...conversation, threadRef: destination.threadRef },
+        modelAccount: "anthropic",
+        origin: { kind: "human" },
+        surface: "slack",
+        text: "adopt",
+      },
+    });
+    const claim = await r.runs.claimById(target.run.id, "target", 60000);
+    await r.runs.complete(target.run.id, claim!.leaseToken!, { status: "silent" });
+    const child = await r.runs.claimById(r.run.id, "child", 60000);
+    await r.runs.complete(child!.id, child!.leaseToken!, { status: "ok", reply: "ready" });
+    assert.equal(
+      await deliverSubagentMail(
+        { ...r, maxAttempts: 3, delegationEnabled: async () => true },
+        (await r.runs.get(r.run.id))!,
+      ),
+      true,
+    );
+    assert.equal((await r.mailbox.pending(destination.id)).length, 1);
+    assert.equal((await r.runs.inFlightForThread(destination.threadRef)).length, 0);
+  });
+}

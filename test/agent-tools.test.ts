@@ -3599,3 +3599,19 @@ test("sandbox call traces preserve purpose across execution, management, process
   assert.equal(calls.length, 5);
   assert.ok(calls.every((entry) => entry.purpose === "Inspect the demo workspace"));
 });
+
+test("sessions model accepts inherit, shared selectors and legacy strings", () => {
+  const tool = createAgentTools({ current: fakeToolContext() }).find((tool) => tool.name === "sessions")!;
+  for (const model of [
+    undefined,
+    "inherit",
+    "gpt-5.6-terra",
+    { modelId: "gpt-5.6-luna", harnessId: "pi", effortLevel: "low", fastMode: false },
+  ])
+    assert.equal(
+      Check(tool.parameters, { action: "open", task: "inspect", ...(model === undefined ? {} : { model }) }),
+      true,
+    );
+  for (const model of [{}, { modelId: "" }, { modelId: "gpt-5.6-luna", billingAccount: "other-user" }])
+    assert.equal(Check(tool.parameters, { action: "open", task: "inspect", model }), false);
+});
