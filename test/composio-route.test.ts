@@ -30,7 +30,7 @@ function fixture() {
     runs: {
       get: async () => ({
         status: "running",
-        sessionId: "test-session",
+        sessionId: "cron:test-cron:fire:test-fire",
         attempts: 1,
         leaseToken: "test-lease",
         leaseExpiresAt: Date.now() + 60_000,
@@ -380,6 +380,7 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
 const privateCap: CapabilityClaims = {
   runId: "test-run",
   sessionId: "test-session",
+  threadRef: "cron:test-cron:fire:test-fire",
   runAttempt: 1,
   runLeaseToken: "test-lease",
   actorId: "alice",
@@ -476,6 +477,17 @@ test("authorized personal automation may execute but cannot initiate consent", a
   assert.equal((await f.invoke("/v1/composio/execute", execution, null, cap)).status, 200);
 });
 
+test("cron discovery accepts a current capability with distinct thread and session identifiers", async () => {
+  const f = fixture();
+  await f.own();
+  f.replies.push({ items: [{ slug: "googlecalendar", name: "Google Calendar" }] });
+  const cap = { ...privateCap, liveActor: false, triggered: true };
+  const result = await f.invoke("/v1/composio/toolkits", undefined, null, cap);
+  assert.equal(result.status, 200);
+  assert.equal(result.data.items[0].id, "googlecalendar");
+  assert.equal(f.calls.length, 1);
+});
+
 test("execution never retries a provider failure", async () => {
   const f = fixture();
   await f.own();
@@ -506,7 +518,13 @@ test("callback completion is browser-only and preserves the durable return URL",
 });
 
 test("finished runs and stale lease capabilities cannot reuse backend connection access", async () => {
-  for (const patch of [{ runId: undefined }, { runLeaseToken: "stale" }, { runAttempt: 2 }, { sessionId: "another" }]) {
+  for (const patch of [
+    { runId: undefined },
+    { runLeaseToken: "stale" },
+    { runAttempt: 2 },
+    { threadRef: undefined },
+    { threadRef: "another" },
+  ]) {
     const f = fixture();
     await f.own();
     assert.equal((await f.invoke("/v1/composio/execute", execution, null, { ...privateCap, ...patch })).status, 403);
