@@ -63,7 +63,7 @@ function exactText(b: CapabilityCronBody): string | undefined {
   return undefined;
 }
 
-export function withoutFireLog<T extends Cron>(cron: T): Omit<T, "fireLog"> {
+function withoutFireLog<T extends Cron>(cron: T): Omit<T, "fireLog"> {
   const { fireLog: _fireLog, ...rest } = cron;
   return rest;
 }
