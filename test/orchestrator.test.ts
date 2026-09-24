@@ -494,6 +494,52 @@ test("a per-turn egress-proxy token is minted and passed to provision, carrying 
   assert.deepEqual(captured!.egress, { allowedHosts: [], deniedHosts: [] });
 });
 
+test("large channel turns apply the compression rollout setting to every sandbox token", async () => {
+  for (const capabilityTokenCompression of [false, true]) {
+    const { app, sandbox } = buildApp(
+      testConfig({
+        dataDir: mkdtempSync(join(tmpdir(), "ap-")),
+        signingSecret: "test-secret",
+        apiBaseUrl: "https://core.example.com",
+        capabilityTokenCompression,
+      }),
+    );
+    let captured: ProvisionOptions | undefined;
+    const provision = sandbox.provision.bind(sandbox);
+    sandbox.provision = (layers, opts) => {
+      captured = opts;
+      return provision(layers, opts);
+    };
+    const members = Array.from({ length: 120 }, (_, i) => ({
+      externalId: i === 0 ? "U1" : `U${i + 1}-compression-fixture`,
+    }));
+    const result = await app.turn(
+      channel("!run echo compact", {
+        conversation: {
+          kind: "channel",
+          threadRef: "ch:C1:compact",
+          channelRef: "C1",
+          audience: members,
+          publishMembers: members,
+        },
+      }),
+    );
+    assert.equal(result.status, "ok");
+    for (const token of [
+      captured?.env?.AGENT_API_TOKEN,
+      captured?.env?.AGENT_OAUTH_CONSENT_TOKEN,
+      captured?.egressToken,
+    ]) {
+      assert.ok(token);
+      const payload = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString("utf8"));
+      assert.equal(payload.encoding, capabilityTokenCompression ? "deflate-raw" : undefined);
+      if (capabilityTokenCompression) assert.ok(token.length < 8 * 1024);
+      const verified = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
+      assert.equal(verified?.members?.length, 120);
+    }
+  }
+});
+
 test("live bot attestation reaches control, OAuth, and egress capabilities", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),

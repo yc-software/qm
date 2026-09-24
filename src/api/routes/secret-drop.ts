@@ -248,6 +248,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
       exp: Date.now() + SECRET_DROP_TTL_MS,
     },
     capSecret,
+    deps.capabilityTokenCompression,
   );
   const formPath = `/drop/${dropId}/form?t=${encodeURIComponent(linkToken)}`;
   const base = (deps.portalUrl ?? deps.publicUrl)?.replace(/\/$/, "");

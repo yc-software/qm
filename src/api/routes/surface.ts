@@ -701,6 +701,7 @@ async function sessionCapability(ctx: ApiCtx): Promise<void> {
   const token = await mintCapabilityToken(
     { actorId: actor.p, scopeId: makeScopeId("personal", actor.p), exp: Date.now() + CAPABILITY_TTL_MS },
     secret,
+    deps.capabilityTokenCompression,
   );
   return sendJson(res, 200, { token });
 }

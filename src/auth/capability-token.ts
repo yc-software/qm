@@ -1,3 +1,5 @@
+import { promisify } from "node:util";
+import { deflateRaw, inflateRaw } from "node:zlib";
 import { orgId as configOrgId } from "../config.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
@@ -52,8 +54,37 @@ export interface CapabilityClaims {
   exp: number;
 }
 
-export function mintCapabilityToken(claims: CapabilityClaims, secret: string): Promise<string> {
-  return mintSignedPayload({ orgId: configOrgId(), ...claims }, secret);
+const compress = promisify(deflateRaw);
+const decompress = promisify(inflateRaw);
+const MAX_CLAIMS_BYTES = 1024 * 1024;
+
+export async function mintCapabilityToken(
+  claims: CapabilityClaims,
+  secret: string,
+  compressionEnabled = false,
+): Promise<string> {
+  const value = { orgId: configOrgId(), ...claims };
+  const bytes = Buffer.from(JSON.stringify(value));
+  if (bytes.length > MAX_CLAIMS_BYTES) throw new Error("Capability claims exceed size limit");
+  return mintSignedPayload(
+    compressionEnabled && bytes.length > 4096
+      ? { encoding: "deflate-raw", claims: (await compress(bytes)).toString("base64url") }
+      : value,
+    secret,
+  );
+}
+
+async function readCapabilityClaims(token: string, secret: string | string[]): Promise<CapabilityClaims | null> {
+  const value = await verifySignedPayload(token, secret);
+  if (!value || typeof value !== "object") return null;
+  if (!("encoding" in value)) return value as CapabilityClaims;
+  if (value.encoding !== "deflate-raw" || !("claims" in value) || typeof value.claims !== "string") return null;
+  try {
+    const bytes = await decompress(Buffer.from(value.claims, "base64url"), { maxOutputLength: MAX_CLAIMS_BYTES });
+    return JSON.parse(bytes.toString("utf8")) as CapabilityClaims;
+  } catch {
+    return null;
+  }
 }
 
 export function isValidCapabilityTimezone(timezone: unknown): timezone is string {
@@ -72,7 +103,7 @@ export async function verifyCapabilityToken(
   secret: string | string[],
   now: number = Date.now(),
 ): Promise<CapabilityClaims | null> {
-  const claims = (await verifySignedPayload(token, secret)) as CapabilityClaims | null;
+  const claims = await readCapabilityClaims(token, secret);
   if (
     !claims ||
     typeof claims.actorId !== "string" ||

@@ -19,6 +19,7 @@ import {
   EGRESS_PROXY_AUD,
 } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { mintSignedPayload } from "../src/auth/signed-token.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
@@ -101,6 +102,56 @@ test("an org admin's capability token can read and rewrite a scope's notebook vi
     const updates = (await s.built.auditLog.events()).filter((e) => e.action === "memory.update");
     assert.equal(updates.length, 1);
     assert.equal(updates[0]!.principalId, "admin-alice", "the admin action is attributed to the acting admin");
+  } finally {
+    await s.close();
+  }
+});
+
+test("a large channel's capability passes HTTP parsing and retains admin authorization", async () => {
+  const s = start();
+  try {
+    const members = Array.from({ length: 120 }, (_, i) => ({
+      id: `channel-member-${i}@example.test`,
+      type: "internal" as const,
+      displayName: `Channel Member ${i}`,
+      teamIds: ["engineering"],
+    }));
+    const claims = {
+      actorId: "admin-alice",
+      scopeId: "channel:C1",
+      aud: CONTROL_PLANE_AUD,
+      liveActor: true,
+      liveAuthor: true,
+      members,
+      keychainMembers: members,
+      exp: Date.now() + CAPABILITY_TTL_MS,
+    };
+    const url = `${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`;
+    const legacy = await mintSignedPayload({ orgId: "default-org", ...claims }, SECRET);
+    const rejected = await fetch(url, { headers: { "x-agent-capability": legacy } });
+    assert.equal(rejected.status, 431);
+    await rejected.text();
+    const token = await mintCapabilityToken(claims, SECRET, true);
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: { "x-agent-capability": token, "content-type": "application/json" },
+      body: JSON.stringify({ content: "# Memory\n\n- Large channel standing rule." }),
+    });
+    assert.equal(response.status, 200);
+    await response.text();
+    const read = await fetch(url, { headers: { "x-agent-capability": token } });
+    assert.equal(read.status, 200);
+    assert.match(((await read.json()) as { content: string }).content, /Large channel standing rule/);
+    const denied = await fetch(url, {
+      method: "PUT",
+      headers: {
+        "x-agent-capability": await mintCapabilityToken({ ...claims, actorId: "U1" }, SECRET, true),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ content: "unauthorized overwrite" }),
+    });
+    assert.equal(denied.status, 403);
+    await denied.text();
   } finally {
     await s.close();
   }
