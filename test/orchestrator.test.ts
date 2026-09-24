@@ -98,7 +98,8 @@ test("internal DM turn runs end-to-end and records the session", async () => {
 
   const found = await app.getSession(res.sessionId!);
   const types = found!.entries.map((e) => e.type);
-  assert.deepEqual(types, ["user", "assistant"]);
+  assert.deepEqual(types, ["system", "user", "assistant"]);
+  assert.equal((found!.entries[0]!.payload as { kind: string }).kind, "runtime_active");
 });
 
 test("the persisted assistant entry carries authoritative turn timing for transcript rendering", async () => {
@@ -166,7 +167,7 @@ test("a proactive-opener turn greets with no user text and records the seeding e
   const found = await app.getSession(res.sessionId!);
   assert.deepEqual(
     found!.entries.map((e) => e.type),
-    ["user", "assistant"],
+    ["system", "user", "assistant"],
   );
   const userEntry = found!.entries.find((e) => e.type === "user")!;
   assert.equal(
@@ -352,13 +353,16 @@ test("a retried run RESUMES the interrupted turn from the durable ledger instead
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /system note: your previous attempt at the request above was interrupted/);
-  assert.equal(res.sourceUserSeq, 0, "provenance points at the original interrupted user entry, not the resume note");
-  assert.equal(res.sourceAssistantEntrySeq, 4);
-
   const found = await app.getSession(res.sessionId!);
+  assert.equal(
+    res.sourceUserSeq,
+    found!.entries.find((e) => e.type === "user")!.seq,
+    "provenance points at the original interrupted user entry, not the resume note",
+  );
+  assert.equal(res.sourceAssistantEntrySeq, found!.entries.findLast((e) => e.type === "assistant")!.seq);
   assert.deepEqual(
     found!.entries.map((e) => e.type),
-    ["user", "tool_call", "tool_result", "user", "assistant"],
+    ["system", "user", "tool_call", "tool_result", "system", "user", "assistant"],
   );
   const userTexts = found!.entries
     .filter((e) => e.type === "user")
@@ -416,10 +420,13 @@ test("a retry of an attempt that recorded NO work restarts it — never claims w
     /recorded above|don't start over/,
     "the model is never told about work that does not exist",
   );
-  assert.equal(res.sourceUserSeq, 0, "provenance points at the original user entry, not the retry's prompt");
-
   const found = await app.getSession(res.sessionId!);
   const userEntries = found!.entries.filter((e) => e.type === "user");
+  assert.equal(
+    res.sourceUserSeq,
+    userEntries[0]!.seq,
+    "provenance points at the original user entry, not the retry's prompt",
+  );
   const texts = userEntries.map((e) => String((e.payload as { text?: string }).text ?? ""));
   assert.equal(
     texts.filter((t) => t === "!boom").length,
@@ -2097,7 +2104,7 @@ test("an unprompted thread question gets a reply (turn detection chimes in)", as
   const found = await app.getSession(res.sessionId!);
   assert.deepEqual(
     found!.entries.map((e) => e.type),
-    ["user", "assistant"],
+    ["system", "user", "assistant"],
   );
 });
 
