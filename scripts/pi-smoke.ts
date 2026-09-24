@@ -42,10 +42,10 @@ await run(
   dm("Use your execute tool to run the command `echo hello-from-sandbox`, then tell me exactly what it printed."),
 );
 await run(
-  "3. write + read tools (workspace)",
+  "3. files write + read actions (workspace)",
   dm(
-    "Use the write tool to create a file named fact.txt with exactly the contents: the sky is blue. " +
-      "Then use the read tool to read fact.txt back, and tell me its contents.",
+    "Use files action write to create a file named fact.txt with exactly the contents: the sky is blue. " +
+      "Then use files action read to read fact.txt back, and tell me its contents.",
   ),
 );
 await run("4a. multi-turn memory (set)", dm("My favorite number is 7. Please remember it.", "mem"));

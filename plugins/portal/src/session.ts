@@ -134,6 +134,21 @@ export function clearCookie(name: string, path: string, secure: boolean, domain?
   return parts.join("; ");
 }
 
+export function sessionCookieHeaders(value: string, attrs: CookieOpts, framed = false): string[] {
+  return [
+    setCookie("portal_session", value, attrs),
+    framed
+      ? setCookie("portal_session_x", value, { ...attrs, sameSite: "None" })
+      : clearCookie("portal_session_x", attrs.path ?? "/", attrs.secure, attrs.domain),
+    ...(attrs.domain
+      ? [
+          clearCookie("portal_session", attrs.path ?? "/", attrs.secure),
+          clearCookie("portal_session_x", attrs.path ?? "/", attrs.secure),
+        ]
+      : []),
+  ];
+}
+
 export function readCookie(header: string | undefined, name: string): string | null {
   if (!header) return null;
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

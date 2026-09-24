@@ -68,16 +68,6 @@ export function reconcileLoadout(
   return available.has(active.value) ? upsertLoadout(next, active) : next.slice(0, LOADOUT_CAP);
 }
 
-export function reorderLoadout(entries: readonly LoadoutEntry[], value: string, targetValue: string): LoadoutEntry[] {
-  const next = [...entries];
-  const source = next.findIndex((entry) => entry.value === value);
-  const target = next.findIndex((entry) => entry.value === targetValue);
-  if (source < 0 || target < 0 || source === target) return next;
-  const [entry] = next.splice(source, 1);
-  next.splice(target, 0, entry!);
-  return next;
-}
-
 export function effortLevelsForHarness(harnessId: string): Array<{ value: EffortLevel; label: string }> {
   return EFFORT_LEVELS.filter(({ value }) => {
     if (harnessId === "pi") return true;

@@ -16,6 +16,7 @@ import {
   openImpersonation,
   openTmp,
   setCookie,
+  sessionCookieHeaders,
   clearCookie,
   readCookie,
   randomToken,
@@ -852,17 +853,8 @@ function sessionCookieSet(value: string, sub: string): string[] {
     secure: SECURE_COOKIES,
     ...(COOKIE_DOMAIN ? { domain: COOKIE_DOMAIN } : {}),
   };
-  const set = setCookie("portal_session", value, attrs);
-  const framed = setCookie(FRAME_SESSION_COOKIE, value, { ...attrs, sameSite: "None" });
   return [
-    ...(COOKIE_DOMAIN
-      ? [
-          set,
-          framed,
-          clearCookie("portal_session", "/", SECURE_COOKIES),
-          clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES),
-        ]
-      : [set, framed]),
+    ...sessionCookieHeaders(value, attrs, process.env.PORTAL_FRAME_SESSION_ENABLED === "1"),
     ...loginProviderCookie(sub),
   ];
 }
