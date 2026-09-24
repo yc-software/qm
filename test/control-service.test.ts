@@ -1295,3 +1295,99 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
     /runtime is no longer available/,
   );
 });
+
+test("cron selectors resolve once, estimates stay advisory, and inherit explicitly clears", async () => {
+  const { built, control } = setup();
+  built.config.setApprovedHarnesses(["mock"]);
+  const computeEstimate = { workload: "routine" as const, reason: "One bounded status check with a retry" };
+  const created = await control.createCron(
+    {
+      schedule: { everyMs: 60_000 },
+      action: "check",
+      runtime: { modelId: "claude-sonnet-5" },
+      computeEstimate,
+    },
+    claims("U1"),
+  );
+  assert.ok(created.ok, JSON.stringify(created));
+  assert.deepEqual(created.cron.runtime, { harnessId: "mock", modelId: "claude-sonnet-5" });
+  assert.deepEqual(created.cron.computeEstimate, computeEstimate);
+  const renamed = await control.patchCron(created.cron.id, { title: "Renamed" }, claims("U1"));
+  assert.ok(renamed.ok);
+  assert.deepEqual(renamed.cron.runtime, created.cron.runtime);
+  assert.deepEqual(renamed.cron.computeEstimate, computeEstimate);
+  const denied = await control.patchCron(created.cron.id, { computeEstimate: null }, claims("U9"));
+  assert.equal(denied.ok, false);
+  const invalid = await control.patchCron(
+    created.cron.id,
+    { runtime: { modelId: "missing" }, computeEstimate: null },
+    claims("U1"),
+  );
+  assert.equal(invalid.ok, false);
+  assert.deepEqual((await built.app.getCron(created.cron.id))?.computeEstimate, computeEstimate);
+  const cleared = await control.patchCron(created.cron.id, { runtime: "inherit" }, claims("U1"));
+  assert.ok(cleared.ok);
+  assert.equal(cleared.cron.runtime, null);
+  assert.deepEqual(cleared.cron.computeEstimate, computeEstimate);
+  const estimateOnly = await control.patchCron(created.cron.id, { computeEstimate: null }, claims("U1"));
+  assert.ok(estimateOnly.ok);
+  assert.equal(estimateOnly.cron.computeEstimate, null);
+  assert.equal(estimateOnly.cron.runtime, null);
+  assert.deepEqual(estimateOnly.cron.schedule, created.cron.schedule);
+  assert.equal(estimateOnly.cron.action, created.cron.action);
+});
+
+test("cron explicit selectors do not inherit high effort or fast mode", async () => {
+  const built = buildApp(testConfig({ openaiApiKey: "test-openai" }));
+  const control = createControlService(built.app, built.scheduler, built.admin);
+  built.config.setApprovedHarnesses(["pi"]);
+  await built.config.setRuntimeSelection("personal:U1", {
+    harnessId: "pi",
+    modelId: "gpt-6-astra",
+    effortLevel: "high",
+    fastMode: true,
+  });
+  const created = await control.createCron(
+    { schedule: { everyMs: 60_000 }, action: "check", runtime: { modelId: "6 Luna" } },
+    claims("U1"),
+  );
+  assert.ok(created.ok, JSON.stringify(created));
+  assert.deepEqual(created.cron.runtime, { harnessId: "pi", modelId: "gpt-6-luna" });
+});
+
+test("estimate-only app patches preserve legacy runtime and existing grant-reaffirmation policy", async () => {
+  const { built } = setup();
+  const runtime = { harnessId: "pi" as const, modelId: "legacy-unavailable-model", effortLevel: "low" };
+  const cron = await built.crons.create({
+    ownerScopeId: "personal:U1",
+    owner: "U1",
+    createdBy: "U1",
+    schedule: { everyMs: 60_000 },
+    action: "check",
+    runtime,
+    unattendedGrants: ["admin.sessions.read"],
+  });
+  const updated = await built.app.updateCron(cron.id, {
+    computeEstimate: { workload: "routine", reason: "One bounded check" },
+  });
+  assert.deepEqual(updated?.runtime, runtime);
+  assert.deepEqual(updated?.unattendedGrants, []);
+});
+
+test("inherit and null have identical no-op semantics for an already inherited privileged cron", async () => {
+  const { built, control } = setup();
+  const cron = await built.crons.create({
+    ownerScopeId: "personal:admin-alice",
+    owner: "admin-alice",
+    createdBy: "admin-alice",
+    schedule: { everyMs: 60_000 },
+    action: "check",
+    unattendedGrants: ["admin.sessions.read"],
+  });
+  const before = await built.crons.update(cron.id, { runtime: null });
+  for (const runtime of [null, "inherit"] as const) {
+    const result = await control.patchCron(cron.id, { runtime }, claims("admin-alice"));
+    assert.ok(result.ok, JSON.stringify(result));
+    assert.deepEqual(result.cron, before);
+  }
+});

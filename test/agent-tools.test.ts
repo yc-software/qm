@@ -3599,3 +3599,49 @@ test("sandbox call traces preserve purpose across execution, management, process
   assert.equal(calls.length, 5);
   assert.ok(calls.every((entry) => entry.purpose === "Inspect the demo workspace"));
 });
+
+test("cron creator tools pass selectors and estimates through and show the saved estimate", async () => {
+  const computeEstimate = { workload: "routine" as const, reason: "One bounded status check" };
+  const runtime = { modelId: "6 Luna", effortLevel: "low" };
+  const canonical = { harnessId: "pi" as const, modelId: "gpt-6-luna", effortLevel: "low" };
+  const cron = {
+    id: "cron-estimate",
+    ownerScopeId: "personal:U1" as const,
+    owner: "U1",
+    createdBy: "U1",
+    enabled: true,
+    createdAt: 0,
+    schedule: { everyMs: 60_000 },
+    action: "check",
+    runtime: canonical,
+    computeEstimate,
+  };
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    async cronCreate(req) {
+      assert.deepEqual(req.runtime, runtime);
+      assert.deepEqual(req.computeEstimate, computeEstimate);
+      return { ok: true, cron };
+    },
+    async cronPatch(id, req) {
+      assert.equal(id, cron.id);
+      assert.deepEqual(req, { runtime: "inherit", computeEstimate: null });
+      return { ok: true, cron: { ...cron, runtime: null, computeEstimate: null } };
+    },
+  };
+  const out = textOut(
+    await call(tool("cron", tc), {
+      action: "create",
+      task: "check",
+      schedule: { everyMs: 60_000 },
+      runtime,
+      computeEstimate,
+    }),
+  );
+  assert.match(out, /runtime: pi\/gpt-6-luna/);
+  assert.match(out, /compute estimate: routine — One bounded status check/);
+  const cleared = textOut(
+    await call(tool("cron", tc), { action: "patch", id: cron.id, runtime: "inherit", computeEstimate: null }),
+  );
+  assert.doesNotMatch(cleared, /compute estimate:|runtime:/);
+});

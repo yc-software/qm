@@ -1,29 +1,50 @@
 import type { Cron } from "../types.ts";
-import type { RuntimeChoice } from "../harness/harness.ts";
+import { isModelSelector, type ModelSelector } from "../harness/model-selector.ts";
 import { isHarnessId, thinkingLevelsForHarness } from "../model/pi-models.ts";
 import { isObj } from "../util/objects.ts";
 
-export function isCronRuntime(value: unknown): value is RuntimeChoice | null | undefined {
-  if (value === undefined || value === null) return true;
+export type CronRuntimeRequest<T> = Omit<T, "runtime"> & { runtime?: ModelSelector | "inherit" | null };
+
+export interface CronComputeEstimate {
+  workload: "routine" | "analysis" | "deep";
+  reason: string;
+}
+
+export function isCronComputeEstimate(value: unknown): value is CronComputeEstimate | null | undefined {
   return (
-    isObj(value) &&
-    Object.keys(value).every((key) => ["harnessId", "modelId", "effortLevel", "fastMode"].includes(key)) &&
-    isHarnessId(value.harnessId) &&
-    typeof value.modelId === "string" &&
-    value.modelId.trim().length > 0 &&
-    (value.effortLevel === undefined ||
-      (typeof value.effortLevel === "string" &&
-        value.effortLevel !== "auto" &&
-        thinkingLevelsForHarness(value.harnessId).includes(value.effortLevel))) &&
-    (value.fastMode === undefined || typeof value.fastMode === "boolean")
+    value === undefined ||
+    value === null ||
+    (isObj(value) &&
+      Object.keys(value).every((key) => ["workload", "reason"].includes(key)) &&
+      ["routine", "analysis", "deep"].includes(value.workload as string) &&
+      typeof value.reason === "string" &&
+      value.reason.trim().length > 0 &&
+      value.reason.length <= 400)
   );
 }
 
-export function assertCronRuntime(cron: Pick<Cron, "runtime" | "loopId" | "action" | "message">): void {
-  if (!isCronRuntime(cron.runtime))
+export function isCronRuntime(value: unknown): value is ModelSelector | "inherit" | null | undefined {
+  return value === undefined || value === null || value === "inherit" || isModelSelector(value);
+}
+
+export function assertCronRuntime(
+  cron: Pick<Cron, "runtime" | "computeEstimate" | "loopId" | "action" | "message">,
+): void {
+  if (
+    !isCronRuntime(cron.runtime) ||
+    (cron.runtime &&
+      (!isHarnessId(cron.runtime.harnessId) ||
+        (cron.runtime.effortLevel !== undefined &&
+          (cron.runtime.effortLevel === "auto" ||
+            !thinkingLevelsForHarness(cron.runtime.harnessId).includes(cron.runtime.effortLevel)))))
+  )
     throw new Error(
-      "runtime requires harnessId, modelId and optional explicit effortLevel/fastMode; null inherits defaults",
+      "runtime requires a resolved harnessId and modelId with supported effortLevel/fastMode; null inherits defaults",
     );
-  if (cron.runtime && (cron.loopId || !cron.action?.trim() || cron.message !== undefined))
+  if (!isCronComputeEstimate(cron.computeEstimate))
+    throw new Error(
+      "computeEstimate requires workload (routine/analysis/deep) and a non-empty reason of at most 400 characters",
+    );
+  if ((cron.runtime || cron.computeEstimate) && (cron.loopId || !cron.action?.trim() || cron.message !== undefined))
     throw new Error("runtime overrides require an agent cron task, not a loop or exact-message cron");
 }

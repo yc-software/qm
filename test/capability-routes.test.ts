@@ -719,6 +719,38 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal((await del(`/v1/crons/${id}`, { "x-agent-capability": await capChannel("U2") })).status, 403);
   });
 
+  it("cron HTTP create and patch validate selectors and advisory estimates atomically", async () => {
+    built.config.setApprovedHarnesses(["mock"]);
+    const headers = { "x-agent-capability": await capFor("U1") };
+    const computeEstimate = { workload: "routine", reason: "Bounded status check" };
+    const body = {
+      schedule: { everyMs: 60_000 },
+      action: "selector check",
+      runtime: { modelId: "claude-sonnet-5" },
+      computeEstimate,
+    };
+    const bad = await post("/v1/crons", { ...body, computeEstimate: { ...computeEstimate, reason: "" } }, headers);
+    assert.equal(bad.status, 400);
+    const created = await post("/v1/crons", body, headers);
+    assert.equal(created.status, 200, await created.clone().text());
+    const { cron } = (await created.json()) as { cron: import("../src/types.ts").Cron };
+    assert.deepEqual(cron.runtime, { harnessId: "mock", modelId: "claude-sonnet-5" });
+    assert.deepEqual(cron.computeEstimate, computeEstimate);
+    const invalid = await patch(
+      `/v1/crons/${cron.id}`,
+      { runtime: "inherit", computeEstimate: { ...computeEstimate, reason: " " } },
+      headers,
+    );
+    assert.equal(invalid.status, 400);
+    assert.deepEqual((await built.app.getCron(cron.id))?.runtime, cron.runtime);
+    const cleared = await patch(`/v1/crons/${cron.id}`, { runtime: "inherit", computeEstimate: null }, headers);
+    assert.equal(cleared.status, 200);
+    const after = await built.app.getCron(cron.id);
+    assert.equal(after?.runtime, null);
+    assert.equal(after?.computeEstimate, null);
+    assert.deepEqual(after?.destination, cron.destination);
+  });
+
   it("get of an unknown cron is 404; a bad patch body is 400", async () => {
     assert.equal((await get(`/v1/crons/does-not-exist`, { "x-agent-capability": await capFor("U1") })).status, 404);
     const created = (await (

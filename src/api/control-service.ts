@@ -1,3 +1,4 @@
+import type { CronRuntimeRequest } from "../cron/runtime.ts";
 import { unattendedGrantRefusal } from "../cron/authority.ts";
 import { isDeepStrictEqual } from "node:util";
 import type { Cron, CronFireLogEntry, CronSchedule, Destination, Principal, Webhook } from "../types.ts";
@@ -31,7 +32,8 @@ import { isSharedScope, parseScopeId, type Permission, type ScopeId } from "../t
 import type { App, VisibleCron } from "./app.ts";
 
 export interface CronCreateRequest {
-  runtime?: Cron["runtime"];
+  runtime?: CronRuntimeRequest<Cron>["runtime"];
+  computeEstimate?: Cron["computeEstimate"];
   schedule: CronSchedule;
   title?: string;
   action?: string;
@@ -85,7 +87,8 @@ export type WebhookCreateResult =
   | { ok: false; code: "bad_request" | "unknown_destination" | "webhook_create_failed"; message: string };
 
 export interface CronPatchRequest {
-  runtime?: Cron["runtime"];
+  runtime?: CronRuntimeRequest<Cron>["runtime"];
+  computeEstimate?: Cron["computeEstimate"];
   title?: string;
   action?: string;
   text?: string;
@@ -219,6 +222,7 @@ function scopeIsMembershipControlled(scope: string, cap: { scopeId: string; priv
 function hasCronPatchField(req: CronPatchRequest): boolean {
   return (
     req.runtime !== undefined ||
+    req.computeEstimate !== undefined ||
     req.title !== undefined ||
     req.action !== undefined ||
     req.text !== undefined ||
@@ -231,7 +235,7 @@ function hasCronPatchField(req: CronPatchRequest): boolean {
   );
 }
 
-function cronPatchChanges(before: Cron, patch: CronPatch): boolean {
+function cronPatchChanges(before: Cron, patch: CronRuntimeRequest<CronPatch>): boolean {
   return (Object.entries(patch) as Array<[keyof CronPatch, unknown]>).some(
     ([key, value]) => !isDeepStrictEqual(before[key as keyof Cron], value),
   );
@@ -296,7 +300,7 @@ async function patchFromCronPatchRequest(
   before: Cron,
   req: CronPatchRequest,
   capability: CapabilityClaims,
-): Promise<CronPatch | ControlErr<"bad_request" | "forbidden">> {
+): Promise<CronRuntimeRequest<CronPatch> | ControlErr<"bad_request" | "forbidden">> {
   if (!hasCronPatchField(req)) {
     return {
       ok: false,
@@ -315,7 +319,8 @@ async function patchFromCronPatchRequest(
     };
   }
   return {
-    ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
+    ...(req.runtime !== undefined ? { runtime: req.runtime === "inherit" ? null : req.runtime } : {}),
+    ...(req.computeEstimate !== undefined ? { computeEstimate: req.computeEstimate } : {}),
     ...(req.title !== undefined ? { title: req.title } : {}),
     ...(req.action !== undefined ? { action: req.action } : {}),
     ...(req.text !== undefined ? { message: req.text } : {}),
@@ -526,9 +531,10 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       const standing = req.schedule.cron !== undefined || req.schedule.everyMs !== undefined;
       const consentRecipient = consentRequiredRecipient({ owner: capability.actorId, standing, destination });
 
-      const input: CreateCronInput = {
+      const input: CronRuntimeRequest<CreateCronInput> = {
         schedule: withDefaultTimezone(req.schedule, capability),
         ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
+        ...(req.computeEstimate !== undefined ? { computeEstimate: req.computeEstimate } : {}),
         ...(req.action !== undefined ? { action: req.action } : {}),
         ...(req.text !== undefined ? { message: req.text } : {}),
         owner: capability.actorId,
@@ -636,6 +642,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
         const changeSummary: string[] = [];
         if (req.runtime !== undefined) changeSummary.push("runtime");
+        if (req.computeEstimate !== undefined) changeSummary.push("compute estimate");
         if (req.title !== undefined) changeSummary.push("title");
         if (req.action !== undefined || req.text !== undefined) changeSummary.push("task");
         if (req.schedule !== undefined) changeSummary.push("schedule");

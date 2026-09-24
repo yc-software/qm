@@ -1,3 +1,4 @@
+import { resolveModelSelector } from "../harness/model-selector.ts";
 import type { ScopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
@@ -21,8 +22,8 @@ import { externalMemberActive } from "../identity/external-members.ts";
 import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
-import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
-import { assertCronRuntime } from "../cron/runtime.ts";
+import { runtimeConfigBody, webuiModelEnabled } from "./runtime-config.ts";
+import { assertCronRuntime, isCronRuntime, type CronRuntimeRequest } from "../cron/runtime.ts";
 import type { Cron } from "../types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 
@@ -160,17 +161,35 @@ export function createMessagingMethods(
     return [...stored, ...viaEmail.filter((member) => !seen.has(personKey(member.principalId)))];
   };
 
-  const validateRuntime = async (cron: Pick<Cron, "runtime" | "ownerScopeId" | "loopId" | "action" | "message">) => {
-    assertCronRuntime(cron);
-    if (!cron.runtime) return;
-    const error =
-      validateRuntimeChoice(cron.runtime) ?? (await availableRuntimeError({ deps }, cron.ownerScopeId, cron.runtime));
-    if (error) throw new Error(error);
+  const resolveRuntime = async (
+    cron: CronRuntimeRequest<
+      Pick<Cron, "runtime" | "computeEstimate" | "ownerScopeId" | "loopId" | "action" | "message">
+    >,
+  ) => {
+    if (!isCronRuntime(cron.runtime)) throw new Error("invalid cron runtime selector");
+    const selector = cron.runtime;
+    if (!selector || selector === "inherit") {
+      const runtime = selector === "inherit" ? null : selector;
+      assertCronRuntime({ ...cron, runtime });
+      return runtime;
+    }
+    await deps.refreshModels?.();
+    const catalog = await runtimeConfigBody({ deps }, cron.ownerScopeId);
+    const resolved = resolveModelSelector(
+      selector,
+      { harnessId: catalog.effective.harnessId, modelId: catalog.effective.modelId },
+      catalog,
+    );
+    if (!resolved.ok) throw new Error(resolved.error);
+    if (!(await webuiModelEnabled({ deps }, resolved.choice.modelId)))
+      throw new Error("runtime is no longer available or enabled on this deployment");
+    assertCronRuntime({ ...cron, runtime: resolved.choice });
+    return resolved.choice;
   };
 
   return {
     async createCron(input) {
-      await validateRuntime(input);
+      const runtime = await resolveRuntime(input);
       validateUserSchedule(input.schedule);
       if (input.runAs === "scopeShared") {
         if (input.ownerScopeId.startsWith("personal:"))
@@ -180,7 +199,7 @@ export function createMessagingMethods(
           throw new Error("scopeShared requires a member snapshot or current Open scope membership");
         if (open) input = { ...input, ownerResourcesRequireOpen: true };
       }
-      const cron = await deps.crons.create(input);
+      const cron = await deps.crons.create({ ...input, runtime });
       deps.auditLog.record({
         at: Date.now(),
         principalId: cron.createdBy,
@@ -221,7 +240,7 @@ export function createMessagingMethods(
     async updateCron(id, patch) {
       const before = await deps.crons.get(id);
       if (!before) return null;
-      if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
+      const runtime = patch.runtime !== undefined ? await resolveRuntime({ ...before, ...patch }) : before.runtime;
       if (patch.schedule) validateUserSchedule(patch.schedule);
       if (patch.runAs === "scopeShared") {
         if (before.ownerScopeId.startsWith("personal:"))
@@ -235,7 +254,8 @@ export function createMessagingMethods(
       const grantsReaffirmed = patch.unattendedGrants !== undefined;
       const guardedPatch =
         (before.unattendedGrants?.length ?? 0) > 0 && !grantsReaffirmed ? { ...patch, unattendedGrants: [] } : patch;
-      const updated = await deps.crons.update(id, guardedPatch);
+      const { runtime: _requested, ...fields } = guardedPatch;
+      const updated = await deps.crons.update(id, { ...fields, ...(patch.runtime !== undefined ? { runtime } : {}) });
       deps.auditLog.record({
         at: Date.now(),
         principalId: before.owner,
@@ -278,8 +298,8 @@ export function createMessagingMethods(
     async setCronRuntime(id, runtime) {
       const before = await deps.crons.get(id);
       if (!before) return null;
-      await validateRuntime({ ...before, runtime });
-      return deps.crons.update(id, { runtime });
+      const resolved = await resolveRuntime({ ...before, runtime });
+      return deps.crons.update(id, { runtime: resolved });
     },
     async setCronDestination(id, destination) {
       const before = await deps.crons.get(id);

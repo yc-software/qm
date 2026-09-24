@@ -28,6 +28,7 @@ import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFi
 
 export interface CreateCronInput extends CreateTriggerInput {
   runtime?: Cron["runtime"];
+  computeEstimate?: Cron["computeEstimate"];
   enabled?: boolean;
   schedule: Cron["schedule"];
   title?: string;
@@ -42,6 +43,7 @@ export interface CreateCronInput extends CreateTriggerInput {
 
 export interface CronPatch {
   runtime?: Cron["runtime"];
+  computeEstimate?: Cron["computeEstimate"];
   title?: string;
   action?: string;
   message?: string;
@@ -141,6 +143,7 @@ export function createCronStore(
         ...(input.unattendedGrants ? { unattendedGrants: input.unattendedGrants } : {}),
         ...(input.loopId ? { loopId: input.loopId } : {}),
         ...(input.runtime ? { runtime: input.runtime } : {}),
+        ...(input.computeEstimate ? { computeEstimate: input.computeEstimate } : {}),
       }));
     },
     get: (id) => backing.get(id),
@@ -151,6 +154,7 @@ export function createCronStore(
       assertCronRuntime({ ...before, ...patch });
       const fields: Partial<Cron> = {};
       if (patch.runtime !== undefined) fields.runtime = patch.runtime;
+      if (patch.computeEstimate !== undefined) fields.computeEstimate = patch.computeEstimate;
       if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
       if (patch.action !== undefined) fields.action = patch.action;
       if (patch.message !== undefined) fields.message = patch.message;
