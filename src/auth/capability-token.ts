@@ -3,6 +3,11 @@ import { deflateRaw, inflateRaw } from "node:zlib";
 import { orgId as configOrgId } from "../config.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
+import {
+  MAX_CAPABILITY_CLAIMS_BYTES,
+  packCapabilityParticipants,
+  unpackCapabilityParticipants,
+} from "./capability-participants.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
 export const SANDBOX_CAPABILITY_TTL_MS = 48 * 60 * 60_000;
@@ -56,18 +61,25 @@ export interface CapabilityClaims {
 
 const compress = promisify(deflateRaw);
 const decompress = promisify(inflateRaw);
-const MAX_CLAIMS_BYTES = 1024 * 1024;
+export interface CapabilityTokenEncoding {
+  compression?: boolean;
+  participants?: boolean;
+}
 
 export async function mintCapabilityToken(
   claims: CapabilityClaims,
   secret: string,
-  compressionEnabled = false,
+  encoding: boolean | CapabilityTokenEncoding = false,
 ): Promise<string> {
-  const value = { orgId: configOrgId(), ...claims };
+  const options = typeof encoding === "boolean" ? { compression: encoding } : encoding;
+  const original = { orgId: configOrgId(), ...claims };
+  if (Buffer.byteLength(JSON.stringify(original)) > MAX_CAPABILITY_CLAIMS_BYTES)
+    throw new Error("Capability claims exceed size limit");
+  const value = options.participants ? packCapabilityParticipants(original) : original;
   const bytes = Buffer.from(JSON.stringify(value));
-  if (bytes.length > MAX_CLAIMS_BYTES) throw new Error("Capability claims exceed size limit");
+  if (bytes.length > MAX_CAPABILITY_CLAIMS_BYTES) throw new Error("Capability claims exceed size limit");
   return mintSignedPayload(
-    compressionEnabled && bytes.length > 4096
+    options.compression && bytes.length > 4096
       ? { encoding: "deflate-raw", claims: (await compress(bytes)).toString("base64url") }
       : value,
     secret,
@@ -75,16 +87,20 @@ export async function mintCapabilityToken(
 }
 
 async function readCapabilityClaims(token: string, secret: string | string[]): Promise<CapabilityClaims | null> {
-  const value = await verifySignedPayload(token, secret);
+  let value = await verifySignedPayload(token, secret);
   if (!value || typeof value !== "object") return null;
-  if (!("encoding" in value)) return value as CapabilityClaims;
-  if (value.encoding !== "deflate-raw" || !("claims" in value) || typeof value.claims !== "string") return null;
-  try {
-    const bytes = await decompress(Buffer.from(value.claims, "base64url"), { maxOutputLength: MAX_CLAIMS_BYTES });
-    return JSON.parse(bytes.toString("utf8")) as CapabilityClaims;
-  } catch {
-    return null;
+  if ("encoding" in value && value.encoding === "deflate-raw") {
+    if (!("claims" in value) || typeof value.claims !== "string") return null;
+    try {
+      const bytes = await decompress(Buffer.from(value.claims, "base64url"), {
+        maxOutputLength: MAX_CAPABILITY_CLAIMS_BYTES,
+      });
+      value = JSON.parse(bytes.toString("utf8"));
+    } catch {
+      return null;
+    }
   }
+  return unpackCapabilityParticipants(value) as CapabilityClaims | null;
 }
 
 export function isValidCapabilityTimezone(timezone: unknown): timezone is string {

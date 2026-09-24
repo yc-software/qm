@@ -91,6 +91,25 @@ test("publisher resumes an existing transfer after new uploads are disabled", as
     assert.equal(JSON.parse(await run()).file.id, "published");
     assert.equal(begins, 1);
     assert.equal(puts, 1);
+    for (const compression of [false, true]) {
+      const packed = {
+        encoding: "participants-v1",
+        claims: { actorId: "user", scopeId: "personal:user" },
+        participants: { records: [], scope: [], keychain: [] },
+      };
+      token = await mintSignedPayload(
+        compression
+          ? {
+              encoding: "deflate-raw",
+              claims: deflateRawSync(JSON.stringify(packed)).toString("base64url"),
+            }
+          : packed,
+        "upload-test-secret",
+      );
+      assert.equal(JSON.parse(await run()).file.id, "published");
+      assert.equal(begins, 1);
+      assert.equal(puts, 1);
+    }
     token = await mintSignedPayload(
       {
         encoding: "deflate-raw",

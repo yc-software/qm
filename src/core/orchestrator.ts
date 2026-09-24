@@ -1619,7 +1619,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(
           controlClaims,
           deps.capabilitySecret ?? deps.signingSecret,
-          deps.capabilityTokenCompression,
+          { compression: deps.capabilityTokenCompression, participants: deps.capabilityTokenParticipants },
         );
         connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
           {
@@ -1628,7 +1628,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
           },
           deps.capabilitySecret ?? deps.signingSecret,
-          deps.capabilityTokenCompression,
+          { compression: deps.capabilityTokenCompression, participants: deps.capabilityTokenParticipants },
         );
         if (deps.serviceCreds) {
           const records = serviceCredRecords;
@@ -1689,7 +1689,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
           },
           egressSecret,
-          deps.capabilityTokenCompression,
+          { compression: deps.capabilityTokenCompression, participants: deps.capabilityTokenParticipants },
         );
       }
       const registerServiceCredentials = async (
@@ -1732,7 +1732,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
               },
               (deps.capabilitySecret ?? deps.signingSecret)!,
-              deps.capabilityTokenCompression,
+              { compression: deps.capabilityTokenCompression, participants: deps.capabilityTokenParticipants },
             );
           })());
         for (const credential of available) {

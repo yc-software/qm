@@ -1,4 +1,4 @@
-import type { CapabilityClaims } from "../src/auth/capability-token.ts";
+import { mintCapabilityToken, verifyCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ServerResponse } from "node:http";
@@ -535,31 +535,39 @@ test("ending the run during account lookup prevents execution", async () => {
 });
 
 test("shared org connections recheck grants for every audience member", async () => {
-  const f = fixture();
-  await f.shared(false);
-  const org = scopeId("org", orgId());
-  await f.deps.acl!.grant({
-    ownerScopeId: org,
-    ref: "service-cred:composio",
-    granteeScopeId: "personal:alice",
-    permission: "read",
-    grantedBy: "admin",
-  });
-  const cap = {
-    ...privateCap,
-    scopeId: "channel:C1",
-    liveActor: false,
-    triggered: true,
-    keychainMembers: [
-      { id: "alice", type: "internal" as const },
-      { id: "bob", type: "internal" as const },
-    ],
-  };
-  assert.equal((await f.invoke("/v1/composio/connections", undefined, null, cap)).status, 403);
-  assert.equal(f.calls.length, 0);
-  await f.shared();
-  f.replies.push({ items: [] });
-  assert.equal((await f.invoke("/v1/composio/connections", undefined, null, cap)).status, 200);
+  for (const participants of [false, true]) {
+    const f = fixture();
+    await f.shared(false);
+    const org = scopeId("org", orgId());
+    await f.deps.acl!.grant({
+      ownerScopeId: org,
+      ref: "service-cred:composio",
+      granteeScopeId: "personal:alice",
+      permission: "read",
+      grantedBy: "admin",
+    });
+    const original = {
+      ...privateCap,
+      scopeId: "channel:C1",
+      liveActor: false,
+      triggered: true,
+      members: [{ id: "alice", type: "internal" as const }],
+      keychainMembers: [
+        { id: "alice", type: "internal" as const },
+        { id: "bob", type: "internal" as const },
+      ],
+    };
+    const cap = await verifyCapabilityToken(
+      await mintCapabilityToken(original, "test-secret", { participants }),
+      "test-secret",
+    );
+    assert.ok(cap);
+    assert.equal((await f.invoke("/v1/composio/connections", undefined, null, cap)).status, 403);
+    assert.equal(f.calls.length, 0);
+    await f.shared();
+    f.replies.push({ items: [] });
+    assert.equal((await f.invoke("/v1/composio/connections", undefined, null, cap)).status, 200);
+  }
 });
 
 test("expired callback returns are discarded after successful browser verification", async () => {

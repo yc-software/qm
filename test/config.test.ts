@@ -945,3 +945,11 @@ test("background ownership requires durable storage and an independent deploymen
   assert.throws(() => loadConfig({ ...env, CORE_SIGNING_SECRET: "short" }), /CORE_SIGNING_SECRET/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
 });
+
+test("participant encoding has an independent default-off rollout", () => {
+  assert.equal(loadConfig({}).capabilityTokenParticipants, false);
+  assert.equal(loadConfig({ CAPABILITY_TOKEN_PARTICIPANTS: "0" }).capabilityTokenParticipants, false);
+  assert.equal(loadConfig({ CAPABILITY_TOKEN_PARTICIPANTS: "1" }).capabilityTokenParticipants, true);
+  assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "1" }).capabilityTokenParticipants, false);
+  assert.throws(() => loadConfig({ CAPABILITY_TOKEN_PARTICIPANTS: "invalid" }), /CAPABILITY_TOKEN_PARTICIPANTS/);
+});

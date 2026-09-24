@@ -495,13 +495,19 @@ test("a per-turn egress-proxy token is minted and passed to provision, carrying 
 });
 
 test("large channel turns apply the compression rollout setting to every sandbox token", async () => {
-  for (const capabilityTokenCompression of [false, true]) {
+  for (const [capabilityTokenCompression, capabilityTokenParticipants] of [
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ]) {
     const { app, sandbox } = buildApp(
       testConfig({
         dataDir: mkdtempSync(join(tmpdir(), "ap-")),
         signingSecret: "test-secret",
         apiBaseUrl: "https://core.example.com",
         capabilityTokenCompression,
+        capabilityTokenParticipants,
       }),
     );
     let captured: ProvisionOptions | undefined;
@@ -532,7 +538,8 @@ test("large channel turns apply the compression rollout setting to every sandbox
     ]) {
       assert.ok(token);
       const payload = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString("utf8"));
-      assert.equal(payload.encoding, capabilityTokenCompression ? "deflate-raw" : undefined);
+      const innerEncoding = capabilityTokenParticipants ? "participants-v1" : undefined;
+      assert.equal(payload.encoding, capabilityTokenCompression ? "deflate-raw" : innerEncoding);
       if (capabilityTokenCompression) assert.ok(token.length < 8 * 1024);
       const verified = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
       assert.equal(verified?.members?.length, 120);

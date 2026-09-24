@@ -1134,7 +1134,7 @@ export function buildApp(
           exp: Date.now() + CAPABILITY_TTL_MS,
         },
         secret,
-        config.capabilityTokenCompression,
+        { compression: config.capabilityTokenCompression, participants: config.capabilityTokenParticipants },
       );
       return { egressToken };
     },
@@ -1167,7 +1167,7 @@ export function buildApp(
           exp: Date.now() + CAPABILITY_TTL_MS,
         },
         egressSecret,
-        config.capabilityTokenCompression,
+        { compression: config.capabilityTokenCompression, participants: config.capabilityTokenParticipants },
       );
       return { egressToken };
     },
@@ -1703,7 +1703,7 @@ export function buildApp(
                   exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
                 },
                 config.capabilitySecret ?? deployGitSecret,
-                config.capabilityTokenCompression,
+                { compression: config.capabilityTokenCompression, participants: config.capabilityTokenParticipants },
               );
             }
             return env;
@@ -1880,6 +1880,7 @@ export function buildApp(
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
+    capabilityTokenParticipants: config.capabilityTokenParticipants,
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
@@ -2772,6 +2773,7 @@ export function serverDeps(
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
+    capabilityTokenParticipants: config.capabilityTokenParticipants,
     ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
     ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
     ...(built.replayDedupe ? { replayDedupe: built.replayDedupe } : {}),

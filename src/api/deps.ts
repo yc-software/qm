@@ -86,6 +86,7 @@ export interface ServerDeps {
   signingSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
+  capabilityTokenParticipants?: boolean;
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
   control: ControlService;

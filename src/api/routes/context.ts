@@ -185,7 +185,7 @@ function awaitFileFulfillment(ctx: ApiCtx, requestId: string): Promise<void> {
         exp: Date.now() + FILE_DOWNLOAD_TTL_MS,
       },
       (ctx.deps.capabilitySecret ?? secret)!,
-      ctx.deps.capabilityTokenCompression,
+      { compression: ctx.deps.capabilityTokenCompression, participants: ctx.deps.capabilityTokenParticipants },
     );
     const { blobId, ...meta } = file;
     return sendJson(res, 200, {

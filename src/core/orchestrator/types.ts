@@ -144,6 +144,7 @@ export interface OrchestratorDeps {
   signingSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
+  capabilityTokenParticipants?: boolean;
   apiBaseUrl?: string;
   publicWebUrl?: string;
   /** The public base for an inbound webhook URL (PUBLIC_WEB_URL ?? api url) — what the webhook

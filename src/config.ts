@@ -128,6 +128,7 @@ export interface Config {
   signingSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
+  capabilityTokenParticipants?: boolean;
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
@@ -1540,6 +1541,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...((env.PORTAL_IDENTITY_SECRET ?? env.CORE_SIGNING_SECRET)
       ? { portalIdentitySecret: env.PORTAL_IDENTITY_SECRET ?? env.CORE_SIGNING_SECRET }
       : {}),
+    capabilityTokenParticipants:
+      boolEnvStrict("CAPABILITY_TOKEN_PARTICIPANTS", env.CAPABILITY_TOKEN_PARTICIPANTS) ?? false,
     capabilityTokenCompression:
       boolEnvStrict("CAPABILITY_TOKEN_COMPRESSION", env.CAPABILITY_TOKEN_COMPRESSION) ?? false,
     requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
