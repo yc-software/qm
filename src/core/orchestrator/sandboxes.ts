@@ -49,6 +49,7 @@ export interface TurnSandboxContext {
   isolateOwnerKeychain: boolean;
   openSpeakerKeychain?: boolean;
   openResourceAccess?: boolean;
+  liveAdminTurn?: boolean;
   ownerAuthAvailable: boolean;
   credentialTools: readonly import("../../deployment/load-layer.ts").LayerCredentialTool[];
   credentialServices: string[];
@@ -78,6 +79,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     isolateOwnerKeychain,
     openSpeakerKeychain,
     openResourceAccess,
+    liveAdminTurn,
     ownerAuthAvailable,
     credentialTools,
     credentialServices,
@@ -396,6 +398,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const writableScopeId = resolution.layers.find((layer) => layer.mode === "rw")?.scopeId;
   const canUseSandboxScope = async (target: ScopeId): Promise<boolean> => {
     if (target === writableScopeId || target === scopeId) return true;
+    if (
+      liveAdminTurn &&
+      actor.type === "internal" &&
+      (await deps.admin?.adminStatusOf(actor))?.isAdmin &&
+      (scopeId === personalScope(actor.id) ||
+        (await deps.config?.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) === "open")
+    )
+      return true;
     if (!openResourceAccess || actor.type !== "internal" || !deps.config || !deps.isCurrentSharedScopeMember)
       return false;
     const personal = personalScope(actor.id);

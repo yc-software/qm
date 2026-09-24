@@ -1373,6 +1373,11 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
     /private-content reads work only from a DM|bulk configuration imports require/,
   );
   assert.match(adminPrompt.reply ?? "", /"scope":"org"/, "the org-notebook option rides in the admin hint");
+  assert.doesNotMatch(
+    adminPrompt.reply ?? "",
+    /Each conversation is isolated|Carried context is read-only|Writes, message history, approvals/,
+  );
+  assert.match(adminPrompt.reply ?? "", /do not require the resource owner to be present/);
 
   captured = undefined;
   assert.equal((await app.turn(dm("!run echo hi"))).status, "ok");

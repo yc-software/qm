@@ -122,6 +122,9 @@ test("discovery for an org admin's LIVE turn includes the admin plane (live gran
     const p = paths(body);
     assert.ok(p.includes("/v1/admin/scopes"));
     assert.ok(p.includes("/v1/admin/users"));
+    assert.ok(p.includes("/v1/admin/sandboxes/:scopeId"));
+    assert.ok(p.includes("/v1/admin/sandbox-routes"));
+    assert.ok(p.includes("/v1/admin/sandbox-routes/:scopeId/migrate"));
     assert.ok(!p.includes("/v1/admin/grants"), "grant management is portal-only and must not be advertised");
     assert.ok(body.guidance.some((g: string) => g.includes("confirm before any mutation")));
     assert.match(JSON.stringify(body), /content reads require a DM or effective Open sharing for the live admin/);

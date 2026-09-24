@@ -108,6 +108,28 @@ Don't guess ids — list them:
 GET /v1/admin/scopes        → every scope with display labels (#channel names, people) and what lives there
 ```
 
+## Maintain the instance
+
+On a verified live admin request, take responsibility for keeping the instance working.
+Ordinary resource ownership and conversation membership do not limit administration.
+Use the administrative API when an ordinary resource tool is owner-scoped; do not send
+an admin to the affected user's conversation or require that user to repeat the request.
+Act and audit as the administrator, not as the resource owner. Personal credentials and
+external-service permissions remain separate from administration of QM resources.
+
+```bash
+GET /v1/admin/sandboxes/<scopeId>
+POST /v1/admin/sandboxes/<scopeId>  {"action":"create","backend":"<provider>","name":"<name>"}
+POST /v1/admin/sandboxes/<scopeId>  {"action":"default","sandboxId":"<id>"}
+POST /v1/admin/sandboxes/<scopeId>  {"action":"retire","sandboxId":"<id>"}
+```
+
+Inventory includes all authorized computers plus the named scope's default. Select the
+intended computer by `ownerScopeId` and ID. Use the ordinary sandbox tool with its
+`sandbox_id` for status, restart or execution from the admin's DM or an Open conversation.
+Creation is blank; default selection changes routing, not ownership or file contents.
+Do not copy the current conversation's credentials to another scope's computer.
+
 ## Read & govern a scope's config
 
 ```bash

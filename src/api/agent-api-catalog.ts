@@ -794,6 +794,23 @@ const FAMILIES: AgentApiFamily[] = [
     routes: [
       { method: "GET", path: "/v1/admin/whoami", summary: "this user's admin status" },
       {
+        method: "GET|POST",
+        path: "/v1/admin/sandboxes/:scopeId",
+        summary:
+          "list authorized computers and this scope's default; POST {action: create, backend, name?}, {action: default, sandboxId: id|null}, or {action: retire, sandboxId}. Use returned IDs with the sandbox tool for status, restart and execution as the live admin",
+      },
+      {
+        method: "GET",
+        path: "/v1/admin/sandbox-routes",
+        summary: "list sandbox provider routes and available backends",
+      },
+      {
+        method: "POST",
+        path: "/v1/admin/sandbox-routes/:scopeId/migrate",
+        summary:
+          "legacy scope migration: {to, reason?, force?}; scopes with explicit sandbox defaults use create/default instead",
+      },
+      {
         method: "GET",
         path: "/v1/admin/scopes",
         summary: "every scope with labels and what lives there — find scope ids here, don't guess",

@@ -95,6 +95,7 @@ function buildOrchestrator(
   extra: {
     blobTransfer?: BlobTransferStore;
     harness?: Harness;
+    admin?: import("../src/admin/admin-service.ts").AdminService;
     memoryPolicy?: import("../src/memory/policy.ts").MemoryPolicy;
     crons?: CronStore;
     connectorStatusCache?: ConnectorStatusCache;
@@ -1222,4 +1223,43 @@ test("connector revocation still refreshes system-authority permissions", async 
   assert.match(prefix(second.reply!), /Needs reconnect: Google.*Do not use these apps/);
   assert.doesNotMatch(prefix(second.reply!), /Connected: Google/);
   assert.notEqual(prefix(first.reply!), prefix(second.reply!));
+});
+
+test("admin prompts replace ordinary sharing limits and retain provenance only while authorized", async () => {
+  let isAdmin = true;
+  const { orchestrator, config } = buildOrchestrator({
+    admin: {
+      adminStatusOf: async () => ({ isAdmin }),
+    } as unknown as import("../src/admin/admin-service.ts").AdminService,
+    isCurrentSharedScopeMember: async () => true,
+  });
+  await config.setSharingPosture(scopeId("org", ORG), "open");
+  const request: OrchestratorInput = {
+    surface: "test",
+    actor,
+    conversation: {
+      kind: "channel",
+      threadRef: "C1:admin",
+      channelRef: "C1",
+      audience: [actor],
+      publishMembers: [actor],
+    },
+    text: "!sysprompt",
+    origin: { kind: "human" },
+  };
+  const elevated = (await orchestrator.handleTurn(request)).reply ?? "";
+  assert.match(elevated, /## Acting for an org admin/);
+  assert.match(elevated, /## Context sources[\s\S]*personal:U1/);
+  assert.doesNotMatch(
+    elevated,
+    /Each conversation is isolated|Sharing posture: Open|Carried context is read-only|Writes, message history, approvals/,
+  );
+  const readOnly = (await orchestrator.handleTurn({ ...request, readOnly: true })).reply ?? "";
+  assert.doesNotMatch(readOnly, /## Acting for an org admin/);
+  assert.match(readOnly, /Each conversation is isolated/);
+  isAdmin = false;
+  const revoked = (await orchestrator.handleTurn(request)).reply ?? "";
+  assert.doesNotMatch(revoked, /## Acting for an org admin/);
+  assert.match(revoked, /Sharing posture: Open/);
+  assert.match(revoked, /Each conversation is isolated/);
 });

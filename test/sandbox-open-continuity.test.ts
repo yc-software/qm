@@ -10,9 +10,11 @@ function fixture(
   target = "personal:alice",
   authority = true,
   toolDeps: Partial<ToolContextDeps> = {},
+  liveAdminTurn = false,
 ) {
   const state = {
     open: true,
+    admin: liveAdminTurn,
     member: true,
     allowed: true,
     cutoverMode: "legacy",
@@ -127,6 +129,7 @@ function fixture(
         },
       },
       config,
+      admin: { adminStatusOf: async () => ({ isAdmin: state.admin }) },
       isCurrentSharedScopeMember: async () => state.member,
     },
     actor: { id: "alice", type: "internal" },
@@ -143,6 +146,7 @@ function fixture(
     scopeId: source,
     memoryScopeId: source,
     openResourceAccess: authority,
+    liveAdminTurn,
     credentialServices: [],
     credentialTools: [],
     quarantinedServices: [],
@@ -529,4 +533,38 @@ test("same-scope explicit execution prepares credentials only after provisioning
   await f.tools.execute("pwd", { sandboxId: "personal-box", credentials: ["lazy"] });
   assert.deepEqual(events, ["policy", "resolve", "commit", "wrap"]);
   assert.equal(f.runs.at(-1)?.env?.TOKEN, "synthetic-command-secret");
+});
+
+for (const source of ["personal:alice", "group:project"]) {
+  test(`live admin from ${source} maintains a nonmember's computer without moving credentials`, async () => {
+    const f = fixture(source, "personal:bob", true, {}, true);
+    f.state.member = false;
+    if (source === "personal:alice") f.state.open = false;
+    assert.equal(((await f.tools.sandboxResources!("list")) as { sandboxes: unknown[] }).sandboxes.length, 1);
+    await f.tools.computerStatus("personal-box");
+    await f.tools.restartComputer("personal-box");
+    await f.tools.execute("repair", { sandboxId: "personal-box" });
+    assert.deepEqual(f.commands, ["repair"]);
+    assert.deepEqual(f.credentialOwners, []);
+    assert.deepEqual(f.restored, []);
+    assert.equal(JSON.stringify(f.provisions).includes("synthetic-room"), false);
+    if (source === "group:project") {
+      f.state.open = false;
+      await assert.rejects(f.tools.execute("after isolation", { sandboxId: "personal-box" }), /authorized/);
+      f.state.open = true;
+    }
+    f.state.admin = false;
+    await assert.rejects(f.tools.execute("repair again", { sandboxId: "personal-box" }), /authorized/);
+    await assert.rejects(f.tools.computerStatus("personal-box"), /authorized/);
+    assert.deepEqual(f.commands, ["repair"]);
+  });
+}
+
+test("admin membership alone cannot elevate autonomous or isolated shared sandbox access", async () => {
+  const automated = fixture("personal:alice", "personal:bob", false);
+  automated.state.admin = true;
+  await assert.rejects(automated.tools.computerStatus("personal-box"), /authorized/);
+  const isolated = fixture("group:project", "personal:bob", true, {}, true);
+  isolated.state.open = false;
+  await assert.rejects(isolated.tools.execute("repair", { sandboxId: "personal-box" }), /authorized/);
 });

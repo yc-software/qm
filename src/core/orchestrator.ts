@@ -1035,6 +1035,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
+      const actorIsOrgAdmin =
+        !strictReadOnly &&
+        !!deps.signingSecret &&
+        !!deps.apiBaseUrl &&
+        liveAuthorTurn &&
+        actor.type === "internal" &&
+        (
+          await deps.admin
+            ?.adminStatusOf(actor)
+            .catch(swallowAs("orchestrator: admin status for turn", { isAdmin: false }))
+        )?.isAdmin === true;
+
       const useMemory = input.skipMemory !== true;
       const environmentId = await resolveEnvironmentId(deps.environments, scopeId);
       const rwLayer = resolution.layers.find((l) => l.mode === "rw");
@@ -1099,13 +1111,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (modeName === "mode-conversation" && input.proactiveOpener) {
         modeFrame += "\nNo one has written yet; open the conversation yourself per the onboarding note below.";
       }
-      const sharedCore = applyPromptVars(SHARED_CORE_MD, { botName, botHandle, orgName });
+      const sharedCore = applyPromptVars(SHARED_CORE_MD, {
+        botName,
+        botHandle,
+        orgName,
+        ordinaryTurn: !actorIsOrgAdmin,
+      });
       let systemPrompt = `${modeFrame}\n\n${resolution.systemPrompt}\n\n${sharedCore}\n\n${renderSecurityPolicyPrompt(securityPolicy)}`;
       const turnContextBlocks: string[] = [];
       if (input.privateSessionMessage)
         systemPrompt +=
           "\n\nThis is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.";
-      const sharingPrompt = renderSharingPosturePrompt(actor, sharingSources);
+      const sharingPrompt = renderSharingPosturePrompt(actor, sharingSources, actorIsOrgAdmin);
       if (sharingPrompt) systemPrompt += `\n\n${sharingPrompt}`;
       const scopeProfile = supportsScopeProfile(deps.sandbox)
         ? await deps.sandbox
@@ -1570,7 +1587,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           connectorEnv.BROWSE_LAB_MODEL_PROVIDER = browseChoice.provider;
         }
       }
-      let actorIsOrgAdmin = false;
       let orgMemoryWrite: ScopeId | undefined;
       let controlClaims: CapabilityClaims | undefined;
       const scopeAttestation = {
@@ -1584,20 +1600,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
         const destination = defaultDestination;
         connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
-        if (deps.admin && liveAuthorTurn) {
-          const status = await deps.admin
-            .adminStatusOf(actor)
-            .catch(swallowAs("orchestrator: admin status for turn", { isAdmin: false }));
-          actorIsOrgAdmin = status.isAdmin;
-          if (
-            actorIsOrgAdmin &&
-            liveTurn &&
-            useMemory &&
-            memoryPolicy.capture !== "off" &&
-            resolution.orgScopeId !== memoryScopeId
-          ) {
-            orgMemoryWrite = resolution.orgScopeId;
-          }
+        if (
+          actorIsOrgAdmin &&
+          liveTurn &&
+          useMemory &&
+          memoryPolicy.capture !== "off" &&
+          resolution.orgScopeId !== memoryScopeId
+        ) {
+          orgMemoryWrite = resolution.orgScopeId;
         }
         const memoryClaim = memoryAccess
           ? { ...memoryAccess, read: baseRecallScopes, ...(orgMemoryWrite ? { orgWrite: orgMemoryWrite } : {}) }
@@ -1899,6 +1909,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         openSpeakerKeychain: openSpeakerKeychain || openAutomationKeychain,
         openResourceAccess:
           liveAuthorTurn || (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true),
+        liveAdminTurn: actorIsOrgAdmin,
         ownerAuthAvailable,
         credentialTools,
         credentialServices,
@@ -2176,11 +2187,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (actorIsOrgAdmin) {
           systemPrompt +=
             "\n\n## Acting for an org admin\n" +
-            "This user is an org admin, and your token inherits that for this turn: anything they could do in the admin dashboard — inspect or govern any scope's config/SOUL, memory, transcripts, files, audit — they can do through you. The admin skill documents the whole API surface; read it before acting" +
+            "This is a verified org-admin request. Take responsibility for keeping this instance working on the administrator's behalf. Ordinary resource ownership and conversation membership are not reasons to refuse administration: do not require the resource owner to be present or repeat the request elsewhere. Use the existing tools and administrative API across the organization, including other users' and channels' computers. Act as the administrator, not as the resource owner. Load the admin skill for API details" +
             (orgMemoryWrite
               ? ', and for plain "remember this org-wide" requests the lighter path is `"scope":"org"` on the memory self-API (memory skill)'
               : "") +
-            ". You're acting as them: confirm before any mutation, and say exactly what you changed. Hard limits the API enforces: private-content reads require a DM or an Open conversation on a live admin turn (organization, personal, and conversation sharing restrictions all apply); admin grant changes and impersonation are portal-only. Open admin reads can expose private data to everyone in the conversation: retrieve and report only what the request needs.";
+            ". You're acting as them: confirm before any mutation, and say exactly what you changed. Hard limits the API enforces: private-content reads require a DM or an Open conversation on a live admin turn (organization, personal, and conversation sharing restrictions all apply); admin grant changes, identity links and impersonation are portal-only. Administrative access does not grant another person's external-service credentials. Open admin reads can expose private data to everyone in the conversation: retrieve and report only what the request needs.";
         }
         if (deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors)) {
           const nowMs = Date.now();
