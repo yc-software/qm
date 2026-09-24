@@ -2173,6 +2173,25 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
+    path: "/api/deployment-notices",
+    handle: async ({ res }) => relayCore(res, "GET", "/v1/deployment-notices"),
+  },
+  {
+    method: "POST",
+    path: "/api/deployment-notices/:id",
+    handle: async ({ req, res, params }) => {
+      const body = await readJson<{ action?: unknown }>(req, res, false);
+      if (!body) return;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/deployment-notices/${encodeURIComponent(params.id!)}`,
+        JSON.stringify({ action: body.action }),
+      );
+    },
+  },
+  {
+    method: "GET",
     path: "/api/deployments",
     handle: async (c) => {
       const { res, user } = c;

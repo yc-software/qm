@@ -27,6 +27,7 @@ import {
   Settings,
   ShieldUser,
   Webhook,
+  X,
   type IconNode,
 } from "lucide";
 import {
@@ -89,7 +90,8 @@ import { openChatSearch } from "./search";
 import { closeBrowse, openBrowse } from "./browse";
 import { attachTooltip, hideTooltip, tip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
-import { openDeployById, renderDeploys } from "./deploys";
+import { appNoticeState, hideAppNoticeToast, startAppNotices, stopAppNotices } from "./app-notices";
+import { openDeployById, renderDeploys, redrawAppNotices } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
 import { renderCalendar } from "./calendar";
 import {
@@ -228,6 +230,8 @@ const ICON = {
 };
 
 export async function signOut(): Promise<void> {
+  stopAppNotices();
+  renderAppNotification();
   stopAnalytics();
   stopBrowserErrors();
   const portal = authMode === "portal";
@@ -447,6 +451,7 @@ export type AuthGate =
   | { kind: "dev"; value?: string; error?: string; pending?: boolean };
 
 export function renderAuthGate(gate: AuthGate): void {
+  stopAppNotices();
   stopAnalytics();
   stopBrowserErrors();
   shellMounted = false;
@@ -479,6 +484,7 @@ export function mountShell(): void {
   render(
     html`
       ${banner}
+      <div id="app-notification" aria-live="polite"></div>
       <div class="layout ${sidebarOpen ? "" : "sidebar-closed"} ${banner !== nothing ? "bannered" : ""}">
         <aside
           class="sidebar"
@@ -534,6 +540,35 @@ export function mountShell(): void {
   renderSidebarTop();
   updateSidebarToggleLabels();
   syncSidebarAccessibility(false);
+}
+
+function renderAppNotification(): void {
+  const host = (appEl as HTMLElement).querySelector<HTMLElement>("#app-notification");
+  if (!host) return;
+  const notice = appNoticeState.toast;
+  render(
+    notice
+      ? html`<div class="action-toast app-notification" role="status">
+          <span>${notice.text}</span>
+          <a
+            href=${deepLinkPath(UI_BASE, "deploys", null)}
+            @click=${(event: MouseEvent) => {
+              if (!isPlainLeftClick(event)) return;
+              event.preventDefault();
+              hideAppNoticeToast();
+              setScopedSession(null);
+              switchView("deploys");
+              closeSidebarOnNarrowView();
+            }}
+            >${notice.request ? "Review" : "Open Apps"}</a
+          >
+          <button class="icon-btn" type="button" aria-label="Hide notification" @click=${hideAppNoticeToast}>
+            ${icon(X, 14)}
+          </button>
+        </div>`
+      : nothing,
+    host,
+  );
 }
 
 function inboxNavRow(): TemplateResult {
@@ -597,15 +632,15 @@ export function renderSidebarTop(): void {
   syncDocumentTitle();
   if (!appState.topEl) return;
   const highlighted = (v: View) => v !== "chats" && appState.currentView === v;
-  const navRow = (v: View, glyph: IconNode, label: string) =>
+  const navRow = (v: View, glyph: IconNode, label: string, count = 0) =>
     html`<a
       class="navrow ${highlighted(v) ? "active" : ""}"
       href=${deepLinkPath(UI_BASE, v, null)}
       data-view=${v}
-      aria-label=${label}
+      aria-label=${count > 0 ? `${label}, ${count} app notifications` : label}
       ${tip(sidebarOpen ? "" : label)}
     >
-      ${icon(glyph, 17)}<span>${label}</span>
+      ${icon(glyph, 17)}<span>${label}</span>${count > 0 ? html`<span class="nav-badge" aria-label=${`${count} app notifications`}>${count > 99 ? "99+" : count}</span>` : nothing}
     </a>`;
   const actionRow = (glyph: IconNode, label: string, run: () => void) =>
     html`<button
@@ -625,6 +660,7 @@ export function renderSidebarTop(): void {
     html`
       <nav class="nav quick-nav" @click=${onNavClick}>
         ${navRow("chats", ICON.home, "Home")}
+        ${canView("deploys") ? navRow("deploys", ICON.deploys, "Apps", appNoticeState.notices.length) : nothing}
         ${can("inbox") ? html`${inboxNavRow()} ${navRow("calendar", ICON.calendar, "Calendar")}` : nothing}
         ${actionRow(Search, "Search", () => {
           hideTooltip();
@@ -1063,6 +1099,12 @@ export async function boot(): Promise<void> {
   resyncModelSelection();
   mountShell();
   shellMounted = true;
+  if (canView("deploys"))
+    startAppNotices(() => {
+      renderSidebarTop();
+      renderAppNotification();
+      redrawAppNotices();
+    });
   ensureDeliveryStream();
   warmDeferredChunks();
   void refreshInbox({ silent: true });

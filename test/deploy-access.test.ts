@@ -1,3 +1,7 @@
+import { listDeploymentNotices, decideDeploymentNotice } from "../src/api/routes/deployment-notices.ts";
+import type { ApiCtx } from "../src/api/routes/route.ts";
+import { enqueueDeploymentNotice } from "../src/deploy/share-notice.ts";
+import { decideDeploymentAccess, parseDeployAccess } from "../src/deploy/access-request.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -13,12 +17,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
-import {
-  decideDeploymentAccess,
-  deployAccessMessage,
-  parseDeployAccess,
-  registerDeployAccessActions,
-} from "../src/slack/deploy-access.ts";
+import { deployAccessMessage, registerDeployAccessActions } from "../src/slack/deploy-access.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type ActorAssertion, type Permission } from "../src/types.ts";
 
@@ -276,4 +275,119 @@ test("publish audiences notify once with final permissions, including subsequent
   await decideDeploymentAccess(f.app, f.identity, value, { externalId: owner }, true);
   await f.app.shareDeployment(d.id, person(requester), "write", { createdBy: owner });
   assert.equal((await f.notices()).length, 2);
+});
+
+test("sharing persists a web notice without any Slack consumer", async (t) => {
+  const f = await fixture(t);
+  await f.share("read");
+  const notices = await f.deliveries.pending("app-notice");
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0]!.destination.target, requester);
+  assert.match(notices[0]!.text, /gave you access/);
+});
+
+test("web notices persist before optional Slack delivery and failures stay truthful", async () => {
+  const deliveries = createDeliveryStore();
+  const input = {
+    destination: { type: "principal", target: owner },
+    text: "Access requested",
+    idempotencyKey: "notice-test",
+  };
+  await enqueueDeploymentNotice(async (row) => {
+    if (row.destination.type === "principal") throw new Error("Slack unavailable");
+    return deliveries.enqueue(row);
+  }, input);
+  assert.equal((await deliveries.pending("app-notice")).length, 1);
+  let attemptedSlack = false;
+  await assert.rejects(
+    enqueueDeploymentNotice(async (row) => {
+      if (row.destination.type === "app-notice") throw new Error("outbox unavailable");
+      attemptedSlack = true;
+    }, input),
+    /outbox unavailable/,
+  );
+  assert.equal(attemptedSlack, false);
+});
+
+test("decisions on either surface dismiss all matching web requests, not other apps", async (t) => {
+  const f = await fixture(t);
+  for (const day of [1, 2])
+    await f.app.enqueueDelivery({
+      destination: {
+        type: "app-notice",
+        target: owner,
+        deploymentAccess: { deploymentId: f.d.id, requesterId: requester },
+      },
+      text: "Access requested",
+      idempotencyKey: `request:${day}`,
+    });
+  await f.app.enqueueDelivery({
+    destination: { type: "app-notice", target: owner, deploymentAccess: request },
+    text: "Another app",
+    idempotencyKey: "other",
+  });
+  await f.decide();
+  const notices = await f.deliveries.pending("app-notice");
+  assert.equal(notices.filter((row) => row.destination.deploymentAccess).length, 1);
+  assert.equal(notices.find((row) => row.destination.deploymentAccess)?.idempotencyKey, "other");
+});
+
+test("web notices require a portal actor, isolate recipients, and recheck current ownership", async (t) => {
+  const f = await fixture(t);
+  await enqueueDeploymentNotice((row) => f.app.enqueueDelivery(row), {
+    destination: {
+      type: "principal",
+      target: owner,
+      deploymentAccess: { deploymentId: f.d.id, requesterId: requester },
+    },
+    text: "Access requested",
+    idempotencyKey: "web-route-request",
+  });
+  const notice = (await f.deliveries.pending("app-notice"))[0]!;
+  async function call(actor: string | undefined, action?: string, body = {}) {
+    let status = 0;
+    let result: { notices?: Array<{ id: string }>; ok?: boolean } = {};
+    const ctx = {
+      app: f.app,
+      deps: { identity: f.identity },
+      actor: actor ? { p: actor } : undefined,
+      capability: { actorId: owner },
+      params: { id: notice.id },
+      body: { action, ...body },
+      res: {
+        writeHead(code: number) {
+          status = code;
+        },
+        end(raw: string) {
+          result = JSON.parse(raw);
+        },
+      },
+    } as unknown as ApiCtx;
+    await (action ? decideDeploymentNotice(ctx) : listDeploymentNotices(ctx));
+    return { status, result };
+  }
+  assert.equal((await call(undefined)).status, 403);
+  assert.equal((await call(undefined, "approve")).status, 403);
+  assert.deepEqual((await call(requester)).result.notices, []);
+  assert.equal((await call(requester, "approve", { actorId: owner, requesterId: "carol@example.com" })).status, 404);
+  assert.equal((await call(owner)).result.notices?.length, 1);
+  assert.equal((await f.deliveries.get(notice.id))?.deliveredAt, null, "GET does not acknowledge requests");
+  assert.deepEqual(await f.grants(), []);
+  assert.equal((await call(owner, "dismiss")).status, 400);
+  assert.equal((await call(owner, "approve", { requesterId: "carol@example.com" })).status, 200);
+  assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "read" }]);
+  assert.equal((await call(owner, "approve")).status, 404, "handled web requests cannot be replayed");
+  await enqueueDeploymentNotice((row) => f.app.enqueueDelivery(row), {
+    destination: {
+      type: "principal",
+      target: owner,
+      deploymentAccess: { deploymentId: f.d.id, requesterId: requester },
+    },
+    text: "A later request",
+    idempotencyKey: "web-route-later",
+  });
+  await f.app.moveArtifactHome("deploy", f.d.id, person(requester), owner);
+  assert.deepEqual((await call(owner)).result.notices, [], "former owner cannot see transferred requests");
+  await f.identity.deactivate(owner);
+  assert.equal((await call(owner)).status, 403);
 });

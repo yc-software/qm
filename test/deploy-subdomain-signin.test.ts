@@ -16,7 +16,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
 import { portalSession } from "../src/deploy/viewer-session.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, type Destination } from "../src/types.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const SESSION_SECRET = "portal-session-secret";
@@ -186,7 +186,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     files: [],
     name: "mysite",
   });
-  const deliveries: { destination: unknown; text: string; idempotencyKey: string }[] = [];
+  const deliveries: { destination: Destination; text: string; idempotencyKey: string }[] = [];
   (app as unknown as Record<string, unknown>).enqueueDelivery = async (input: (typeof deliveries)[number]) => {
     deliveries.push(input);
   };
@@ -314,17 +314,23 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
       Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
     });
     assert.equal(again.status, 200, "asking twice is idempotent, not an error");
-    assert.equal(deliveries.length, 2, "both posts enqueue (the outbox dedupes by idempotency key)");
-    assert.equal(deliveries[0]!.idempotencyKey, deliveries[1]!.idempotencyKey, "same visitor+app+day dedupes");
-    assert.match(deliveries[0]!.text, /mallory@example\.com is asking for access/);
-    assert.match(deliveries[0]!.text, /mysite/);
-    assert.deepEqual(deliveries[0]!.destination, {
-      type: "principal",
-      target: "alice@example.com",
-      audienceScopeId: "personal:alice@example.com",
-      onBehalfOf: "mallory@example.com",
-      deploymentAccess: { deploymentId: (await app.getDeployment("mysite"))!.id, requesterId: "mallory@example.com" },
-    });
+    assert.equal(deliveries.length, 4, "both posts enqueue web and Slack notices");
+    for (const type of ["app-notice", "principal"] as const) {
+      const notices = deliveries.filter((delivery) => delivery.destination.type === type);
+      assert.equal(notices.length, 2);
+      assert.equal(notices[0]!.idempotencyKey, notices[1]!.idempotencyKey, "same visitor+app+day dedupes");
+      assert.match(notices[0]!.text, /mallory@example\.com is asking for access/);
+      assert.match(notices[0]!.text, /mysite/);
+      assert.deepEqual(notices[0]!.destination, {
+        type,
+        target: "alice@example.com",
+        audienceScopeId: "personal:alice@example.com",
+        onBehalfOf: "mallory@example.com",
+        deploymentAccess: { deploymentId: (await app.getDeployment("mysite"))!.id, requesterId: "mallory@example.com" },
+      });
+      assert.deepEqual(notices[1], notices[0]);
+    }
+    assert.equal(new Set(deliveries.map((delivery) => delivery.idempotencyKey)).size, 2);
 
     const signedOutAsk = await httpPost(port, "/__claw__/request-access", { Host: host });
     assert.equal(signedOutAsk.status, 401, "a signed-out visitor cannot send access requests");

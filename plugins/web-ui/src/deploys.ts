@@ -1,3 +1,4 @@
+import { appNoticeState, refreshAppNotices, type AppNotice } from "./app-notices";
 import { openDeploymentPermissions } from "./deploy-permissions";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
@@ -51,6 +52,55 @@ const DEPLOY_EDIT_FIELDS: Record<DeployEditField, { endpoint: string; savedValue
   name: { endpoint: "name", savedValue: (d) => d.name ?? "" },
   embedAncestors: { endpoint: "embed-ancestors", savedValue: (d) => (d.embedAncestors ?? []).join("\n") },
 };
+
+const decidingNotices = new Set<string>();
+let noticeError = "";
+
+async function decideAppNotice(notice: AppNotice, action: "approve" | "decline" | "dismiss"): Promise<void> {
+  if (decidingNotices.has(notice.id)) return;
+  decidingNotices.add(notice.id);
+  drawDeploysPage();
+  try {
+    await api(`/api/deployment-notices/${encodeURIComponent(notice.id)}`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    });
+    noticeError = "";
+    await refreshAppNotices(true);
+    await refreshDeployments();
+  } catch (error) {
+    noticeError = errMessage(error, "Could not update this request. Try again.");
+  } finally {
+    decidingNotices.delete(notice.id);
+    if (!activeDeploy) drawDeploysPage();
+  }
+}
+
+function appNoticeRows(): TemplateResult[] {
+  return [
+    ...(noticeError || appNoticeState.error
+      ? [html`<div class="status" role="alert">${noticeError || appNoticeState.error}</div>`]
+      : []),
+    ...appNoticeState.notices.map(
+      (notice) =>
+        html`<div
+          class="deploy-row app-notice"
+          role="group"
+          aria-label=${notice.request ? "App access request" : "App notification"}
+        >
+          <div class="deploy-row-main"><span>${notice.text}</span></div>
+          <div class="deploy-row-actions">
+            ${notice.url ? html`<a class="btn" href=${withBase(notice.url)} target="_blank" rel="noopener">Open app</a>` : nothing}
+            ${(notice.request ? (["approve", "decline"] as const) : (["dismiss"] as const)).map((action) => html`<button class="btn" type="button" ?disabled=${decidingNotices.has(notice.id)} @click=${() => void decideAppNotice(notice, action)}>${{ approve: "Approve", decline: "Decline", dismiss: "Dismiss" }[action]}</button>`)}
+          </div>
+        </div>`,
+    ),
+  ];
+}
+
+export function redrawAppNotices(): void {
+  if (!activeDeploy) drawDeploysPage();
+}
 
 let deployList: DeploymentView[] = [];
 let deployNotices: DeploymentNotices = { list: "", detail: null };
@@ -229,7 +279,7 @@ function drawDeploysPage(): void {
             drawDeploysPage();
           },
         },
-        rows: content,
+        rows: [...appNoticeRows(), ...content],
         empty,
       })}
       ${archiveCandidate ? archiveDialog(archiveCandidate) : nothing} ${deployToast ? undoToast(deployToast) : nothing}
@@ -854,7 +904,7 @@ export async function renderDeploys(): Promise<void> {
   deployLoading = deployList.length === 0;
   deployNotices = withDeploymentListNotice(deployNotices, "");
   drawDeploysPage();
-  await refreshDeployments();
+  await Promise.all([refreshDeployments(), refreshAppNotices()]);
   if (seq !== appState.viewRenderSeq || appState.currentView !== "deploys") return;
   if (requestedId) {
     await openDeploy(deployList.find((d) => d.id === requestedId) ?? { id: requestedId });
