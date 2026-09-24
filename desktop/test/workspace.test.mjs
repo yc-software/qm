@@ -9,6 +9,7 @@ async function workspace(platform = "darwin") {
   const dom = new JSDOM('<div id="sidebar-body"></div><textarea></textarea>', { runScripts: "outside-only" });
   const { window } = dom;
   window.process = { platform };
+  window.require = () => ({ contextBridge: { exposeInMainWorld() {} }, ipcRenderer: { invoke() {} } });
   window.HTMLElement.prototype.checkVisibility = function () {
     return !this.closest("[hidden], .collapsed, .sidebar-closed");
   };

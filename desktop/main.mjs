@@ -3,11 +3,12 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createLogin, loginCallback } from "./login.mjs";
-import { instanceUrl, externalUrl, browserLoginUrl, loginDestination } from "./url.mjs";
+import { instanceUrl, externalUrl, browserLoginUrl, loginDestination, internalUrl } from "./url.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const setupUrl = pathToFileURL(path.join(directory, "setup.html")).href;
 let mainWindow;
+const workspaceWindows = new Set();
 let setupWindow;
 let target;
 let pendingLogin;
@@ -63,7 +64,9 @@ function showSetup() {
   setupWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   setupWindow.on("closed", () => {
     setupWindow = undefined;
-    if (pendingLogin) mainWindow?.destroy();
+    pendingLogin?.controller.abort();
+    pendingLogin = undefined;
+    loginStatus = "";
   });
   setupWindow.loadURL(setupUrl);
 }
@@ -72,13 +75,14 @@ function instanceSession(url) {
   return electronSession.fromPartition(`persist:qm-${new URL(url).origin}`);
 }
 
-async function beginBrowserSignIn(url) {
+async function beginBrowserSignIn(url, loginUrl) {
+  if (pendingLogin?.instance === url) return;
   pendingLogin?.controller.abort();
-  const attempt = { ...createLogin(url), controller: new AbortController() };
+  const attempt = { ...createLogin(url, Date.now(), loginUrl), controller: new AbortController() };
   pendingLogin = attempt;
   loginStatus = "Finish signing in in your browser. This window will open your workspace when you're done.";
-  mainWindow?.hide();
   showSetup();
+  mainWindow?.destroy();
   setupWindow.webContents.send("qm:login-status", loginStatus);
   try {
     await shell.openExternal(attempt.url);
@@ -152,34 +156,65 @@ async function showInstance(url) {
   session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   session.setPermissionCheckHandler(() => false);
   let handedOff = false;
-  const navigate = (event, destination) => {
-    if (event.isMainFrame === false) return;
-    const destinationUrl = new URL(destination);
-    if (browserLoginUrl(destination, origin)) {
-      event.preventDefault();
+  const children = new Set();
+  const configureNavigation = (page) => {
+    workspaceWindows.add(page);
+    page.on("closed", () => workspaceWindows.delete(page));
+    const active = () => !page.isDestroyed() && !window.isDestroyed() && mainWindow === window;
+    const signIn = (destination) => {
       handedOff = true;
-      void beginBrowserSignIn(loginDestination(destination, url, window.webContents.getURL()));
-    } else if (destinationUrl.origin !== origin) {
-      event.preventDefault();
-      handedOff = true;
-      openExternal(destination);
-    }
+      void beginBrowserSignIn(loginDestination(destination, url, page.webContents.getURL()), destination);
+    };
+    const navigate = (event, destination) => {
+      if (!active()) return event.preventDefault();
+      if (event.isMainFrame === false) return;
+      if (browserLoginUrl(destination, origin)) {
+        event.preventDefault();
+        signIn(destination);
+      } else if (!internalUrl(destination, origin)) {
+        event.preventDefault();
+        handedOff = true;
+        openExternal(destination);
+      }
+    };
+    page.webContents.on("will-navigate", navigate);
+    page.webContents.on("will-redirect", navigate);
+    page.webContents.on("will-attach-webview", (event) => event.preventDefault());
+    page.webContents.setWindowOpenHandler(({ url: destination }) => {
+      if (!active()) return { action: "deny" };
+      if (browserLoginUrl(destination, origin)) signIn(destination);
+      else if (internalUrl(destination, origin)) {
+        return {
+          action: "allow",
+          overrideBrowserWindowOptions: {
+            width: 1100,
+            height: 800,
+            minWidth: 600,
+            minHeight: 400,
+            ...(process.platform === "darwin"
+              ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 20, y: 20 } }
+              : {}),
+            webPreferences: {
+              session,
+              preload: path.join(directory, "workspace-preload.cjs"),
+              nodeIntegration: false,
+              contextIsolation: true,
+              sandbox: true,
+            },
+          },
+        };
+      } else openExternal(destination);
+      return { action: "deny" };
+    });
+    page.webContents.on("did-create-window", (child) => {
+      children.add(child);
+      child.on("closed", () => children.delete(child));
+      configureNavigation(child);
+    });
   };
-  window.webContents.on("will-navigate", navigate);
-  window.webContents.on("will-redirect", navigate);
-  window.webContents.on("will-attach-webview", (event) => event.preventDefault());
-  window.webContents.setWindowOpenHandler(({ url: destination }) => {
-    if (browserLoginUrl(destination, origin)) {
-      handedOff = true;
-      void beginBrowserSignIn(loginDestination(destination, url, window.webContents.getURL()));
-    } else if (new URL(destination).origin === origin) {
-      window.loadURL(destination).catch((error) => {
-        if (error.code !== "ERR_ABORTED") dialog.showErrorBox("Could not open page", error.message);
-      });
-    } else openExternal(destination);
-    return { action: "deny" };
-  });
+  configureNavigation(window);
   window.on("closed", () => {
+    for (const child of children) if (!child.isDestroyed()) child.destroy();
     if (mainWindow === window) mainWindow = undefined;
   });
   try {
@@ -210,6 +245,27 @@ async function start() {
       throw new Error("Untrusted settings request");
     }
   };
+  ipcMain.handle("qm:open-browser", async (event, value) => {
+    if (
+      !mainWindow ||
+      mainWindow.isDestroyed() ||
+      ![...workspaceWindows].some((page) => !page.isDestroyed() && page.webContents === event.sender) ||
+      event.senderFrame !== event.sender.mainFrame ||
+      !target ||
+      new URL(event.senderFrame.url).origin !== new URL(target).origin ||
+      typeof value !== "string"
+    ) {
+      throw new Error("Untrusted browser request");
+    }
+    const destination = new URL(value, target);
+    if (
+      destination.origin !== new URL(target).origin ||
+      !externalUrl(destination.href) ||
+      !["http:", "https:"].includes(destination.protocol)
+    )
+      throw new Error("Untrusted browser destination");
+    await shell.openExternal(destination.href);
+  });
   ipcMain.handle("qm:current-instance", (event) => {
     assertSetup(event);
     return { url: target ?? "", status: loginStatus };
@@ -252,6 +308,22 @@ async function start() {
       {
         label: "View",
         submenu: [
+          {
+            label: "Back",
+            accelerator: "Alt+Left",
+            click: () => {
+              const contents = BrowserWindow.getFocusedWindow()?.webContents;
+              if (contents?.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
+            },
+          },
+          {
+            label: "Forward",
+            accelerator: "Alt+Right",
+            click: () => {
+              const contents = BrowserWindow.getFocusedWindow()?.webContents;
+              if (contents?.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
+            },
+          },
           { role: "reload" },
           { role: "forceReload" },
           { role: "toggleDevTools" },

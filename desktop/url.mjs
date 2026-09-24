@@ -11,7 +11,7 @@ export function instanceUrl(value) {
 export function externalUrl(value) {
   try {
     const url = new URL(value);
-    return ["https:", "http:", "mailto:"].includes(url.protocol) && !url.username && !url.password;
+    return ["https:", "http:", "mailto:", "tel:"].includes(url.protocol) && !url.username && !url.password;
   } catch {
     return false;
   }
@@ -26,7 +26,11 @@ export function loginDestination(value, instance, current = instance) {
   const base = new URL(instance);
   const page = new URL(current || instance);
   const safePage =
-    page.origin === base.origin && !page.username && !page.password && !page.pathname.startsWith("/auth/");
+    ["https:", "http:"].includes(page.protocol) &&
+    page.origin === base.origin &&
+    !page.username &&
+    !page.password &&
+    !page.pathname.startsWith("/auth/");
   let fallback = base.pathname.startsWith("/auth/") ? new URL("/", base).href : base.href;
   if (safePage) fallback = page.href;
   try {
@@ -36,6 +40,7 @@ export function loginDestination(value, instance, current = instance) {
     if (!returnTo) return fallback;
     const destination = new URL(returnTo, base.origin);
     if (
+      !["https:", "http:"].includes(destination.protocol) ||
       destination.origin !== base.origin ||
       destination.username ||
       destination.password ||
@@ -45,5 +50,17 @@ export function loginDestination(value, instance, current = instance) {
     return destination.href;
   } catch {
     return fallback;
+  }
+}
+
+export function internalUrl(value, origin) {
+  if (value === "about:blank") return true;
+  try {
+    const url = new URL(value);
+    return (
+      url.origin === origin && !url.username && !url.password && ["https:", "http:", "blob:"].includes(url.protocol)
+    );
+  } catch {
+    return false;
   }
 }

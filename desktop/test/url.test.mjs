@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { instanceUrl, externalUrl, browserLoginUrl, loginDestination } from "../url.mjs";
+import { instanceUrl, externalUrl, browserLoginUrl, loginDestination, internalUrl } from "../url.mjs";
 
 test("accepts secure deployments and explicit loopback development URLs", () => {
   for (const url of [
@@ -77,6 +77,7 @@ test("desktop login never resumes off-origin, credential-bearing or auth destina
     "https://user:pass@qm.example.com/drop",
     "javascript:alert(1)",
     "file:///tmp/key",
+    "blob:https://qm.example.com/id",
     "/auth/login",
     "/auth/desktop/redeem",
   ]) {
@@ -91,7 +92,13 @@ test("desktop login never resumes off-origin, credential-bearing or auth destina
 test("initial blank or failed pages cannot change the trusted instance origin", () => {
   const instance = "https://qm.example.com/";
   const login = "https://qm.example.com/auth/login?returnTo=%2Fdrop%2Ftest%2Fform";
-  for (const current of ["", "about:blank", "chrome-error://chromewebdata/", "https://other.example/page"]) {
+  for (const current of [
+    "",
+    "about:blank",
+    "chrome-error://chromewebdata/",
+    "https://other.example/page",
+    "blob:https://qm.example.com/id",
+  ]) {
     assert.equal(loginDestination(login, instance, current), "https://qm.example.com/drop/test/form");
     assert.equal(loginDestination("https://qm.example.com/auth/login", instance, current), instance);
   }
@@ -99,4 +106,20 @@ test("initial blank or failed pages cannot change the trusted instance origin", 
     loginDestination("https://qm.example.com/auth/login", instance, "https://qm.example.com/s/current"),
     "https://qm.example.com/s/current",
   );
+});
+
+test("auxiliary pages allow only blank or the trusted instance including its blobs", () => {
+  const origin = "https://qm.example.com";
+  for (const url of ["about:blank", `${origin}/file.pdf`, `blob:${origin}/file`])
+    assert.equal(internalUrl(url, origin), true);
+  for (const url of [
+    "file:///tmp/private",
+    "data:text/html,hi",
+    "https://other.example/",
+    "blob:https://other.example/file",
+    "https://user:pass@qm.example.com/",
+    "invalid",
+  ])
+    assert.equal(internalUrl(url, origin), false);
+  assert.equal(externalUrl("tel:+15551234567"), true);
 });

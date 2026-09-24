@@ -1,3 +1,9 @@
+const { contextBridge, ipcRenderer } = require("electron");
+
+contextBridge.exposeInMainWorld("qmDesktop", {
+  openBrowser: (url) => ipcRenderer.invoke("qm:open-browser", url),
+});
+
 window.addEventListener("DOMContentLoaded", () => {
   const root = document.documentElement;
   const mac = process.platform === "darwin";
@@ -15,6 +21,25 @@ window.addEventListener("DOMContentLoaded", () => {
       height: calc(100dvh - 86px - env(safe-area-inset-top));
     }
     html[data-qm-desktop="darwin"] .top-banner { top: 48px; }
+    html[data-qm-desktop="darwin"] header.top { top: 48px; }
+    html[data-qm-desktop="darwin"] #app-view #main .admin-inner { margin-inline: 0; }
+    @media (min-width: 901px) {
+      html[data-qm-desktop="darwin"]:has(.admin-app:not(.hidden)) body { padding-top: 0; }
+      html[data-qm-desktop="darwin"]:has(.admin-app:not(.hidden)) body::before { display: none; }
+      html[data-qm-desktop="darwin"]:has(.admin-app:not(.hidden)) header.top {
+        top: 0; -webkit-app-region: drag;
+      }
+      html[data-qm-desktop="darwin"] .admin-sidebar { top: 0; height: 100dvh; }
+      html[data-qm-desktop="darwin"] .admin-sidebar .brand {
+        min-height: 56px; padding-left: 92px; -webkit-app-region: drag; user-select: none;
+      }
+      html[data-qm-desktop="darwin"] header.top :is(a, button, input, select) {
+        -webkit-app-region: no-drag;
+      }
+    }
+    @media (max-width: 900px) {
+      html[data-qm-desktop="darwin"] .admin-sidebar { top: calc(48px + var(--header-total-h)); }
+    }
     @media (max-width: 860px) {
       html[data-qm-desktop="darwin"] .layout { top: 48px; }
     }

@@ -1,6 +1,7 @@
+import "./onboarding-welcome";
 import "./slack-account";
 import { openModelConnectManager, type StatusResponse } from "./model-connect";
-import { api } from "./core-bridge";
+import { api, withBase } from "./core-bridge";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { BookOpen, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type IconNode } from "lucide";
 import { icon } from "./ui";
@@ -430,6 +431,15 @@ function settingsPane(): TemplateResult {
       ${accountRow()}
       <div class="settings-row settings-slack-account">
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
+      </div>
+      <div class="settings-row">
+        <qm-onboarding-welcome
+          .me=${appState.me}
+          .setupOnly=${true}
+          .widget=${"apps"}
+          .returnKey=${"settings"}
+          .base=${withBase("")}
+        ></qm-onboarding-welcome>
       </div>
     </div>
   `;

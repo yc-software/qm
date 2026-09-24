@@ -7924,6 +7924,10 @@
       const FOCUS_REFRESH_EXEMPT = new Set(["governance", "connectors", "slack-settings", "user"]);
       window.addEventListener("focus", () => {
         if ($("app-view").classList.contains("hidden")) return;
+        if (view === "slack-settings") {
+          void loadSlackInstallation();
+          return;
+        }
         if (isGovLike(view) || FOCUS_REFRESH_EXEMPT.has(view)) return;
         if (Date.now() - (viewLoadedAt[view] || 0) < FOCUS_STALE_MS) return;
         if (view === "memory" && !(orgWideView() && urlToState().mem !== "edit")) return;
