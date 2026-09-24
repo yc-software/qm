@@ -236,6 +236,7 @@ import {
 import { createSandboxMigrationRunner, type SandboxMigrationRunner } from "./sandbox/sandbox-migration-runner.ts";
 import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
 import { withOperatorTokenFallback } from "./credentials/connector-token.ts";
+import { legacyCronGrantsMigration } from "./credentials/legacy-cron-grants-migration.ts";
 import {
   createAwsSecretsManagerSource,
   createEnvSecretSource,
@@ -1752,6 +1753,7 @@ export function buildApp(
     staleRunningMs: config.runMaxAgeMs,
     fires: cronFires,
   });
+  pgArtifactMap?.pool.registerMigration(legacyCronGrantsMigration);
   const crons: CronStore = {
     ...cronsBase,
     async create(input) {
