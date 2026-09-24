@@ -10,9 +10,15 @@ const usd = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigi
 const date = (ms: number) =>
   new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 
-export function spendChart(data: any, breakdown: "category" | "model" = "category") {
-  const models = [
-    ...new Set<string | null>((data.series || []).flatMap((p: any) => (p.models || []).map((m: any) => m.model))),
+export function spendChart(data: any, breakdown: "category" | "model" | "person" = "category") {
+  const field = breakdown === "person" ? "people" : "models";
+  const id = breakdown === "person" ? "principalId" : "model";
+  const unknown = breakdown === "person" ? "Shared scopes" : "Unknown model";
+  const names = new Map(
+    (breakdown === "person" ? data.people || [] : []).map((p: any) => [p.principalId, p.displayName || p.principalId]),
+  );
+  const keys = [
+    ...new Set<string | null>((data.series || []).flatMap((p: any) => (p[field] || []).map((item: any) => item[id]))),
   ].sort((a, b) => {
     if (a === b) return 0;
     if (a === null) return 1;
@@ -20,15 +26,15 @@ export function spendChart(data: any, breakdown: "category" | "model" = "categor
     return a < b ? -1 : 1;
   });
   const parts =
-    breakdown === "model"
-      ? models.map((model) => {
+    breakdown !== "category"
+      ? keys.map((key) => {
           let hash = 0;
-          for (const ch of model ?? "unknown") hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+          for (const ch of key ?? "unknown") hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
           return {
-            key: model,
-            label: model ?? "Unknown model",
-            color: model === null ? "var(--muted)" : `hsl(${hash % 360} 55% 48%)`,
-            cls: "spend-model",
+            key,
+            label: key === null ? unknown : names.get(key) || key,
+            color: key === null ? "var(--muted)" : `hsl(${hash % 360} 55% 48%)`,
+            cls: `spend-${breakdown}`,
           };
         })
       : PARTS.map(([key, label]) => ({ key, label, color: `var(--spend-${key})`, cls: `spend-${key}` }));
@@ -41,11 +47,11 @@ export function spendChart(data: any, breakdown: "category" | "model" = "categor
   const points: any[] = [];
   for (let t = start; t < to; t += step) {
     const p: any = recorded.get(t);
-    const byModel = new Map((p?.models || []).map((m: any) => [m.model, m.costUsd]));
+    const costs = new Map((p?.[field] || []).map((item: any) => [item[id], item.costUsd]));
     points.push({
       t,
       values: parts.map(({ key }) =>
-        Math.max(0, Number(breakdown === "model" ? byModel.get(key) : p?.[key!]?.costUsd) || 0),
+        Math.max(0, Number(breakdown !== "category" ? costs.get(key) : p?.[key!]?.costUsd) || 0),
       ),
     });
   }

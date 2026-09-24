@@ -34,7 +34,7 @@ export class SpendView {
   services: Services;
   paint: (template: unknown) => void;
   filter = "";
-  chartBreakdown: "category" | "model";
+  chartBreakdown: "category" | "model" | "person";
   sortKey = "costUsd";
   sortDir: "asc" | "desc" = "desc";
   search: HTMLElement | null = null;
@@ -150,18 +150,18 @@ export class SpendView {
           : html`<p class="empty">Nothing to chart yet.</p>`,
         series.length
           ? html`<div class="spend-chart-switch" role="group" aria-label="Chart breakdown">
-              ${(["category", "model"] as const).map(
+              ${(["category", "model", "person"] as const).map(
                 (mode) =>
                   html`<button
                     type="button"
                     aria-pressed=${this.chartBreakdown === mode}
-                    ?disabled=${mode === "model" && !series.every((p: any) => Array.isArray(p.models))}
+                    ?disabled=${mode !== "category" && !series.every((p: any) => Array.isArray(p[mode === "person" ? "people" : "models"]))}
                     @click=${() => {
                       this.chartBreakdown = mode;
                       this.draw();
                     }}
                   >
-                    ${mode === "model" ? "Model" : "Category"}
+                    ${{ category: "Category", model: "Model", person: "Person" }[mode]}
                   </button>`,
               )}
             </div>`

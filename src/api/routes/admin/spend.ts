@@ -63,6 +63,7 @@ interface SpendSeriesPoint {
   costUsd: number;
   calls: number;
   models: { model: string | null; costUsd: number }[];
+  people: { principalId: string | null; costUsd: number }[];
   live: { costUsd: number };
   cron: { costUsd: number };
   background: { costUsd: number };
@@ -200,7 +201,10 @@ function byCostThenModel(
 
 export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOptions): SpendReport {
   const accumulators = new Map<string, EntityAccumulator>();
-  const buckets = new Map<number, { byOrigin: Record<OriginBucket, Tally>; models: Map<string | null, number> }>();
+  const buckets = new Map<
+    number,
+    { byOrigin: Record<OriginBucket, Tally>; models: Map<string | null, number>; people: Map<string | null, number> }
+  >();
   const modelBuckets = new Map<string | null, Record<OriginBucket, Tally>>();
   const orgOrigins = emptyOrigins();
   for (const row of rows) {
@@ -232,11 +236,12 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
     const bucketKey = opts.bucket === "week" ? weekStart(row.day) : row.day;
     let bucket = buckets.get(bucketKey);
     if (!bucket) {
-      bucket = { byOrigin: emptyOrigins(), models: new Map() };
+      bucket = { byOrigin: emptyOrigins(), models: new Map(), people: new Map() };
       buckets.set(bucketKey, bucket);
     }
     addRow(bucket.byOrigin[origin], row);
     bucket.models.set(row.model, (bucket.models.get(row.model) ?? 0) + row.costUsd);
+    bucket.people.set(person, (bucket.people.get(person) ?? 0) + row.costUsd);
   }
 
   const entities = [...accumulators.values()].map((acc) => entityOf(acc, opts.label));
@@ -249,7 +254,7 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
 
   const series = [...buckets.entries()]
     .sort(([a], [b]) => a - b)
-    .map(([day, { byOrigin, models }]) => {
+    .map(([day, { byOrigin, models, people }]) => {
       const total = emptyTally();
       for (const bucket of ORIGIN_BUCKETS) addTally(total, byOrigin[bucket]);
       return {
@@ -257,6 +262,14 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
         costUsd: total.costUsd,
         calls: total.calls,
         models: [...models].map(([model, costUsd]) => ({ model, costUsd })).sort(byCostThenModel),
+        people: [...people]
+          .sort(([a], [b]) => {
+            if (a === b) return 0;
+            if (a === null) return 1;
+            if (b === null) return -1;
+            return a < b ? -1 : 1;
+          })
+          .map(([principalId, costUsd]) => ({ principalId, costUsd })),
         live: { costUsd: byOrigin.live.costUsd },
         cron: { costUsd: byOrigin.cron.costUsd },
         background: { costUsd: byOrigin.background.costUsd },

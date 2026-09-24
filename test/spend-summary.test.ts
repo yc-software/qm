@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { installPrincipalLinks } from "../src/directory/person.ts";
 import { cacheHitRatio } from "../src/admin/metrics-sink.ts";
 import type { SpendRow } from "../src/sessions/session-store.ts";
 import { spendCsv, summarizeSpend, type SpendReport } from "../src/api/routes/admin/spend.ts";
@@ -356,6 +357,55 @@ for (const bucket of ["day", "week"] as const) {
     }
     assert.equal(modelTotals.size, report.models.length);
     for (const model of report.models) assert.equal(modelTotals.get(model.model), model.costUsd);
+    assert.deepEqual(summarize(rows.toReversed(), { bucket, to: (MON + 8) * DAY }).series, report.series);
+  });
+}
+
+for (const bucket of ["day", "week"] as const) {
+  test(`summarizeSpend: ${bucket} person series merges aliases and conserves shared spend`, (t) => {
+    installPrincipalLinks({ canonical: (id) => (id === "slack-alice" ? "alice" : undefined), aliases: () => [] });
+    t.after(() => installPrincipalLinks(null));
+    const rows = [
+      row({ day: MON, scopeId: "personal:alice", origin: "conversation", costUsd: 1 }),
+      row({ day: MON, scopeId: "personal:slack-alice", origin: "cron", costUsd: 2 }),
+      row({ day: TUE, scopeId: "personal:slack-alice", origin: "monitor", costUsd: 4 }),
+      row({ day: MON, scopeId: "channel:C1", origin: "conversation", costUsd: 8 }),
+      row({ day: TUE, scopeId: "team:T1", origin: "cron", costUsd: 16 }),
+      row({ day: MON + 7, scopeId: "personal:bob", origin: "conversation", costUsd: 32 }),
+      row({ day: MON + 7, scopeId: "org:default", origin: "webhook", costUsd: 64 }),
+      row({ day: MON + 7, scopeId: "personal:free", origin: "conversation", costUsd: 0 }),
+    ];
+    const report = summarize(rows, { bucket, to: (MON + 8) * DAY });
+    assert.deepEqual(report.series[0]!.people, [
+      { principalId: "alice", costUsd: bucket === "day" ? 3 : 7 },
+      { principalId: null, costUsd: bucket === "day" ? 8 : 24 },
+    ]);
+    const totals = new Map<string | null, number>();
+    for (const point of report.series) {
+      assert.equal(
+        point.people.reduce((sum, p) => sum + p.costUsd, 0),
+        point.costUsd,
+      );
+      for (const p of point.people) totals.set(p.principalId, (totals.get(p.principalId) ?? 0) + p.costUsd);
+    }
+    assert.deepEqual(
+      [...totals],
+      [
+        ["alice", 7],
+        [null, 88],
+        ["bob", 32],
+        ["free", 0],
+      ],
+    );
+    for (const p of report.people) assert.equal(totals.get(p.principalId), p.costUsd);
+    assert.equal(
+      totals.get(null),
+      report.scopes.reduce((sum, p) => sum + p.costUsd, 0),
+    );
+    assert.equal(
+      [...totals.values()].reduce((sum, cost) => sum + cost, 0),
+      report.org.costUsd,
+    );
     assert.deepEqual(summarize(rows.toReversed(), { bucket, to: (MON + 8) * DAY }).series, report.series);
   });
 }

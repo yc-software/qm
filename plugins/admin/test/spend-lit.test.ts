@@ -305,3 +305,71 @@ test("spend chart: weekly model stacks and zero totals remain finite", () => {
   assert.ok(!/NaN|Infinity/.test(f.root.innerHTML));
   f.window.close();
 });
+
+for (const bucket of ["day", "week"]) {
+  test(`spend chart: ${bucket} person toggle shows names, shared scopes and zero bins`, () => {
+    const { f, calls, view } = render({
+      ...DATA,
+      window: { ...DATA.window, bucket },
+      people: [person("alice", 3, { displayName: "Alice" }), person("bob", 2)],
+      series: [
+        {
+          day: bucket === "day" ? "2026-09-24" : "2026-09-21",
+          live: { costUsd: 10 },
+          models: [{ model: "model-a", costUsd: 10 }],
+          people: [
+            { principalId: "alice", costUsd: 3 },
+            { principalId: "bob", costUsd: 2 },
+            { principalId: null, costUsd: 5 },
+          ],
+        },
+      ],
+    });
+    const toggle = (label: string) =>
+      [...f.root.querySelectorAll<HTMLButtonElement>(".spend-chart-switch button")].find(
+        (b) => b.textContent!.trim() === label,
+      )!;
+    toggle("Person").click();
+    assert.equal(toggle("Person").getAttribute("aria-pressed"), "true");
+    const bars = () => f.root.querySelectorAll<HTMLElement>(".spend-column");
+    assert.equal(bars().length, bucket === "day" ? 30 : 5);
+    assert.match(
+      bars()[0]!.getAttribute("aria-label")!,
+      /\$0.00 total.*Alice \$0.00.*bob \$0.00.*Shared scopes \$0.00/,
+    );
+    const last = () => bars()[bars().length - 1]!;
+    last().dispatchEvent(new f.window.Event("focus"));
+    assert.match(
+      f.root.querySelector(".spend-chart-detail")!.textContent!,
+      /\$10.00 total.*Alice \$3.00.*bob \$2.00.*Shared scopes \$5.00/,
+    );
+    const colors = () => [...last().querySelectorAll<HTMLElement>(".spend-person")].map((s) => s.style.background);
+    const before = colors();
+    view.data.people[0].displayName = "Renamed Alice";
+    calls.shell.search.onInput("unmatched");
+    assert.deepEqual(colors(), before, "colors are stable across display-name changes and filtering");
+    assert.deepEqual(
+      [...last().querySelectorAll<HTMLElement>(".spend-segment")].map((s) => s.style.height),
+      ["30%", "20%", "50%"],
+    );
+    for (const label of ["Category", "Model", "Person"]) {
+      toggle(label).click();
+      assert.equal(toggle(label).getAttribute("aria-pressed"), "true");
+      assert.match(last().getAttribute("aria-label")!, /\$10.00 total/);
+    }
+    assert.ok(!/NaN|Infinity/.test(f.root.innerHTML));
+    assert.equal(calls.api, 0);
+    f.window.close();
+  });
+}
+
+test("spend chart: person toggle is disabled for reports without person buckets", () => {
+  const { f } = render(DATA);
+  assert.equal(
+    [...f.root.querySelectorAll<HTMLButtonElement>(".spend-chart-switch button")].find(
+      (b) => b.textContent!.trim() === "Person",
+    )!.disabled,
+    true,
+  );
+  f.window.close();
+});
