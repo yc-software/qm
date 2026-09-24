@@ -343,3 +343,21 @@ test("a stale queued approval cannot render a newer request for the same command
   assert.equal(out.posts.length, 0);
   assert.deepEqual(out.acknowledgements, ["D1"]);
 });
+
+for (const type of ["slack", "group", "principal"]) {
+  test(`${type} file-only deliveries survive a restart after a lost acknowledgement`, async () => {
+    const history: Record<string, unknown>[] = [];
+    const first = await deliver({ type }, undefined, undefined, "", { history, loseAck: true });
+    assert.equal(first.posts.length, 1);
+    assert.equal(first.posts[0]!.text, "Files attached.");
+    assert.equal(first.uploads.length, 1);
+    assert.deepEqual(first.acknowledgements, []);
+    const recovered = await deliver({ type }, undefined, undefined, "", {
+      history,
+      createdAt: Date.now() - 60_000,
+    });
+    assert.equal(recovered.posts.length, 0);
+    assert.equal(recovered.uploads.length, 0);
+    assert.deepEqual(recovered.acknowledgements, ["D1"]);
+  });
+}
