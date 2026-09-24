@@ -48,6 +48,7 @@ export function createTranscriptViewport() {
   let gap: number | null = null;
   let contentMax = "";
   let collapseDistance = 0;
+  let geometryDistance: number | null = null;
   const contentUpdates = new Set<Promise<void>>();
 
   function setFollowing(value: boolean): void {
@@ -71,6 +72,7 @@ export function createTranscriptViewport() {
     gap = null;
     contentMax = "";
     collapseDistance = 0;
+    geometryDistance = null;
     remeasure = true;
     const toggle = prompt?.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) toggle.hidden = true;
@@ -172,9 +174,15 @@ export function createTranscriptViewport() {
 
   function condense(active: boolean, distance: number): void {
     if (!prompt || !content) return;
-    if (!active) collapseDistance = 0;
-    else if (following) collapseDistance = Math.max(collapseDistance, distance);
-    else collapseDistance = distance;
+    if (!active) {
+      collapseDistance = 0;
+      geometryDistance = null;
+    } else {
+      if (geometryDistance === null) collapseDistance = Math.max(0, distance);
+      else if (following) collapseDistance = Math.max(collapseDistance, distance);
+      else collapseDistance = Math.max(0, collapseDistance + distance - geometryDistance);
+      geometryDistance = distance;
+    }
     distance = collapseDistance;
     const span = restContent - condensedContent;
     const settled = span <= 0.5 || span - distance < 0.5;
@@ -194,10 +202,11 @@ export function createTranscriptViewport() {
     if (!scroller || contentUpdates.size > 0) return;
     const movingUp = scroller.scrollTop < lastTop;
     const atBottom = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 1;
-    if (atBottom && (following || !movingUp)) setFollowing(true);
-    else if (movingUp) cancelFollow();
+    const resumeFollowing = atBottom && (following || !movingUp);
+    if (!resumeFollowing && movingUp) cancelFollow();
     lastTop = scroller.scrollTop;
     syncSticky();
+    if (resumeFollowing) setFollowing(true);
     if (movingUp) loadEarlier();
   }
 

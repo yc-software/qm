@@ -307,9 +307,9 @@ test("auto-follow layout clamps do not reverse an in-progress prompt collapse", 
 
     f.wheel(-10);
     f.scroll(30);
-    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "109.5px");
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "99.75px");
     f.scroll(40);
-    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "99.5px");
+    assert.equal(f.row.style.getPropertyValue("--pin-content-max"), "89.75px");
   } finally {
     f.close();
   }
