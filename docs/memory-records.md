@@ -2,8 +2,9 @@
 
 This change adds provenance and sensitivity metadata to the Postgres notebook store
 and applies a shared disclosure view to fresh model recall and agent memory APIs.
-It is **not release-ready**: automatic classification and retained model-context
-invalidation remain incomplete. Existing memories are not automatically declassified.
+Automatic capture classification and durable retained-context invalidation are included.
+Existing memories are not automatically declassified. See the conservative behavior
+and qualification limits below before rolling this out.
 
 ## Stored representation
 
@@ -85,16 +86,64 @@ be memory-filtered.
 Recall-delta messages never quote withdrawn text. This prevents a new leak in a
 delta, but does not erase information already present in a harness session.
 
-## Remaining integration before release
+## Classification and capture dependencies
 
-1. Thread trusted dependency records through capture and consolidation, including
-   scratch promotion and non-Postgres providers. Add classification with conservative
-   defaults; model suggestions must not confer access or clear restrictions.
-2. Invalidate or rebuild retained prompts, summaries and harness history when memory
-   eligibility shrinks. The fresh-read filter alone does not provide this guarantee.
-3. Run real-model shared-conversation qualification, including copied facts, changed
-   audiences, revoked access and provider paths. Current live checks use synthetic
-   data through HTTP/Postgres and the development portal with the mock model.
+The existing extraction request classifies each extracted batch using its strongest
+sensitivity. Explicit fact capture uses the same conservative labels through the
+memory strategy wrapper. Missing labels, malformed output and classifier failure
+produce `unknown`. Classifier output never supplies source scopes or removes inherited
+restrictions. The classifier is a model estimate, not proof that a fact is harmless.
 
-This change is not a defense against delete-and-recapture through untracked external
-context. Do not represent it as the completed memory system.
+Turn captures inherit the records actually vended at turn start. When prior history,
+tools, attachments or other untracked context may have contributed, known dependencies
+are retained and an unknown-provenance marker prevents widening. Bursts retain the
+union of their dependencies and do not mix sessions. Existing legacy records remain
+unknown. Scratch promotion and opaque providers stay conservative: no cross-origin
+personal CC, and scratch captures with known foreign dependencies are refused rather
+than silently stripping their source. Full provenance for arbitrary external tool
+results is not inferred.
+
+## Durable retained-context boundary
+
+Each model turn records its authorized-memory snapshot in the existing session log.
+The checkpoint contains hashes, not another copy of fact text. Before the next turn,
+removed or reclassified facts, changed eligible audiences/policies, or a disabled
+recall source advance a durable replay cutoff. Simple fact additions preserve history.
+The automatic recall body and its checkpoint are derived from the same filtered heads.
+
+A reset excludes the whole earlier model context, not just matching strings: user
+environments, summaries, assistant paraphrases, tool results and historical tape.
+Native harness state is reset, stale retry answers and approvals cannot replay, and
+background summaries started before the boundary are discarded. Human transcript and
+administrator audit records are not erased. The next model turn receives current
+memory and begins a fresh context window. This is next-turn invalidation, not live
+cancellation of an already executing model request.
+
+Explicit memory reads, searches and history requests can return facts absent from the
+starting snapshot. Before returning those results, tools and capability APIs increment
+a durable session read epoch without taking the turn lease. A changed epoch triggers
+a conservative reset on the next turn even if the notebook later returns to its
+original state. This deliberately sacrifices some continuity after explicit reads
+rather than retaining untracked facts. The epoch is atomic and restart-safe.
+
+Model-facing history and conversation APIs enforce the boundary. Untracked legacy or
+incompatible target conversations are unavailable to those APIs; human transcript
+views remain unchanged. Derived titles, status text and pins are not used to bypass
+an unavailable agent transcript. Session coordination uses safe identifiers when a
+prior title cannot be justified against the current memory snapshot.
+
+## Qualification and limits
+
+Synthetic regressions cover capture failures, inherited restrictions, copying,
+classification changes, audience changes, source revocation, restart/compaction,
+explicit off-snapshot reads, provider routes and agent transcript reopening. Local
+Postgres tests cover migrations, concurrent read epochs and checkpoint persistence.
+A launched development portal exercised the actual web/core/worker/Postgres path and
+verified that a withdrawn sentinel disappears from the next captured model request
+while remaining in the human audit transcript. That routing test used the mock model.
+A separate live-model smoke test exercised benign, medical and secret classifications.
+
+Live Slack and every real provider harness have not been qualified. Direct MCP tools,
+explicit administrator inspection, exported files and other independently authorized
+artifacts are separate access paths. This is not retroactive deletion of copied data,
+a guarantee of classifier accuracy, or a complete provenance system for all tools.

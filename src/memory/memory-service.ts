@@ -205,6 +205,7 @@ export async function ccCaptureToPersonal(
 ): Promise<number> {
   const target = ccTargetFor(origin, actorId);
   if (!target || !facts.length) return 0;
+  if (!(await memory.readHead?.(target))?.records) return 0;
   const { kind } = parseScopeId(origin);
   const clean = sourceLabel
     ?.replace(/[()\r\n]+/g, " ")

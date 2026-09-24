@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
+import { legacyMemoryRecords } from "../src/memory/records.ts";
 import { createMemoryService, MEMORY_FILE, ccCaptureToPersonal } from "../src/memory/memory-service.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { createConsolidatingMemory } from "../src/memory/strategies/consolidation.ts";
@@ -19,7 +20,15 @@ const PERSONAL = scopeId("personal", ACTOR);
 
 function freshMemory() {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "mcc-")));
-  return { workspace, memory: createMemoryService(workspace) };
+  const base = createMemoryService(workspace);
+  const memory = {
+    ...base,
+    async readHead(scope: ScopeId) {
+      const head = await base.readHead!(scope);
+      return { ...head, records: legacyMemoryRecords(scope, head.content) };
+    },
+  };
+  return { workspace, memory };
 }
 
 const INPUT = "remember that my task list is ship the launch";
@@ -116,6 +125,7 @@ test("cc falls back to a generic source label when no conversation label is give
   const { memory } = freshMemory();
   const calls: string[] = [];
   const recorder = {
+    readHead: async () => ({ content: "", revision: "", records: { version: 1 as const, records: [] } }),
     recall: async () => "",
     capture: async (_s: string, facts: string[]) => (calls.push(...facts), facts.length),
     query: async () => [],
@@ -130,6 +140,7 @@ test("cc falls back to a generic source label when no conversation label is give
 test("cc sanitizes a crafted channel label so it can't inject the tag grammar or extra lines", async () => {
   const calls: string[] = [];
   const recorder = {
+    readHead: async () => ({ content: "", revision: "", records: { version: 1 as const, records: [] } }),
     recall: async () => "",
     capture: async (_s: string, facts: string[]) => (calls.push(...facts), facts.length),
     query: async () => [],
@@ -150,6 +161,7 @@ test("cc sanitizes a crafted channel label so it can't inject the tag grammar or
 test("ccCaptureToPersonal records source-channel provenance via the author param", async () => {
   const calls: Array<{ scopeId: string; facts: string[]; author?: string }> = [];
   const recorder = {
+    readHead: async () => ({ content: "", revision: "", records: { version: 1 as const, records: [] } }),
     recall: async () => "",
     capture: async (sId: string, facts: string[], _at: number, author?: string) => {
       calls.push({ scopeId: sId, facts, ...(author !== undefined ? { author } : {}) });

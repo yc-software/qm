@@ -1,3 +1,8 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createMemoryStrategy } from "../src/memory/strategy.ts";
+import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
@@ -322,3 +327,49 @@ test("pg memory: an intermediate empty restore cannot erase later restrictions",
   assert.equal(fact.sensitivity, "restricted");
   assert.ok(fact.sources.some((source) => source.scopeId === "group:private"));
 });
+
+test(
+  "pg memory: production classification and CC provenance survive reopening and weaker recapture",
+  { skip },
+  async () => {
+    const base = createPostgresMemoryService(URL!);
+    const workspace = createLocalWorkspaceStore(await mkdtemp(join(tmpdir(), "pg-classification-")));
+    const { strategy, memory } = createMemoryStrategy("per-turn", {
+      memory: base,
+      workspace,
+      consolidateAfter: 0,
+      harness: {
+        oneShot: async (_system, input) =>
+          input.startsWith("User said:") ? "SENSITIVITY: sensitive\n- A confidential synthetic project" : "ordinary",
+      },
+    });
+    await strategy.onTurnEnd!({
+      scopeId: "group:private",
+      actorId: "alice",
+      sessionId: "test-session",
+      input: "A synthetic confidential project",
+      reply: "Noted",
+      inheritedRecords: [],
+    });
+    const reopened = createPostgresMemoryService(URL!);
+    const before = await reopened.readHead!("personal:alice");
+    const captured = before.records!.records.find((record) => record.text.includes("confidential"))!;
+    assert.equal(captured.sensitivity, "sensitive");
+    assert.equal(captured.sourceUnknown, false);
+    assert.deepEqual(captured.sources, [{ scopeId: "group:private", sessionId: "test-session" }]);
+    await memory.capture("personal:alice", ["A derived synthetic fact"], at, "alice", {
+      mode: "explicit",
+      conversationScopeId: "personal:alice",
+      inheritedRecords: [captured],
+    });
+    const after = await reopened.readHead!("personal:alice");
+    const derived = after.records!.records.find((record) => record.text.includes("derived"))!;
+    assert.equal(derived.sensitivity, "sensitive");
+    assert.ok(derived.sources.some((source) => source.scopeId === "group:private"));
+    await memory.replace("personal:alice", "- A rewritten synthetic fact");
+    const rewritten = (await reopened.readHead!("personal:alice")).records!.records[0]!;
+    assert.equal(rewritten.sensitivity, "sensitive");
+    assert.equal(rewritten.sourceUnknown, true);
+    assert.ok(rewritten.sources.some((source) => source.scopeId === "group:private"));
+  },
+);

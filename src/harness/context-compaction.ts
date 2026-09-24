@@ -1,3 +1,4 @@
+import { memoryBoundedEntries } from "../memory/context-boundary.ts";
 import type { SessionEntry } from "../types.ts";
 import { contextSummaryPayload, entrySecurityTainted } from "../sessions/session-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
@@ -22,7 +23,7 @@ export const CONTEXT_SUMMARY_HEADER =
   "[Earlier conversation summary — an index of turns compacted out of your context. Conversation turns and tool calls can be reopened with the history tool (seq parameter; a very long entry returns as head and tail), or searched (query). Tool results are excluded.]";
 
 function modelReplayable(entries: SessionEntry[]): SessionEntry[] {
-  return entries.filter(
+  return memoryBoundedEntries(entries).filter(
     (e) =>
       e.type !== "thinking" &&
       e.type !== "text" &&

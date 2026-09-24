@@ -77,7 +77,14 @@ export function createRoutedMemoryService(opts: {
       const counts = await Promise.all(
         routes.map(async (route) => {
           try {
-            return await providerFor(route).capture(scopeId, facts, at, author, context);
+            const provider = providerFor(route);
+            if (
+              context?.conversationScopeId &&
+              context.conversationScopeId !== scopeId &&
+              !(await provider.readHead?.(scopeId))?.records
+            )
+              return 0;
+            return await provider.capture(scopeId, facts, at, author, context);
           } catch (error) {
             if (!route.failOpen) throw error;
             opts.onError?.(error, route.provider, "capture");
