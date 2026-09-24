@@ -1517,6 +1517,8 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
           type="button"
           role="tab"
           aria-selected=${surface.viewId === v.id ? "true" : "false"}
+          aria-label=${`${v.name}, ${count} items`}
+          ${tip(count > 99 ? `${count} items` : "")}
           @click=${() => {
             if (surface === fullSurface) selectInboxView(v.id, true);
             else surface.viewId = v.id;
@@ -1527,7 +1529,7 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
           ${v.id === "all" ? nothing : loopIcon(inboxState.selected.find((loop) => loop.id === v.id) ?? {})}<span
             >${v.name}</span
           ><span class="inbox-chip-count-slot"
-            ><span class="inbox-chip-count" aria-hidden=${count === 0 ? "true" : "false"} title=${String(count)}
+            ><span class="inbox-chip-count" aria-hidden="true" ?data-empty=${count === 0}
               >${count > 99 ? "99+" : count}</span
             ></span
           >

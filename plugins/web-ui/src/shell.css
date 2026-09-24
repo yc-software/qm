@@ -9423,7 +9423,7 @@ h3.ambient-field-label {
   line-height: 14px;
   text-align: center;
 }
-.inbox-chip-count[aria-hidden="true"] {
+.inbox-chip-count[data-empty] {
   visibility: hidden;
 }
 .inbox-sync-line {
@@ -10364,12 +10364,12 @@ h3.ambient-field-label {
 .inbox-surface.compact .inbox-sync-line > .inbox-sync-status {
   display: none;
 }
-.inbox-surface[data-density="min"] .inbox-item-sub,
-.inbox-surface[data-density="min"] .inbox-item-side .inbox-avatars,
-.inbox-surface[data-density="min"] .inbox-chip-count-slot {
+.inbox-surface:is([data-density="card"], [data-density="strip"]) .inbox-item-sub,
+.inbox-surface:is([data-density="card"], [data-density="strip"]) .inbox-item-side .inbox-avatars,
+.inbox-surface:is([data-density="card"], [data-density="strip"]) .inbox-chip-count-slot {
   display: none;
 }
-.inbox-surface[data-density="min"] .inbox-chip:has(.inbox-chip-count) {
+.inbox-surface:is([data-density="card"], [data-density="strip"]) .inbox-chip:has(.inbox-chip-count) {
   padding-right: 14px;
 }
 .loop-row {
