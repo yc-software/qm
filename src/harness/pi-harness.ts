@@ -58,7 +58,6 @@ import {
   auxiliaryModelForProvider,
   defaultModelForHarness,
   defaultInteractiveThinkingLevel,
-  modelDisplayName,
   resolveModel,
   getRequiredModel,
   modelSupportsFastMode,
@@ -963,40 +962,6 @@ export function piTurnError(session: AssistantTextSession, thrown: unknown, mess
   const detailed = piAssistantError(fresh);
   if (detailed) return new NonRetryableTurnError(detailed);
   return thrown instanceof Error ? thrown : new Error(String(thrown));
-}
-
-const PROVIDER_REFUSAL_PATTERN =
-  /violate Anthropic(?:'|’)?s (?:Terms of Service|usage policy)|reduce refusals for your users by configuring a fallback model/i;
-
-export function isProviderRefusal(message: string | undefined): boolean {
-  return !!message && PROVIDER_REFUSAL_PATTERN.test(message);
-}
-
-export function providerRefusalError(session: AssistantTextSession, messagesBefore?: number): string | null {
-  const fresh =
-    messagesBefore === undefined
-      ? session
-      : ({ messages: session.messages.slice(messagesBefore) } as AssistantTextSession);
-  const err = piAssistantError(fresh);
-  return err && isProviderRefusal(err) ? err : null;
-}
-
-export const REFUSAL_FALLBACK_MODEL_IDS = ["claude-opus-5", "claude-sonnet-5"] as const;
-
-export function refusalFallbackModelId(fromId: string): string | undefined {
-  return REFUSAL_FALLBACK_MODEL_IDS.find((id) => id !== fromId);
-}
-
-export function refusalFallbackNote(fromModel: string, toModel: string, refusal: string): string {
-  return (
-    `[system] Your previous response was blocked by the model provider's automated content filter ` +
-    `before it reached the user — these blocks can fire spuriously; the user did nothing wrong. ` +
-    `The provider's stated reason was: "${refusal}". ` +
-    `The turn has been switched from ${fromModel} to ${toModel}. Start your reply by briefly ` +
-    `telling the user that ${fromModel} declined this request and why (paraphrase the provider's ` +
-    `stated reason in plain words), and that you are answering as ${toModel} instead — then answer ` +
-    `their message.`
-  );
 }
 
 export type TurnWallClockOutcome = "ok" | "aborted" | "abandoned";
@@ -2191,41 +2156,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const raceCapMs = floorCap.raceCapMs;
           const extendCapMs = floorCap.extendMs;
           let grindWaiverNote = "";
-          const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
-            if (userAborted || turn.cancel?.aborted) return false;
-            const fromId = (entry.agentSession.model as { id?: string } | undefined)?.id;
-            const fallbackId = fromId ? refusalFallbackModelId(fromId) : undefined;
-            const fallback = fallbackId ? resolveModel(fallbackId, !turn.providerKeys) : undefined;
-            if (!fallbackId || !fallback) return false;
-            const capMs = raceCapMs();
-            if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
-            console.error(
-              `[pi] provider refusal — retrying on fallback model ${fromId} -> ${fallbackId} session=${turn.session.id}: ${refusal}`,
-            );
-            const wantFast = wantsFastMode(turn.runtime?.fastMode, fallbackId);
-            await entry.agentSession.setModel(
-              withRequestHeaders(fallback, !turnModelGateway?.models[fallbackId], wantFast),
-            );
-            entry.ref.fast = wantFast;
-            applyTurnEffort(entry.agentSession, turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback));
-            const state = entry.agentSession.agent.state;
-            for (let i = state.messages.length - 1; i >= messagesBefore; i--) {
-              const m = state.messages[i] as { role?: string; stopReason?: string } | undefined;
-              if (m?.role === "assistant" && m.stopReason === "error") {
-                state.messages = [...state.messages.slice(0, i), ...state.messages.slice(i + 1)];
-                break;
-              }
-            }
-            const outcome = await raceTurnWallClock(
-              entry.agentSession.prompt(
-                refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal),
-              ),
-              { capMs, extendMs: extendCapMs, abort: () => entry.agentSession.abort() },
-            );
-            if (userAborted) return false;
-            if (outcome !== "ok") throw new NonRetryableTurnError(refusal);
-            return true;
-          };
           try {
             const images = turn.images?.length
               ? turn.images.map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType }))
@@ -2284,17 +2214,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               wallClock = goalResult.outcome;
               grindWaiverNote = goalResult.waiverNote;
             }
-            if (wallClock === "ok" && !entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
-              const refusal = providerRefusalError(entry.agentSession, messagesBefore);
-              if (refusal) {
-                try {
-                  await attemptRefusalFallback(refusal);
-                } catch (e) {
-                  swallow("pi: refusal fallback", e);
-                  throw new NonRetryableTurnError(refusal);
-                }
-              }
-            }
             const note = emptyEndingNote({
               wallClock,
               userAborted,
@@ -2342,18 +2261,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (tapeError) throw tapeError;
             const cancelAbortRejection =
               turn.cancel?.aborted === true && (err as { name?: string } | null)?.name === "AbortError";
-            if (!userAborted && !cancelAbortRejection) {
-              const turnErr = piTurnError(entry.agentSession, err, messagesBefore);
-              let recovered = false;
-              if (isProviderRefusal(turnErr.message)) {
-                try {
-                  recovered = await attemptRefusalFallback(turnErr.message);
-                } catch (e) {
-                  swallow("pi: refusal fallback", e);
-                }
-              }
-              if (!recovered && !userAborted) throw turnErr;
-            }
+            if (!userAborted && !cancelAbortRejection) throw piTurnError(entry.agentSession, err, messagesBefore);
             wallClock = "ok";
           } finally {
             turn.cancel?.removeEventListener("abort", onCancel);

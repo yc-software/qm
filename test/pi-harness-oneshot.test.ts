@@ -11,13 +11,8 @@ import {
   oneShot,
   parseDetectVerdict,
   piHarnessConfigOptions,
-  isProviderRefusal,
   piLastAssistantTextOrThrow,
   piTurnError,
-  providerRefusalError,
-  refusalFallbackNote,
-  refusalFallbackModelId,
-  REFUSAL_FALLBACK_MODEL_IDS,
   renderDetectPrompt,
   resolveConfiguredModelId,
   sanitizeLlmPayload,
@@ -27,7 +22,7 @@ import {
   toPiMessage,
   transportFromModel,
 } from "../src/harness/pi-harness.ts";
-import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel, resolveModel } from "../src/model/pi-models.ts";
+import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel } from "../src/model/pi-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import type { SessionEntry } from "../src/types.ts";
@@ -877,57 +872,6 @@ test("resolveConfiguredModelId: known ids pass through, unknown ids fall back to
   assert.equal(resolveConfiguredModelId(undefined), DEFAULT_AGENT_MODEL_ID);
   assert.equal(resolveConfiguredModelId("claude-dropped-by-pi-ai"), DEFAULT_AGENT_MODEL_ID);
   assert.equal(resolveConfiguredModelId("claude-dropped-by-pi-ai", "claude-opus-4-8"), "claude-opus-4-8");
-});
-
-test("isProviderRefusal matches Anthropic's ToS-refusal wording and nothing else", () => {
-  assert.equal(
-    isProviderRefusal(
-      "Anthropic API error (invalid_request_error): This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs. To learn more, visit https://www.anthropic.com/legal/commercial-terms. API integrators: you can reduce refusals for your users by configuring a fallback model — see https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback.",
-    ),
-    true,
-  );
-  assert.equal(isProviderRefusal("This request seems to violate Anthropic’s usage policy."), true);
-  assert.equal(isProviderRefusal("Anthropic API error (overloaded_error): Overloaded"), false);
-  assert.equal(isProviderRefusal("prompt is too long: 250000 tokens > 200000 maximum"), false);
-  assert.equal(isProviderRefusal(undefined), false);
-});
-
-test("providerRefusalError finds this prompt's refusal but never a prior turn's", () => {
-  const refusalMsg = {
-    role: "assistant",
-    stopReason: "error",
-    errorMessage:
-      "This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs.",
-    content: [],
-  };
-  const session = {
-    getLastAssistantText: () => undefined,
-    messages: [refusalMsg, { role: "user", content: [] }],
-  } as unknown as Parameters<typeof providerRefusalError>[0];
-  assert.match(providerRefusalError(session) ?? "", /Terms of Service/);
-  assert.equal(providerRefusalError(session, 2), null);
-});
-
-test("refusalFallbackNote names both models, carries the provider's refusal, and tells the agent to inform the user", () => {
-  const note = refusalFallbackNote(
-    "Claude Fable 5",
-    "Claude Opus 4.8",
-    "This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering.",
-  );
-  assert.match(note, /Claude Fable 5/);
-  assert.match(note, /Claude Opus 4.8/);
-  assert.match(note, /restrictions on reverse engineering/);
-  assert.match(note, /telling the user/);
-});
-
-test("refusal fallback drawdown: Fable -> Opus, Opus -> Sonnet, never the refused model back", () => {
-  assert.equal(refusalFallbackModelId("claude-fable-5-1"), "claude-opus-5");
-  assert.equal(refusalFallbackModelId("claude-fable-5"), "claude-opus-5");
-  assert.equal(refusalFallbackModelId("claude-opus-5"), "claude-sonnet-5");
-  for (const id of REFUSAL_FALLBACK_MODEL_IDS) {
-    assert.notEqual(refusalFallbackModelId(id), id);
-    assert.equal(resolveModel(id)?.provider, "anthropic");
-  }
 });
 
 test("resolveConfiguredModelId: an unresolvable default is rejected too, so auxiliaries never chase a dead id", () => {
