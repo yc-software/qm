@@ -1,3 +1,4 @@
+import { annotate } from "./annotation";
 import { formatMessageTime } from "./message-time.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "./app-edit";
@@ -1444,7 +1445,12 @@ export function createChatSurface(
           }
           ${glanceTier || ctx.pane || editingApp ? nothing : sessionTopbar()}
           ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
-          <section class="chat-scroll" tabindex="0" aria-label="Conversation">
+          <section
+            class="chat-scroll"
+            tabindex="0"
+            aria-label="Conversation"
+            ${annotate({ key: agent, selector: ".message-row", add: (text) => ctx.composer.appendAnnotation(text) })}
+          >
             ${pinnedStrip()}
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}

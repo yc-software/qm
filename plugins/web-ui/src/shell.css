@@ -12875,3 +12875,43 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   color: var(--foreground);
   text-decoration: underline;
 }
+
+.annotation-popover {
+  position: fixed;
+  z-index: 1000;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--popover, var(--background));
+  box-shadow: 0 8px 32px #0002;
+}
+.annotation-popover.editing {
+  width: min(360px, calc(100vw - 24px));
+  padding: 12px;
+}
+.annotation-popover blockquote {
+  margin: 0 0 10px;
+  padding: 0 0 0 10px;
+  border-left: 2px solid var(--border);
+  max-height: 100px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+.annotation-popover textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+.annotation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
