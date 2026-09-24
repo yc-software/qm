@@ -32,7 +32,7 @@ async function activeRun(ctx: ApiCtx): Promise<boolean> {
     !cap.runLeaseToken ||
     run.leaseToken !== cap.runLeaseToken ||
     run.attempts !== cap.runAttempt ||
-    run.sessionId !== cap.sessionId ||
+    run.sessionId !== cap.threadRef ||
     !samePerson(run.request.actor.id, cap.actorId) ||
     (run.leaseExpiresAt ?? 0) <= Date.now()
   ) {
