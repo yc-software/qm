@@ -12,6 +12,7 @@ import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
 import {
   createKeychain,
+  credentialHandle,
   renderKeychainManifest,
   renderUseScript,
   KeychainError,
@@ -804,8 +805,8 @@ test("multi-input login: each field becomes its own env var, values never in met
 
   const [own] = await k.materializeOwn("U1");
   assert.deepEqual(own!.env, [
-    { key: "DOORDASH_EMAIL", value: "alice@acme.co" },
-    { key: "DOORDASH_PASSWORD", value: "hunter2" },
+    { key: "DOORDASH_EMAIL", value: "alice@acme.co", secret: false },
+    { key: "DOORDASH_PASSWORD", value: "hunter2", secret: true },
   ]);
   const script = renderUseScript({ kind: "env", ...own! });
   assert.match(script, /export DOORDASH_EMAIL='alice@acme.co'\nexport DOORDASH_PASSWORD='hunter2'/);
@@ -880,7 +881,7 @@ test("back-compat: a legacy record carrying a plaintext username still materiali
   const [own] = await k.materializeOwn("U1");
   assert.deepEqual(own!.env, [
     { key: "ACME_PORTAL_PASSWORD", value: "hunter2" },
-    { key: "ACME_PORTAL_USERNAME", value: "alice@acme.co" },
+    { key: "ACME_PORTAL_USERNAME", value: "alice@acme.co", secret: false },
   ]);
 });
 
@@ -1098,12 +1099,79 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(res.status, 200);
     const { credential } = (await res.json()) as any;
     assert.equal(credential.ownerId, "U1");
+    assert.equal(credential.credentialHandle, credentialHandle(credential.id));
     assert.ok(!JSON.stringify(credential).includes("ghp_u1"));
 
     const mine = (await (await get("/v1/keychain/credentials", await capFor("U1"))).json()) as any;
     assert.equal(mine.credentials.length, 1);
+    assert.equal(mine.credentials[0].credentialHandle, credential.credentialHandle);
+    assert.ok(!JSON.stringify(mine).includes("ghp_u1"));
     const other = (await (await get("/v1/keychain/credentials", await capFor("U2"))).json()) as any;
     assert.deepEqual(other.credentials, []);
+  });
+
+  it("backend-only grants offer backend guidance while file grants retain shell commands", async () => {
+    const owner = "BACKEND_HANDLE_OWNER";
+    const cap = await capFor(owner, scopeId("personal", owner), { liveActor: true });
+    for (const backend of [true, false]) {
+      const input = backend
+        ? { service: "composio", envKey: "COMPOSIO_API_KEY", secret: "backend-project-sentinel" }
+        : {
+            service: "test-files",
+            files: [{ path: ".test/token", contentBase64: Buffer.from("file-sentinel").toString("base64") }],
+          };
+      const saved = (await (await post("/v1/keychain/credentials", input, cap)).json()) as any;
+      const response = await post(
+        "/v1/keychain/grants",
+        { credential: saved.credential.id, mode: "once", purpose: "authorized access" },
+        cap,
+      );
+      assert.equal(response.status, 200);
+      const granted = (await response.json()) as any;
+      assert.equal(granted.use.credentialHandle, undefined);
+      assert.equal(granted.use.credentials, undefined);
+      if (backend) {
+        assert.equal(granted.use.command, undefined);
+        assert.match(granted.use.note, /\/v1\/composio/);
+      } else {
+        assert.match(granted.use.command, /keychain\/use/);
+        assert.match(granted.use.note, /same shell/);
+      }
+      assert.ok(!JSON.stringify([saved, granted]).includes("backend-project-sentinel"));
+    }
+  });
+
+  it("new env grants return immediately usable execution handles without secrets", async () => {
+    const owner = "HANDLE_OWNER";
+    const cap = await capFor(owner, scopeId("personal", owner), { liveActor: true });
+    const saved = (await (
+      await post(
+        "/v1/keychain/credentials",
+        { service: "handle-test", envKey: "HANDLE_TOKEN", secret: "synthetic-handle-secret" },
+        cap,
+      )
+    ).json()) as any;
+    const metadata = (await (await get("/v1/keychain/credentials", cap)).json()) as any;
+    const response = await post(
+      "/v1/keychain/grants",
+      { credential: saved.credential.id, mode: "once", purpose: "use the new execution handle" },
+      cap,
+    );
+    assert.equal(response.status, 200);
+    const granted = (await response.json()) as any;
+    assert.equal(saved.credential.credentialHandle, metadata.credentials[0].credentialHandle);
+    assert.equal(granted.use.credentialHandle, saved.credential.credentialHandle);
+    assert.deepEqual(granted.use.credentials, [saved.credential.credentialHandle]);
+    assert.match(granted.use.note, /available immediately/);
+    assert.ok(!JSON.stringify([saved, metadata, granted]).includes("synthetic-handle-secret"));
+    const current = (await built.keychain!.grantsForScope(scopeId("personal", owner))).find(
+      ({ credential }) => credential.credentialHandle === granted.use.credentialHandle,
+    );
+    assert.ok(current);
+    const prepared = await built.keychain!.prepareMaterialize(current.grant.id, scopeId("personal", owner), owner);
+    assert.equal(prepared.materialized.kind, "env");
+    await prepared.commit();
+    assert.equal((await built.keychain!.getGrant(current.grant.id))?.status, "used");
   });
 
   it("a participant's connector is grantable by its owner, then materialized under the host env var", async () => {
@@ -1552,7 +1620,18 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
     }),
   );
   assert.ok(built.keychain, "buildApp with a signing secret wires the keychain");
-  await built.featureFlags.setEnabled("command_scoped_credentials", "channel:C1", true, "test");
+  built.keychain.materializeOwn = async () => {
+    throw new Error("eager owner materialization is forbidden");
+  };
+  built.keychain.materializeStanding = async () => {
+    throw new Error("eager standing materialization is forbidden");
+  };
+  const resolved: string[] = [];
+  const materializeOwnById = built.keychain.materializeOwnById.bind(built.keychain);
+  built.keychain.materializeOwnById = async (...args) => {
+    resolved.push(args[1]);
+    return materializeOwnById(...args);
+  };
   const cred = await built.keychain!.save({
     ownerId: "U_OWNER",
     service: "github",
@@ -1593,9 +1672,103 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   const dm: TurnRequest = {
     surface: "test",
     actor: { externalId: "U_OWNER" },
-    conversation: { kind: "dm", threadRef: "dm:U_OWNER" },
+    conversation: { kind: "dm", threadRef: "dm:U_OWNER", audience: [{ externalId: "U_OWNER" }] },
+    origin: { kind: "human" },
     text: "!run true",
   } as TurnRequest;
   assert.equal((await built.app.turn(dm)).status, "ok");
-  assert.ok(execScriptsMention("ghp_e2e", mark), "an unlisted scope keeps legacy behavior");
+  assert.ok(!execScriptsMention("ghp_e2e", mark), "unrequested secrets are never materialized");
+  const selected = await built.app.turn({
+    ...dm,
+    text: `!execute ${JSON.stringify({ command: 'test "$GITHUB_TOKEN" = ghp_e2e && echo selected', credentials: [credentialHandle(cred.id)] })}`,
+  });
+  assert.equal(selected.reply, "selected");
+  assert.deepEqual(resolved, [cred.id]);
+});
+
+test("prepared grants reject credential rotation without consuming a single use", async () => {
+  const k = kc();
+  const credential = await k.save(GH);
+  const grant = await k.createGrant({
+    credentialId: credential.id,
+    ownerId: GH.ownerId,
+    audienceScopeId: "channel:C1",
+    mode: "once",
+    purpose: "rotation regression",
+  });
+  const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
+  await k.save({ ...GH, secret: "rotated-execution-token" });
+  await assert.rejects(prepared.commit(), /credential changed/);
+  assert.equal((await k.getGrant(grant.id))?.status, "active");
+  const fresh = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
+  assert.equal(fresh.materialized.kind, "env");
+  if (fresh.materialized.kind === "env") assert.equal(fresh.materialized.env[0]?.value, "rotated-execution-token");
+  await fresh.commit();
+  assert.equal((await k.getGrant(grant.id))?.status, "used");
+});
+
+test("connector refresh during preparation binds the refreshed version and later rotation invalidates it", async () => {
+  let refreshes = 0;
+  const k = createKeychain({
+    creds: createMemoryMap(),
+    grants: createMemoryMap(),
+    asks: createMemoryMap(),
+    key: KEY,
+    refreshConnector: async () => {
+      refreshes++;
+      return { accessToken: "refreshed-token", expiresAt: Date.now() + 3600000 };
+    },
+  });
+  await k.setConnectorToken("gmail.googleapis.com", "U1", {
+    accessToken: "expired-token",
+    refreshToken: "refresh",
+    expiresAt: Date.now() - 1000,
+  });
+  const connector = (await k.listConnectorsByOwners(["U1"])).get("U1")![0]!;
+  const grant = await k.createGrant({
+    credentialId: connector.credentialId,
+    ownerId: "U1",
+    audienceScopeId: "channel:C1",
+    mode: "standing",
+    purpose: "refresh regression",
+  });
+  const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
+  assert.equal(refreshes, 1);
+  await prepared.commit();
+  await k.setConnectorToken("gmail.googleapis.com", "U1", {
+    accessToken: "replacement-token",
+    expiresAt: Date.now() + 3600000,
+  });
+  await assert.rejects(prepared.commit(), /credential changed/);
+  await (await k.prepareMaterialize(grant.id, "channel:C1", "U2")).commit();
+});
+
+test("Composio keys remain backend-only across all materialization paths including multi-field records", async () => {
+  for (const input of [
+    { secret: "project-key", envKey: "COMPOSIO_API_KEY" },
+    {
+      fields: [
+        { envKey: "COMPOSIO_API_KEY", value: "project-key" },
+        { envKey: "OTHER", value: "other" },
+      ],
+    },
+  ]) {
+    const k = kc();
+    const c = await k.save({ ownerId: "U1", service: "composio", ...input });
+    assert.equal(c.credentialHandle, undefined);
+    assert.equal((await k.getCredential(c.id))?.credentialHandle, undefined);
+    const grant = await k.createGrant({
+      credentialId: c.id,
+      ownerId: "U1",
+      audienceScopeId: "channel:C1",
+      mode: "standing",
+      purpose: "apps",
+    });
+    assert.deepEqual(await k.materializeOwn("U1"), []);
+    assert.deepEqual(await k.materializeStanding("channel:C1"), []);
+    await assert.rejects(k.materializeOwnById("U1", c.id, "personal:U1"), /keys stay in the backend/);
+    await assert.rejects(k.materialize(grant.id, "channel:C1", "U1"), /keys stay in the backend/);
+    assert.equal(await k.composioKey("U1", c.id), "project-key");
+    assert.equal(await k.composioKey("U2", c.id), null);
+  }
 });

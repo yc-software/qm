@@ -26,6 +26,7 @@ export function createDeploymentMethods(
   | "renameDeployment"
   | "setDeploymentDisplayName"
   | "setDeploymentAlwaysOn"
+  | "setDeploymentEmbedAncestors"
   | "keepAlwaysOnWarm"
   | "reachDeployment"
   | "deploymentLogsFor"
@@ -96,6 +97,9 @@ export function createDeploymentMethods(
     },
     setDeploymentAlwaysOn(id, alwaysOn) {
       return deps.deploy.setDeploymentAlwaysOn(id, alwaysOn);
+    },
+    setDeploymentEmbedAncestors(id, embedAncestors) {
+      return deps.deploy.setDeploymentEmbedAncestors(id, embedAncestors);
     },
     keepAlwaysOnWarm() {
       return deps.deploy.keepAlwaysOnWarm();

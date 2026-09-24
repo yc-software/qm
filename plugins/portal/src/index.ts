@@ -843,15 +843,26 @@ function loginProviderCookie(sub: string): string[] {
   ];
 }
 
+const FRAME_SESSION_COOKIE = "portal_session_x";
+
 function sessionCookieSet(value: string, sub: string): string[] {
-  const set = setCookie("portal_session", value, {
+  const attrs = {
     path: "/",
     maxAge: SESSION_TTL_S,
     secure: SECURE_COOKIES,
     ...(COOKIE_DOMAIN ? { domain: COOKIE_DOMAIN } : {}),
-  });
+  };
+  const set = setCookie("portal_session", value, attrs);
+  const framed = setCookie(FRAME_SESSION_COOKIE, value, { ...attrs, sameSite: "None" });
   return [
-    ...(COOKIE_DOMAIN ? [set, clearCookie("portal_session", "/", SECURE_COOKIES)] : [set]),
+    ...(COOKIE_DOMAIN
+      ? [
+          set,
+          framed,
+          clearCookie("portal_session", "/", SECURE_COOKIES),
+          clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES),
+        ]
+      : [set, framed]),
     ...loginProviderCookie(sub),
   ];
 }
@@ -1030,7 +1041,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     setSession(res, [
       ...(signedOutSession ? loginProviderCookie(signedOutSession.sub) : []),
       clearCookie("portal_session", "/", SECURE_COOKIES, COOKIE_DOMAIN),
-      ...(COOKIE_DOMAIN ? [clearCookie("portal_session", "/", SECURE_COOKIES)] : []),
+      clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES, COOKIE_DOMAIN),
+      ...(COOKIE_DOMAIN
+        ? [clearCookie("portal_session", "/", SECURE_COOKIES), clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES)]
+        : []),
       clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
       ...(AUTH_BROKER_UPSTREAM ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
       ...(LOCAL_AUTH_BYPASS && isLoopbackAddress(req.socket.remoteAddress)

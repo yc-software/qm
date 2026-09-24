@@ -110,10 +110,17 @@ export interface CookieOpts {
   maxAge?: number;
   secure: boolean;
   domain?: string;
+  sameSite?: "Lax" | "None";
 }
 
 export function setCookie(name: string, value: string, opts: CookieOpts): string {
-  const parts = [`${name}=${encodeURIComponent(value)}`, "HttpOnly", "SameSite=Lax", `Path=${opts.path ?? "/"}`];
+  const sameSite = opts.sameSite === "None" && opts.secure ? "None" : "Lax";
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    "HttpOnly",
+    `SameSite=${sameSite}`,
+    `Path=${opts.path ?? "/"}`,
+  ];
   if (opts.domain) parts.push(`Domain=${opts.domain}`);
   if (opts.secure) parts.push("Secure");
   if (opts.maxAge !== undefined) parts.push(`Max-Age=${opts.maxAge}`);
@@ -172,11 +179,11 @@ export function sanitizeReturnTo(value: string | null | undefined, publicOrigin:
   if (!value || value[0] !== "/") return "/";
   if (value.startsWith("//")) return "/";
   if (/[\\\x00-\x1f]/.test(value)) return "/";
-  if (/%2f%2f|%5c/i.test(value)) return "/";
+  if (/%2f%2f|%5c/i.test(value.split(/[?#]/, 1)[0]!)) return "/";
   try {
     const base = new URL(publicOrigin).origin;
     const u = new URL(value, base);
-    if (u.origin !== base) return "/";
+    if (u.origin !== base || u.pathname.startsWith("//")) return "/";
     return `${u.pathname}${u.search}${u.hash}`;
   } catch {
     return "/";

@@ -119,7 +119,7 @@ test("expanded pins wrap their full text instead of truncating to one line", () 
 });
 
 test("chat shadows stay limited to elevated surfaces and subtle activity hover glow", () => {
-  const elevated = [".pinned-strip", ".message-stack .user-row.stuck > .user-bubble"];
+  const elevated = [".pinned-strip", ".message-stack .user-row.stuck > .user-bubble", ".attachment-peek"];
   const rules = shellCss.replace(/\/\*[\s\S]*?\*\//g, "");
   const painted = [...rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap((rule) =>
     [...rule[2].matchAll(/(box|text)-shadow\s*:\s*([^;}]+)/g)]

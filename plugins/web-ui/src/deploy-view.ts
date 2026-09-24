@@ -18,6 +18,7 @@ export interface DeploymentView {
   name?: string;
   displayName?: string;
   permission?: "read" | "write";
+  embedAncestors?: string[];
   createdAt?: number;
   updatedAt?: number;
   lastAccessAt?: number;

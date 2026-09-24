@@ -24,7 +24,7 @@ test("compact and full composers share one left-side picker with Fast inside its
   const leftStart = composer.indexOf('class="composer-left"');
   const rightStart = composer.indexOf('class="composer-right"');
   assert.ok(leftStart >= 0 && rightStart > leftStart);
-  assert.ok(composer.slice(leftStart, rightStart).includes("showRuntimeControls ? runtimeControls : nothing"));
+  assert.ok(composer.slice(leftStart, rightStart).includes("${runtimeControls}"));
   assert.ok(/class="composer-right">\$\{sendControls\(agent\)\}<\/div>/.test(composer));
   const loadout = picker.slice(picker.indexOf("function render"), picker.indexOf("function menuArrowKeys"));
   assert.ok(/role="menuitemcheckbox"\s+aria-label="Fast"/.test(loadout));

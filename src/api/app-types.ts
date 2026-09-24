@@ -129,6 +129,7 @@ export interface DeploymentView {
   appliedVersion?: number;
   status: Deployment["status"];
   alwaysOn?: boolean;
+  embedAncestors?: string[];
   lastAccessAt?: number;
   createdAt?: number;
   updatedAt?: number;
@@ -157,6 +158,7 @@ export function deploymentView(d: Deployment): DeploymentView {
     ...(d.appliedVersion !== undefined ? { appliedVersion: d.appliedVersion } : {}),
     status: d.status,
     ...(d.alwaysOn ? { alwaysOn: true } : {}),
+    ...(d.embedAncestors?.length ? { embedAncestors: d.embedAncestors } : {}),
     ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),
     ...(versions[0] ? { createdAt: versions[0].createdAt } : {}),
     ...(versions.at(-1) ? { updatedAt: versions.at(-1)!.createdAt } : {}),
@@ -557,6 +559,7 @@ export interface App {
   renameDeployment(id: string, name: string): Promise<Deployment>;
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
+  setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
   keepAlwaysOnWarm(): Promise<number>;
   reachDeployment(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   deploymentLogsFor(

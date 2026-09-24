@@ -226,7 +226,6 @@ test("every boolean knob accepts the shared vocabulary (off means off)", () => {
     SEED_SKILLS: "off",
     EXECUTE_SCRATCH: "off",
     REACH_EXEC: "off",
-    COMMAND_SCOPED_CREDENTIALS: "off",
     PI_CAPTURE_REQUESTS: "off",
     EAGER_PROVISION: "off",
   });
@@ -234,20 +233,17 @@ test("every boolean knob accepts the shared vocabulary (off means off)", () => {
   assert.equal(off.eagerProvisionEnabled, false);
   assert.equal(off.scratchExecEnabled, false);
   assert.equal(off.reachExecEnabled, false);
-  assert.equal(off.sharedOwnerAuthIsolation, false);
   assert.equal(off.piCaptureRequests, false);
 
   const on = loadConfig({
     SEED_SKILLS: "yes",
     EXECUTE_SCRATCH: "on",
     REACH_EXEC: "1",
-    SHARED_OWNER_AUTH_ISOLATION: "yes",
     PI_SYSTEM_CACHE_SPLIT: "on",
   });
   assert.equal(on.seedSkills, true);
   assert.equal(on.scratchExecEnabled, true);
   assert.equal(on.reachExecEnabled, true);
-  assert.equal(on.sharedOwnerAuthIsolation, true);
   assert.equal(on.piSystemCacheSplit, true);
 
   const unset = loadConfig({});

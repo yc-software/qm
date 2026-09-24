@@ -68,6 +68,7 @@ export interface Deployment {
   endpoint: DeployEndpoint | null;
 
   alwaysOn?: boolean;
+  embedAncestors?: string[];
   lastAccessAt?: number;
   appliedVersion?: number;
   versions: DeploymentVersion[];
@@ -108,6 +109,7 @@ export interface DeployStore {
   setOwnerScope(id: string, ownerScopeId: ScopeId): Promise<void>;
   setDisplayName(id: string, displayName: string | undefined): Promise<void>;
   setAlwaysOn(id: string, alwaysOn: boolean): Promise<void>;
+  setEmbedAncestors(id: string, embedAncestors: string[]): Promise<void>;
   setDefaultAudience(id: string, snapshot: DefaultAudienceSnapshot): Promise<void>;
   setAppliedVersion(id: string, version: number): Promise<void>;
   touch(id: string, at: number): Promise<void>;
@@ -430,6 +432,9 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
     },
     async setAlwaysOn(id, alwaysOn) {
       await backingMap.merge(id, { alwaysOn } as Partial<Deployment>);
+    },
+    async setEmbedAncestors(id, embedAncestors) {
+      await backingMap.merge(id, { embedAncestors } as Partial<Deployment>);
     },
     async setDefaultAudience(id, snapshot) {
       const d = await backingMap.get(id);

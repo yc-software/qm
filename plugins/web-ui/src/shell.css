@@ -627,10 +627,6 @@ a.chat-row-open {
 .split-pane-title > .session-status {
   margin-inline-start: auto;
 }
-.split-pane-title:has(> .session-status) .split-tab-actions {
-  right: 22px;
-}
-
 .working-mark {
   display: inline-flex;
   align-items: center;
@@ -2012,7 +2008,9 @@ qm-markdown .tok-in {
   line-height: 1.55;
 }
 .user-bubble {
-  background: color-mix(in srgb, var(--secondary) 76%, var(--background));
+  --bubble-bg: color-mix(in srgb, var(--secondary) 76%, var(--background));
+  position: relative;
+  background: var(--bubble-bg);
   color: var(--foreground);
   overflow-wrap: anywhere;
 }
@@ -2039,26 +2037,70 @@ qm-markdown .tok-in {
   overflow: auto;
   overscroll-behavior: contain;
 }
+.message-stack .user-row.stuck:not(.pin-expanded) {
+  min-height: var(--pin-rest-height);
+}
+.message-stack .user-row.stuck:not(.pin-expanded) .user-bubble > .pin-content {
+  max-height: var(--pin-content-max, none);
+}
+.message-stack
+  .user-row.stuck:not(.pin-expanded)
+  .user-bubble
+  > .pin-content:has(code-block, pre, table, img, svg, math, .katex-display, video, iframe) {
+  max-height: var(--pin-content-max, 2lh);
+}
+.message-stack .user-row.pin-condensed:not(.pin-expanded) .user-bubble > .pin-content {
+  -webkit-line-clamp: 2;
+}
+.message-stack
+  .user-row.pin-condensed:not(.pin-expanded)
+  .user-bubble
+  > .pin-content
+  :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
+  margin-block: 0;
+}
+.message-stack .user-row.pin-condensed:not(.pin-expanded) .user-bubble > .pin-content :is(h1, h2, h3, h4, h5, h6) {
+  font-size: inherit;
+  line-height: inherit;
+}
 .pin-toggle {
   display: none;
-  width: fit-content;
-  margin: 6px 0 0 auto;
-  pointer-events: auto;
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  height: 1lh;
+  margin: 0;
+  padding: 0 0 0 36px;
   border: 0;
-  border-radius: 6px;
-  background: transparent;
+  background: linear-gradient(to right, transparent, var(--bubble-bg) 28px);
   color: var(--muted-foreground);
   font: inherit;
-  font-size: 12px;
-  padding: 6px 8px;
+  pointer-events: auto;
   cursor: pointer;
 }
 .message-stack .user-row:not(:has(~ .user-row)) > .user-bubble > .pin-toggle:not([hidden]) {
   display: flex;
+  align-items: center;
+  gap: 2px;
 }
-.pin-toggle:hover {
+.message-stack .user-row.pin-expanded > .user-bubble > .pin-toggle > .icon {
+  transform: rotate(180deg);
+}
+.message-stack .user-row.pin-expanded > .user-bubble > .pin-toggle,
+.message-stack
+  .user-bubble
+  > .pin-content:has(code-block, pre, table, img, svg, math, .katex-display, video, iframe)
+  ~ .pin-toggle {
+  position: static;
+  height: auto;
+  margin: 6px 0 0 auto;
+  padding: 0;
+  background: none;
+  font-size: 12px;
+}
+.pin-toggle:is(:hover, :focus-visible) {
   color: var(--foreground);
-  background: var(--secondary);
+  text-decoration: underline;
 }
 .message-files,
 .attachment-strip {
@@ -2310,6 +2352,95 @@ qm-markdown .tok-in {
   width: 100%;
   height: 80px;
   object-fit: cover;
+}
+.file-image .file-image-name,
+.file-image .file-image-size {
+  display: none;
+}
+/* In a short pane, or while the message is the pinned prompt riding over the answer, an
+   image folds from the 80px thumbnail to a one-line chip: a 22px thumbnail, the name and
+   the size, the same footprint as a document chip. Hover or focus peeks at the picture. */
+@container split-pane (max-height: 480px) {
+  .user-row > .message-files .file-image {
+    --attachment-compact: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    width: auto;
+    max-width: 100%;
+    min-height: 28px;
+    padding: 3px 8px 3px 3px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--background);
+    color: var(--muted-foreground);
+    font-size: 12px;
+    line-height: 1.2;
+  }
+  .user-row > .message-files .file-image img {
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    object-fit: cover;
+  }
+  .user-row > .message-files .file-image .file-image-name,
+  .user-row > .message-files .file-image .file-image-size {
+    display: inline;
+  }
+}
+.message-stack .user-row.stuck > .message-files .file-image {
+  --attachment-compact: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 3px 8px 3px 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.message-stack .user-row.stuck > .message-files .file-image img {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  object-fit: cover;
+}
+.message-stack .user-row.stuck > .message-files .file-image .file-image-name,
+.message-stack .user-row.stuck > .message-files .file-image .file-image-size {
+  display: inline;
+}
+.file-image .file-image-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.file-image .file-image-size {
+  flex: none;
+  color: var(--muted-foreground);
+}
+.attachment-peek {
+  position: fixed;
+  z-index: 1200;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+  box-shadow: var(--chat-surface-shadow);
+  pointer-events: none;
+}
+.attachment-peek img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  object-fit: contain;
 }
 .file-html-unfurl {
   display: flex;
@@ -7459,6 +7590,63 @@ a.connector-widget:focus-visible {
   justify-content: flex-end;
   gap: 5px;
 }
+.deploy-embed-origins {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 6px;
+  min-width: 0;
+}
+.deploy-embed-origins code {
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.deploy-embed-empty {
+  color: var(--muted-foreground);
+}
+.deploy-embed-editor {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.deploy-embed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.deploy-embed-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.deploy-embed-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+}
+.deploy-embed-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.deploy-embed-actions .spacer {
+  flex: 1;
+}
+.deploy-embed-hint {
+  font-size: 12px;
+}
+.deploy-embed-hint code {
+  font-size: 11px;
+}
+
 .deploy-edit-form label {
   min-width: 0;
 }
@@ -8053,9 +8241,14 @@ h3.ambient-field-label {
 }
 
 .split-canvas.single-pane .dockview-theme-qm .dv-groupview .dv-tabs-and-actions-container {
+  --split-strip-line: color-mix(in srgb, var(--border) 68%, transparent);
+  --split-strip-bg: color-mix(in srgb, var(--background) 94%, var(--secondary));
   padding: 0 16px;
-  border-bottom-color: color-mix(in srgb, var(--border) 68%, transparent);
-  background: color-mix(in srgb, var(--background) 94%, var(--secondary));
+}
+
+.split-canvas.single-pane .dockview-theme-qm .dv-groupview .dv-tabs-and-actions-container:not(.dv-single-tab) {
+  --split-strip-pad: 11px;
+  padding-top: var(--split-strip-pad);
 }
 
 .split-canvas.single-pane .dv-render-overlay {
@@ -8112,21 +8305,25 @@ h3.ambient-field-label {
   border-radius: 0;
   background: var(--background);
   overflow: hidden;
+  container: pane-group / inline-size;
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container {
+  --split-strip-line: var(--border);
+  --split-strip-bg: var(--secondary);
+  --split-strip-pad: 4px;
   position: relative;
   box-sizing: border-box;
-  padding: 4px 6px 4px 10px;
+  padding: var(--split-strip-pad) 6px var(--split-strip-pad) 10px;
   gap: 8px;
-  border-bottom: 1px solid var(--border);
-  background: var(--secondary);
+  border-bottom: 1px solid var(--split-strip-line);
+  background: var(--split-strip-bg);
   user-select: none;
   font-family: var(--app-font);
 }
 
 .dockview-theme-qm .dv-groupview.dv-active-group .dv-tabs-and-actions-container {
-  border-bottom-color: color-mix(in srgb, var(--brand-accent) 20%, var(--border));
+  --split-strip-line: color-mix(in srgb, var(--brand-accent) 20%, var(--border));
 }
 
 /* Empty auxiliary action containers must not occupy a flex-gap slot. */
@@ -8154,6 +8351,19 @@ h3.ambient-field-label {
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) {
   --dv-activegroup-visiblepanel-tab-background-color: var(--background);
   --dv-inactivegroup-visiblepanel-tab-background-color: var(--background);
+  padding-bottom: 0;
+  border-bottom: 0;
+  background: linear-gradient(var(--split-strip-line), var(--split-strip-line)) bottom / 100% 1px no-repeat
+    var(--split-strip-bg);
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tabs-container,
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-right-actions-container {
+  align-items: flex-start;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-group-session-action {
+  display: none;
 }
 
 /* A lone tab is today's header: title 10px from the strip edge, no chip chrome, and the
@@ -8175,25 +8385,17 @@ h3.ambient-field-label {
 }
 
 .split-group-session-action {
-  display: none;
-}
-
-.dockview-theme-qm .dv-single-tab .split-group-session-action {
   display: inline-flex;
 }
 
-/* Multi-tab groups (tabbing is new capability the old canvas lacked): segmented chips in
-   the app's own control idiom — the active tab is the standard raised card (page bg, 1px
-   border, tiny shadow, 34px like .icon-btn), inactive tabs are muted text with the shared
-   7% hover wash. The group-level close hides; every session closes from its own tab. */
+/* Multi-tab groups: inactive tabs are muted labels on the strip; the active tab shares the
+   body's surface and runs down onto it, carrying its own session actions. Tabs shrink to a
+   floor and then move into the strip's overflow menu; the active one keeps a higher floor. */
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
-  height: 34px;
-  /* Every tab takes the same share of the strip and shrinks with it, down to a floor that
-     still reads as a label; past that they stop shrinking and the ones that no longer fit
-     move into the strip's overflow menu. Sizing off a fixed basis rather than the title
-     keeps the rhythm even and stops a title change from resizing its neighbours. */
-  flex: 0 1 220px;
-  min-width: 100px;
+  --split-tab-h: 34px;
+  height: var(--split-tab-h);
+  flex: 0 1 160px;
+  min-width: 72px;
   max-width: 220px;
   padding: 0 8px 0 10px;
   display: flex;
@@ -8203,7 +8405,15 @@ h3.ambient-field-label {
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab.dv-active-tab {
+  flex: 0 1 260px;
+  min-width: 150px;
+  max-width: 320px;
+  align-self: stretch;
+  height: auto;
+  padding-bottom: var(--split-strip-pad);
   border-color: var(--border);
+  border-bottom-color: transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
 }
 
 .dockview-theme-qm
@@ -8273,16 +8483,15 @@ h3.ambient-field-label {
   background: var(--secondary);
 }
 
+/* The close control sits in the tab's flow after the title, so the title truncates
+   around it instead of being painted over; every tab reserves the slot and only the
+   opacity moves, so hovering never shifts a title. */
 .split-tab-actions {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
   display: flex;
   align-items: center;
   gap: 2px;
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--background) 96%, transparent);
+  flex: 0 0 auto;
+  margin-left: 2px;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.12s ease;
@@ -8295,7 +8504,7 @@ h3.ambient-field-label {
   pointer-events: auto;
 }
 
-.split-tab-close {
+.split-tab-actions .icon-btn {
   width: 18px;
   height: 18px;
   min-width: 18px;
@@ -8303,9 +8512,30 @@ h3.ambient-field-label {
   opacity: 0.55;
 }
 
-.dv-tab:hover .split-tab-close,
-.dv-tab:focus-within .split-tab-close {
+.dv-tab:hover .split-tab-actions .icon-btn,
+.dv-tab:focus-within .split-tab-actions .icon-btn {
   opacity: 0.8;
+}
+
+.split-tab-session {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.split-tab-more,
+.dv-tab:not(.dv-active-tab) .split-tab-session {
+  display: none;
+}
+
+@container pane-group (max-width: 400px) {
+  .dv-tab .split-tab-session {
+    display: none;
+  }
+
+  .dv-tab.dv-active-tab .split-tab-more {
+    display: inline-flex;
+  }
 }
 
 .split-pane-title {
@@ -8334,6 +8564,18 @@ h3.ambient-field-label {
   align-items: center;
   gap: 2px;
   flex: 0 0 auto;
+}
+
+.split-pane-actions-wide {
+  display: contents;
+}
+
+/* A narrow pane keeps the tools menu, share, archive and the group close in its header;
+   split and focus fold into the menu. */
+@container pane-group (max-width: 560px) {
+  .split-pane-actions-wide {
+    display: none;
+  }
 }
 
 /* Single-header multiview: the pane title is a scope / title breadcrumb, and the
@@ -8410,7 +8652,7 @@ h3.ambient-field-label {
   font-size: 21px;
 }
 
-.split-canvas:not(.single-pane) .dockview-theme-qm .dv-tabs-and-actions-container .icon-btn {
+.split-canvas:not(.single-pane) .dockview-theme-qm .dv-tabs-and-actions-container .split-pane-actions .icon-btn {
   width: 27px;
   height: 27px;
   min-width: 27px;
@@ -8418,7 +8660,7 @@ h3.ambient-field-label {
 }
 
 .split-canvas:not(.single-pane) .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
-  height: 27px;
+  --split-tab-h: 27px;
   border-radius: 0;
 }
 

@@ -26,6 +26,8 @@ export function preserveTranscriptScroll(root: HTMLElement): () => void {
   };
 }
 
+const CONDENSED_LINES = 2;
+
 export function createTranscriptViewport() {
   let scroller: HTMLElement | null = null;
   let pins: HTMLElement | null = null;
@@ -38,6 +40,13 @@ export function createTranscriptViewport() {
   let observer: ResizeObserver | null = null;
   let following = false;
   let frame: number | null = null;
+  let remeasure = true;
+  let restContent = 0;
+  let condensedContent = 0;
+  let contentHeight = 0;
+  let condensedHeight = 0;
+  let gap: number | null = null;
+  let contentMax = "";
   const contentUpdates = new Set<Promise<void>>();
 
   function setFollowing(value: boolean): void {
@@ -53,8 +62,14 @@ export function createTranscriptViewport() {
 
   function clearPrompt(): void {
     if (content) content.scrollTop = 0;
-    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded");
+    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded", "pin-condensed");
     prompt?.style.removeProperty("--pin-expanded-max");
+    prompt?.style.removeProperty("--pin-rest-height");
+    prompt?.style.removeProperty("--pin-content-max");
+    restContent = condensedContent = contentHeight = condensedHeight = 0;
+    gap = null;
+    contentMax = "";
+    remeasure = true;
     const toggle = prompt?.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) toggle.hidden = true;
     expanded = false;
@@ -69,7 +84,8 @@ export function createTranscriptViewport() {
     if (toggle) {
       toggle.hidden = !clipped && !expanded;
       const label = expanded ? "Show less" : "Show more";
-      if (toggle.textContent !== label) toggle.textContent = label;
+      const text = toggle.querySelector<HTMLElement>(".pin-toggle-label") ?? toggle;
+      if (text.textContent !== label) text.textContent = label;
       toggle.setAttribute("aria-expanded", String(expanded));
     }
   }
@@ -93,7 +109,9 @@ export function createTranscriptViewport() {
     const style = getComputedStyle(scroller);
     const paddingTop = parseFloat(style.paddingTop) || 0;
     const paddingBottom = parseFloat(style.paddingBottom) || 0;
-    const promptMargin = prompt ? parseFloat(getComputedStyle(prompt).marginBottom) || 0 : 0;
+    const promptStyle = prompt ? getComputedStyle(prompt) : null;
+    const promptMargin = promptStyle ? parseFloat(promptStyle.marginBottom) || 0 : 0;
+    if (prompt && content && promptStyle && remeasure && !expanded) measureRest(promptStyle);
     if (prompt && content) {
       const chrome = prompt.getBoundingClientRect().height - content.getBoundingClientRect().height;
       const available = scroller.clientHeight - top - paddingTop - paddingBottom - promptMargin - chrome;
@@ -103,13 +121,67 @@ export function createTranscriptViewport() {
       !!prompt &&
       prompt.getBoundingClientRect().height + promptMargin + top + paddingTop + paddingBottom <= scroller.clientHeight;
     prompt?.classList.toggle("sticky-disabled", !canStick);
-    prompt?.classList.toggle(
-      "stuck",
-      canStick &&
-        scroller.scrollTop > 0 &&
-        prompt.getBoundingClientRect().top <=
-          scroller.getBoundingClientRect().top + scroller.clientTop + paddingTop + top + 0.5,
-    );
+    const line = scroller.getBoundingClientRect().top + scroller.clientTop + paddingTop + top;
+    const stuck = !!prompt && canStick && scroller.scrollTop > 0 && prompt.getBoundingClientRect().top <= line + 0.5;
+    prompt?.classList.toggle("stuck", stuck);
+    if (!prompt || !content || !promptStyle) return;
+    const edge = anchorEdge();
+    if (!stuck) gap = prompt.getBoundingClientRect().top - edge;
+    condense(stuck && !expanded, line - edge - (gap ?? restingGap(promptStyle)));
+  }
+
+  function anchorEdge(): number {
+    const previous = prompt?.previousElementSibling;
+    if (previous) return previous.getBoundingClientRect().bottom;
+    return stack?.getBoundingClientRect().top ?? 0;
+  }
+
+  function restingGap(promptStyle: CSSStyleDeclaration): number {
+    const previous = prompt?.previousElementSibling;
+    let before = 0;
+    if (previous) before = parseFloat(getComputedStyle(previous).marginBottom) || 0;
+    else if (stack) before = parseFloat(getComputedStyle(stack).paddingTop) || 0;
+    return before + (parseFloat(promptStyle.marginTop) || 0);
+  }
+
+  function measureRest(promptStyle: CSSStyleDeclaration): void {
+    if (!prompt || !content) return;
+    remeasure = false;
+    prompt.classList.remove("pin-condensed");
+    prompt.style.removeProperty("--pin-content-max");
+    prompt.style.setProperty("--pin-rest-height", "0px");
+    contentMax = "";
+    restContent = content.getBoundingClientRect().height;
+    contentHeight = content.scrollHeight;
+    const inner =
+      prompt.getBoundingClientRect().height -
+      (parseFloat(promptStyle.paddingTop) || 0) -
+      (parseFloat(promptStyle.paddingBottom) || 0);
+    prompt.style.setProperty("--pin-rest-height", `${Math.max(0, inner)}px`);
+    const contentStyle = getComputedStyle(content);
+    const lineHeight = parseFloat(contentStyle.lineHeight) || (parseFloat(contentStyle.fontSize) || 0) * 1.5;
+    condensedContent = CONDENSED_LINES * lineHeight;
+  }
+
+  function contentChanged(): boolean {
+    if (!content) return false;
+    return content.scrollHeight !== (prompt?.classList.contains("pin-condensed") ? condensedHeight : contentHeight);
+  }
+
+  function condense(active: boolean, distance: number): void {
+    if (!prompt || !content) return;
+    const span = restContent - condensedContent;
+    const settled = span <= 0.5 || span - distance < 0.5;
+    if (active && settled && !prompt.classList.contains("pin-condensed")) {
+      prompt.classList.add("pin-condensed");
+      condensedHeight = content.scrollHeight;
+    } else if (!(active && settled)) prompt.classList.remove("pin-condensed");
+    let max = "";
+    if (active) max = `${settled ? condensedContent : restContent - Math.max(0, distance)}px`;
+    if (max === contentMax) return;
+    contentMax = max;
+    if (max) prompt.style.setProperty("--pin-content-max", max);
+    else prompt.style.removeProperty("--pin-content-max");
   }
 
   function onScroll(): void {
@@ -199,7 +271,8 @@ export function createTranscriptViewport() {
       scroller?.addEventListener("click", onClick);
       scroller?.addEventListener("keydown", onKeyDown);
       if (typeof ResizeObserver !== "undefined") {
-        observer = new ResizeObserver(() => {
+        observer = new ResizeObserver((entries = []) => {
+          if (entries.some((entry) => entry.target === scroller) || contentChanged()) remeasure = true;
           beforeRender();
           syncSticky();
           follow();
@@ -233,6 +306,7 @@ export function createTranscriptViewport() {
     const nextContent = prompt?.querySelector<HTMLElement>(".pin-content") ?? null;
     if (content !== nextContent) {
       changed = true;
+      remeasure = true;
       if (content) observer?.unobserve(content);
       content = nextContent;
       if (content) observer?.observe(content);

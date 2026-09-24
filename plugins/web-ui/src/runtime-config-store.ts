@@ -14,6 +14,19 @@ type Entry = {
 const FRESH_MS = 30_000;
 const entries = new Map<string, Entry>();
 let bootScope: string | null = null;
+let accountRevision = 0;
+
+export function invalidateRuntimeConfigs(): void {
+  accountRevision++;
+  for (const entry of entries.values()) {
+    entry.generation++;
+    entry.config = null;
+    entry.fetchedAt = 0;
+    entry.load = null;
+  }
+}
+
+if (typeof window !== "undefined") window.addEventListener("model-account-changed", invalidateRuntimeConfigs);
 
 function entryFor(scopeId: string): Entry {
   let entry = entries.get(scopeId);
@@ -87,9 +100,10 @@ export async function saveRuntimeConfig(scopeId: string, change: Change): Promis
   // Invalidate old reads at enqueue time, including when the save ultimately fails.
   ++entry.generation;
   entry.load = null;
+  const revision = accountRevision;
   const save = (entry.write ?? Promise.resolve()).then(async () => {
     const config = await updateRuntimeConfig(scopeId, change);
-    publish(scopeId, entry, config);
+    if (revision === accountRevision) publish(scopeId, entry, config);
     return config;
   });
   const settled = save.then(

@@ -21,9 +21,9 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!preamble",
   "!speakpost ",
   "!run ",
+  "!execute ",
   "!scratch ",
   "!owner ",
-  "!credential ",
   "!reach ",
   "!paused-approval ",
   "!collect-approval ",
@@ -365,18 +365,16 @@ export function createMockHarness(): Harness {
             scopeLabel: turn.scopeLabel,
           });
           reply = "thought about it";
-        } else if (command0.startsWith("!credential ")) {
-          const rest = command0.slice("!credential ".length);
-          const split = rest.indexOf(" ");
-          const service = split === -1 ? rest : rest.slice(0, split);
-          const args = split === -1 ? [] : (JSON.parse(rest.slice(split + 1)) as string[]);
-          if (!turn.tools.credentialExec) throw new Error("credential_exec unavailable");
-          await turn.emit({
-            type: "tool_call",
-            payload: { tool: "credential_exec", service, args },
-            scopeLabel: turn.scopeLabel,
+        } else if (command0.startsWith("!execute ")) {
+          const params = JSON.parse(cmd.slice(cmd.indexOf("!execute ") + 9)) as {
+            command: string;
+            credentials?: string[];
+            ownerAuth?: boolean;
+          };
+          const result = await turn.tools.execute(params.command, {
+            credentials: params.credentials,
+            ownerAuth: params.ownerAuth,
           });
-          const result = await turn.tools.credentialExec(service, args);
           await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
           turn.onProgress?.({ toolCalls: 1 });
           usedTool = true;
