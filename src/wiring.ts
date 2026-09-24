@@ -1753,7 +1753,10 @@ export function buildApp(
     staleRunningMs: config.runMaxAgeMs,
     fires: cronFires,
   });
-  pgArtifactMap?.pool.registerMigration(legacyCronGrantsMigration);
+  pgArtifactMap?.pool.registerMigration({
+    ...legacyCronGrantsMigration,
+    statementParams: [[], [config.emailAuthPrincipals ?? [], scopeId("org", config.orgId)]],
+  });
   const crons: CronStore = {
     ...cronsBase,
     async create(input) {

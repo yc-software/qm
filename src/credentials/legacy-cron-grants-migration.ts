@@ -12,6 +12,7 @@ export const legacyCronGrantsMigration: PgMigrationDefinition = {
       UNION SELECT substring(json ->> 'requesterScopeId' FROM 10) FROM keychain_asks
       UNION SELECT json ->> 'principalId' FROM deactivated_principals
       UNION SELECT json ->> 'email' FROM external_members
+      UNION SELECT unnest($1::text[])
     ), canonical AS (
       SELECT identities.id, coalesce(link.json ->> 'canonicalId', identities.id) AS principal
       FROM identities LEFT JOIN principal_links link ON link.id =
@@ -21,32 +22,45 @@ export const legacyCronGrantsMigration: PgMigrationDefinition = {
       SELECT id, principal,
         CASE WHEN position('@' IN principal) > 0 THEN lower(btrim(principal)) ELSE btrim(principal) END AS person
       FROM canonical
+    ), external_people AS (
+      SELECT DISTINCT ON (member.person) member.person, external.json
+      FROM external_members external JOIN people member ON member.id = external.json ->> 'email'
+      ORDER BY member.person, external.id DESC
+    ), inactive_people AS (
+      SELECT DISTINCT ON (member.person) member.person, inactive.json ->> 'source' AS source
+      FROM deactivated_principals inactive JOIN people member ON member.id = inactive.json ->> 'principalId'
+      ORDER BY member.person, CASE WHEN inactive.json ->> 'source' = 'manual' THEN 1 ELSE 0 END DESC, inactive.id DESC
     ), owners AS (
       SELECT DISTINCT owner.principal, owner.person
       FROM crons cron
       JOIN people owner ON owner.id = cron.json ->> 'owner'
       JOIN people home ON home.id = substring(cron.json ->> 'ownerScopeId' FROM 10)
+      LEFT JOIN external_people external ON external.person = owner.person
+      LEFT JOIN inactive_people inactive ON inactive.person = owner.person
       WHERE cron.json ->> 'ownerScopeId' LIKE 'personal:%'
         AND home.person = owner.person
         AND coalesce(cron.json ->> 'runAs', 'owner') = 'owner'
         AND (cron.json ->> 'createdAt')::numeric < 1790142489000
         AND coalesce((cron.json ->> 'archived')::boolean, false) = false
         AND (cron.json ->> 'enabled' = 'true' OR cron.json #>> '{schedule,everyMs}' IS NOT NULL
-          OR cron.json #>> '{schedule,cron}' IS NOT NULL)
+          OR cron.json #>> '{schedule,cron}' IS NOT NULL OR cron.json ->> 'lastFiredAt' IS NULL)
         AND cron.json ->> 'message' IS NULL
         AND btrim(cron.json ->> 'action') <> ''
-        AND NOT EXISTS (
-          SELECT 1 FROM deactivated_principals inactive
-          JOIN people member ON member.id = inactive.json ->> 'principalId'
-          WHERE member.person = owner.person
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM external_members external
-          JOIN people member ON member.id = external.json ->> 'email'
-          WHERE member.person = owner.person AND (
-            (external.json ->> 'kind' = 'teammate' AND external.json ->> 'expiresAt' IS NULL)
-            OR (external.json ->> 'expiresAt')::numeric > extract(epoch FROM now()) * 1000
-          ) IS NOT TRUE
+        AND (
+          EXISTS (
+            SELECT 1 FROM internal_member_overrides overrides WHERE overrides.id = $2
+              AND coalesce(overrides.json -> 'members', '[]'::jsonb) ? lower(btrim(owner.id))
+          ) OR (
+            inactive.source IS DISTINCT FROM 'manual'
+            AND (
+              inactive.source IS DISTINCT FROM 'directory-sync' OR external.person IS NOT NULL
+              OR EXISTS (SELECT 1 FROM people protected WHERE protected.id = ANY($1::text[]) AND protected.person = owner.person)
+            )
+            AND (external.person IS NULL OR (
+              (external.json ->> 'kind' = 'teammate' AND external.json ->> 'expiresAt' IS NULL)
+              OR (external.json ->> 'expiresAt')::numeric > extract(epoch FROM now()) * 1000
+            ) IS TRUE)
+          )
         )
     ), available AS (
       SELECT DISTINCT credential.id AS credential_id, credential.json, 'personal:' || owner.principal AS scope,
@@ -69,7 +83,7 @@ export const legacyCronGrantsMigration: PgMigrationDefinition = {
         AND (
           credential.json ->> 'managed' IS NULL
           OR (credential.json ->> 'managed' = 'connector' AND holder.id = owner.principal
-            AND slot.priority IS NOT NULL AND credential.json #>> '{refresh,refreshFailedAt}' IS NULL
+            AND slot.priority IS NOT NULL
             AND credential.json ->> 'host' IN (
             'gmail.googleapis.com', 'www.googleapis.com', 'sheets.googleapis.com', 'docs.googleapis.com',
             'slides.googleapis.com', 'slack.com', 'api.notion.com', 'api.linear.app', 'api.dropboxapi.com',

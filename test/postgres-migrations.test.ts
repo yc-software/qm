@@ -232,3 +232,55 @@ test("pre-migration maintenance can repair schema before a released migration", 
     await admin.end();
   }
 });
+
+test("migration bindings reach constructor, registration, dynamic migration and maintenance", { skip }, async () => {
+  const admin = new pg.Pool({ connectionString: databaseUrl });
+  const { id, table } = names();
+  const insert = `INSERT INTO ${table}(name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`;
+  const value = "runtime ' $1 ; value";
+  const definition = {
+    id,
+    statements: [" ", insert],
+    statementParams: [[], ["constructor", value]],
+  };
+  const store = createPgPool(
+    databaseUrl!,
+    [definition],
+    [
+      {
+        id: `${id}/before`,
+        beforeMigrations: true,
+        statements: [`CREATE TABLE IF NOT EXISTS ${table}(name TEXT PRIMARY KEY, value TEXT)`, insert],
+        statementParams: [[], ["before", value]],
+      },
+      { id: `${id}/after`, statements: [insert], statementParams: [["after", value]] },
+    ],
+  );
+  try {
+    store.registerMigration({ id: `${id}/registered`, statements: [insert], statementParams: [["registered", value]] });
+    await migrateRegisteredPgSchemas(databaseUrl);
+    await store.migrate({ id: `${id}/dynamic`, statements: [insert], statementParams: [["dynamic", value]] });
+    assert.deepEqual(
+      await store.q(`SELECT name, value FROM ${table} ORDER BY name`),
+      ["after", "before", "constructor", "dynamic", "registered"].map((name) => ({ name, value })),
+    );
+    store.registerMigration({ ...definition, statementParams: [[], ["constructor", "changed config"]] });
+    await migrateRegisteredPgSchemas(databaseUrl);
+    await store.migrate({
+      id: `${id}/dynamic`,
+      statements: [insert],
+      statementParams: [["dynamic", "changed config"]],
+    });
+    assert.deepEqual(await store.q(`SELECT value FROM ${table} WHERE name IN ('constructor', 'dynamic')`), [
+      { value },
+      { value },
+    ]);
+  } finally {
+    await store.close();
+    await admin.query(`DROP TABLE IF EXISTS ${table}`);
+    await admin.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id = ANY($1::text[])`, [
+      [id, `${id}/registered`, `${id}/dynamic`],
+    ]);
+    await admin.end();
+  }
+});

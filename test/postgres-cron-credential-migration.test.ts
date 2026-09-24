@@ -12,6 +12,11 @@ const databaseUrl = process.env.DATABASE_URL;
 const exec = promisify(execFile);
 const cutoff = Date.parse("2026-09-23T05:48:09Z");
 const old = cutoff - 1;
+const protectedPrincipals = [
+  "protected-login@example.test",
+  "protected-manual@example.test",
+  "protected-expired@example.test",
+];
 
 test(
   "startup grants legacy personal crons existing credentials once without overriding consent",
@@ -66,7 +71,7 @@ test(
       });
       return id;
     };
-    const migrate = () =>
+    const migrate = (protectedOwners = protectedPrincipals) =>
       exec(process.execPath, ["src/migrate-main.ts"], {
         cwd: new URL("..", import.meta.url),
         timeout: 60_000,
@@ -77,6 +82,7 @@ test(
           SANDBOX_BACKEND: "local",
           SESSION_STORE: "postgres",
           ORG_ID: "migration-test",
+          ...(protectedOwners.length ? { AUTH_ALLOWED_EMAILS: protectedOwners.join(",") } : {}),
           CONNECTOR_SECRET_KEY: "test-connector-secret-0123456789abcdef",
         },
       });
@@ -90,6 +96,7 @@ test(
         "principal_links",
         "deactivated_principals",
         "external_members",
+        "internal_member_overrides",
       ]) {
         await db.query(`CREATE TABLE ${table}(id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
       }
@@ -107,14 +114,14 @@ test(
         "api.github.com",
       );
       const expectedConnectors = [oauth, refreshable];
-      for (const owner of ["U_ACCOUNTS", "U_DEFAULT", "U_COMPANY", "U_REFRESH", "U_REVOKED", "U_METADATA"])
+      for (const owner of ["U_ACCOUNTS", "U_DEFAULT", "U_COMPANY", "U_REFRESH", "U_RETRY", "U_REVOKED", "U_METADATA"])
         await cron(owner);
       expectedConnectors.push(await connector("U_ACCOUNTS", "personal"));
       await connector("U_ACCOUNTS");
       await connector("U_ACCOUNTS", "company");
       await connector("U_DEFAULT", "personal", {
         expiresAt: old,
-        refresh: { refreshTokenEnc: "failed-token", refreshFailedAt: old },
+        refresh: { accountType: "personal" },
       });
       expectedConnectors.push(await connector("U_DEFAULT"));
       await connector("U_DEFAULT", "company");
@@ -125,6 +132,13 @@ test(
         await connector("U_REFRESH", "personal", { expiresAt: old, refresh: { refreshTokenEnc: "refreshable" } }),
       );
       await connector("U_REFRESH");
+      expectedConnectors.push(
+        await connector("U_RETRY", "personal", {
+          expiresAt: old,
+          refresh: { refreshTokenEnc: "retryable-token", refreshFailedAt: old },
+        }),
+      );
+      await connector("U_RETRY", "company");
       const revokedConnector = await connector("U_REVOKED", "personal");
       await connector("U_REVOKED");
       await put("keychain_grants", "revoked-connector", {
@@ -138,6 +152,12 @@ test(
       await connector("U_METADATA", "company");
       await cron("U_PAUSED", { enabled: false, runAs: "owner" });
       await credential("paused", "U_PAUSED");
+      await cron("U_PAUSED_ONCE", {
+        enabled: false,
+        schedule: { firstFireAt: Date.now() + 60_000 },
+        nextFireAt: Date.now() + 60_000,
+      });
+      await credential("paused-once", "U_PAUSED_ONCE");
       await put("principal_links", "U_ALIAS", { principalId: "U_ALIAS", canonicalId: "owner@example.test" });
       await cron("U_ALIAS");
       await credential("canonical", "owner@example.test");
@@ -148,7 +168,7 @@ test(
         ["U_ARCHIVED", { archived: true }],
         ["U_MESSAGE", { message: "A static reminder" }],
         ["U_EMPTY", { action: " " }],
-        ["U_COMPLETED", { enabled: false, schedule: { firstFireAt: old } }],
+        ["U_COMPLETED", { enabled: false, schedule: { firstFireAt: old }, lastFiredAt: old }],
         ["U_CHANNEL", { ownerScopeId: "channel:C1" }],
         ["U_OTHER_HOME", { ownerScopeId: "personal:U_OWNER" }],
         ["U_FLOOR", { runAs: "scopeFloor" }],
@@ -210,13 +230,54 @@ test(
       await cron("former@example.test");
       await credential("expired-member", "former@example.test");
       await put("external_members", "former@example.test", { email: "former@example.test", expiresAt: old });
+      const identityCredentials = [];
+      for (const [owner, source, external, expected] of [
+        ["reinstated@example.test", "directory-sync", { kind: "teammate", expiresAt: null }, true],
+        ["manual-teammate@example.test", "manual", { kind: "teammate", expiresAt: null }, false],
+        ["U_DIRECTORY_ONLY", "directory-sync", undefined, false],
+        ["protected@example.test", "directory-sync", undefined, true],
+        ["protected-manual@example.test", "manual", undefined, false],
+        ["protected-expired@example.test", "directory-sync", { expiresAt: old }, false],
+        ["U_OVERRIDE", "manual", undefined, true],
+        ["override-expired@example.test", "directory-sync", { expiresAt: old }, true],
+        ["U_FOREIGN_OVERRIDE", "manual", undefined, false],
+      ] as const) {
+        await cron(owner);
+        await credential(owner, owner);
+        await put("deactivated_principals", owner, { principalId: owner, source });
+        if (external) await put("external_members", owner, { email: owner, ...external });
+        if (expected) identityCredentials.push(owner);
+      }
+      await put("principal_links", "protected-login@example.test", {
+        principalId: "protected-login@example.test",
+        canonicalId: "protected@example.test",
+      });
+      await put("principal_links", "U_OLD_EXTERNAL", {
+        principalId: "U_OLD_EXTERNAL",
+        canonicalId: "reinstated@example.test",
+      });
+      await put("external_members", "U_OLD_EXTERNAL", { email: "U_OLD_EXTERNAL", expiresAt: old });
+      for (const [alias, canonical, expected] of [
+        ["U_OVERRIDE_ALIAS", "override-alias@example.test", true],
+        ["U_CANONICAL_OVERRIDE_ALIAS", "canonical-override@example.test", false],
+      ] as const) {
+        await put("principal_links", alias, { principalId: alias, canonicalId: canonical });
+        await cron(alias);
+        await credential(canonical, canonical);
+        await put("deactivated_principals", canonical, { principalId: canonical, source: "manual" });
+        if (expected) identityCredentials.push(canonical);
+      }
+      await put("internal_member_overrides", "org:migration-test", {
+        members: ["u_override", "override-expired@example.test", "u_override_alias", "canonical-override@example.test"],
+      });
+      await put("internal_member_overrides", "org:other", { members: ["u_foreign_override"] });
       const originalCrons = (await db.query("SELECT id, json FROM crons ORDER BY id")).rows;
       const originalGrants = await grants();
       await migrate();
       const migrated = (await grants()).filter((g) => !originalGrants.some((original) => original.id === g.id));
       assert.deepEqual(
         migrated.map((g) => g.credentialId).sort(),
-        ["alias", "canonical", "env", "paused", ...expectedConnectors].sort(),
+        ["alias", "canonical", "env", "paused", "paused-once", ...expectedConnectors, ...identityCredentials].sort(),
       );
       for (const grant of migrated) {
         assert.equal(grant.status, "active");
@@ -237,7 +298,13 @@ test(
       await db.query("DELETE FROM qm_schema_migrations WHERE id = $1", [legacyCronGrantsMigration.id]);
       const other = new pg.Pool({ connectionString: url.toString() });
       try {
-        const migration = definePgMigration(legacyCronGrantsMigration.id, legacyCronGrantsMigration.statements);
+        const migration = definePgMigration(
+          legacyCronGrantsMigration.id,
+          legacyCronGrantsMigration.statements,
+          undefined,
+          undefined,
+          [[], [protectedPrincipals, "org:migration-test"]],
+        );
         const concurrent = await Promise.allSettled([
           applyPgMigrations(db, [migration]),
           applyPgMigrations(other, [migration]),
@@ -259,7 +326,7 @@ test(
       await credential("added-after-migration", "U_OWNER");
       await cron("U_AFTER_MIGRATION");
       await credential("later-cron", "U_AFTER_MIGRATION");
-      await migrate();
+      await migrate([]);
       assert.deepEqual(await grants(), revoked);
       assert.equal(
         (await db.query("SELECT v FROM durable_map_versions WHERE tbl = 'keychain_grants'")).rows[0]?.v,
