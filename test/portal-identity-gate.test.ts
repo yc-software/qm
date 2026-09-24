@@ -162,6 +162,21 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     }
   });
 
+  it("submitted message edits bind the portal actor", async () => {
+    const path = "/v1/sessions/s1/messages/0/edit";
+    assert.equal((await post(path, { principalId: "U1", text: "fixed" })).status, 401);
+    assert.equal(
+      (
+        await post(
+          path,
+          { principalId: "U2", text: "fixed" },
+          { "x-portal-identity": await token("U1") },
+        )
+      ).status,
+      403,
+    );
+  });
+
   it("memory restore binds its body principalId to the portal actor", async () => {
     assert.equal(
       (await post("/v1/memory/restore", { principalId: "U2", revision: "r1", expectedRevision: "r0" })).status,

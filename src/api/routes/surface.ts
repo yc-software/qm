@@ -3,6 +3,9 @@ import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeFallback, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, ScopeId, Session } from "../../types.ts";
+import type { TurnRequest } from "../../types.ts";
+import { isTerminal } from "../../runs/run-store.ts";
+import { samePerson } from "../../directory/person.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
 import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
@@ -120,6 +123,66 @@ async function forkSession(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
+async function editSubmittedMessage(ctx: ApiCtx): Promise<void> {
+  const { res, app, body, deps } = ctx;
+  const sessionId = ctx.params.id!;
+  const seq = Number(ctx.params.seq);
+  const b = body as { principalId?: unknown; text?: unknown };
+  if (
+    typeof b.principalId !== "string" ||
+    !b.principalId ||
+    typeof b.text !== "string" ||
+    !b.text.trim() ||
+    !Number.isInteger(seq) ||
+    seq < 0
+  ) {
+    return sendJson(res, 400, { error: "bad_request" });
+  }
+  const session = await app.getSessionForViewer(sessionId, b.principalId, { tailTurns: 1 });
+  const visible = await app.getSessionEntryForViewer(sessionId, b.principalId, seq);
+  const payload = visible?.entry.payload as { runId?: unknown } | undefined;
+  const run = typeof payload?.runId === "string" ? await deps.runs?.get(payload.runId) : null;
+  if (
+    visible?.entry.type !== "user" ||
+    !session ||
+    !run ||
+    run.request.conversation.threadRef !== session.session.threadRef ||
+    run.turnUserSeq !== seq ||
+    !samePerson(run.request.actor.id, b.principalId)
+  ) {
+    return sendJson(res, 404, { error: "not_found" });
+  }
+  if (!isTerminal(run.status)) return sendJson(res, 409, { error: "message_busy" });
+  const fork = await app.forkSession(sessionId, b.principalId, { upToSeq: seq - 1 });
+  if (!fork) return sendJson(res, 404, { error: "not_found" });
+  const source = run.request;
+  const request: TurnRequest = {
+    surface: "web",
+    actor: {
+      externalId: b.principalId,
+      ...(source.actor.displayName ? { displayName: source.actor.displayName } : {}),
+    },
+    conversation: {
+      kind: source.conversation.kind,
+      threadRef: fork.session.threadRef,
+      ...(source.conversation.channelRef ? { channelRef: source.conversation.channelRef } : {}),
+      ...(source.conversation.channelName ? { channelName: source.conversation.channelName } : {}),
+      ...(source.conversation.audience.length
+        ? { audience: source.conversation.audience.map((actor) => ({ externalId: actor.id })) }
+        : {}),
+    },
+    text: b.text.trim(),
+    ...(source.attachments?.length ? { attachments: source.attachments } : {}),
+    ...(source.model ? { model: source.model } : {}),
+    ...(source.harness ? { harness: source.harness } : {}),
+    ...(source.thinkingLevel ? { thinkingLevel: source.thinkingLevel } : {}),
+    ...(typeof source.fastMode === "boolean" ? { fastMode: source.fastMode } : {}),
+    async: true,
+  };
+  const turn = await app.turn(request);
+  return sendJson(res, turn.status === "queued" ? 202 : 409, { ...fork, turn });
+}
+
 async function spawnAgentConversation(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability, deps } = ctx;
   if (!capability) {
@@ -217,7 +280,7 @@ function transcriptWindow(
 }
 
 async function getSession(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
+  const { res, app, url, deps } = ctx;
   const id = ctx.params.id!;
   const viewer = url.searchParams.get("viewer");
   if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
@@ -230,7 +293,21 @@ async function getSession(ctx: ApiCtx): Promise<void> {
   }
   const found = await app.getSessionForViewer(id, viewer, Object.keys(window).length ? window : undefined);
   if (!found) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, found);
+  const entries = await Promise.all(
+    found.entries.map(async (entry) => {
+      const runId = entry.type === "user" ? (entry.payload as { runId?: unknown } | null)?.runId : undefined;
+      if (typeof runId !== "string") return entry;
+      const run = await deps.runs?.get(runId);
+      return run &&
+        isTerminal(run.status) &&
+        samePerson(run.request.actor.id, viewer) &&
+        run.request.conversation.threadRef === found.session.threadRef &&
+        run.turnUserSeq === entry.seq
+        ? { ...entry, editable: true }
+        : entry;
+    }),
+  );
+  return sendJson(res, 200, { ...found, entries });
 }
 
 async function getAgentConversation(ctx: ApiCtx): Promise<void> {
@@ -1381,6 +1458,12 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/sessions/search", auth: "source", handle: searchSessions },
   { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
   { method: "POST", path: "/v1/sessions/:id/fork", auth: "source", handle: forkSession },
+  {
+    method: "POST",
+    path: "/v1/sessions/:id/messages/:seq/edit",
+    auth: "source",
+    handle: editSubmittedMessage,
+  },
   { method: "POST", path: "/v1/sessions/:id/adopt", auth: "source", handle: adoptSession },
   { method: "POST", path: "/v1/sessions/:id/detach", auth: "source", handle: detachSession },
   { method: "GET", path: "/v1/sessions/:id/approvals", auth: "source", handle: listSessionApprovals },

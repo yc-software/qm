@@ -1884,6 +1884,20 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "POST",
+    path: "/api/sessions/:id/messages/:seq/edit",
+    handle: async (c) => {
+      const p = await readJson<{ text?: unknown }>(c.req, c.res);
+      if (!p) return;
+      return relayCore(
+        c.res,
+        "POST",
+        `/v1/sessions/${encodeURIComponent(c.params.id!)}/messages/${encodeURIComponent(c.params.seq!)}/edit`,
+        JSON.stringify({ principalId: c.user, text: p.text }),
+      );
+    },
+  },
+  {
     method: "GET",
     path: "/api/sessions/:id/approvals",
     handle: async (c) => {

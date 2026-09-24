@@ -77,6 +77,7 @@ import {
   signalLiveRun,
   attachPendingApprovals,
   entriesToMessages,
+  editSubmittedMessage,
   fetchEntry,
   fetchTranscript,
   fetchSessionApprovals,
@@ -1674,7 +1675,7 @@ export function createChatSurface(
                 </div>`
               : nothing
           }
-          ${messageMeta(message, index)}
+          ${messageMeta(message, index, Boolean((message as { editable?: boolean }).editable))}
         </article>
       `;
     }
@@ -1770,7 +1771,11 @@ export function createChatSurface(
     return role === "user" || role === "user-with-attachments" ? slackWireToPlain(raw) : stripSlackDirectives(raw);
   }
 
-  function messageMeta(message: AgentMessage, index: number): TemplateResult | typeof nothing {
+  function messageMeta(
+    message: AgentMessage,
+    index: number,
+    editable = false,
+  ): TemplateResult | typeof nothing {
     const text = copyableText(message).trim();
     const ts = (message as { timestamp?: number }).timestamp;
     if (!text && ts === undefined) return nothing;
@@ -1805,6 +1810,19 @@ export function createChatSurface(
             : nothing
         }
         ${
+          editable && chatState.sessionId && messageEntrySeqs(message).length && !isReadOnlySlackView()
+            ? html`<button
+                class="msg-copy msg-edit"
+                type="button"
+                ${tip("Edit and rerun in a fork")}
+                aria-label="Edit message and rerun in a fork"
+                @click=${() => void editMessageInFork(message)}
+              >
+                ${icon(Pencil, 13)}
+              </button>`
+            : nothing
+        }
+        ${
           forkable
             ? html`<button
                 class="msg-copy msg-fork"
@@ -1819,6 +1837,35 @@ export function createChatSurface(
         }
       </div>
     `;
+  }
+
+  async function editMessageInFork(message: AgentMessage): Promise<void> {
+    const sessionId = chatState.sessionId;
+    const sourceThreadRef = chatState.threadRef;
+    const seq = messageEntrySeqs(message)[0];
+    if (!sessionId || seq === undefined) return;
+    const text = window.prompt("Edit message and rerun in a new conversation", copyableText(message));
+    if (text === null || !text.trim() || text.trim() === copyableText(message).trim()) return;
+    try {
+      const forked = await editSubmittedMessage(sessionId, seq, text);
+      const split = inheritedTranscript(forked.session, forked.entries ?? []);
+      ctx.composer.carryModelPick(sourceThreadRef, forked.session.threadRef);
+      mountContinuable(
+        forked.session.threadRef,
+        forked.session.id,
+        forked.session.scopeId,
+        entriesToMessages(split.current, transcriptModel()),
+        forked.session.channelName ?? null,
+        forked.session,
+        entriesToMessages(split.inherited, transcriptModel()),
+      );
+      await refreshSessions({ silent: true });
+      renderList();
+      resumeIfIdle();
+    } catch (err) {
+      ctx.composer.state.error = errMessage(err, "Could not edit and rerun the message.");
+      drawActiveChat();
+    }
   }
 
   async function forkFromMessage(index: number): Promise<void> {
