@@ -21,6 +21,7 @@ async function deliver(
 ) {
   const delivery = {
     id: "D1",
+    idempotencyKey: destination.commandApprovalId ? `command-approval:${destination.commandApprovalId}:0` : "D1",
     text,
     ...(sourceThreadRef
       ? { provenance: { trigger: "cron", sourceThreadRef, sourceTitle: "Weekly <project> & check-in" } }
@@ -329,3 +330,16 @@ for (const approval of [null, { requestId: "A1", command: "publish", request: { 
     assert.deepEqual(out.acknowledgements, ["D1"]);
   });
 }
+
+test("a stale queued approval cannot render a newer request for the same command", async () => {
+  const approval = { requestId: "A1", createdAt: 99, command: "publish", request: { actor: { externalId: "U1" } } };
+  const out = await deliver(
+    { type: "principal", target: "U1", commandApprovalId: "A1" },
+    undefined,
+    undefined,
+    "approval",
+    { approval },
+  );
+  assert.equal(out.posts.length, 0);
+  assert.deepEqual(out.acknowledgements, ["D1"]);
+});

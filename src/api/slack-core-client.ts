@@ -69,6 +69,7 @@ export interface SlackAgentRequestContext {
 }
 
 interface StoredApprovalView extends Omit<PendingApproval, "reason"> {
+  createdAt?: number;
   reason?: string;
   request?: Record<string, unknown>;
 }
@@ -444,6 +445,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       if (!record) return null;
       return {
         requestId: record.requestId,
+        ...(record.createdAt !== undefined ? { createdAt: record.createdAt } : {}),
         command: record.command,
         ...(record.reason !== undefined ? { reason: record.reason } : {}),
         ...(record.purpose !== undefined ? { purpose: record.purpose } : {}),

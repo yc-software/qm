@@ -1,5 +1,4 @@
 import { principalDestination } from "../reach/reach.ts";
-import { samePerson } from "../directory/person.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
@@ -11,7 +10,7 @@ import { filterHistoryForAudience } from "../resolution/context-filter.ts";
 import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../util/objects.ts";
-import type { ScopeId, Session, SessionEntry, SpawnMeta, PendingApprovalRecord } from "../types.ts";
+import type { ScopeId, Session, SessionEntry, SpawnMeta } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
@@ -813,7 +812,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
 export interface SubagentMailDeps {
   signals?: Pick<RunSignalStore, "pending">;
   deliveries?: Pick<DeliveryStore, "enqueue">;
-  getApproval?: (id: string) => Promise<PendingApprovalRecord | null>;
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
   sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
@@ -944,24 +942,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
       if (!visible.some((entry) => entry.seq === outputSeq && entry.scopeLabel === child.scopeId))
         throw new Error("the current parent audience cannot read this child result");
     }
-  }
-  for (const approval of result?.pendingApprovals ?? []) {
-    if (!deps.deliveries || !deps.getApproval) break;
-    const stored = await deps.getApproval(approval.requestId);
-    if (
-      !stored?.request ||
-      stored.sessionId !== child.id ||
-      !samePerson(stored.request.actor.externalId, run.request.actor.id)
-    )
-      continue;
-    await deps.deliveries.enqueue({
-      destination: {
-        ...principalDestination(run.request.actor.id, run.request.actor.id),
-        commandApprovalId: approval.requestId,
-      },
-      text: `Approval needed: ${stored.summary ?? stored.command}`,
-      idempotencyKey: `command-approval:${approval.requestId}`,
-    });
   }
   if (result?.attachments?.length && deps.deliveries) {
     const delivery = deliveryCandidatesFor(meta.surface, meta.deliveryTarget, meta.deliveryCandidates, parent.scopeId);

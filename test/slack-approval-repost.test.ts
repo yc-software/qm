@@ -219,3 +219,24 @@ test("cold delegated approval resumes the child without posting its reply a seco
   assert.equal(f.posts.length, 0);
   assert.match(JSON.stringify(f.updates), /original conversation/);
 });
+
+test("a rejected grant scope preserves the same approval card instead of promising a replacement", async () => {
+  const f = fixture();
+  f.state.result = {
+    status: "pending_approval",
+    pendingApprovals: [
+      {
+        requestId: "req-1",
+        command: "publish",
+        reason: "only once allowed",
+        grantModes: { session: false, always: false },
+      },
+    ],
+  };
+  await f.click("U2", "hilo_allow_session");
+  const last = JSON.stringify(f.updates.at(-1));
+  assert.match(last, /hilo_allow_once/);
+  assert.doesNotMatch(last, /hilo_allow_session/);
+  assert.doesNotMatch(last, /new command needs approval/);
+  assert.equal(f.posts.length, 0);
+});

@@ -1385,7 +1385,7 @@ test("nested delegated work retains the reminder destination without exposing su
 });
 
 for (const status of ["ok", "pending_approval"] as const) {
-  test(`child ${status} forwards files and stored approvals durably and only once`, async () => {
+  test(`child ${status} forwards files once without creating approval deliveries`, async () => {
     const r = await rig();
     const deliveries = createDeliveryStore();
     const out = await r.syscallsFor(r.room).open({ task: "prepare the report" });
@@ -1400,21 +1400,7 @@ for (const status of ["ok", "pending_approval"] as const) {
       pendingApprovals: [{ requestId: "approve-report", command: "publish", reason: "needs consent" }],
     });
     const completed = (await r.runs.get(run.id))!;
-    const deps = {
-      ...r,
-      maxAttempts: 3,
-      deliveries,
-      getApproval: async () => ({
-        sessionId: child.id,
-        command: "publish",
-        request: {
-          surface: "slack" as const,
-          actor: { externalId: actor.id },
-          conversation: { kind: "dm" as const, threadRef: conversation.threadRef },
-          text: "prepare the report",
-        },
-      }),
-    };
+    const deps = { ...r, maxAttempts: 3, deliveries };
     await deliverSubagentMail(deps, completed);
     await deliverSubagentMail(deps, completed);
     const files = await deliveries.pending("slack");
@@ -1422,14 +1408,12 @@ for (const status of ["ok", "pending_approval"] as const) {
     assert.deepEqual(files[0]!.attachments, [attachment]);
     assert.equal(files[0]!.destination.target, "D1");
     const approvals = await deliveries.pending("principal");
-    assert.equal(approvals.length, 1);
-    assert.equal(approvals[0]!.destination.commandApprovalId, "approve-report");
-    assert.equal(approvals[0]!.destination.target, actor.id);
+    assert.equal(approvals.length, 0);
     assert.match((await r.mailbox.pending(r.room.id))[0]!.text, /awaiting_input/);
   });
 }
 
-test("file-only child completion is a result and cannot redirect another session's approval", async () => {
+test("file-only child completion is a result", async () => {
   const r = await rig();
   const deliveries = createDeliveryStore();
   const out = await r.syscallsFor(r.room).open({ task: "make a chart" });
@@ -1443,32 +1427,6 @@ test("file-only child completion is a result and cannot redirect another session
   });
   await deliverSubagentMail({ ...r, maxAttempts: 3, deliveries }, (await r.runs.get(run.id))!);
   assert.match((await r.mailbox.pending(r.room.id))[0]!.text, /Produced chart.png/);
-  const forged = {
-    ...(await r.runs.get(run.id))!,
-    result: {
-      status: "ok" as const,
-      pendingApprovals: [{ requestId: "other", command: "publish", reason: "approval" }],
-    },
-  };
-  await deliverSubagentMail(
-    {
-      ...r,
-      maxAttempts: 3,
-      deliveries,
-      getApproval: async () => ({
-        sessionId: "someone-else",
-        command: "publish",
-        request: {
-          surface: "slack" as const,
-          actor: { externalId: actor.id },
-          conversation: { kind: "dm" as const, threadRef: conversation.threadRef },
-          text: "other",
-        },
-      }),
-    },
-    forged,
-  );
-  assert.equal((await deliveries.pending("principal")).length, 0);
 });
 
 test("stopping an idle coordinator cancels running and queued descendants and blocks new work", async () => {

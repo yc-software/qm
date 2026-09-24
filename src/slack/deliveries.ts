@@ -1,4 +1,5 @@
 import { deployAccessMessage } from "./deploy-access.ts";
+import { approvalDeliveryKey } from "../core/approval-store.ts";
 import { samePerson } from "../directory/person.ts";
 import { approvalMessage } from "./approval-cards.ts";
 import { keychainApprovalMessage, keychainApprovalOrigin } from "./keychain-approvals.ts";
@@ -375,7 +376,10 @@ export function createDeliveryPoller(deps: {
               const requester = commandApproval?.request?.actor as { externalId?: string } | undefined;
               if (
                 d.destination.commandApprovalId &&
-                (!commandApproval || !requester?.externalId || !samePerson(requester.externalId, d.destination.target))
+                (!commandApproval ||
+                  !requester?.externalId ||
+                  !samePerson(requester.externalId, d.destination.target) ||
+                  d.idempotencyKey !== approvalDeliveryKey(d.destination.commandApprovalId, commandApproval))
               )
                 return undefined;
               let card: { text: string; blocks: Array<Record<string, unknown>> } | null = null;
