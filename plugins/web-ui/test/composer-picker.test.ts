@@ -362,14 +362,13 @@ test("the personal-account picker preserves composer choices and saves context d
     assert.equal(composer!.currentModelOption()?.value, "opencode:alpha");
     assert.equal(agent.state.model.id, "alpha");
     assert.equal(composer!.state.effortLevel, "auto");
-    assert.equal(composer!.state.fastMode, false);
-    assert.deepEqual(saved()[1], { value: "opencode:alpha", effort: "auto", fast: false });
+    assert.equal(composer!.state.fastMode, true);
+    assert.deepEqual(saved()[1], { value: "opencode:alpha", effort: "auto", fast: true });
     assert.equal(host.querySelector('[data-loadout-section="effort"]'), null);
-    const unavailableFast = button('[aria-label="Fast"][role="menuitemcheckbox"]');
-    assert.equal(unavailableFast.disabled, true);
-    assert.equal(unavailableFast.querySelector(".loadout-shortcut")?.textContent, "Not supported by this harness");
-    assert.equal(unavailableFast.getAttribute("aria-checked"), "false");
-    unavailableFast.click();
+    const openCodeFast = button('[aria-label="Fast"][role="menuitemcheckbox"]');
+    assert.equal(openCodeFast.disabled, false);
+    assert.equal(openCodeFast.getAttribute("aria-checked"), "true");
+    openCodeFast.click();
     assert.equal(composer!.state.fastMode, false);
 
     button('[data-loadout-section="harness"]').click();

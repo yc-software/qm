@@ -508,3 +508,79 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
   assert.ok(!JSON.stringify(tape).includes(pdf));
   assert.ok(!JSON.stringify(tape).includes("DOCX-QUARTZ-731"));
 });
+
+for (const [modelId, fastMode, expected] of [
+  ["claude-opus-5", true, { speed: "fast" }],
+  ["gpt-5.6-sol", true, { serviceTier: "priority" }],
+  ["claude-opus-5", false, {}],
+  ["claude-sonnet-5", true, {}],
+  ["unknown-model", true, {}],
+] as const) {
+  test(`OpenCode bridge resolves fast options for ${modelId} with fast=${fastMode}`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-fast-"));
+    const harness = createOpenCodeHarness({
+      binaryPath: fakeSidecar(
+        dir,
+        "fast-options",
+        `
+        if (req.method === "GET" && message) return json(res, []);
+        if (req.method === "POST" && message) {
+          await readBody(req);
+          const context = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + message[1] + "/context?model=${modelId}", {
+            headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET },
+          }).then(r => r.json());
+          const assistant = ${okAssistant};
+          assistant.parts[0].text = JSON.stringify(context.modelOptions);
+          return json(res, assistant);
+        }
+      `,
+      ),
+    });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const turn = turnInput([], []);
+    turn.runtime = { modelId: "claude-opus-5", fastMode };
+    const result = await harness.turns.runTurn(turn);
+    assert.deepEqual(JSON.parse(result.reply), expected);
+  });
+}
+
+test("OpenCode child requests inherit fast mode and a reused runtime honors switching it off", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-fast-child-"));
+  const harness = createOpenCodeHarness({
+    binaryPath: fakeSidecar(
+      dir,
+      "child-fast",
+      `
+      if (req.method === "GET" && url.pathname === "/session/ses_child") return json(res, { id: "ses_child", parentID: "ses_main" });
+      if (req.method === "GET" && message) return json(res, []);
+      if (req.method === "POST" && message) {
+        await readBody(req);
+        const options = [];
+        for (const model of ["gpt-5.6-sol", "claude-sonnet-5"]) {
+          const context = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/ses_child/context?model=" + model, {
+            headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET },
+          }).then(r => r.json());
+          if (context.history !== undefined || context.systemPrompt !== undefined) throw new Error("child borrowed parent prompt");
+          options.push(context.modelOptions);
+        }
+        const assistant = ${okAssistant};
+        assistant.parts[0].text = JSON.stringify(options);
+        return json(res, assistant);
+      }
+    `,
+    ),
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  for (const fastMode of [true, false]) {
+    const turn = turnInput([], []);
+    turn.runtime = { modelId: "claude-opus-5", fastMode };
+    const result = await harness.turns.runTurn(turn);
+    assert.deepEqual(JSON.parse(result.reply), [fastMode ? { serviceTier: "priority" } : {}, {}]);
+  }
+});

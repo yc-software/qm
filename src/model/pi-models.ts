@@ -36,7 +36,7 @@ export function thinkingLevelsForHarness(harnessId: HarnessId): readonly string[
 }
 
 export function harnessSupportsFastMode(harnessId: HarnessId): boolean {
-  return harnessId === "pi" || harnessId === "claude" || harnessId === "codex";
+  return harnessId === "pi" || harnessId === "claude" || harnessId === "codex" || harnessId === "opencode";
 }
 export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
 export type ModelProvider = (typeof MODEL_PROVIDERS)[number];

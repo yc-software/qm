@@ -682,13 +682,13 @@ test("admin runtime saves reasoning level and fast mode with the default model",
     assert.equal(unsupported.status, 200);
     assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.fastMode, false);
 
-    const unsupportedHarness = await fetch(url, {
+    const openCode = await fetch(url, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({ harnessId: "opencode", modelId: "claude-opus-5", effortLevel: "auto", fastMode: true }),
     });
-    assert.equal(unsupportedHarness.status, 200);
-    assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.fastMode, false);
+    assert.equal(openCode.status, 200);
+    assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.fastMode, true);
 
     for (const body of [
       { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "extreme", fastMode: true },

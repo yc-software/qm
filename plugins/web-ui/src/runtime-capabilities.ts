@@ -21,7 +21,7 @@ export function harnessSupportsEffort(harnessId: string): boolean {
 }
 
 export function harnessSupportsFastMode(harnessId: string): boolean {
-  return harnessId === "pi" || harnessId === "claude" || harnessId === "codex";
+  return harnessId === "pi" || harnessId === "claude" || harnessId === "codex" || harnessId === "opencode";
 }
 
 export function harnessSupportsSteer(harnessId: string): boolean {

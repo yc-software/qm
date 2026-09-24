@@ -15,7 +15,13 @@ import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import { customProviderApi, isCustomModelId } from "../model/custom-providers.ts";
 import type { CustomProviderProtocol, CustomProviderSpec } from "../model/custom-providers.ts";
-import { DEFAULT_AGENT_MODEL_ID, modelServiceable, modelSupportedByHarness, resolveModel } from "../model/pi-models.ts";
+import {
+  DEFAULT_AGENT_MODEL_ID,
+  modelServiceable,
+  modelSupportedByHarness,
+  modelSupportsFastMode,
+  resolveModel,
+} from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import type { ScopeId } from "../types.ts";
@@ -583,14 +589,23 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
               }
             }
             if (!state) return json(res, 404, { error: "inactive session" });
-            if (sessionMatch[2] === "context")
+            if (sessionMatch[2] === "context") {
+              const modelId = url.searchParams.get("model");
+              const fast = state.turn.runtime?.fastMode === true && modelSupportsFastMode(modelId ?? undefined);
+              const api = modelId ? resolveModel(modelId)?.api : undefined;
+              const modelOptions: Record<string, string> = {};
+              if (fast && api === "anthropic-messages") modelOptions.speed = "fast";
+              if (fast && (api === "openai-responses" || api === "openai-completions"))
+                modelOptions.serviceTier = "priority";
               return json(res, 200, {
                 ...(state.child ? {} : { systemPrompt: state.system, history: state.history }),
+                modelOptions,
                 proxyHeaders: {
                   "x-qm-session": sessionMatch[1],
                   "x-qm-token": sessionToken(bridgeSecret, sessionMatch[1]!),
                 },
               });
+            }
             if (sessionMatch[2] === "capture") {
               const request = JSON.parse((await body(req)).toString("utf8")) as Record<string, unknown>;
               const model = state.model;
@@ -1150,7 +1165,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       controlTransport: "http",
       toolTransport: "plugin",
       transcriptFormat: "opencode",
-      capabilities: new Set(["abort", "steer", "images", "provider-sessions"]),
+      capabilities: new Set(["abort", "steer", "images", "provider-sessions", "fast-mode"]),
     },
     {
       runTurn: runPrompt,
