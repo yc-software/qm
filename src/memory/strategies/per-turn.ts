@@ -148,11 +148,14 @@ export function createPerTurnStrategy(deps: {
   maintain?: (scopeId: ScopeId) => Promise<void>;
   captureQuietMs?: number;
   captureMaxTurns?: number;
+  captureAllowed?: (scopeId: ScopeId) => Promise<boolean>;
   onCaptureError?: (e: unknown, scopeId: ScopeId) => void;
 }): MemoryStrategy {
   async function flush(burst: Burst): Promise<void> {
+    if (deps.captureAllowed && !(await deps.captureAllowed(burst.conversationScopeId))) return;
     const facts = await extractFacts(deps.harness, burst.turns);
     if (!facts.length) return;
+    if (deps.captureAllowed && !(await deps.captureAllowed(burst.conversationScopeId))) return;
     const at = Date.now();
     await deps.memory.capture(burst.scopeId, facts, at, burst.actorId, burstCaptureContext(burst));
     await ccCaptureToPersonal(

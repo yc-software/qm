@@ -47,6 +47,7 @@ import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { DEVICE_FLOW_CUTOVER_MODES, type DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
 import { FEATURE_NAMES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
+import type { MemoryPolicy } from "../../memory/policy.ts";
 
 export interface AutoFlaggerDraft {
   harnessId: HarnessId;
@@ -173,6 +174,34 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           : { error: `security-posture requires { posture: ${SECURITY_POSTURES.join(" | ")} }` };
       },
       (deps, scope, posture) => deps.config!.setSecurityPosture(scope, posture),
+    ),
+  },
+  {
+    id: "memory-policy",
+    kind: "custom",
+    target: "any",
+    clearable: true,
+    label:
+      "Memory capture and recall. Deployment and organization restrictions are floors; narrower scopes may only restrict them further.",
+    readKey: "memoryPolicy",
+    get: (deps, scope) => deps.config!.getMemoryPolicyDurable(scope),
+    apply: generic<MemoryPolicy | null>(
+      (body) => {
+        const value = body as { inherit?: unknown; recall?: unknown; capture?: unknown };
+        if (value.inherit === true) return { value: null };
+        if (!["off", "writable", "visible"].includes(String(value.recall)))
+          return { error: "memory-policy requires recall (off | writable | visible)" };
+        if (!["off", "writable"].includes(String(value.capture)))
+          return { error: "memory-policy requires capture (off | writable)" };
+        return {
+          value: {
+            recall: value.recall as MemoryPolicy["recall"],
+            capture: value.capture as MemoryPolicy["capture"],
+          },
+        };
+      },
+      (deps, scope, policy) =>
+        policy === null ? deps.config!.clearMemoryPolicy(scope) : deps.config!.setMemoryPolicy(scope, policy),
     ),
   },
   {

@@ -81,6 +81,7 @@ import {
   type PersistedSoulRevision,
   type PersistedCommandPolicy,
   type PersistedSecurityPosture,
+  type PersistedMemoryPolicy,
   type PersistedSharingPosture,
   type PersistedApprovalGrantModes,
   type PersistedEgressPolicy,
@@ -655,6 +656,7 @@ export function buildApp(
     soulHistory: artifactMap<PersistedSoulRevision>("soul_history"),
     commandPolicies: artifactMap<PersistedCommandPolicy>("command_policies"),
     securityPostures: artifactMap<PersistedSecurityPosture>("security_postures"),
+    memoryPolicies: artifactMap<PersistedMemoryPolicy>("memory_policies"),
     sharingPostures: artifactMap<PersistedSharingPosture>("sharing_postures"),
     approvalGrantModes: artifactMap<PersistedApprovalGrantModes>("approval_grant_modes"),
     egressPolicies: artifactMap<PersistedEgressPolicy>("egress_policies"),
@@ -678,6 +680,7 @@ export function buildApp(
     turnWallClocks: artifactMap<PersistedTurnWallClock>("turn_wall_clock_configs"),
     deploymentIdentity: artifactMap<PersistedDeploymentIdentity>("deployment_identity"),
     defaultSecurityPosture: config.securityPosture,
+    defaultMemoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture },
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
@@ -1643,6 +1646,7 @@ export function buildApp(
     ...(config.memoryConsolidateAfter !== undefined ? { consolidateAfter: config.memoryConsolidateAfter } : {}),
     captureQuietMs: config.memoryCaptureQuietMs,
     ...(config.memoryCaptureMaxTurns !== undefined ? { captureMaxTurns: config.memoryCaptureMaxTurns } : {}),
+    captureAllowed: async (scope) => (await configStore.getMemoryPolicyDurable(scope)).capture !== "off",
     onCaptureError: (e, scope) =>
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });

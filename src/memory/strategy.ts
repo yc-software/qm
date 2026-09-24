@@ -42,6 +42,7 @@ export interface MemoryStrategyDeps {
   consolidateAfter?: number;
   captureQuietMs?: number;
   captureMaxTurns?: number;
+  captureAllowed?: (scopeId: ScopeId) => Promise<boolean>;
   onCaptureError?: (e: unknown, scopeId: ScopeId) => void;
 }
 
@@ -57,6 +58,7 @@ export function createMemoryStrategy(
       consolidateAfter: deps.consolidateAfter ?? DEFAULT_CONSOLIDATE_AFTER,
       ...(deps.captureQuietMs !== undefined ? { captureQuietMs: deps.captureQuietMs } : {}),
       ...(deps.captureMaxTurns !== undefined ? { captureMaxTurns: deps.captureMaxTurns } : {}),
+      ...(deps.captureAllowed ? { captureAllowed: deps.captureAllowed } : {}),
       ...(deps.onCaptureError ? { onCaptureError: deps.onCaptureError } : {}),
     });
   }
@@ -82,6 +84,7 @@ export function createMemoryStrategy(
       ...(maintain ? { maintain } : {}),
       ...(deps.captureQuietMs !== undefined ? { captureQuietMs: deps.captureQuietMs } : {}),
       ...(deps.captureMaxTurns !== undefined ? { captureMaxTurns: deps.captureMaxTurns } : {}),
+      ...(deps.captureAllowed ? { captureAllowed: deps.captureAllowed } : {}),
       ...(deps.onCaptureError ? { onCaptureError: deps.onCaptureError } : {}),
     }),
     memory,

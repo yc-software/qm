@@ -6529,6 +6529,7 @@
                   <p>What can leave a scope, which audiences can see it, and how deployment authority is carried.</p>
                 </div>
                 <template data-governance-card="card-sharing-posture"></template>
+                <template data-governance-card="card-memory-policy"></template>
                 <template data-governance-card="card-egress"></template>
                 <template data-integrations-card="card-external-slack"></template>
                 <template data-integrations-card="card-internal-member-overrides"></template>
@@ -8638,6 +8639,7 @@
         [...governanceUI.states.keys()].map((key) => [key, () => governanceUI.collect(key)]),
       );
       const SAVE_ST = {
+        "memory-policy": "st-memory-policy",
         "security-posture": "st-security-posture",
         "auto-flagger": "st-auto-flagger",
         "sharing-posture": "st-sharing-posture",
@@ -8838,6 +8840,24 @@
           await refreshPolicySetting("sharing-posture", requestedScope, requestedGeneration, draftBefore, "Saved");
         else setStatus("st-sharing-posture", "Could not reset sharing.", "err");
       };
+      $("memory-policy-inherit").onclick = async () => {
+        const requestedScope = scope;
+        const requestedGeneration = governanceReq;
+        const draftBefore = JSON.stringify(governanceUI.collect("memory-policy"));
+        const result = await api("PUT", "/api/scopes/" + encodeURIComponent(requestedScope) + "/memory-policy", {
+          inherit: true,
+        });
+        if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
+        if (result.ok)
+          await refreshPolicySetting(
+            "memory-policy",
+            requestedScope,
+            requestedGeneration,
+            draftBefore,
+            "Following parent",
+          );
+        else setStatus("st-memory-policy", "Could not reset memory policy.", "err");
+      };
       async function refreshPolicySetting(key, requestedScope, requestedGeneration, draftBefore, message) {
         const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance");
         if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
@@ -8964,7 +8984,9 @@
                 return;
               }
               if (key === "command-policy") loadedCommandPolicyPresent = true;
-              if (["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) {
+              if (
+                ["memory-policy", "security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)
+              ) {
                 const fresh = await api(
                   "GET",
                   "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance",

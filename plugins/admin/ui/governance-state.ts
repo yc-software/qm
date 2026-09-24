@@ -4,6 +4,7 @@ export type Bot = { id: number; name: string; mode: string; hours: string };
 let nextId = 0;
 const fieldNames: Record<string, Record<string, string>> = {
   "security-posture": { "security-posture": "posture" },
+  "memory-policy": { "memory-recall": "recall", "memory-capture": "capture" },
   "sharing-posture": { "sharing-posture": "posture" },
   "org-ambient": { "governance-org-ambient": "on" },
   "auto-flagger": {
@@ -194,6 +195,7 @@ export function loadResource(key: string, body: Record<string, any>) {
 export function load(data: Record<string, any>, scope: string, only?: string) {
   const resources: Record<string, [boolean, Record<string, any>]> = {
     "security-posture": ["securityPosture" in data, { posture: data.securityPosture || "auto" }],
+    "memory-policy": ["memoryPolicy" in data, data.memoryPolicy || { recall: "visible", capture: "writable" }],
     "sharing-posture": ["sharingPosture" in data, { posture: data.sharingPosture || "isolated" }],
     "auto-flagger": [
       scope.startsWith("org:") && "autoFlagger" in data,

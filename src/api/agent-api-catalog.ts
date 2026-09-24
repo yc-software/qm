@@ -567,21 +567,35 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     match: (m, p) =>
-      (p === "/v1/memory/self" && (m === "GET" || m === "PUT")) ||
+      (p === "/v1/memory/self" && m === "GET") ||
       (p === "/v1/memory/history" && m === "GET") ||
-      (p === "/v1/memory/restore" && m === "POST") ||
-      (m === "POST" && (p === "/v1/memory/search" || p === "/v1/memory/facts")),
-    when: (v) => !!v.claims.memory,
+      (p === "/v1/memory/search" && m === "POST"),
+    when: (v) => (v.claims.memory?.read.length ?? 0) > 0,
     guidance: "Memory bodies and curation rules are documented in the memory skill.",
     routes: [
       { method: "POST", path: "/v1/memory/search", summary: "search every notebook this conversation may read" },
-      { method: "POST", path: "/v1/memory/facts", summary: "append durable facts to this conversation's notebook now" },
       {
-        method: "GET|PUT",
+        method: "GET",
         path: "/v1/memory/self",
-        summary: "read or rewrite (curate) this conversation's whole notebook; rewriting is destructive",
+        summary: "read this conversation's whole notebook",
       },
       { method: "GET", path: "/v1/memory/history", summary: "list notebook versions available to undo a rewrite" },
+    ],
+  },
+  {
+    match: (m, p) =>
+      (p === "/v1/memory/self" && m === "PUT") ||
+      (p === "/v1/memory/restore" && m === "POST") ||
+      (p === "/v1/memory/facts" && m === "POST"),
+    when: (v) => !!v.claims.memory?.write,
+    guidance: "Memory bodies and curation rules are documented in the memory skill.",
+    routes: [
+      { method: "POST", path: "/v1/memory/facts", summary: "append durable facts to this conversation's notebook now" },
+      {
+        method: "PUT",
+        path: "/v1/memory/self",
+        summary: "rewrite (curate) this conversation's whole notebook; rewriting is destructive",
+      },
       {
         method: "POST",
         path: "/v1/memory/restore",

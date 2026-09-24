@@ -1050,7 +1050,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         sessions: deps.sessions,
         isCurrentSharedScopeMember,
         resolution,
-        memoryPolicy,
+        memoryPolicy: resolution.memoryPolicy ?? memoryPolicy,
         useMemory,
         memory: deps.memory,
         workspace: deps.workspace,
@@ -1059,6 +1059,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         auditLog: deps.auditLog,
       });
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
+      const turnMemoryPolicy = resolution.memoryPolicy ?? memoryPolicy;
       resolution.grantedHandles = context.listFiles();
       const recallStart = Date.now();
       const recalled = await context.recall();
@@ -1574,7 +1575,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             actorIsOrgAdmin &&
             liveTurn &&
             useMemory &&
-            memoryPolicy.capture !== "off" &&
+            turnMemoryPolicy.capture !== "off" &&
             resolution.orgScopeId !== memoryScopeId
           ) {
             orgMemoryWrite = resolution.orgScopeId;
@@ -3766,7 +3767,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
         });
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
-        if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
+        if (!pausing && !cancelStopped && useMemory && turnMemoryPolicy.capture !== "off" && onTurnEnd) {
           const prior = pendingCaptures.get(memoryScopeId);
           const capture = (async () => {
             if (prior) await prior.catch(swallowAs("prior memory capture", undefined));

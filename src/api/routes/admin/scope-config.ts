@@ -244,6 +244,7 @@ const SETTINGS_RESOURCES = {
     "baseModel",
     "runtime",
     "securityPosture",
+    "memoryPolicy",
     "sharingPosture",
     "autoFlagger",
     "approvalGrantModes",

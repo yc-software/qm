@@ -658,7 +658,11 @@ async function getSelfMemoryHistory(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: 'scope must be "org" when present' });
   }
   let scope: ScopeId | undefined = makeScopeId("personal", principalId);
-  if (capability) scope = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
+  if (capability)
+    scope =
+      requestedScope === "org"
+        ? capability.memory?.read.find((candidate) => parseScopeId(candidate).kind === "org")
+        : capability.memory?.read[0];
   if (!scope) return sendJson(res, 404, { error: "not_found" });
   if (!deps.memory?.history) return sendJson(res, 200, { revisions: [] });
   return sendJson(res, 200, { revisions: await deps.memory.history(scope, 30) });
@@ -785,21 +789,29 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
   if (requestedScope !== undefined && requestedScope !== "org") {
     return sendJson(res, 400, { error: "bad_request", message: 'scope must be "org" when present' });
   }
-  const write = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
-  if (!write) {
+  let target: string | undefined;
+  if (method === "GET") {
+    target =
+      requestedScope === "org"
+        ? capability.memory?.read.find((scope) => parseScopeId(scope).kind === "org")
+        : capability.memory?.read[0];
+  } else {
+    target = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
+  }
+  if (!target) {
+    let message = "memory capture is not enabled for this conversation";
+    if (method === "GET") message = "memory recall is not enabled for this conversation";
+    else if (requestedScope === "org") message = "org memory writes require an org admin";
     return sendJson(res, 403, {
       error: "forbidden",
-      message:
-        requestedScope === "org"
-          ? "org memory writes require an org admin"
-          : "memory capture is not enabled for this conversation",
+      message,
     });
   }
 
   if (method === "POST" && pathname === "/v1/memory/facts") {
     const facts = parseFacts(body);
     if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
-    const added = await deps.memory.capture(write, facts, Date.now(), capability.actorId, {
+    const added = await deps.memory.capture(target, facts, Date.now(), capability.actorId, {
       mode: "explicit",
       actorId: capability.actorId,
     });
@@ -807,31 +819,31 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
       principalId: capability.actorId,
       action: "memory.agent.capture",
       resource: "memory",
-      scopeLabel: write,
+      scopeLabel: target,
     });
-    return sendJson(res, 200, { ok: true, added, scopeId: write });
+    return sendJson(res, 200, { ok: true, added, scopeId: target });
   }
   if (method === "GET" && pathname === "/v1/memory/self") {
     audit(deps, {
       principalId: capability.actorId,
       action: "memory.agent.read",
       resource: "memory",
-      scopeLabel: write,
+      scopeLabel: target,
     });
-    return sendJson(res, 200, { scopeId: write, content: await deps.memory.read(write) });
+    return sendJson(res, 200, { scopeId: target, content: await deps.memory.read(target) });
   }
   if (method === "PUT" && pathname === "/v1/memory/self") {
     const b = body as { content?: unknown };
     if (typeof b.content !== "string")
       return sendJson(res, 400, { error: "bad_request", message: "content (string) required" });
-    await deps.memory.replace(write, b.content, capability.actorId);
+    await deps.memory.replace(target, b.content, capability.actorId);
     audit(deps, {
       principalId: capability.actorId,
       action: "memory.agent.curate",
       resource: "memory",
-      scopeLabel: write,
+      scopeLabel: target,
     });
-    return sendJson(res, 200, { ok: true, scopeId: write });
+    return sendJson(res, 200, { ok: true, scopeId: target });
   }
 
   return sendJson(res, 404, { error: "not_found", message: `${method} ${pathname}` });

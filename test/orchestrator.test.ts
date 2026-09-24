@@ -1291,7 +1291,7 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox } = buildApp(config);
+  const { app, sandbox, config: scopedConfig } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
@@ -1327,6 +1327,16 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
     /private-content reads work only from a DM|bulk configuration imports require/,
   );
   assert.match(adminPrompt.reply ?? "", /"scope":"org"/, "the org-notebook option rides in the admin hint");
+
+  await scopedConfig.setMemoryPolicy(scopeId("personal", "admin-alice"), { recall: "off", capture: "off" });
+  captured = undefined;
+  assert.equal(
+    (await app.turn(adminTurn({ text: "!run echo hi", conversation: { kind: "dm", threadRef: "dm:admin-alice:off" } })))
+      .status,
+    "ok",
+  );
+  const disabledClaims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(disabledClaims!.memory, undefined, "capture-off removes both writable and org-memory capabilities");
 
   captured = undefined;
   assert.equal((await app.turn(dm("!run echo hi"))).status, "ok");

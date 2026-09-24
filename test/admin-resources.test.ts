@@ -410,6 +410,50 @@ test("a generic resource round-trips through the registry dispatch + read loop",
   }
 });
 
+test("memory policy validates updates, rejects unauthorized changes, and resets to the deployment default", async () => {
+  const srv = start();
+  const endpoint = `${srv.base}/v1/admin/scopes/channel:private/memory-policy`;
+  try {
+    const denied = await fetch(endpoint, {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-admin-actor": "nobody@default-org" },
+      body: JSON.stringify({ recall: "off", capture: "off" }),
+    });
+    assert.equal(denied.status, 403);
+
+    const invalid = await fetch(endpoint, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ recall: "never", capture: "off" }),
+    });
+    assert.equal(invalid.status, 400);
+
+    const update = await fetch(endpoint, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ recall: "off", capture: "off" }),
+    });
+    assert.equal(update.status, 200);
+    assert.deepEqual(await srv.built.config.getMemoryPolicyDurable("channel:private"), {
+      recall: "off",
+      capture: "off",
+    });
+
+    const reset = await fetch(endpoint, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ inherit: true }),
+    });
+    assert.equal(reset.status, 200);
+    assert.deepEqual(await srv.built.config.getMemoryPolicyDurable("channel:private"), {
+      recall: "visible",
+      capture: "writable",
+    });
+  } finally {
+    await srv.close();
+  }
+});
+
 test("feature flag table changes one scope live without restart", async () => {
   const srv = start();
   try {

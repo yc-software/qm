@@ -157,6 +157,7 @@ export interface Resolution {
   securityPolicy: ResolvedSecurityPolicy;
   sharingPosture?: SharingPosture;
   approvalGrantModes: ApprovalGrantModes;
+  memoryPolicy?: import("./memory/policy.ts").MemoryPolicy;
   orgScopeId: ScopeId;
   grantedHandles: GrantedHandle[];
 }

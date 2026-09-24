@@ -20,14 +20,14 @@ describe("agent memory history and restore", () => {
   let built: BuiltApp;
   let memory: MemoryService;
 
-  const capFor = (actorId: string, write: ScopeId, orgWrite?: ScopeId) =>
+  const capFor = (actorId: string, write?: ScopeId, orgWrite?: ScopeId, read = write ? [write] : []) =>
     mintCapabilityToken(
       {
         actorId,
         scopeId: scopeId("personal", actorId),
         aud: CONTROL_PLANE_AUD,
         exp: Date.now() + CAPABILITY_TTL_MS,
-        memory: { write, read: [write], ...(orgWrite ? { orgWrite } : {}) },
+        memory: { ...(write ? { write } : {}), read, ...(orgWrite ? { orgWrite } : {}) },
       },
       SECRET,
     );
@@ -122,7 +122,7 @@ describe("agent memory history and restore", () => {
   it("binds org history and restore to the token's org write scope", async () => {
     const mine = scopeId("personal", "A1");
     const org = scopeId("org", "default-org");
-    const token = await capFor("A1", mine, org);
+    const token = await capFor("A1", mine, org, [mine, org]);
     assert.equal((await put("/v1/memory/self", { content: "first org version", scope: "org" }, token)).status, 200);
     assert.equal((await put("/v1/memory/self", { content: "second org version", scope: "org" }, token)).status, 200);
 
@@ -148,5 +148,15 @@ describe("agent memory history and restore", () => {
   it("requires authentication", async () => {
     assert.equal((await get("/v1/memory/history")).status, 401);
     assert.equal((await post("/v1/memory/restore", { revision: "1", expectedRevision: "2" })).status, 401);
+  });
+
+  it("requires recall for history and capture for restore", async () => {
+    const mine = scopeId("personal", "U4");
+    await memory.replace(mine, "private revision", "U4");
+    const captureOnly = await capFor("U4", mine, undefined, []);
+    assert.equal((await get("/v1/memory/history", captureOnly)).status, 404);
+    const recallOnly = await capFor("U4", undefined, undefined, [mine]);
+    assert.equal((await get("/v1/memory/history", recallOnly)).status, 200);
+    assert.equal((await post("/v1/memory/restore", { revision: "1", expectedRevision: "1" }, recallOnly)).status, 404);
   });
 });
