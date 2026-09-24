@@ -341,7 +341,7 @@ export type CoreToolOptions = Omit<AgentToolsOptions, "readOnly" | "surfaceTools
 
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
-    sandboxResources: config.sandboxResourcesEnabled,
+    sandboxResources: true,
     scratchExec: config.scratchExecEnabled,
     // Availability is checked per turn; Open can be enabled without restarting the harness.
     ownerAuthExec: true,
@@ -581,9 +581,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const sandboxRecoveryGuidance =
     "[recovery] Transport errors can also come from credentials or other services; first inspect the affected sandbox with sandbox action=status. Only if it confirms a sandbox failure, use action=restart if supported (it stops running processes). If the sandbox is healthy, investigate the failing dependency instead. " +
-    (opts?.sandboxResources
-      ? "If a confirmed sandbox failure cannot be recovered, use sandbox action=list to discover configured providers and authorized sandboxes. Select an available sandbox_id for execution, or create on a listed provider and set_default when appropriate. A new sandbox is blank; changing the default does not copy files or move jobs. Keep the old sandbox and recover needed files from it, Files, or git. "
-      : "If recovery fails, report the infrastructure failure and preserve the existing computer for recovery. ") +
+    "If a confirmed sandbox failure cannot be recovered, use sandbox action=list to discover configured providers and authorized sandboxes. Select an available sandbox_id for execution, or create on a listed provider and set_default when appropriate. A new sandbox is blank; changing the default does not copy files or move jobs. Keep the old sandbox and recover needed files from it, Files, or git. " +
     "Continue unfinished work without repeating completed effects; a failed transport may hide a command that already ran. Do not use another sandbox to bypass permission denials, approvals, or quarantines.";
 
   const sandboxFailureText = (error: unknown): string | undefined => {

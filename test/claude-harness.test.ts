@@ -163,17 +163,19 @@ test("resource tools register with the actual Claude SDK and preserve flat argum
   const { createAgentTools } = await import("../src/harness/agent-tools.ts");
   const { fromJSONSchema, ZodObject } = await import("zod");
   const { tool, createSdkMcpServer } = await import("@anthropic-ai/claude-agent-sdk");
-  const definitions = createAgentTools({ current: null }, { controlTools: true }).map((definition) => {
-    const schema = fromJSONSchema(definition.parameters as Parameters<typeof fromJSONSchema>[0]);
-    assert.ok(schema instanceof ZodObject, definition.name);
-    if (definition.name === "files")
-      assert.deepEqual(schema.parse({ action: "write", path: "hello", data: "world" }), {
-        action: "write",
-        path: "hello",
-        data: "world",
-      });
-    return tool(definition.name, definition.description, schema.shape, async () => ({ content: [] }));
-  });
+  const definitions = createAgentTools({ current: null }, { controlTools: true, sandboxResources: true }).map(
+    (definition) => {
+      const schema = fromJSONSchema(definition.parameters as Parameters<typeof fromJSONSchema>[0]);
+      assert.ok(schema instanceof ZodObject, definition.name);
+      if (definition.name === "files")
+        assert.deepEqual(schema.parse({ action: "write", path: "hello", data: "world" }), {
+          action: "write",
+          path: "hello",
+          data: "world",
+        });
+      return tool(definition.name, definition.description, schema.shape, async () => ({ content: [] }));
+    },
+  );
   assert.doesNotThrow(() => createSdkMcpServer({ name: "catalog-test", tools: definitions }));
 });
 
@@ -210,4 +212,43 @@ test("Claude resource hook denies child transfers while permitting the parent's 
   assert.deepEqual(claudeChildToolHook({ ...input, agent_id: "child", tool_input: { action: "publish" } }), {
     continue: true,
   });
+});
+
+test("Claude native children discover unified sandbox execution without gaining resource management", async () => {
+  const { nativeChildToolAllowed } = await import("../src/harness/harness-shared.ts");
+  const { claudeChildToolHook } = await import("../src/harness/claude-harness.ts");
+  assert.equal(nativeChildToolAllowed("sandbox"), true);
+  const input = {
+    hook_event_name: "PreToolUse" as const,
+    session_id: "parent",
+    agent_id: "child",
+    transcript_path: "/tmp/transcript",
+    cwd: "/tmp",
+    tool_name: "mcp__qm__sandbox",
+    tool_use_id: "call",
+  };
+  for (const action of [
+    "exec",
+    "start_process",
+    "read_process",
+    "write_stdin",
+    "signal_process",
+    "list_processes",
+    "watch_process",
+    "unwatch_process",
+  ])
+    assert.deepEqual(claudeChildToolHook({ ...input, tool_input: { action } }), { continue: true });
+  for (const args of [
+    undefined,
+    null,
+    {},
+    [],
+    "exec",
+    { action: ["exec"] },
+    ...["list", "create", "set_default", "retire", "status", "restart"].map((action) => ({ action })),
+  ]) {
+    const denied = claudeChildToolHook({ ...input, tool_input: args });
+    assert.ok("hookSpecificOutput" in denied);
+    assert.equal((denied.hookSpecificOutput as { permissionDecision: string }).permissionDecision, "deny");
+  }
 });

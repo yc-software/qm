@@ -63,7 +63,6 @@ export interface Config {
   databaseDirectPoolMax?: number;
   harness: "mock" | "pi" | "opencode" | "codex" | "claude";
   securityPosture: SecurityPosture;
-  sandboxResourcesEnabled: boolean;
   sharingPosture: SharingPosture;
   sandboxScopeDefaults?: SandboxScopeDefaults;
   sandboxBackend: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37" | "superserve";
@@ -1447,7 +1446,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : {}),
     sandboxBackend,
     sandboxScopeDefaults,
-    sandboxResourcesEnabled: boolEnvStrict("SANDBOX_RESOURCES_ENABLED", env.SANDBOX_RESOURCES_ENABLED) ?? false,
     deployProvider,
     ...(env.EGRESS_SERVICE_HOSTS
       ? {

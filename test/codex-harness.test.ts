@@ -950,6 +950,30 @@ test("Codex children cannot use parent surface, control, or terminal tools", () 
   }
 });
 
+test("Codex native children retain unified execution and process actions but not resource management", () => {
+  for (const action of [
+    "exec",
+    "start_process",
+    "read_process",
+    "write_stdin",
+    "signal_process",
+    "list_processes",
+    "watch_process",
+    "unwatch_process",
+  ])
+    assert.equal(codexChildToolAllowed("sandbox", { action }), true, action);
+  for (const args of [
+    undefined,
+    null,
+    {},
+    [],
+    "exec",
+    { action: ["exec"] },
+    ...["list", "create", "set_default", "retire", "status", "restart"].map((action) => ({ action })),
+  ])
+    assert.equal(codexChildToolAllowed("sandbox", args), false, JSON.stringify(args));
+});
+
 test("Codex interrupts the provider after a terminal QM tool", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-stop-test-"));
   const harness = createCodexHarness({

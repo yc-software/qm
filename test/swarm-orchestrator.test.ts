@@ -5,6 +5,7 @@ import * as modalClient from "../src/sandbox/modal-client.ts";
 import * as mockHarness from "../src/harness/mock-harness.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
 import { testConfig } from "./support/test-config.ts";
+import { withSandboxDefaults } from "./support/sandbox-defaults.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { createServer } from "../src/api/server.ts";
@@ -52,9 +53,7 @@ test.after(() => fake.cleanup());
 
 for (const kind of ["command", "security-screen"] as const) {
   test(`workers require their own approval instead of inheriting root-session ${kind} grants`, async () => {
-    const built = buildApp(
-      testConfig({ sandboxResourcesEnabled: true, modalSandbox: { tokenId: "test", tokenSecret: "test" } }),
-    );
+    const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
     const request: TurnRequest = {
       surface: "swarm",
       actor: { externalId: "U1" },
@@ -119,7 +118,6 @@ for (const kind of ["command", "security-screen"] as const) {
 test("wired swarm outbox drives the real orchestrator, durable runs, and authenticated session viewer", async () => {
   const built = buildApp(
     testConfig({
-      sandboxResourcesEnabled: true,
       modalSandbox: { tokenId: "test-id", tokenSecret: "test-secret", nativeSnapshotsEnabled: true },
     }),
   );
@@ -214,7 +212,6 @@ for (const storage of ["memory", "postgres"] as const) {
         databaseUrl,
         sessionStore: storage,
         runStore: storage,
-        sandboxResourcesEnabled: true,
         modalSandbox: { tokenId: "test", tokenSecret: "test" },
         signingSecret: "swarm-http-source-signing-key-distinct",
         portalIdentitySecret: "swarm-http-portal-identity-key-distinct",
@@ -467,7 +464,7 @@ test("unbound request fields cannot claim verified swarm provenance", async () =
 });
 
 test("a resolved command approval informs the model without changing its requested command", async () => {
-  const built = buildApp(testConfig());
+  const built = await withSandboxDefaults(buildApp(testConfig()), ["personal:U1"]);
   const request: TurnRequest = {
     surface: "web",
     actor: { externalId: "U1" },

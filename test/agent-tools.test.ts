@@ -2,9 +2,15 @@ import { E2bSandboxGoneError, E2bCommandLostError } from "../src/sandbox/e2b-cli
 import { ModalSandboxGoneError } from "../src/sandbox/modal-client.ts";
 import { SuperserveSandboxGoneError } from "../src/sandbox/superserve-client.ts";
 import { test } from "node:test";
+import { loadConfig } from "../src/config.ts";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
-import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import {
+  coreToolOptions,
+  createAgentTools,
+  pauseStampAfterToolCall,
+  type ToolContextRef,
+} from "../src/harness/agent-tools.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
 import type { EntryType, SessionEntry } from "../src/types.ts";
@@ -500,6 +506,28 @@ test("sandbox advertises available management actions and retires migrate", asyn
   ]);
   assert.match(textOut(await call(sandbox, { action: "migrate", purpose: "p" })), /unsupported sandbox action/);
   await assert.rejects(() => call(execute, { command: "", computer: "migrate" }), /migrate has been retired/);
+});
+
+test("production tools always expose unified sandbox management regardless of the legacy env flag", () => {
+  for (const env of [{}, { SANDBOX_RESOURCES_ENABLED: "false" }]) {
+    const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "personal:U1" };
+    const options = coreToolOptions(loadConfig(env));
+    const tools = createAgentTools(ref, options);
+    const sandbox = tools.find((tool) => tool.name === "sandbox")!;
+    const schema = sandbox.parameters as { properties: { action: { enum: string[] } } };
+    assert.equal(options.sandboxResources, true);
+    for (const action of ["list", "create", "set_default", "retire", "exec", "start_process"])
+      assert.ok(schema.properties.action.enum.includes(action), action);
+    assert.ok(!tools.some((tool) => ["execute", "background"].includes(tool.name)));
+    const readOnly = createAgentTools(ref, { ...options, readOnly: true });
+    assert.ok(!readOnly.some((tool) => ["sandbox", "execute", "background"].includes(tool.name)));
+    const delegated = createAgentTools(ref, { ...options, delegateWork: true });
+    assert.ok(!delegated.some((tool) => ["execute", "background"].includes(tool.name)));
+    const management = delegated.find((tool) => tool.name === "sandbox")!;
+    const managementSchema = management.parameters as { properties: { action: { enum: string[] } } };
+    assert.ok(!managementSchema.properties.action.enum.includes("exec"));
+    assert.ok(!managementSchema.properties.action.enum.includes("start_process"));
+  }
 });
 
 test("sandbox tells the agent to provision a missing default before reporting a blocker", () => {
@@ -3652,7 +3680,7 @@ test("sandbox recovery handles nested transport errors and respects output quara
   const execute = createAgentTools(ref).find((tool) => tool.name === "execute");
   const result = textOut(await call(execute, { command: "true", purpose: "Test recovery" }));
   assert.match(result, /\[recovery\]/);
-  assert.doesNotMatch(result, /action=list/);
+  assert.match(result, /action=list/);
   ref.screenToolResult = async () => ({ outcome: "quarantine" });
   const quarantined = textOut(await call(execute, { command: "true", purpose: "Test recovery" }));
   assert.match(quarantined, /quarantined/);

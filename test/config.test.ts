@@ -872,14 +872,14 @@ test("direct Files initiation defaults off and requires explicit activation", ()
   assert.throws(() => loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "maybe" }));
 });
 
-test("sandbox resource rollout requires explicit activation", () => {
-  assert.equal(loadConfig({ ...productionEnv }).sandboxResourcesEnabled, false);
-  for (const value of ["true", "on", "1"])
-    assert.equal(loadConfig({ ...productionEnv, SANDBOX_RESOURCES_ENABLED: value }).sandboxResourcesEnabled, true);
-  assert.throws(
-    () => loadConfig({ ...productionEnv, SANDBOX_RESOURCES_ENABLED: "enable" }),
-    /not a recognized boolean/,
-  );
+test("the retired sandbox resource environment flag has no effect on configuration", () => {
+  const config = loadConfig(productionEnv);
+  assert.equal("sandboxResourcesEnabled" in config, false);
+  for (const value of ["false", "true", "off", "0", "enable"])
+    assert.deepEqual(loadConfig({ ...productionEnv, SANDBOX_RESOURCES_ENABLED: value }), {
+      ...config,
+      layerEnv: { ...config.layerEnv, SANDBOX_RESOURCES_ENABLED: value },
+    });
 });
 
 test("suggestion generation defaults on and can be explicitly disabled", () => {
