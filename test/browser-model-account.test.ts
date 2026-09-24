@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { resolveBrowserModel } from "../src/model/browser-model.ts";
-import { BrowserCompletionError, personalBrowserCompletion } from "../src/model/browser-completion.ts";
+import { BrowserCompletionError, nativeBrowserCompletion } from "../src/model/browser-completion.ts";
 import { zeroUsage } from "../src/harness/replay.ts";
 import type { Context, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
 
@@ -56,7 +56,7 @@ test("ChatGPT browser inference uses refreshed subscription auth and native stru
   let derived = 0;
   let context: Context | undefined;
   let options: ModelsSimpleStreamOptions | undefined;
-  const factory: NonNullable<Parameters<typeof personalBrowserCompletion>[1]> = async (keys) => {
+  const factory: NonNullable<Parameters<typeof nativeBrowserCompletion>[1]> = async (keys) => {
     assert.deepEqual(keys, { "openai-codex": "fresh-access" });
     return {
       completeSimple: async (model, suppliedContext, suppliedOptions) => {
@@ -76,7 +76,7 @@ test("ChatGPT browser inference uses refreshed subscription auth and native stru
       },
     };
   };
-  const result = await personalBrowserCompletion(
+  const result = await nativeBrowserCompletion(
     {
       selection,
       credentials: {
@@ -136,7 +136,7 @@ test("Claude subscription browser requests fail without deriving or sending cred
     credentials: built.userModelCredentials,
   });
   await assert.rejects(
-    personalBrowserCompletion(
+    nativeBrowserCompletion(
       {
         selection,
         credentials: {
@@ -171,7 +171,7 @@ test("personal API keys bypass organization provider endpoint overrides", async 
       companyModel: "gateway/unavailable-company-model",
     });
     assert.equal(selection.routing?.provider, provider);
-    const result = await personalBrowserCompletion(
+    const result = await nativeBrowserCompletion(
       {
         selection,
         actorId: "U1",
@@ -200,4 +200,56 @@ test("personal API keys bypass organization provider endpoint overrides", async 
     );
     assert.equal(result.choices[0]?.message.content, "done");
   }
+});
+
+test("company Codex subscription auth uses the native subscription transport without API-key fallback", async () => {
+  const built = buildApp(
+    testConfig({
+      harness: "codex",
+      codexProcessEnv: { CODEX_ACCESS_TOKEN: "company-access" },
+      openaiApiKey: "must-not-fallback",
+    }),
+  );
+  const selection = { account: "company" as const, model: "gpt-5.6-sol", routing: null };
+  const keys = await built.resolveBrowserCompanyKeys();
+  assert.equal(keys["openai-codex"], "company-access");
+  const input = {
+    selection,
+    actorId: "U1",
+    companyProviderKeys: keys,
+    companySubscriptionProvider: "openai" as const,
+    body: { messages: [{ role: "user", content: "test" }] },
+    signal: new AbortController().signal,
+  };
+  const result = await nativeBrowserCompletion(input, async (auth) => {
+    assert.deepEqual(auth, { "openai-codex": "company-access" });
+    return {
+      completeSimple: async (model) => {
+        assert.equal(model.provider, "openai-codex");
+        return {
+          role: "assistant",
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: zeroUsage(),
+          timestamp: Date.now(),
+          stopReason: "stop",
+          content: [{ type: "text", text: "done" }],
+        };
+      },
+    };
+  });
+  assert.equal(result.choices[0]?.message.content, "done");
+  await assert.rejects(
+    nativeBrowserCompletion({ ...input, companyProviderKeys: { openai: "must-not-fallback" } }),
+    (error: unknown) => error instanceof BrowserCompletionError && error.status === 503,
+  );
+  await assert.rejects(
+    nativeBrowserCompletion({
+      ...input,
+      selection: { ...selection, model: "claude-opus-5" },
+      companySubscriptionProvider: "anthropic",
+    }),
+    (error: unknown) => error instanceof BrowserCompletionError && error.status === 422,
+  );
 });

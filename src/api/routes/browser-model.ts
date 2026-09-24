@@ -1,5 +1,5 @@
 import { resolveBrowserModel } from "../../model/browser-model.ts";
-import { BrowserCompletionError, personalBrowserCompletion } from "../../model/browser-completion.ts";
+import { BrowserCompletionError, nativeBrowserCompletion } from "../../model/browser-completion.ts";
 import { BROWSER_MODEL_AUD } from "../../auth/capability-token.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -52,9 +52,10 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
       return sendJson(res, 409, {
         error: "AI access changed or is unavailable; start a new turn to refresh browser access",
       });
-    if (selected.account !== "company") {
-      if (!selected.routing) return sendJson(res, 409, { error: "Reconnect your selected AI account in Settings" });
-      if (selected.routing.kind === "oauth" && selected.routing.provider === "anthropic")
+    if (selected.account !== "company" || !gateway) {
+      if (selected.account !== "company" && !selected.routing)
+        return sendJson(res, 409, { error: "Reconnect your selected AI account in Settings" });
+      if (selected.routing?.kind === "oauth" && selected.routing.provider === "anthropic")
         return sendJson(res, 422, {
           error:
             "Claude subscription access does not support the browser agent. Choose company access, ChatGPT, or a Claude API key in Settings.",
@@ -62,16 +63,17 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
       return sendJson(
         res,
         200,
-        await personalBrowserCompletion({
+        await nativeBrowserCompletion({
           selection: selected,
-          credentials: deps.userModelCredentials!,
+          credentials: deps.userModelCredentials,
+          companyProviderKeys: selected.account === "company" ? await deps.resolveBrowserCompanyKeys?.() : undefined,
+          companySubscriptionProvider: selected.account === "company" ? deps.harnessCarriedModelAuth : undefined,
           actorId: capability.actorId,
           body: input,
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
         }),
       );
     }
-    if (!gateway) return sendJson(res, 503, { error: "browser model gateway unavailable" });
     await gateway.refresh?.();
     const target = gateway.models[capability.browserModel];
     if (!target) return sendJson(res, 503, { error: "browser model unavailable" });

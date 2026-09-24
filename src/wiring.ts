@@ -1,4 +1,5 @@
 import { createKeychainApprovals } from "./credentials/keychain-approval.ts";
+import { asObject } from "./harness/codex-auth-file.ts";
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
 import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
@@ -297,10 +298,10 @@ import type { SessionStore } from "./sessions/session-store.ts";
 import { createMockHarness } from "./harness/mock-harness.ts";
 import { createOpenCodeHarness, openCodeHarnessConfigOptions } from "./harness/opencode-harness.ts";
 import { createCodexHarness, codexHarnessConfigOptions } from "./harness/codex-harness.ts";
-import { keychainCodexAuthStore } from "./harness/codex-auth-store.ts";
+import { keychainCodexAuthStore, fileCodexAuthStore } from "./harness/codex-auth-store.ts";
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
-import { createPiHarness, piHarnessConfigOptions } from "./harness/pi-harness.ts";
+import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
@@ -483,6 +484,7 @@ export interface BuiltApp {
   oauthFlows: OAuthFlowStore;
   secretDrops: SecretDropStore;
   browserModelGateway?: ModelGatewayTransportConfig;
+  resolveBrowserCompanyKeys: () => Promise<ProviderKeys>;
   modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
@@ -1323,6 +1325,23 @@ export function buildApp(
       ...customKeys,
     };
   };
+  const companyCodexAuthStore =
+    config.codexAuthCredential && keychain
+      ? keychainCodexAuthStore({ keychain, credentialId: config.codexAuthCredential })
+      : config.codexAuthFile
+        ? fileCodexAuthStore(config.codexAuthFile)
+        : undefined;
+  const resolveBrowserCompanyKeys = async (): Promise<ProviderKeys> => {
+    const keys: ProviderKeys = await resolveModelProviderKeys();
+    if (harnessCarriedModelAuth(config) === "openai") {
+      const auth = await companyCodexAuthStore?.load();
+      const token = companyCodexAuthStore
+        ? asObject(auth?.tokens)?.access_token
+        : config.codexProcessEnv.CODEX_ACCESS_TOKEN;
+      if (typeof token === "string" && token) keys["openai-codex"] = token;
+    }
+    return keys;
+  };
   const runtimeOrgScope = scopeId("org", config.orgId);
   const orgBaseModelId = (): string | undefined =>
     configStore.getRuntimeSelection(runtimeOrgScope)?.modelId ?? configStore.getBaseModel(runtimeOrgScope) ?? undefined;
@@ -1381,9 +1400,7 @@ export function buildApp(
         // owner's keychain; core refreshes it centrally and hands the harness
         // ephemeral derived material. The credential can be (re)registered at
         // runtime — resolution happens on every load.
-        ...(config.codexAuthCredential && keychain
-          ? { authStore: keychainCodexAuthStore({ keychain, credentialId: config.codexAuthCredential }) }
-          : {}),
+        ...(companyCodexAuthStore ? { authStore: companyCodexAuthStore } : {}),
         signals: runSignals,
         tasks,
         mcpTools,
@@ -1914,7 +1931,6 @@ export function buildApp(
     crons,
     webhooks,
     resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
-    browserModelGateway: gatewayTransport,
     ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
     directory,
     isCurrentSharedScopeMember,
@@ -2675,6 +2691,7 @@ export function buildApp(
     oauthFlows,
     secretDrops,
     browserModelGateway: gatewayTransport,
+    resolveBrowserCompanyKeys,
     modelGateway,
     modelCredentials,
     userModelCredentials,
@@ -2764,6 +2781,7 @@ export function serverDeps(
   const carriedModelAuth = harnessCarriedModelAuth(config);
   return {
     browserModelGateway: built.browserModelGateway,
+    resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
     production: config.production,
     ...(built.backgroundOwnership
       ? {

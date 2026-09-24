@@ -191,3 +191,86 @@ test("gateway browsing never selects a direct provider when callback signing or 
     assert.equal(captured?.env?.BROWSE_LAB_MODEL_TOKEN, undefined);
   }
 });
+
+test("company browsing without a gateway uses current deployment credentials and endpoints", async (t) => {
+  const calls: Array<{ key: string | undefined; model: string }> = [];
+  const upstream = httpServer(async (req, res) => {
+    let raw = "";
+    for await (const chunk of req) raw += chunk;
+    const body = JSON.parse(raw);
+    calls.push({ key: req.headers["x-api-key"] as string, model: body.model });
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const events = [
+      {
+        type: "message_start",
+        message: {
+          id: "test",
+          type: "message",
+          role: "assistant",
+          model,
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 0 },
+        },
+      },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "DIRECT_OK" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+      { type: "message_stop" },
+    ];
+    res.end(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""));
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
+  const config = testConfig({
+    signingSecret: "ingress-secret".repeat(3),
+    apiBaseUrl: "https://core.example.test",
+    anthropicApiKey: "deployment-key",
+    providerBaseUrls: { anthropic: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` },
+  });
+  const built = buildApp(config);
+  const server = createServer(built.app, serverDeps(config, built));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  let captured: ProvisionOptions | undefined;
+  const provision = built.sandbox.provision.bind(built.sandbox);
+  built.sandbox.provision = (layers, opts) => {
+    captured = opts;
+    return provision(layers, opts);
+  };
+  await built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "dm:U1:direct" },
+    text: "!run echo direct",
+  });
+  const env = captured!.env!;
+  assert.equal(env.BROWSE_LAB_MODEL_PROVIDER, "managed");
+  assert.equal(env.BROWSE_LAB_MODEL, model);
+  assert.ok(!Object.values(env).includes("deployment-key"));
+  const token = env.BROWSE_LAB_MODEL_TOKEN!;
+  assert.equal((await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET))?.browserAccount, "company");
+  const post = () =>
+    fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/browser-model/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-agent-capability": token },
+      body: JSON.stringify({ model, messages: [{ role: "user", content: "direct browser test" }] }),
+    });
+  const first = await post();
+  assert.equal(first.status, 200);
+  assert.equal(
+    ((await first.json()) as { choices: Array<{ message: { content: string } }> }).choices[0]?.message.content,
+    "DIRECT_OK",
+  );
+  await built.modelCredentials.set("anthropic", "rotated-admin-key", "U1");
+  assert.equal((await post()).status, 200);
+  assert.deepEqual(calls, [
+    { key: "deployment-key", model },
+    { key: "rotated-admin-key", model },
+  ]);
+  await built.modelCredentials.delete("anthropic", "U1");
+  assert.equal((await post()).status, 503);
+  assert.equal(calls.length, 2);
+});

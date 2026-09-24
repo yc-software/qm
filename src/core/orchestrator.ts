@@ -228,11 +228,6 @@ const ACTIVITY_ENTRY_TYPES = new Set<EntryType>([
   "approval_resolved",
 ]);
 
-function knownBrowseModel(id: string | null | undefined): { id: string; provider: string } | undefined {
-  const provider = id ? resolveModel(id)?.provider : undefined;
-  return id && provider ? { id, provider } : undefined;
-}
-
 const SHARED_CORE_MD = loadProtocolFile("shared-core");
 const MODE_CONVERSATION_MD = loadProtocolFile("mode-conversation");
 const MODE_AUTONOMOUS_MD = loadProtocolFile("mode-autonomous");
@@ -1545,13 +1540,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const browseSteps = deps.config?.getBrowseMaxSteps(toScopeId("org", orgId()));
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
-        const browseChoice =
-          knownBrowseModel(deps.config?.getBrowseModel(toScopeId("org", orgId()))) ??
-          knownBrowseModel(deps.resolveBaseModelId?.());
-        if (browseChoice && !("BROWSE_LAB_MODEL" in connectorEnv)) {
-          connectorEnv.BROWSE_LAB_MODEL = browseChoice.id;
-          connectorEnv.BROWSE_LAB_MODEL_PROVIDER = browseChoice.provider;
-        }
       }
       const browserSelection =
         !strictReadOnly && allInternal
@@ -1562,7 +1550,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               companyModel: deps.resolveBaseModelId?.(),
             })
           : undefined;
-      const managedBrowse = browserSelection && (deps.browserModelGateway || browserSelection.account !== "company");
+      const managedBrowse = browserSelection;
       if (managedBrowse) {
         connectorEnv.BROWSE_LAB_MODEL_PROVIDER = "managed";
         connectorEnv.BROWSE_LAB_MODEL = browserSelection.model ?? "unavailable";
