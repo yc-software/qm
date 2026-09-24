@@ -46,13 +46,14 @@ test("ChatGPT browser inference uses refreshed subscription auth and native stru
     expiresAt: Date.now() + 3600_000,
   });
   await built.config.setPersonalModelAuth("U1", true, "openai");
+  await built.config.setBaseModel("personal:U1", "gpt-6-astra");
   const selection = await resolveBrowserModel({
     actorId: "U1",
     config: built.config,
     credentials: built.userModelCredentials,
-    companyModel: "gpt-5.6-sol",
+    companyModel: "gpt-6-astra",
   });
-  assert.equal(selection.model, "codex/gpt-5.6-sol");
+  assert.equal(selection.model, "codex/gpt-6-astra");
   let derived = 0;
   let context: Context | undefined;
   let options: ModelsSimpleStreamOptions | undefined;
@@ -117,8 +118,8 @@ test("ChatGPT browser inference uses refreshed subscription auth and native stru
     { type: "image", mimeType: "image/png", data: "aGVsbG8=" },
   ]);
   const model = { api: "openai-codex-responses" } as Parameters<NonNullable<ModelsSimpleStreamOptions["onPayload"]>>[1];
-  assert.deepEqual(await options?.onPayload?.({ model: "gpt-5.6-sol" }, model), {
-    model: "gpt-5.6-sol",
+  assert.deepEqual(await options?.onPayload?.({ model: "gpt-6-astra" }, model), {
+    model: "gpt-6-astra",
     tool_choice: { type: "function", name: "browser_result" },
   });
 });
