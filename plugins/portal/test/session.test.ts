@@ -8,6 +8,7 @@ import {
   openImpersonation,
   openTmp,
   setCookie,
+  sessionCookieHeaders,
   clearCookie,
   readCookie,
   safeEqual,
@@ -260,3 +261,24 @@ test("login preserves opaque callback query values while rejecting normalized re
   assert.equal(sanitizeReturnTo("/path/..//evil.example", "https://qm.example"), "/");
   assert.equal(sanitizeReturnTo("/%2f%2fevil.example?session_uri=ok", "https://qm.example"), "/");
 });
+
+for (const domain of [undefined, "example.test"]) {
+  test(`framed session issuance is staged and clears existing twins (${domain ?? "host-only"})`, () => {
+    const attrs = { path: "/", maxAge: 100, secure: true, domain };
+    const headers = sessionCookieHeaders("signed-session", attrs);
+    assert.ok(headers.some((header) => header.startsWith("portal_session=signed-session;")));
+    const twins = headers.filter((header) => header.startsWith("portal_session_x="));
+    assert.equal(twins.length, domain ? 2 : 1);
+    assert.ok(twins.every((header) => header.startsWith("portal_session_x=;") && header.includes("Max-Age=0")));
+    if (domain) assert.ok(twins.some((header) => header.includes(`Domain=${domain}`)));
+    const enabled = sessionCookieHeaders("signed-session", attrs, true);
+    assert.ok(
+      enabled.some(
+        (header) =>
+          header.startsWith("portal_session_x=signed-session;") &&
+          header.includes("SameSite=None") &&
+          header.includes("Secure"),
+      ),
+    );
+  });
+}
