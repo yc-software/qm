@@ -20,6 +20,7 @@ class FakeSlackClient {
   readonly reactionsAdded: any[] = [];
   readonly reactionsRemoved: any[] = [];
   readonly usersById = new Map<string, any>();
+  readonly userInfoFailures = new Set<string>();
   readonly channelsById = new Map<string, any>();
   readonly membersByChannel = new Map<string, string[]>();
   readonly messagesByChannel = new Map<string, any[]>();
@@ -46,7 +47,10 @@ class FakeSlackClient {
   };
   readonly emoji = { list: async () => ({ emoji: {} }) };
   readonly users = {
-    info: async ({ user }: { user: string }) => ({ user: this.usersById.get(user) }),
+    info: async ({ user }: { user: string }) => {
+      if (this.userInfoFailures.has(user)) throw new Error("users.info unavailable");
+      return { user: this.usersById.get(user) };
+    },
     lookupByEmail: async ({ email }: { email: string }) => ({
       user: [...this.usersById.values()].find((u) => u.profile?.email === email),
     }),
@@ -406,6 +410,7 @@ async function fixture(
     allowFrom?: string[];
     denyMessage?: string;
     coreSingleton?: boolean;
+    unresolvedUser?: string;
   } = {},
 ) {
   const core = new FakeCore();
@@ -426,6 +431,10 @@ async function fixture(
   app.client.membershipDelayMs = options.membershipDelayMs ?? 0;
   app.client.usersById.set("U1", internalUser("U1", "Alice"));
   app.client.usersById.set("U2", internalUser("U2", "Bob"));
+  if (options.unresolvedUser) {
+    const user = app.client.usersById.get(options.unresolvedUser);
+    app.client.usersById.set(options.unresolvedUser, { ...user, profile: { ...user.profile, email: undefined } });
+  }
   app.client.usersById.set("UX", { id: "UX", team_id: "T2", name: "mallory", profile: { display_name: "Mallory" } });
   app.client.channelsById.set("C1", { id: "C1", name: "engineering", is_member: true, is_private: false });
   app.client.channelsById.set("CX", {
@@ -1024,6 +1033,62 @@ test("an unknown user fails closed even when Slack lookup returns no record", as
       false,
     );
     assert.match(f.client.posts[0].text, /isn't fully internal/);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("an unresolved own-team email principal is refused distinctly without persisting a Slack-ID principal", async () => {
+  const f = await fixture({ identityEmail: "1", unresolvedUser: "U1" });
+  try {
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello", ts: "101.4" });
+    assert.equal(f.core.turns.length, 0);
+    assert.equal(f.core.ingests.length, 0);
+    assert.equal(f.client.posts.length, 1);
+    assert.match(f.client.posts[0].text, /email identity/i);
+    assert.doesNotMatch(f.client.posts[0].text, /fully internal/i);
+    assert.equal(
+      f.core.directories.some((directory: any) =>
+        directory.members?.some((member: any) => member.principalId === "U1"),
+      ),
+      false,
+    );
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a directory lookup failure is refused with its own observable reason", async () => {
+  const f = await fixture({ identityEmail: "1" });
+  try {
+    f.client.userInfoFailures.add("UFAIL");
+    await f.app.emitMessage({ channel: "DF", channel_type: "im", user: "UFAIL", text: "hello", ts: "101.45" });
+    assert.equal(f.core.turns.length, 0);
+    assert.equal(f.core.ingests.length, 0);
+    assert.equal(f.client.posts.length, 1);
+    assert.match(f.client.posts[0].text, /right now/i);
+    assert.doesNotMatch(f.client.posts[0].text, /fully internal/i);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("external-participant enablement cannot admit an unresolved channel member", async () => {
+  const f = await fixture({ externalParticipants: true, identityEmail: "1", unresolvedUser: "U2" });
+  try {
+    const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> hello", ts: "101.5" };
+    f.client.messagesByChannel.set("C1", [event]);
+    await f.app.emitEvent("app_mention", event);
+    assert.equal(f.core.turns.length, 0);
+    assert.equal(f.core.ingests.length, 0);
+    assert.equal(f.client.ephemerals.length, 1);
+    assert.match(f.client.ephemerals[0].text, /email identity/i);
+    assert.equal(
+      f.core.directories.some((directory: any) =>
+        directory.members?.some((member: any) => member.principalId === "U2"),
+      ),
+      false,
+    );
   } finally {
     await f.stop();
   }

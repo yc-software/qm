@@ -97,6 +97,7 @@ export function registerKeychainApprovalActions(
     if (!parsed || !clickerId || !channel || !messageTs || !deps.core.keychainApprovals) return;
     try {
       const actor = await deps.directory.classifyActor(client, clickerId);
+      if (actor.identityFailure) throw new Error("the approver identity could not be resolved");
       const decisions = {
         keychain_allow_once: "once",
         keychain_allow_always: "standing",

@@ -11,6 +11,7 @@ import {
   createUserCache,
   externalMarker,
   isExternallyShared,
+  isResolvedInternal,
   isReservedMentionName,
   probeIdentityMode,
   resolveChannelMembership,
@@ -165,7 +166,7 @@ export function createDirectory(deps: {
     if (CORE_SINGLETON) setMentionIndex(mentionIndex);
     if (missingEmails > 0) {
       console.warn(
-        `[slack] email identity mode: ${missingEmails} own-team member(s) have no visible email (missing users:read.email scope?) — they fail closed to guest`,
+        `[slack] email identity mode: ${missingEmails} own-team member(s) have no visible email (missing users:read.email scope?) — their principals remain unresolved`,
       );
     }
     return { byId, fetchedAt };
@@ -521,7 +522,7 @@ export function createDirectory(deps: {
     targetChannelIds?: ReadonlySet<string>,
   ): Promise<boolean> {
     const members = [...snap.byId.entries()]
-      .filter(([, u]) => !u.actor.isExternalGuest)
+      .filter(([, u]) => isResolvedInternal(u.actor))
       .map(([slackId, u]) => {
         const a = u.actor;
         return {
@@ -669,7 +670,10 @@ export function createDirectory(deps: {
       if (ids.ownTeamId && userId !== undefined) userCache.set(userId, classified);
       return { ...classified, ok: true };
     } catch {
-      return { actor: { externalId: userId ?? "", isExternalGuest: true }, ok: false };
+      return {
+        actor: { externalId: userId ?? "", isExternalGuest: false, identityFailure: "directory_lookup_failed" },
+        ok: false,
+      };
     }
   }
 
