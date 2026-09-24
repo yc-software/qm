@@ -1807,3 +1807,62 @@ test("manifest order does not depend on credential or member insertion order", a
     ),
   );
 });
+
+test("manifest timestamps stay stable until credentials and pending asks actually expire", async () => {
+  let now = Date.parse("2030-01-01T00:00:00Z");
+  const k = createKeychain({
+    creds: createMemoryMap(),
+    grants: createMemoryMap(),
+    asks: createMemoryMap(),
+    key: KEY,
+    now: () => now,
+  });
+  const expiresAt = now + 50 * 3_600_000;
+  const credential = await k.save({ ...GH, expiresAt });
+  const { ask } = await k.createAsk({
+    credentialId: credential.id,
+    requesterId: "U2",
+    requesterScopeId: "channel:C1",
+    purpose: "test access",
+  });
+  const manifest = async () =>
+    renderKeychainManifest(
+      {
+        scopeId: "personal:U1",
+        conversationKind: "dm",
+        actorId: "U1",
+        members: [{ id: "U1" }],
+        entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
+        scopeGrants: [],
+        injected: [],
+        scopeAsks: await k.listAsks({ requesterScopeId: "channel:C1" }),
+        ownerAsks: await k.listAsks({ ownerId: "U1" }),
+      },
+      now,
+    );
+  const first = await manifest();
+  for (const advance of [61_000, 3 * 3_600_000]) {
+    now += advance;
+    assert.equal(await manifest(), first);
+  }
+  assert.ok(first.includes(`expires at ${new Date(expiresAt).toISOString()}`));
+  now = ask.expiresAt;
+  assert.equal(await manifest(), first);
+  now++;
+  const expiredAsk = await manifest();
+  assert.match(expiredAsk, /EXPIRED/);
+  assert.doesNotMatch(expiredAsk, /PENDING|### Asks waiting on you/);
+  await assert.rejects(
+    k.approveAsk({ askId: ask.id, ownerId: "U1", mode: "once", purpose: "test access" }),
+    (e: KeychainError) => e.status === 410,
+  );
+  now = expiresAt;
+  assert.doesNotMatch(await manifest(), /EXPIRED — they must re-auth/);
+  await k.materializeOwnById("U1", credential.id, "personal:U1");
+  now++;
+  assert.match(await manifest(), /EXPIRED — they must re-auth/);
+  await assert.rejects(
+    k.materializeOwnById("U1", credential.id, "personal:U1"),
+    (e: KeychainError) => e.status === 410,
+  );
+});

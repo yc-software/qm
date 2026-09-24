@@ -1615,11 +1615,6 @@ function hoursLeft(expiresAt: number, now: number): number {
   return Math.max(1, Math.round((expiresAt - now) / 3_600_000));
 }
 
-function agoNote(createdAt: number, now: number): string {
-  const mins = Math.max(1, Math.round((now - createdAt) / 60_000));
-  return mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`;
-}
-
 export function renderAskNotice(
   input: {
     ask: KeychainAsk;
@@ -1685,8 +1680,7 @@ function expiryNote(c: KeychainCredentialMeta, now: number, own: boolean): strin
       ? ", EXPIRED — they must re-auth before it can be used"
       : ", EXPIRED — ask the owner to re-auth before requesting a grant";
   }
-  const hours = Math.round((c.expiresAt - now) / 3_600_000);
-  return hours <= 48 ? `, expires in ~${hours}h` : "";
+  return `, expires at ${new Date(c.expiresAt).toISOString()}`;
 }
 
 function credLine(
@@ -1834,7 +1828,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   for (const a of input.scopeAsks ?? []) {
     if (a.status === "pending") {
       askLines.push(
-        `- ask \`${a.id}\` to ${a.ownerId} — PENDING, sent ${agoNote(a.createdAt, now)}, expires in ${hoursLeft(a.expiresAt, now)}h (purpose: "${a.purpose}")`,
+        `- ask \`${a.id}\` to ${a.ownerId} — PENDING, sent ${new Date(a.createdAt).toISOString()}, expires at ${new Date(a.expiresAt).toISOString()} (purpose: "${a.purpose}")`,
       );
     } else if (a.resolvedAt !== undefined && now - a.resolvedAt < 24 * 3_600_000) {
       let detail = "";
@@ -1892,7 +1886,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
             ? `${cred.service}${cred.accountLabel ? ` (${cred.accountLabel})` : ""}`
             : `credential \`${a.credentialId}\``;
           const hint = a.requestedMode === "standing" ? ", asked as standing" : "";
-          return `- ask \`${a.id}\`: ${a.requesterId} wants to use your ${what} in ${a.requesterScopeId}${hint}, for: "${a.purpose}" — expires in ${hoursLeft(a.expiresAt, now)}h`;
+          return `- ask \`${a.id}\`: ${a.requesterId} wants to use your ${what} in ${a.requesterScopeId}${hint}, for: "${a.purpose}" — expires at ${new Date(a.expiresAt).toISOString()}`;
         }),
       'When this person answers (their own words are the consent — "sure"/"just this once" means `once`; "keep it for that channel" means `standing`; default to `once`):',
       '- Approve: `curl -fsS -X POST "$AGENT_API_URL/v1/keychain/grants" ' +
