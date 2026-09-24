@@ -105,7 +105,11 @@ can only tighten:
 - **Auto** (default) — blocks private-network access and uses a content screener when
   the deployment configures one. Model screening is off by default; deployments can
   use an external proxy or explicitly opt into the built-in model classifier.
-- **Dangerous** — no content screening, no pauses between tool calls.
+- **Dangerous** — no posture-based content screening or tool approval gates.
+
+Deployments can set `securityScreen.allPostures: true` to require external-content
+screening under every posture, including Dangerous and Strict, without changing tool
+approvals or private-network policy. Flagged content still requires release approval.
 
 The predeclared command policy — approval rules and hard denials for things like
 recursive deletes or destructive SQL — applies in every posture, Dangerous included.

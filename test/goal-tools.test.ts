@@ -136,7 +136,7 @@ test("goal tool results are core-authored, so the security classifier never sees
   const read = await get.execute("g1", {});
   const closed = await update.execute("u1", { status: "complete", note: "shipped" });
   for (const res of [created, read, closed]) {
-    assert.doesNotMatch(textOf(res as never), /quarantined by Auto security posture/);
+    assert.doesNotMatch(textOf(res as never), /quarantined by the security screen/);
   }
   assert.match(textOf(created as never), /registered and now enforced/);
   assert.match(textOf(read as never), /"objective": "ship the fix"/);
@@ -145,7 +145,7 @@ test("goal tool results are core-authored, so the security classifier never sees
   const other = await by("finish_silently").execute("f1", {});
   assert.match(
     textOf(other as never),
-    /quarantined by Auto security posture/,
+    /quarantined by the security screen/,
     "the same screener still quarantines a non-exempt tool, so the exemption is what spared the goal tools",
   );
   assert.deepEqual(screened, ["finish_silently"]);

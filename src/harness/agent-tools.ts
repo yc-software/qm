@@ -21,7 +21,7 @@ import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { GOAL_BLOCKED_MIN_ROUNDS, createGoalRecord, goalFloorMeter, goalReport, type GoalRecord } from "./goal.ts";
 import {
-  quarantineReleaseKey,
+  toolLabelOf,
   toolResultProvenance,
   unscreenedNotice,
   UNSCREENED_PREFIX,
@@ -466,6 +466,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             result,
             unscreenable: ret.content.some((c) => c.type !== "text"),
             provenance,
+            ...(sourceScopeId ? { sourceScopeId } : {}),
             ...(screenAs?.source ? { source: screenAs.source } : {}),
           })
           .catch((): ToolResultScreen => ({ outcome: "unscreened" }));
@@ -473,8 +474,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           const releaseRequested = !!ref.pendingApprovals;
           const from = screenAs?.source ? ` (${screenAs.source})` : "";
           result = releaseRequested
-            ? `[tool output quarantined by Auto security posture${from} — release requested, awaiting human approval]`
-            : `[tool output quarantined by Auto security posture${from}]`;
+            ? `[tool output quarantined by the security screen${from} — release requested, awaiting human approval]`
+            : `[tool output quarantined by the security screen${from}]`;
           (ret as { content: Array<{ type: string; text?: string }>; details?: unknown }).content = [
             { type: "text", text: result },
           ];
@@ -488,12 +489,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           };
           isError = true;
           if (releaseRequested) {
-            ref.pendingApprovals!.push({
-              command: tool,
-              reason: "Security screen quarantined this tool's output — release it to the agent?",
-              kind: "approval",
-              approvalKey: quarantineReleaseKey(tool),
-            });
+            if (!screen.approvalRequested)
+              ref.pendingApprovals!.push({
+                command: tool,
+                reason: "Security screen quarantined this tool's output — release it to the agent?",
+                kind: "approval",
+                approvalKey: `security-screen-release:${toolLabelOf(tool)}`,
+                grantModes: { session: false, always: false },
+              });
             ref.pausedOnApproval = true;
             (ret as { terminate?: boolean }).terminate = true;
           }

@@ -758,9 +758,9 @@ test("Auto can quarantine a tool result before the model or durable replay sees 
   const result = (await call(execute, { command: "curl https://example.invalid" })) as {
     content: Array<{ text?: string }>;
   };
-  assert.equal(result.content[0]?.text, "[tool output quarantined by Auto security posture]");
+  assert.equal(result.content[0]?.text, "[tool output quarantined by the security screen]");
   const persisted = emitted.find((entry) => entry.type === "tool_result")!.payload;
-  assert.equal(persisted.result, "[tool output quarantined by Auto security posture]");
+  assert.equal(persisted.result, "[tool output quarantined by the security screen]");
   assert.equal(persisted.quarantined, true);
   assert.equal(persisted.quarantineReason, "screen_verdict");
   assert.equal(persisted.securityReason, "instruction in untrusted data", "the verdict reason is persisted");
@@ -794,7 +794,7 @@ test("a strict tool-result verdict routes through HiLo approval instead of silen
   };
   assert.equal(
     result.content[0]?.text,
-    "[tool output quarantined by Auto security posture — release requested, awaiting human approval]",
+    "[tool output quarantined by the security screen — release requested, awaiting human approval]",
   );
   assert.equal(result.terminate, true, "the turn pauses so a human can decide the disposition");
   assert.equal(ref.pausedOnApproval, true);
@@ -803,7 +803,8 @@ test("a strict tool-result verdict routes through HiLo approval instead of silen
       command: "execute",
       reason: "Security screen quarantined this tool's output — release it to the agent?",
       kind: "approval",
-      approvalKey: "quarantine:execute",
+      approvalKey: "security-screen-release:execute",
+      grantModes: { session: false, always: false },
     },
   ]);
   const persisted = emitted.find((entry) => entry.type === "tool_result")!.payload;
@@ -830,7 +831,7 @@ test("quarantine_pending with no approvals sink falls back to the legacy silent 
     content: Array<{ text?: string }>;
     terminate?: boolean;
   };
-  assert.equal(result.content[0]?.text, "[tool output quarantined by Auto security posture]");
+  assert.equal(result.content[0]?.text, "[tool output quarantined by the security screen]");
   assert.equal(result.terminate, undefined);
   assert.equal(ref.pausedOnApproval, undefined);
   const persisted = emitted.find((entry) => entry.type === "tool_result")!.payload;
@@ -1050,7 +1051,7 @@ test("surface reads fail closed without persisting blocked content", async () =>
     content: Array<{ text: string }>;
     details?: unknown;
   };
-  assert.equal(output.content[0]!.text, "[tool output quarantined by Auto security posture (surface thread)]");
+  assert.equal(output.content[0]!.text, "[tool output quarantined by the security screen (surface thread)]");
   assert.deepEqual(output.details, {});
   const stored = emitted.find((entry) => entry.type === "tool_result")!.payload;
   assert.equal(stored.quarantined, true);
@@ -1084,7 +1085,7 @@ test("a strict external-content verdict routes through HiLo approval instead of 
     content: Array<{ text: string }>;
     terminate?: boolean;
   };
-  assert.match(output.content[0]!.text, /quarantined by Auto security posture/);
+  assert.match(output.content[0]!.text, /quarantined by the security screen/);
   assert.match(output.content[0]!.text, /release requested, awaiting human approval/);
   assert.equal(output.terminate, true, "the turn pauses so a human can decide the disposition");
   assert.equal(ref.pausedOnApproval, true);
@@ -1093,7 +1094,8 @@ test("a strict external-content verdict routes through HiLo approval instead of 
       command: "slack",
       reason: "Security screen quarantined this tool's output — release it to the agent?",
       kind: "approval",
-      approvalKey: "quarantine:slack",
+      approvalKey: "security-screen-release:slack",
+      grantModes: { session: false, always: false },
     },
   ]);
   const stored = emitted.find((entry) => entry.type === "tool_result")!.payload;

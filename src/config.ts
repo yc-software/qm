@@ -181,6 +181,7 @@ export interface Config {
   turnLeaseWaitMs: number;
   securityScreenTimeoutMs: number;
   securityScreenBackend: "off" | "model" | "proxy";
+  securityScreenAllPostures: boolean;
   securityScreenProxy?: {
     provider: string;
     endpoint: string;
@@ -1283,6 +1284,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const securityScreenBackend = securityScreenBackendEnvStrict(env.SECURITY_SCREEN_BACKEND);
+  const securityScreenAllPostures =
+    boolEnvStrict("SECURITY_SCREEN_ALL_POSTURES", env.SECURITY_SCREEN_ALL_POSTURES) ?? false;
+  if (securityScreenAllPostures && securityScreenBackend === "off") {
+    throw new Error("SECURITY_SCREEN_ALL_POSTURES requires an enabled SECURITY_SCREEN_BACKEND");
+  }
   const proxyProvider = env.SECURITY_SCREEN_PROXY_PROVIDER?.trim();
   const proxyEndpoint = env.SECURITY_SCREEN_PROXY_ENDPOINT?.trim();
   const proxyToken = env.SECURITY_SCREEN_PROXY_TOKEN?.trim();
@@ -1428,6 +1434,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     securityPosture: securityPostureEnvStrict(env.HARNESS_SECURITY_POSTURE),
     sharingPosture: sharingPostureEnvStrict(env.HARNESS_SHARING_POSTURE),
     securityScreenBackend,
+    securityScreenAllPostures,
     ...(securityScreenBackend === "proxy"
       ? {
           securityScreenProxy: {

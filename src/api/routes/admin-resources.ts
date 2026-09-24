@@ -201,7 +201,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     kind: "custom",
     target: "org",
     clearable: true,
-    label: "The model and classification rubric used to screen external content while Auto posture is active.",
+    label:
+      "The model and classification rubric used to screen external content when the deployment enables model screening.",
     readKey: "autoFlagger",
     get: (deps) => deps.config!.getAutoFlaggerConfig(),
     apply: async (ctx, _actor, scope) => {

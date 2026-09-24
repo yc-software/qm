@@ -945,3 +945,13 @@ test("background ownership requires durable storage and an independent deploymen
   assert.throws(() => loadConfig({ ...env, CORE_SIGNING_SECRET: "short" }), /CORE_SIGNING_SECRET/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
 });
+
+test("screening across postures is explicit and requires an enabled backend", () => {
+  assert.equal(loadConfig({}).securityScreenAllPostures, false);
+  assert.equal(
+    loadConfig({ SECURITY_SCREEN_BACKEND: "model", SECURITY_SCREEN_ALL_POSTURES: "true" }).securityScreenAllPostures,
+    true,
+  );
+  assert.throws(() => loadConfig({ SECURITY_SCREEN_ALL_POSTURES: "true" }), /requires an enabled/);
+  assert.throws(() => loadConfig({ SECURITY_SCREEN_ALL_POSTURES: "typo" }), /SECURITY_SCREEN_ALL_POSTURES/);
+});

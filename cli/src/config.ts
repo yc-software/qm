@@ -55,9 +55,11 @@ export interface SandboxConfig {
 }
 
 export type SecurityScreenConfig =
-  | { backend: "off" | "model" }
+  | { backend: "off" }
+  | { backend: "model"; allPostures?: boolean }
   | {
       backend: "proxy";
+      allPostures?: boolean;
       provider: string;
       endpoint: string;
       rollout: "shadow" | "enforce";
@@ -173,9 +175,15 @@ export interface QmConfig {
 
 export function securityScreenEnv(config: Pick<QmConfig, "securityScreen">): Record<string, string> {
   const screen = config.securityScreen;
-  if (!screen || screen.backend !== "proxy") return { SECURITY_SCREEN_BACKEND: screen?.backend ?? "off" };
+  const base = {
+    SECURITY_SCREEN_BACKEND: screen?.backend ?? "off",
+    ...(screen && screen.backend !== "off" && screen.allPostures !== undefined
+      ? { SECURITY_SCREEN_ALL_POSTURES: String(screen.allPostures) }
+      : {}),
+  };
+  if (!screen || screen.backend !== "proxy") return base;
   return {
-    SECURITY_SCREEN_BACKEND: screen.backend,
+    ...base,
     SECURITY_SCREEN_PROXY_PROVIDER: screen.provider,
     SECURITY_SCREEN_PROXY_ENDPOINT: screen.endpoint,
     SECURITY_SCREEN_PROXY_ROLLOUT: screen.rollout,
@@ -434,13 +442,17 @@ const isPlainObject = (x: unknown): x is Record<string, unknown> =>
 function validateSecurityScreen(raw: unknown, path: string): SecurityScreenConfig | undefined {
   if (raw === undefined) return undefined;
   if (!isPlainObject(raw)) throw new CliError(`${path}: "securityScreen" must be an object`);
+  if (raw.allPostures !== undefined && (typeof raw.allPostures !== "boolean" || raw.backend === "off")) {
+    throw new CliError(`${path}: securityScreen.allPostures must be a boolean with an enabled backend`);
+  }
+  const postureOption = raw.allPostures === undefined ? {} : { allPostures: raw.allPostures as boolean };
   if (raw.backend === "off" || raw.backend === "model") {
-    if (Object.keys(raw).some((key) => key !== "backend")) {
+    if (Object.keys(raw).some((key) => key !== "backend" && key !== "allPostures")) {
       throw new CliError(`${path}: securityScreen provider, endpoint, and rollout require backend proxy`);
     }
-    return { backend: raw.backend };
+    return { backend: raw.backend, ...postureOption };
   }
-  const allowed = new Set(["backend", "provider", "endpoint", "rollout"]);
+  const allowed = new Set(["backend", "provider", "endpoint", "rollout", "allPostures"]);
   for (const key of Object.keys(raw)) {
     if (!allowed.has(key)) throw new CliError(`${path}: "securityScreen.${key}" is not recognized`);
   }
@@ -483,6 +495,7 @@ function validateSecurityScreen(raw: unknown, path: string): SecurityScreenConfi
     provider: raw.provider,
     endpoint: raw.endpoint,
     rollout: raw.rollout,
+    ...postureOption,
   };
 }
 
@@ -625,6 +638,7 @@ function validate(raw: unknown, path: string): QmConfig {
   const securityScreen = validateSecurityScreen(o["securityScreen"], path);
   const managedSecurityScreenEnv = [
     "SECURITY_SCREEN_BACKEND",
+    "SECURITY_SCREEN_ALL_POSTURES",
     "SECURITY_SCREEN_PROXY_PROVIDER",
     "SECURITY_SCREEN_PROXY_ENDPOINT",
     "SECURITY_SCREEN_PROXY_ROLLOUT",

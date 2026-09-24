@@ -420,7 +420,7 @@ export function createMockHarness(): Harness {
                 .catch((): ToolResultScreen => ({ outcome: "unscreened" }))
             : ({ outcome: "allow" } as ToolResultScreen);
           if (screen.outcome === "quarantine") {
-            const stub = "[tool output quarantined by Auto security posture]";
+            const stub = "[tool output quarantined by the security screen]";
             await turn.emit({
               type: "tool_result",
               payload: {

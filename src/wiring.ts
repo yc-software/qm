@@ -784,6 +784,7 @@ export function buildApp(
     configStore,
     acl,
     config.securityScreenBackend !== "off" || Boolean(overrides.securityScreener),
+    config.securityScreenAllPostures,
   );
 
   const workspace = createLocalWorkspaceStore(config.dataDir);
