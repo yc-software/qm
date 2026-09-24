@@ -122,7 +122,7 @@ const READ_MAX_CHARS_CEILING = 20_000;
 const MAIL_ERROR_CAP = 1_000;
 const LAST_SAID_SCAN = 40;
 
-export interface SessionOpenInput {
+interface SessionOpenInput {
   requestId?: string;
   task: string;
   name?: string;
