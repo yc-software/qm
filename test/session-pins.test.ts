@@ -197,7 +197,9 @@ describe("conversation pins self-API", async () => {
     await built.deliveries.ack(queued[0]!.id, Date.now());
 
     const webToken = await capFor("U1", THREAD);
-    const webRes = await call("POST", "/v1/pins", { seq: 0 }, webToken);
+    const webUser = (await built.sessions.getEntries(sessionId)).find((entry) => entry.type === "user");
+    assert.ok(webUser);
+    const webRes = await call("POST", "/v1/pins", { seq: webUser.seq }, webToken);
     assert.equal(webRes.status, 200);
     assert.equal((await built.deliveries.pending("slack")).length, 0, "a web conversation never touches Slack pins");
     const webPin = ((await webRes.json()) as { pin: { id: string } }).pin;
