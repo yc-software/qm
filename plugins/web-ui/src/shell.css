@@ -2048,21 +2048,7 @@ qm-markdown .tok-in {
   .user-row.stuck:not(.pin-expanded)
   .user-bubble
   > .pin-content:has(code-block, pre, table, img, svg, math, .katex-display, video, iframe) {
-  max-height: var(--pin-content-max, 2lh);
-}
-.message-stack .user-row.pin-condensed:not(.pin-expanded) .user-bubble > .pin-content {
-  -webkit-line-clamp: 2;
-}
-.message-stack
-  .user-row.pin-condensed:not(.pin-expanded)
-  .user-bubble
-  > .pin-content
-  :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
-  margin-block: 0;
-}
-.message-stack .user-row.pin-condensed:not(.pin-expanded) .user-bubble > .pin-content :is(h1, h2, h3, h4, h5, h6) {
-  font-size: inherit;
-  line-height: inherit;
+  max-height: var(--pin-content-max, 6lh);
 }
 .pin-toggle {
   display: none;
@@ -2388,6 +2374,11 @@ qm-markdown .tok-in {
   .user-row > .message-files .file-image .file-image-size {
     display: inline;
   }
+}
+.message-stack .user-row.stuck > .message-files > .attachment-images {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  justify-content: safe flex-end;
 }
 .message-stack .user-row.stuck > .message-files .file-image {
   --attachment-compact: 1;

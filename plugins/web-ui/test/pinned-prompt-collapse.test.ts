@@ -393,13 +393,8 @@ test("the disclosure rides the last visible line while clamped and drops to a ro
   );
 });
 
-test("the condensed strip is a css contract on the condensed class, with a scroll-driven height on stuck", () => {
+test("the condensed strip keeps the resting line layout, with a scroll-driven height on stuck", () => {
   const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-  const condensed =
-    css.match(
-      /\.message-stack \.user-row\.pin-condensed:not\(\.pin-expanded\) \.user-bubble > \.pin-content \{[^}]*\}/,
-    )?.[0] ?? "";
-  assert.match(condensed, /-webkit-line-clamp: 2/);
   const stuck =
     css.match(/\.message-stack \.user-row\.stuck:not\(\.pin-expanded\) \.user-bubble > \.pin-content \{[^}]*\}/)?.[0] ??
     "";
@@ -408,7 +403,7 @@ test("the condensed strip is a css contract on the condensed class, with a scrol
   assert.match(css, /\.user-row\.stuck:not\(\.pin-expanded\) \{\s*min-height: var\(--pin-rest-height\)/);
   assert.match(
     css,
-    /\.user-row\.stuck:not\(\.pin-expanded\)\s+\.user-bubble\s+> \.pin-content:has\(code-block[^{]*\{\s*max-height: var\(--pin-content-max, 2lh\)/,
+    /\.user-row\.stuck:not\(\.pin-expanded\)\s+\.user-bubble\s+> \.pin-content:has\(code-block[^{]*\{\s*max-height: var\(--pin-content-max, 6lh\)/,
   );
   const rest =
     css.match(
@@ -493,4 +488,33 @@ test("ordinary multi-line prompts stay fully visible without a disclosure", () =
   } finally {
     f.close();
   }
+});
+
+test("condensing clips content without changing its typography", () => {
+  const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
+  const rules = css.match(/[^{}]*\.pin-condensed[^{}]*\{[^}]*\}/g) ?? [];
+  for (const rule of rules) assert.doesNotMatch(rule, /margin|font-size|line-height|line-clamp/);
+});
+
+test("border-box prompts reserve the entire row including the metadata lane", () => {
+  const f = fixture();
+  try {
+    f.row.style.boxSizing = "border-box";
+    f.row.style.paddingTop = "8px";
+    f.row.style.paddingBottom = "24px";
+    f.resize(400);
+    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "163.5px");
+    f.scroll(50);
+    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "163.5px");
+  } finally {
+    f.close();
+  }
+});
+
+test("pinned image chips cannot grow into more rows than their thumbnails", () => {
+  const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
+  const rule = css.match(/\.user-row\.stuck > \.message-files > \.attachment-images \{[^}]*\}/)?.[0] ?? "";
+  assert.match(rule, /flex-wrap: nowrap/);
+  assert.match(rule, /overflow-x: auto/);
+  assert.match(rule, /justify-content: safe flex-end/);
 });

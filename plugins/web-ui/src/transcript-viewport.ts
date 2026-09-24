@@ -132,6 +132,7 @@ export function createTranscriptViewport() {
     const edge = anchorEdge();
     if (!stuck) gap = prompt.getBoundingClientRect().top - edge;
     condense(stuck && !expanded, line - edge - (gap ?? restingGap(promptStyle)));
+    syncPrompt();
   }
 
   function anchorEdge(): number {
@@ -159,8 +160,9 @@ export function createTranscriptViewport() {
     contentHeight = content.scrollHeight;
     const inner =
       prompt.getBoundingClientRect().height -
-      (parseFloat(promptStyle.paddingTop) || 0) -
-      (parseFloat(promptStyle.paddingBottom) || 0);
+      (promptStyle.boxSizing === "border-box"
+        ? 0
+        : (parseFloat(promptStyle.paddingTop) || 0) + (parseFloat(promptStyle.paddingBottom) || 0));
     prompt.style.setProperty("--pin-rest-height", `${Math.max(0, inner)}px`);
     const contentStyle = getComputedStyle(content);
     const lineHeight = parseFloat(contentStyle.lineHeight) || (parseFloat(contentStyle.fontSize) || 0) * 1.5;
