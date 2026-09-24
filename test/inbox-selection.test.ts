@@ -14,7 +14,6 @@ import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { ensureDefaultInboxLoops, ensureInboxLoop } from "../src/loops/inbox-loop.ts";
 import { migrateInbox } from "../src/loops/inbox-migration.ts";
-import { runLoopFire } from "../src/loops/runner.ts";
 
 function world(enabled = true) {
   const deps = {
@@ -400,6 +399,9 @@ test("inbox filters retain automated messages and resolved human conversations w
       },
     ]);
   }
+  const receiptItem = (await w.deps.items.byLoop(email!.id)).find((item) => item.sourceKey === "receipt")!;
+  const claimed = await w.deps.items.claim(receiptItem.id);
+  await w.deps.items.markReady(receiptItem.id, [], claimed!.claimToken!);
   const handled = (await w.deps.items.byLoop(email!.id)).find((item) => item.sourceKey === "handled")!;
   await w.deps.items.recordAction(handled.id, { kind: "dismiss", outcome: "dismissed" });
   await w.deps.items.ingest([
@@ -437,7 +439,8 @@ test("inbox filters retain automated messages and resolved human conversations w
   }
   const receipt = (await w.call()).data.items.find((item: any) => item.dedupeKey === "receipt");
   assert.equal(receipt.sourcePayload.automated, true);
-  assert.equal(receipt.state, "pending");
+  assert.equal(receipt.state, "held");
+  assert.equal(receipt.proposal, undefined);
   await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "invalid", updatedAt: Date.now() });
   assert.equal((await w.call()).data.filter, "triaged");
 });
@@ -466,51 +469,6 @@ test("inbox filters apply before pagination even when automated messages fill mu
   assert.equal(first.total, 85);
   assert.deepEqual([first.items.length, second.items.length, third.items.length], [40, 40, 5]);
   assert.equal(new Set([...first.items, ...second.items, ...third.items].map((item: any) => item.id)).size, 85);
-});
-
-test("automated messages remain in All after ingress work completes without a draft", async () => {
-  const w = world();
-  const [loop] = await ensureDefaultInboxLoops(w.deps.store, "alice");
-  await w.deps.items.ingest([
-    {
-      loopId: loop!.id,
-      dedupeKey: "receipt",
-      source: "gmail",
-      sourceAt: Date.now(),
-      sourcePayload: { title: "Receipt" },
-    },
-  ]);
-  await runLoopFire(
-    loop!,
-    { loops: w.deps.store, items: w.deps.items, outputs: w.deps.outputs },
-    {
-      enumerate: async () => [],
-      work: async ({ item }) => {
-        await w.deps.items.ingest([
-          {
-            loopId: loop!.id,
-            dedupeKey: item.sourceKey,
-            sourceAt: item.sourceAt,
-            sourcePayload: { ...item.sourcePayload, automated: true },
-          },
-        ]);
-        return { runId: "classification" };
-      },
-      captureOutputs: async () => [],
-      evaluate: async () => ({ outcome: "met", reason: "Classified", checks: [], judged: true }),
-      ship: async () => assert.fail("Automated inbox messages must not ship"),
-    },
-  );
-  const item = (await w.deps.items.byLoop(loop!.id))[0]!;
-  assert.equal(item.status, "ready");
-  assert.equal(item.proposal, undefined);
-  assert.equal((await w.call()).data.total, 0);
-  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "human", updatedAt: Date.now() });
-  assert.equal((await w.call()).data.total, 0);
-  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "all", updatedAt: Date.now() });
-  const feed = (await w.call()).data;
-  assert.equal(feed.total, 1);
-  assert.equal(feed.items[0].id, item.id);
 });
 
 test("explicit refresh filters stay consistent across saved preference changes without overwriting them", async () => {

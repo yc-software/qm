@@ -880,6 +880,7 @@ test("event-only Email work skips scanning and holds its draft instead of markin
 test("existing inboxes use current classification instructions for unclassified realtime items", async () => {
   for (const surface of ["inbox", "inbox:gmail", "inbox:slack"]) {
     const source = surface === "inbox:slack" ? "slack" : "gmail";
+    const receipt = { dedupeKey: "receipt", source, sourceAt: 1000, sourcePayload: { source, title: "Your receipt" } };
     const s = service(async (req) => {
       if (stage(req) === "judge") return '{"outcome":"met","reason":"Automated receipt retained"}';
       assert.equal(stage(req), "work");
@@ -890,10 +891,8 @@ test("existing inboxes use current classification instructions for unclassified 
       await s.items.ingest([
         {
           loopId: loop.id,
-          dedupeKey: "receipt",
-          source,
-          sourceAt: 1000,
-          sourcePayload: { source, title: "Your receipt", automated: true, probablyResolved: false },
+          ...receipt,
+          sourcePayload: { ...receipt.sourcePayload, automated: true, probablyResolved: false },
         },
       ]);
       return '{"outputs":[]}';
@@ -904,15 +903,7 @@ test("existing inboxes use current classification instructions for unclassified 
       playbook: "Inbox sync v4. SKIP machine noise.",
       shipActions: [{ action: "send", gate: "hold" }],
     });
-    await s.items.ingest([
-      {
-        loopId: loop.id,
-        dedupeKey: "receipt",
-        source,
-        sourceAt: 1000,
-        sourcePayload: { source, title: "Your receipt" },
-      },
-    ]);
+    await s.items.ingest([{ loopId: loop.id, ...receipt }]);
     const result = await s.fire.fire(loop.id, "push:receipt", undefined, { enumerate: false });
     const [item] = await s.items.byLoop(loop.id);
     assert.equal(result.status, "ok");
