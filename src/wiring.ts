@@ -298,7 +298,7 @@ import type { SessionStore } from "./sessions/session-store.ts";
 import { createMockHarness } from "./harness/mock-harness.ts";
 import { createOpenCodeHarness, openCodeHarnessConfigOptions } from "./harness/opencode-harness.ts";
 import { createCodexHarness, codexHarnessConfigOptions } from "./harness/codex-harness.ts";
-import { keychainCodexAuthStore, fileCodexAuthStore } from "./harness/codex-auth-store.ts";
+import { keychainCodexAuthStore, fileCodexAuthStore, type CodexAuthStore } from "./harness/codex-auth-store.ts";
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
 import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
@@ -484,7 +484,7 @@ export interface BuiltApp {
   oauthFlows: OAuthFlowStore;
   secretDrops: SecretDropStore;
   browserModelGateway?: ModelGatewayTransportConfig;
-  resolveBrowserCompanyKeys: () => Promise<ProviderKeys>;
+  resolveBrowserCompanyKeys: (includeSubscription?: boolean) => Promise<ProviderKeys>;
   modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
@@ -1325,15 +1325,13 @@ export function buildApp(
       ...customKeys,
     };
   };
-  const companyCodexAuthStore =
-    config.codexAuthCredential && keychain
-      ? keychainCodexAuthStore({ keychain, credentialId: config.codexAuthCredential })
-      : config.codexAuthFile
-        ? fileCodexAuthStore(config.codexAuthFile)
-        : undefined;
-  const resolveBrowserCompanyKeys = async (): Promise<ProviderKeys> => {
+  let companyCodexAuthStore: CodexAuthStore | undefined;
+  if (config.codexAuthCredential && keychain)
+    companyCodexAuthStore = keychainCodexAuthStore({ keychain, credentialId: config.codexAuthCredential });
+  else if (config.codexAuthFile) companyCodexAuthStore = fileCodexAuthStore(config.codexAuthFile);
+  const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> => {
     const keys: ProviderKeys = await resolveModelProviderKeys();
-    if (harnessCarriedModelAuth(config) === "openai") {
+    if (includeSubscription && harnessCarriedModelAuth(config) === "openai") {
       const auth = await companyCodexAuthStore?.load();
       const token = companyCodexAuthStore
         ? asObject(auth?.tokens)?.access_token

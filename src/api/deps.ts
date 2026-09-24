@@ -80,7 +80,7 @@ import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 
 export interface ServerDeps {
   browserModelGateway?: ModelGatewayTransportConfig;
-  resolveBrowserCompanyKeys?: () => Promise<ProviderKeys>;
+  resolveBrowserCompanyKeys?: (includeSubscription?: boolean) => Promise<ProviderKeys>;
   slackAccounts?: DurableMap<SlackAccountLink>;
   composioReturns?: DurableMap<ComposioReturn>;
   composioFetch?: typeof fetch;
