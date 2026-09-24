@@ -279,6 +279,8 @@ test("spend: malformed windows are rejected instead of silently defaulted", asyn
   try {
     for (const query of [
       "from=not-a-date",
+      "from=9007199254740991",
+      "to=9007199254740991",
       "from=2026-02-30",
       "to=2026-13-01",
       "to=yesterday",

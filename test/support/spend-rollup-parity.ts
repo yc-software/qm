@@ -32,6 +32,7 @@ export async function assertSpendRollupParity(
       usage:
         costUsd === null ? null : { input: 100, output: 20, cacheRead: 400, cacheWrite: 40, totalTokens: 560, costUsd },
     });
+    return session;
   };
 
   await record(`${prefix}:alice-live-a`, "dm", alice, 1.5);
@@ -141,4 +142,44 @@ export async function assertSpendRollupParity(
   ).sort(byKey);
 
   assert.deepEqual(sorted, expected);
+
+  clock.at = BASE;
+  const child = async (name: string, parentId: string) => {
+    const session = await record(`agent:main:subagent:${prefix}-${name}`, "dm", alice, 0.01, `${prefix}-${name}`);
+    await store.setParentSession(session.id, parentId);
+    return session;
+  };
+  for (const origin of ["cron", "webhook", "monitor", "conversation"] as const) {
+    const parent = await store.getOrCreateByThread(`agent:main:${origin}:${prefix}-parent`, "dm", bob);
+    const first = await child(`${origin}-child`, parent.id);
+    await child(`${origin}-grandchild`, first.id);
+  }
+  await child("missing-parent", `${prefix}-missing`);
+  const deleted = await store.getOrCreateByThread(`cron:${prefix}-deleted`, "dm", bob);
+  await child("deleted-parent", deleted.id);
+  await store.deleteSession(deleted.id);
+  const cycleA = await child("cycle-a", `${prefix}-missing`);
+  const cycleB = await child("cycle-b", cycleA.id);
+  await store.setParentSession(cycleA.id, cycleB.id);
+  const self = await child("self-cycle", `${prefix}-missing`);
+  await store.setParentSession(self.id, self.id);
+
+  const inherited = (await store.spendRollup({ from: BASE, to: BASE + DAY })).filter((r) =>
+    r.model?.startsWith(`${prefix}-`),
+  );
+  const origins = new Map<string, string>([
+    ...["cron", "webhook", "monitor", "conversation"].flatMap((origin) =>
+      ["child", "grandchild"].map((kind) => [`${prefix}-${origin}-${kind}`, origin] as const),
+    ),
+    ...["missing-parent", "deleted-parent", "cycle-a", "cycle-b", "self-cycle"].map(
+      (name) => [`${prefix}-${name}`, "conversation"] as const,
+    ),
+  ]);
+  assert.equal(inherited.length, origins.size);
+  for (const row of inherited) {
+    assert.equal(row.origin, origins.get(row.model!), row.model!);
+    assert.equal(row.scopeId, alice, "inherit origin, not the parent's scope");
+    assert.equal(row.calls, 1);
+    assert.equal(row.costUsd, 0.01);
+  }
 }

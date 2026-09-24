@@ -336,7 +336,7 @@ function parseBound(raw: string): number | null {
     parsed = Date.parse(`${value}T00:00:00.000Z`);
     if (!Number.isFinite(parsed) || new Date(parsed).toISOString().slice(0, 10) !== value) return null;
   } else if (EPOCH_MS.test(value)) parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : null;
+  return Number.isSafeInteger(parsed) && Number.isFinite(new Date(parsed).getTime()) ? parsed : null;
 }
 
 export async function spend(ctx: ApiCtx): Promise<void> {

@@ -1632,7 +1632,21 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async spendRollup(range): Promise<SpendRow[]> {
       const rows = await q(
-        `SELECT day, scope_id, origin, model,
+        `WITH RECURSIVE spending AS (
+           SELECT DISTINCT session_id FROM session_llm_requests
+            WHERE created_at >= $1 AND created_at < $2 AND usage_json IS NOT NULL
+         ), ancestry AS (
+           SELECT s.id AS session_id, s.parent_session_id, ${originExpr("s")} AS origin, ARRAY[s.id] AS path
+             FROM sessions s JOIN spending r ON r.session_id = s.id
+           UNION ALL
+           SELECT a.session_id, p.parent_session_id, ${originExpr("p")}, a.path || p.id
+             FROM ancestry a JOIN sessions p ON p.id = a.parent_session_id
+            WHERE a.origin = 'conversation' AND NOT p.id = ANY(a.path) AND cardinality(a.path) < 64
+         ), origins AS (
+           SELECT DISTINCT ON (session_id) session_id, origin
+             FROM ancestry ORDER BY session_id, cardinality(path) DESC
+         )
+         SELECT day, scope_id, origin, model,
                 COUNT(*) AS calls,
                 COALESCE(SUM(cost_usd), 0) AS cost_usd,
                 COALESCE(SUM(input), 0) AS input,
@@ -1642,7 +1656,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            FROM (SELECT (r.created_at / 86400000)::bigint AS day,
                         s.scope_id,
                         r.model,
-                        ${originExpr("s")} AS origin,
+                        o.origin,
                         (u.j ->> 'costUsd')::double precision AS cost_usd,
                         (u.j ->> 'input')::bigint AS input,
                         (u.j ->> 'output')::bigint AS output,
@@ -1650,6 +1664,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                         (u.j ->> 'cacheWrite')::bigint AS cache_write
                    FROM session_llm_requests r
                    JOIN sessions s ON s.id = r.session_id
+                   JOIN origins o ON o.session_id = s.id
                    CROSS JOIN LATERAL (SELECT r.usage_json::jsonb AS j) u
                   WHERE r.created_at >= $1 AND r.created_at < $2
                     AND r.usage_json IS NOT NULL) t
