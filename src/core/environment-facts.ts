@@ -8,8 +8,8 @@ export interface WorkspaceLayoutInfo {
 }
 
 export function renderComputerBlock(spec: AgentComputerSpec | undefined, layout: WorkspaceLayoutInfo): string {
+  if (!spec) return "";
   const lines: string[] = ["## Sandbox environment profile"];
-  if (!spec) return `${lines[0]}\nNo sandbox profile is available for this turn.`;
 
   const size: string[] = [];
   if (spec.cpus) size.push(`${spec.cpus} vCPU`);

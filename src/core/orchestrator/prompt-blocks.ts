@@ -2,12 +2,10 @@ import type { CandidateDestination, Cron, Monitor, Webhook } from "../../types.t
 import type { DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
 
 export function deliveryMenu(candidates: CandidateDestination[], defaultKey: string | undefined): string {
-  const lines = [...candidates]
-    .sort((a, b) => a.key.localeCompare(b.key))
-    .map(
-      (c) =>
-        `- ${c.label}${c.key === defaultKey ? " (default — where we're talking now)" : ""}: destinationKey \`${c.key}\``,
-    );
+  const lines = candidates.map(
+    (c) =>
+      `- ${c.label}${c.key === defaultKey ? " (default — where we're talking now)" : ""}: destinationKey \`${c.key}\``,
+  );
   return [
     "## Where scheduled tasks post",
     "When you schedule a cron here, it delivers to the default below unless you pass a different",

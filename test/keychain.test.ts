@@ -910,7 +910,7 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
     detectedByOwner: new Map([["U1", ["GitHub", "AWS SSO"]]]),
   });
   assert.match(detected, /Detected but NOT registered/);
-  assert.match(detected, /Alice \(U1\): AWS SSO, GitHub — signed in on their own computer/);
+  assert.match(detected, /Alice \(U1\): GitHub, AWS SSO — signed in on their own computer/);
 
   const k = kc();
   const cred = await k.save(GH);
@@ -1777,35 +1777,6 @@ test("Composio keys remain backend-only across all materialization paths includi
     assert.equal(await k.composioKey("U1", c.id), "project-key");
     assert.equal(await k.composioKey("U2", c.id), null);
   }
-});
-
-test("manifest order does not depend on credential or member insertion order", async () => {
-  const k = kc();
-  await k.save(GH);
-  await k.save({ ...GH, service: "other", envKey: "OTHER_TOKEN" });
-  const entries = await k.listByOwner("U1");
-  const input = {
-    scopeId: "channel:C1",
-    conversationKind: "channel" as const,
-    actorId: "U2",
-    members: [{ id: "U2" }, { id: "U1" }],
-    entriesByOwner: new Map([["U1", entries]]),
-    scopeGrants: [],
-    injected: [],
-    detectedByOwner: new Map([["U2", ["GitHub", "AWS SSO"]]]),
-  };
-  assert.equal(
-    renderKeychainManifest(input, 1),
-    renderKeychainManifest(
-      {
-        ...input,
-        members: [...input.members].reverse(),
-        entriesByOwner: new Map([["U1", [...entries].reverse()]]),
-        detectedByOwner: new Map([["U2", ["AWS SSO", "GitHub"]]]),
-      },
-      1,
-    ),
-  );
 });
 
 test("manifest timestamps stay stable until credentials and pending asks actually expire", async () => {

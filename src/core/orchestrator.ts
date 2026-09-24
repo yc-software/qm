@@ -1659,12 +1659,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (enabled.size > 0) {
             const slugs = [...grantedCredSlugs].filter((s) => enabled.has(s));
             if (slugs.length > 0) {
-              const usable = records.filter((r) => slugs.includes(r.slug)).sort((a, b) => a.slug.localeCompare(b.slug));
+              const usable = records.filter((r) => slugs.includes(r.slug));
               const lines = usable.map((r) => {
-                const methods = r.allowedMethods?.length ? [...r.allowedMethods].sort().join("/") : "GET";
-                const paths = r.allowedPathPrefixes?.length
-                  ? `paths ${[...r.allowedPathPrefixes].sort().join(", ")}`
-                  : "any path";
+                const methods = r.allowedMethods?.length ? r.allowedMethods.join("/") : "GET";
+                const paths = r.allowedPathPrefixes?.length ? `paths ${r.allowedPathPrefixes.join(", ")}` : "any path";
                 return `- \`${r.slug}\` (${r.name}; shared org credential) → ${r.host} (${methods}; ${paths})`;
               });
               sharedCredsBlock =
@@ -2173,7 +2171,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (credentialDescriptions.length)
           systemPrompt +=
             "\n\n## Execution credentials\nRequest exact handles in execute.credentials:\n" +
-            credentialDescriptions.sort().join("\n");
+            credentialDescriptions.join("\n");
         systemPrompt += sharedCredsBlock;
         if (actorIsOrgAdmin) {
           systemPrompt +=

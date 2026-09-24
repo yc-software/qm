@@ -21,8 +21,8 @@ const FULL_SPEC: AgentComputerSpec = {
   workdir: "/root/workspace",
 };
 
-test("computer block: absent spec explicitly replaces the previous profile", () => {
-  assert.match(renderComputerBlock(undefined, { hasGlobal: false, teamCount: 0 }), /No sandbox profile is available/);
+test("computer block: absent spec renders nothing (graceful for doubles)", () => {
+  assert.equal(renderComputerBlock(undefined, { hasGlobal: false, teamCount: 0 }), "");
 });
 
 test("computer block: renders OS/size/runtimes/tools and the not-installed list", () => {

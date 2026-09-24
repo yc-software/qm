@@ -1,4 +1,3 @@
-import { deliveryMenu } from "../src/core/orchestrator/prompt-blocks.ts";
 import type { Harness, HarnessTurnInput } from "../src/harness/harness.ts";
 import { createMemoryBlobTransferStore, type BlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
@@ -1188,6 +1187,7 @@ test("profile and scheduled-work changes append fresh snapshots without rewritin
     assert.match(turn.systemPrompt, /only workspace files ship/);
     assert.match(turn.systemPrompt, /don't re-create it/);
     assert.match(turn.systemPrompt, /historical/);
+    assert.match(turn.systemPrompt, /A missing profile means unknown capabilities/);
   }
   assert.match(seen[0]!.environment!, /Debian 12/);
   assert.match(seen[0]!.environment!, /No active scheduled work/);
@@ -1195,7 +1195,7 @@ test("profile and scheduled-work changes append fresh snapshots without rewritin
   assert.match(seen[1]!.environment!, /check the synthetic status page/);
   assert.doesNotMatch(seen[2]!.environment!, /check the synthetic status page/);
   assert.match(seen[2]!.environment!, /No active scheduled work/);
-  assert.match(seen[3]!.environment!, /No sandbox profile is available/);
+  assert.doesNotMatch(seen[3]!.environment!, /Sandbox environment profile/);
   assert.match(seen[3]!.environment!, /Scheduled-work status is unavailable/);
   assert.doesNotMatch(seen[3]!.environment!, /Other Linux|synthetic status|No active scheduled work/);
   assert.deepEqual(seen[1]!.history, originalHistory);
@@ -1222,10 +1222,4 @@ test("connector revocation still refreshes system-authority permissions", async 
   assert.match(prefix(second.reply!), /Needs reconnect: Google.*Do not use these apps/);
   assert.doesNotMatch(prefix(second.reply!), /Connected: Google/);
   assert.notEqual(prefix(first.reply!), prefix(second.reply!));
-});
-
-test("delivery menus retain canonical order without changing the selected default", () => {
-  const destinations = ["C2", "C1"].map((key) => ({ key, type: "slack" as const, target: key, label: key }));
-  assert.equal(deliveryMenu(destinations, "C1"), deliveryMenu([...destinations].reverse(), "C1"));
-  assert.match(deliveryMenu(destinations, "C1"), /C1 \(default/);
 });

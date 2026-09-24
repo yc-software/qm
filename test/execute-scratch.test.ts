@@ -530,14 +530,3 @@ test("scoped command wrappers preserve selected AWS credentials and clear unsele
   );
   assert.equal(result.stdout, "passed");
 });
-
-test("command credential handle order is stable without changing resolution priority", () => {
-  const credentials = ["service_zeta", "kc_alpha"].map((handle) => ({ handle, resolve: async () => ({ env: [] }) }));
-  const first = routingCtx({ commandCredentials: credentials }).ctx;
-  const second = routingCtx({ commandCredentials: [...credentials].reverse() }).ctx;
-  assert.deepEqual(first.commandCredentialHandles, second.commandCredentialHandles);
-  assert.deepEqual(
-    credentials.map((c) => c.handle),
-    ["service_zeta", "kc_alpha"],
-  );
-});
