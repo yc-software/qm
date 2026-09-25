@@ -1072,9 +1072,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const context = await resolveTurnContext({
         external,
-        noteMemoryRead: async () => {
-          await deps.sessions.noteMemoryRead(session.id);
-        },
         actor,
         audience: conversation.audience,
         acl: deps.acl,
@@ -1326,11 +1323,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
       };
       const initialMemoryWindow = await deps.sessions.getContextWindow(session.id);
-      const memorySnapshot = { ...memoryView.snapshot, readEpoch: await deps.sessions.memoryReadEpoch(session.id) };
       const initialMemoryContext = initialMemoryWindow.entries.findLast((entry) => memoryContextPayload(entry));
       const candidateMemoryContext = nextMemoryContext(
         initialMemoryWindow.entries,
-        memorySnapshot,
+        memoryView.snapshot,
         await deps.sessions.latestEntrySeq(session.id),
       );
       let memoryContextChanged =
@@ -2055,9 +2051,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return true;
         });
         const memoryWindow = await deps.sessions.getContextWindow(session.id);
-        const readEpoch = await deps.sessions.memoryReadEpoch(session.id);
         memoryView = await context.memorySnapshot();
-        memoryView.snapshot.readEpoch = readEpoch;
         recalled = memoryView.recalled;
         const latestMemoryContext = memoryWindow.entries.findLast((entry) => memoryContextPayload(entry));
         const nextContext = nextMemoryContext(
@@ -2067,8 +2061,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
         memoryContextChanged =
           !latestMemoryContext || nextContext.throughSeq > memoryContextPayload(latestMemoryContext)!.throughSeq;
-        if (memoryContextChanged && nextContext.throughSeq >= 0)
-          await deps.sessions.append(lease, { type: "system", scopeLabel: scopeId, payload: nextContext });
         const memoryHistoryReset = nextContext.throughSeq >= 0;
         const captureDependencies = () => [
           ...memoryView.records,
@@ -2090,7 +2082,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ]
             : []),
         ];
-        if (memoryHistoryReset) await deps.harness.turns.resetSession?.(session.id);
+        if (memoryContextChanged && memoryHistoryReset) {
+          await deps.harness.turns.resetSession?.(session.id);
+          await deps.sessions.append(lease, { type: "system", scopeLabel: scopeId, payload: nextContext });
+        }
         if (input.approval) {
           const p = await pending.get(input.approval.requestId);
           const decision = input.approval.approved ? "approve" : "deny";
@@ -2101,7 +2096,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             return {
               status: "refused",
               sessionId: session.id,
-              reason: "Memory access changed; submit a fresh request rather than resuming the previous approval.",
+              reason:
+                "Conversation audience changed; submit a fresh request rather than resuming the previous approval.",
             };
           if (!p || p.sessionId !== session.id) {
             deps.auditLog.record({

@@ -42,7 +42,7 @@ async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
   await sessions.addParticipant(room.id, actor.id);
   const binding = (session: Session) => ({
     session,
-    memoryContext: { audience: "safe-audience", facts: [], readEpoch: 0 },
+    memoryContext: { audience: "safe-audience" },
     scopeId: scope,
     request: {
       surface: "slack",
@@ -62,7 +62,7 @@ async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
   };
 }
 
-test("revoked child title is not disclosed through session read", async () => {
+test("previous-audience child title is not disclosed through session read", async () => {
   const r = await rig();
   const child = await r.sessions.getOrCreateByThread("subagent:synthetic", "dm", scope);
   await r.sessions.setParentSession(child.id, r.room.id);
@@ -78,7 +78,7 @@ test("revoked child title is not disclosed through session read", async () => {
       memoryContext: {
         kind: "memory_context",
         fingerprint: "old",
-        snapshot: { audience: "safe-audience", facts: ["revoked-fact"], readEpoch: 0 },
+        snapshot: { audience: "previous-audience" },
         throughSeq: -1,
       },
     },
@@ -107,7 +107,7 @@ test("reset source title does not enter fresh child task", async () => {
     payload: {
       kind: "memory_context",
       fingerprint: "new",
-      snapshot: { audience: "safe-audience", facts: [], readEpoch: 0 },
+      snapshot: { audience: "safe-audience" },
       throughSeq: old.seq,
     },
   });
@@ -118,7 +118,7 @@ test("reset source title does not enter fresh child task", async () => {
   const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   assert.doesNotMatch(run.request.text, /PRIVATE_SENTINEL/);
 });
-test("revoked child title is not disclosed through session write", async () => {
+test("previous-audience child title is not disclosed through session write", async () => {
   const r = await rig();
   const opened = await r.syscallsFor(r.room).open({ task: "task", name: "PRIVATE_SENTINEL" });
   assert.ok(opened.ok);
@@ -136,7 +136,7 @@ test("revoked child title is not disclosed through session write", async () => {
       memoryContext: {
         kind: "memory_context",
         fingerprint: "old",
-        snapshot: { audience: "safe-audience", facts: ["revoked-fact"], readEpoch: 0 },
+        snapshot: { audience: "previous-audience" },
         throughSeq: -1,
       },
     },

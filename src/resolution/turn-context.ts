@@ -29,7 +29,6 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   skills?: SkillStore;
   auditLog?: AuditLog;
   currentScopeMembers?: CurrentScopeMembers;
-  noteMemoryRead?: () => Promise<void>;
 };
 
 interface MemoryReaderInput {
@@ -150,7 +149,7 @@ export async function resolveTurnContext(input: ContextInput) {
     memoryScopeId,
     baseRecallScopes,
     memoryAccess,
-    memory: disclosedMemory(input.memory, { ...disclosure, noteRead: input.noteMemoryRead }),
+    memory,
     recall: memories.recall,
     memorySnapshot: async (auditReads = true) => {
       const heads = await Promise.all(
@@ -168,17 +167,12 @@ export async function resolveTurnContext(input: ContextInput) {
         records: heads.flatMap(({ head }) => head.records?.records ?? []),
         complete: heads.every(({ head }) => !!head.records),
         snapshot: buildMemoryContextSnapshot({
-          actorId: input.actor.id,
+          targetScope: input.targetScope,
           audience: (await input.currentScopeMembers?.(input.targetScope)) ?? input.audience,
-          posture: resolution.sharingPosture,
-          heads,
         }),
       };
     },
-    searchMemory: async (query: string, limit?: number) => {
-      await input.noteMemoryRead?.();
-      return memories.search(query, limit);
-    },
+    searchMemory: memories.search,
     listFiles: () => handles,
     listSkills: async () => (await input.skills?.visibleFor(skillScopes, grantedSkills)) ?? [],
     readFile: (path: string) =>
