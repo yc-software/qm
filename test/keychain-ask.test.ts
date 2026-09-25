@@ -426,8 +426,8 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
   );
   assert.equal(outcome.ran, true);
   assert.equal(seen?.triggered, true);
-  assert.equal(seen?.thinkingLevel, "xhigh");
-  assert.equal(seen?.fastMode, false);
+  assert.equal(seen?.thinkingLevel, undefined);
+  assert.equal(seen?.fastMode, undefined);
   assert.equal(seen?.conversation.threadRef, "ch:C1-t1", "an explicit threadRef overrides the per-fire fireKey thread");
 });
 
