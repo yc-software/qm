@@ -729,7 +729,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           true,
         );
       }
-      await recordResult(callId, { tool: "execute", ...scopeNote }, text(errMessage(e)), true);
+      await log("tool_result", {
+        ...sandboxLog({ tool: "execute", ...scopeNote }),
+        callId,
+        isError: true,
+        result: "Command execution failed.",
+      });
       throw e;
     }
   };

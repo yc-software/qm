@@ -3826,7 +3826,7 @@ test("command exit codes are data; timeouts and thrown tool errors are failures"
         await assert.rejects(run, /sandbox provider unavailable/);
         const result = entries.find((e) => e.type === "tool_result")!.payload;
         assert.equal(result.isError, true);
-        assert.equal(result.result, "sandbox provider unavailable");
+        assert.equal(result.result, "Command execution failed.");
         assert.equal(result.code, undefined);
         continue;
       }
@@ -3838,5 +3838,45 @@ test("command exit codes are data; timeouts and thrown tool errors are failures"
         assert.match(textOut(returned), /\[exit 1\]/);
       }
     }
+  }
+});
+
+test("thrown execution errors leave pending child messages for the next delivered result", async () => {
+  for (const sandboxResources of [false, true]) {
+    let pending = true;
+    const context = fakeToolContext();
+    context.execute = async () => {
+      throw new Error("provider unavailable");
+    };
+    context.sessionSyscalls = {
+      open: async () => ({ ok: false, message: "unused" }),
+      write: async () => ({ ok: false, message: "unused" }),
+      read: async () => ({ ok: false, message: "unused" }),
+      receive: async () =>
+        pending
+          ? [
+              {
+                id: "mail",
+                senderId: "child",
+                recipientId: "parent",
+                actor: { id: "U1", type: "internal" as const },
+                audience: [],
+                text: "Important child finding",
+                createdAt: 1,
+              },
+            ]
+          : [],
+      acknowledge: async () => {
+        pending = false;
+      },
+    };
+    const tools = createAgentTools({ current: context }, { sandboxResources });
+    const tool = tools.find((t) => t.name === (sandboxResources ? "sandbox" : "execute"))!;
+    const input = { ...(sandboxResources ? { action: "exec" } : {}), command: "true", purpose: "Check provider" };
+    await assert.rejects(() => call(tool, input), /provider unavailable/);
+    assert.equal(pending, true);
+    context.execute = async () => ({ stdout: "ok", stderr: "", code: 0, timedOut: false });
+    assert.match(JSON.stringify(await call(tool, input)), /Important child finding/);
+    assert.equal(pending, false);
   }
 });
