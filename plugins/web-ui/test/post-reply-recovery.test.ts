@@ -4,7 +4,7 @@ import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import { metadata } from "./model-metadata.ts";
 import type { Conversation } from "../src/conv-types.ts";
-import type { SessionEntry } from "../src/core-bridge.ts";
+import type { AssistantWork, SessionEntry, WorkBlock } from "../src/core-bridge.ts";
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -151,7 +151,7 @@ test("post replies remain visible in new and continuing conversations", async (t
     const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
     const { createConversation, disposeConversation, ensureDeliveryStream } =
       await vite.ssrLoadModule("/src/conversations.ts");
-    const { entriesToMessages } = await vite.ssrLoadModule("/src/core-bridge.ts");
+    const { entriesToMessages, userSendMessage } = await vite.ssrLoadModule("/src/core-bridge.ts");
     const { transcriptModel } = await vite.ssrLoadModule("/src/model-options.ts");
     const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     seedRuntimeConfig(row.scopeId, await (await fetch("/api/runtime-config")).json());
@@ -189,7 +189,6 @@ test("post replies remain visible in new and continuing conversations", async (t
           null,
           row as never,
         );
-        conv.state.agent!.convertToLlm = () => [{ role: "user", content: "Please answer", timestamp: 0 }];
       }
       if (wait) await settle();
       requests.length = 0;
@@ -243,6 +242,184 @@ test("post replies remain visible in new and continuing conversations", async (t
       await settle();
       return text;
     }
+    await t.test("mounted core agent skips history conversion but sends the latest text and attachment", async () => {
+      await mount(completed);
+      const agent = conv!.state.agent!;
+      const attachment = {
+        id: "new-file",
+        type: "document",
+        fileName: "note.txt",
+        mimeType: "text/plain",
+        size: 5,
+        content: btoa("hello"),
+        extractedText: "hello",
+      };
+      agent.state.messages = [
+        ...agent.state.messages,
+        userSendMessage("Old attachment question", [{ ...attachment, id: "old-file", fileName: "old.txt" }]),
+        {
+          role: "toolResult",
+          toolCallId: "old-call",
+          toolName: "exec",
+          content: [{ type: "text", text: "old result" }],
+          isError: false,
+          timestamp: 0,
+        },
+      ];
+      const converted = agent.convertToLlm(agent.state.messages);
+      assert.ok(Array.isArray(converted), "conversion must return synchronously, not import or await history");
+      assert.deepEqual(converted, []);
+      const uploads: string[] = [];
+      let submitted: Record<string, unknown> | undefined;
+      const fetchBefore = globalThis.fetch;
+      globalThis.fetch = async (input, init) => {
+        const path = String(input);
+        if (path.startsWith("/api/blobs?sha=")) {
+          uploads.push(new TextDecoder().decode(init!.body as Uint8Array));
+          return Response.json({ blobId: "new-blob", sizeBytes: 5 });
+        }
+        if (path === "/api/turn") {
+          submitted = JSON.parse(String(init?.body));
+          return Response.json({ reply: "Received the new note" });
+        }
+        return fetchBefore(input, init);
+      };
+      try {
+        await agent.prompt(userSendMessage("Read the new note", [attachment]));
+        assert.equal(submitted?.text, "Read the new note");
+        assert.deepEqual(submitted?.attachments, [
+          { name: "note.txt", mimetype: "text/plain", sizeBytes: 5, blobId: "new-blob" },
+        ]);
+        assert.deepEqual(uploads, ["hello"], "only the current attachment is uploaded");
+        assert.equal(agent.state.errorMessage, undefined);
+      } finally {
+        globalThis.fetch = fetchBefore;
+      }
+    });
+    await t.test("work bursts update state immediately and draw once per frame, ignoring stale observers", async () => {
+      await mount();
+      const agent = conv!.state.agent!;
+      const state = conv!.state as Conversation["state"] & {
+        onWork: (work: WorkBlock) => void;
+        liveWork: WorkBlock | null;
+      };
+      const observe = state.onWork;
+      const before = FakeEventSource.instances.length;
+      const turn = agent.prompt("Observe this turn");
+      await until(() => FakeEventSource.instances.length > before);
+      const run = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r1/events")!;
+      await settle();
+      const label = () => host.querySelector(".live-work-label")?.textContent;
+      assert.match(label() ?? "", /Thinking/);
+      const rafBefore = globalThis.requestAnimationFrame;
+      const frames: FrameRequestCallback[] = [];
+      globalThis.requestAnimationFrame = (callback) => frames.push(callback);
+      try {
+        const work: WorkBlock = { status: "thinking", activity: [], stale: true };
+        for (let i = 0; i < 5; i++) observe({ ...work, startedAt: i });
+        observe(work);
+        assert.equal(state.liveWork, work);
+        assert.match(label() ?? "", /Thinking/, "the observer must not synchronously redraw");
+        assert.equal(frames.length, 1, "a burst shares one pending frame");
+        frames.shift()!(0);
+        assert.match(label() ?? "", /Interrupted, resuming/);
+        observe(work);
+        conv!.mountContinuable("web:owner:replacement", null, row.scopeId, []);
+        const replacement = conv!.state.agent;
+        const pending = frames.length;
+        observe(work);
+        assert.equal(frames.length, pending, "stale observers must not schedule draws");
+        assert.equal(state.liveWork, null);
+        for (const frame of frames.splice(0)) frame(0);
+        assert.equal(conv!.state.agent, replacement);
+        assert.doesNotMatch(host.textContent ?? "", /Interrupted, resuming/);
+      } finally {
+        globalThis.requestAnimationFrame = rafBefore;
+        run.emit("done", { status: "done", result: { status: "ok", reply: "Finished" } });
+        await turn;
+      }
+    });
+    await t.test("text redraws retain tool refs while changed work refreshes rows and disclosures", async () => {
+      await mount();
+      const agent = conv!.state.agent!;
+      const before = FakeEventSource.instances.length;
+      const turn = agent.prompt("Read two files");
+      await until(() => FakeEventSource.instances.length > before);
+      const run = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r1/events")!;
+      try {
+        const activity: SessionEntry[] = [1, 2].map((seq) => ({
+          seq,
+          type: "tool_call",
+          createdAt: Date.now(),
+          payload: { tool: "files", action: "read", path: `file-${seq}.txt`, callId: `read-${seq}` },
+        }));
+        run.emit("run", { status: "running", result: null, activity });
+        await settle();
+        const streaming = agent.state.streamingMessage as AssistantWork;
+        const work = streaming.work!;
+        assert.equal(host.querySelectorAll(".tool-running").length, 2);
+        let refs = 0;
+        const disclosureHosts = [...host.querySelectorAll(".tool-disclosure-host")];
+        assert.equal(disclosureHosts.length, 2);
+        for (const element of disclosureHosts) {
+          const closest = element.closest.bind(element);
+          Object.defineProperty(element, "closest", {
+            configurable: true,
+            value: (selector: string) => {
+              if (selector === "details") refs++;
+              return closest(selector);
+            },
+          });
+        }
+        for (let i = 0; i < 3; i++) {
+          streaming.content = [{ type: "text", text: `Progress ${i}` }];
+          conv!.drawActiveChat(agent);
+        }
+        assert.equal(refs, 0, "unchanged tools must not rerun their disclosure refs on text deltas");
+        assert.equal(
+          host.querySelector<HTMLElement & { content: string }>(".work-said qm-markdown")?.content,
+          "Progress 2",
+        );
+        work.activity = [
+          ...work.activity,
+          {
+            seq: 3,
+            parentSeq: 1,
+            type: "tool_result",
+            createdAt: Date.now(),
+            payload: { tool: "files", result: "First output" },
+          },
+        ];
+        conv!.drawActiveChat(agent);
+        assert.ok(refs > 0, "new activity refreshes tool rows");
+        const details = host.querySelector<HTMLDetailsElement>(".tool-ok")!;
+        assert.ok(details);
+        details.open = true;
+        details.dispatchEvent(new Event("toggle"));
+        assert.match(details.textContent ?? "", /First output/);
+        work.activity = work.activity.map((entry) =>
+          entry.seq === 3 ? { ...entry, payload: { tool: "files", result: "Updated output" } } : entry,
+        );
+        conv!.drawActiveChat(agent);
+        assert.match(details.textContent ?? "", /Updated output/);
+        assert.doesNotMatch(details.textContent ?? "", /First output/);
+        work.stale = true;
+        conv!.drawActiveChat(agent);
+        assert.match(host.querySelector(".tool-running")?.textContent ?? "", /interrupted/);
+        work.status = "complete";
+        conv!.drawActiveChat(agent);
+        assert.equal(host.querySelector(".tool-running"), null);
+        work.pendingApprovals = [{ requestId: "next-decision", command: "echo approved" }];
+        conv!.drawActiveChat(agent);
+        assert.match(host.querySelector(".inline-approval-marker")?.textContent ?? "", /echo approved/);
+        work.pendingApprovals = [];
+        conv!.drawActiveChat(agent);
+        assert.equal(host.querySelector(".inline-approval-marker"), null);
+      } finally {
+        run.emit("done", { status: "done", result: { status: "ok", reply: "Finished" } });
+        await turn;
+      }
+    });
     await t.test("control: reopening displays a persisted post", async () => {
       await mount(completed);
       assert.ok(shownAnswer());
@@ -250,7 +427,6 @@ test("post replies remain visible in new and continuing conversations", async (t
     await t.test("a new session accepts every transcript after adoption without fork metadata", async () => {
       await mount();
       conv!.mountContinuable(row.threadRef, null, row.scopeId, []);
-      conv!.state.agent!.convertToLlm = () => [{ role: "user", content: "Please answer", timestamp: 0 }];
       entries = [];
       const visible: boolean[] = [];
       for (let i = 0; i < 3; i++) {

@@ -149,7 +149,6 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       const messages = entriesToMessages(entries, transcriptModel());
       attachPendingApprovals(messages, pending, transcriptModel());
       chat.mountContinuable(row.threadRef, row.id, row.scopeId, messages);
-      chat.state.agent!.convertToLlm = () => [{ role: "user", content: "run the command", timestamp: 0 }];
     }
     function click(label: string) {
       const button = [...host.querySelectorAll<HTMLButtonElement>("button")].find(

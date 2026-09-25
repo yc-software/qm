@@ -27,6 +27,7 @@ import { markdown } from "./message-markdown";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { ref } from "lit/directives/ref.js";
+import { guard } from "lit/directives/guard.js";
 import {
   Activity,
   Ban,
@@ -485,7 +486,7 @@ export function createChatSurface(
         messages,
         tools: [],
       },
-      convertToLlm: (messages) => import("@earendil-works/pi-web-ui").then((m) => m.defaultConvertToLlm(messages)),
+      convertToLlm: () => [],
     });
     chatState.agent = agent;
     clearLiveWork();
@@ -831,7 +832,7 @@ export function createChatSurface(
       if (agent !== chatState.agent) return;
       chatState.liveWork = work;
       syncWorkTicker();
-      drawActiveChat(agent);
+      scheduleStreamDraw(agent);
     };
   }
 
@@ -2467,23 +2468,38 @@ export function createChatSurface(
             </summary>
             ${stopped ? nothing : html`<div class="work-divider"></div>`}
             <div class="work-rows">
-              ${repeat(
-                activityGroups(timeline),
-                (items) => timelineKey(items[0]!),
-                (items) => {
-                  if (items.length === 1 || items[0]?.kind === "text") return renderTimelineItem(items[0]!, work);
-                  const summary = activityGroupSummary(items, work.status);
-                  const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
-                    summary.category
-                  ];
-                  return html`<details class="activity-group work-fold" ?open=${active || summary.attention}>
-                    <summary class="work-head">
-                      ${icon(groupIcon, 15)}<span>${summary.label}</span
-                      ><span class="activity-chevron">${icon(ChevronRight, 14)}</span>
-                    </summary>
-                    <div class="work-rows">${repeat(items, timelineKey, (item) => renderTimelineItem(item, work))}</div>
-                  </details>`;
-                },
+              ${guard(
+                [
+                  work,
+                  work.activity,
+                  work.status,
+                  work.stale,
+                  work.pendingApprovals,
+                  active,
+                  active ? "" : text,
+                  sessionsState.list,
+                ],
+                () =>
+                  repeat(
+                    activityGroups(timeline),
+                    (items) => timelineKey(items[0]!),
+                    (items) => {
+                      if (items.length === 1 || items[0]?.kind === "text") return renderTimelineItem(items[0]!, work);
+                      const summary = activityGroupSummary(items, work.status);
+                      const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
+                        summary.category
+                      ];
+                      return html`<details class="activity-group work-fold" ?open=${active || summary.attention}>
+                        <summary class="work-head">
+                          ${icon(groupIcon, 15)}<span>${summary.label}</span
+                          ><span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+                        </summary>
+                        <div class="work-rows">
+                          ${repeat(items, timelineKey, (item) => renderTimelineItem(item, work))}
+                        </div>
+                      </details>`;
+                    },
+                  ),
               )}
               ${tail.trim() ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}">${markdown(tail, animating, streamingTextTail(baseline, work.activity))}</div>` : nothing}
             </div>
