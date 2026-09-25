@@ -469,6 +469,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     description: "Email addresses allowed to sign in; the portal enforces the same list the broker does.",
   },
   {
+    name: "AUTH_PASSWORD_USERS",
+    service: "auth",
+    required: false,
+    description:
+      "Optional <email>:<scrypt-hash> entries that may sign in with a password while email or an identity provider is still being set up; each address must also be allowed to sign in.",
+  },
+  {
     name: "AUTH_EMAIL_FROM",
     service: "auth",
     required: false,

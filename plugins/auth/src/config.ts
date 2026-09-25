@@ -1,4 +1,5 @@
 import type { SmtpTlsMode } from "./smtp.ts";
+import { parsePasswordHash } from "./password.ts";
 
 type EmailTransportKind = "resend" | "smtp";
 
@@ -20,6 +21,10 @@ export interface AuthConfig {
   tokenSecret: string;
   allowedEmails: readonly string[];
   allowedEmailDomain: string | undefined;
+  passwordUsers: ReadonlyMap<string, string>;
+  passwordUserProblems: readonly string[];
+  passwordLimitPerEmail: number;
+  passwordLimitPerIp: number;
   emailFrom: string;
   brandName: string;
   faviconSvg: string | undefined;
@@ -87,6 +92,7 @@ export function readConfig(env: NodeJS.ProcessEnv): AuthConfig {
   const issuer = (env.AUTH_ISSUER ?? `http://localhost:${env.PORT ?? 8099}`).replace(/\/$/, "");
   const publicPath = issuerPath(issuer);
   const transport: EmailTransportKind = env.AUTH_EMAIL_TRANSPORT?.trim() === "smtp" ? "smtp" : "resend";
+  const passwordUsers = parsePasswordUsers(env.AUTH_PASSWORD_USERS);
   return {
     issuer,
     publicPath,
@@ -97,6 +103,10 @@ export function readConfig(env: NodeJS.ProcessEnv): AuthConfig {
     tokenSecret: env.AUTH_TOKEN_SECRET ?? "",
     allowedEmails: listFrom(env.AUTH_ALLOWED_EMAILS),
     allowedEmailDomain: env.AUTH_ALLOWED_EMAIL_DOMAIN?.trim().toLowerCase() || undefined,
+    passwordUsers: passwordUsers.users,
+    passwordUserProblems: passwordUsers.problems,
+    passwordLimitPerEmail: numberFrom(env.AUTH_PASSWORD_LIMIT_PER_EMAIL, 10),
+    passwordLimitPerIp: numberFrom(env.AUTH_PASSWORD_LIMIT_PER_IP, 30),
     emailFrom: env.AUTH_EMAIL_FROM?.trim() ?? "",
     brandName: env.AUTH_BRAND_NAME?.trim() || "qm",
     faviconSvg: env.AUTH_FAVICON_SVG?.trim() || undefined,
@@ -134,6 +144,31 @@ function validEmailDomain(value: string): boolean {
 
 export function validEmail(value: string): boolean {
   return value.length <= 254 && /^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(value);
+}
+
+export function parsePasswordUsers(raw: string | undefined): { users: Map<string, string>; problems: string[] } {
+  const users = new Map<string, string>();
+  const problems: string[] = [];
+  for (const entry of (raw ?? "").split(/[,\s]+/).filter(Boolean)) {
+    const separator = entry.indexOf(":");
+    const email = separator > 0 ? entry.slice(0, separator).trim().toLowerCase() : "";
+    const hash = separator > 0 ? entry.slice(separator + 1).trim() : "";
+    if (!email || !validEmail(email)) {
+      problems.push("AUTH_PASSWORD_USERS entries must be <email>:<hash>");
+      continue;
+    }
+    if (!parsePasswordHash(hash)) {
+      problems.push(`AUTH_PASSWORD_USERS: the hash for ${email} was not produced by the password helper`);
+      continue;
+    }
+    if (users.has(email)) problems.push(`AUTH_PASSWORD_USERS lists ${email} more than once`);
+    users.set(email, hash);
+  }
+  return { users, problems };
+}
+
+export function passwordConfigured(cfg: AuthConfig): boolean {
+  return cfg.passwordUsers.size > 0;
 }
 
 export function emailConfigured(cfg: AuthConfig): boolean {
@@ -216,6 +251,18 @@ export function bootProblems(cfg: AuthConfig, isProd: boolean): string[] {
         problems.push(
           "SMTP_TLS=none may not be used in production — SMTP credentials would cross the network in cleartext",
         );
+    }
+  }
+
+  problems.push(...cfg.passwordUserProblems);
+  for (const [name, limit] of [
+    ["AUTH_PASSWORD_LIMIT_PER_EMAIL", cfg.passwordLimitPerEmail],
+    ["AUTH_PASSWORD_LIMIT_PER_IP", cfg.passwordLimitPerIp],
+  ] as const) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_RATE_LIMIT_SLOTS) {
+      problems.push(
+        `${name} must be a whole number between 1 and ${MAX_RATE_LIMIT_SLOTS}; each unit is one durable claim slot`,
+      );
     }
   }
 

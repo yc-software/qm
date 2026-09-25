@@ -6,6 +6,12 @@ credentials unset, then run `qm admin-login` after deployment. It prints a priva
 single-use login link valid for five minutes. The selected account must already
 have `org_admin` access. Other users need email or an external identity provider.
 
+A deployment can also start with password sign-in: hash a password with
+`node plugins/auth/src/hash-password.ts admin@example.com` and store the result
+with `qm secrets set AUTH_PASSWORD_USERS ...`. The address must also be allowed
+to sign in. Treat this as an onboarding aid and move to email links or an
+identity provider once the deployment is running (see `plugins/auth/README.md`).
+
 Email sign-in needs one transport. SMTP is the default recommendation: any existing mail account or
 relay works and there is no DNS wait. Pick Resend only when the operator
 prefers it and has DNS control over a domain they are happy to send from.
