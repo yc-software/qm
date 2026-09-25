@@ -100,12 +100,10 @@ test("update blocked: needs a reason and three claims in distinct rounds", async
   assert.equal(ref.goal?.status, "blocked");
 });
 
-test("update pause/resume round-trip", async () => {
+test("update resumes a user-paused goal", async () => {
   const { ref, create, update } = toolbox();
   await create.execute("c1", { objective: "long haul" });
-  const paused = await update.execute("u1", { status: "paused" });
-  assert.match(textOf(paused as never), /Goal paused/);
-  assert.equal(ref.goal?.status, "paused");
+  ref.goal!.status = "paused";
   const closeWhilePaused = await update.execute("u2", { status: "complete" });
   assert.match(textOf(closeWhilePaused as never), /paused. Resume it first/);
   assert.equal(ref.goal?.status, "paused");
@@ -169,10 +167,35 @@ test("goal mutation receipts are durable before returning and rehydrate without 
   await create.execute("c1", { objective: "keep working", floor: { minMs: 1000 } });
   assert.equal(rehydrateOpenGoal(entries)?.status, "active");
   await update.execute("u1", { status: "paused" });
-  assert.equal(rehydrateOpenGoal(entries)?.status, "paused");
+  assert.equal(rehydrateOpenGoal(entries)?.status, "active");
+  ref.goal!.status = "paused";
   await update.execute("u2", { status: "active" });
   assert.equal(rehydrateOpenGoal(entries)?.status, "active");
   await update.execute("u3", { status: "complete", note: "verified" });
   assert.equal(rehydrateOpenGoal(entries), null);
   assert.ok(entries.every((entry) => entry.type !== "system"));
+});
+
+test("agent cannot pause a goal or bypass its work floor", async () => {
+  const { ref, create, update } = toolbox();
+  await create.execute("c1", { objective: "keep working", floor: { minMs: 86_400_000 } });
+  const before = structuredClone(ref.goal);
+  const result = await update.execute("u1", { status: "paused", note: "I choose to stop" });
+  assert.match(textOf(result), /Invalid arguments/);
+  assert.deepEqual(ref.goal, before);
+});
+
+test("goal update schema does not offer pause", () => {
+  const { tools } = toolbox();
+  const goal = tools.find((tool) => tool.name === "goal")!;
+  assert.doesNotMatch(JSON.stringify(goal.parameters), /"paused"/);
+});
+
+test("invalid goal status cannot fall through to completion", async () => {
+  const { ref, create, update } = toolbox();
+  await create.execute("c1", { objective: "keep working" });
+  const before = structuredClone(ref.goal);
+  const result = await update.execute("u1", { status: "cancelled" });
+  assert.match(textOf(result), /Invalid arguments/);
+  assert.deepEqual(ref.goal, before);
 });

@@ -13,9 +13,9 @@
  *   floor works the same way (matching Codex/Claude Code goal features):
  *   completing or stopping under an unmet floor is answered with a
  *   keep-going prompt, never a hard tool rejection.
- * - Goals are pausable: the agent can pause/resume via goal action update, and
- *   halting a turn (the user's stop button) pauses an in-flight goal —
- *   a deliberate stop should not leave enforcement armed.
+ * - Only the user can pause a goal by halting a turn (the stop button):
+ *   a deliberate stop should not leave enforcement armed. The agent can
+ *   resume a paused goal via goal action update.
  * - Opting out is deliberately hard: `blocked` is accepted only after the
  *   same impasse has been claimed across three separate continuation
  *   rounds, and never merely because the work is hard or slow.

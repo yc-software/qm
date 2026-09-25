@@ -3864,24 +3864,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "update",
     label: "update",
     description:
-      'Close, pause, or resume the goal. status "complete" ONLY when the objective is achieved and verified against ' +
+      'Close or resume the goal. status "complete" ONLY when the objective is achieved and verified against ' +
       'current evidence. status "blocked" ONLY at a genuine impasse that has recurred across ' +
       `${GOAL_BLOCKED_MIN_ROUNDS} separate continuation rounds — never because the work is hard, slow, or unclear. ` +
-      'status "paused" suspends enforcement (the user asked to set it aside; a halted turn also pauses it); ' +
+      "Only the user can pause a goal by stopping the turn; agents cannot pause goals. " +
       'status "active" resumes a paused goal.',
     parameters: Type.Object({
-      status: Type.Union([
-        Type.Literal("complete"),
-        Type.Literal("blocked"),
-        Type.Literal("paused"),
-        Type.Literal("active"),
-      ]),
+      status: Type.Union([Type.Literal("complete"), Type.Literal("blocked"), Type.Literal("active")]),
       note: Type.Optional(
         Type.String({ description: "complete: what evidence proves it. blocked: the exact impasse (required)." }),
       ),
     }),
     async execute(callId, params) {
-      const p = params as { status: "complete" | "blocked" | "paused" | "active"; note?: string };
+      const p = params as { status: "complete" | "blocked" | "active"; note?: string };
       await recordCall(callId, {
         tool: "goal",
         action: "update",
@@ -3912,15 +3907,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           callId,
           { tool: "goal", action: "update", goal },
           text("Goal resumed. It is enforced again; keep working toward it."),
-        );
-      }
-      if (p.status === "paused") {
-        goal.status = "paused";
-        goal.updatedAt = Date.now();
-        return recordCoreAuthoredResult(
-          callId,
-          { tool: "goal", action: "update", goal },
-          text('Goal paused. Enforcement is off until it is resumed with goal action update status "active".'),
         );
       }
       if (goal.status === "paused") {
