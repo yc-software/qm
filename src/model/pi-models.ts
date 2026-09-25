@@ -456,8 +456,19 @@ export function registerOpenRouterCatalogModel(definition: OpenRouterCatalogMode
 
 export function resolveBuiltinModel(id: string): PiModel | undefined {
   if (id.startsWith(CODEX_SUBSCRIPTION_PREFIX)) {
-    const m = getModel(CODEX_SUBSCRIPTION_PROVIDER, codexProviderModelId(id));
-    return m ? { ...m, id } : undefined;
+    const providerId = codexProviderModelId(id);
+    const m = getModel(CODEX_SUBSCRIPTION_PROVIDER, providerId);
+    if (m) return { ...m, id };
+    const entry = REGISTRY_BY_ID.get(providerId);
+    const template = entry?.clone ? getModel(CODEX_SUBSCRIPTION_PROVIDER, entry.clone.template) : undefined;
+    const native = entry?.clone ? resolveBuiltinModel(providerId) : undefined;
+    if (!template || !native || native.provider !== "openai") return undefined;
+    return cloneModel(template, id, native.name, {
+      contextWindow: native.contextWindow,
+      maxTokens: native.maxTokens,
+      cost: native.cost,
+      ...(native.thinkingLevelMap ? { thinkingLevelMap: native.thinkingLevelMap } : {}),
+    });
   }
   const entry = REGISTRY_BY_ID.get(id);
   if (entry?.clone) {

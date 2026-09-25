@@ -145,12 +145,12 @@ export class PayloadTooLargeError extends Error {
 
 const MAX_BODY_BYTES = 1_000_000;
 
-export async function readRawBody(req: IncomingMessage): Promise<string> {
+export async function readRawBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<string> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) throw new PayloadTooLargeError();
+    if (size > maxBytes) throw new PayloadTooLargeError();
     chunks.push(chunk as Buffer);
   }
   return chunks.length === 0 ? "" : Buffer.concat(chunks).toString("utf8");

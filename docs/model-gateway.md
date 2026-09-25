@@ -15,3 +15,35 @@ For LiteLLM deployments, allow the two authenticated GET endpoints alongside inf
 The metadata endpoint returns `{"data": [...]}` with one object per model group. QM uses `model_group`, `mode`, `supports_function_calling`, `max_input_tokens`, `max_output_tokens`, `input_cost_per_token`, and `output_cost_per_token`. Optional fields include `providers`, `supports_vision`, `supports_reasoning`, `supports_adaptive_thinking`, `supported_openai_params`, `cache_read_input_token_cost`, and `cache_creation_input_token_cost`. Prices are per token and converted to per-million-token prices for QM. Missing cache prices use the input rate. Input capacity is used conservatively as the context budget; output capacity must be smaller.
 
 LiteLLM group metadata may combine capabilities and maximum limits from multiple deployments. It is a gateway contract, not a guarantee that every backing deployment has identical capabilities.
+
+## Browser agent
+
+The browse skill follows the user's saved AI access and default model. Company
+access uses the configured model gateway, or the deployment's default provider
+credentials when no gateway is configured; ChatGPT access uses the user's connected
+OpenAI account, including refreshed subscription access; Claude access supports
+API keys. Claude subscription access is unavailable for the inner browser agent
+and returns an actionable error. No account silently falls back to another.
+Kernel, Anchor and Browserbase still use their own credentials for browser sessions.
+
+Core gives internal, non-strict turns a one-hour capability bound to the account,
+model and conversation scope. The sandbox sends OpenAI-compatible, non-streaming
+chat completions to `/v1/browser-model/chat/completions`; core reloads the saved
+selection and credentials for each request. Changing the account or model requires
+a fresh turn. Credentials stay on core. Without a gateway, company inference reloads the same provider credentials as normal
+agent inference, including administrator changes and configured provider endpoints.
+No separate browser model key is needed. Missing credentials fail closed.
+Personal inference uses native provider
+transports, bypassing organization endpoint overrides, and converts structured
+browser responses and screenshots through the existing model runtime.
+
+Company browser inference uses the same gateway key permissions and budgets as
+other company model calls. The selected model must be in the gateway catalog or
+configured aliases. Private gateways need no public listener. The endpoint accepts
+up to 16 MiB for screenshot history, rejects provider overrides, and rechecks scope
+membership, strict posture and gateway availability. Gateway budget exhaustion is
+returned as HTTP 429; missing or retired models fail closed.
+
+The managed browse runner needs browser-use 0.12.9 with
+`ChatOpenAI.default_headers` support. It never requests separate browser model
+credentials or falls back to them on account or gateway errors.
