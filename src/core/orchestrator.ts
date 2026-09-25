@@ -2218,8 +2218,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             "Core will deliver your final reply after you finish. Do not call Slack, email, chat, or other send APIs to deliver it yourself; put the exact message to send in your final reply.";
         }
         if (automatedTurn && input.surface && isPollSurface(input.surface)) {
-          const silentEnder = input.surfaceTools ? "stay_silent" : "finish_silently";
-          systemPrompt += `\n\nThis turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call \`${silentEnder}\` to end the turn without sending anything — silence is the success case for a poll, so don't post a summary or a "nothing to report" note just to fill the silence.`;
+          systemPrompt += `\n\nThis turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call \`finish_silently\` to end the turn without sending anything — silence is the success case for a poll, so don't post a summary or a "nothing to report" note just to fill the silence.`;
         }
         if (reachAvailable) {
           const roster = renderReachRoster(
@@ -2415,7 +2414,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const spine: SpineState = {
           surfaceOutboundCount: 0,
           crossConversationPosts: 0,
-          staySilentReason: undefined,
           turnUserEntrySeq: undefined,
         };
         const turnKey = input.runId ?? randomUUID();
@@ -3752,7 +3750,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           surfaceToolDeps &&
           !input.cancel?.aborted &&
           spine.surfaceOutboundCount === 0 &&
-          spine.staySilentReason === undefined &&
           !result.silent &&
           !result.stopped
         ) {
@@ -3818,16 +3815,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   })
               : undefined;
             result = await runHarnessTurn(
-              "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with stay_silent — ending the turn without either is not allowed here.",
+              "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.",
               nudgeTape?.mode !== "serve" && inbound.images.length ? { images: inbound.images } : {},
               { history: nudgeHistory, ...(nudgeTape ? { tape: nudgeTape } : {}) },
             );
-            if (
-              spine.surfaceOutboundCount === 0 &&
-              spine.staySilentReason === undefined &&
-              !result.silent &&
-              !result.stopped
-            ) {
+            if (spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
               const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
               if (fallback && defaultDestination && deps.deliveries) {
                 try {

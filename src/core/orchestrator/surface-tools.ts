@@ -43,7 +43,6 @@ const SURFACE_FILE_MAX_CHARS = 100_000;
 export interface SpineState {
   surfaceOutboundCount: number;
   crossConversationPosts: number;
-  staySilentReason: string | undefined;
   turnUserEntrySeq: number | undefined;
 }
 
@@ -523,10 +522,6 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(p.bots && Object.keys(p.bots).length ? { bots: p.bots } : {}),
         ...(p.ambientEnabled !== undefined ? { ambientEnabled: p.ambientEnabled } : {}),
       };
-    },
-    staySilent: async (reason: string) => {
-      spine.staySilentReason = reason;
-      return { ok: true, message: "[staying silent]" };
     },
   };
 }

@@ -426,7 +426,6 @@ export interface SurfaceToolDeps {
     bots?: Record<string, BotPolicy>,
     ambientEnabled?: boolean | null,
   ): Promise<SurfaceStandingOrderResult>;
-  staySilent(reason: string): Promise<{ ok: true; message: string }>;
 }
 
 export interface ControlUnavailable {
@@ -1425,10 +1424,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     getStandingOrder: () => surfaceOp((s) => s.getStandingOrder()),
     setStandingOrder: (orders, bots, ambientEnabled) =>
       surfaceOp((s) => s.setStandingOrder(orders, bots, ambientEnabled)),
-    staySilent: (reason) =>
-      deps.surface
-        ? deps.surface.staySilent(reason)
-        : Promise.resolve({ ok: true as const, message: "[staying silent]" }),
     attach: (files) =>
       deps.attach ? deps.attach(files) : Promise.resolve({ ok: false as const, message: ATTACH_UNAVAILABLE_MESSAGE }),
   };

@@ -1117,7 +1117,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       }
       for (const thinking of reasoningFromParts(parts))
         await turn.emit({ type: "thinking", payload: thinking, scopeLabel: turn.scopeLabel });
-      const reply = ref.runtimeHandoff ? "" : textFromParts(parts);
+      const reply = ref.runtimeHandoff || ref.silentRequested ? "" : textFromParts(parts);
       if (reply) {
         const finalEntry = await turn.emit({
           type: "assistant",

@@ -628,3 +628,45 @@ for (const mechanism of ["signal", "cancel", "both"] as const) {
     if (mechanism !== "cancel") assert.equal(result.stopped, true);
   });
 }
+
+for (const surfaceTools of [false, true]) {
+  test(`OpenCode finish_silently suppresses provider closing text (surface=${surfaceTools})`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-silent-"));
+    const harness = createOpenCodeHarness({
+      binaryPath: fakeSidecar(
+        dir,
+        "silent",
+        `
+        if (req.method === "POST" && message) {
+          await readBody(req);
+          const result = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + message[1] + "/tool", {
+            method: "POST",
+            headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET, "content-type": "application/json" },
+            body: JSON.stringify({ tool: "finish_silently", callID: "quiet", args: { reason: "nothing new" } }),
+          }).then((r) => r.json());
+          if (!result.terminate) throw new Error("silence did not terminate");
+          return json(res, ${okAssistant});
+        }
+        if (req.method === "GET" && message) return json(res, [${okAssistant}]);
+      `,
+      ),
+    });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const entries: SessionEntry[] = [];
+    const result = await harness.turns.runTurn({
+      ...turnInput(entries, []),
+      pollFire: !surfaceTools,
+      surfaceTools,
+    });
+    assert.equal(result.silent, true);
+    assert.equal(result.reply, "");
+    assert.equal(
+      entries.some((entry) => entry.type === "assistant"),
+      false,
+    );
+    assert.ok(entries.some((entry) => entry.type === "tool_result" && (entry.payload as { silent?: boolean }).silent));
+  });
+}

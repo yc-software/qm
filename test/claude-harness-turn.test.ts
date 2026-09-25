@@ -650,3 +650,23 @@ test("Claude coordinators expose neither command tools nor native subagents", as
   for (const name of ["Agent", "mcp__qm__execute", "mcp__qm__background"]) assert.ok(!allowed.includes(name));
   await harness.turns.close?.();
 });
+
+for (const surfaceTools of [false, true]) {
+  test(`Claude finish_silently suppresses provider closing text (surface=${surfaceTools})`, async () => {
+    currentScript = async function* () {
+      await toolHandlers.get("finish_silently")!({ reason: "nothing new" });
+      yield assistantMessage("quiet", "Nothing to add", {});
+      yield resultMessage("Nothing to add");
+    };
+    const harness = createClaudeHarness();
+    const { turn, entries } = harnessTurn({ pollFire: !surfaceTools, surfaceTools });
+    const result = await harness.turns.runTurn(turn);
+    assert.equal(result.silent, true);
+    assert.equal(result.reply, "");
+    assert.equal(
+      entries.some((entry) => entry.type === "assistant"),
+      false,
+    );
+    assert.ok(entries.some((entry) => entry.type === "tool_result" && (entry.payload as { silent?: boolean }).silent));
+  });
+}

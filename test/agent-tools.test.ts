@@ -349,9 +349,6 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async setStandingOrder(orders: string) {
       return { ok: true, orders };
     },
-    async staySilent() {
-      return { ok: true as const, message: "[staying silent]" };
-    },
     mcpToolDefs() {
       return [];
     },
@@ -1479,7 +1476,7 @@ test("finish_silently on a poll fire terminates the turn at the tool contract; o
   assert.match(noop.content[0]?.text ?? "", /no-op/);
 });
 
-test("stay_silent records its reason in the tape like finish_silently", async () => {
+test("finish_silently ends surface turns and replaces stay_silent", async () => {
   const emitted: Emitted[] = [];
   const ref: ToolContextRef = {
     current: fakeToolContext(),
@@ -1488,13 +1485,17 @@ test("stay_silent records its reason in the tape like finish_silently", async ()
     },
     scopeLabel: "personal:U1",
   };
-  const stay = createAgentTools(ref, { surfaceTools: true }).find((t) => t.name === "stay_silent");
-  await call(stay, { reason: "nothing new since the last check" });
+  const tools = createAgentTools(ref, { surfaceTools: true });
+  assert.ok(!tools.some((t) => t.name === "stay_silent"));
+  const finish = tools.find((t) => t.name === "finish_silently");
+  const result = (await call(finish, { reason: "nothing new since the last check" })) as { terminate?: boolean };
+  assert.equal(result.terminate, true);
+  assert.equal(ref.silentRequested, true);
   assert.equal(
     emitted.filter(
       (e) =>
         e.type === "tool_call" &&
-        e.payload.tool === "stay_silent" &&
+        e.payload.tool === "finish_silently" &&
         e.payload.reason === "nothing new since the last check",
     ).length,
     1,

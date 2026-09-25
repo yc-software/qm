@@ -945,53 +945,56 @@ test("Codex rejects malformed turn completion payloads", async (t) => {
 test("Codex children cannot use parent surface, control, or terminal tools", () => {
   assert.equal(codexChildToolAllowed("history"), true);
   assert.equal(codexChildToolAllowed("execute"), true);
-  for (const denied of ["slack", "cron", "webhook", "guidance", "share", "stay_silent", "finish_silently"]) {
+  for (const denied of ["slack", "cron", "webhook", "guidance", "share", "finish_silently"]) {
     assert.equal(codexChildToolAllowed(denied), false, denied);
   }
 });
 
-test("Codex interrupts the provider after a terminal QM tool", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-codex-stop-test-"));
-  const harness = createCodexHarness({
-    binaryPath: terminatingCodexBinary(dir),
-    env: testHarnessEnv(dir),
-    turnWallClockMs: 2_000,
-  });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const entries: SessionEntry[] = [];
-  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  const result = await harness.turns.runTurn({
-    session: { id: "terminal-tool" } as Session,
-    input: "poll",
-    systemPrompt: "finish silently",
-    history: [],
-    tools: {} as HarnessTurnInput["tools"],
-    scopeLabel: scope,
-    orgScopeId: scope,
-    pollFire: true,
-    emit: async (entry) => {
-      const saved = {
-        ...entry,
-        sessionId: "terminal-tool",
-        seq: entries.length + 1,
-        createdAt: Date.now(),
-      } as SessionEntry;
-      entries.push(saved);
-      return saved;
-    },
-    recordModelCall: () => {},
-  });
+for (const surfaceTools of [false, true]) {
+  test(`Codex interrupts the provider after finish_silently (surface=${surfaceTools})`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-codex-stop-test-"));
+    const harness = createCodexHarness({
+      binaryPath: terminatingCodexBinary(dir),
+      env: testHarnessEnv(dir),
+      turnWallClockMs: 2_000,
+    });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const entries: SessionEntry[] = [];
+    const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+    const result = await harness.turns.runTurn({
+      session: { id: "terminal-tool" } as Session,
+      input: "poll",
+      systemPrompt: "finish silently",
+      history: [],
+      tools: {} as HarnessTurnInput["tools"],
+      scopeLabel: scope,
+      orgScopeId: scope,
+      pollFire: !surfaceTools,
+      surfaceTools,
+      emit: async (entry) => {
+        const saved = {
+          ...entry,
+          sessionId: "terminal-tool",
+          seq: entries.length + 1,
+          createdAt: Date.now(),
+        } as SessionEntry;
+        entries.push(saved);
+        return saved;
+      },
+      recordModelCall: () => {},
+    });
 
-  assert.equal(result.silent, true);
-  assert.notEqual(result.reply, "BAD");
-  assert.equal(
-    entries.some((entry) => entry.type === "assistant"),
-    false,
-  );
-});
+    assert.equal(result.silent, true);
+    assert.notEqual(result.reply, "BAD");
+    assert.equal(
+      entries.some((entry) => entry.type === "assistant"),
+      false,
+    );
+  });
+}
 
 test("Codex spawn failure does not hang run or cleanup", async () => {
   const harness = createCodexHarness({ binaryPath: "/definitely/missing/qm-codex" });

@@ -1587,3 +1587,30 @@ test("a recorded decision clears stale approval labels without consuming a later
   assert.deepEqual((history[0] as AssistantWork).work?.pendingApprovals, []);
   assert.equal(history.at(-1), fresh);
 });
+
+test("finish_silently retains explicit posts and audit without a phantom closing reply", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", seq: 1, createdAt: 100, payload: { text: "post the answer" } },
+    {
+      type: "tool_call",
+      seq: 2,
+      createdAt: 110,
+      payload: { tool: "slack", action: "post", text: "The answer.", callId: "post1" },
+    },
+    {
+      type: "tool_result",
+      seq: 3,
+      createdAt: 120,
+      payload: { tool: "slack", action: "post", ok: true, callId: "post1" },
+    },
+    { type: "text", seq: 4, createdAt: 130, payload: { text: "Nothing to add." } },
+    { type: "tool_call", seq: 5, createdAt: 140, payload: { tool: "finish_silently", reason: "already posted" } },
+    { type: "tool_result", seq: 6, createdAt: 150, payload: { tool: "finish_silently", silent: true } },
+    { type: "assistant", seq: 7, createdAt: 160, payload: { text: "" } },
+  ];
+  const replies = entriesToMessages(entries, MODEL).filter((m) => m.role === "assistant") as AssistantWork[];
+  assert.deepEqual(replies.map((m) => (m.content[0] as { text: string }).text).filter(Boolean), ["The answer."]);
+  assert.ok(
+    replies.some((m) => m.work?.activity.some((a) => (a.payload as { tool?: string }).tool === "finish_silently")),
+  );
+});
