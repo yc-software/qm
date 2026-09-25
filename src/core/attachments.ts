@@ -1,3 +1,6 @@
+import { MAX_DOCUMENT_BYTES } from "./document-inputs.ts";
+import { addAbortSignal, type Readable } from "node:stream";
+import { collectBytes } from "../util/bytes.ts";
 import { basename } from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
@@ -9,13 +12,18 @@ import type {
   SessionEntry,
 } from "../types.ts";
 import { hasParentPathSegment, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
-import { MAX_BLOB_BYTES, collectBlob, type BlobTransferStore } from "../persistence/blob-transfer.ts";
-import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
+import { MAX_BLOB_BYTES, type BlobTransferStore } from "../persistence/blob-transfer.ts";
+import {
+  artifactPath,
+  fileArtifactId,
+  type FileArtifactStore,
+  type FileDirection,
+} from "../files/file-artifact-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
-import { downscaleVisionImage } from "./image-downscale.ts";
+import { downscaleVisionImage, sniffImageDimensions } from "./image-downscale.ts";
 
 export const INBOX_DIR = "inbox";
 export const SHARED_DIR = "shared";
@@ -202,18 +210,19 @@ function shownToModel(meta: AttachmentMeta): boolean {
   return isVisionAttachment(meta) && meta.sizeBytes > 0 && meta.sizeBytes <= MAX_VISION_IMAGE_BYTES;
 }
 
-export function inboundManifest(metas: AttachmentMeta[], inboxDir = INBOX_DIR): string {
+export function inboundManifest(metas: AttachmentMeta[], inboxDir?: string): string {
   if (!metas.length) return "";
   const list = metas
-    .map(
-      (m) =>
-        `- ${inboxDir}/${m.name} (${m.mimetype}, ${m.sizeBytes} bytes)${m.author ? ` — shared by ${m.author}` : ""}`,
-    )
+    .map((m) => {
+      let path = `${inboxDir ?? INBOX_DIR}/${m.name}`;
+      if (m.artifactId) path = inboxDir ? `${inboxDir}/${m.artifactId}/${m.name}` : artifactPath(m.artifactId, m.name);
+      return `- ${path} (${m.mimetype}, ${m.sizeBytes} bytes)${m.author ? ` — shared by ${m.author}` : ""}`;
+    })
     .join("\n");
   const noun = metas.length === 1 ? "file" : "files";
   const lead = metas.some((m) => m.author)
-    ? `${metas.length} ${noun} shared in this conversation, available in ./${inboxDir}/:`
-    : `The user shared ${metas.length} ${noun}, available in ./${inboxDir}/:`;
+    ? `${metas.length} ${noun} shared in this conversation, available at these file paths:`
+    : `The user shared ${metas.length} ${noun}, available at these file paths:`;
   return `${lead}\n${list}`;
 }
 
@@ -229,7 +238,7 @@ export interface FileEventPayload {
 export function fileEventPayload(direction: FileDirection, issues: string[]): FileEventPayload {
   const lead =
     direction === "in"
-      ? `Files received this turn that did not reach ./${INBOX_DIR}/`
+      ? "Files received this turn that could not be made available"
       : "Files the agent tried to send that did not go out";
   return { kind: FILE_EVENT_KIND, direction, issues, text: `${lead}: ${issues.join("; ")}` };
 }
@@ -299,18 +308,41 @@ export function senderNote(name: string | undefined): string {
   return n ? `This message is from @${n}.` : "";
 }
 
-export async function materializeInbound(
-  sandbox: Sandbox,
-  handle: SandboxHandle,
+const MAX_INBOUND_BUFFER_BYTES = MAX_DOCUMENT_BYTES;
+const MAX_IMAGE_PIXELS = 20_000_000;
+
+async function isBinaryStream(stream: Readable, name: string, mimetype: string): Promise<boolean> {
+  if (isTextMime(mimetype) || isTextMime(mimeFromName(name))) return false;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let totalBytes = 0;
+  try {
+    for await (const chunk of stream) {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += bytes.length;
+      if (totalBytes > MAX_ATTACHMENT_BYTES) throw new Error("attachment exceeds the size limit");
+      for (let offset = 0; offset < bytes.length; offset += 64 * 1024) {
+        const text = decoder.decode(bytes.subarray(offset, offset + 64 * 1024), { stream: true });
+        if (text.includes("\0")) return true;
+      }
+    }
+    return decoder.decode().includes("\0");
+  } catch (error) {
+    if (error instanceof TypeError && "code" in error && error.code === "ERR_ENCODING_INVALID_ENCODED_DATA")
+      return true;
+    throw error;
+  }
+}
+
+export async function ingestInbound(
   attachments: IncomingAttachment[],
   transfer: BlobTransferStore,
-  register?: ArtifactRegistration,
-  inboxDir = INBOX_DIR,
+  register: ArtifactRegistration,
   screenText?: (input: {
     content: string;
     name: string;
     mimetype: string;
   }) => Promise<SecurityScreenVerdict | undefined>,
+  signal?: AbortSignal,
 ): Promise<{
   metas: AttachmentMeta[];
   images: InboundImage[];
@@ -319,6 +351,7 @@ export async function materializeInbound(
   blocked: string[];
   unscreened: string[];
 }> {
+  signal?.throwIfAborted();
   const metas: AttachmentMeta[] = [];
   const images: InboundImage[] = [];
   const tooMany: string[] = [];
@@ -326,53 +359,142 @@ export async function materializeInbound(
   const blocked: string[] = [];
   const unscreened: string[] = [];
   const usedNames = new Set<string>();
-  for (const a of attachments) {
-    if (metas.length >= MAX_INBOUND_FILES) {
-      tooMany.push(safeAttachmentName(a.name));
+  let imageBytesRemaining = MAX_HISTORY_IMAGE_BYTES;
+  for (const [index, a] of attachments.entries()) {
+    signal?.throwIfAborted();
+    const name = uniqueName(safeAttachmentName(a.name), usedNames);
+    usedNames.add(name);
+    if (index >= MAX_INBOUND_FILES) {
+      tooMany.push(name);
       continue;
     }
     const blob = await transfer.open(a.blobId);
     if (!blob) {
-      unavailable.push(safeAttachmentName(a.name));
+      unavailable.push(name);
       continue;
     }
-    const bytes = await collectBlob(blob.stream);
-    const name = uniqueName(safeAttachmentName(a.name), usedNames);
-    usedNames.add(name);
+    let stream = signal ? addAbortSignal(signal, blob.stream) : blob.stream;
     const mimetype = baseMime(a.mimetype || mimeFromName(name));
-    const textContent = screenText ? decodeText(bytes, name, mimetype) : null;
-    if (screenText && textContent !== null) {
-      const verdict = await screenText({ content: textContent, name, mimetype });
-      if (verdict?.decision === "strict") {
-        blocked.push(name);
-        continue;
+    let bytes: Buffer | undefined;
+    try {
+      if (blob.sizeBytes <= MAX_INBOUND_BUFFER_BYTES) {
+        bytes = (await collectBytes(stream, { maxBytes: MAX_INBOUND_BUFFER_BYTES })).data;
+        const textContent = screenText ? decodeText(bytes, name, mimetype) : null;
+        if (screenText && textContent !== null) {
+          const verdict = await screenText({ content: textContent, name, mimetype });
+          if (verdict?.decision === "strict") {
+            blocked.push(name);
+            continue;
+          }
+          if (!verdict || verdict.unscreened) unscreened.push(name);
+        }
+      } else if (screenText) {
+        if (!(await isBinaryStream(stream, name, mimetype))) {
+          blocked.push(`${name} (text exceeds the 8 MB security-screen limit)`);
+          continue;
+        }
+        stream.destroy();
+        signal?.throwIfAborted();
+        const reopened = await transfer.open(a.blobId);
+        if (!reopened) {
+          unavailable.push(name);
+          continue;
+        }
+        stream = signal ? addAbortSignal(signal, reopened.stream) : reopened.stream;
       }
-      if (!verdict || verdict.unscreened) unscreened.push(name);
-    }
-    await sandbox.writeFileBytes(handle, `${inboxDir}/${name}`, bytes);
-    const registered = register
-      ? await registerArtifact(register, "in", metas.length, name, mimetype, bytes)
-      : undefined;
-    metas.push({
-      name,
-      mimetype,
-      sizeBytes: bytes.length,
-      direction: "in",
-      ...(a.author ? { author: a.author } : {}),
-      ...(a.sourceId ? { sourceId: a.sourceId } : {}),
-      ...(registered ? { artifactId: registered.id } : {}),
-    });
-    if (VISION_MIME_TYPES.has(mimetype) && bytes.length > 0 && bytes.length <= MAX_VISION_IMAGE_BYTES) {
-      const imageBytes = await downscaleVisionImage(bytes, mimetype);
-      images.push({
+      signal?.throwIfAborted();
+      const id = fileArtifactId(`${register.seed}:${a.blobId}`, "in", 0);
+      const path = artifactPath(id, name);
+      const { artifact } = await register.store.put({
+        id,
+        path,
         name,
-        mimeType: mimetype,
-        dataBase64: Buffer.from(imageBytes).toString("base64"),
-        ...(registered ? { artifactId: registered.id } : {}),
+        mimetype,
+        data: bytes ?? stream,
+        ownerScopeId: register.ownerScopeId,
+        createdBy: register.createdBy,
+        createdInScope: register.createdInScope,
+        direction: "in",
+        maxBytes: MAX_ATTACHMENT_BYTES,
       });
+      signal?.throwIfAborted();
+      await register.onRegistered?.({
+        id: artifact.id,
+        path: artifact.path,
+        ownerScopeId: artifact.ownerScopeId,
+        direction: "in",
+      });
+      metas.push({
+        name: artifact.name,
+        mimetype: artifact.mimetype,
+        sizeBytes: artifact.sizeBytes,
+        direction: "in",
+        artifactId: id,
+        ...(a.author ? { author: a.author } : {}),
+        ...(a.sourceId ? { sourceId: a.sourceId } : {}),
+      });
+      if (
+        bytes &&
+        VISION_MIME_TYPES.has(mimetype) &&
+        bytes.length > 0 &&
+        bytes.length <= Math.min(MAX_VISION_IMAGE_BYTES, imageBytesRemaining)
+      ) {
+        const dimensions = sniffImageDimensions(bytes);
+        if (dimensions && dimensions.width * dimensions.height > MAX_IMAGE_PIXELS) continue;
+        const imageBytes = await downscaleVisionImage(bytes, mimetype);
+        if (imageBytes.length > imageBytesRemaining) continue;
+        imageBytesRemaining -= imageBytes.length;
+        images.push({
+          name: artifact.name,
+          mimeType: artifact.mimetype,
+          dataBase64: Buffer.from(imageBytes).toString("base64"),
+          artifactId: id,
+        });
+      }
+    } finally {
+      stream.destroy();
     }
   }
   return { metas, images, tooMany, unavailable, blocked, unscreened };
+}
+
+export async function materializeArtifact(
+  files: FileArtifactStore,
+  transfer: BlobTransferStore,
+  sandbox: Sandbox,
+  handle: SandboxHandle,
+  ref: { id: string; ownerScopeId: ScopeId; path: string },
+  path: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
+  const opened = await files.open(ref.id);
+  if (!opened) throw new Error(`File ${path} is no longer available`);
+  const stream = signal ? addAbortSignal(signal, opened.stream) : opened.stream;
+  try {
+    if (opened.artifact.ownerScopeId !== ref.ownerScopeId || opened.artifact.path !== ref.path)
+      throw new Error(`File ${path} does not match its authorized reference`);
+    if (sandbox.stageIn) {
+      const { blobId } = await transfer.put(stream, {
+        maxBytes: MAX_ATTACHMENT_BYTES,
+        ...(opened.artifact.sha256 ? { expectedSha256: opened.artifact.sha256 } : {}),
+      });
+      try {
+        signal?.throwIfAborted();
+        await sandbox.stageIn(handle, path, blobId, { timeoutSec: 60 });
+        signal?.throwIfAborted();
+      } finally {
+        await transfer.delete(blobId).catch(swallowAs("attachments: staged blob cleanup", undefined));
+      }
+    } else {
+      const { data } = await collectBytes(stream, { maxBytes: MAX_INBOUND_BUFFER_BYTES });
+      signal?.throwIfAborted();
+      await sandbox.writeFileBytes(handle, path, data);
+      signal?.throwIfAborted();
+    }
+  } finally {
+    stream.destroy();
+  }
 }
 
 const DELIVERY_NOTE_PREFIX = "[files delivered to the conversation: ";

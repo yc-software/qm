@@ -1,3 +1,5 @@
+import { createServer as createHttpServer } from "node:http";
+import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -313,4 +315,31 @@ test("containerized core joins each sandbox network and reaches the daemon by co
   assert.ok(seen.includes(`http://${h.id}:8080/health`));
   await sb.teardown(h, { destroy: true });
   assert.equal(fake.connections.has(`${localNetworkName(h.id)}|qm-test-core`), false);
+});
+
+test("local blob staging streams large files through the existing authenticated transfer route", async () => {
+  const bytes = Buffer.alloc(9_000_000, 42);
+  let requested = false;
+  const server = createHttpServer((request, response) => {
+    assert.ok(request.headers["x-agent-capability"]);
+    requested = true;
+    response.end(bytes);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as AddressInfo;
+  try {
+    const fake = installFakeDocker(daemonPort);
+    const sandbox = makeSandbox(fake, {
+      blobTransfer: createMemoryBlobTransferStore(),
+      capabilitySecret: "local-stage-test-secret-with-sufficient-entropy",
+      apiBaseUrl: `http://127.0.0.1:${address.port}`,
+    });
+    const handle = await sandbox.provision(rw("personal:stage-test"));
+    assert.ok(sandbox.stageIn);
+    await sandbox.stageIn(handle, "inbound/large.bin", "a".repeat(32));
+    assert.equal(requested, true);
+    assert.deepEqual(await sandbox.readFileBytes(handle, "inbound/large.bin"), bytes);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
 });

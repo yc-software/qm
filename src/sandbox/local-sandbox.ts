@@ -11,7 +11,13 @@ import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
-import { createExecExport, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
+import {
+  createExecExport,
+  createExecFileOps,
+  createBackendBlobStaging,
+  type BlobStagingOptions,
+  posixJoin,
+} from "./exec-file-ops.ts";
 import { spawnDockerExec, type DockerExec } from "./docker-exec.ts";
 import { ephemeralCredLinkScript } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
@@ -40,7 +46,7 @@ const PREP_TIMEOUT_SEC = 30;
 
 export type { DockerExec };
 
-export interface LocalSandboxOptions {
+export interface LocalSandboxOptions extends BlobStagingOptions {
   image?: string;
   dockerBin?: string;
   cpus?: number;
@@ -380,7 +386,10 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     ephemeralCredentialPrefixes: ephemeralCredLinkPaths().map(({ rel }) => rel),
   });
 
+  const blobStaging = createBackendBlobStaging("local", (id, script, t) => execRaw(id, script, t), opts);
+
   const sandbox: Sandbox = {
+    ...blobStaging,
     profile,
     startProcess: procSessions.startProcess,
     readProcess: procSessions.readProcess,
