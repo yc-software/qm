@@ -1,3 +1,4 @@
+import { isLiveResourceAdmin } from "../admin/resource-authority.ts";
 import { unattendedGrantRefusal } from "../cron/authority.ts";
 import { isDeepStrictEqual } from "node:util";
 import type { Cron, CronFireLogEntry, CronSchedule, Destination, Principal, Webhook } from "../types.ts";
@@ -186,6 +187,7 @@ export async function canAdministerCron(
   callerScopeId?: ScopeId,
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
+  if (await isLiveResourceAdmin(actorId)) return true;
   if (await app.membershipControlsScope(cron.ownerScopeId)) return app.managesScope(actorId, cron.ownerScopeId);
   if (await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId))) return true;
   const team = cron.runAs === "scopeFloor" || cron.runAs === "scopeShared";
@@ -200,6 +202,7 @@ export async function canAdministerWebhook(
   actorId: string,
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
+  if (await isLiveResourceAdmin(actorId)) return true;
   if (await app.membershipControlsScope(webhook.ownerScopeId)) {
     return app.managesScope(actorId, webhook.ownerScopeId);
   }
@@ -615,7 +618,15 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (req.unattendedGrants !== undefined) patch.unattendedGrants = req.unattendedGrants;
       else if ((before.unattendedGrants?.length ?? 0) > 0) patch.unattendedGrants = before.unattendedGrants;
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
-      if ((before.unattendedGrants?.length ?? 0) > 0 || req.unattendedGrants !== undefined) {
+      const adminMetadataEdit =
+        req.action === undefined &&
+        req.text === undefined &&
+        req.runAs === undefined &&
+        req.unattendedGrants === undefined &&
+        req.enabled !== true &&
+        req.archived !== false &&
+        (await isLiveResourceAdmin(capability.actorId));
+      if (!adminMetadataEdit && ((before.unattendedGrants?.length ?? 0) > 0 || req.unattendedGrants !== undefined)) {
         const refusal = await unattendedGrantRefusal(
           app,
           admin,
@@ -895,7 +906,11 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       const isOrg = toKind === "org";
       const orgSkillCede = isOrg && req.type === "skill";
 
-      if (!orgSkillCede && !(await app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId))) {
+      if (
+        !orgSkillCede &&
+        !(await isLiveResourceAdmin(capability.actorId)) &&
+        !(await app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId))
+      ) {
         return {
           ok: false,
           code: "forbidden",
@@ -904,7 +919,8 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       }
       if (
         (toKind === "channel" || toKind === "group" || toKind === "team") &&
-        !(await app.belongsToScope(capability.actorId, toScope))
+        !(await app.belongsToScope(capability.actorId, toScope)) &&
+        !(await isLiveResourceAdmin(capability.actorId))
       ) {
         return {
           ok: false,
@@ -915,7 +931,12 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
       try {
         if (orgSkillCede) {
-          const promoted = await app.promoteSkill(home.id, toScope, capability.actorId, capability.liveActor === true);
+          const promoted = await app.promoteSkill(
+            home.id,
+            toScope,
+            capability.actorId,
+            livePersonCapability(capability),
+          );
           return {
             ok: true,
             verb: "promote",
@@ -928,7 +949,11 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
         if (req.move) {
           const deployPersonTransfer = req.type === "deploy" && toKind === "personal" && capability.liveActor === true;
-          if (!deployPersonTransfer && !(await app.belongsToScope(capability.actorId, toScope))) {
+          if (
+            !deployPersonTransfer &&
+            !(await app.belongsToScope(capability.actorId, toScope)) &&
+            !(await isLiveResourceAdmin(capability.actorId))
+          ) {
             return {
               ok: false,
               code: "forbidden",

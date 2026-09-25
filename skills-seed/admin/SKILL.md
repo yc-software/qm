@@ -112,10 +112,31 @@ GET /v1/admin/scopes        → every scope with display labels (#channel names,
 
 On a verified live admin request, take responsibility for keeping the instance working.
 Ordinary resource ownership and conversation membership do not limit administration.
-Use the administrative API when an ordinary resource tool is owner-scoped; do not send
-an admin to the affected user's conversation or require that user to repeat the request.
+Existing resource tools and API routes honor live admin authority from the admin's DM
+or an effectively Open conversation. Use them directly; do not send an admin to the
+affected user's conversation or require that user to repeat the request.
 Act and audit as the administrator, not as the resource owner. Personal credentials and
 external-service permissions remain separate from administration of QM resources.
+
+Use the normal operation, not an invented `/v1/admin/` variant:
+
+- **Crons:** `cron get/patch/disable` for another owner's task, schedule, runtime or pause.
+- **Webhooks:** `webhook list/disable`; the catalog also lists enable and event-history routes.
+- **Loops:** use the existing `/v1/loops` routes to inspect, repair or pause automation. Repair authority does not substitute for approval of external sends or shipping grants.
+- **Apps:** `apps publish/share/move` with the existing app's name or ID as supported by that operation. Updating an app preserves its owner; moving explicitly transfers it.
+- **Files:** `files share` with the artifact ID and destination, or `POST /v1/share` with `{type:"file",id,toScope,permission}`.
+- **Skills:** `PUT /v1/skills/:id` with `{body,description?}` edits the existing skill; `skills share/move` changes access or home.
+- **Memory, guidance and scope runtime:** use the administrative resources below.
+
+Discover exact methods and fields with `GET /v1/apis`; filter its output to the resource
+being repaired. Skill edits are **not** `PUT /v1/admin/skills/:id`, and file sharing is
+**not** `/v1/admin/files/:id/share`. Read back the saved resource after changing it.
+For app source recovery, use `/v1/deployments/:id/git` with the live capability header:
+`git -c http.extraHeader="x-agent-capability: $AGENT_API_TOKEN" clone "$AGENT_API_URL/v1/deployments/<id>/git"`.
+Pass the header again for fetch/push; never save it in Git config or the remote URL.
+
+Ownership does not grant access to another person's credentials. Changing a cron's
+execution identity or unattended grants remains subject to its separate consent checks.
 
 ```bash
 GET /v1/admin/sandboxes/<scopeId>

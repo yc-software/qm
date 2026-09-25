@@ -1,3 +1,4 @@
+import { isLiveResourceAdmin } from "../../admin/resource-authority.ts";
 import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
 import { unattendedGrantRefusal } from "../../cron/authority.ts";
@@ -65,7 +66,13 @@ function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): boolean {
   return false;
 }
 
-export async function canAdministerLoop(ctx: ApiCtx, loop: Loop, acting: ActingPrincipal): Promise<boolean> {
+export async function canAdministerLoop(
+  ctx: ApiCtx,
+  loop: Loop,
+  acting: ActingPrincipal,
+  allowAdmin = true,
+): Promise<boolean> {
+  if (allowAdmin && (await isLiveResourceAdmin(acting.actorId))) return true;
   const { app } = ctx;
   if (await app.membershipControlsScope(loop.ownerScopeId)) {
     return app.managesScope(acting.actorId, loop.ownerScopeId);
@@ -78,6 +85,7 @@ export async function canAdministerLoop(ctx: ApiCtx, loop: Loop, acting: ActingP
 
 export async function loadAdministrable(
   ctx: ApiCtx,
+  allowAdmin = true,
 ): Promise<{ deps: LoopServiceDeps; loop: Loop; acting: ActingPrincipal } | null> {
   const deps = loopDeps(ctx);
   if (!deps) {
@@ -91,7 +99,7 @@ export async function loadAdministrable(
     sendJson(ctx.res, 404, { error: "not_found", message: "no such loop" });
     return null;
   }
-  if (!(await canAdministerLoop(ctx, loop, acting))) {
+  if (!(await canAdministerLoop(ctx, loop, acting, allowAdmin))) {
     sendJson(ctx.res, 403, { error: "forbidden", message: "you may not administer this loop" });
     return null;
   }
@@ -395,6 +403,11 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: 'shipActions must be [{action, gate: "auto"|"hold"}]',
     });
+  if (b.shipActions !== undefined && !(await canAdministerLoop(ctx, loop, acting, false)))
+    return sendJson(ctx.res, 403, {
+      error: "forbidden",
+      message: "ship policies require the loop owner or a shared manager",
+    });
   const existingGates = new Map(loop.shipActions.map((policy) => [policy.action, policy.gate]));
   if (
     shipActions.some((policy) => policy.gate === "auto" && existingGates.get(policy.action) !== "auto") &&
@@ -477,7 +490,7 @@ async function decideOutput(ctx: ApiCtx): Promise<void> {
 }
 
 async function decideOutputLocked(ctx: ApiCtx): Promise<void> {
-  const loaded = await loadAdministrable(ctx);
+  const loaded = await loadAdministrable(ctx, false);
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
@@ -513,7 +526,7 @@ async function decideOutputLocked(ctx: ApiCtx): Promise<void> {
 }
 
 async function graduateShipAction(ctx: ApiCtx): Promise<void> {
-  const loaded = await loadAdministrable(ctx);
+  const loaded = await loadAdministrable(ctx, false);
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
@@ -542,7 +555,7 @@ async function graduateShipAction(ctx: ApiCtx): Promise<void> {
 }
 
 async function setAutopilot(ctx: ApiCtx): Promise<void> {
-  const loaded = await loadAdministrable(ctx);
+  const loaded = await loadAdministrable(ctx, false);
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
@@ -598,7 +611,7 @@ async function setAutopilot(ctx: ApiCtx): Promise<void> {
 }
 
 async function revokeShipGrant(ctx: ApiCtx): Promise<void> {
-  const loaded = await loadAdministrable(ctx);
+  const loaded = await loadAdministrable(ctx, false);
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
   if (!requireLiveHuman(ctx, acting)) return;

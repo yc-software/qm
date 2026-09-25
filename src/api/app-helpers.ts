@@ -1,3 +1,4 @@
+import { isLiveResourceAdmin } from "../admin/resource-authority.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
   PendingApproval,
@@ -478,8 +479,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return undefined;
   }
 
-  function canManageSkill(skill: Pick<Skill, "scopeId" | "createdBy">, principalId: string): Promise<boolean> {
-    return principalManagesArtifactHome(skill.scopeId, skill.createdBy, principalId);
+  async function canManageSkill(skill: Pick<Skill, "scopeId" | "createdBy">, principalId: string): Promise<boolean> {
+    return (
+      (await isLiveResourceAdmin(principalId)) ||
+      principalManagesArtifactHome(skill.scopeId, skill.createdBy, principalId)
+    );
   }
 
   async function republishIfShared(skill: Skill, editorId: string): Promise<Skill> {
@@ -499,6 +503,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   }
 
   async function effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null> {
+    if (await isLiveResourceAdmin(principalId)) return "write";
     if (!principalId || deps.identity.deactivationSource?.(principalId) === "manual") return null;
     if (await principalCanWriteScope(principalId, d.ownerScopeId)) return "write";
     let best: Permission | null = (await principalCanAccessCurrentScope(principalId, d.ownerScopeId)) ? "read" : null;
@@ -527,8 +532,10 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function principalGitPermission(
     d: Pick<Deployment, "id" | "ownerScopeId" | "createdBy" | "createdInScope">,
     principalId: string,
+    allowResourceAdmin = true,
   ): Promise<"read" | "write" | null> {
     if (!principalId) return null;
+    if (allowResourceAdmin && (await isLiveResourceAdmin(principalId))) return "write";
     const { kind } = parseScopeId(d.ownerScopeId);
     if (await principalManagesArtifactHome(d.ownerScopeId, d.createdBy, principalId)) return "write";
     if (isManageableCreationScope(d.createdInScope) && (await principalCanWriteScope(principalId, d.createdInScope!)))

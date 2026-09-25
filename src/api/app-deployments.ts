@@ -1,3 +1,4 @@
+import { isLiveResourceAdmin } from "../admin/resource-authority.ts";
 import { validEmail } from "../identity/external-members.ts";
 import { createMemoryAdvisoryLock } from "../persistence/advisory-lock.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../admin/invite-email.ts";
@@ -71,7 +72,7 @@ export function createDeploymentMethods(
       const grantee = await deploymentShareScope(`personal:${email}`, "read");
       const deployment = await deps.deploy.getDeployment(idOrName);
       if (!deployment) throw new Error(`no such app: ${idOrName}`);
-      if (deployment.ownerScopeId !== `personal:${actorId}`)
+      if (deployment.ownerScopeId !== `personal:${actorId}` && !(await isLiveResourceAdmin(actorId)))
         throw new Error(`only the owner can change who can reach "${deployment.name ?? deployment.id}"`);
       return invitationLock.withLock(`deployment-invite:${deployment.id}:${email}`, async () => {
         const previous = await deps.deploy.deploymentGrantees(deployment.id);
@@ -189,7 +190,7 @@ export function createDeploymentMethods(
     async deploymentGitUrlFor(idOrName, principalId, opts) {
       const d = await deps.deploy.getDeployment(idOrName);
       if (!d) return null;
-      const permission = await principalGitPermission(d, principalId);
+      const permission = await principalGitPermission(d, principalId, false);
       if (!permission) return null;
       const token = await mintDeployGitAccess(opts.secret, {
         deploymentId: d.id,
@@ -205,7 +206,7 @@ export function createDeploymentMethods(
     async authorizesDeploymentGitAccess(id, principalId, permission) {
       const d = await deps.deploy.getDeployment(id);
       if (!d) return false;
-      const current = await principalGitPermission(d, principalId);
+      const current = await principalGitPermission(d, principalId, false);
       return permission === "write" ? current === "write" : current !== null;
     },
     reapIdleDeployments(ttlMs, now) {

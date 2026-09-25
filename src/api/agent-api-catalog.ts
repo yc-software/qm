@@ -381,7 +381,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/share",
         summary:
-          'share or move one of YOUR artifacts to another context — body {type:"file"|"skill"|"deploy"|"cron", id, toScope:"org"|<scope id>|a teammate\'s name, permission?:"read"(default)|"write", move?:false}. For app sharing only, `email` may replace `toScope` to grant view access to an exact email outside the directory. Default (share) adds a grant — the artifact keeps its home and creator. move:true changes its home scope instead (skills only today). Frictionless into any context you belong to; allowed for anyone who manages the artifact\'s home (its owner, or a current member of its private-channel/group home), from any conversation; ceding a skill to the org is admin-gated (a live org admin only).',
+          'share or move an authorized artifact to another context — body {type:"file"|"skill"|"deploy"|"cron", id, toScope:"org"|<scope id>|a teammate\'s name, permission?:"read"(default)|"write", move?:false}. For app sharing only, `email` may replace `toScope` to grant view access to an exact email outside the directory. Default (share) adds a grant — the artifact keeps its home and creator. move:true changes its home scope instead (skills only today). Frictionless into any context you belong to; allowed for anyone who manages the artifact\'s home (its owner, or a current member of its private-channel/group home), from any conversation; ceding a skill to the org is admin-gated (a live org admin only).',
       },
     ],
   },
@@ -461,9 +461,11 @@ const FAMILIES: AgentApiFamily[] = [
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/logs$/.test(p)) ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/(git-url|share)$/.test(p)) ||
       (m === "POST" &&
-        /^\/v1\/deployments\/[^/]+\/(share|archive|restore|name|display-name|always-on|embed-ancestors)$/.test(p)),
+        /^\/v1\/deployments\/[^/]+\/(share|archive|restore|name|display-name|always-on|embed-ancestors|redeploy|rollback)$/.test(
+          p,
+        )),
     guidance:
-      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/deployments/:id/share with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; external email grants are view-only and send an invitation with the app link. Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default and only the owner may change it. POST /v1/deployments/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, or change always-on behavior, use the corresponding endpoint.',
+      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/deployments/:id/share with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; external email grants are view-only and send an invitation with the app link. Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default; changing it requires sharing authority. POST /v1/deployments/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, redeploy, roll back, or change always-on behavior, use the corresponding endpoint. A verified live org admin in a DM or Open conversation can manage other owners\' apps through these same endpoints. For admin source repair without changing shares, use the existing Git remote /v1/deployments/:id/git with the x-agent-capability header (git -c http.extraHeader="x-agent-capability: $AGENT_API_TOKEN"); each request rechecks live admin authority. Never put that token in a remote URL or git config.',
     routes: [
       {
         method: "GET",
@@ -498,13 +500,24 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "GET",
         path: "/v1/deployments/:id/share",
-        summary: "inspect access for an app you own (:id is its name or id) — returns {public, grantees}; owner-only",
+        summary: "inspect access for an app you administer (:id is its name or id) — returns {public, grantees}",
       },
       {
         method: "POST",
         path: "/v1/deployments/:id/share",
         summary:
-          'change who can reach a published app you own (:id is its name or id). For anonymous link access, pass only `public` (boolean). Otherwise target ONE of: `scope` — "org" (everyone in the org) or a scope id like personal:<id>; or `recipient` — a teammate\'s name (resolved in the directory); or `email` — an exact email address, including someone outside the directory (view-only). `access`: view (reach, default), manage (reach + redeploy/rollback), or none (stop sharing). Owner-only (from any conversation), no redeploy',
+          'change who can reach a published app you administer (:id is its name or id). For anonymous link access, pass only `public` (boolean). Otherwise target ONE of: `scope` — "org" (everyone in the org) or a scope id like personal:<id>; or `recipient` — a teammate\'s name (resolved in the directory); or `email` — an exact email address, including someone outside the directory (view-only). `access`: view (reach, default), manage (reach + redeploy/rollback), or none (stop sharing). Requires sharing authority, no redeploy',
+      },
+      {
+        method: "POST",
+        path: "/v1/deployments/:id/redeploy",
+        summary:
+          "replace an app you manage using {entrypoint, files:[{path,data}], env?, alwaysOn?}; preserves owner and creator",
+      },
+      {
+        method: "POST",
+        path: "/v1/deployments/:id/rollback",
+        summary: "roll back an app you manage to an existing version using {version}",
       },
       {
         method: "POST",

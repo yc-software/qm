@@ -1,3 +1,5 @@
+import { samePerson } from "../directory/person.ts";
+import { withResourceAuthority, type ResourceAuthorityDeps } from "../admin/resource-authority.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort } from "../util/async.ts";
 import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-types.ts";
@@ -515,6 +517,7 @@ export interface ToolContextDeps {
   onGapWork?: (work: GapWork) => void;
   control?: ControlService;
   controlClaims?: CapabilityClaims;
+  resourceAuthority?: ResourceAuthorityDeps;
   webhookPublicUrl?: string;
   surface?: SurfaceToolDeps;
   attach?: AttachFiles;
@@ -604,7 +607,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     cache?: (r: R) => boolean,
   ): Promise<R | ControlUnavailable> {
     if (!deps.control || !deps.controlClaims) return Promise.resolve(CONTROL_UNAVAILABLE);
-    const call = () => run(deps.control!, deps.controlClaims!);
+    const call = () =>
+      withResourceAuthority(deps.resourceAuthority ?? {}, deps.controlClaims, "control resource", () =>
+        run(deps.control!, deps.controlClaims!),
+      );
     return cache ? once(call, cache) : call();
   }
 
@@ -1083,14 +1089,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (effectiveEntrypoint && files.length === 0) {
         throw new Error(`publish: no files found under ${input.dir ?? "."} - nothing to deploy`);
       }
-      const authEnv = effectiveEntrypoint
-        ? Object.assign(
-            {},
-            ...(deps.layerAuth?.splitEnvTemplates ?? []).map((template) =>
-              interpolateSplitEnv(template, { actingSlackUserId: deps.actingSlackUserId }),
-            ),
-          )
-        : {};
+      const targetName = input.renameFrom ?? input.name;
+      const existing = targetName && deps.layerAuth ? await deps.deploy.getDeployment(targetName) : null;
+      const authEnv =
+        effectiveEntrypoint && (!existing || samePerson(existing.createdBy, deps.createdBy))
+          ? Object.assign(
+              {},
+              ...(deps.layerAuth?.splitEnvTemplates ?? []).map((template) =>
+                interpolateSplitEnv(template, { actingSlackUserId: deps.actingSlackUserId }),
+              ),
+            )
+          : {};
 
       const pc = deps.publishContext;
       const aud: PublishAudience =
@@ -1117,32 +1126,38 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         return { scope, permission: s.permission };
       });
       return once(async () => {
-        const d = await deps.deploy.deployOrUpdate({
-          ownerScopeId: owner,
-          createdBy: deps.createdBy,
-          createdInScope,
-          files,
-          ...(input.entrypoint ? { entrypoint: input.entrypoint } : {}),
-          ...(input.name !== undefined ? { name: input.name } : {}),
-          ...(input.renameFrom !== undefined ? { renameFrom: input.renameFrom } : {}),
-          ...(input.env !== undefined ? { env: input.env } : {}),
-          ...(Object.keys(authEnv).length ? { stampEnv: authEnv } : {}),
-          ...(input.rollbackTo !== undefined ? { rollbackTo: input.rollbackTo } : {}),
-          ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
-          ...(input.embedAncestors !== undefined ? { embedAncestors: input.embedAncestors } : {}),
-          ...(input.public !== undefined ? { public: input.public } : {}),
-          ...(doReconcile
-            ? {
-                defaultAudience: {
-                  contextScopeId: createdInScope,
-                  granteeScopeIds: desiredDefault,
-                  snapshotAt,
-                  ...(optOut ? { force: true } : {}),
-                },
-              }
-            : {}),
-          ...(resolvedShare?.length ? { share: resolvedShare } : {}),
-        });
+        const d = await withResourceAuthority(
+          deps.resourceAuthority ?? {},
+          deps.controlClaims,
+          `publish ${input.name ?? input.renameFrom ?? "new"}`,
+          () =>
+            deps.deploy.deployOrUpdate({
+              ownerScopeId: owner,
+              createdBy: deps.createdBy,
+              createdInScope,
+              files,
+              ...(input.entrypoint ? { entrypoint: input.entrypoint } : {}),
+              ...(input.name !== undefined ? { name: input.name } : {}),
+              ...(input.renameFrom !== undefined ? { renameFrom: input.renameFrom } : {}),
+              ...(input.env !== undefined ? { env: input.env } : {}),
+              ...(Object.keys(authEnv).length ? { stampEnv: authEnv } : {}),
+              ...(input.rollbackTo !== undefined ? { rollbackTo: input.rollbackTo } : {}),
+              ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
+              ...(input.embedAncestors !== undefined ? { embedAncestors: input.embedAncestors } : {}),
+              ...(input.public !== undefined ? { public: input.public } : {}),
+              ...(doReconcile
+                ? {
+                    defaultAudience: {
+                      contextScopeId: createdInScope,
+                      granteeScopeIds: desiredDefault,
+                      snapshotAt,
+                      ...(optOut ? { force: true } : {}),
+                    },
+                  }
+                : {}),
+              ...(resolvedShare?.length ? { share: resolvedShare } : {}),
+            }),
+        );
         const ref = d.name ?? d.id;
         const grantees = await deps.deploy.deploymentGrantees(d.id);
         const base = audienceFromGrantees(
@@ -1171,7 +1186,9 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async setDeploymentPublic(id: string, isPublic: boolean) {
-      const d = await deps.deploy.setDeploymentPublic(id, isPublic, { createdBy: deps.createdBy });
+      const d = await withResourceAuthority(deps.resourceAuthority ?? {}, deps.controlClaims, `app public ${id}`, () =>
+        deps.deploy.setDeploymentPublic(id, isPublic, { createdBy: deps.createdBy }),
+      );
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
 

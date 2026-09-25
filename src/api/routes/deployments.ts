@@ -1,3 +1,5 @@
+import { verifyCapabilityToken } from "../../auth/capability-token.ts";
+import { isLiveResourceAdmin, withResourceAuthority } from "../../admin/resource-authority.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -1162,6 +1164,24 @@ async function runGitHttpBackend(input: {
 }
 
 async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
+  const token = ctx.req.headers["x-agent-capability"];
+  if (token === undefined) return serveAuthorizedDeploymentGit(ctx);
+  const secret = ctx.deps.capabilitySecret ?? ctx.secret;
+  const claims = typeof token === "string" && secret ? await verifyCapabilityToken(token, secret) : null;
+  if (!claims) return rejectGitAuth(ctx.res);
+  const parts = deploymentGitParts(ctx.pathname);
+  const isPush = parts && gitServiceOf(parts.tail, ctx.url) === "git-receive-pack";
+  await withResourceAuthority(ctx.deps, claims, `${ctx.method} ${ctx.pathname}`, async () => {
+    const authorize = async () =>
+      (await isLiveResourceAdmin(claims.actorId)) &&
+      (await ctx.app.authorizesCapabilityScope(claims)) &&
+      (!isPush || (await ctx.deps.config?.getSecurityPostureDurable(claims.scopeId)) !== "strict");
+    if (!(await authorize())) return rejectGitAuth(ctx.res);
+    await serveAuthorizedDeploymentGit(ctx, authorize);
+  });
+}
+
+async function serveAuthorizedDeploymentGit(ctx: BaseCtx, authorizeAdmin?: () => Promise<boolean>): Promise<void> {
   const parts = deploymentGitParts(ctx.pathname);
   if (!parts) return sendJson(ctx.res, 404, { error: "not_found" });
   const service = gitServiceOf(parts.tail, ctx.url);
@@ -1170,7 +1190,7 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
   if (isPush && !ctx.secret)
     return sendJson(ctx.res, 503, { error: "unavailable", message: "deployment git push requires core signing" });
   let access: Awaited<ReturnType<typeof verifyDeployGitAccess>> = null;
-  if (ctx.secret) {
+  if (ctx.secret && !authorizeAdmin) {
     const token = gitTokenFrom(ctx);
     access = token ? await verifyDeployGitAccess(ctx.secret, token) : null;
     if (!access) return rejectGitAuth(ctx.res);
@@ -1204,8 +1224,10 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
     const result = isPush
       ? await ctx.app.runDeploymentGitPush(parts.id, async () => {
           if (
-            access?.principalId &&
-            !(await ctx.app.authorizesDeploymentGitAccess(parts.id, access.principalId, "write"))
+            authorizeAdmin
+              ? !(await authorizeAdmin())
+              : access?.principalId &&
+                !(await ctx.app.authorizesDeploymentGitAccess(parts.id, access.principalId, "write"))
           ) {
             const body = Buffer.from(
               JSON.stringify({ error: "forbidden", message: "deployment git write access has been revoked" }),
@@ -1529,7 +1551,7 @@ export async function getDeploymentShares(ctx: ApiCtx): Promise<void> {
   if (!capability) return sendJson(res, 403, { error: "forbidden" });
   const deployment = await app.getDeployment(params.id!);
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
-  if (deployment.ownerScopeId !== `personal:${capability.actorId}`)
+  if (deployment.ownerScopeId !== `personal:${capability.actorId}` && !(await isLiveResourceAdmin(capability.actorId)))
     return sendJson(res, 403, { error: "forbidden", message: "Only the owner can edit app permissions." });
   return sendJson(res, 200, {
     public: deployment.public === true,
@@ -1662,8 +1684,8 @@ export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/deployments/:id/git-url", auth: "either", handle: deploymentGitUrl },
   { method: "GET", path: "/v1/deployments/:id/share", auth: "either", handle: getDeploymentShares },
   { method: "POST", path: "/v1/deployments/:id/share", auth: "either", handle: shareDeployment },
-  { method: "POST", path: "/v1/deployments/:id/rollback", auth: "source", handle: rollbackDeployment },
-  { method: "POST", path: "/v1/deployments/:id/redeploy", auth: "source", handle: redeployDeployment },
+  { method: "POST", path: "/v1/deployments/:id/rollback", auth: "either", handle: rollbackDeployment },
+  { method: "POST", path: "/v1/deployments/:id/redeploy", auth: "either", handle: redeployDeployment },
   { method: "POST", path: "/v1/deployments/:id/archive", auth: "either", handle: archiveDeployment },
   { method: "POST", path: "/v1/deployments/:id/restore", auth: "either", handle: restoreDeployment },
   { method: "POST", path: "/v1/deployments/:id/name", auth: "either", handle: renameDeployment },

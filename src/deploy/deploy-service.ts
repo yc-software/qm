@@ -1,3 +1,4 @@
+import { isLiveResourceAdmin, resourceAdminActor } from "../admin/resource-authority.ts";
 import { notifyDeploymentShared } from "./share-notice.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "./embed-ancestors.ts";
@@ -242,6 +243,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   const grantsOn = (d: Deployment): Promise<Grant[]> => deps.acl.grantsFor(d.ownerScopeId, deploymentRef(d.id));
 
   async function reachAllowed(d: Deployment, principalId: string): Promise<boolean> {
+    if (await isLiveResourceAdmin(principalId)) return true;
     if (!principalId) return false;
     const reaches = async (scope: ScopeId): Promise<boolean> => {
       if (deps.canReadScope) return deps.canReadScope(principalId, scope);
@@ -261,6 +263,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   }
 
   async function managesHome(d: Deployment, callerId: string, actingScopeId?: ScopeId): Promise<boolean> {
+    if (await isLiveResourceAdmin(callerId)) return true;
     if (d.ownerScopeId === `personal:${callerId}`) return true;
     if (deps.managesArtifactHome && (await deps.managesArtifactHome(d.ownerScopeId, d.createdBy, callerId)))
       return true;
@@ -292,9 +295,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     isCreate: boolean,
     explicitShares?: DeployOrUpdateInput["share"],
   ): Promise<void> {
+    const adminActor = resourceAdminActor();
+    if (!isCreate && !da.force && adminActor && !samePerson(adminActor, d.createdBy)) return;
     if (!isCreate && !da.force && d.createdInScope && da.contextScopeId !== d.createdInScope) return;
     const ref = deploymentRef(d.id);
-    const owner = d.createdBy;
+    const owner = resourceAdminActor() ?? d.createdBy;
     const prior = isCreate ? [] : (d.defaultAudience?.granteeScopeIds ?? []);
     const priorSet = new Set(prior);
     const nextSet = new Set(da.granteeScopeIds);
@@ -421,7 +426,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         void deps.appPublished?.(before.createdBy, id, v.version).catch(() => {});
         deps.auditLog.record({
           at: Date.now(),
-          principalId: before.createdBy,
+          principalId: resourceAdminActor() ?? before.createdBy,
           action: "deploy_version",
           resource: `${id}@v${v.version}`,
           scopeLabel: before.ownerScopeId,
@@ -449,7 +454,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         await markVersionRunning(id, v.version, endpoint);
         deps.auditLog.record({
           at: Date.now(),
-          principalId: d.createdBy,
+          principalId: resourceAdminActor() ?? d.createdBy,
           action: "deploy_rollback",
           resource: `${id}@v${version}`,
           scopeLabel: d.ownerScopeId,
@@ -492,7 +497,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         }
         deps.auditLog.record({
           at: Date.now(),
-          principalId: actorId ?? d.createdBy,
+          principalId: resourceAdminActor() ?? actorId ?? d.createdBy,
           action: "deploy_restore",
           resource: `${id}@v${version.version}`,
           scopeLabel: d.ownerScopeId,
@@ -511,7 +516,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         await deps.deployStore.setName(id, name);
         deps.auditLog.record({
           at: Date.now(),
-          principalId: d.createdBy,
+          principalId: resourceAdminActor() ?? d.createdBy,
           action: "deploy_rename",
           resource: id,
           scopeLabel: d.ownerScopeId,
@@ -528,7 +533,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         await deps.deployStore.setDisplayName(id, displayName || undefined);
         deps.auditLog.record({
           at: Date.now(),
-          principalId: d.createdBy,
+          principalId: resourceAdminActor() ?? d.createdBy,
           action: "deploy_display_name",
           resource: id,
           scopeLabel: d.ownerScopeId,
@@ -545,7 +550,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         await deps.deployStore.setAlwaysOn(id, alwaysOn);
         deps.auditLog.record({
           at: Date.now(),
-          principalId: d.createdBy,
+          principalId: resourceAdminActor() ?? d.createdBy,
           action: "deploy_always_on",
           resource: id,
           scopeLabel: d.ownerScopeId,
@@ -563,7 +568,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         await deps.deployStore.setEmbedAncestors(id, ancestors);
         deps.auditLog.record({
           at: Date.now(),
-          principalId: d.createdBy,
+          principalId: resourceAdminActor() ?? d.createdBy,
           action: "deploy_embed_ancestors",
           resource: id,
           scopeLabel: d.ownerScopeId,
@@ -575,7 +580,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async setDeploymentPublic(idOrName, isPublic, actor) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) throw new Error(`no such app: ${idOrName}`);
-      if (d.ownerScopeId !== scopeId("personal", actor.createdBy)) {
+      if (d.ownerScopeId !== scopeId("personal", actor.createdBy) && !(await isLiveResourceAdmin(actor.createdBy))) {
         throw new Error(`only the owner can change who can reach "${d.name ?? d.id}"`);
       }
       await deps.deployStore.setPublic(d.id, isPublic);
@@ -647,7 +652,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           void deps.appPublished?.(before.createdBy, id, v.version).catch(() => {});
           deps.auditLog.record({
             at: Date.now(),
-            principalId: before.createdBy,
+            principalId: resourceAdminActor() ?? before.createdBy,
             action: "deploy_git_push",
             resource: `${id}@v${v.version}`,
             scopeLabel: before.ownerScopeId,
@@ -820,7 +825,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async shareDeployment(idOrName, grantee, permission, actor) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) throw new Error(`no such app: ${idOrName}`);
-      if (d.ownerScopeId !== scopeId("personal", actor.createdBy)) {
+      if (d.ownerScopeId !== scopeId("personal", actor.createdBy) && !(await isLiveResourceAdmin(actor.createdBy))) {
         throw new Error(`only the owner can change who can reach "${d.name ?? d.id}"`);
       }
       grantee = await deploymentShareScope(grantee, permission, deps.canManageEmail);

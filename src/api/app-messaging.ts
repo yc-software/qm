@@ -1,3 +1,4 @@
+import { resourceAdminActor } from "../admin/resource-authority.ts";
 import type { ScopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
@@ -238,7 +239,7 @@ export function createMessagingMethods(
       const updated = await deps.crons.update(id, guardedPatch);
       deps.auditLog.record({
         at: Date.now(),
-        principalId: before.owner,
+        principalId: resourceAdminActor() ?? before.owner,
         action: "cron_update",
         resource: id,
         scopeLabel: before.ownerScopeId,
@@ -251,14 +252,24 @@ export function createMessagingMethods(
       if (before)
         deps.auditLog.record({
           at: Date.now(),
-          principalId: before.owner,
+          principalId: resourceAdminActor() ?? before.owner,
           action: "cron_delete",
           resource: id,
           scopeLabel: before.ownerScopeId,
         });
     },
-    setCronEnabled(id, enabled) {
-      return deps.crons.setEnabled(id, enabled);
+    async setCronEnabled(id, enabled) {
+      await deps.crons.setEnabled(id, enabled);
+      const actorId = resourceAdminActor();
+      const resource = actorId ? await deps.crons.get(id) : null;
+      if (actorId && resource)
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: actorId,
+          action: "cron_" + (enabled ? "enable" : "disable"),
+          resource: id,
+          scopeLabel: resource.ownerScopeId,
+        });
     },
     async setCronFireNote(id, note) {
       const before = await deps.crons.get(id);
@@ -267,7 +278,7 @@ export function createMessagingMethods(
       if (outcome === "applied") {
         deps.auditLog.record({
           at: Date.now(),
-          principalId: note.by ?? before.owner,
+          principalId: resourceAdminActor() ?? note.by ?? before.owner,
           action: "cron_note",
           resource: id,
           scopeLabel: before.ownerScopeId,
@@ -287,7 +298,7 @@ export function createMessagingMethods(
       await deps.crons.setDestination(id, destination);
       deps.auditLog.record({
         at: Date.now(),
-        principalId: before.owner,
+        principalId: resourceAdminActor() ?? before.owner,
         action: "cron_retarget",
         resource: id,
         scopeLabel: before.ownerScopeId,
@@ -324,8 +335,18 @@ export function createMessagingMethods(
     listWebhooks() {
       return deps.webhooks.list();
     },
-    setWebhookEnabled(id, enabled) {
-      return deps.webhooks.setEnabled(id, enabled);
+    async setWebhookEnabled(id, enabled) {
+      await deps.webhooks.setEnabled(id, enabled);
+      const actorId = resourceAdminActor();
+      const resource = actorId ? await deps.webhooks.get(id) : null;
+      if (actorId && resource)
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: actorId,
+          action: "webhook_" + (enabled ? "enable" : "disable"),
+          resource: id,
+          scopeLabel: resource.ownerScopeId,
+        });
     },
     setWebhookRecipientConsent(id, recipientConsent) {
       return deps.webhooks.setRecipientConsent(id, recipientConsent);

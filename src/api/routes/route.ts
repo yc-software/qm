@@ -1,3 +1,4 @@
+import { withResourceAuthority } from "../../admin/resource-authority.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { compilePath, findRoute } from "../../../plugins/chassis/src/router.ts";
 
@@ -37,5 +38,13 @@ export type Route<C extends BaseCtx = ApiCtx> = {
 
 export async function run<C extends BaseCtx>(route: Route<C>, params: Record<string, string>, ctx: C): Promise<void> {
   ctx.params = params;
-  await route.handle(ctx);
+  const operation = `${ctx.method} ${ctx.pathname}`;
+  if (
+    "capability" in ctx &&
+    /^\/v1\/(crons|webhooks|deployments|share|skills|loops|environments)(?:\/|$)/.test(ctx.pathname)
+  ) {
+    await withResourceAuthority(ctx.deps, (ctx as unknown as ApiCtx).capability, operation, async () =>
+      route.handle(ctx),
+    );
+  } else await route.handle(ctx);
 }

@@ -3011,14 +3011,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   function sharingTool(type: "file" | "skill" | "deploy" | "cron", move = false): ToolDefinition {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
     const action = move ? "move" : "share";
-    let description =
-      "Grant access to an artifact you own while keeping it in its current home. Only the owner can share; grantees cannot reshare.";
+    let description = "Grant access to an artifact while keeping it in its current home.";
     if (move)
       description =
         "Transfer the artifact to another context. Moving an app transfers ownership; existing shares survive. Moving a skill to the org requires an org admin in a user-started turn.";
     else if (type === "deploy")
       description =
-        "Change access to an app you own while keeping it in its current home. Set public to true or false for anonymous link access, or use toScope/email for authenticated access (external emails are view-only). Only the owner can share; grantees cannot reshare.";
+        "Change access to an app while keeping it in its current home. Set public to true or false for anonymous link access, or use toScope/email for authenticated access (external emails are view-only).";
     return defineTool({
       name: action,
       label: action,
