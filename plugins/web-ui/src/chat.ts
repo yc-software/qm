@@ -63,6 +63,7 @@ import {
 } from "lucide";
 import {
   continuableMessages,
+  hasRecordedRunReply,
   messagesWithStreaming,
   withBase,
   type SessionPin,
@@ -786,19 +787,35 @@ export function createChatSurface(
     const sessionId = chatState.sessionId;
     if (!sessionId || agent !== chatState.agent || agent.state.isStreaming) return drawActiveChat(agent);
     const generation = ++transcriptRefreshGeneration;
-    const last = agent.state.messages[agent.state.messages.length - 1] as { stopReason?: string } | undefined;
-    if (last?.stopReason === "error") return drawActiveChat(agent);
+    const originalMessages = agent.state.messages;
+    const last = originalMessages.at(-1) as AssistantWork | undefined;
+    const isCurrent = (): boolean =>
+      generation === transcriptRefreshGeneration &&
+      sessionId === chatState.sessionId &&
+      agent === chatState.agent &&
+      !agent.state.isStreaming &&
+      agent.state.messages === originalMessages &&
+      agent.state.messages.at(-1) === last;
+    if (last?.stopReason === "error" && !last.interruptedRunId) return drawActiveChat(agent);
     if (last?.stopReason === "aborted") return drawActiveChat(agent);
     try {
+      if (last?.stopReason === "error" && last.interruptedRunId) {
+        const run = await api<RunPoll>(`/api/runs/${encodeURIComponent(last.interruptedRunId)}`, {
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!isCurrent()) return;
+        if (
+          !runIsTerminal(run) ||
+          run.status === "failed" ||
+          !["ok", "silent", "react"].includes(run.result?.status ?? "")
+        )
+          return drawActiveChat(agent);
+      }
       const anchor = chatState.transcriptAnchorSeq;
       const page = await transcriptFetcher(sessionId, anchor !== null ? { sinceSeq: anchor } : undefined);
-      if (
-        generation !== transcriptRefreshGeneration ||
-        sessionId !== chatState.sessionId ||
-        agent !== chatState.agent ||
-        agent.state.isStreaming
-      )
-        return;
+      if (!isCurrent()) return;
+      if (last?.stopReason === "error" && !hasRecordedRunReply(page.entries ?? [], last.interruptedRunId!))
+        return drawActiveChat(agent);
       chatState.pins = page.pins ?? [];
       const split = inheritedTranscript(chatState.forkSession ?? {}, page.entries ?? []);
       const messages = entriesToMessages(split.current, transcriptModel());
@@ -808,13 +825,7 @@ export function createChatSurface(
         chatState.inheritedLoaded,
       );
       await syncPendingApprovals(agent, messages);
-      if (
-        generation !== transcriptRefreshGeneration ||
-        sessionId !== chatState.sessionId ||
-        agent !== chatState.agent ||
-        agent.state.isStreaming
-      )
-        return;
+      if (!isCurrent()) return;
       if (refreshedInherited) chatState.inheritedMessages = entriesToMessages(refreshedInherited, transcriptModel());
       agent.state.messages = messages;
       const rawEarlier = page.earlierEntries ?? 0;
