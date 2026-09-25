@@ -378,7 +378,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const processActions = {
     start_process: "start",
     read_process: "poll",
-    write_stdin: "write",
+    write_stdin: "send_input",
     signal_process: "stop",
     list_processes: "list",
     watch_process: "watch",
@@ -1482,7 +1482,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     description:
       "Coordinate durable subagents using internal agent messages. `open` starts a child with a complete standalone task; children do not inherit your conversation. " +
       "`send_message` sends information to a parent, sibling, or other accessible session without starting a turn. Messages and child results arrive at tool boundaries or through `wait`. " +
-      "`followup_task` assigns new work to an attached child and starts a turn if idle; active work is queued safely. `write` is an alias for send_message; interrupt:true stops a child. " +
+      "`followup_task` assigns new work (in `task`, like `open`) to an attached child and starts a turn if idle; active work is queued safely. `send_message` with interrupt:true stops a child. " +
       "`read` lists children or reads a target transcript. " +
       (delegateWork
         ? "Delegate substantial work, then end this turn promptly. Child completion wakes you automatically to report the result. Do not wait or poll for children. "
@@ -1499,7 +1499,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
       action: Type.Union([
         Type.Literal("open"),
-        Type.Literal("write"),
         Type.Literal("read"),
         Type.Literal("send_message"),
         Type.Literal("followup_task"),
@@ -1509,7 +1508,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         Type.String({ description: "open: stable request key to reuse when retrying the same delegation." }),
       ),
       task: Type.Optional(
-        Type.String({ description: "open: the complete standalone instruction the subagent works from." }),
+        Type.String({
+          description: "open and followup_task: the complete standalone instruction the subagent works from.",
+        }),
       ),
       name: Type.Optional(Type.String({ description: "open: short title for the subagent (default: from task)." })),
       readOnly: Type.Optional(Type.Boolean({ description: "open: subagent may not change anything." })),
@@ -1523,15 +1524,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "Message/followup/read target: literal parent, accessible sessionId, or exact child/sibling title. Do not invent filesystem paths such as /root/name. read: omit to list children.",
         }),
       ),
-      text: Type.Optional(Type.String({ description: "write: the message to deliver." })),
-      interrupt: Type.Optional(Type.Boolean({ description: "write: abort the target's current run instead." })),
+      text: Type.Optional(Type.String({ description: "send_message: the message to deliver." })),
+      interrupt: Type.Optional(
+        Type.Boolean({ description: "send_message: abort the target's current run instead of delivering text." }),
+      ),
       limit: Type.Optional(Type.Integer({ description: "read: max transcript entries to show (default 30)." })),
     }),
     async execute(callId, params) {
       const tc = ref.current;
       const syscalls = tc?.sessionSyscalls;
       const p = params as {
-        action: "open" | "write" | "read" | "send_message" | "followup_task" | "wait";
+        action: "open" | "read" | "send_message" | "followup_task" | "wait";
         timeoutMs?: number;
         requestId?: string;
         harness?: string;
@@ -1602,13 +1605,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ),
         );
       }
-      if (p.action === "write" || p.action === "send_message" || p.action === "followup_task") {
+      if (p.action === "send_message" || p.action === "followup_task") {
+        const followup = p.action === "followup_task";
+        const body = followup ? p.task : p.text;
         const result = await syscalls.write({
           requestId: callId,
-          followup: p.action === "followup_task",
+          followup,
           target: p.target ?? "",
-          ...(p.text ? { text: p.text } : {}),
-          ...(p.interrupt ? { interrupt: true } : {}),
+          ...(body ? { text: body } : {}),
+          ...(!followup && p.interrupt ? { interrupt: true } : {}),
         });
         if (!result.ok) {
           return recordResult(
@@ -1695,7 +1700,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "blocks waiting on a human) belong here, NOT in `execute`. Run them with action=start, read the " +
       "URL/code from the returned output and relay it to the user, then `watch` (or `poll`) until the " +
       "command exits — that's when the login is done. If a prompt needs an answer typed in, use " +
-      "action=write. Never run a login with `execute` (it blocks the whole turn) and never `stop`/kill a " +
+      "action=send_input. Never run a login with `execute` (it blocks the whole turn) and never `stop`/kill a " +
       "login mid-flight — that throws away the pending approval and wedges it. The platform captures the " +
       "resulting credential into your keychain automatically; you don't save anything yourself.",
     parameters: Type.Object({
@@ -1703,7 +1708,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         [
           Type.Literal("start"),
           Type.Literal("poll"),
-          Type.Literal("write"),
+          Type.Literal("send_input"),
           Type.Literal("stop"),
           Type.Literal("list"),
           Type.Literal("watch"),
@@ -1711,18 +1716,20 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ],
         {
           description:
-            "start a long command, poll its output by id, write to its stdin, stop it, list your background jobs, watch a job so its output/exit wakes you in this conversation, or unwatch.",
+            "start a long command, poll its output by id, send_input to its stdin, stop it, list your background jobs, watch a job so its output/exit wakes you in this conversation, or unwatch.",
         },
       ),
       purpose: Type.Optional(
         Type.String({ description: "Human-readable purpose, at most 4 words (e.g. 'Start preview server')." }),
       ),
       command: Type.Optional(Type.String({ description: "start only: the shell command to run in the background." })),
-      process_id: Type.Optional(Type.String({ description: "poll/write/stop/watch only: the id start returned." })),
+      process_id: Type.Optional(
+        Type.String({ description: "poll/send_input/stop/watch only: the id start returned." }),
+      ),
       data: Type.Optional(
         Type.String({
           description:
-            "write only: text sent to the job's stdin (a trailing newline is NOT added — include \\n to submit a line).",
+            "send_input only: text sent to the job's stdin (a trailing newline is NOT added — include \\n to submit a line).",
         }),
       ),
       since_cursor: Type.Optional(
@@ -1955,19 +1962,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               );
             }
           }
-          case "write": {
+          case "send_input": {
             if (!params.process_id)
               return recordResult(
                 callId,
-                { tool: "background", action: params.action, error: "write requires process_id" },
-                text("[error] background write requires `process_id`."),
+                { tool: "background", action: params.action, error: "send_input requires process_id" },
+                text("[error] background send_input requires `process_id`."),
                 true,
               );
             if (params.data === undefined)
               return recordResult(
                 callId,
-                { tool: "background", action: params.action, error: "write requires data" },
-                text("[error] background write requires `data` (the text to send to the job's stdin)."),
+                { tool: "background", action: params.action, error: "send_input requires data" },
+                text("[error] background send_input requires `data` (the text to send to the job's stdin)."),
                 true,
               );
             const r = await tc.backgroundWrite(params.process_id, params.data);
@@ -2040,7 +2047,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const processFieldDescription = (description: string) =>
     description.replace(
-      /\b(start|poll|write|stop|watch|unwatch)\b/g,
+      /\b(start|poll|send_input|stop|watch|unwatch)\b/g,
       (action) => Object.entries(processActions).find(([, legacy]) => legacy === action)?.[0] ?? action,
     );
   const schemas = (tool: ToolDefinition) => (tool.parameters as { properties: Record<string, TSchema> }).properties;
@@ -2120,7 +2127,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     description
       .replaceAll("action=start", "action=start_process")
       .replaceAll("action=poll", "action=read_process")
-      .replaceAll("action=write", "action=write_stdin")
+      .replaceAll("action=send_input", "action=write_stdin")
       .replaceAll("action=stop", "action=signal_process")
       .replaceAll("action=list", "action=list_processes")
       .replaceAll("action=watch", "action=watch_process")
@@ -2815,7 +2822,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "guidance",
     label: "guidance",
     description:
-      "Read or rewrite your durable guidance — the standing instructions you carry into " +
+      "Read or change your durable guidance — the standing instructions you carry into " +
       "future turns. Two scopes: `channel` = how you behave in THIS channel (when to chime " +
       "in unprompted, where replies land, ongoing 'whenever X, do Y' orders — evaluated " +
       "against every new message automatically, so never build a poll or timer for these); " +
@@ -2825,14 +2832,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "context it is shared by ALL of that person's sessions, not tied to the session that " +
       "wrote it. Never store session pins or 'for this session' notes here: ALL pinning goes " +
       "through the pins self-API (POST /v1/pins), which routes by context — the session's own " +
-      "pins in the web UI, native pinning in Slack. `write` REPLACES that scope's entire " +
-      "guidance with `content` — " +
-      "include everything that should remain. Org-wide policy is always layered above and " +
+      "pins in the web UI, native pinning in Slack. `edit` swaps one exact passage `old` for `new` " +
+      "and fails unless `old` appears exactly once in that scope's guidance; prefer it for small changes. " +
+      "`replace` REPLACES that scope's entire guidance with `content` — include everything that " +
+      "should remain. Org-wide policy is always layered above and " +
       "cannot be overridden. Don't store one-off facts here — that's what memory is for.",
     parameters: Type.Object({
-      action: Type.Union([Type.Literal("read"), Type.Literal("write")]),
+      action: Type.Union([Type.Literal("read"), Type.Literal("replace"), Type.Literal("edit")]),
       scope: Type.Optional(Type.Union([Type.Literal("channel"), Type.Literal("conversation")])),
-      content: Type.Optional(Type.String()),
+      content: Type.Optional(Type.String({ description: "replace: the full new guidance for the scope." })),
+      old: Type.Optional(
+        Type.String({ description: "edit: an exact passage that appears once in the scope's current guidance." }),
+      ),
+      new: Type.Optional(Type.String({ description: "edit: the text that takes the place of `old`." })),
       ambientEnabled: Type.Optional(
         Type.Union([Type.Boolean(), Type.Null()], {
           description:
@@ -2863,6 +2875,24 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         action: params.action,
         ...(params.scope ? { scope: params.scope } : {}),
       });
+
+      const editError = (message: string) =>
+        recordResult(
+          callId,
+          { tool: "guidance", scope, error: message },
+          text(`[error] guidance edit ${message}.`),
+          true,
+        );
+      const applyEdit = (current: string): { ok: true; next: string } | { ok: false; message: string } => {
+        if (typeof params.old !== "string" || !params.old || typeof params.new !== "string")
+          return { ok: false, message: "requires `old` (an exact passage of the current guidance) and `new`" };
+        const at = current.indexOf(params.old);
+        if (at < 0)
+          return { ok: false, message: "found no exact match for `old`; read the guidance and copy it exactly" };
+        if (current.indexOf(params.old, at + 1) >= 0)
+          return { ok: false, message: "found `old` more than once; include more surrounding text so it is unique" };
+        return { ok: true, next: current.slice(0, at) + params.new + current.slice(at + params.old.length) };
+      };
 
       let scope = params.scope;
       let channel: Awaited<ReturnType<typeof tc.getStandingOrder>> | undefined;
@@ -2900,17 +2930,23 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             (channel!.orders.trim() ? channel!.orders : "[no channel guidance set]") + ambient + ledger + note;
           return recordResult(callId, { tool: "guidance", scope, ok: true }, text(body));
         }
-        if (typeof params.content !== "string" && params.bots === undefined && params.ambientEnabled === undefined) {
+        let orders = channel!.orders;
+        if (params.action === "edit") {
+          const edited = applyEdit(orders);
+          if (!edited.ok) return editError(edited.message);
+          orders = edited.next;
+        } else if (typeof params.content === "string") {
+          orders = params.content;
+        } else if (params.bots === undefined && params.ambientEnabled === undefined) {
           return recordResult(
             callId,
             { tool: "guidance", scope, error: "content, bots, or ambientEnabled required" },
             text(
-              "[error] guidance write needs `content` (the full new channel guidance), `bots`, and/or `ambientEnabled`.",
+              "[error] guidance replace needs `content` (the full new channel guidance), `bots`, and/or `ambientEnabled`.",
             ),
             true,
           );
         }
-        const orders = typeof params.content === "string" ? params.content : channel!.orders;
         const r = await tc.setStandingOrder(orders, params.bots, params.ambientEnabled);
         if (!r.ok)
           return recordResult(callId, { tool: "guidance", scope, ok: false }, text(`[error] ${r.message}`), true);
@@ -2935,15 +2971,22 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           text(r.effectiveSoul ? r.effectiveSoul : "(no standing instructions set)"),
         );
       }
-      if (typeof params.content !== "string") {
+      let content = params.content;
+      if (params.action === "edit") {
+        const current = tc.soulRead();
+        if (isUnavailable(current)) return unavailable(callId, "guidance");
+        const edited = applyEdit(current.soul ?? "");
+        if (!edited.ok) return editError(edited.message);
+        content = edited.next;
+      } else if (typeof content !== "string") {
         return recordResult(
           callId,
           { tool: "guidance", scope, error: "content required" },
-          text("[error] guidance write requires `content` (the full new standing instructions)."),
+          text("[error] guidance replace requires `content` (the full new standing instructions)."),
           true,
         );
       }
-      const r = await tc.soulWrite(params.content);
+      const r = await tc.soulWrite(content);
       if (isUnavailable(r)) return unavailable(callId, "guidance");
       if (!r.ok)
         return recordResult(callId, { tool: "guidance", scope, error: r.code }, text(`[error] ${r.message}`), true);

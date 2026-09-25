@@ -147,6 +147,21 @@ for (const explicit of [
   });
 }
 
+test("empty writes name the action and field the caller used", async () => {
+  const r = await rig();
+  const opened = await r.syscallsFor(r.room).open({ task: "work" });
+  assert.ok(opened.ok);
+  const followup = await r.syscallsFor(r.room).write({ followup: true, target: opened.sessionId });
+  assert.ok(!followup.ok);
+  assert.match(followup.message, /^followup_task requires `task`/);
+  const message = await r.syscallsFor(r.room).write({ target: opened.sessionId, text: "  " });
+  assert.ok(!message.ok);
+  assert.match(message.message, /^send_message requires `text`/);
+  const self = await r.syscallsFor(r.room).write({ target: r.room.id, text: "hi" });
+  assert.ok(!self.ok);
+  assert.match(self.message, /cannot message itself/);
+});
+
 test("followup tasks cannot turn an ordinary session into a child", async () => {
   const r = await rig();
   const ordinary = await r.sessions.getOrCreateByThread("web:ordinary", "dm", scope, undefined, "web");

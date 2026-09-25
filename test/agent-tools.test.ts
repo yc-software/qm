@@ -1968,7 +1968,7 @@ test("background dispatches each action and emits tool_call/tool_result", async 
   assert.match(polled, /cursor 18/);
   assert.match(polled, /exited 0/);
 
-  const wrote = textOf(await call(background, { action: "write", process_id: "bg-1", data: "ABCD-1234\n" }));
+  const wrote = textOf(await call(background, { action: "send_input", process_id: "bg-1", data: "ABCD-1234\n" }));
   assert.match(wrote, /wrote 10B to bg-1 stdin/);
 
   const stopped = textOf(await call(background, { action: "stop", process_id: "bg-1" }));
@@ -2023,8 +2023,11 @@ test("background per-action validation returns a crisp [error] instead of throwi
   assert.match(textOf(await call(background, { action: "start" })), /\[error\].*requires `command`/);
   assert.match(textOf(await call(background, { action: "poll" })), /\[error\].*requires `process_id`/);
   assert.match(textOf(await call(background, { action: "stop" })), /\[error\].*requires `process_id`/);
-  assert.match(textOf(await call(background, { action: "write", process_id: "bg-1" })), /\[error\].*requires `data`/);
-  assert.match(textOf(await call(background, { action: "write", data: "x" })), /\[error\].*requires `process_id`/);
+  assert.match(
+    textOf(await call(background, { action: "send_input", process_id: "bg-1" })),
+    /\[error\].*requires `data`/,
+  );
+  assert.match(textOf(await call(background, { action: "send_input", data: "x" })), /\[error\].*requires `process_id`/);
 });
 
 test("background surfaces a policy denial/approval as a tool_result, not a throw", async () => {
@@ -2360,14 +2363,14 @@ test("webhook create requires task + verification; list and disable dispatch", a
   assert.match(textOut(await call(tool("webhook"), { action: "disable" })), /\[error\].*requires `id`/);
 });
 
-test("guidance conversation scope reads the effective SOUL; write requires content and reports the version", async () => {
+test("guidance conversation scope reads the effective SOUL; replace requires content and reports the version", async () => {
   assert.match(textOut(await call(tool("guidance"), { action: "read", scope: "conversation" })), /Be terse\./);
   assert.match(
-    textOut(await call(tool("guidance"), { action: "write", scope: "conversation", content: "New guidance." })),
+    textOut(await call(tool("guidance"), { action: "replace", scope: "conversation", content: "New guidance." })),
     /version 4/,
   );
   assert.match(
-    textOut(await call(tool("guidance"), { action: "write", scope: "conversation" })),
+    textOut(await call(tool("guidance"), { action: "replace", scope: "conversation" })),
     /\[error\].*requires `content`/,
   );
 });
@@ -2375,15 +2378,15 @@ test("guidance conversation scope reads the effective SOUL; write requires conte
 test("guidance defaults to channel scope when a channel is available, and rewrites the channel order", async () => {
   assert.match(textOut(await call(tool("guidance"), { action: "read" })), /Ambient replies: default/);
   assert.match(
-    textOut(await call(tool("guidance"), { action: "write", content: "reply piratey to tweets" })),
+    textOut(await call(tool("guidance"), { action: "replace", content: "reply piratey to tweets" })),
     /channel guidance updated/,
   );
   assert.match(
-    textOut(await call(tool("guidance"), { action: "write", bots: { newsbot: { mode: "ignore" } } })),
+    textOut(await call(tool("guidance"), { action: "replace", bots: { newsbot: { mode: "ignore" } } })),
     /channel guidance updated/,
   );
   assert.match(
-    textOut(await call(tool("guidance"), { action: "write" })),
+    textOut(await call(tool("guidance"), { action: "replace" })),
     /\[error\].*needs `content`.*`bots`.*and\/or `ambientEnabled`/,
   );
 });
@@ -2401,21 +2404,64 @@ test("guidance reads and writes channel ambient replies without changing omitted
     },
   };
 
-  assert.match(textOut(await call(tool("guidance", tc), { action: "write", ambientEnabled: true })), /updated/);
+  assert.match(textOut(await call(tool("guidance", tc), { action: "replace", ambientEnabled: true })), /updated/);
   assert.match(textOut(await call(tool("guidance", tc), { action: "read" })), /Ambient replies: on/);
-  await call(tool("guidance", tc), { action: "write", content: "keep watching" });
+  await call(tool("guidance", tc), { action: "replace", content: "keep watching" });
   assert.match(textOut(await call(tool("guidance", tc), { action: "read" })), /Ambient replies: on/);
-  await call(tool("guidance", tc), { action: "write", ambientEnabled: false });
+  await call(tool("guidance", tc), { action: "replace", ambientEnabled: false });
   assert.match(textOut(await call(tool("guidance", tc), { action: "read" })), /Ambient replies: off/);
-  await call(tool("guidance", tc), { action: "write", ambientEnabled: null });
+  await call(tool("guidance", tc), { action: "replace", ambientEnabled: null });
   assert.match(textOut(await call(tool("guidance", tc), { action: "read" })), /Ambient replies: default/);
+});
+
+test("guidance edit swaps one exact passage in either scope and refuses ambiguous or missing matches", async () => {
+  let orders = "reply piratey\nwatch tweets\nwatch tweets";
+  const soulWrites: string[] = [];
+  const setCalls: unknown[] = [];
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    async getStandingOrder() {
+      return { ok: true, orders };
+    },
+    async setStandingOrder(next, bots, ambientEnabled) {
+      orders = next;
+      setCalls.push({ bots, ambientEnabled });
+      return { ok: true, orders };
+    },
+    soulRead() {
+      return {
+        effectiveSoul: "Org policy.\n\nBe terse. Use $1 sparingly.",
+        soul: "Be terse. Use $1 sparingly.",
+        soulVersion: 3,
+      };
+    },
+    async soulWrite(content) {
+      soulWrites.push(content);
+      return { ok: true, version: 4 };
+    },
+  };
+  const edit = (args: Record<string, unknown>) => call(tool("guidance", tc), { action: "edit", ...args });
+  assert.match(textOut(await edit({ old: "watch tweets", new: "x" })), /\[error\].*more than once/);
+  assert.match(textOut(await edit({ old: "absent", new: "x" })), /\[error\].*no exact match/);
+  assert.match(textOut(await edit({ content: "everything" })), /\[error\].*requires `old`/);
+  assert.equal(orders, "reply piratey\nwatch tweets\nwatch tweets");
+  assert.match(
+    textOut(await edit({ old: "piratey", new: "plainly", bots: { newsbot: { mode: "ignore" } } })),
+    /channel guidance updated/,
+  );
+  assert.equal(orders, "reply plainly\nwatch tweets\nwatch tweets");
+  assert.deepEqual(setCalls, [{ bots: { newsbot: { mode: "ignore" } }, ambientEnabled: undefined }]);
+  assert.match(textOut(await edit({ scope: "conversation", old: "Be terse.", new: "Be $& brief." })), /version 4/);
+  assert.deepEqual(soulWrites, ["Be $& brief. Use $1 sparingly."]);
+  assert.match(textOut(await edit({ scope: "conversation", old: "Org policy.", new: "x" })), /no exact match/);
+  assert.ok(!Check(tool("guidance").parameters, { action: "write", content: "x" }));
 });
 
 test("guidance rejects ambient replies at conversation scope", async () => {
   assert.match(
     textOut(
       await call(tool("guidance"), {
-        action: "write",
+        action: "replace",
         scope: "conversation",
         content: "Be terse.",
         ambientEnabled: true,
@@ -3381,6 +3427,48 @@ test("sessions open schema and dispatch preserve an explicit false fast mode", a
   assert.ok(Check(session.parameters, { action: "open", task: "test", fastMode: false }));
   assert.ok(!Check(session.parameters, { action: "open", task: "test", fastMode: "false" }));
   assert.match(textOut(await call(session, { action: "open", task: "test", fastMode: false })), /child/);
+});
+
+test("sessions followup_task takes its instruction in task, like open", async () => {
+  const writes: Array<{ followup?: boolean; text?: string; interrupt?: boolean }> = [];
+  const tc = fakeToolContext();
+  tc.sessionSyscalls = {
+    open: async () => ({ ok: false, message: "unused" }),
+    write: async (input) => {
+      writes.push(input);
+      return input.text || input.interrupt
+        ? { ok: true, sessionId: "child", title: "child", delivered: input.followup ? "queued_turn" : "queued_message" }
+        : {
+            ok: false,
+            message: input.followup ? "followup_task requires `task`." : "send_message requires `text`.",
+          };
+    },
+    read: async () => ({ ok: false, message: "unused" }),
+  };
+  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "sessions")!;
+  assert.ok(!Check(session.parameters, { action: "write", target: "child", text: "hi" }));
+  assert.match(
+    textOut(await call(session, { action: "followup_task", target: "child", task: "next task" })),
+    /queued as a new turn/,
+  );
+  assert.match(
+    textOut(await call(session, { action: "send_message", target: "child", text: "fyi" })),
+    /queued internally/,
+  );
+  await call(session, { action: "followup_task", target: "child", task: "stop?", interrupt: true });
+  assert.match(
+    textOut(await call(session, { action: "followup_task", target: "child", text: "misplaced" })),
+    /followup_task requires `task`/,
+  );
+  assert.deepEqual(
+    writes.map(({ followup, text, interrupt }) => ({ followup, text, interrupt })),
+    [
+      { followup: true, text: "next task", interrupt: undefined },
+      { followup: false, text: "fyi", interrupt: undefined },
+      { followup: true, text: "stop?", interrupt: undefined },
+      { followup: true, text: undefined, interrupt: undefined },
+    ],
+  );
 });
 
 test("conversation coordinator mailbox checks never block on children", async () => {
