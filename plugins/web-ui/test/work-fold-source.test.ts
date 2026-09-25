@@ -5,13 +5,13 @@ import test from "node:test";
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
-test("live and completed work share one chronological duration fold", () => {
+test("live and completed work keep chronological folds split around steering", () => {
   assert.match(chat, /class=\$\{stopped \? "stopped-work" : `work work-fold work-\$\{work.status\}`\}/);
   assert.match(chat, /messageWorkTimeline\(work, active \? "" : text\)/);
-  assert.match(chat, /let label = stopping \? "Stop requested" : workLabel\(work\)/);
-  assert.match(chat, /const animating = active && !stopping;/);
+  assert.match(chat, /let label = last \? workLabel\(work\) : "Worked"/);
+  assert.match(chat, /const animating = active && last && !stopping;/);
   assert.match(chat, /sheenLabel\(label, animating\)/);
-  assert.match(chat, /\?open=\$\{active \|\| !!work.pendingApprovals\?\.length\}/);
+  assert.match(chat, /\?open=\$\{animating \|\| !!\(last && work.pendingApprovals\?\.length\)\}/);
   assert.doesNotMatch(chat, /function segmentSummaryLabel/);
 });
 
@@ -92,7 +92,7 @@ test("stopped work shares posted reply rendering and shows one status without ac
   const block = chat.slice(chat.indexOf("  function workBlock("), chat.indexOf("  function approvalSummaryView("));
   assert.match(block, /postSpeechText\(item.row\)/);
   assert.match(block, /replies.map\(\(reply\) => html`<div class="streaming-text"/);
-  assert.match(block, /if \(stopped && fold === nothing\) fold = html`<div class="stopped-head">/);
+  assert.match(block, /if \(stopped && last && fold === nothing\) fold = html`<div class="stopped-head">/);
   assert.doesNotMatch(chat, /stopped-note|function stoppedWork/);
 });
 

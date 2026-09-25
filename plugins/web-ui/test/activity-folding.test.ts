@@ -52,3 +52,53 @@ test("a subagent header includes its parent title in the breadcrumb", async () =
     await h.close();
   }
 });
+
+test("steering separates tool folds with a visible unlabelled user message", async () => {
+  const tool = (seq: number) => [
+    {
+      seq,
+      type: "tool_call",
+      createdAt: seq * 1000,
+      payload: { tool: "execute", callId: String(seq), command: `echo step-${seq}` },
+    },
+    {
+      seq: seq + 1,
+      type: "tool_result",
+      createdAt: (seq + 1) * 1000,
+      payload: { tool: "execute", callId: String(seq), code: 0, stdout: String(seq) },
+    },
+  ];
+  const entries = [
+    { seq: 0, type: "user", createdAt: 0, payload: { text: "Original request" } },
+    ...tool(1),
+    ...tool(3),
+    { seq: 5, type: "user", createdAt: 5000, payload: { text: "Use the smaller sample", steered: true } },
+    ...tool(6),
+    ...tool(8),
+    { seq: 10, type: "assistant", createdAt: 10000, payload: { text: "Done" } },
+  ];
+  const h = await harness({ path: `/s/${SESSION.id}`, listSessions: [SESSION], entries });
+  try {
+    h.releaseSessions();
+    await h.boot();
+    await h.sessionsReady();
+    const steer = document.querySelector(".inline-steer")!;
+    assert.equal(document.querySelectorAll(".inline-steer").length, 1);
+    assert.equal(document.querySelectorAll(".message-stack > .steered-row").length, 0);
+    assert.equal(
+      steer.querySelector<HTMLElement & { content: string }>("qm-markdown")?.content,
+      "Use the smaller sample",
+    );
+    assert.equal(steer.closest("details"), null);
+    assert.equal(document.querySelector(".steer-label"), null);
+    assert.doesNotMatch(document.body.textContent!, /steered the running task/);
+    const folds = [...document.querySelectorAll(".work.work-fold")];
+    assert.equal(folds.length, 2);
+    assert.match(folds[0]!.textContent!, /step-1/);
+    assert.match(folds[1]!.textContent!, /step-6/);
+    assert.ok(folds[0]!.compareDocumentPosition(steer) & Node.DOCUMENT_POSITION_FOLLOWING);
+    assert.ok(steer.compareDocumentPosition(folds[1]!) & Node.DOCUMENT_POSITION_FOLLOWING);
+  } finally {
+    await h.close();
+  }
+});
