@@ -934,8 +934,6 @@ export function createChatSurface(
     chatState.rememberedScopeId = match.scopeId;
     chatState.rememberedContextName = chatState.contextName;
     syncLocation();
-    renderList();
-    drawActiveChat(agent);
   }
 
   function postCurrentPaneState(): void {
@@ -1396,6 +1394,7 @@ export function createChatSurface(
 
   function drawActiveChat(agent = chatState.agent, opts: { forceScroll?: boolean } = {}): void {
     if (!agent || agent !== chatState.agent || !chatState.host || appState.currentView !== "chats") return;
+    adoptActiveSessionFromList(agent);
     if (!ctx.visible()) {
       postCurrentPaneState();
       return;

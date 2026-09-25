@@ -59,7 +59,6 @@ import { contextsState, scopeTitle } from "./contexts";
 import type { DensityTier } from "./density";
 import { appState } from "./shell-state";
 import { renderSidebarTop, switchView, syncDocumentTitle, syncUrlFromState } from "./shell";
-import { sleep } from "./chat";
 import {
   createConversation,
   disposeConversation,
@@ -1585,26 +1584,7 @@ function notePaneSession(paneId: string, sessionId: string | null, threadRef: st
     ...(threadRef ? { threadRef } : {}),
   });
   persist();
-  if (sessionId) void settlePaneTitle(sessionId);
   refreshHeaders();
-}
-
-async function settlePaneTitle(sessionId: string): Promise<void> {
-  const titled = (): boolean => Boolean(sessionsState.list.find((s) => s.id === sessionId)?.title?.trim());
-  if (!titled()) await settlePoll([0, 1200, 2400, 4000, 6000], titled);
-}
-
-async function settlePoll(delays: number[], done: () => boolean): Promise<void> {
-  for (const delay of delays) {
-    if (delay) await sleep(delay);
-    if (!splitState.active) return;
-    try {
-      await refreshSessions({ silent: true });
-    } catch {
-      void 0;
-    }
-    if (done()) return;
-  }
 }
 
 document.addEventListener("keydown", (e) => {

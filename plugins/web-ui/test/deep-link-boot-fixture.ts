@@ -1,5 +1,6 @@
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
+import type { Conversation } from "../src/conv-types.ts";
 import type { CoreSession, TranscriptPage } from "../src/core-bridge.ts";
 
 export interface Harness {
@@ -11,10 +12,11 @@ export interface Harness {
   releaseTranscript: () => void;
   releaseApprovals: () => void;
   sessionsReady: () => Promise<void>;
+  refreshSessions: () => Promise<boolean>;
   boot: () => Promise<void>;
   appState: { currentView: string };
   sessionsState: { list: Array<{ id: string }>; loaded: boolean; openingKey: string | null };
-  visibleConversation: () => { state: { sessionId: string | null; threadRef: string | null } };
+  visibleConversation: () => Conversation;
   mainText: () => string;
   close: () => Promise<void>;
 }
@@ -243,6 +245,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     releaseTranscript,
     releaseApprovals,
     sessionsReady: sessions.sessionsReady as () => Promise<void>,
+    refreshSessions: sessions.refreshSessions as () => Promise<boolean>,
     boot: shell.boot as () => Promise<void>,
     appState: shell.appState as Harness["appState"],
     sessionsState: sessions.sessionsState as Harness["sessionsState"],
