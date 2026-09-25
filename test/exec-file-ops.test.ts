@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rm, access } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, access, readFile, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -76,4 +76,61 @@ test("posixJoin rejects parent path segments", () => {
   assert.equal(posixJoin("/root/workspace/", "/a/./b.txt"), "/root/workspace/a/./b.txt");
   assert.throws(() => posixJoin("/root/workspace", "../x"), /must stay inside the workspace/);
   assert.throws(() => posixJoin("/root/workspace", "a/../../x"), /must stay inside the workspace/);
+});
+
+test("concurrent imports keep separate archives through extraction and cleanup", { timeout: 10_000 }, async () => {
+  const rootDir = await mkdtemp(join(tmpdir(), "qm-import-'"));
+  const handle = { id: "test", rootDir };
+  const uploaded = Promise.withResolvers<void>();
+  let writes = Promise.resolve();
+  let extracts = Promise.resolve();
+  let writeCount = 0;
+  const makeOps = () =>
+    createExecFileOps({
+      label: "test",
+      writeInline: async (_id, path, data) => {
+        writes = writes.then(() => writeFile(path, data));
+        await writes;
+        if (++writeCount === 2) uploaded.resolve();
+        await uploaded.promise;
+      },
+      exec: async (_id, script) => {
+        const result = extracts.then(async () => {
+          const r = await exec("sh", ["-c", script]);
+          return { ...r, code: 0 };
+        });
+        extracts = result.then(
+          () => {},
+          () => {},
+        );
+        return result;
+      },
+    });
+  const trees = ["first", "second"].map((name) => [
+    { path: `${name}/nested/data.bin`, data: Buffer.from([0, 255, name.length]) },
+    { path: `${name}/run.sh`, data: Buffer.from(`echo ${name}\n`), mode: 0o755 },
+  ]);
+  try {
+    const results = await Promise.allSettled(trees.map((tree) => makeOps().importFiles(handle, tree)));
+    const contents = await Promise.all(
+      trees.flat().map(async (entry) => ({
+        path: entry.path,
+        data: await readFile(join(rootDir, entry.path)).catch(() => null),
+      })),
+    );
+    assert.deepEqual(
+      contents,
+      trees.flat().map(({ path, data }) => ({ path, data })),
+    );
+    assert.deepEqual(
+      results.map((r) => r.status),
+      ["fulfilled", "fulfilled"],
+    );
+    for (const tree of trees) {
+      assert.equal((await stat(join(rootDir, tree[1]!.path))).mode & 0o777, 0o755);
+    }
+    assert.deepEqual((await readdir(rootDir)).sort(), ["first", "second"]);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
 });
