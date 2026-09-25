@@ -134,6 +134,7 @@ function signOutFromMenu(): void {
 
 let authMode: AuthMode = "portal";
 let shellMounted = false;
+let pendingCanvasRestore: Promise<void> | null = null;
 
 setSigninRequiredHandler((detail) => {
   authMode = detail.mode ?? authMode;
@@ -699,11 +700,22 @@ export function switchView(v: View): void {
   syncUrlFromState();
   resetActiveDetail(v);
   switch (v) {
-    case "chats":
-      if (mountRestoredCanvas()) drawCanvas();
-      else void renderChatsPage();
-      renderList();
+    case "chats": {
+      const seq = appState.viewRenderSeq;
+      const showChats = () => {
+        if (appState.currentView !== "chats" || appState.viewRenderSeq !== seq) return;
+        if (mountRestoredCanvas()) drawCanvas();
+        else void renderChatsPage();
+        renderList();
+      };
+      if (pendingCanvasRestore) {
+        appState.mainEl?.replaceChildren(
+          Object.assign(document.createElement("div"), { className: "empty", textContent: "Loading conversations…" }),
+        );
+        void pendingCanvasRestore.then(showChats);
+      } else showChats();
       break;
+    }
     case "inbox":
       void renderInbox();
       break;
@@ -1053,6 +1065,7 @@ export async function boot(): Promise<void> {
     renderModelConnectGate();
     return;
   }
+  const sessions = refreshSessions({ showLoading: true });
   const personalScope = `personal:${appState.me.user}`;
   const prefetchedConfig = await runtimeConfigFetch;
   const runtimeConfig =
@@ -1062,21 +1075,28 @@ export async function boot(): Promise<void> {
   }
   resyncModelSelection();
   mountShell();
+  renderList();
   shellMounted = true;
   ensureDeliveryStream();
   warmDeferredChunks();
   void refreshInbox({ silent: true });
-  loadPersistedSplit();
-  await adoptRemoteSplit(remoteSplitFetch);
-
   const connectedProvider = params.get("status") === "connected" ? params.get("connector") : null;
   if (connectedProvider) markConnectorConnected(connectedProvider);
   const viewIntent = isView(wanted) && canView(wanted) && wanted !== "chats";
+  loadPersistedSplit();
+  if (!wantedSession && wanted !== "app-edit") {
+    const restore = adoptRemoteSplit(remoteSplitFetch).then(async () => {
+      if (viewIntent && restoredCanvasNeedsSessionList()) await sessions;
+    });
+    pendingCanvasRestore = restore;
+    void restore.then(() => {
+      if (pendingCanvasRestore === restore) pendingCanvasRestore = null;
+    });
+    if (!viewIntent) await restore;
+  }
 
   const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider;
   if (bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);
-
-  const sessions = refreshSessions({ showLoading: true });
 
   if (wantedSession && !viewIntent && wanted !== "app-edit") {
     const transcript = entriesPrefetch ?? loadLinkedTranscript(wantedSession);
@@ -1105,6 +1125,26 @@ export async function boot(): Promise<void> {
     return;
   }
 
+  if (viewIntent) {
+    if (wanted === "keychain") {
+      const provider = params.get("connector");
+      const status = params.get("status");
+      if (provider && status) noteConnectorResult(provider, status);
+    }
+    if (wanted === "contexts" || wanted === "files" || wanted === "deploys") {
+      const scope =
+        params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
+      if (scope) contextsState.selected = scope;
+    }
+    if (wanted === "deploys" && wantedItem) openDeployById(wantedItem);
+    if (wanted === "crons" && wantedItem) openCronById(wantedItem);
+    if (wanted === "webhooks" && wantedItem) openWebhookById(wantedItem);
+    if (wanted === "skills" && wantedItem) openSkillById(wantedItem);
+    switchView(wanted as View);
+    if (wanted === "inbox") routeInboxHistory(wantedItem);
+    return;
+  }
+
   await sessions;
 
   if (wanted === "app-edit") {
@@ -1117,24 +1157,7 @@ export async function boot(): Promise<void> {
     return;
   }
 
-  if (wanted === "keychain") {
-    const provider = params.get("connector");
-    const status = params.get("status");
-    if (provider && status) noteConnectorResult(provider, status);
-    switchView("keychain");
-  } else if (viewIntent) {
-    if (wanted === "contexts" || wanted === "files" || wanted === "deploys") {
-      const scope =
-        params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
-      if (scope) contextsState.selected = scope;
-    }
-    if (wanted === "deploys" && wantedItem) openDeployById(wantedItem);
-    if (wanted === "crons" && wantedItem) openCronById(wantedItem);
-    if (wanted === "webhooks" && wantedItem) openWebhookById(wantedItem);
-    if (wanted === "skills" && wantedItem) openSkillById(wantedItem);
-    switchView(wanted as View);
-    if (wanted === "inbox") routeInboxHistory(wantedItem);
-  } else if (connectedProvider && sessionsState.list.length) {
+  if (connectedProvider && sessionsState.list.length) {
     const recent = [...sessionsState.list].sort((a, b) => activityOf(b) - activityOf(a))[0]!;
     exitSplitIfActive();
     await openSession(recent);

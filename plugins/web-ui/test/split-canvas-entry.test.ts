@@ -125,7 +125,8 @@ test("boot mounts a restored canvas before it awaits the session list", () => {
   const listAwait = boot.lastIndexOf("await sessions;");
   assert.ok(early > 0, "boot must offer the canvas its head start");
   assert.ok(listStart > 0, "boot still loads the session list");
-  assert.ok(early < listStart, "the mount must come BEFORE the list fetch the panes never read");
+  assert.ok(listStart < early, "the list overlaps runtime settings and remote layout reads");
+  assert.ok(early < listAwait, "the restored canvas must not wait for the sidebar list");
 
   assert.match(boot, /const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider;/);
 
