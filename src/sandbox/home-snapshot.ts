@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { basename } from "node:path/posix";
 import {
   AbortMultipartUploadCommand,
@@ -68,8 +69,8 @@ export interface HomeSnapshotStore {
 }
 
 export class SnapshotTooLargeError extends Error {
-  constructor(label: string, size: number, cap: number) {
-    super(`${label} snapshot skipped: home tar is ${size} bytes, cap is ${cap}`);
+  constructor(label: string, cap: number) {
+    super(`${label} snapshot skipped: home tar exceeds the cap of ${cap} bytes`);
     this.name = "SnapshotTooLargeError";
   }
 }
@@ -147,11 +148,6 @@ export function createS3SnapshotStore(opts: S3SnapshotStoreOptions): HomeSnapsho
           parts.push({ ETag: uploaded.ETag!, PartNumber });
         },
         async complete() {
-          if (!parts.length) {
-            await abort();
-            await s3.send(new PutObjectCommand({ Bucket, Key, Body: new Uint8Array(0) }));
-            return;
-          }
           await s3.send(
             new CompleteMultipartUploadCommand({ Bucket, Key, UploadId, MultipartUpload: { Parts: parts } }),
           );
@@ -259,7 +255,6 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
   const scratchInHome = homeTarPath.startsWith(`${homeDir}/`);
   const prunePaths = scratchInHome ? [...opts.prunePaths, `./${basename(homeTarPath)}*`] : opts.prunePaths;
   const partPath = (i: number): string => `${homeTarPath}.${i}.part`;
-  const listPath = `${homeTarPath}.list`;
 
   const startClock = (): (() => number) => {
     const deadline = Date.now() + timeoutMs;
@@ -280,7 +275,11 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
 
   const removeScratch = (session: S, what: string): Promise<void> =>
     io
-      .runCommand(session, `rm -f ${shq(homeTarPath)} ${shq(homeTarPath)}.*`, 30_000)
+      .runCommand(
+        session,
+        `for p in ${shq(homeTarPath)}.*/pid; do kill -KILL -"$(cat "$p" 2>/dev/null)" 2>/dev/null; done; rm -rf ${shq(homeTarPath)} ${shq(homeTarPath)}.*`,
+        30_000,
+      )
       .then(() => undefined)
       .catch(swallowAs(`${label}-sandbox: ${what}`, undefined));
 
@@ -292,19 +291,17 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
     return size;
   }
 
-  async function readPart(session: S, i: number, expected: number, left: () => number): Promise<Uint8Array> {
-    const part = partPath(i);
+  async function readPart(
+    session: S,
+    i: number,
+    path: string,
+    expected: number,
+    left: () => number,
+  ): Promise<Uint8Array> {
     let detail = "";
     for (let attempt = 0; attempt < 2; attempt++) {
-      const cut = await run(
-        session,
-        `dd if=${shq(homeTarPath)} of=${shq(part)} bs=${partBytes} skip=${i} count=1`,
-        180_000,
-        left,
-      );
-      if (cut.exitCode !== 0) throw new Error(`${label} snapshot part ${i}: dd failed: ${cut.stderr.slice(0, 200)}`);
       const bytes = await withTimeout(
-        () => io.readFileBytes(session, part),
+        () => io.readFileBytes(session, path),
         left(),
         `${label} snapshot part ${i} read`,
       );
@@ -312,6 +309,28 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
       detail = `got ${bytes?.length ?? 0} bytes, expected ${expected}`;
     }
     throw new Error(`${label} snapshot part ${i}: ${detail}`);
+  }
+
+  async function nextPart(session: S, i: number, dir: string, left: () => number): Promise<number | null> {
+    const part = shq(`${dir}/${i}.part`);
+    const done = shq(`${dir}/done`);
+    const waited = await run(
+      session,
+      `while [ ! -e ${part} ] && [ ! -e ${done} ]; do sleep 0.1; done; if [ -e ${part} ]; then wc -c < ${part}; else echo done; cat ${done}; tail -c 300 ${shq(`${dir}/err`)}; fi`,
+      180_000,
+      left,
+    );
+    if (waited.exitCode !== 0)
+      throw new Error(`${label} snapshot part ${i}: wait failed: ${waited.stderr.slice(0, 200)}`);
+    const [first = "", rc, ...detail] = waited.stdout.trim().split("\n");
+    if (first === "done") {
+      if (rc !== "0") throw new Error(`${label} snapshot producer failed (exit ${rc}): ${detail.join(" ")}`);
+      return null;
+    }
+    const size = Number(first);
+    if (!Number.isSafeInteger(size) || size <= 0)
+      throw new Error(`${label} snapshot part ${i}: unexpected size ${first.slice(0, 50)}`);
+    return size;
   }
 
   async function writePart(session: S, i: number, bytes: Uint8Array, left: () => number): Promise<void> {
@@ -339,18 +358,32 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
       const prune = prunePaths.length
         ? `\\( ${prunePaths.map((p) => `-path ${shq(p)}`).join(" -o ")} \\) -prune -o `
         : "";
-      const script = `cd ${shq(homeDir)} 2>/dev/null || exit 0; find . ${prune}\\( ! -type d -o -exec test -r {} \\; \\) -print0 > ${shq(listPath)} 2>/dev/null; tar --no-recursion --null -T ${shq(listPath)} -cf ${shq(homeTarPath)}; rc=$?; rm -f ${shq(listPath)}; exit $rc`;
+      const dir = `${homeTarPath}.${randomBytes(4).toString("hex")}`;
+      const list = shq(`${dir}/list`);
+      const done = shq(`${dir}/done`);
+      const tmp = `${shq(dir)}/$i.part.tmp`;
+      const part = `${shq(dir)}/$i.part`;
+      const produce = `( tar --no-recursion --null -T ${list} -cf -; echo $? > ${done}.rc ) | ( i=0; while [ -e ${list} ]; do dd bs=${partBytes} count=1 iflag=fullblock of=${tmp} 2>${done}.dd || { cat ${done}.dd >&2; exit 1; }; [ -s ${tmp} ] || break; mv ${tmp} ${part} || exit 1; while [ -e ${part} ] && [ -e ${list} ]; do sleep 0.1; done; rm -f ${part}; i=$((i+1)); done; rm -f ${tmp} ) || echo $? > ${done}.rc; mv ${done}.rc ${done}`;
+      const detached = `sh -c ${shq(produce)} </dev/null >/dev/null 2>${shq(`${dir}/err`)} &`;
+      const script = `cd ${shq(homeDir)} && mkdir ${shq(dir)} || exit 1; find . ${prune}\\( ! -type d -o -exec test -r {} \\; \\) -print0 > ${list} 2>/dev/null; if command -v setsid >/dev/null 2>&1; then setsid ${detached} else ${detached} fi; echo $! > ${shq(`${dir}/pid`)}`;
       try {
-        const made = await run(session, script, 180_000, left);
-        if (made.exitCode !== 0) throw new Error(`${label} snapshot tar failed: ${made.stderr.slice(0, 200)}`);
-        const size = await tarSize(session, left);
-        if (size > maxBytes) throw new SnapshotTooLargeError(label, size, maxBytes);
+        const started = await run(session, script, 180_000, left);
+        if (started.exitCode !== 0) throw new Error(`${label} snapshot tar failed: ${started.stderr.slice(0, 200)}`);
         const upload = await withTimeout(() => store.createUpload(scope), left(), `${label} snapshot upload start`);
         try {
-          for (let i = 0, offset = 0; offset < size; i++, offset += partBytes) {
-            const bytes = await readPart(session, i, Math.min(partBytes, size - offset), left);
+          let total = 0;
+          for (let i = 0; ; i++) {
+            const size = await nextPart(session, i, dir, left);
+            if (size === null) break;
+            total += size;
+            if (total > maxBytes) throw new SnapshotTooLargeError(label, maxBytes);
+            const bytes = await readPart(session, i, `${dir}/${i}.part`, size, left);
+            const released = await run(session, `rm -f ${shq(`${dir}/${i}.part`)}`, 30_000, left);
+            if (released.exitCode !== 0)
+              throw new Error(`${label} snapshot part ${i}: release failed: ${released.stderr.slice(0, 200)}`);
             await withTimeout(() => upload.addPart(bytes), left(), `${label} snapshot part ${i} upload`);
           }
+          if (!total) throw new Error(`${label} snapshot read-back empty`);
           await withTimeout(() => upload.complete(), left(), `${label} snapshot upload completion`);
         } catch (e) {
           await upload.abort().catch(swallowAs(`${label}-sandbox: snapshot upload abort`, undefined));
