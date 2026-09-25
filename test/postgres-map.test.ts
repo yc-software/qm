@@ -1,5 +1,6 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore, type WebhookHistory } from "../src/webhooks/webhook-store.ts";
@@ -22,7 +23,7 @@ before(async () => {
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(
-    "DROP TABLE IF EXISTS map_webhooks, map_webhook_history, map_widgets, map_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
+    "DROP TABLE IF EXISTS map_webhooks, map_webhook_history, map_widgets, map_wide_widgets, map_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
   );
   await p.end();
 });
@@ -247,6 +248,27 @@ test("pg map: select mirrors the memory map — folded field filter, projection,
     );
   } finally {
     for (const id of [...rows.map(([id]) => id), "sel-d"]) await pgMap.delete(id);
+    await factory.pool.close();
+  }
+});
+
+test("pg map: indexed fields accept wide values through migration and later writes", { skip }, async () => {
+  const factory = createPostgresMapFactory(URL!);
+  const first = randomBytes(3000).toString("hex");
+  const second = randomBytes(3000).toString("hex");
+  const unindexed = factory.map<{ owner: string }>("map_wide_widgets");
+  try {
+    await unindexed.put("existing", { owner: first });
+    const indexed = factory.map<{ owner: string }>("map_wide_widgets", ["owner"]);
+    const select = (owner: string) => indexed.select({ where: { field: "owner", anyOfFold: [owner.toUpperCase()] } });
+    assert.deepEqual(await select(first), [{ owner: first }]);
+    await indexed.put("later", { owner: second });
+    await indexed.merge("existing", { owner: second });
+    assert.deepEqual(await select(first), []);
+    assert.deepEqual(await select(second), [{ owner: second }, { owner: second }]);
+  } finally {
+    await unindexed.delete("existing");
+    await unindexed.delete("later");
     await factory.pool.close();
   }
 });

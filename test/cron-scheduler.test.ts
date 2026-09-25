@@ -1121,6 +1121,98 @@ for (const queued of [false, true]) {
   });
 }
 
+test("queue mode: concurrent reconciliation cannot consume an overdue slot while its lifecycle lock is held", async () => {
+  const crons = createCronStore();
+  const cron = await crons.create({
+    schedule: { cron: "* * * * *", timezone: "UTC" },
+    action: "overdue calendar task",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  const slot = cron.nextFireAt!;
+  let clock = slot + 120_000;
+  const mutex = createMemoryAdvisoryLock();
+  const releaseHeld = Promise.withResolvers<void>();
+  const heldEntered = Promise.withResolvers<void>();
+  const holding = mutex.withLock(`cron-lifecycle:${cron.id}`, async () => {
+    heldEntered.resolve();
+    await releaseHeld.promise;
+  });
+  await heldEntered.promise;
+  const gates = [0, 1].map(() => ({ entered: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() }));
+  let attempts = 0;
+  let onFire!: (job: CronFireJob) => Promise<void>;
+  let onTick!: () => Promise<void>;
+  const enqueued: CronFireJob[] = [];
+  const calls: TurnRequest[] = [];
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    now: () => clock,
+    lock: {
+      ...mutex,
+      async tryWithLock(key, fn) {
+        const gate = gates[attempts++];
+        if (gate) {
+          gate.entered.resolve();
+          await gate.release.promise;
+        }
+        return mutex.tryWithLock!(key, fn);
+      },
+    },
+    run: async (req) => {
+      calls.push(req);
+      return { status: "ok", reply: "done" };
+    },
+    jobQueue: {
+      async start(handlers) {
+        onFire = handlers.onFire;
+        onTick = handlers.onTick;
+      },
+      async enqueueFire(job) {
+        enqueued.push(job);
+      },
+      healthy: () => true,
+      async stop() {},
+    },
+  });
+  scheduler.start(1000);
+  await scheduler.ready();
+  const first = onFire({ cronId: cron.id, scheduledAt: slot });
+  let second: Promise<void> | undefined;
+  try {
+    await gates[0]!.entered.promise;
+    await onTick();
+    clock++;
+    second = onFire(enqueued.at(-1)!);
+    await gates[1]!.entered.promise;
+    gates[0]!.release.resolve();
+    await first;
+    gates[1]!.release.resolve();
+    await second;
+    const deferred = (await crons.get(cron.id))!;
+    assert.equal(deferred.nextFireAt, slot, "neither claimant can advance past an unstarted calendar slot");
+    assert.equal(deferred.lastFiredAt, undefined);
+    assert.equal(deferred.deferUntil, clock + 30_000);
+    assert.equal(calls.length, 0);
+    releaseHeld.resolve();
+    await holding;
+    clock = deferred.deferUntil!;
+    await onFire({ cronId: cron.id, scheduledAt: slot });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.idempotencyKey, `cron:${cron.id}:${slot}`);
+    assert.equal((await crons.get(cron.id))!.nextFireAt, slot + 60_000);
+  } finally {
+    for (const gate of gates) gate.release.resolve();
+    releaseHeld.resolve();
+    await Promise.all([holding, first, second]);
+    await scheduler.stop();
+  }
+});
+
 test("queue mode: while the queue runs, the interval scheduler's leader lease is held as a guard", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const heldKeys: string[] = [];

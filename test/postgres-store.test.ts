@@ -114,6 +114,8 @@ test("pg spend indexes preserve legacy and unusual requests through migration an
   const usage = { input: 10, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 19, costUsd: 0.5 };
   const wideModel = Array.from({ length: 100 }, () => randomUUID()).join("");
   const wideUsage = { ...usage, legacyDetail: wideModel };
+  const deeplyNestedUsage =
+    JSON.stringify(usage).slice(0, -1) + ',"detail":' + "[".repeat(20_000) + "0" + "]".repeat(20_000) + "}";
   const insert = async (id: string, model: string, json: string | null, when = at, sessionId = session.id) => {
     await raw.query(
       "INSERT INTO session_llm_requests(id, session_id, step, model, scope_label, created_at, usage_json) VALUES ($1,$2,0,$3,$4,$5,$6)",
@@ -140,6 +142,7 @@ test("pg spend indexes preserve legacy and unusual requests through migration an
     await insert("spend-index-unicode", "bad-unicode", JSON.stringify({ ...usage, detail: "\u0000" }), at - 1);
     await insert("spend-index-fraction", "fraction", JSON.stringify({ ...usage, input: 0.5 }), at - 1);
     await insert("spend-index-overflow", "overflow", JSON.stringify({ ...usage, input: 1e308 }), at - 1);
+    await insert("spend-index-deep-history", "deep-history", deeplyNestedUsage, at - 2);
     await migrateRegisteredPgSchemas(URL!);
     const indexes = await raw.query(
       "SELECT indexrelid::regclass::text AS name, indisvalid, indisready FROM pg_index WHERE indexrelid IN ('session_llm_requests_spend'::regclass, 'session_llm_requests_spend_wide'::regclass)",
@@ -173,6 +176,8 @@ test("pg spend indexes preserve legacy and unusual requests through migration an
     });
     await raw.query("UPDATE session_llm_requests SET created_at = $1 WHERE model = 'fraction-after-index'", [at - 1]);
     await insert("spend-index-bad-later", "bad-later", "not json", at - 1);
+    await insert("spend-index-deep-later", "deep-later", deeplyNestedUsage, at - 2);
+    await assert.rejects(store.spendRollup({ from: at - 2, to: at - 1 }), { code: "54001" });
     await raw.query("UPDATE session_llm_requests SET usage_json = $1 WHERE id = 'spend-index-normal'", [
       JSON.stringify({ ...usage, costUsd: 2 }),
     ]);
@@ -191,6 +196,46 @@ test("pg spend indexes preserve legacy and unusual requests through migration an
   } finally {
     await raw.query("DELETE FROM session_llm_requests WHERE session_id IN ($1, 'missing-spend-session')", [session.id]);
     await store.deleteSession(session.id);
+    await raw.end();
+  }
+});
+
+test("pg spend ancestry only visits sessions with usage inside the requested range", { skip }, async (t) => {
+  const at = Date.UTC(2023, 0, 1);
+  const store = createPostgresSessionStore(URL!, { now: () => at });
+  const scope = scopeId("personal", "USPENDANCESTRY");
+  const parent = await store.getOrCreateByThread("cron:spend-ancestry", "dm", scope);
+  const current = await store.getOrCreateByThread("spend-ancestry-current", "dm", scope);
+  const historical = await store.getOrCreateByThread("spend-ancestry-historical", "dm", scope);
+  await store.setParentSession(current.id, parent.id);
+  await store.setParentSession(historical.id, parent.id);
+  await store.recordLlmRequest(current.id, {
+    turnSeq: null,
+    step: 0,
+    model: "ancestry",
+    scopeLabel: scope,
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, costUsd: 1 },
+  });
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  const execute = pg.Pool.prototype.query;
+  let query = "";
+  t.mock.method(pg.Pool.prototype, "query", function (this: InstanceType<typeof pg.Pool>, ...args: unknown[]) {
+    if (typeof args[0] === "string" && args[0].startsWith("WITH RECURSIVE")) query = args[0];
+    return Reflect.apply(execute, this, args);
+  });
+  try {
+    assert.equal((await store.spendRollup({ from: at, to: at + 1 }))[0]!.origin, "cron");
+    assert.ok(query);
+    const explained = await raw.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${query}`, [at, at + 1]);
+    type Plan = { Plans?: Plan[]; "Subplan Name"?: string; "Actual Rows"?: number };
+    const plans = (plan: Plan): Plan[] => [plan, ...(plan.Plans ?? []).flatMap(plans)];
+    const ancestry = plans(explained.rows[0]["QUERY PLAN"][0].Plan).find(
+      (plan) => plan["Subplan Name"] === "CTE ancestry",
+    );
+    assert.equal(ancestry?.["Actual Rows"], 2);
+  } finally {
+    for (const session of [current, historical, parent]) await store.deleteSession(session.id);
     await raw.end();
   }
 });

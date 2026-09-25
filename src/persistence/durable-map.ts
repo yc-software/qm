@@ -179,7 +179,7 @@ export function createPostgresMap<T>(
         id: `durable-map/${table}/select-${field.toLowerCase()}`,
         statements: [
           `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_${field.toLowerCase()}_fold
-           ON ${table} (lower(json->>'${field}'))`,
+           ON ${table} USING hash (lower(json->>'${field}'))`,
           `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_${field.toLowerCase()}_unicode
            ON ${table} (id) WHERE json->>'${field}' ~ '[^\\x01-\\x7f]'`,
         ],

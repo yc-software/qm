@@ -615,7 +615,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                           AND pg_input_is_valid(j ->> 'output', 'bigint') IS NOT FALSE
                           AND pg_input_is_valid(j ->> 'cacheRead', 'bigint') IS NOT FALSE
                           AND pg_input_is_valid(j ->> 'cacheWrite', 'bigint') IS NOT FALSE THEN j END
-               FROM (SELECT CASE WHEN pg_input_is_valid(t, 'jsonb') THEN t::jsonb END AS j OFFSET 0) parsed
+               FROM (SELECT CASE WHEN octet_length(t) > 2000 THEN NULL
+                                 WHEN pg_input_is_valid(t, 'jsonb') THEN t::jsonb END AS j OFFSET 0) parsed
              $spend_usage_json$`,
         ],
       },
@@ -1677,6 +1678,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            SELECT s.id AS session_id, s.parent_session_id, ${originExpr("s")} AS origin, ARRAY[s.id] AS path
              FROM sessions s
             WHERE s.parent_session_id IS NOT NULL AND ${originExpr("s")} = 'conversation'
+              AND EXISTS (SELECT 1 FROM session_llm_requests r
+                           WHERE r.session_id = s.id AND r.created_at >= $1 AND r.created_at < $2
+                             AND r.usage_json IS NOT NULL)
            UNION ALL
            SELECT a.session_id, p.parent_session_id, ${originExpr("p")}, a.path || p.id
              FROM ancestry a JOIN sessions p ON p.id = a.parent_session_id
