@@ -1,8 +1,8 @@
-import { swallow, swallowAs } from "./errors.ts";
+import { reportFailure, reportFailureAs } from "./errors.ts";
 
 export interface Sweeper {
   start(intervalMs?: number): void;
-  stop(): void;
+  stop(): Promise<void>;
 }
 
 export function createSweeper(
@@ -12,16 +12,20 @@ export function createSweeper(
 ): Sweeper {
   const label = opts.label ?? "sweeper";
   let timer: ReturnType<typeof setInterval> | null = null;
+  const pending = new Set<Promise<void>>();
+  let stopping: Promise<void> | null = null;
   const sweep = (): void => {
     try {
-      void Promise.resolve(fn()).catch(swallowAs(`${label}: sweep failed`, undefined));
+      const work = Promise.resolve(fn()).then(() => {}, reportFailureAs(`${label}: sweep failed`, undefined));
+      pending.add(work);
+      void work.finally(() => pending.delete(work));
     } catch (e) {
-      swallow(`${label}: sweep failed`, e);
+      reportFailure(`${label}: sweep failed`, e);
     }
   };
   return {
     start(intervalMs?: number) {
-      if (timer) return;
+      if (timer || stopping) return;
       timer = setInterval(sweep, intervalMs ?? defaultIntervalMs);
       timer.unref?.();
       if (opts.immediate) sweep();
@@ -29,6 +33,12 @@ export function createSweeper(
     stop() {
       if (timer) clearInterval(timer);
       timer = null;
+      stopping ??= Promise.all(pending)
+        .then(() => {})
+        .finally(() => {
+          stopping = null;
+        });
+      return stopping;
     },
   };
 }

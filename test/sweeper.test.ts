@@ -83,9 +83,9 @@ test("createSweeper start(intervalMs) overrides the construction-time interval",
   assert.ok(ticks >= 2, `expected ticks at the start-time interval, got ${ticks}`);
 });
 
-test("createSweeper tags swallowed failures with its label", async (t) => {
+test("createSweeper tags reported failures with its label", async (t) => {
   const logged: string[] = [];
-  t.mock.method(console, "warn", (...args: unknown[]) => {
+  t.mock.method(console, "error", (...args: unknown[]) => {
     logged.push(args.map(String).join(" "));
   });
   const s = createSweeper(
@@ -100,7 +100,7 @@ test("createSweeper tags swallowed failures with its label", async (t) => {
   s.stop();
   assert.ok(
     logged.some((l) => l.includes("test-loop: sweep failed") && l.includes("boom")),
-    `expected a labelled swallow line, got: ${logged.join(" | ")}`,
+    `expected a labelled failure line, got: ${logged.join(" | ")}`,
   );
 });
 
@@ -117,4 +117,52 @@ test("createSweeper unrefs its timer so it never keeps the process alive", () =>
     globalThis.setInterval = realSetInterval;
   }
   assert.deepEqual(calls, ["unref"], "the interval was unref()'d on start");
+});
+
+test("stop waits for all admitted sweeps and fences a restart until they settle", async () => {
+  const first = Promise.withResolvers<void>();
+  let ticks = 0;
+  const s = createSweeper(
+    async () => {
+      ticks++;
+      await first.promise;
+    },
+    60_000,
+    { immediate: true },
+  );
+  s.start();
+  assert.equal(ticks, 1);
+  let settled = false;
+  const stopping = s.stop();
+  assert.equal(s.stop(), stopping);
+  void stopping.then(() => {
+    settled = true;
+  });
+  s.start();
+  await sleep(10);
+  assert.equal(ticks, 1);
+  assert.equal(settled, false);
+  first.resolve();
+  await stopping;
+  s.start();
+  assert.equal(ticks, 2);
+  await s.stop();
+});
+
+test("stop drains overlapping callbacks including failed work before acknowledging", async () => {
+  const gate = Promise.withResolvers<void>();
+  let active = 0;
+  const s = createSweeper(async () => {
+    active++;
+    await gate.promise;
+    active--;
+    throw new Error("expected sweep failure");
+  }, 5);
+  s.start();
+  await sleep(20);
+  assert.ok(active > 1);
+  const stopping = s.stop();
+  gate.resolve();
+  await stopping;
+  assert.equal(active, 0);
 });

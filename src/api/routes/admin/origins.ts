@@ -61,7 +61,6 @@ type AdminWakeOrigin = {
 
 export type AdminOrigin = AdminCronOrigin | AdminWakeOrigin;
 
-export type AdminSessionCategory = "conversation" | "background";
 export type AdminSessionOrigin = "cron" | "other_background";
 
 export type AdminWakeRef = NonNullable<ReturnType<typeof parseWakeFireKey>> & {
@@ -78,10 +77,6 @@ export function parseSessionWakeRef(threadRef: string | undefined | null): Admin
   if (!trigger || !sourceId) return null;
   const parsed = parseWakeFireKey(`${trigger}:${sourceId}`);
   return parsed ? { ...parsed, fireKey: threadRef!, monologue: true } : null;
-}
-
-export function sessionCategory(session: Pick<Session, "threadRef"> | SessionSummary): AdminSessionCategory {
-  return parseSessionWakeRef(session.threadRef) ? "background" : "conversation";
 }
 
 export function sessionKind(session: Pick<Session, "type" | "threadRef"> | SessionSummary): string {

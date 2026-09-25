@@ -5,13 +5,19 @@ import { connect } from "node:net";
 import type { AddressInfo } from "node:net";
 import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
 
-let whoamiMode: "ok" | "down" = "ok";
+let whoamiMode: "ok" | "down" | "fail-once" | "malformed" = "ok";
+let whoamiRequests = 0;
 
 const upstream = createServer((req: IncomingMessage, res) => {
   if (req.url === "/api/whoami") {
-    if (whoamiMode === "down") {
+    whoamiRequests++;
+    if (whoamiMode === "down" || (whoamiMode === "fail-once" && whoamiRequests === 1)) {
       res.writeHead(502, { "content-type": "application/json" });
       return void res.end(JSON.stringify({ error: "core_unreachable" }));
+    }
+    if (whoamiMode === "malformed") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return void res.end("{}");
     }
     const m = (req.headers.cookie ?? "").match(/admin=([^;]+)/);
     const sub = m ? decodeURIComponent(m[1] ?? "") : "";
@@ -128,6 +134,15 @@ test("a prototype-chain segment like /constructor/ never matches a keyed surface
   }
 });
 
+test("a transient admin-probe failure is retried before denying access", async () => {
+  whoamiRequests = 0;
+  whoamiMode = "fail-once";
+  const ok = await fetch(`${base}/admin/api/me`, { headers: { cookie: sessionCookie("U-admin-transient") } });
+  assert.equal(ok.status, 200);
+  assert.equal(whoamiRequests, 2);
+  whoamiMode = "ok";
+});
+
 test("an admin-probe outage is reported as unavailable and is NOT negative-cached", async () => {
   whoamiMode = "down";
   const denied = await fetch(`${base}/admin/`, {
@@ -139,6 +154,16 @@ test("an admin-probe outage is reported as unavailable and is NOT negative-cache
   whoamiMode = "ok";
   const ok = await fetch(`${base}/admin/api/me`, { headers: { cookie: sessionCookie("U-admin-outage") } });
   assert.equal(ok.status, 200);
+});
+
+test("a malformed admin verdict fails readiness instead of being cached as non-admin", async () => {
+  whoamiMode = "malformed";
+  const denied = await fetch(`${base}/admin/`, {
+    headers: { cookie: sessionCookie("U-admin-malformed"), accept: "text/html" },
+  });
+  assert.equal(denied.status, 403);
+  assert.match(await denied.text(), /temporarily unavailable/i);
+  whoamiMode = "ok";
 });
 
 test("consumeState: single-use, TTL-bounded, never wholesale-wiped", () => {

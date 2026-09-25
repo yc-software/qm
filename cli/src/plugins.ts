@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { PluginSecret, QmConfig } from "./config.ts";
 import { pluginNameError } from "./services.ts";
@@ -11,13 +11,20 @@ export interface ResolvedPlugin {
   dockerfile?: string;
   env: Record<string, string>;
   secrets?: PluginSecret[];
+  coreAccess?: boolean;
 }
+
+const isDir = (path: string): boolean => {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+};
 
 const subdirs = (dir: string): string[] => {
   if (!existsSync(dir)) return [];
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isDirectory())
-    .map((e) => e.name);
+  return readdirSync(dir).filter((name) => isDir(join(dir, name)));
 };
 
 export function discoverPlugins(configDir: string, config: QmConfig): { plugins: ResolvedPlugin[]; errors: string[] } {
@@ -34,6 +41,7 @@ export function discoverPlugins(configDir: string, config: QmConfig): { plugins:
     const image = entry?.image;
     const env = entry?.env ?? {};
     const secrets = entry?.secrets ?? [];
+    const coreAccess = entry?.coreAccess;
     const hasDockerfile = sourceDirs.has(name);
     const dir = join(pluginsRoot, name);
 
@@ -47,7 +55,14 @@ export function discoverPlugins(configDir: string, config: QmConfig): { plugins:
       continue;
     }
     if (image) {
-      plugins.push({ name, kind: "image", image, env, secrets });
+      plugins.push({
+        name,
+        kind: "image",
+        image,
+        env,
+        secrets,
+        ...(coreAccess !== undefined ? { coreAccess } : {}),
+      });
       continue;
     }
     if (hasDockerfile) {
@@ -58,6 +73,7 @@ export function discoverPlugins(configDir: string, config: QmConfig): { plugins:
         dockerfile: join(dir, "Dockerfile"),
         env,
         secrets,
+        ...(coreAccess !== undefined ? { coreAccess } : {}),
       });
       continue;
     }

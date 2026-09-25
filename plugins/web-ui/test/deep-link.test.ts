@@ -2,8 +2,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { deepLinkPath, parseDeepLink, sessionLink } from "../src/deep-link.ts";
 
-test("chats view with an active session is addressed by /?session=", () => {
-  assert.equal(deepLinkPath("", "chats", "abc-123"), "/?session=abc-123");
+test("chats view with an active session is addressed by /s/<id>", () => {
+  assert.equal(deepLinkPath("", "chats", "abc-123"), "/s/abc-123");
+});
+
+test("a uuid session round-trips through /s/<uuid>", () => {
+  const uuid = "fd8f1b46-4445-4912-8871-9b9f8690107f";
+  assert.equal(deepLinkPath("", "chats", uuid), `/s/${uuid}`);
+  assert.deepEqual(parseDeepLink("", `/s/${uuid}`, ""), { view: "chats", session: uuid, item: null });
+});
+
+test("legacy ?session= links still parse", () => {
+  assert.deepEqual(parseDeepLink("", "/", "?session=s1"), { view: null, session: "s1", item: null });
 });
 
 test("chats view with no session yields the bare root", () => {
@@ -11,9 +21,10 @@ test("chats view with no session yields the bare root", () => {
 });
 
 test("non-chat views are path-addressed regardless of any session", () => {
-  assert.equal(deepLinkPath("", "crons", null), "/crons");
+  assert.equal(deepLinkPath("", "webhooks", null), "/webhooks");
   assert.equal(deepLinkPath("", "files", "abc"), "/files");
   assert.equal(deepLinkPath("", "keychain", null), "/keychain");
+  assert.equal(deepLinkPath("", "deploys", null), "/apps");
 });
 
 test("the contexts view carries its open scope", () => {
@@ -21,25 +32,38 @@ test("the contexts view carries its open scope", () => {
 });
 
 test("a non-root base is prefixed, with or without its trailing slash", () => {
+  assert.equal(deepLinkPath("/web-ui/", "webhooks", null), "/web-ui/webhooks");
   assert.equal(deepLinkPath("/web-ui/", "crons", null), "/web-ui/crons");
-  assert.equal(deepLinkPath("/web-ui", "chats", "s1"), "/web-ui/?session=s1");
+  assert.equal(deepLinkPath("/web-ui", "chats", "s1"), "/web-ui/s/s1");
 });
 
 test("session ids are URI-encoded", () => {
-  assert.equal(deepLinkPath("", "chats", "a b&c"), "/?session=a%20b%26c");
+  assert.equal(deepLinkPath("", "chats", "a b&c"), "/s/a%20b%26c");
 });
 
 test("parseDeepLink reads the view from the path", () => {
+  assert.deepEqual(parseDeepLink("", "/webhooks", ""), { view: "webhooks", session: null, item: null });
   assert.deepEqual(parseDeepLink("", "/crons", ""), { view: "crons", session: null, item: null });
+  assert.deepEqual(parseDeepLink("", "/apps", ""), { view: "deploys", session: null, item: null });
   assert.deepEqual(parseDeepLink("/web-ui/", "/web-ui/crons", ""), { view: "crons", session: null, item: null });
   assert.deepEqual(parseDeepLink("", "/", "?session=s1"), { view: null, session: "s1", item: null });
 });
 
+test("legacy deploys links resolve to Apps while new links use /apps", () => {
+  assert.deepEqual(parseDeepLink("", "/deploys", ""), { view: "deploys", session: null, item: null });
+  assert.deepEqual(parseDeepLink("/web-ui/", "/web-ui/apps", ""), {
+    view: "deploys",
+    session: null,
+    item: null,
+  });
+  assert.deepEqual(parseDeepLink("", "/", "?view=apps"), { view: "deploys", session: null, item: null });
+});
+
 test("project paths open the contexts view with a resolvable project identifier", () => {
-  assert.deepEqual(parseDeepLink("", "/projects/atlas", ""), {
+  assert.deepEqual(parseDeepLink("", "/projects/alice", ""), {
     view: "contexts",
     session: null,
-    item: "atlas",
+    item: "alice",
   });
   assert.deepEqual(parseDeepLink("/web-ui/", "/web-ui/projects/channel/C0123", ""), {
     view: "contexts",
@@ -59,6 +83,7 @@ test("parseDeepLink degrades a malformed percent-escape to no view instead of th
 
 test("parseDeepLink still honors legacy ?view= links", () => {
   assert.deepEqual(parseDeepLink("", "/", "?view=crons"), { view: "crons", session: null, item: null });
+  assert.deepEqual(parseDeepLink("", "/", "?view=webhooks"), { view: "webhooks", session: null, item: null });
   assert.deepEqual(parseDeepLink("/web-ui/", "/web-ui/", "?view=contexts&scope=channel:C1"), {
     view: "contexts",
     session: null,
@@ -91,6 +116,27 @@ test("only the first two path segments are addressed", () => {
 });
 
 test("sessionLink builds an absolute link under the serving base", () => {
-  assert.equal(sessionLink("https://portal.example", "/web-ui/", "s1"), "https://portal.example/web-ui/?session=s1");
-  assert.equal(sessionLink("http://localhost:8096", "", "s1"), "http://localhost:8096/?session=s1");
+  assert.equal(sessionLink("https://portal.example", "/web-ui/", "s1"), "https://portal.example/web-ui/s/s1");
+  assert.equal(sessionLink("http://localhost:8096", "", "s1"), "http://localhost:8096/s/s1");
+});
+
+test("/c/<id> is accepted as an alias for /s/<id> (links shared from Slack)", () => {
+  assert.deepEqual(parseDeepLink("", "/c/abc-123", ""), { view: "chats", session: "abc-123", item: null });
+  assert.deepEqual(parseDeepLink("/web-ui", "/web-ui/c/abc-123", ""), {
+    view: "chats",
+    session: "abc-123",
+    item: null,
+  });
+});
+
+test("sent and pending email URLs use the same id route shape", () => {
+  for (const base of ["", "/web-ui"]) {
+    const path = deepLinkPath(base, "inbox", null, null, "96e58b52e75bf97f");
+    assert.equal(path, `${base}/inbox/96e58b52e75bf97f`);
+    assert.deepEqual(parseDeepLink(base, path, ""), {
+      view: "inbox",
+      session: null,
+      item: "96e58b52e75bf97f",
+    });
+  }
 });

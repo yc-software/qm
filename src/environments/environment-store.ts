@@ -103,7 +103,7 @@ export function createPostgresEnvironmentStore(
   opts: { now?: () => number } = {},
 ): EnvironmentStore {
   const now = opts.now ?? (() => Date.now());
-  const { q } = createPgPool(connectionString, [
+  const { q } = createPgPool(connectionString, "environments/store/0001", [
     `CREATE TABLE IF NOT EXISTS environments(
         id TEXT PRIMARY KEY, org_id TEXT NOT NULL, name TEXT, owner_actor_id TEXT,
         created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL

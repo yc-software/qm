@@ -2,7 +2,7 @@ import { orgId as configOrgId } from "../config.ts";
 import { Readable } from "node:stream";
 import { CREDENTIAL_BROKER_AUD, verifyCapabilityToken, type CapabilityClaims } from "../auth/capability-token.ts";
 import { scopeId as makeScopeId } from "../types.ts";
-import { type DecryptedServiceCredential, isValidCredentialSlug } from "../credentials/keychain.ts";
+import { type DecryptedServiceCredential, isValidCredentialSlug, isComposioHost } from "../credentials/keychain.ts";
 import { brokerCredentialAuthHeader, brokerPathAllowed } from "./credential-broker.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { headerValue, pipeToResponse, sendJson } from "./http.ts";
@@ -148,6 +148,9 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
       actorId: claims.actorId,
       scopeId: claims.scopeId,
       ...(claims.scopeVersion ? { scopeVersion: claims.scopeVersion } : {}),
+      ...(claims.botActor ? { botActor: true } : {}),
+      ...(claims.liveActor ? { liveActor: true } : {}),
+      ...(claims.members ? { members: claims.members } : {}),
     }))
   ) {
     return sendJson(ctx.res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });
@@ -184,6 +187,8 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
     );
   }
   const upstream = gitUrlFor(rec, upstreamPath, ctx.url.search);
+  if (isComposioHost(upstream.hostname))
+    return sendDenied(ctx, claims, 403, "backend_only", "Composio calls must use /v1/composio", slug, rec.host);
   if (!brokerPathAllowed(upstream.pathname, rec.allowedPathPrefixes)) {
     return sendDenied(
       ctx,

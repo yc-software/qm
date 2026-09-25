@@ -13,7 +13,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { mintDeployOwnerToken } from "../src/deploy/access-token.ts";
+import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope-membership.ts";
 import { createHmac } from "node:crypto";
 import { scopeId } from "../src/types.ts";
 
@@ -24,6 +24,7 @@ const PORTAL = "https://portal.example.com";
 function appServingUpstream(upstreamPort: number) {
   const deployStore = createDeployStore();
   const acl = createAclStore();
+  const directory = createDirectoryStore();
   const deploy = createDeployService({
     deployStore,
     provider: {
@@ -33,16 +34,19 @@ function appServingUpstream(upstreamPort: number) {
     },
     auditLog,
     acl,
+    canReadScope: createCanReadScope({ directory }),
+    canWriteScope: createCanWriteScope({ directory }),
     deployDir: mkdtempSync(join(tmpdir(), "app-shell-")),
   });
-  return createApp({
+  const app = createApp({
     deploy,
     acl,
-    directory: createDirectoryStore(),
+    directory,
     sessions: createMemorySessionStore(),
     identity: createIdentityService(),
     orgId: "acme",
   } as unknown as Parameters<typeof createApp>[0]);
+  return { app, directory };
 }
 
 function httpGet(
@@ -72,13 +76,14 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
   upstream.listen(0);
   await new Promise((r) => upstream.once("listening", r));
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const app = appServingUpstream(upstreamPort);
+  const { app, directory } = appServingUpstream(upstreamPort);
   const d = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "x",
     files: [],
     name: "mysite",
+    createdInScope: scopeId("channel", "CBUILT"),
   });
   await app.shareDeployment(d.id, scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
   const server = createInsecureTestServer(app, {
@@ -93,36 +98,25 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
   };
-  return { app, port, close };
+  return { app, directory, port, close };
 }
 
 const HOST = "mysite.apps.example.com";
-function mintPortalSession(sub: string): string {
+function mintPortalSession(sub: string, expiresInSeconds = 3600): string {
   const key = createHmac("sha256", "portal-session-secret").update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
-  const body = Buffer.from(JSON.stringify({ k: "session", sub, org: "acme", iat: now, exp: now + 3600 })).toString(
-    "base64url",
-  );
+  const body = Buffer.from(
+    JSON.stringify({ k: "session", sub, org: "acme", iat: now, exp: now + expiresInSeconds }),
+  ).toString("base64url");
   return `${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
 }
 const viewerCookie = () => `portal_session=${mintPortalSession("U-viewer")}`;
-const ownerToken = (sub: string, expInMs = 60_000) =>
-  mintDeployOwnerToken(GATE_SECRET, { slug: "mysite", sub, exp: Date.now() + expInMs });
-
-test("app shell: a valid owner link becomes a host-only cookie and turns on the shell", async () => {
+test("app shell: a normal signed-in manager gets the shell without an edit link", async () => {
   const f = await widgetFixture();
   try {
-    const token = await ownerToken("U1");
-    const swallow = await httpGet(f.port, `/?owner=${encodeURIComponent(token)}`, { Host: HOST });
-    assert.equal(swallow.status, 302, "the owner token is swallowed into a redirect");
-    const setCookie = ([] as string[]).concat(swallow.headers["set-cookie"] as string[] | string).join("\n");
-    assert.match(setCookie, /dpl_owner=/, "the owner session lands in a cookie");
-    assert.match(setCookie, /HttpOnly/, "the owner cookie is HttpOnly");
-    assert.equal(swallow.headers.location, "/", "the redirect drops the token from the URL");
-
     const page = await httpGet(f.port, "/", {
       Host: HOST,
-      Cookie: `dpl_owner=${token}`,
+      Cookie: `portal_session=${mintPortalSession("U1")}`,
       "Sec-Fetch-Dest": "document",
     });
     assert.equal(page.status, 200);
@@ -139,10 +133,9 @@ test("app shell: a valid owner link becomes a host-only cookie and turns on the 
 test("app shell: the frame's own load (sec-fetch-dest: iframe) proxies the app untouched", async () => {
   const f = await widgetFixture();
   try {
-    const token = await ownerToken("U1");
     const page = await httpGet(f.port, "/", {
       Host: HOST,
-      Cookie: `dpl_owner=${token}`,
+      Cookie: `portal_session=${mintPortalSession("U1")}`,
       "Sec-Fetch-Dest": "iframe",
     });
     assert.equal(page.status, 200);
@@ -155,10 +148,9 @@ test("app shell: the frame's own load (sec-fetch-dest: iframe) proxies the app u
 test("app shell: the frame src preserves the requested path and query", async () => {
   const f = await widgetFixture();
   try {
-    const token = await ownerToken("U1");
     const page = await httpGet(f.port, "/reports/q3?tab=2", {
       Host: HOST,
-      Cookie: `dpl_owner=${token}`,
+      Cookie: `portal_session=${mintPortalSession("U1")}`,
       "Sec-Fetch-Dest": "document",
     });
     assert.equal(page.status, 200);
@@ -171,8 +163,7 @@ test("app shell: the frame src preserves the requested path and query", async ()
 test("app shell: a client without fetch metadata gets the raw app, never a nested shell", async () => {
   const f = await widgetFixture();
   try {
-    const token = await ownerToken("U1");
-    const page = await httpGet(f.port, "/", { Host: HOST, Cookie: `dpl_owner=${token}` });
+    const page = await httpGet(f.port, "/", { Host: HOST, Cookie: `portal_session=${mintPortalSession("U1")}` });
     assert.equal(page.status, 200);
     assert.equal(page.body, "<html><body>APP</body></html>", "no sec-fetch-dest means a straight proxy");
   } finally {
@@ -194,8 +185,10 @@ test("app shell: a plain visitor (granted, signed in) gets untouched HTML and no
 test("app shell: the owner version endpoint reports the applied version", async () => {
   const f = await widgetFixture();
   try {
-    const token = await ownerToken("U1");
-    const version = await httpGet(f.port, "/__claw__/version", { Host: HOST, Cookie: `dpl_owner=${token}` });
+    const version = await httpGet(f.port, "/__claw__/version", {
+      Host: HOST,
+      Cookie: `portal_session=${mintPortalSession("U1")}`,
+    });
     assert.equal(version.status, 200);
     assert.equal(JSON.parse(version.body).version, 1, "the applied version is reported");
   } finally {
@@ -206,10 +199,9 @@ test("app shell: the owner version endpoint reports the applied version", async 
 test("app shell: an owner's XHR/fetch HTML fragment is not shelled (sec-fetch-dest gate)", async () => {
   const f = await widgetFixture();
   try {
-    const token = await ownerToken("U1");
     const frag = await httpGet(f.port, "/fragment", {
       Host: HOST,
-      Cookie: `dpl_owner=${token}`,
+      Cookie: `portal_session=${mintPortalSession("U1")}`,
       "Sec-Fetch-Dest": "empty",
     });
     assert.equal(frag.status, 200);
@@ -225,8 +217,11 @@ test("app shell: a 206 partial HTML response streams byte-exact through the fram
     res.end("<html></h");
   });
   try {
-    const token = await ownerToken("U1");
-    const r = await httpGet(f.port, "/", { Host: HOST, Cookie: `dpl_owner=${token}`, "Sec-Fetch-Dest": "iframe" });
+    const r = await httpGet(f.port, "/", {
+      Host: HOST,
+      Cookie: `portal_session=${mintPortalSession("U1")}`,
+      "Sec-Fetch-Dest": "iframe",
+    });
     assert.equal(r.status, 206);
     assert.equal(r.body, "<html></h", "a range slice stays byte-exact");
   } finally {
@@ -248,32 +243,33 @@ test("app shell: a non-owner request to /__claw__/ falls through to the app, not
   }
 });
 
-test("app shell: an owner token for someone who cannot manage the app grants nothing", async () => {
+test("app shell: forged and expired sessions cannot activate the shell", async () => {
   const f = await widgetFixture();
   try {
-    const forged = await ownerToken("U-stranger");
-    const swallow = await httpGet(f.port, `/?owner=${encodeURIComponent(forged)}`, { Host: HOST });
-    assert.equal(swallow.status, 401, "a non-manager's owner token leaves them an anonymous visitor");
-    assert.equal(swallow.headers["set-cookie"], undefined, "no owner cookie for a non-manager");
-
-    const page = await httpGet(f.port, "/", {
-      Host: HOST,
-      Cookie: `dpl_owner=${forged}; ${viewerCookie()}`,
-      "Sec-Fetch-Dest": "document",
-    });
-    assert.equal(page.status, 200, "the visitor's own grant still admits them");
-    assert.doesNotMatch(page.body, /__qmAppShell/, "a forged owner cookie raises no shell");
+    for (const token of [mintPortalSession("U1") + "forged", mintPortalSession("U1", -1)]) {
+      const page = await httpGet(f.port, "/", {
+        Host: HOST,
+        Cookie: `portal_session=${token}`,
+        "Sec-Fetch-Dest": "document",
+      });
+      assert.equal(page.status, 401);
+      assert.doesNotMatch(page.body, /__qmAppShell/);
+    }
   } finally {
     await f.close();
   }
 });
 
-test("app shell: an expired owner token is rejected", async () => {
+test("app shell: an old owner cookie cannot override the signed-in viewer", async () => {
   const f = await widgetFixture();
   try {
-    const expired = await ownerToken("U1", -1);
-    const page = await httpGet(f.port, "/", { Host: HOST, Cookie: `dpl_owner=${expired}` });
-    assert.equal(page.status, 401, "an expired owner session is just an anonymous visitor");
+    const page = await httpGet(f.port, "/", {
+      Host: HOST,
+      Cookie: `dpl_owner=old-token; ${viewerCookie()}`,
+      "Sec-Fetch-Dest": "document",
+    });
+    assert.equal(page.status, 200);
+    assert.doesNotMatch(page.body, /__qmAppShell/);
   } finally {
     await f.close();
   }
@@ -285,8 +281,7 @@ test("app shell: non-HTML responses stream through untouched even for the owner"
     res.end('{"data":true}');
   });
   try {
-    const token = await ownerToken("U1");
-    const r = await httpGet(f.port, "/api/data", { Host: HOST, Cookie: `dpl_owner=${token}` });
+    const r = await httpGet(f.port, "/api/data", { Host: HOST, Cookie: `portal_session=${mintPortalSession("U1")}` });
     assert.equal(r.status, 200);
     assert.equal(r.body, '{"data":true}', "JSON is byte-identical");
     assert.equal(r.headers["content-length"], "13", "content-length survives the proxy");
@@ -313,17 +308,89 @@ test("app shell: an app cannot plant the owner cookie on its visitors", async ()
   }
 });
 
-test("owner-url mint: a manager gets an owner-token link; others are refused", async () => {
+test("app shell: manage grants are checked on every navigation and version request", async () => {
   const f = await widgetFixture();
   try {
-    const ok = await httpGet(f.port, "/v1/deployments/mysite/owner-url?principalId=U1", {});
-    assert.equal(ok.status, 200);
-    const { url } = JSON.parse(ok.body) as { url: string };
-    assert.match(url, /^https:\/\/mysite\.apps\.example\.com\/\?owner=/, "the link targets the app's public origin");
-    assert.doesNotMatch(url, /access=/, "the owner link carries no piggybacked capability token");
+    await f.app.shareDeployment("mysite", scopeId("personal", "U-viewer"), "write", { createdBy: "U1" });
+    const page = await httpGet(f.port, "/", { Host: HOST, Cookie: viewerCookie(), "Sec-Fetch-Dest": "document" });
+    assert.match(page.body, /__qmAppShell/);
+    await f.app.shareDeployment("mysite", scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
+    const revoked = await httpGet(f.port, "/", { Host: HOST, Cookie: viewerCookie(), "Sec-Fetch-Dest": "document" });
+    assert.doesNotMatch(revoked.body, /__qmAppShell/);
+    const version = await httpGet(f.port, "/__claw__/version", { Host: HOST, Cookie: viewerCookie() });
+    assert.equal(version.body, "<html><body>APP</body></html>");
+  } finally {
+    await f.close();
+  }
+});
 
-    const denied = await httpGet(f.port, "/v1/deployments/mysite/owner-url?principalId=U-stranger", {});
-    assert.equal(denied.status, 403, "a non-manager cannot mint an owner link");
+test("app shell: a manager from the creation scope can load the app and its assets without a read grant", async () => {
+  const f = await widgetFixture();
+  try {
+    await f.directory.replaceChannels(
+      [{ channelId: "CBUILT", name: "builders", isPrivate: true }],
+      [{ channelId: "CBUILT", principalId: "U2" }],
+    );
+    assert.equal(await f.app.canManageDeployment("mysite", "U2"), true);
+    assert.equal((await f.app.reachDeployment("mysite", "U2")).status, "denied");
+    const headers = { Host: HOST, Cookie: `portal_session=${mintPortalSession("U2")}` };
+    const page = await httpGet(f.port, "/", { ...headers, "Sec-Fetch-Dest": "document" });
+    assert.match(page.body, /__qmAppShell/);
+    for (const dest of ["iframe", "script", "empty"]) {
+      const resource = await httpGet(f.port, "/asset", { ...headers, "Sec-Fetch-Dest": dest });
+      assert.equal(resource.status, 200);
+      assert.equal(resource.body, "<html><body>APP</body></html>");
+    }
+    await f.directory.replaceChannels([{ channelId: "CBUILT", name: "builders", isPrivate: true }], []);
+    const denied = await httpGet(f.port, "/", headers);
+    assert.equal(denied.status, 403);
+  } finally {
+    await f.close();
+  }
+});
+
+test("app shell: normal sign-in keeps editing available beyond the old five-minute window", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"] });
+  const f = await widgetFixture();
+  try {
+    const headers = { Host: HOST, Cookie: `portal_session=${mintPortalSession("U1")}`, "Sec-Fetch-Dest": "document" };
+    const first = await httpGet(f.port, "/", headers);
+    assert.match(first.body, /__qmAppShell/);
+    t.mock.timers.tick(6 * 60 * 1000);
+    const later = await httpGet(f.port, "/reports?view=week", headers);
+    assert.equal(later.status, 200);
+    assert.match(later.body, /__qmAppShell/);
+    const version = await httpGet(f.port, "/__claw__/version", headers);
+    assert.equal(JSON.parse(version.body).version, 1);
+    t.mock.timers.tick(60 * 60 * 1000);
+    assert.equal((await httpGet(f.port, "/", headers)).status, 401);
+  } finally {
+    await f.close();
+  }
+});
+
+test("app shell: bare escape renders frame-denying apps at top level without forwarding the shell parameter", async () => {
+  let appRequestPath: string | undefined;
+  const f = await widgetFixture((req, res) => {
+    appRequestPath = req.url;
+    res.writeHead(200, {
+      "content-type": "text/html",
+      "x-frame-options": "DENY",
+      "content-security-policy": "frame-ancestors 'none'",
+    });
+    res.end("APP");
+  });
+  try {
+    const page = await httpGet(f.port, "/?__qm_no_shell=1&filter=recent", {
+      Host: HOST,
+      Cookie: `portal_session=${mintPortalSession("U1")}`,
+      "sec-fetch-dest": "document",
+    });
+    assert.equal(page.status, 200);
+    assert.equal(page.body, "APP");
+    assert.equal(appRequestPath, "/?filter=recent");
+    assert.equal(page.headers["x-frame-options"], "DENY");
+    assert.equal(page.headers["content-security-policy"], "frame-ancestors 'none'");
   } finally {
     await f.close();
   }

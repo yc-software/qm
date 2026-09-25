@@ -1,4 +1,64 @@
-import type { EntryType, ScopeId, Session, SessionEntry, SessionType } from "../types.ts";
+import { createHash } from "node:crypto";
+import type { EntryType, ScopeId, Session, SessionEntry, SessionType, SpawnMeta } from "../types.ts";
+import { sleep } from "../util/async.ts";
+
+export function promptEnvelopeBody(envelope: unknown): { hash: string; body: string } | null {
+  if (envelope == null) return null;
+  let body: string;
+  try {
+    body = JSON.stringify(envelope);
+  } catch {
+    return null;
+  }
+  if (body === undefined) return null;
+  return { hash: createHash("sha256").update(body).digest("hex"), body };
+}
+
+const CONTEXT_SUMMARY_KIND = "context_summary";
+
+export interface ContextSummaryPayload {
+  kind: typeof CONTEXT_SUMMARY_KIND;
+  throughSeq: number;
+  text: string;
+}
+
+export function contextSummaryPayload(entry: SessionEntry): ContextSummaryPayload | null {
+  const payload = entry.payload as Partial<ContextSummaryPayload> | null;
+  if (
+    entry.type === "system" &&
+    payload?.kind === CONTEXT_SUMMARY_KIND &&
+    typeof payload.throughSeq === "number" &&
+    typeof payload.text === "string"
+  ) {
+    return { kind: CONTEXT_SUMMARY_KIND, throughSeq: payload.throughSeq, text: payload.text };
+  }
+  return null;
+}
+
+export function createContextSummaryPayload(throughSeq: number, text: string): ContextSummaryPayload {
+  return { kind: CONTEXT_SUMMARY_KIND, throughSeq, text };
+}
+
+export interface ContextWindow {
+  entries: SessionEntry[];
+  totalEntries: number;
+  hasSecurityTaint: boolean;
+}
+
+export function entrySecurityTainted(entry: SessionEntry): boolean {
+  return (entry.payload as { securityTainted?: unknown } | null)?.securityTainted === true;
+}
+
+export function contextWindowFromEntries(entries: SessionEntry[]): ContextWindow {
+  let latest: ContextSummaryPayload | null = null;
+  for (const entry of entries) latest = contextSummaryPayload(entry) ?? latest;
+  const throughSeq = latest?.throughSeq;
+  return {
+    entries: throughSeq === undefined ? [...entries] : entries.filter((entry) => entry.seq > throughSeq),
+    totalEntries: entries.length,
+    hasSecurityTaint: entries.some(entrySecurityTainted),
+  };
+}
 
 export interface Lease {
   sessionId: string;
@@ -12,6 +72,44 @@ export interface LeaseAttempt {
   heldBy?: LeaseHolder;
   heldSince?: number;
   heldUntil?: number;
+}
+
+export interface LeasePeek {
+  holder?: LeaseHolder;
+  heldUntil: number;
+}
+
+export interface AcquireLeaseWaitOptions {
+  waitFor?: (heldBy: LeaseHolder | undefined) => boolean;
+}
+
+const LEASE_WAIT_MIN_DELAY_MS = 25;
+const LEASE_WAIT_MAX_DELAY_MS = 1_000;
+
+export async function acquireLeaseWithin(
+  sessions: Pick<SessionStore, "acquireLease" | "peekLease">,
+  sessionId: string,
+  holder: LeaseHolder,
+  budgetMs: number,
+  opts?: AcquireLeaseWaitOptions,
+): Promise<LeaseAttempt & { waitedMs?: number }> {
+  const started = Date.now();
+  const deadline = started + budgetMs;
+  let delay = LEASE_WAIT_MIN_DELAY_MS;
+  for (;;) {
+    const waitedMs = Date.now() - started;
+    const attempt = await sessions.acquireLease(sessionId, holder);
+    if (attempt.lease) return { ...attempt, waitedMs };
+    if (attempt.heldUntil === undefined) return { ...attempt, waitedMs };
+    if (opts?.waitFor && !opts.waitFor(attempt.heldBy)) return { ...attempt, waitedMs };
+    for (;;) {
+      if (Date.now() + LEASE_WAIT_MIN_DELAY_MS > deadline) return { ...attempt, waitedMs: Date.now() - started };
+      await sleep(Math.min(delay, deadline - Date.now()));
+      delay = Math.min(delay * 2, LEASE_WAIT_MAX_DELAY_MS);
+      const seen = await sessions.peekLease(sessionId);
+      if (!seen || seen.heldUntil <= Date.now()) break;
+    }
+  }
 }
 
 export interface StoreOptions {
@@ -32,15 +130,137 @@ interface ParticipantViewPatch {
   color?: string | null;
 }
 
+export interface NewSessionPin {
+  text?: string;
+  entrySeq?: number;
+  addedBy: string;
+}
+
+export interface SessionPin extends NewSessionPin {
+  id: string;
+  sessionId: string;
+  createdAt: number;
+}
+
 type TapeKind = "message" | "context_event" | "annotation";
 
-interface TapeMeta {
+export const TAPE_RENDER_VERSION = 1;
+
+export interface TapeCheckpointEntry {
+  type: EntryType;
+  payload: unknown;
+  at: number;
+}
+
+export function tapeCheckpointPayload(
+  bound: "turnEnd" | "subturnEnd",
+  entry?: TapeCheckpointEntry,
+  spanStart?: number,
+): Record<string, unknown> {
+  return {
+    [bound]: true,
+    render: TAPE_RENDER_VERSION,
+    ...(entry ? { entry } : {}),
+    ...(spanStart !== undefined ? { spanStart } : {}),
+  };
+}
+
+export function tapeEntryMirrorRecord(entry: {
+  seq: number;
+  createdAt: number;
+  type: string;
+  payload: unknown;
+  scopeLabel: ScopeId;
+}): NewTapeRecord {
+  return {
+    kind: "annotation",
+    payload: { entry: { type: entry.type, payload: entry.payload, at: entry.createdAt } },
+    scopeLabel: entry.scopeLabel,
+    entrySeq: entry.seq,
+  };
+}
+
+export function tapeTranscriptEntryRecord(entry: SessionEntry): NewTapeRecord {
+  return {
+    kind: "annotation",
+    payload: {
+      event: "transcript_entry",
+      entry: { type: entry.type, payload: entry.payload, at: entry.createdAt, parentSeq: entry.parentSeq },
+    },
+    scopeLabel: entry.scopeLabel,
+    entrySeq: entry.seq,
+  };
+}
+
+export function transcriptEntryFromTape(row: TapeRecord): SessionEntry | null {
+  if (row.kind !== "annotation" || row.entrySeq === undefined) return null;
+  const payload = row.payload as {
+    event?: unknown;
+    entry?: { type?: unknown; payload?: unknown; at?: unknown; parentSeq?: unknown };
+  } | null;
+  const entry = payload?.entry;
+  if (
+    payload?.event !== "transcript_entry" ||
+    !entry ||
+    typeof entry.type !== "string" ||
+    typeof entry.at !== "number" ||
+    (entry.parentSeq !== null && typeof entry.parentSeq !== "number")
+  )
+    return null;
+  return {
+    sessionId: row.sessionId,
+    seq: row.entrySeq,
+    parentSeq: entry.parentSeq,
+    type: entry.type as EntryType,
+    payload: entry.payload ?? null,
+    scopeLabel: row.scopeLabel,
+    createdAt: entry.at,
+  };
+}
+
+export type TranscriptAppendSessions = Pick<SessionStore, "append" | "appendTape" | "latestEntrySeq" | "tapeCoverage">;
+
+export async function appendEntryOutsideTurn(
+  sessions: TranscriptAppendSessions,
+  lease: Lease,
+  entry: NewEntry,
+  modelText?: (appended: SessionEntry) => string,
+): Promise<SessionEntry> {
+  const tapeContiguous =
+    (await sessions.tapeCoverage(lease.sessionId)) === (await sessions.latestEntrySeq(lease.sessionId));
+  const appended = await sessions.append(lease, entry);
+  if (!tapeContiguous) return appended;
+  if (modelText) {
+    await sessions.appendTape(lease, {
+      kind: "message",
+      payload: { role: "user", content: [{ type: "text", text: modelText(appended) }], timestamp: appended.createdAt },
+      scopeLabel: entry.scopeLabel,
+      meta: { entryCreatedAt: appended.createdAt },
+    });
+  }
+  await sessions.appendTape(lease, {
+    kind: "annotation",
+    payload: tapeCheckpointPayload("turnEnd", { type: entry.type, payload: entry.payload, at: appended.createdAt }),
+    scopeLabel: entry.scopeLabel,
+    entrySeq: appended.seq,
+  });
+  return appended;
+}
+
+export const TAPE_IMPORT_MAX_ENTRIES = 500;
+
+export interface TapeMeta {
   bareText?: string;
   ts?: string;
   changeTime?: string;
   hidden?: boolean;
   overheard?: boolean;
+  sourceRole?: "agent";
   author?: string;
+  attachments?: unknown[];
+  display?: string;
+  securityTainted?: boolean;
+  entryCreatedAt?: number;
 }
 
 export interface NewTapeRecord {
@@ -66,6 +286,7 @@ export interface GetTapeOptions {
 
 export interface GetEntriesOptions {
   sinceSeq?: number;
+  beforeSeq?: number;
   limit?: number;
 }
 
@@ -97,6 +318,15 @@ export interface CronGroupSummary {
   createdAt: number;
 }
 
+export interface ScopeSessionRollup {
+  scopeId: ScopeId;
+  sessions: number;
+  backgroundSessions: number;
+  lastActivity: number;
+  lastConversationActivity: number;
+  previewSessionId: string | null;
+}
+
 export interface ScopeSessionStats {
   total: number;
   turns: number;
@@ -104,6 +334,19 @@ export interface ScopeSessionStats {
   byTypeAll: Record<string, number>;
   totalByCategory: Record<SessionCategory | "all", number>;
   crons: number;
+}
+
+export interface SpendRow {
+  day: number;
+  model: string | null;
+  scopeId: ScopeId;
+  origin: SessionOrigin;
+  calls: number;
+  costUsd: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
 }
 
 export interface LlmCallUsage {
@@ -166,6 +409,8 @@ export interface LlmRequestRecord {
   scopeLabel: ScopeId;
   createdAt: number;
   request: unknown;
+  promptHash: string | null;
+  promptEnvelope?: unknown;
   truncated: boolean;
   ttftMs: number | null;
   durationMs: number | null;
@@ -176,12 +421,22 @@ export interface LlmRequestRecord {
   transport: LlmTransportMeta | null;
 }
 
+/** A past security screening, recovered from its captured request — the replay corpus for flagger tests. */
+export interface ScreenSample {
+  id: string;
+  sessionId: string;
+  scopeLabel: ScopeId;
+  createdAt: number;
+  model: string;
+  payload: string;
+}
+
 export interface NewLlmRequest {
   turnSeq: number | null;
   step: number;
   model: string;
   scopeLabel: ScopeId;
-  request: unknown;
+  promptEnvelope?: unknown;
   truncated?: boolean;
   ttftMs?: number | null;
   durationMs?: number | null;
@@ -197,6 +452,20 @@ export interface ParticipantWindow {
   principalId: string;
   validFrom: number;
   validTo: number | null;
+  validFromSeq: number | null;
+  validToSeq: number | null;
+}
+
+export function entryWithinTenure(
+  entry: Pick<SessionEntry, "seq" | "createdAt">,
+  window: Pick<ParticipantWindow, "validFrom" | "validTo" | "validFromSeq" | "validToSeq">,
+): boolean {
+  const fromOk = window.validFromSeq !== null ? entry.seq >= window.validFromSeq : entry.createdAt >= window.validFrom;
+  const toOk =
+    window.validToSeq !== null
+      ? entry.seq < window.validToSeq
+      : window.validTo === null || entry.createdAt < window.validTo;
+  return fromOk && toOk;
 }
 
 export interface AttributedTurn {
@@ -213,8 +482,10 @@ export type SessionOrigin = "conversation" | "cron" | "webhook" | "monitor";
 export const stableOriginPattern = (origin: string): string => `^agent:main:${origin}:[^:]+$`;
 export const legacyOriginPattern = (origin: string): string => `^${origin}:[^:]+(:.+)?$`;
 export const ORIGIN_ALTERNATION = "(cron|webhook|monitor)";
-export const STABLE_CRON_ID_PATTERN = "^agent:main:cron:([^:]+)$";
-export const LEGACY_CRON_ID_PATTERN = "^cron:([^:]+)(:.+)?$";
+const STABLE_CRON_ID_PATTERN = "^agent:main:cron:([^:]+)$";
+const LEGACY_CRON_ID_PATTERN = "^cron:([^:]+)(:.+)?$";
+export const threadRefCronIdExpr = (threadRef: string): string =>
+  `COALESCE(substring(${threadRef} FROM '${STABLE_CRON_ID_PATTERN}'), substring(${threadRef} FROM '${LEGACY_CRON_ID_PATTERN}'))`;
 
 const STABLE_ORIGIN_RE = new RegExp(stableOriginPattern(ORIGIN_ALTERNATION));
 const LEGACY_ORIGIN_RE = new RegExp(legacyOriginPattern(ORIGIN_ALTERNATION));
@@ -253,6 +524,23 @@ export interface SessionRef {
 export interface DistinctScope {
   scopeId: ScopeId;
   channelName?: string;
+}
+
+export interface EntrySearchHit extends Pick<Session, "scopeId" | "title" | "channelName" | "surface" | "archived"> {
+  sessionId: string;
+  seq: number;
+  type: EntryType;
+  author?: string;
+  text: string;
+  createdAt: number;
+}
+
+export interface NewSearchEntry {
+  seq: number;
+  type: EntryType;
+  author?: string;
+  text: string;
+  createdAt: number;
 }
 
 export interface SessionSummary {
@@ -400,6 +688,11 @@ export function isOverheardEntry(e: Pick<SessionEntry, "type" | "payload">): boo
   return e.type === "user" && (e.payload as { overheard?: unknown } | null)?.overheard === true;
 }
 
+export function entryDeliveryKey(entry: Pick<SessionEntry, "payload">): string | undefined {
+  const key = (entry.payload as { deliveryKey?: unknown } | null)?.deliveryKey;
+  return typeof key === "string" ? key : undefined;
+}
+
 interface AddParticipantOptions {
   includeHistory?: boolean;
 }
@@ -416,36 +709,71 @@ export interface SessionStore {
   get(sessionId: string): Promise<Session | null>;
 
   updateTitle(sessionId: string, title: string): Promise<void>;
+  setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
+  setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
+  childrenOf(parentSessionId: string): Promise<Session[]>;
+  updateStatus(sessionId: string, status: Session["status"]): Promise<void>;
   updateForkProvenance(
     sessionId: string,
     provenance: { forkedFrom: { sessionId: string; title?: string | null }; forkBoundarySeq: number },
   ): Promise<void>;
 
+  readonly leaseTtlMs: number;
   acquireLease(sessionId: string, holder?: LeaseHolder): Promise<LeaseAttempt>;
+  peekLease(sessionId: string): Promise<LeasePeek | null>;
+  renewLease(lease: Lease): Promise<boolean>;
   releaseLease(lease: Lease): Promise<void>;
   forceReleaseLease(sessionId: string): Promise<void>;
 
   append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
+  getTranscriptEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
+  getContextWindow(sessionId: string): Promise<ContextWindow>;
+  getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
+  latestEntrySeq(sessionId: string): Promise<number>;
+  clearSecurityTaint(sessionId: string): Promise<boolean>;
 
   appendTape(lease: Lease, rec: NewTapeRecord): Promise<TapeRecord>;
   getTape(sessionId: string, opts?: GetTapeOptions): Promise<TapeRecord[]>;
   tapeCoverage(sessionId: string): Promise<number>;
 
-  recordLlmRequest(sessionId: string, rec: NewLlmRequest): Promise<LlmRequestRecord>;
+  recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
+  /** The most recent security screenings across every scope, newest first. */
+  listScreenSamples(limit: number): Promise<ScreenSample[]>;
 
   addParticipant(sessionId: string, principalId: string, title?: string, opts?: AddParticipantOptions): Promise<void>;
   removeParticipant(sessionId: string, principalId: string): Promise<void>;
-  listByParticipant(principalId: string): Promise<Session[]>;
+  listByParticipant(principalId: string, opts?: { limit: number }): Promise<Session[]>;
+  getForParticipant(sessionId: string, principalId: string): Promise<Session | null>;
 
   deleteSession(sessionId: string): Promise<void>;
+  deleteSessionIfEmpty(sessionId: string): Promise<boolean>;
 
   updateParticipantView(sessionId: string, principalId: string, patch: ParticipantViewPatch): Promise<void>;
 
+  addPin(sessionId: string, pin: NewSessionPin, maxPins?: number): Promise<SessionPin | null>;
+  listPins(sessionId: string): Promise<SessionPin[]>;
+  removePin(sessionId: string, pinId: string): Promise<boolean>;
+
   visibleEntries(sessionId: string, principalId: string): Promise<SessionEntry[]>;
 
-  listAll(): Promise<Session[]>;
+  searchEntries(principalId: string, query: string, limit?: number): Promise<EntrySearchHit[]>;
+
+  appendSearchEntries(lease: Lease, rows: readonly NewSearchEntry[]): Promise<void>;
+  searchIndexCoverage(sessionId: string): Promise<number>;
+  missingSearchEntries(sessionId: string): Promise<number>;
+  lastSearchableEntrySeq(sessionId: string): Promise<number>;
+
+  scanAll(): Promise<Session[]>;
+
+  countSessions(): Promise<number>;
+
+  listByScope(scope: ScopeId): Promise<Session[]>;
+
+  scopeHasSessions(scope: ScopeId): Promise<boolean>;
+
+  countPersonalConversations(scope: ScopeId, limit?: number): Promise<number>;
 
   sessionsByThreadRefs(threadRefs: readonly string[]): Promise<SessionRef[]>;
 
@@ -455,13 +783,14 @@ export interface SessionStore {
     scope: ScopeId,
     orgWide: boolean,
     page?: SessionPage,
-    includePreviews?: boolean,
     sessionIds?: string[],
   ): Promise<SessionSummary[]>;
 
   lastUserMessages(sessionIds: string[]): Promise<Map<string, string>>;
 
   scopeCronGroups(scope: ScopeId, orgWide: boolean): Promise<CronGroupSummary[]>;
+
+  scopeSessionRollups(scope: ScopeId, orgWide: boolean): Promise<ScopeSessionRollup[]>;
 
   scopeSessionStats(
     scope: ScopeId,
@@ -473,7 +802,13 @@ export interface SessionStore {
 
   attributedTurns(): Promise<AttributedTurn[]>;
 
+  spendRollup(range: { from: number; to: number }): Promise<SpendRow[]>;
+
   listParticipants(): Promise<ParticipantWindow[]>;
+
+  distinctParticipants(): Promise<string[]>;
+
+  participantWindowsOf(sessionId: string): Promise<ParticipantWindow[]>;
 
   participantsOf(sessionId: string): Promise<string[]>;
 }

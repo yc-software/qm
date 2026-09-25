@@ -1,19 +1,27 @@
+import {
+  createSandboxResources,
+  type SandboxResource,
+  type SandboxDefault,
+  type SandboxResourceRollout,
+} from "../src/sandbox/sandbox-resources.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createSandboxMigrationRunner } from "../src/sandbox/sandbox-migration-runner.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { SandboxRoute } from "../src/sandbox/sandbox-routing.ts";
+import { posixJoin } from "../src/sandbox/exec-file-ops.ts";
 import type { Sandbox, SandboxHandle, ExecResult } from "../src/sandbox/sandbox.ts";
 
 function hostBackend(name: string, homeDir: string): Sandbox & { tornDown: number } {
   mkdirSync(homeDir, { recursive: true });
   const rootDir = join(homeDir, "workspace");
   mkdirSync(rootDir, { recursive: true });
-  const resolve = (rel: string) => join(rootDir, rel);
+  const resolve = (rel: string) => posixJoin(rootDir, rel);
   const s = {
     tornDown: 0,
     profile: { backend: name, writablePersistence: "resident_disk" as const, processSessions: false },
@@ -89,6 +97,134 @@ test("migrateScope copies $HOME, flips the route only after a verified copy, and
   }
 });
 
+test("snapshot strategy exports once, adopts into the target's snapshot store, and flips only after a hydrated home verifies", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mig-snap-"));
+  try {
+    const { aws: src, routes } = build(root);
+    const notes = join(root, "aws-home", "notes.txt");
+    writeFileSync(notes, "hello snapshot\n");
+    utimesSync(notes, new Date(0), new Date(0));
+    const blobs = new Map<string, Buffer>();
+    const adopted: string[] = [];
+    (src as unknown as { stageOut: Sandbox["stageOut"]; importFiles: unknown; stageIn: unknown }).stageOut = async (
+      h,
+      rel,
+    ) => {
+      const bytes = await src.readFileBytes(h, rel);
+      if (!bytes) throw new Error("no tar");
+      const id = `blob-${blobs.size + 1}`;
+      blobs.set(id, Buffer.from(bytes));
+      return id;
+    };
+    (src as unknown as { stageIn: unknown }).stageIn = async () => {};
+    (src as unknown as { importFiles: unknown }).importFiles = async () => {};
+
+    const dstHome = join(root, "e2b-home");
+    const dst = hostBackend("e2b", dstHome);
+    let hydratePending: Buffer | null = null;
+    (dst as unknown as { adoptHomeSnapshot: Sandbox["adoptHomeSnapshot"] }).adoptHomeSnapshot = async (
+      scope,
+      blobId,
+    ) => {
+      adopted.push(`${scope}:${blobId}`);
+      hydratePending = blobs.get(blobId) ?? null;
+      if (!hydratePending) throw new Error("unknown blob");
+    };
+    const origProvision = dst.provision.bind(dst);
+    dst.provision = async (layers, opts) => {
+      const h = await origProvision(layers, opts);
+      if (hydratePending) {
+        const tarFile = join(dstHome, ".hydrate.tgz");
+        writeFileSync(tarFile, hydratePending);
+        hydratePending = null;
+        spawnSync("sh", ["-c", `cd ${dstHome} && tar xzf .hydrate.tgz && rm -f .hydrate.tgz`], { encoding: "utf8" });
+      }
+      return h;
+    };
+
+    const runner = createSandboxMigrationRunner({ backends: { aws: src, e2b: dst }, routes, defaultBackend: "aws" });
+    const res = await runner.migrateScope("personal:alice", "e2b", "snapshot cutover", {
+      force: true,
+      strategy: "snapshot",
+    });
+    assert.equal(res.to, "e2b");
+    assert.match(res.sha, /^[0-9a-f]{64}$/);
+    assert.ok(res.destFiles >= 1);
+    assert.equal(adopted.length, 1);
+    assert.equal(res.resynced, false);
+    assert.equal(readFileSync(join(dstHome, "notes.txt"), "utf8"), "hello snapshot\n");
+    assert.equal((await routes.get("personal:alice"))?.backend, "e2b");
+    assert.equal(existsSync(join(root, "aws-home", "notes.txt")), true, "source untouched");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("snapshot strategy resumes from an already-exported blob without repacking the source", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mig-snap-resume-"));
+  try {
+    const { aws: src, routes } = build(root);
+    let packs = 0;
+    const origRun = src.run.bind(src);
+    src.run = async (h, command, opts) => {
+      if (command.includes("tar czf")) packs++;
+      return origRun(h, command, opts);
+    };
+    (src as unknown as { stageOut: unknown }).stageOut = async () => {
+      throw new Error("stageOut must not run on resume");
+    };
+    (src as unknown as { stageIn: unknown }).stageIn = async () => {};
+    (src as unknown as { importFiles: unknown }).importFiles = async () => {};
+
+    const dstHome = join(root, "e2b-home");
+    const dst = hostBackend("e2b", dstHome);
+    const adopted: string[] = [];
+    (dst as unknown as { adoptHomeSnapshot: Sandbox["adoptHomeSnapshot"] }).adoptHomeSnapshot = async (
+      scope,
+      blobId,
+    ) => {
+      adopted.push(blobId);
+      writeFileSync(join(dstHome, "restored.txt"), "from resumed blob\n");
+    };
+
+    const runner = createSandboxMigrationRunner({ backends: { aws: src, e2b: dst }, routes, defaultBackend: "aws" });
+    const res = await runner.migrateScope("personal:alice", "e2b", "resume", {
+      force: true,
+      strategy: "snapshot",
+      resumeBlobId: "ab".repeat(16),
+    });
+    assert.equal(packs, 0, "no source pack on resume");
+    assert.deepEqual(adopted, ["ab".repeat(16)]);
+    assert.equal(res.sha, "resumed");
+    assert.equal(res.resynced, false, "resume never resyncs from the live source");
+    assert.equal((await routes.get("personal:alice"))?.backend, "e2b");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("snapshot strategy refuses when the target cannot adopt snapshots", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mig-snap-refuse-"));
+  try {
+    const { aws: src, sprites: dst, routes } = build(root);
+    (src as unknown as { stageOut: unknown }).stageOut = async () => "blob-x";
+    (src as unknown as { stageIn: unknown }).stageIn = async () => {};
+    (src as unknown as { importFiles: unknown }).importFiles = async () => {};
+    const runner = createSandboxMigrationRunner({
+      backends: { aws: src, sprites: dst },
+      routes,
+      defaultBackend: "aws",
+    });
+    await assert.rejects(
+      runner.migrateScope("personal:alice", "sprites", undefined, { force: true, strategy: "snapshot" }),
+      /adopting home snapshots/,
+    );
+    assert.equal(await routes.get("personal:alice"), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("migrateScope refuses: same backend, pinned scope, live work, unconstructed target", async () => {
   const root = mkdtempSync(join(tmpdir(), "mig-refuse-"));
   try {
@@ -118,7 +254,7 @@ test("migrateScope refuses a target that carries fewer capabilities, unless forc
     writeFileSync(join(root, "aws-home", "notes.txt"), "hello\n");
     const awsWithBackup: Sandbox = {
       ...aws,
-      async backupComputer() {
+      async exportFiles() {
         return [];
       },
     };
@@ -128,14 +264,14 @@ test("migrateScope refuses a target that carries fewer capabilities, unless forc
       defaultBackend: "aws",
     });
 
-    await assert.rejects(runner.migrateScope("personal:alice", "sprites"), /home backup/);
+    await assert.rejects(runner.migrateScope("personal:alice", "sprites"), /home export/);
     assert.equal(await routes.get("personal:alice"), null, "a refused migration must not flip the route");
 
     const forced = await runner.migrateScope("personal:alice", "sprites", "canary", { force: true });
-    assert.deepEqual(forced.capabilitiesLost, ["home backup (publish, resident-auth capture)"]);
+    assert.deepEqual(forced.capabilitiesLost, ["home export (publish, resident-auth capture)"]);
     const route = await routes.get("personal:alice");
     assert.equal(route?.backend, "sprites");
-    assert.deepEqual(route?.capabilitiesLost, ["home backup (publish, resident-auth capture)"]);
+    assert.deepEqual(route?.capabilitiesLost, ["home export (publish, resident-auth capture)"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -148,7 +284,7 @@ test("a resync after the settle window keeps the durable record of what was lost
     writeFileSync(join(root, "aws-home", "notes.txt"), "hello\n");
     const awsWithBackup: Sandbox = {
       ...aws,
-      async backupComputer() {
+      async exportFiles() {
         return [];
       },
       async run(h, command, o) {
@@ -164,7 +300,7 @@ test("a resync after the settle window keeps the durable record of what was lost
     const res = await runner.migrateScope("personal:alice", "sprites", "canary", { force: true });
     assert.equal(res.resynced, true, "the test must actually exercise the resync write");
     assert.deepEqual((await routes.get("personal:alice"))?.capabilitiesLost, [
-      "home backup (publish, resident-auth capture)",
+      "home export (publish, resident-auth capture)",
     ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -222,6 +358,74 @@ test("a failed copy leaves the route untouched", async () => {
     const runner = createSandboxMigrationRunner({ backends: { aws, sprites: corrupt }, routes, defaultBackend: "aws" });
     await assert.rejects(runner.migrateScope("personal:alice", "sprites"), /sha-mismatch|verify\/extract failed/);
     assert.equal(await routes.get("personal:alice"), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("activation cannot pass a running migration before its final route and teardown", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mig-activation-"));
+  try {
+    const { aws, sprites, routes } = build(root);
+    writeFileSync(join(root, "aws-home", "notes.txt"), "preserve me\n");
+    const lock = createMemoryAdvisoryLock();
+    const rollout = createMemoryMap<SandboxResourceRollout>();
+    const options = {
+      enabled: false,
+      rollout,
+      records: createMemoryMap<SandboxResource>(),
+      defaults: createMemoryMap<SandboxDefault>(),
+      routes,
+      backends: { aws, sprites },
+      defaultBackend: "aws" as const,
+      lock,
+      canUseScope: async () => true,
+    };
+    const reader = createSandboxResources(options);
+    const activating = createSandboxResources({ ...options, enabled: true });
+    const parked = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    aws.teardown = async () => {
+      parked.resolve();
+      await release.promise;
+    };
+    const runner = createSandboxMigrationRunner({
+      backends: { aws, sprites },
+      routes,
+      defaultBackend: "aws",
+      advisoryLock: lock,
+      withLegacyMutation: (scope, action) => reader.withLegacyMutation(scope, action),
+    });
+    const migration = runner.migrateScope("personal:alice", "sprites");
+    await parked.promise;
+    const activation = activating.initialize();
+    assert.equal(await rollout.get("explicit-defaults"), null);
+    release.resolve();
+    await Promise.all([migration, activation]);
+    assert.equal((await activating.resolve("personal:alice"))?.backend, "sprites");
+    assert.equal(readFileSync(join(root, "sprites-home", "notes.txt"), "utf8"), "preserve me\n");
+    await assert.rejects(runner.migrateScope("personal:alice", "aws"), /retired/);
+    assert.equal((await routes.get("personal:alice"))?.backend, "sprites");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("migration reads the scope default as its source before installing an explicit route", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mig-scope-default-"));
+  try {
+    const { aws, sprites, routes } = build(root);
+    writeFileSync(join(root, "aws-home", "notes.txt"), "scope default data\n");
+    const runner = createSandboxMigrationRunner({
+      backends: { aws, sprites },
+      routes,
+      defaultBackend: "sprites",
+      scopeDefaults: { personal: "aws" },
+    });
+    const result = await runner.migrateScope("personal:alice", "sprites", "scope policy migration");
+    assert.equal(result.from, "aws");
+    assert.equal(readFileSync(join(root, "sprites-home", "notes.txt"), "utf8"), "scope default data\n");
+    assert.equal((await routes.get("personal:alice"))?.backend, "sprites");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

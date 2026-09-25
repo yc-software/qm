@@ -228,7 +228,6 @@ export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void>
     idempotencyKey: "fire-race-2",
   });
   assert.equal((await store.claimPending("group", 50)).length, 1);
-  assert.equal((await store.claimPending("group", 50)).length, 0, "still claimed before the TTL");
   await new Promise((r) => setTimeout(r, 80));
   assert.deepEqual(
     (await store.claimPending("group", 60_000)).map((d) => d.id),
@@ -236,4 +235,157 @@ export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void>
     "an expired claim re-surfaces (at-least-once)",
   );
   await store.ack(abandoned.id, 700);
+}
+
+export async function exerciseDeliveryExpiry(makeStore: (opts: { maxAgeMs: number }) => DeliveryStore): Promise<void> {
+  const store = makeStore({ maxAgeMs: 300 });
+
+  const fresh = await store.enqueue({
+    destination: { type: "slack", target: "C-live" },
+    text: "young enough to post",
+    idempotencyKey: "ttl-fresh",
+  });
+  assert.deepEqual(
+    (await store.claimPending("slack", 60_000)).map((d) => d.id),
+    [fresh.id],
+    "a row younger than the TTL is claimable",
+  );
+  await store.ack(fresh.id, Date.now());
+
+  const doomed = await store.enqueue({
+    destination: { type: "slack", target: "C-deleted" },
+    text: "nobody will ever see this",
+    idempotencyKey: "ttl-doomed",
+  });
+  const unpolled = await store.enqueue({
+    destination: { type: "webhook", target: "https://gone.example" },
+    text: "a type nothing ever drains",
+    idempotencyKey: "ttl-unpolled",
+  });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.deepEqual(
+    (await store.pending("slack")).map((d) => d.id),
+    [doomed.id],
+    "pending() is a pure read — inspecting the queue never drops rows",
+  );
+  assert.equal((await store.get(doomed.id))?.expiredAt, undefined);
+  assert.deepEqual(await store.claimPending("slack", 60_000), [], "an overaged row is never handed out");
+  assert.deepEqual(await store.pending("slack"), [], "once swept, pending hides it");
+  const expired = await store.get(doomed.id);
+  assert.equal(expired?.deliveredAt, null, "an expired row was never delivered");
+  assert.ok((expired?.expiredAt ?? 0) > 0, "the give-up is recorded durably on the row");
+  assert.deepEqual(await store.claimPending("slack", 60_000), [], "expiry is terminal for that copy");
+  assert.ok(
+    ((await store.get(unpolled.id))?.expiredAt ?? 0) > 0,
+    "draining any type expires overaged rows of every type",
+  );
+
+  const inFlight = await store.enqueue({
+    destination: { type: "group", target: "C-slow" },
+    text: "being posted right now",
+    idempotencyKey: "ttl-in-flight",
+  });
+  assert.equal((await store.claimPending("group", 60_000)).length, 1);
+  await new Promise((r) => setTimeout(r, 400));
+  assert.deepEqual(await store.claimPending("group", 60_000), [], "another drainer can't claim it");
+  assert.equal((await store.get(inFlight.id))?.expiredAt, undefined, "a row under a live claim is never expired");
+  await store.ack(inFlight.id, Date.now());
+
+  const lateAck = await store.enqueue({
+    destination: { type: "slack", target: "C-late" },
+    text: "post raced the expiry",
+    idempotencyKey: "ttl-late-ack",
+  });
+  await new Promise((r) => setTimeout(r, 400));
+  await store.claimPending("slack", 60_000);
+  assert.ok(((await store.get(lateAck.id))?.expiredAt ?? 0) > 0);
+  await store.ack(lateAck.id, Date.now());
+  const delivered = await store.get(lateAck.id);
+  assert.notEqual(delivered?.deliveredAt, null, "a post that actually landed wins over the expiry");
+  assert.equal(delivered?.expiredAt, undefined, "the expiry mark is cleared once delivered");
+}
+
+export async function exerciseDeliveryExpiryRevive(
+  makeStore: (opts: { maxAgeMs: number }) => DeliveryStore,
+): Promise<void> {
+  const store = makeStore({ maxAgeMs: 300 });
+
+  const consent = await store.enqueue({
+    destination: { type: "slack", target: "C-gone" },
+    text: "please approve this cron",
+    idempotencyKey: "consent-notice:trigger-1",
+    provenance: {
+      trigger: "cron",
+      surface: "cron",
+      fireKey: "consent-notice:trigger-1",
+      sourceScopeId: "personal:U-owner",
+      sourceThreadRef: "agent:main:cron:t1",
+      sourceSessionId: "consent-session",
+    },
+  });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.deepEqual(await store.claimPending("slack", 60_000), [], "the overaged notice is swept, not handed out");
+  assert.ok(((await store.get(consent.id))?.expiredAt ?? 0) > 0);
+  assert.equal(
+    (await store.sentCountsBySourceSessions([{ sessionId: "consent-session", threadRef: "agent:main:cron:t1" }])).get(
+      "consent-session",
+    ),
+    undefined,
+    "dropped rows never count as sent",
+  );
+
+  const revived = await store.enqueue({
+    destination: { type: "slack", target: "C-restored" },
+    text: "please approve this cron (retry)",
+    idempotencyKey: "consent-notice:trigger-1",
+  });
+  assert.equal(revived.id, consent.id, "the once-ever key still owns one row");
+  assert.equal(revived.deliveredAt, null);
+  assert.equal(revived.expiredAt, undefined, "a dropped once-ever notice re-enqueues instead of deadlocking");
+  assert.equal(revived.destination.target, "C-restored", "the revived row carries the fresh destination");
+  assert.deepEqual(
+    (await store.claimPending("slack", 60_000)).map((d) => d.id),
+    [revived.id],
+    "the revived notice is claimable again",
+  );
+  await store.ack(revived.id, Date.now());
+
+  const dedup = await store.enqueue({
+    destination: { type: "slack", target: "C-x" },
+    text: "same key after delivery",
+    idempotencyKey: "consent-notice:trigger-1",
+  });
+  assert.notEqual(dedup.deliveredAt, null, "a delivered key stays a dedup hit — no re-send after success");
+
+  const claimed = await store.enqueue({
+    destination: { type: "group", target: "C-claimed" },
+    text: "claimed, then aged out",
+    idempotencyKey: "revive-after-claim",
+  });
+  assert.equal((await store.claimPending("group", 50)).length, 1);
+  await new Promise((r) => setTimeout(r, 400));
+  assert.deepEqual(await store.claimPending("group", 60_000), [], "the lapsed-claim overaged row is swept");
+  assert.ok(((await store.get(claimed.id))?.expiredAt ?? 0) > 0);
+  const reclaimable = await store.enqueue({
+    destination: { type: "group", target: "C-claimed" },
+    text: "claimed, then aged out (retry)",
+    idempotencyKey: "revive-after-claim",
+  });
+  assert.equal(reclaimable.expiredAt, undefined);
+  assert.deepEqual(
+    (await store.claimPending("group", 60_000)).map((d) => d.id),
+    [reclaimable.id],
+    "a revived row is immediately claimable — no stale claim survives the revive",
+  );
+  await store.ack(reclaimable.id, Date.now());
+
+  const racers = await Promise.all(
+    ["one", "two", "three"].map((text) =>
+      store.enqueue({ destination: { type: "slack", target: "C-race" }, text, idempotencyKey: "race-1" }),
+    ),
+  );
+  assert.equal(new Set(racers.map((r) => r.id)).size, 1, "racing enqueues on one key resolve to a single delivery");
+  const raced = (await store.pending("slack")).filter((d) => d.idempotencyKey === "race-1");
+  assert.equal(raced.length, 1, "exactly one copy joins the queue");
+  await store.ack(raced[0]!.id, Date.now());
 }

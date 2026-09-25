@@ -7,11 +7,19 @@ import {
   FAST_MODE_MODEL_IDS,
   resolveModel,
   modelSupportsFastMode,
+  modelSupportedByHarness,
+  defaultModelForHarness,
+  safeModelMetadata,
   modelServiceable,
   serviceableModelIds,
   modelProviderAvailabilityFor,
 } from "../src/model/pi-models.ts";
 import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
+
+test("registry model identifiers are unique", () => {
+  const ids = MODEL_REGISTRY.map((model) => model.id);
+  assert.equal(new Set(ids).size, ids.length);
+});
 
 test("every registry model resolves via pi-ai (nothing offered that turns can't serve)", () => {
   for (const m of MODEL_REGISTRY) {
@@ -42,6 +50,72 @@ test("every web-ui-enabled model passes the web-turn model gate (no 403 for an o
 test("regression: gpt-5.6-sol is web-ui-enabled (the reported 403)", () => {
   assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes("gpt-5.6-sol"));
   assert.equal(validateWebTurnModelOptions({ model: "gpt-5.6-sol" }, null), null);
+});
+
+test("gpt-6-astra is offered with its published context, output ceiling, and rates", () => {
+  const model = resolveModel("gpt-6-astra");
+  assert.ok(model, "gpt-6-astra must resolve");
+  assert.equal(model.provider, "openai");
+  assert.equal(model.contextWindow, 1_050_000);
+  assert.equal(model.maxTokens, 128_000);
+  assert.deepEqual(
+    {
+      input: model.cost.input,
+      output: model.cost.output,
+      cacheRead: model.cost.cacheRead,
+      cacheWrite: model.cost.cacheWrite,
+    },
+    { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+  );
+  assert.deepEqual((model.cost as { tiers?: unknown }).tiers, [
+    { inputTokensAbove: 272_000, input: 20, output: 75, cacheRead: 2, cacheWrite: 25 },
+  ]);
+  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes("gpt-6-astra"));
+  assert.equal(validateWebTurnModelOptions({ model: "gpt-6-astra" }, null), null);
+});
+
+test("Opus 5.5 inherits adaptive thinking without off, with its own rates and limits", () => {
+  const model = resolveModel("claude-opus-5-5");
+  assert.ok(model);
+  assert.equal(model.provider, "anthropic");
+  assert.equal(model.api, "anthropic-messages");
+  assert.equal(model.reasoning, true);
+  assert.deepEqual(model.input, ["text", "image"]);
+  assert.equal(model.contextWindow, 1_000_000);
+  assert.equal(model.maxTokens, 128_000);
+  assert.deepEqual(model.cost, { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, tiers: undefined });
+  assert.deepEqual(model.thinkingLevelMap, { xhigh: "xhigh", max: "max", off: null });
+  assert.deepEqual(model.compat, {
+    forceAdaptiveThinking: true,
+    supportsTemperature: false,
+    supportsStrictTools: true,
+  });
+  assert.equal(resolveModel("claude-opus-4-8")?.thinkingLevelMap?.off, undefined);
+  assert.equal(resolveModel("claude-opus-5")?.thinkingLevelMap?.off, undefined);
+  model.thinkingLevelMap!.xhigh = "high";
+  assert.equal(resolveModel("claude-opus-5-5")?.thinkingLevelMap?.xhigh, "xhigh");
+  assert.equal(resolveModel("claude-opus-4-8")?.thinkingLevelMap?.xhigh, "xhigh");
+});
+
+test("Opus 5.5 is selectable with compatible harnesses and credentials, without changing defaults", () => {
+  const id = "claude-opus-5-5";
+  assert.ok(SELECTABLE_BASE_MODELS.some((model) => model.id === id));
+  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
+  assert.ok(FAST_MODE_MODEL_IDS.includes(id));
+  assert.equal(safeModelMetadata(id)?.label, "Opus 5.5");
+  for (const harness of ["pi", "claude", "opencode", "mock"]) {
+    assert.equal(modelSupportedByHarness(id, harness), true);
+    assert.equal(defaultModelForHarness(harness), "claude-opus-5");
+  }
+  assert.equal(modelSupportedByHarness(id, "codex"), false);
+  assert.match(
+    validateWebTurnModelOptions({ model: id }, null, { anthropic: false, openai: true, openrouter: false }) ?? "",
+    /provider isn't configured/,
+  );
+  assert.equal(
+    validateWebTurnModelOptions({ model: id }, null, { anthropic: true, openai: false, openrouter: false }),
+    null,
+  );
 });
 
 test("FAST_MODE_MODEL_IDS derives from the registry — the web-ui client reads this, keeps no copy", () => {
@@ -100,7 +174,7 @@ test("web-turn gate refuses a keyless model cleanly, accepts it once the provide
 
 test("fast-mode support is registry-driven", () => {
   assert.equal(modelSupportsFastMode("claude-opus-4-8"), true);
-  assert.equal(modelSupportsFastMode("gpt-5.6-sol"), false);
+  assert.equal(modelSupportsFastMode("gpt-5.6-sol"), true);
   assert.equal(modelSupportsFastMode(undefined), false);
   assert.equal(modelSupportsFastMode("nonexistent-model"), false);
 });

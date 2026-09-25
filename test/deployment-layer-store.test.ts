@@ -1052,3 +1052,40 @@ test("an archived foreign skill does not block the layer; a later live collision
   );
   await rehydrated.get();
 });
+
+test("a bundle may carry the files a tool declares under install.files, and nothing else", async () => {
+  const runtime = emptyDeploymentLayer();
+  const store = createDeploymentLayerStore({
+    backing: createMemoryMap<StoredDeploymentLayer>(),
+    runtime,
+    skills: createSkillStore({ signingSecret: "layer-test" }),
+    scopeId: scopeId("org", "default-org"),
+  });
+  const descriptor = {
+    path: "tools/acme/tool.json",
+    content: JSON.stringify({
+      id: "acme",
+      install: { binary: "acme", files: [{ from: "acme", to: "/usr/local/bin/acme" }] },
+    }),
+  };
+  const executable = { path: "tools/acme/acme", content: "#!/bin/sh\necho acme\n", executable: true };
+  await store.put({ contract: 1, tools: [descriptor, executable], skills: [] }, "api");
+  assert.deepEqual(runtime.installFiles, [
+    { to: "/usr/local/bin/acme", mode: "0755", content: "#!/bin/sh\necho acme\n" },
+  ]);
+  await assert.rejects(
+    store.put({ contract: 1, tools: [descriptor], skills: [] }, "api"),
+    /declares install file acme but the bundle does not carry tools\/acme\/acme/,
+  );
+  await assert.rejects(
+    store.put(
+      {
+        contract: 1,
+        tools: [descriptor, executable, { path: "tools/acme/notes.txt", content: "stray\n" }],
+        skills: [],
+      },
+      "api",
+    ),
+    /tool path must be tools\/<id>\/tool\.json: tools\/acme\/notes\.txt/,
+  );
+});

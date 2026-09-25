@@ -55,7 +55,7 @@ function hostBackend(name: string, homeDir: string): Sandbox {
 function start(root: string) {
   const fat = hostBackend("aws", join(root, "aws-home"));
   const thin = hostBackend("sprites", join(root, "sprites-home"));
-  (fat as { backupComputer?: unknown }).backupComputer = async () => [];
+  (fat as { exportFiles?: unknown }).exportFiles = async () => [];
   const routes = createMemoryMap<SandboxRoute>();
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-migrate-")) }));
   const server = createInsecureTestServer(built.app, {
@@ -82,6 +82,44 @@ const migrate = (base: string, scopeId: string, body: unknown, headers: Record<s
     body: JSON.stringify(body),
   });
 
+test("copyTimeoutSec stretches the copy budget through to the guest execs, clamped to sane bounds", async () => {
+  const root = mkdtempSync(join(tmpdir(), "admin-migrate-timeout-"));
+  const fat = hostBackend("aws", join(root, "aws-home"));
+  const thin = hostBackend("sprites", join(root, "sprites-home"));
+  (fat as { exportFiles?: unknown }).exportFiles = async () => [];
+  const timeouts: number[] = [];
+  const origRun = fat.run.bind(fat);
+  fat.run = async (h, command, opts) => {
+    if (opts?.timeoutMs) timeouts.push(opts.timeoutMs);
+    return origRun(h, command, opts);
+  };
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-migrate-")) }));
+  const server = createInsecureTestServer(built.app, {
+    admin: built.admin,
+    sessions: built.sessions,
+    auditLog: built.auditLog,
+    workspace: built.workspace,
+    sandboxMigration: createSandboxMigrationRunner({
+      backends: { aws: fat, sprites: thin },
+      routes: createMemoryMap<SandboxRoute>(),
+      defaultBackend: "aws",
+    }),
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  try {
+    const res = await migrate(base, "personal:U9", { to: "sprites", force: true, copyTimeoutSec: 999_999 });
+    assert.equal(res.status, 200);
+    assert.ok(
+      timeouts.includes(7200 * 1000),
+      `an oversized request is clamped to the 7200s ceiling and still reaches the copy execs (saw: ${timeouts.join(",")})`,
+    );
+    assert.ok(!timeouts.includes(900 * 1000), "the default budget is replaced, not merely accompanied");
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
 test("the migrate endpoint refuses a capability-losing move, then records what force gave up", async () => {
   const root = mkdtempSync(join(tmpdir(), "admin-migrate-e2e-"));
   const s = start(root);
@@ -92,7 +130,7 @@ test("the migrate endpoint refuses a capability-losing move, then records what f
     assert.equal(refused.status, 409);
     const refusedBody = (await refused.json()) as { error: string; message: string };
     assert.equal(refusedBody.error, "migration_failed");
-    assert.match(refusedBody.message, /home backup \(publish, resident-auth capture\)/);
+    assert.match(refusedBody.message, /home export \(publish, resident-auth capture\)/);
     assert.match(refusedBody.message, /force/);
     assert.equal(await s.routes.get("personal:yna"), null, "a refused migration leaves the scope where it was");
     assert.ok(
@@ -104,17 +142,17 @@ test("the migrate endpoint refuses a capability-losing move, then records what f
     assert.equal(forced.status, 200);
     const body = (await forced.json()) as { to: string; capabilitiesLost: string[]; sha: string };
     assert.equal(body.to, "sprites");
-    assert.deepEqual(body.capabilitiesLost, ["home backup (publish, resident-auth capture)"]);
+    assert.deepEqual(body.capabilitiesLost, ["home export (publish, resident-auth capture)"]);
 
     assert.equal(readFileSync(join(root, "sprites-home", "notes.txt"), "utf8"), "hello\n");
     const route = await s.routes.get("personal:yna");
     assert.equal(route?.backend, "sprites");
     assert.equal(route?.reason, "canary");
-    assert.deepEqual(route?.capabilitiesLost, ["home backup (publish, resident-auth capture)"]);
+    assert.deepEqual(route?.capabilitiesLost, ["home export (publish, resident-auth capture)"]);
 
     const migrated = (await s.built.auditLog.events()).find((e) => e.action === "sandbox_routes.migrate");
     assert.ok(migrated, "the migration is audited");
-    assert.match(migrated.resource ?? "", /lost=home backup/);
+    assert.match(migrated.resource ?? "", /lost=home export/);
     assert.equal(migrated.scopeLabel, "personal:yna");
   } finally {
     await s.close();

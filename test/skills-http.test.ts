@@ -945,7 +945,10 @@ test("an ORG- or TEAM-homed skill is never inline-managed, even by its author (p
 test("a PUBLIC channel (self-joinable) stays owner-only — a non-author member cannot edit it", async () => {
   const srv = await startSecure();
   try {
-    await srv.directory.replaceChannels([{ channelId: "CPUB", name: "general", isPrivate: false }], []);
+    await srv.directory.replaceChannels(
+      [{ channelId: "CPUB", name: "general", isPrivate: false }],
+      ["owner", "rando"].map((principalId) => ({ channelId: "CPUB", principalId })),
+    );
     const created = await fetch(`${srv.base}/v1/skills`, {
       method: "POST",
       headers: {

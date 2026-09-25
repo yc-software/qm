@@ -1,4 +1,5 @@
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
+import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 
@@ -72,19 +73,15 @@ export function channelSurfaceUrl(webUiPublicUrl: string | undefined, channelId:
 
 export function channelWelcomeMessage(surfaceUrl: string | undefined): string {
   if (!surfaceUrl) {
-    return "Hi! I'm the agent for this channel. Mention me and I'll help out — scheduled jobs, skills, files, and apps I run here are shared with everyone in the channel.";
+    return "QM here, ready to assist.";
   }
-  return `Hi! I'm the agent for this channel. Everyone here can see and manage what I'm doing — scheduled jobs, skills, files, and apps — on this channel's shared page: ${surfaceUrl}`;
+  return `QM here, ready to assist. Access my data and channel settings <${surfaceUrl}|here>.`;
 }
 
-export function surfaceHeaderText(
-  facts: { agentLabel?: string; modelName?: string },
-  projectUrl: string | undefined,
-): string | undefined {
-  const agent = (facts.agentLabel ?? "").trim();
+export function surfaceHeaderText(facts: { modelName?: string }, projectUrl: string | undefined): string | undefined {
   const model = (facts.modelName ?? "").trim();
   const url = (projectUrl ?? "").trim();
-  const modelText = model ? `${agent ? `${agent} is using` : "Using"} ${model} here.` : "";
+  const modelText = model ? `Using ${model} here.` : "";
   const link = url ? `<${url}|More settings>` : "";
   return [modelText, link].filter(Boolean).join(" ") || undefined;
 }
@@ -107,26 +104,66 @@ export function headerUpdate(
 const SURFACE_HEADER_MAX_TRACKED = 1000;
 
 export interface SurfaceHeaderClient {
+  chat: {
+    postMessage: (args: SlackReplyArgs) => Promise<{ ts?: string }>;
+    update: (args: { channel: string; ts: string; text: string }) => Promise<unknown>;
+    delete: (args: { channel: string; ts: string }) => Promise<unknown>;
+  };
+  pins: {
+    list: (args: { channel: string }) => Promise<{ items?: PinnedItem[] }>;
+    add: (args: { channel: string; timestamp: string }) => Promise<unknown>;
+    remove: (args: { channel: string; timestamp: string }) => Promise<unknown>;
+  };
   conversations: {
     info: (args: { channel: string }) => Promise<{ channel?: ChannelMeta }>;
     setTopic: (args: { channel: string; topic: string }) => Promise<unknown>;
-    setPurpose: (args: { channel: string; purpose: string }) => Promise<unknown>;
   };
 }
 
+export interface PinnedItem {
+  message?: { ts?: string; user?: string; text?: string };
+}
+
+export function isSurfaceHeaderMessage(text: string | undefined): boolean {
+  const t = (text ?? "").trim();
+  if (!t) return false;
+  return /^(Using .+ here\.)?\s*(<[^<>|]+\|More settings>)?$/.test(t);
+}
+
+export function findHeaderPin(
+  items: PinnedItem[] | undefined,
+  botUserId: string,
+): { ts: string; text: string } | undefined {
+  for (const item of items ?? []) {
+    const m = item.message;
+    if (m?.ts && m.user === botUserId && isSurfaceHeaderMessage(m.text)) return { ts: m.ts, text: m.text ?? "" };
+  }
+  return undefined;
+}
+
+const HEADER_PIN_OFF = "<surface-header-off>";
+
 export function createSurfaceHeaderEnsurer(opts: {
   headerFacts(scope: string): Promise<{ agentLabel?: string; modelName: string }>;
+  channelPinEnabled?(scope: string): Promise<boolean>;
   webUiPublicUrl: string | undefined;
   ids: { botUserId: string };
   maxTracked?: number;
-}): (client: SurfaceHeaderClient, channel: string, scopeId: string, kind: "dm" | "channel") => void {
+}): (
+  client: SurfaceHeaderClient,
+  channel: string,
+  scopeId: string,
+  kind: "dm" | "channel",
+  ensureOpts?: { pinNew?: boolean },
+) => void {
   const maxTracked = opts.maxTracked ?? SURFACE_HEADER_MAX_TRACKED;
   const settled = new Map<string, string>();
   const inFlight = new Set<string>();
-  const requeued = new Set<string>();
-  return function ensure(client, channel, scopeId, kind) {
+  const requeued = new Map<string, { pinNew?: boolean }>();
+  return function ensure(client, channel, scopeId, kind, ensureOpts) {
     if (inFlight.has(channel)) {
-      requeued.add(channel);
+      const prior = requeued.get(channel);
+      requeued.set(channel, { pinNew: Boolean(prior?.pinNew) || Boolean(ensureOpts?.pinNew) });
       return;
     }
     inFlight.add(channel);
@@ -136,21 +173,43 @@ export function createSurfaceHeaderEnsurer(opts: {
           await opts.headerFacts(scopeId),
           scopeSurfaceUrl(opts.webUiPublicUrl, scopeId),
         );
-        if (!desired || settled.get(channel) === desired) return;
+        if (!desired) return;
+        const enabled = kind === "dm" || ((await opts.channelPinEnabled?.(scopeId)) ?? false);
+        const goal = enabled ? desired : HEADER_PIN_OFF;
+        if (settled.get(channel) === goal) return;
         const info = (await client.conversations.info({ channel })).channel;
-        if (kind === "channel" && (isExternallyShared(info) || isMpim(info))) return;
-        const existing = kind === "dm" ? info?.topic : info?.purpose;
-        if (headerUpdate(existing, opts.ids.botUserId, desired) === "set") {
-          if (kind === "dm") await client.conversations.setTopic({ channel, topic: desired });
-          else await client.conversations.setPurpose({ channel, purpose: desired });
+        if (kind === "dm") {
+          if (headerUpdate(info?.topic, opts.ids.botUserId, desired) === "set")
+            await client.conversations.setTopic({ channel, topic: desired });
+        } else {
+          if (isExternallyShared(info) || isMpim(info)) return;
+          const pinned = findHeaderPin((await client.pins.list({ channel })).items, opts.ids.botUserId);
+          if (!enabled) {
+            if (pinned) {
+              await client.pins.remove({ channel, timestamp: pinned.ts });
+              await client.chat.delete({ channel, ts: pinned.ts });
+            }
+          } else if (pinned) {
+            if (unwrapSlackLinks(pinned.text) !== unwrapSlackLinks(desired))
+              await client.chat.update({ channel, ts: pinned.ts, text: desired });
+          } else if (ensureOpts?.pinNew) {
+            const posted = await client.chat.postMessage(
+              slackReplyArgs(channel, desired, undefined, { unfurlLinks: false }),
+            );
+            if (posted.ts) await client.pins.add({ channel, timestamp: posted.ts });
+          }
         }
-        settled.set(channel, desired);
+        settled.set(channel, goal);
         capMap(settled, maxTracked);
       } catch (err) {
         console.error("[slack] surface header ensure failed:", errMessage(err));
       } finally {
         inFlight.delete(channel);
-        if (requeued.delete(channel)) ensure(client, channel, scopeId, kind);
+        const again = requeued.get(channel);
+        if (again) {
+          requeued.delete(channel);
+          ensure(client, channel, scopeId, kind, again);
+        }
       }
     })();
   };
@@ -161,7 +220,6 @@ export async function onBotJoinedChannel(opts: {
     chat: { postMessage: (args: SlackReplyArgs) => Promise<unknown> };
     conversations: {
       info: (args: { channel: string }) => Promise<{ channel?: ChannelMeta }>;
-      setPurpose: (args: { channel: string; purpose: string }) => Promise<unknown>;
     };
   };
   channel: string | undefined;
@@ -237,6 +295,7 @@ export function deliveryCandidatesFor(
 
 const DELIVERY_MAX_ATTEMPTS = 5;
 const DELIVERY_MAX_TRACKED = 1000;
+const DELIVERY_GIVEUP_RETRY_MS = 5 * 60_000;
 
 export interface DeliveryTracker {
   givenUp(id: string): boolean;
@@ -254,15 +313,24 @@ function capMap<K, V>(map: Map<K, V>, max: number): void {
   }
 }
 
-export function createDeliveryTracker(opts: { maxAttempts?: number; maxTracked?: number } = {}): DeliveryTracker {
+export function createDeliveryTracker(
+  opts: { maxAttempts?: number; maxTracked?: number; giveUpRetryMs?: number } = {},
+): DeliveryTracker {
   const maxAttempts = opts.maxAttempts ?? DELIVERY_MAX_ATTEMPTS;
   const maxTracked = opts.maxTracked ?? DELIVERY_MAX_TRACKED;
+  const giveUpRetryMs = opts.giveUpRetryMs ?? DELIVERY_GIVEUP_RETRY_MS;
   const failures = new Map<string, number>();
   const posted = new Map<string, { ackBody?: unknown }>();
-  const dead = new Map<string, true>();
+
+  const dead = new Map<string, number>();
   return {
     givenUp(id) {
-      return dead.has(id);
+      const until = dead.get(id);
+      if (until === undefined) return false;
+      if (Date.now() < until) return true;
+      dead.delete(id);
+      console.error(`[slack-plugin] delivery ${id} give-up window expired — retrying delivery`);
+      return false;
     },
     posted(id) {
       return posted.get(id);
@@ -274,7 +342,7 @@ export function createDeliveryTracker(opts: { maxAttempts?: number; maxTracked?:
         if (oldest === undefined) break;
         posted.delete(oldest);
         failures.delete(oldest);
-        dead.set(oldest, true);
+        dead.set(oldest, Date.now() + giveUpRetryMs);
         capMap(dead, maxTracked);
       }
     },
@@ -283,7 +351,7 @@ export function createDeliveryTracker(opts: { maxAttempts?: number; maxTracked?:
       if (count >= maxAttempts) {
         failures.delete(id);
         posted.delete(id);
-        dead.set(id, true);
+        dead.set(id, Date.now() + giveUpRetryMs);
         capMap(dead, maxTracked);
         return true;
       }
@@ -294,6 +362,7 @@ export function createDeliveryTracker(opts: { maxAttempts?: number; maxTracked?:
     clear(id) {
       failures.delete(id);
       posted.delete(id);
+      dead.delete(id);
     },
   };
 }
@@ -330,8 +399,17 @@ export interface PostMessageArgs {
   channel: string;
   text?: string;
   thread_ts?: string;
-  metadata?: { event_type: string; event_payload: Record<string, unknown> };
+  metadata?: DeliveryMetadata;
   [key: string]: unknown;
+}
+
+export interface DeliveryMetadata {
+  event_type: string;
+  event_payload: Record<string, unknown>;
+}
+
+export function deliveryMetadata(idempotencyKey: string): DeliveryMetadata {
+  return { event_type: "qm_delivery", event_payload: { idempotency_key: idempotencyKey } };
 }
 export interface PostVerifyClient {
   chat: { postMessage(args: PostMessageArgs): Promise<unknown> };
@@ -356,7 +434,7 @@ export interface PostVerifyClient {
   };
 }
 
-async function findPostedByKey(
+export async function findPostedByKey(
   client: PostVerifyClient,
   args: PostMessageArgs,
   idempotencyKey: string,
@@ -392,24 +470,90 @@ async function findPostedByKey(
   return undefined;
 }
 
+export function recoveryVerifyOldest(createdAt: number | undefined, editRef: string | undefined): string | undefined {
+  const bounds: number[] = [];
+  if (typeof createdAt === "number") bounds.push(createdAt / 1000 - 60);
+  const editRefSec = Number(editRef);
+  if (editRef && Number.isFinite(editRefSec)) bounds.push(editRefSec - 5);
+  return bounds.length ? String(Math.min(...bounds)) : undefined;
+}
+
+export const SLACK_TEXT_LIMIT = 40000;
+
+export const SLACK_POST_SPLIT_LIMIT = 3_800;
+
+export interface PostedPart {
+  ts: string | undefined;
+  channel: string;
+  reused?: boolean;
+  text: string;
+}
+
+function splitPostKey(idempotencyKey: string, partIndex: number): string {
+  return partIndex === 0 ? idempotencyKey : `${idempotencyKey}#p${partIndex + 1}`;
+}
+
 export async function postWithVerify(
   client: PostVerifyClient,
   args: PostMessageArgs,
   idempotencyKey: string,
-  opts?: { attempts?: number; verifyFirst?: boolean; verifyOldest?: string },
-): Promise<{ ts: string; channel: string }> {
+  opts?: { attempts?: number; verifyFirst?: boolean; verifyOldest?: string; verifyBestEffort?: boolean },
+): Promise<{ ts: string | undefined; channel: string; reused?: boolean; parts?: PostedPart[] }> {
+  const fullText = typeof args.text === "string" ? args.text : "";
+  const batches: PostMessageArgs[] = [];
+  if (Array.isArray(args.blocks) && args.blocks.length > 50) {
+    for (let offset = 0; offset < args.blocks.length; offset += 50) {
+      const blocks = args.blocks.slice(offset, offset + 50);
+      const text = blocks
+        .filter((block) => block.type === "section" && typeof block.text?.text === "string")
+        .map((block) => block.text.text)
+        .join("\n");
+      batches.push({ ...args, blocks, text });
+    }
+  } else if (!args.blocks && fullText.length > SLACK_POST_SPLIT_LIMIT) {
+    batches.push(...safeChunks(fullText, SLACK_POST_SPLIT_LIMIT).map((text) => ({ ...args, text })));
+  }
+  if (batches.length) {
+    const parts: PostedPart[] = [];
+    for (const [i, batch] of batches.entries()) {
+      const text = batch.text ?? "";
+      const res = await postWithVerify(client, batch, splitPostKey(idempotencyKey, i), {
+        ...opts,
+        verifyFirst: true,
+        verifyBestEffort: !opts?.verifyFirst,
+      });
+      parts.push({
+        ts: res.ts,
+        channel: res.channel,
+        ...(res.reused !== undefined ? { reused: res.reused } : {}),
+        text,
+      });
+    }
+    const first = parts[0]!;
+    return {
+      ts: first.ts,
+      channel: first.channel,
+      ...(parts.every((p) => p.reused) ? { reused: true } : {}),
+      parts,
+    };
+  }
+  if (args.blocks && fullText.length > SLACK_TEXT_LIMIT - 1_000) {
+    args.text = safeClip(fullText, SLACK_TEXT_LIMIT - 1_000);
+  }
   const maxAttempts = opts?.attempts ?? 3;
   const verifyOldest = opts?.verifyOldest ?? String((Date.now() - 5_000) / 1000);
-  args.metadata = { event_type: "qm_delivery", event_payload: { idempotency_key: idempotencyKey } };
+  args.metadata = deliveryMetadata(idempotencyKey);
   if (opts?.verifyFirst) {
-    const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest);
-    if (found) return found;
+    const found = opts.verifyBestEffort
+      ? await findPostedByKey(client, args, idempotencyKey, verifyOldest).catch(swallowAs("slack: part verify", null))
+      : await findPostedByKey(client, args, idempotencyKey, verifyOldest);
+    if (found) return { ...found, reused: true };
   }
   let lastErr: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const res = (await client.chat.postMessage(args)) as { ts?: string; channel?: string };
-      return { ts: String(res.ts), channel: String(res.channel ?? args.channel) };
+      return { ts: res.ts === undefined ? undefined : String(res.ts), channel: String(res.channel ?? args.channel) };
     } catch (err) {
       lastErr = err;
       const code = (err as { code?: string }).code;
@@ -417,6 +561,13 @@ export async function postWithVerify(
       if (code === "slack_webapi_rate_limited_error") {
         const retryAfter = (err as { retryAfter?: number }).retryAfter ?? 1;
         await sleep(retryAfter * 1000);
+
+        try {
+          const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest);
+          if (found) return { ...found, reused: true };
+        } catch {
+          /* verification is best-effort on this path */
+        }
         continue;
       }
       let found: { ts: string; channel: string } | undefined;

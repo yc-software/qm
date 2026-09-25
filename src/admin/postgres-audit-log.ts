@@ -1,6 +1,7 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import type { AuditEvent, AuditLog } from "../audit/audit-log.ts";
+import { reportFailureAs } from "../util/errors.ts";
 
 function rowToEvent(r: Record<string, unknown>): AuditEvent {
   return {
@@ -19,7 +20,11 @@ const MAX = 50000;
 
 export function createPostgresAuditLog(connectionString: string): AuditLog {
   const { q } = createPgPool(connectionString, [
-    `CREATE TABLE IF NOT EXISTS audit_log(
+    {
+      id: "admin/audit-log/0001",
+      expectedChecksum: "542f2a64d2814b329f2c1ad2eb8ed2728e8044b78efa6343eafb5598bc83cb1d",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS audit_log(
         id BIGSERIAL PRIMARY KEY,
         at BIGINT NOT NULL,
         principal_id TEXT NOT NULL,
@@ -29,11 +34,11 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
         status TEXT,
         detail TEXT
       )`,
-    `ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS idempotency_key TEXT`,
-    `CREATE INDEX IF NOT EXISTS audit_log_by_at ON audit_log(at DESC)`,
-    `CREATE INDEX IF NOT EXISTS audit_log_by_scope_at ON audit_log(scope_label, at DESC)`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS audit_log_by_idempotency_key ON audit_log(idempotency_key) WHERE idempotency_key IS NOT NULL`,
-    `DO $$
+        `ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS idempotency_key TEXT`,
+        `CREATE INDEX IF NOT EXISTS audit_log_by_at ON audit_log(at DESC)`,
+        `CREATE INDEX IF NOT EXISTS audit_log_by_scope_at ON audit_log(scope_label, at DESC)`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS audit_log_by_idempotency_key ON audit_log(idempotency_key) WHERE idempotency_key IS NOT NULL`,
+        `DO $$
       BEGIN
         PERFORM pg_advisory_xact_lock(hashtext('agent-platform:audit-log-migrate'));
         IF to_regclass('public.audit_events') IS NOT NULL
@@ -46,6 +51,12 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
           ORDER BY (json->>'at')::bigint ASC;
         END IF;
       END $$`,
+      ],
+    },
+    {
+      id: "admin/audit-log/0002",
+      statements: [`CREATE INDEX IF NOT EXISTS audit_log_by_action ON audit_log(action, at DESC)`],
+    },
   ]);
 
   const pendingWrites = new Set<Promise<void>>();
@@ -61,7 +72,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
         e.detail ?? null,
       ])
         .then(() => undefined)
-        .catch((err) => console.error("[audit] failed to persist event to durable store:", err));
+        .catch(reportFailureAs("audit: persist event", undefined));
       pendingWrites.add(write);
       void write.finally(() => pendingWrites.delete(write));
     },
@@ -77,7 +88,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       const rows = await q(`SELECT ${COLS} FROM audit_log ORDER BY at DESC, id DESC LIMIT $1`, [MAX]);
       return rows.map(rowToEvent).reverse();
     },
-    async tail({ limit, scopeLabel, action, since }) {
+    async tail({ limit, scopeLabel, action, since, resourceContains }) {
       await Promise.allSettled(pendingWrites);
       const params: unknown[] = [];
       const conds: string[] = [];
@@ -93,6 +104,10 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
         params.push(since);
         conds.push(`at >= $${params.length}`);
       }
+      if (resourceContains !== undefined) {
+        params.push(`%${resourceContains}%`);
+        conds.push(`resource LIKE $${params.length}`);
+      }
       const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
       params.push(limit);
       const rows = await q(
@@ -100,6 +115,14 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
         params,
       );
       return rows.map(rowToEvent);
+    },
+    async tallyByResource(action) {
+      await Promise.allSettled(pendingWrites);
+      const rows = await q(
+        `SELECT resource, count(*)::bigint AS n FROM audit_log WHERE action = $1 GROUP BY resource`,
+        [action],
+      );
+      return new Map(rows.map((r) => [String(r.resource), Number(r.n)]));
     },
   };
 }

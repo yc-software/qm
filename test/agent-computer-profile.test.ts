@@ -45,10 +45,12 @@ test("the sprites sandbox declares the Agent Computer contract (persistent per-s
       egressEnforcement: "none",
     });
     assert.match(spec?.os ?? "", /Ubuntu/);
+    assert.equal(spec?.cpus, 8);
+    assert.equal(spec?.diskGb, 100);
     assert.equal(spec?.homeDir, "/home/sprite");
     assert.equal(spec?.workdir, "/home/sprite/workspace");
     assert.ok(spec?.notInstalled?.includes("gh"));
-    assert.equal(typeof sprites.backupComputer, "function");
+    assert.equal(typeof sprites.exportFiles, "function");
   });
 });
 

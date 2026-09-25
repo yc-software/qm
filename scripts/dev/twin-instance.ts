@@ -1,10 +1,11 @@
+import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { provisionTwinEnvironment, teardownTwinEnvironment } from "../../test/live-slack/arga-provision.ts";
 import { readEnvFile } from "./lib/util.ts";
 
-const root = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
+const root = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const dir = join(root, ".twin-instance");
 const envFile = join(dir, "env");
 const pumpPid = join(dir, "pump.pid");

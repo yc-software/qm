@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { baseModelProviders, configuredModelForHarness, providerKeysPresent } from "../src/config.ts";
-import { defaultModelForHarness } from "../src/model/pi-models.ts";
+import { defaultModelForHarness, modelProviderAvailabilityFor } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -58,6 +58,23 @@ test("base-model set rejects a model whose provider key is absent (would fail pr
   } finally {
     await srv.close();
   }
+});
+
+test("ChatGPT OAuth is serviceable for Codex without advertising OpenAI to Pi", () => {
+  const config = testConfig({ harness: "codex", codexAuthFile: "/tmp/codex-auth.json" });
+  const configured = providerKeysPresent(config);
+  assert.equal(configured.openai, false);
+  assert.equal(
+    modelProviderAvailabilityFor("codex", configured).openai,
+    true,
+    "Codex can use its harness OAuth session",
+  );
+  assert.equal(modelProviderAvailabilityFor("opencode", configured).openai, false);
+  assert.equal(
+    modelProviderAvailabilityFor("pi", configured, { anthropic: false, openai: false, openrouter: false }).openai,
+    false,
+    "Pi still requires an API-key credential",
+  );
 });
 
 test("a deployment that declares a provider runs that provider's base model", async () => {

@@ -41,7 +41,7 @@ function fileSandbox(): Sandbox {
     listDir: async (_h: SandboxHandle, dir: string) =>
       onlyFile.filter((f) => !dir || dir === "." || f.path === dir).map((f) => f.path),
     readFileBytes: async (_h: SandboxHandle, p: string) => onlyFile.find((f) => f.path === p)?.data ?? null,
-    backupComputer: async (_h: SandboxHandle, opts?: { include?: Array<"workspace" | "home"> }) => {
+    exportFiles: async (_h: SandboxHandle, opts?: { include?: Array<"workspace" | "home"> }) => {
       if (opts?.include?.includes("home")) return [];
       return onlyFile.map((f) => ({ area: "workspace" as const, path: f.path, data: f.data }));
     },

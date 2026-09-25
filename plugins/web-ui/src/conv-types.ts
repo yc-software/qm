@@ -1,8 +1,15 @@
 import type { Agent } from "@earendil-works/pi-agent-core";
-import type { TemplateResult } from "lit";
+import type { TemplateResult, nothing } from "lit";
 import type { DensityTier } from "./density";
 import type { Attachment } from "@earendil-works/pi-web-ui";
-import type { ApprovalDecision, CoreSession, PendingApproval, entriesToMessages } from "./core-bridge";
+import type {
+  ApprovalDecision,
+  CoreSession,
+  PendingApproval,
+  QueuedRun,
+  TurnOptions,
+  entriesToMessages,
+} from "./core-bridge";
 import type { EffortLevel, ModelOption } from "./model-options";
 import type { ComposerMenu } from "./composer";
 
@@ -31,7 +38,9 @@ export interface ConvCtx extends ConvHost {
 }
 
 interface ChatState {
+  pins: import("./core-bridge").SessionPin[];
   agent: Agent | null;
+  normalStreamFn: Agent["streamFn"] | null;
   host: HTMLElement | null;
   threadRef: string | null;
   sessionId: string | null;
@@ -55,7 +64,14 @@ interface ChatState {
 export interface ChatSurface {
   state: ChatState;
   hasLiveRun(): boolean;
-  signalLiveRun(kind: "abort" | "steer", text?: string): Promise<import("./core-bridge").SignalOutcome>;
+  signalLiveRun(
+    kind: "abort" | "steer",
+    text?: string,
+    queuedRunId?: string,
+  ): Promise<import("./core-bridge").SignalOutcome>;
+  stopLiveRun(): Promise<void>;
+  isStopping(): boolean;
+  currentTurnOptions(): TurnOptions;
   newChat(context?: { scopeId: string; name: string | null }): string;
   teardown(): void;
   resetChatState(): void;
@@ -75,9 +91,13 @@ export interface ChatSurface {
     anchorSeq?: number | null,
     inheritedMessages?: ReturnType<typeof entriesToMessages>,
   ): void;
-  mountLoadingPane(): void;
+  mountLoadingPane(): () => boolean;
+  mountLoadError(retry: () => void): void;
+  scrollToBottom(): void;
+  revealEntry(seq: number): boolean;
   drawActiveChat(agent?: Agent | null, opts?: { forceScroll?: boolean }): void;
   setTranscriptWindow(anchorSeq: number | null, earlierCount: number, hasEarlier?: boolean): void;
+  setPins(pins: import("./core-bridge").SessionPin[]): void;
   requestBackgroundPanel(sessionId: string | null, threadRef: string | null): void;
   activePendingApprovals(): PendingApproval[];
   hasUnresolvedApproval(): boolean;
@@ -105,14 +125,22 @@ interface ComposerState {
 }
 
 export interface ComposerSurface {
+  composerApprovalPanel(approvals: PendingApproval[]): TemplateResult;
+  submit(instruction?: string): Promise<void>;
+  restageAttachments(attachments: Attachment[], note: string): void;
   state: ComposerState;
-  composerForm(agent: Agent): TemplateResult;
+  composerForm(agent: Agent, header?: TemplateResult | typeof nothing): TemplateResult;
+  queuedStrip(agent: Agent): TemplateResult | typeof import("lit").nothing;
+  queuedRunsFor(threadRef: string | null): QueuedRun[];
+  setQueuedRuns(threadRef: string, runs: QueuedRun[]): void;
   resetComposer(): void;
   focusComposerEnd(): void;
+  fillSuggestedPrompt(prompt: string, agent: Agent): void;
+  sendSuggestedPrompt(prompt: string, agent: Agent): Promise<void>;
   resizeComposer(): void;
-  currentModelOption(): ModelOption;
+  currentModelOption(): ModelOption | undefined;
   carryModelPick(fromThreadRef: string | null, toThreadRef: string): void;
-  refreshRuntimeSelection(scopeId: string | null, agent?: Agent): Promise<void>;
+  refreshRuntimeSelection(scopeId: string | null, agent?: Agent, refresh?: boolean): Promise<void>;
   onDragEnter(e: DragEvent): void;
   onDragOver(e: DragEvent): void;
   onDragLeave(e: DragEvent): void;

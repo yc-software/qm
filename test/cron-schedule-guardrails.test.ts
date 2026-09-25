@@ -34,3 +34,38 @@ test("a calendar schedule with timezone is unaffected", () => {
   assert.equal(r.schedule.timezone, "America/Los_Angeles");
   assert.ok(r.nextFireAt && r.nextFireAt > now);
 });
+
+test("rejects a one-shot firstFireAt in the past, naming the current clock", () => {
+  assert.throws(
+    () => validateUserSchedule({ firstFireAt: now - 60 * 60 * 1000 }, now),
+    /firstFireAt .* is in the past — it is now 2026-07-01T12:00:00\.000Z/,
+  );
+});
+
+test("rejects a recurring schedule whose firstFireAt is in the past", () => {
+  assert.throws(() => validateUserSchedule({ everyMs: 60_000, firstFireAt: now - DAY }, now), /in the past/);
+});
+
+test("a firstFireAt too far back for Date to format still gets the past-time error", () => {
+  assert.throws(
+    () => validateUserSchedule({ firstFireAt: -9e15 }, now),
+    /firstFireAt \(-9000000000000000\) is in the past/,
+  );
+});
+
+test("defaults the clock to the real now when none is given", () => {
+  assert.throws(() => validateUserSchedule({ firstFireAt: 1 }), /in the past/);
+});
+
+test('allows a firstFireAt a few seconds ago so a stale-by-one-turn "send now" still works', () => {
+  assert.doesNotThrow(() => validateUserSchedule({ firstFireAt: now - 30_000 }, now));
+});
+
+test("allows a future firstFireAt", () => {
+  assert.doesNotThrow(() => validateUserSchedule({ firstFireAt: now + DAY }, now));
+});
+
+test("the past-time check ignores schedules without firstFireAt", () => {
+  assert.doesNotThrow(() => validateUserSchedule({ everyMs: 60_000 }, now));
+  assert.doesNotThrow(() => validateUserSchedule({ cron: "30 7 * * 1-5", timezone: "America/Los_Angeles" }, now));
+});

@@ -19,19 +19,14 @@ test("computeRetention: DAU/WAU/MAU, cohorts, new-vs-returning, and channel appr
   const nowMs = at(1000);
   const report = computeRetention({
     nowMs,
-    sessions: [
-      { id: "dm1", type: "dm", scopeId: "personal:U1", createdAt: at(950) },
-      { id: "dm2", type: "dm", scopeId: "personal:U2", createdAt: at(998) },
-      { id: "ch1", type: "channel", scopeId: "channel:eng", createdAt: at(995) },
-      { id: "dm3", type: "dm", scopeId: "personal:U6", createdAt: at(890) },
-    ],
+    sessionCount: 4,
     participants: [
-      { sessionId: "dm1", principalId: "U1", validFrom: at(950), validTo: null },
-      { sessionId: "dm2", principalId: "U2", validFrom: at(998), validTo: null },
-      { sessionId: "ch1", principalId: "U3", validFrom: at(995), validTo: null },
-      { sessionId: "ch1", principalId: "U4", validFrom: at(995), validTo: null },
-      { sessionId: "ch1", principalId: "U5", validFrom: at(1001), validTo: null },
-      { sessionId: "dm3", principalId: "U6", validFrom: at(890), validTo: null },
+      { sessionId: "dm1", principalId: "U1", validFrom: at(950), validTo: null, validFromSeq: null, validToSeq: null },
+      { sessionId: "dm2", principalId: "U2", validFrom: at(998), validTo: null, validFromSeq: null, validToSeq: null },
+      { sessionId: "ch1", principalId: "U3", validFrom: at(995), validTo: null, validFromSeq: null, validToSeq: null },
+      { sessionId: "ch1", principalId: "U4", validFrom: at(995), validTo: null, validFromSeq: null, validToSeq: null },
+      { sessionId: "ch1", principalId: "U5", validFrom: at(1001), validTo: null, validFromSeq: null, validToSeq: null },
+      { sessionId: "dm3", principalId: "U6", validFrom: at(890), validTo: null, validFromSeq: null, validToSeq: null },
     ],
     turns: [
       { principalId: "U1", sessionId: "dm1", day: 1000, turns: 1, firstAt: at(1000), lastAt: at(1000) },
@@ -59,7 +54,7 @@ test("computeRetention: DAU/WAU/MAU, cohorts, new-vs-returning, and channel appr
 });
 
 test("computeRetention: empty input yields zeros, never NaN", () => {
-  const report = computeRetention({ nowMs: at(1000), sessions: [], participants: [], turns: [] });
+  const report = computeRetention({ nowMs: at(1000), sessionCount: 0, participants: [], turns: [] });
   assert.deepEqual(report.active, { dau: 0, wau: 0, mau: 0, stickiness: 0 });
   assert.deepEqual(report.perUser.turns, { p50: 0, p95: 0 });
   assert.deepEqual(report.cohorts, []);

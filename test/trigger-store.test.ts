@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { assertNoEscalation } from "../src/triggers/trigger-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
+import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { scopeId } from "../src/types.ts";
 
 test("assertNoEscalation: owner == createdBy is always allowed (no consent needed)", () => {
@@ -26,4 +27,16 @@ test("cron store enforces the shared anti-escalation guard at create time", asyn
   await assert.rejects(store.create({ ...base, owner: "U2", createdBy: "U1" }), /consent/);
   const cron = await store.create({ ...base, owner: "U2", createdBy: "U1", ownerConsentedAt: Date.now() });
   assert.equal(cron.owner, "U2");
+});
+
+test("webhook store enforces the shared anti-escalation guard at create time", async () => {
+  const store = createWebhookStore();
+  const base = {
+    ownerScopeId: scopeId("personal", "U1"),
+    action: "triage",
+    verification: { scheme: "github" as const, secret: "s" },
+  };
+  await assert.rejects(store.create({ ...base, owner: "U2", createdBy: "U1" }), /consent/);
+  const wh = await store.create({ ...base, owner: "U2", createdBy: "U1", ownerConsentedAt: Date.now() });
+  assert.equal(wh.owner, "U2");
 });

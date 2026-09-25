@@ -1,15 +1,13 @@
+import { escapeHtml } from "./html-escape.ts";
+
 type Katex = { renderToString: (text: string, opts?: object) => string };
 
 let real: Katex | null = null;
 let loading: Promise<void> | null = null;
 
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
 function rerenderMountedBlocks(): void {
   if (typeof document === "undefined") return;
-  for (const el of document.querySelectorAll("markdown-block")) {
+  for (const el of document.querySelectorAll("markdown-block, qm-markdown")) {
     (el as { requestUpdate?: () => void }).requestUpdate?.();
   }
 }

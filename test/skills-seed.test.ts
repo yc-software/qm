@@ -39,9 +39,16 @@ test("installSeedSkills publishes the repository starter catalog into org scope"
   const result = await installSeedSkills(skills, { dir: "skills-seed", scopeId: scopeId("org", "default-org") });
   assert.deepEqual(result.skipped, []);
   assert.ok(result.installed.includes("cloud-cli"));
+  assert.ok(result.installed.includes("composio"));
   assert.ok(result.installed.includes("google-workspace"));
   assert.ok(result.installed.includes("google-drive-sheets"));
   assert.ok(result.installed.includes("github-gitlab"));
+  assert.ok(result.installed.includes("send"));
+  const github = (await skills.list()).find((s) => s.manifest.name === "github-gitlab")!;
+  assert.equal(
+    github.manifest.files?.find((file) => file.path === "scripts/watch-ci.mjs")?.content,
+    readFileSync("skills-seed/github-gitlab/scripts/watch-ci.mjs", "utf8"),
+  );
   assert.ok(result.installed.includes("taste-skill"));
   assert.ok(result.installed.includes("use-shared-credential"));
 
@@ -192,7 +199,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
     surface: "test",
     actor,
     conversation: { kind: "dm", threadRef: "dm:U1:seeded-skills-read" },
-    text: "!read skills/google-workspace/SKILL.md",
+    text: "!skill google-workspace",
   } as TurnRequest);
   assert.match(read.reply ?? "", /Google Workspace/);
   assert.match(read.reply ?? "", /VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM/);
@@ -202,7 +209,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
     surface: "test",
     actor,
     conversation: { kind: "dm", threadRef: "dm:U1:seeded-drive-read" },
-    text: "!read skills/google-drive-sheets/SKILL.md",
+    text: "!skill google-drive-sheets",
   } as TurnRequest);
   assert.match(drive.reply ?? "", /Google Drive \/ Docs \/ Sheets \/ Slides/);
   assert.match(drive.reply ?? "", /sheets\.googleapis\.com/);
@@ -247,7 +254,7 @@ test("a bundled skill round-trips seed → store → materialize, assets land be
   const { sandbox, files } = fakeSandbox();
   const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
   const resolved = await skills.resolve("tooled", [org]);
-  await materializeSkillTree(sandbox, handle, resolved);
+  await materializeSkillTree(sandbox, handle, "skills", resolved);
   assert.equal(files.get("skills/tooled/SKILL.md"), tooled.manifest.body);
   assert.equal(files.get("skills/tooled/scripts/hello.py"), "print('hi')\n");
   assert.equal(files.get("skills/tooled/references/notes.md"), "# notes\n");

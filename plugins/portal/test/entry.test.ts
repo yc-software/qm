@@ -29,6 +29,30 @@ test("`node src/index.ts` (relative entry, like Docker) binds the port and serve
   }
 });
 
+test("boot refuses an own-origin OIDC endpoint when no broker upstream is wired", () => {
+  const command = "import('./src/index.ts').then(m => m.bootChecks())";
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PORTAL_PUBLIC_URL: "https://agent.example.com",
+    OIDC_AUTH_ENDPOINT: "https://agent.example.com/idp/authorize",
+  };
+  delete env.NODE_ENV;
+  delete env.AUTH_BROKER_UPSTREAM;
+  const looping = spawnSync(process.execPath, ["--input-type=module", "-e", command], {
+    cwd: process.cwd(),
+    env,
+    encoding: "utf8",
+  });
+  assert.notEqual(looping.status, 0);
+  assert.match(looping.stderr, /AUTH_BROKER_UPSTREAM is unset/);
+  const wired = spawnSync(process.execPath, ["--input-type=module", "-e", command], {
+    cwd: process.cwd(),
+    env: { ...env, AUTH_BROKER_UPSTREAM: "http://127.0.0.1:9099" },
+    encoding: "utf8",
+  });
+  assert.equal(wired.status, 0, wired.stderr);
+});
+
 test("production boot requires an explicit OIDC tenant trust boundary", () => {
   const command = "import('./src/index.ts').then(m => m.bootChecks())";
   const baseEnv: NodeJS.ProcessEnv = {
@@ -117,7 +141,7 @@ test("a session TTL above the default max ceiling still boots, but a contradicto
     OIDC_CLIENT_ID: "client-id",
     OIDC_CLIENT_SECRET: "client-secret",
     OIDC_ALLOWED_EMAILS: "admin@example.com",
-    PORTAL_SESSION_TTL_S: "604800",
+    PORTAL_SESSION_TTL_S: "5184000",
   };
   delete baseEnv.PORTAL_SESSION_MAX_TTL_S;
 

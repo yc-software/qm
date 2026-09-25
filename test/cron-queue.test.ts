@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createScheduler, type Scheduler } from "../src/cron/scheduler.ts";
 import { createPgBossCronQueue } from "../src/cron/job-queue.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
+import { createMemoryCronFireStore, type CronFireStore } from "../src/cron/fire-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
@@ -20,6 +21,7 @@ before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
+  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
   await p.query(`DROP TABLE IF EXISTS ${CRONS_TABLE}, ${IDEM_TABLE}`);
   await p.end();
@@ -30,9 +32,9 @@ async function until(cond: () => boolean, ms: number): Promise<void> {
   while (!cond() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
 }
 
-function instance(calls: TurnRequest[], turnMs = 0): { scheduler: Scheduler; crons: CronStore } {
+function instance(calls: TurnRequest[], turnMs = 0, fires?: CronFireStore): { scheduler: Scheduler; crons: CronStore } {
   const maps = createPostgresMapFactory(URL!);
-  const crons = createCronStore(maps.map<Cron>(CRONS_TABLE));
+  const crons = createCronStore(maps.map<Cron>(CRONS_TABLE), fires ? { fires } : undefined);
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
     if (turnMs) await new Promise((r) => setTimeout(r, turnMs));
@@ -54,8 +56,9 @@ test(
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
-    const a = instance(calls, 12_000);
-    const b = instance(calls, 12_000);
+    const fires = createMemoryCronFireStore();
+    const a = instance(calls, 12_000, fires);
+    const b = instance(calls, 12_000, fires);
     a.scheduler.start(1000);
     b.scheduler.start(1000);
     try {
@@ -71,7 +74,7 @@ test(
       await new Promise((r) => setTimeout(r, 16_000));
       assert.equal(calls.length, 1, "no sibling or reconcile re-run while (or after) the slow turn runs");
       assert.equal((await b.crons.get(cron.id))?.enabled, false, "the one-shot ends disabled");
-      assert.equal((await b.crons.get(cron.id))?.fireLog?.length, 1, "one fire recorded");
+      assert.equal((await b.crons.listFires(cron.id)).total, 1, "one fire recorded");
     } finally {
       a.scheduler.stop();
       b.scheduler.stop();

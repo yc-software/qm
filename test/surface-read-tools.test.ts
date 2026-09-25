@@ -8,13 +8,13 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createPiTools, type ToolContextRef } from "../src/harness/pi-tools.ts";
+import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-function freshApp() {
+function freshApp(slackContextSource?: "live" | "shadow" | "mirror") {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-readtools-"));
-  return buildApp(testConfig({ dataDir }));
+  return buildApp(testConfig({ dataDir, ...(slackContextSource ? { slackContextSource } : {}) }));
 }
 
 const actor = { externalId: "U1", displayName: "Ada" };
@@ -25,7 +25,7 @@ function mention(text: string, channel: string, root: string): TurnRequest {
     surface: "slack",
     actor,
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor, mate] },
-    deliveryTarget: `slack:${channel}:${root}`,
+    deliveryTarget: `${channel}:${root}`,
     text,
     liveActor: true,
     async: true,
@@ -61,6 +61,32 @@ async function subToolResult(built: any, root: string, tool: string, deadlineMs 
   throw new Error(`no assistant reply for ${tool}`);
 }
 
+test("read_thread leaves an omitted limit to the surface provider", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  let running = true;
+  const queries: any[] = [];
+  const loop = (async () => {
+    while (running) {
+      for (const request of await built.app.pendingContextRequests("slack")) {
+        queries.push(request.query);
+        await built.app.fulfillContextRequest(request.id, { result: { messages: [] } });
+      }
+      await sleep(20);
+    }
+  })();
+  try {
+    await built.app.turn(mention("!read_thread", "C10", "1000.1"));
+    assert.match(await subToolResult(built, "C10:1000.1", "read_thread"), /read 0 message/);
+    assert.equal(queries.length, 1);
+    assert.equal(queries[0].count, undefined);
+  } finally {
+    running = false;
+    await loop;
+    await built.runtime.stop();
+  }
+});
+
 test("whats_new returns POINTERS (counts of new-here + other active threads), never message prose", async () => {
   const built = freshApp();
   built.runtime.start();
@@ -83,21 +109,22 @@ test("whats_new returns POINTERS (counts of new-here + other active threads), ne
   }
 });
 
-test("search falls back to a live scan when no cache is wired, returning author+snippet pointers", async () => {
-  const built = freshApp();
+test("enabled mirror search uses the current channel and returns author/snippet pointers without a live pull", async () => {
+  const built = freshApp("mirror");
   built.runtime.start();
   const root = "C11:1100.1";
-  const stop = startFulfiller(built.app, [
-    { ts: "1100.2", author: "Bob", text: "the budget doc is in shared/q2.md" },
-    { ts: "1100.3", author: "Cat", text: "unrelated chatter" },
+  await built.surfaceCache.ingest([
+    { container: "C11", ts: "1100.2", authorName: "Bob", text: "the budget doc is in shared/q2.md" },
+    { container: "C11", ts: "1100.3", authorName: "Cat", text: "unrelated chatter" },
+    { container: "CSECRET", ts: "1100.4", authorName: "Eve", text: "the secret budget" },
   ]);
   try {
     await built.app.turn(mention("!search budget", "C11", "1100.1"));
     const reply = await subToolResult(built, root, "search");
-    assert.match(reply, /search\(live\) 1 hit/);
+    assert.match(reply, /search\(cache\) 1 hit/);
+    assert.deepEqual(await built.app.pendingContextRequests("slack"), []);
     assert.match(reply, /first=Bob:the budget doc/);
   } finally {
-    await stop();
     await built.runtime.stop();
   }
 });
@@ -153,7 +180,7 @@ test("read_file returns text content for a text blob and a POINTER (never bytes)
 
 function surfaceTool(tc: Record<string, unknown>): any {
   const ref = { current: tc } as unknown as ToolContextRef;
-  return createPiTools(ref, { surfaceTools: true }).find((t) => t.name === "slack")!;
+  return createAgentTools(ref, { surfaceTools: true }).find((t) => t.name === "slack")!;
 }
 
 test("search action appends the mirror-coverage window to hits, and gives an honest no-match line when the mirror is bounded", async () => {
@@ -220,13 +247,13 @@ test("whats_new action appends the mirror-coverage window when known", async () 
 });
 
 test("search/whats_new surface the mirror coverage window end-to-end once the mirror has ingested history (§4.1/§4.2)", async () => {
-  const built = freshApp();
+  const built = freshApp("mirror");
   built.runtime.start();
   const root = "C30:3000.1";
   await built.app.ingestSurfaceEvents(
     [
       {
-        container: "slack:C30:3000.1",
+        container: "C30",
         ts: "3000.1",
         authorId: "U2",
         authorName: "Bob",
@@ -241,8 +268,8 @@ test("search/whats_new surface the mirror coverage window end-to-end once the mi
     await built.app.turn(mention("!search budget", "C30", "3000.1"));
     const searchReply = await subToolResult(built, root, "search");
     assert.match(searchReply, /coverage=\d{4}-\d\d-\d\d/, "the search reply carries the mirror coverage floor");
-    await built.app.turn(mention("!whats_new", "C30", "3000.1"));
-    const wnReply = await subToolResult(built, root, "whats_new");
+    await built.app.turn(mention("!whats_new", "C30", "3000.2"));
+    const wnReply = await subToolResult(built, "C30:3000.2", "whats_new");
     assert.match(wnReply, /coverage=\d{4}-\d\d-\d\d/, "whats_new carries the mirror coverage floor");
   } finally {
     await stop();
@@ -322,5 +349,31 @@ test("set_standing_order writes the channel policy the ambient judge reads (reco
     assert.match(got, /piratey/);
   } finally {
     await built.runtime.stop();
+  }
+});
+
+test("successful Slack reads preserve partial-context and rate-limit guidance in model tool results", async () => {
+  const guidance =
+    "Some context is missing. Slack history is rate-limited; retry in 60 seconds or set up your own Slack app at https://qm.test/admin/?setup=slack";
+  const tool = surfaceTool({
+    async readThread() {
+      return { ok: true, messages: [{ text: "available thread context" }], message: guidance };
+    },
+    async whatsNew() {
+      return { ok: true, hereNew: 2, activeSubConversations: 1, message: guidance };
+    },
+    async search() {
+      return { ok: true, hits: [{ snippet: "available search hit" }], source: "cache", message: guidance };
+    },
+  });
+  for (const [action, expected] of [
+    ["read_thread", "available thread context"],
+    ["whats_new", "2 new in this thread"],
+    ["search", "available search hit"],
+  ]) {
+    const result = await tool.execute(`partial-${action}`, { action, query: "available" });
+    const output = result.content.map((item: { text?: string }) => item.text ?? "").join("\n");
+    assert.ok(output.includes(expected!), action);
+    assert.ok(output.includes(guidance), action);
   }
 });

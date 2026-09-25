@@ -113,6 +113,41 @@ test("doctor rejects missing and placeholder portal OIDC client ids and tenant g
   );
 });
 
+test("remote doctor keeps missing local email values distinct from disabled email", async () => {
+  const brokerConfig: QmConfig = {
+    ...config,
+    sandbox: undefined,
+    services: ["core", "portal", "auth"],
+    env: {
+      core: { HARNESS: "mock" },
+      auth: { AUTH_EMAIL_TRANSPORT: "resend", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" },
+    },
+  };
+  const priorKey = process.env.RESEND_API_KEY;
+  const priorSender = process.env.AUTH_EMAIL_FROM;
+  const log = console.log;
+  const warn = console.warn;
+  process.env.RESEND_API_KEY = "";
+  process.env.AUTH_EMAIL_FROM = "";
+  try {
+    for (const secrets of [new Map<string, string>(), new Map([["AUTH_EMAIL_FROM", "noreply@example.com"]])]) {
+      const output: string[] = [];
+      console.log = (...values: unknown[]): void => void output.push(values.join(" "));
+      console.warn = (...values: unknown[]): void => void output.push(values.join(" "));
+      await assert.doesNotReject(doctorCommon(brokerConfig, secrets));
+      assert.match(output.join("\n"), /RESEND_API_KEY is not available locally/);
+      assert.doesNotMatch(output.join("\n"), /sign-in email: disabled/);
+    }
+  } finally {
+    console.log = log;
+    console.warn = warn;
+    if (priorKey === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = priorKey;
+    if (priorSender === undefined) delete process.env.AUTH_EMAIL_FROM;
+    else process.env.AUTH_EMAIL_FROM = priorSender;
+  }
+});
+
 test("Fly doctor requires the signing secret for source plugins absent from config", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-"));
   const bin = join(dir, "fake-fly.cjs");
@@ -124,7 +159,7 @@ test("Fly doctor requires the signing secret for source plugins absent from conf
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
 const app = args[args.indexOf("-a") + 1];
-if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\n");
+if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nFLY_DEPLOY_API_TOKEN\\n");
 `,
   );
   chmodSync(bin, 0o755);
@@ -133,6 +168,43 @@ if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SEC
     await assert.rejects(
       flyDoctor({ ...config, target: "fly", appPrefix: "acme", region: "sjc", flyOrg: "personal" }, dir),
       /acme-linear: missing CORE_SIGNING_SECRET/,
+    );
+  } finally {
+    if (prior === undefined) delete process.env.FLY_BIN;
+    else process.env.FLY_BIN = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Fly doctor rejects persisted core access on coreless plugins", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-coreless-"));
+  const bin = join(dir, "fake-fly.cjs");
+  const prior = process.env.FLY_BIN;
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const app = args[args.indexOf("-a") + 1];
+if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\n");
+if (app === "acme-signer") process.stdout.write("CORE_API_URL\\nCORE_SIGNING_SECRET\\n");
+`,
+  );
+  chmodSync(bin, 0o755);
+  process.env.FLY_BIN = bin;
+  try {
+    await assert.rejects(
+      flyDoctor(
+        {
+          ...config,
+          target: "fly",
+          appPrefix: "acme",
+          region: "sjc",
+          flyOrg: "personal",
+          plugins: [{ name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false }],
+        },
+        dir,
+      ),
+      /unexpected CORE_API_URL[\s\S]*unexpected CORE_SIGNING_SECRET/,
     );
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;
@@ -150,7 +222,7 @@ test("Fly doctor demands the plain name too for a dual-role (core + sandbox) sec
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
 const app = args[args.indexOf("-a") + 1];
-if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nFLY_RESIDENT_ENV_ANTHROPIC_API_KEY\\n");
+if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nFLY_DEPLOY_API_TOKEN\\nFLY_RESIDENT_ENV_ANTHROPIC_API_KEY\\n");
 `,
   );
   chmodSync(bin, 0o755);
@@ -398,6 +470,42 @@ test("Slack doctor validates deployment-file tokens before conflicting ambient t
   }
 });
 
+test("Slack doctor validates the bot through its configured API while Socket Mode stays on Slack", async () => {
+  const dir = manifestDir();
+  const priorFetch = globalThis.fetch;
+  const seen: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    seen.push(url);
+    return url.endsWith("/auth.test")
+      ? authOk("chat:write, users:read")
+      : new Response(JSON.stringify({ ok: true }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    await doctorCommon(
+      slackConfig(),
+      new Map([...SLACK_TOKENS, ["SLACK_API_URL", "https://slack-twin.example/api/"]]),
+      { configDir: dir },
+    );
+    assert.deepEqual(seen, ["https://slack-twin.example/api/auth.test", "https://slack.com/api/apps.connections.open"]);
+  } finally {
+    globalThis.fetch = priorFetch;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Slack doctor does not require a Socket Mode token for HTTP events", async () => {
+  const dir = manifestDir();
+  const httpConfig = { ...slackConfig(), env: { slack: { SLACK_EVENTS_MODE: "http" } } };
+  try {
+    await withStubbedSlack({ auth: authOk("chat:write, users:read") }, () =>
+      doctorCommon(httpConfig, new Map([["SLACK_BOT_TOKEN", "xoxb-test"]]), { configDir: dir }),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("slackCheck fails naming each manifest scope the token lacks", async () => {
   const dir = manifestDir();
   try {
@@ -529,9 +637,7 @@ process.exit(1);
   );
   chmodSync(bin, 0o755);
   const prior = process.env.FLY_BIN;
-  const priorSandboxToken = process.env.FLY_SANDBOX_API_TOKEN;
   process.env.FLY_BIN = bin;
-  process.env.FLY_SANDBOX_API_TOKEN = "FlyV1-good";
   const flyConfig: QmConfig = {
     ...config,
     target: "fly",
@@ -540,23 +646,7 @@ process.exit(1);
     flyOrg: "personal",
   };
   try {
-    assert.throws(
-      () => verifyLocalFlyTokens(flyConfig, new Map([["FLY_SANDBOX_API_TOKEN", "FlyV1-expired"]])),
-      (error: unknown) => {
-        assert.match((error as Error).message, /FLY_SANDBOX_API_TOKEN was rejected/);
-        assert.doesNotMatch((error as Error).message, /FlyV1-expired/);
-        return true;
-      },
-    );
-    assert.doesNotThrow(() =>
-      verifyLocalFlyTokens(
-        flyConfig,
-        new Map([
-          ["FLY_SANDBOX_API_TOKEN", "FlyV1-good"],
-          ["FLY_DEPLOY_API_TOKEN", "FlyV1-expired"],
-        ]),
-      ),
-    );
+    assert.doesNotThrow(() => verifyLocalFlyTokens(flyConfig, new Map([["FLY_DEPLOY_API_TOKEN", "FlyV1-expired"]])));
     assert.throws(
       () =>
         verifyLocalFlyTokens(
@@ -564,18 +654,17 @@ process.exit(1);
             ...flyConfig,
             env: { ...flyConfig.env, core: { ...flyConfig.env.core, DEPLOY_PROVIDER: "fly" } },
           },
-          new Map([
-            ["FLY_SANDBOX_API_TOKEN", "FlyV1-good"],
-            ["FLY_DEPLOY_API_TOKEN", "FlyV1-expired"],
-          ]),
+          new Map([["FLY_DEPLOY_API_TOKEN", "FlyV1-expired"]]),
         ),
-      /FLY_DEPLOY_API_TOKEN was rejected/,
+      (error: unknown) => {
+        assert.match((error as Error).message, /FLY_DEPLOY_API_TOKEN was rejected/);
+        assert.doesNotMatch((error as Error).message, /FlyV1-expired/);
+        return true;
+      },
     );
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;
     else process.env.FLY_BIN = prior;
-    if (priorSandboxToken === undefined) delete process.env.FLY_SANDBOX_API_TOKEN;
-    else process.env.FLY_SANDBOX_API_TOKEN = priorSandboxToken;
     rmSync(dir, { recursive: true, force: true });
   }
 });

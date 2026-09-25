@@ -265,16 +265,12 @@ test("every capture path runs the after-N consolidation trigger on the scope it 
   assert.deepEqual(checked.sort(), [CHANNEL, PERSONAL].sort(), "both the turn scope and the cc target are checked");
 });
 
-test("a channel turn by a system actor does not cc into a personal drawer", async () => {
+test("a channel turn by a system actor captures nothing anywhere", async () => {
   const { workspace, memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: "system:ambient:acme" });
 
-  assert.match(
-    (await workspace.read(CHANNEL, MEMORY_FILE)) ?? "",
-    /task list is ship the launch/,
-    "origin scope still receives the fact",
-  );
+  assert.equal(await workspace.read(CHANNEL, MEMORY_FILE), null, "origin scope receives nothing");
   assert.equal(
     await workspace.read(scopeId("personal", "system:ambient:acme"), MEMORY_FILE),
     null,
@@ -282,15 +278,11 @@ test("a channel turn by a system actor does not cc into a personal drawer", asyn
   );
 });
 
-test("an autonomous (triggered) channel turn does not cc, even for a human actor", async () => {
+test("an autonomous (triggered) channel turn captures nothing, even for a human actor", async () => {
   const { workspace, memory } = freshMemory();
   const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
   await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: ACTOR, autonomous: true });
 
-  assert.match(
-    (await workspace.read(CHANNEL, MEMORY_FILE)) ?? "",
-    /task list is ship the launch/,
-    "origin scope still receives the fact",
-  );
+  assert.equal(await workspace.read(CHANNEL, MEMORY_FILE), null, "origin scope receives nothing on a triggered wake");
   assert.equal(await workspace.read(PERSONAL, MEMORY_FILE), null, "no cc into the owner's drawer on a triggered wake");
 });

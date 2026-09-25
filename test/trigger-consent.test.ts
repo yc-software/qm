@@ -113,7 +113,8 @@ describe("runTrigger: recipient-consent gate", () => {
       recipientConsent: { recipientId: "U-alice", status: "pending" },
     });
     assert.equal(
-      (await deps.deliveries.pending("principal")).length,
+      (await deps.deliveries.pending("principal")).filter((delivery) => delivery.destination.target === "U-alice")
+        .length,
       0,
       "nothing reaches a recipient who hasn't accepted",
     );
@@ -145,7 +146,11 @@ describe("runTrigger: recipient-consent gate", () => {
       destination: toAlice,
       recipientConsentRequired: true,
     });
-    assert.equal((await deps.deliveries.pending("principal")).length, 0);
+    assert.equal(
+      (await deps.deliveries.pending("principal")).filter((delivery) => delivery.destination.target === "U-alice")
+        .length,
+      0,
+    );
   });
 
   it("accepted consent for a prior recipient does not authorize a retargeted standing DM", async () => {
@@ -160,7 +165,26 @@ describe("runTrigger: recipient-consent gate", () => {
       recipientConsent: { recipientId: "U-alice", status: "accepted" },
       recipientConsentRequired: true,
     });
-    assert.equal((await deps.deliveries.pending("principal")).length, 0);
+    assert.equal(
+      (await deps.deliveries.pending("principal")).filter((delivery) => delivery.destination.target === "U-bob").length,
+      0,
+    );
+  });
+
+  it("an unrelated turn refusal sends no consent notice (nothing was withheld for consent)", async () => {
+    const deps = triggerDeps(async () => ({ status: "refused", reason: "runtime not approved" }));
+    const out = await runTrigger(deps, {
+      owner: "U-carol",
+      ownerScopeId: scopeId("personal", "U-carol"),
+      input: "compose",
+      fireKey: "c-unrelated",
+      surface: "cron",
+      destination: toAlice,
+      recipientConsentRequired: true,
+    });
+    assert.equal(out.status, "refused");
+    assert.doesNotMatch(out.note ?? "", /consent/);
+    assert.equal((await deps.deliveries.pending("principal")).length, 0, "no misleading skip notice to anyone");
   });
 
   it("withholds a verbatim relay too (a declined recipient gets nothing)", async () => {
@@ -177,7 +201,11 @@ describe("runTrigger: recipient-consent gate", () => {
       destination: toAlice,
       recipientConsent: { recipientId: "U-alice", status: "declined" },
     });
-    assert.equal((await deps.deliveries.pending("principal")).length, 0);
+    assert.equal(
+      (await deps.deliveries.pending("principal")).filter((delivery) => delivery.destination.target === "U-alice")
+        .length,
+      0,
+    );
     assert.match(out.note ?? "", /turned this delivery off/);
   });
 });

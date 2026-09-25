@@ -1,9 +1,14 @@
+import { assertPersonalConversationParity } from "./support/personal-conversation-parity.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
-import { cronIdOf, sessionOrigin } from "../src/sessions/session-store.ts";
+import { acquireLeaseWithin, cronIdOf, sessionCategory, sessionOrigin } from "../src/sessions/session-store.ts";
+import { parseSessionWakeRef } from "../src/api/routes/admin/origins.ts";
 import { scopeId } from "../src/types.ts";
+import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
+import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
+import { byScopeId, rollupsFromSummaries } from "./support/scope-rollup-oracle.ts";
 
 test("sessionOrigin classifies trigger threads by prefix", () => {
   assert.equal(sessionOrigin("agent:main:cron:abc"), "cron");
@@ -58,6 +63,22 @@ test("attributedTurns applies each window's [validFrom,validTo) and excludes ove
   assert.equal(u2[0]!.lastAt, mid.createdAt);
 });
 
+test("scopeHasSessions + listByScope answer scope questions directly", async () => {
+  const store = createMemorySessionStore();
+  const scope = scopeId("channel", "scoped");
+  const other = scopeId("channel", "other");
+  assert.equal(await store.scopeHasSessions(scope), false);
+  const a = await store.getOrCreateByThread("scopedA", "channel", scope);
+  const b = await store.getOrCreateByThread("scopedB", "channel", scope);
+  await store.getOrCreateByThread("scopedC", "channel", other);
+  assert.equal(await store.scopeHasSessions(scope), true);
+  assert.deepEqual(
+    new Set((await store.listByScope(scope)).map((s) => s.id)),
+    new Set([a.id, b.id]),
+    "only the asked-for scope comes back",
+  );
+});
+
 test("a blocked acquire names, dates, and times out the holder it lost to", async () => {
   const nowRef = { v: 10_000_000_000 };
   const t0 = nowRef.v;
@@ -83,6 +104,63 @@ test("a blocked acquire names, dates, and times out the holder it lost to", asyn
   const past = await store.acquireLease(s.id, "turn");
   assert.ok(past.lease, "an expired holder no longer blocks");
   assert.equal(past.heldUntil, undefined, "a won acquire reports no holder");
+});
+
+test("peekLease reads the holder without contending for it, and clears on release", async () => {
+  const store = createMemorySessionStore();
+  const scope = scopeId("personal", "U1");
+  const s = await store.getOrCreateByThread("t-peek", "dm", scope);
+  assert.equal(await store.peekLease(s.id), null);
+  const { lease } = await store.acquireLease(s.id, "compaction");
+  assert.ok(lease);
+  const seen = await store.peekLease(s.id);
+  assert.equal(seen?.holder, "compaction");
+  assert.ok((seen?.heldUntil ?? 0) > Date.now());
+  await store.releaseLease(lease!);
+  assert.equal(await store.peekLease(s.id), null);
+});
+
+test("acquireLeaseWithin outlasts a short hold and returns the winning lease", async () => {
+  const store = createMemorySessionStore();
+  const scope = scopeId("personal", "U1");
+  const s = await store.getOrCreateByThread("t-wait", "dm", scope);
+  const { lease: held } = await store.acquireLease(s.id, "compaction");
+  assert.ok(held);
+  setTimeout(() => void store.releaseLease(held!), 300);
+
+  const attempt = await acquireLeaseWithin(store, s.id, "turn", 5_000);
+  assert.ok(attempt.lease, "the waiter wins once the short hold lapses");
+});
+
+test("acquireLeaseWithin gives up after its budget and reports the holder it lost to", async () => {
+  const store = createMemorySessionStore();
+  const scope = scopeId("personal", "U1");
+  const s = await store.getOrCreateByThread("t-wait-loses", "dm", scope);
+  const { lease: held } = await store.acquireLease(s.id, "compaction");
+  assert.ok(held);
+
+  const attempt = await acquireLeaseWithin(store, s.id, "turn", 100);
+  assert.equal(attempt.lease, null, "the budget bounds the wait");
+  assert.equal(attempt.heldBy, "compaction", "the loser still learns what outranked it");
+  assert.ok((attempt.waitedMs ?? 0) >= 75, "the budget was actually spent waiting");
+  await store.releaseLease(held!);
+});
+
+test("acquireLeaseWithin bails immediately on holders the caller will not wait for", async () => {
+  const store = createMemorySessionStore();
+  const scope = scopeId("personal", "U1");
+  const s = await store.getOrCreateByThread("t-wait-turn", "dm", scope);
+  const { lease: held } = await store.acquireLease(s.id, "turn");
+  assert.ok(held);
+
+  const started = Date.now();
+  const attempt = await acquireLeaseWithin(store, s.id, "turn", 5_000, {
+    waitFor: (heldBy) => heldBy !== undefined && heldBy !== "turn",
+  });
+  assert.equal(attempt.lease, null);
+  assert.equal(attempt.heldBy, "turn", "the refusal names the holder it declined to wait for");
+  assert.ok(Date.now() - started < 1_000, "no wait is spent on a holder that will not release in time");
+  await store.releaseLease(held!);
 });
 
 const backends: Array<[string, () => SessionStore]> = [["memory", () => createMemorySessionStore()]];
@@ -214,10 +292,6 @@ for (const [name, make] of backends) {
       "retention/usage counts only the real user turn",
     );
 
-    const light = await store.scopeSessionSummaries(scope, false, undefined, false);
-    const lightRow = light.find((r) => r.id === s.id)!;
-    assert.equal(lightRow.turns, 1, "light rows still carry counts");
-    assert.deepEqual([lightRow.firstMessage, lightRow.lastMessage], ["", ""], "light rows omit previews");
     const previews = await store.lastUserMessages([s.id]);
     assert.equal(
       previews.get(s.id),
@@ -360,6 +434,72 @@ for (const [name, make] of backends) {
     assert.deepEqual(await store.scopeCronGroups(scopeId("channel", "other"), false), [], "scope filter applies");
   });
 
+  test(`${name}: scopeSessionRollups aggregates per scope what the scope index used to count row by row`, async () => {
+    const nowRef = { v: 30_000_000_000 };
+    const t0 = nowRef.v;
+    const store = createMemorySessionStore({ now: () => nowRef.v });
+    const a = scopeId("channel", "A");
+    const b = scopeId("channel", "B");
+    const c = scopeId("personal", "U9");
+    const say = async (id: string, text: string) => {
+      const { lease } = await store.acquireLease(id);
+      await store.append(lease!, { type: "user", payload: { text }, scopeLabel: a });
+      await store.releaseLease(lease!);
+    };
+    const conv1 = await store.getOrCreateByThread("ch:A:t1", "channel", a);
+    await store.getOrCreateByThread("agent:main:webhook:w1", "channel", a);
+    nowRef.v = t0 + 50_000;
+    await store.getOrCreateByThread("agent:main:monitor:m1", "channel", b);
+    nowRef.v = t0 + 100_000;
+    await say(conv1.id, "one");
+    const conv3 = await store.getOrCreateByThread("ch:A:t3", "channel", a);
+    await say(conv3.id, "three");
+    nowRef.v = t0 + 200_000;
+    await store.getOrCreateByThread("ch:A:t2", "channel", a);
+    await store.getOrCreateByThread("dm:D9", "dm", c);
+    nowRef.v = t0 + 300_000;
+    const fire = await store.getOrCreateByThread("cron:c1:fire:abc", "channel", a);
+    await say(fire.id, "fired");
+
+    const rollups = byScopeId(await store.scopeSessionRollups(a, true));
+    assert.deepEqual(rollups, [
+      {
+        scopeId: a,
+        sessions: 3,
+        backgroundSessions: 2,
+        lastActivity: t0 + 300_000,
+        lastConversationActivity: t0 + 200_000,
+        previewSessionId: [conv1.id, conv3.id].sort().at(-1)!,
+      },
+      {
+        scopeId: b,
+        sessions: 0,
+        backgroundSessions: 1,
+        lastActivity: t0 + 50_000,
+        lastConversationActivity: 0,
+        previewSessionId: null,
+      },
+      {
+        scopeId: c,
+        sessions: 1,
+        backgroundSessions: 0,
+        lastActivity: t0 + 200_000,
+        lastConversationActivity: t0 + 200_000,
+        previewSessionId: null,
+      },
+    ]);
+    assert.deepEqual(
+      rollups,
+      rollupsFromSummaries(await store.scopeSessionSummaries(a, true)),
+      "the aggregate matches a row-by-row pass over the summaries",
+    );
+    assert.deepEqual(
+      await store.scopeSessionRollups(b, false),
+      rollups.filter((r) => r.scopeId === b),
+      "scope filter applies",
+    );
+  });
+
   test(`${name}: forceReleaseLease drops a held lease so a fresh acquire succeeds (reaper path)`, async () => {
     const store = make();
     const s = await store.getOrCreateByThread("t1", "dm", scopeId("personal", "U1"));
@@ -426,7 +566,7 @@ for (const [name, make] of backends) {
       step: 0,
       model: "claude-x",
       scopeLabel: s.scopeId,
-      request: { system: "you are helpful", messages: [{ role: "user", content: "hi" }] },
+      promptEnvelope: { system: "you are helpful", tools: [{ name: "execute" }] },
     });
     assert.ok(rec.id, "stamps an id");
     assert.equal(rec.truncated, false, "defaults truncated to false");
@@ -438,7 +578,6 @@ for (const [name, make] of backends) {
       step: 1,
       model: "claude-x",
       scopeLabel: s.scopeId,
-      request: { messages: [] },
       truncated: true,
       ttftMs: 1200,
       durationMs: 8400,
@@ -455,10 +594,27 @@ for (const [name, make] of backends) {
     );
     assert.equal(list[0]!.turnSeq, 0, "correlated to the turn's user entry seq");
     assert.equal(list[1]!.truncated, true, "truncated flag round-trips");
+    assert.equal(list[0]!.request, null, "message-array bodies are never stored");
     assert.deepEqual(
-      (list[0]!.request as { messages: unknown[] }).messages,
-      [{ role: "user", content: "hi" }],
-      "request body round-trips",
+      list[0]!.promptEnvelope,
+      { system: "you are helpful", tools: [{ name: "execute" }] },
+      "prompt envelope round-trips via its hash",
+    );
+    assert.ok(list[0]!.promptHash, "envelope rows carry the dedup hash");
+    assert.equal(list[1]!.promptHash, null, "rows recorded without an envelope stay bare");
+    const repeat = await store.recordLlmRequest(s.id, {
+      turnSeq: 1,
+      step: 0,
+      model: "claude-x",
+      scopeLabel: s.scopeId,
+      promptEnvelope: { system: "you are helpful", tools: [{ name: "execute" }] },
+    });
+    assert.equal(repeat.promptHash, list[0]!.promptHash, "identical envelopes dedupe to one stored body");
+    const rehydrated = await store.listLlmRequests(s.id, { turnSeqs: [1] });
+    assert.deepEqual(
+      rehydrated[0]!.promptEnvelope,
+      { system: "you are helpful", tools: [{ name: "execute" }] },
+      "the deduped row still hydrates its envelope",
     );
     assert.equal(list[1]!.ttftMs, 1200, "per-call TTFT round-trips");
     assert.equal(list[1]!.durationMs, 8400, "per-call duration round-trips");
@@ -480,7 +636,7 @@ for (const [name, make] of backends) {
   test(`${name}: listLlmRequests filters by turnSeq in the store (no load-all-then-filter)`, async () => {
     const store = make();
     const s = await store.getOrCreateByThread("t1", "dm", scopeId("personal", "U1"));
-    const base = { model: "claude-x", scopeLabel: s.scopeId, request: { messages: [] } };
+    const base = { model: "claude-x", scopeLabel: s.scopeId, promptEnvelope: { system: "sys" } };
     await store.recordLlmRequest(s.id, { ...base, turnSeq: 0, step: 0 });
     await store.recordLlmRequest(s.id, { ...base, turnSeq: 5, step: 0 });
     await store.recordLlmRequest(s.id, { ...base, turnSeq: 5, step: 1 });
@@ -513,7 +669,7 @@ for (const [name, make] of backends) {
     const meta = await store.listLlmRequests(s.id, { omitRequest: true });
     assert.equal(meta.length, 4, "every row still listed");
     assert.ok(
-      meta.every((r) => r.request === null),
+      meta.every((r) => r.request === null && r.promptEnvelope === undefined),
       "bodies omitted",
     );
     assert.ok(
@@ -550,6 +706,17 @@ for (const [name, make] of backends) {
     );
   });
 
+  test(`${name}: bounded participant listing returns recent rows and keeps the unbounded API`, async () => {
+    const store = make();
+    for (let i = 0; i < 5; i++) {
+      const session = await store.getOrCreateByThread(`bounded:${i}`, "dm", scopeId("personal", "bounded-user"));
+      await store.addParticipant(session.id, "bounded-user");
+    }
+    assert.equal((await store.listByParticipant("bounded-user")).length, 5);
+    assert.equal((await store.listByParticipant("bounded-user", { limit: 2 })).length, 2);
+    assert.equal((await store.listByParticipant("bounded-user", { limit: 0 })).length, 0);
+  });
+
   test(`${name}: listByParticipant powers unified history`, async () => {
     const store = make();
     const s1 = await store.getOrCreateByThread("t1", "dm", scopeId("personal", "U1"));
@@ -559,6 +726,34 @@ for (const [name, make] of backends) {
     await store.addParticipant(s2.id, "U2");
     assert.equal((await store.listByParticipant("U1")).length, 2);
     assert.equal((await store.listByParticipant("U2")).length, 1);
+  });
+
+  test(`${name}: getForParticipant returns exactly the row listByParticipant returns`, async () => {
+    const store = make();
+    await assertParticipantSessionParity(store, `parity-${name}-a`);
+    await assertParticipantSessionParity(store, `parity-${name}-b`);
+  });
+
+  test(`${name}: spendRollup groups model-call cost by UTC day, scope, origin and model`, async () => {
+    await assertSpendRollupParity((now) => createMemorySessionStore({ now }), `spend-${name}`);
+  });
+
+  test(`${name}: countSessions and distinctParticipants aggregate without loading rows`, async () => {
+    const store = make();
+    const scope = scopeId("channel", "CAGG");
+    assert.equal(await store.countSessions(), 0);
+    assert.deepEqual(await store.distinctParticipants(), []);
+    const a = await store.getOrCreateByThread("agg-a", "channel", scope);
+    const b = await store.getOrCreateByThread("agg-b", "channel", scope);
+    await store.addParticipant(a.id, "U1");
+    await store.addParticipant(b.id, "U1");
+    await store.addParticipant(b.id, "U2");
+    await store.removeParticipant(b.id, "U2");
+    assert.equal(await store.countSessions(), 2);
+    assert.deepEqual((await store.distinctParticipants()).sort(), ["U1", "U2"], "one id per person, removed included");
+    await store.deleteSession(b.id);
+    assert.equal(await store.countSessions(), 1);
+    assert.deepEqual(await store.distinctParticipants(), ["U1"]);
   });
 
   test(`${name}: deleteSession hard-removes the session and its rows`, async () => {
@@ -587,7 +782,10 @@ for (const [name, make] of backends) {
       true,
       "other sessions untouched",
     );
-    assert.notEqual((await store.acquireLease(s.id)).lease, null, "lease row cleared (re-acquirable)");
+    assert.equal((await store.acquireLease(s.id)).lease, null, "no lease is granted on a deleted session");
+    const reborn = await store.getOrCreateByThread("t1", "dm", scope);
+    assert.notEqual(reborn.id, s.id, "the thread gets a fresh session");
+    assert.notEqual((await store.acquireLease(reborn.id)).lease, null, "the fresh session is leasable");
   });
 
   test(`${name}: listByParticipant sets lastActivityAt to the most recent user message`, async () => {
@@ -815,6 +1013,20 @@ for (const [name, make] of backends) {
   });
 }
 
+test("getEntry returns exactly the requested seq and nothing else", async () => {
+  const store = createMemorySessionStore();
+  const scope = scopeId("personal", "U1");
+  const s = await store.getOrCreateByThread("dm:point-fetch", "dm", scope);
+  const { lease } = await store.acquireLease(s.id);
+  assert.ok(lease);
+  const first = await store.append(lease!, { type: "user", payload: { text: "one" }, scopeLabel: scope });
+  const second = await store.append(lease!, { type: "assistant", payload: { text: "two" }, scopeLabel: scope });
+  assert.deepEqual(await store.getEntry(s.id, first.seq), first);
+  assert.deepEqual(await store.getEntry(s.id, second.seq), second);
+  assert.equal(await store.getEntry(s.id, second.seq + 1), undefined);
+  assert.equal(await store.getEntry("missing", 0), undefined);
+});
+
 test("cronIdOf and sessionOrigin agree on which threadRefs are crons", () => {
   const refs = [
     "agent:main:cron:abc",
@@ -833,4 +1045,94 @@ test("cronIdOf and sessionOrigin agree on which threadRefs are crons", () => {
   assert.equal(cronIdOf("agent:main:cron:abc"), "abc");
   assert.equal(cronIdOf("cron:abc:slot"), "abc");
   assert.equal(cronIdOf("dm:D1"), null);
+});
+
+test("the store's origin and the admin wake-ref parser agree on which threadRefs are background", () => {
+  const refs = [
+    "agent:main:cron:abc",
+    "agent:main:webhook:wh1",
+    "agent:main:monitor:m1",
+    "agent:main:cron:abc:extra",
+    "agent:main:email:e1",
+    "agent:cron:abc",
+    "cron:c1:fire:abc",
+    "cron:c1:2026-01-01T00:00",
+    "cron:c1:manual:uuid",
+    "webhook:wh1:delivery",
+    "monitor:m1:lost",
+    "monitor:m1:quiet:123",
+    "cron:",
+    "cronx:1",
+    "Cron:1",
+    " cron:1",
+    "ch:cron:1",
+    "dm:D1",
+    "ch:C1:t1",
+    "",
+  ];
+  for (const ref of refs) {
+    assert.equal(
+      sessionCategory(sessionOrigin(ref)),
+      parseSessionWakeRef(ref) ? "background" : "conversation",
+      `classifiers agree on ${JSON.stringify(ref)}`,
+    );
+  }
+});
+
+test("deleteSessionIfEmpty refuses while a lease is held and after entries land", async () => {
+  const nowRef = { v: 10_000_000_000 };
+  const store = createMemorySessionStore({ now: () => nowRef.v, leaseTtlMs: 50 });
+  const scope = scopeId("personal", "U1");
+  const s = await store.getOrCreateByThread("web:U1:seed", "dm", scope);
+  const { lease } = await store.acquireLease(s.id);
+  assert.ok(lease);
+  assert.equal(await store.deleteSessionIfEmpty(s.id), false, "a held lease blocks the discard");
+  await store.append(lease, { type: "user", payload: { text: "seed" }, scopeLabel: scope });
+  await store.releaseLease(lease);
+  assert.equal(await store.deleteSessionIfEmpty(s.id), false, "entries block the discard");
+  const empty = await store.getOrCreateByThread("web:U1:seed2", "dm", scope);
+  const second = await store.acquireLease(empty.id);
+  assert.ok(second.lease);
+  await store.releaseLease(second.lease);
+  assert.equal(await store.deleteSessionIfEmpty(empty.id), true, "a released empty session is discarded");
+  assert.equal(await store.get(empty.id), null);
+  assert.equal((await store.acquireLease(empty.id)).lease, null, "no lease is granted on a discarded session");
+
+  const abandoned = await store.getOrCreateByThread("web:U1:seed3", "dm", scope);
+  const stale = await store.acquireLease(abandoned.id);
+  assert.ok(stale.lease);
+  nowRef.v += 60;
+  assert.equal(await store.deleteSessionIfEmpty(abandoned.id), true, "an expired lease does not block the discard");
+  await assert.rejects(
+    store.append(stale.lease, { type: "user", payload: {}, scopeLabel: scope }),
+    /valid session lease/,
+    "the stale holder cannot append after the discard",
+  );
+});
+
+test("renewLease keeps a live turn's lock fresh and refuses stale or superseded tokens", async () => {
+  const nowRef = { v: 10_000_000_000 };
+  const t0 = nowRef.v;
+  const store = createMemorySessionStore({ now: () => nowRef.v, leaseTtlMs: 60_000 });
+  const scope = scopeId("personal", "U1");
+  const s = await store.getOrCreateByThread("t-renew", "dm", scope);
+  const { lease } = await store.acquireLease(s.id, "turn");
+  assert.ok(lease);
+
+  nowRef.v = t0 + 50_000;
+  assert.equal(await store.renewLease(lease!), true, "the holder can renew without writing an entry");
+  const blocked = await store.acquireLease(s.id, "turn");
+  assert.equal(blocked.lease, null);
+  assert.equal(blocked.heldUntil, nowRef.v + 60_000, "the renewal moved the expiry");
+  assert.equal(await store.renewLease({ sessionId: s.id, token: "stale" }), false, "a foreign token cannot renew");
+
+  nowRef.v = nowRef.v + 70_000;
+  assert.equal(await store.renewLease(lease!), false, "an expired lease cannot be revived by its old holder");
+  const taken = await store.acquireLease(s.id, "turn");
+  assert.ok(taken.lease, "an expired lease can still be taken over");
+  assert.equal(await store.renewLease(lease!), false, "the superseded holder cannot renew the new lock");
+});
+
+test("personal conversation counts exclude synthetic and inherited chats", async () => {
+  await assertPersonalConversationParity(createMemorySessionStore(), "personal-count");
 });

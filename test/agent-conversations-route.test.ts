@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest, type SessionStatus } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -37,9 +37,26 @@ describe("agent conversations self-API", async () => {
       body: JSON.stringify(body),
     });
 
+  const spawnWithPortal = async (portalUrl: string | undefined, app: typeof built.app = built.app) => {
+    const configuredServer = createServer(app, { signingSecret: SECRET, ...(portalUrl ? { portalUrl } : {}) });
+    await new Promise<void>((resolve) => configuredServer.listen(0, resolve));
+    const configuredBase = `http://localhost:${(configuredServer.address() as AddressInfo).port}`;
+    try {
+      const response = await fetch(`${configuredBase}/v1/conversations`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-agent-capability": await capFor("U1") },
+        body: JSON.stringify({ text: "start from configured portal" }),
+      });
+      const text = await response.text();
+      return { status: response.status, text, body: JSON.parse(text) as { session: { id: string }; webUrl?: string } };
+    } finally {
+      await new Promise<void>((resolve) => configuredServer.close(() => resolve()));
+    }
+  };
+
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
-    server = createServer(built.app, { signingSecret: SECRET });
+    server = createServer(built.app, { signingSecret: SECRET, portalUrl: "https://portal.example/" });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
     mineId = (await built.app.turn(dm("U1", "plan the launch", "web:U1:c1"))).sessionId!;
@@ -48,6 +65,47 @@ describe("agent conversations self-API", async () => {
 
   after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("sets, replaces, lists and clears a shared session status", async () => {
+    const token = await capFor("U1");
+    await built.sessions.addParticipant(mineId, "U3");
+    for (const status of [{ emoji: "✅", text: "PR merged" }, { emoji: "🚀", text: "Live in production" }, null]) {
+      const res = await post(`/v1/conversations/${mineId}`, { status }, token);
+      assert.equal(res.status, 200);
+      assert.deepEqual(
+        ((await res.json()) as { conversation: { status: SessionStatus | null } }).conversation.status,
+        status,
+      );
+      assert.deepEqual((await built.app.getSessionForViewer(mineId, "U3"))?.session.status ?? null, status);
+      const list = await get("/v1/conversations", token);
+      assert.deepEqual(
+        (
+          (await list.json()) as { conversations: Array<{ id: string; status: SessionStatus | null }> }
+        ).conversations.find((s) => s.id === mineId)?.status,
+        status,
+      );
+    }
+  });
+
+  it("rejects malformed status and unauthorized status updates", async () => {
+    const token = await capFor("U1");
+    for (const status of [
+      {},
+      { emoji: "abc", text: "Merged" },
+      { emoji: "✅🚀", text: "Merged" },
+      { emoji: "✅", text: " " },
+      { emoji: "✅", text: "x".repeat(201) },
+      { emoji: "✅", text: "a\u0000b" },
+      "merged",
+    ]) {
+      assert.equal((await post(`/v1/conversations/${mineId}`, { status }, token)).status, 400);
+    }
+    assert.equal(
+      (await post(`/v1/conversations/${theirsId}`, { status: { emoji: "✅", text: "Merged" } }, token)).status,
+      404,
+    );
+    assert.equal((await post(`/v1/conversations/${mineId}`, { status: null })).status, 401);
   });
 
   it("spawns a fresh conversation with only the seed text", async () => {
@@ -61,10 +119,12 @@ describe("agent conversations self-API", async () => {
     const body = (await res.json()) as {
       session: { id: string; scopeId: string; threadRef: string; title?: string | null };
       turn: { status: string; runId?: string };
+      webUrl?: string;
     };
     assert.notEqual(body.session.id, mineId);
     assert.equal(body.session.scopeId, scopeId("personal", "U1"));
     assert.equal(body.session.title, "Flaky test hunt");
+    assert.equal(body.webUrl, `https://portal.example/s/${body.session.id}`);
     const list = await get("/v1/conversations", token);
     const { conversations } = (await list.json()) as { conversations: Array<{ id: string }> };
     assert.ok(
@@ -83,6 +143,97 @@ describe("agent conversations self-API", async () => {
       !readBody.entries.some((e) => (e.payload.text ?? "").includes("plan the launch")),
       "nothing from the spawning conversation leaks in",
     );
+  });
+
+  it("preserves the public base prefix and encodes the returned session id", async () => {
+    const sessionId = "session /?#";
+    const app: typeof built.app = {
+      ...built.app,
+      spawnSession: async (...args) => {
+        const out = await built.app.spawnSession(...args);
+        return out ? { session: { ...out.session, id: sessionId } } : null;
+      },
+    };
+    const result = await spawnWithPortal("https://portal.example/qm///", app);
+    assert.equal(result.status, 202);
+    assert.equal(result.body.session.id, sessionId);
+    assert.equal(result.body.webUrl, "https://portal.example/qm/s/session%20%2F%3F%23");
+  });
+
+  it("omits webUrl without a safe configured public web URL", async () => {
+    const unsafe = [
+      undefined,
+      "portal.example",
+      "ftp://portal.example/qm",
+      "https://user:secret@portal.example/qm",
+      "https://portal.example/qm?tenant=one",
+      "https://portal.example/qm#conversation",
+    ];
+    for (const portalUrl of unsafe) {
+      const result = await spawnWithPortal(portalUrl);
+      assert.equal(result.status, 202);
+      assert.equal(result.body.webUrl, undefined);
+      assert.ok(!result.text.includes("secret"));
+    }
+  });
+
+  it("spawns a fresh channel conversation for a current member", async () => {
+    await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
+    await built.app.upsertChannels(
+      [{ channelId: "C1", name: "engineering", isPrivate: true }],
+      [{ channelId: "C1", principalId: "U1" }],
+    );
+    const res = await post(
+      "/v1/conversations",
+      { text: "investigate the channel deployment" },
+      await capFor("U1", scopeId("channel", "C1")),
+    );
+    assert.equal(res.status, 202);
+    const body = (await res.json()) as {
+      session: { scopeId: string };
+      turn: { status: string; runId?: string };
+    };
+    assert.equal(body.session.scopeId, scopeId("channel", "C1"));
+    assert.equal(body.turn.status, "queued");
+    assert.ok(body.turn.runId);
+    const run = await built.runs.get(body.turn.runId);
+    assert.equal(run?.request.conversation.channelRef, "C1");
+  });
+
+  it("discards the spawned session when the seed turn is refused (roster race)", async () => {
+    const racedApp: typeof built.app = {
+      ...built.app,
+      turn: async (req) =>
+        (req as { spawned?: boolean }).spawned
+          ? { status: "refused", reason: "project membership changed; retry from the current project" }
+          : built.app.turn(req),
+    };
+    const racedServer = createServer(racedApp, { signingSecret: SECRET });
+    await new Promise<void>((resolve) => racedServer.listen(0, resolve));
+    const racedBase = `http://localhost:${(racedServer.address() as AddressInfo).port}`;
+    try {
+      const token = await capFor("U1");
+      const listIds = async () => {
+        const listed = await get("/v1/conversations", token);
+        const { conversations } = (await listed.json()) as { conversations: Array<{ id: string }> };
+        return conversations.map((c) => c.id).sort();
+      };
+      const before = await listIds();
+
+      const res = await fetch(`${racedBase}/v1/conversations`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-agent-capability": token },
+        body: JSON.stringify({ text: "seed that will be refused" }),
+      });
+      assert.equal(res.status, 409);
+      const body = (await res.json()) as { error: string; message: string };
+      assert.equal(body.error, "seed_turn_refused");
+      assert.match(body.message, /membership changed/);
+
+      assert.deepEqual(await listIds(), before, "no orphaned empty session survives the refused seed");
+    } finally {
+      await new Promise<void>((resolve) => racedServer.close(() => resolve()));
+    }
   });
 
   it("spawn requires text and a capability", async () => {

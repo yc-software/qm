@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { stripImageBytes } from "../src/harness/pi-harness.ts";
+import { stoppedPartialTapeMessage, stripImageBytes } from "../src/harness/pi-harness.ts";
 import type { ScopeId } from "../src/types.ts";
 
 const scope = "personal:test@example.com" as ScopeId;
@@ -125,4 +125,53 @@ test("stripImageBytes swaps image data for artifact refs when attachments line u
   assert.deepEqual(orphan.content[1], { type: "image", mimeType: "image/png", omitted: true });
   const plain = { role: "assistant", content: [{ type: "text", text: "hi" }] };
   assert.deepEqual(stripImageBytes(plain, []), plain);
+});
+
+test("a stopped turn tapes its partial as a replay-visible message exactly when replay would drop it", () => {
+  const aborted = {
+    role: "assistant",
+    content: [{ type: "text", text: "half a thought" }],
+    stopReason: "aborted",
+  };
+  const completed = { role: "assistant", content: [{ type: "text", text: "narration before a tool" }] };
+
+  const fromAborted = stoppedPartialTapeMessage([{ role: "user" }, aborted], "half a thought", 5);
+  assert.ok(fromAborted, "an aborted partial is re-taped so the replay keeps it");
+  assert.equal(fromAborted!.stopReason, "stop");
+  assert.deepEqual(fromAborted!.content, [{ type: "text", text: "half a thought" }]);
+  assert.equal(fromAborted!.timestamp, 5);
+
+  assert.ok(stoppedPartialTapeMessage([{ role: "user" }], "(stopped)", 6), "a stop before any output tapes the marker");
+  assert.ok(
+    stoppedPartialTapeMessage([{ role: "user" }, completed, aborted], "half a thought", 7),
+    "the live text before the aborted step does not stand in for the dropped partial",
+  );
+  assert.equal(
+    stoppedPartialTapeMessage([{ role: "user" }, completed], "narration before a tool", 8),
+    null,
+    "a partial that already replays as a live message is not duplicated",
+  );
+  const toolStep = { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "bash" }] };
+  assert.equal(
+    stoppedPartialTapeMessage([{ role: "user" }, completed, toolStep], "narration before a tool", 9),
+    null,
+    "a reply lifted from an earlier visible step is not re-taped when the last step is tool-only",
+  );
+});
+
+test("an expired lease refuses tape and entry appends — one validity rule with renewLease", async () => {
+  const store = createMemorySessionStore({ leaseTtlMs: 20 });
+  const session = await store.getOrCreateByThread("dm:tape-expired", "dm", scope);
+  const { lease } = await store.acquireLease(session.id);
+  assert.ok(lease);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(await store.renewLease(lease!), false);
+  await assert.rejects(
+    store.appendTape(lease!, { kind: "message", payload: {}, scopeLabel: scope }),
+    /tape append without a valid session lease/,
+  );
+  await assert.rejects(
+    store.append(lease!, { type: "user", payload: { text: "late" }, scopeLabel: scope }),
+    /append without a valid session lease/,
+  );
 });

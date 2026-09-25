@@ -26,10 +26,9 @@ import html
 import json
 import os
 import re
+import subprocess
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from email.message import EmailMessage
 from email.policy import SMTP
 from email.utils import formataddr, getaddresses
@@ -42,19 +41,24 @@ def call(method: str, path: str, body: dict | None = None, query: dict | None = 
     tok = os.environ.get("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", "")
     if not tok:
         sys.exit("no Gmail token: ask the user to connect Google")
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode() if body is not None else None,
-        headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
-        method=method,
-    )
+    # curl, not urllib: the sandbox egress proxy is an https:// CONNECT proxy,
+    # which python's urllib cannot tunnel through.
+    cmd = ["curl", "-sS", "--max-time", "60", "-X", method,
+           "-H", f"Authorization: Bearer {tok}", "-H", "Content-Type: application/json",
+           "-w", "\n%{http_code}", url]
+    if body is not None:
+        cmd[1:1] = ["--data-binary", "@-"]
+    res = subprocess.run(cmd, input=json.dumps(body) if body is not None else None,
+                         capture_output=True, text=True)
+    if res.returncode != 0:
+        sys.exit(f"gmail api unreachable on {method} {path}: {res.stderr.strip()[:500]}")
+    text, _, status = res.stdout.rpartition("\n")
+    if not status.startswith("2"):
+        sys.exit(f"gmail api {status} on {method} {path}: {text[:500]}")
     try:
-        with urllib.request.urlopen(req, timeout=60) as res:
-            return json.load(res)
-    except urllib.error.HTTPError as e:
-        sys.exit(f"gmail api {e.code} on {method} {path}: {e.read().decode()[:500]}")
-    except urllib.error.URLError as e:
-        sys.exit(f"gmail api unreachable on {method} {path}: {e.reason}")
+        return json.loads(text)
+    except ValueError:
+        sys.exit(f"gmail api {status} on {method} {path}: non-json response: {text[:500]}")
 
 
 def read_body(path: str) -> str:

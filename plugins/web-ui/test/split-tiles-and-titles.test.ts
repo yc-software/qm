@@ -25,7 +25,7 @@ test("the tile cap counts tiles and turns the overflow into a tab", () => {
 });
 
 test("a revived canvas is bounded by both caps and cannot blow the stack", () => {
-  assert.match(split, /if \(n < 2 \|\| n > MAX_PANES \|\| serializedTileCount\(o\.layout\) > MAX_TILES\) return;/);
+  assert.match(split, /if \(n < 1 \|\| n > MAX_PANES \|\| serializedTileCount\(o\.layout\) > MAX_TILES\) return;/);
 
   const tiles = (...kids: object[]): object => ({ grid: { root: branch(...kids) } });
   assert.equal(serializedTileCount(tiles(leaf(["a", "b", "c"]), leaf(["d"]))), 2, "tabs are not tiles");
@@ -81,21 +81,43 @@ test("a pane title ellipsizes rather than being clipped or wrapped", () => {
   assert.match(css, /\.split-pane-title \{[^}]*min-width: 0;/);
 });
 
-test("tabs share the strip evenly down to a legible floor", () => {
+test("the active tab keeps a higher floor than its neighbours and runs down onto the body", () => {
   const multi = css.match(/:not\(\.dv-single-tab\) \.dv-tab \{[^}]*\}/)?.[0] ?? "";
-  assert.match(multi, /flex: 0 1 220px;/);
-  assert.match(multi, /min-width: 100px;/);
-  assert.match(multi, /max-width: 220px;/);
+  assert.match(multi, /flex: 0 1 auto;/);
+  assert.match(multi, /min-width: 72px;/);
+  assert.match(multi, /max-width: 320px;/);
+  const active = css.match(/:not\(\.dv-single-tab\) \.dv-tab\.dv-active-tab \{[^}]*\}/)?.[0] ?? "";
+  assert.match(active, /flex: 0 1 auto;/);
+  assert.match(active, /min-width: 150px;/);
+  assert.match(active, /align-self: stretch;/);
+  assert.match(active, /padding-bottom: var\(--split-strip-pad\);/);
+  assert.match(active, /border-bottom-color: transparent;/);
+  const strip =
+    css.match(/^\.dockview-theme-qm \.dv-tabs-and-actions-container:not\(\.dv-single-tab\) \{[^}]*\}/m)?.[0] ?? "";
+  assert.match(strip, /padding-bottom: 0;/);
+  assert.match(strip, /border-bottom: 0;/);
+  assert.match(
+    strip,
+    /linear-gradient\(var\(--split-strip-line\), var\(--split-strip-line\)\) bottom \/ 100% 1px no-repeat/,
+  );
 });
 
-test("the per-tab close floats to the end of the tab", () => {
-  const close = css.match(/^\.split-tab-close \{[^}]*\}/m)?.[0] ?? "";
-  assert.match(close, /margin-left: auto;/);
+test("tab actions sit in the title's flow so the title truncates around them", () => {
+  const actions = css.match(/^\.split-tab-actions \{[^}]*\}/m)?.[0] ?? "";
+  assert.doesNotMatch(actions, /position: absolute;|right: 0;|transform:/, "nothing may paint over the title");
+  assert.match(actions, /flex: 0 0 auto;/);
+  assert.doesNotMatch(css, /\.split-pane-title:has\(> \.session-status\) \.split-tab-actions/);
+  assert.match(css, /\.split-pane-title-text \{[^}]*overflow: hidden;/);
   assert.match(css, /\.dv-tab \.split-pane-title \{[^}]*flex: 1 1 auto;/);
-  assert.match(css, /\.split-pane-title-text \{[^}]*margin-right: 6px;/);
-  const collapsed = css.match(/:not\(:hover\):not\(:focus-within\) \.split-tab-close \{[^}]*\}/)?.[0] ?? "";
-  assert.ok(collapsed, "the collapsed-slot rule not found");
-  assert.doesNotMatch(collapsed, /margin-left:/);
+  const draw = split.slice(split.indexOf("class PaneTab"), split.indexOf("class StripDrop"));
+  assert.equal((draw.match(/class="split-tab-actions"/g) ?? []).length, 2);
+  assert.equal((draw.match(/split-tab-close/g) ?? []).length, 2, "each tab form carries exactly one close control");
+});
+
+test("the tab close control stays at the trailing edge of a wide tab", () => {
+  const title = css.match(/^\.dv-tab \.split-pane-title-text \{[^}]*\}/m)?.[0] ?? "";
+  assert.match(title, /flex: 1 1 auto;/);
+  assert.match(title, /min-width: 0;/);
 });
 
 test("the tab overflow menu is lifted above the panes and styled", () => {
@@ -120,4 +142,19 @@ test("a pane tab carries the conversation's background chip, from the sidebar's 
   // Only the sidebar's chip opens the inspector; the tab's is a mark on a tab that is
   // itself the control, so the clickable affordance hangs off the clickable one.
   assert.match(css, /\.bg-chip\[role="button"\] \{[^}]*cursor: pointer;/);
+});
+
+test("tab actions only fade on hover or keyboard focus, never shifting the title", () => {
+  const actions = css.match(/^\.split-tab-actions \{[^}]*\}/m)?.[0] ?? "";
+  assert.match(actions, /transition: opacity 0\.12s ease;/);
+  assert.match(actions, /opacity: 0;/);
+  assert.match(actions, /pointer-events: none;/);
+  const states = [...css.matchAll(/([^{}]*\.split-tab-(?:actions|close)[^{}]*)\{([^{}]*)\}/g)].filter(([, selector]) =>
+    /:(?:not|hover|focus|focus-within|focus-visible)|\.dv-active-tab/.test(selector),
+  );
+  assert.ok(states.length > 0);
+  for (const [, selector, declarations] of states) {
+    assert.doesNotMatch(declarations, /(?:width|margin|padding|display|flex|gap)\s*:/, selector);
+  }
+  assert.match(css, /\.dv-tab:focus-within \.split-tab-actions \{[^}]*pointer-events: auto;/);
 });

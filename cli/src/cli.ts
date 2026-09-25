@@ -18,18 +18,17 @@ import { HOSTING_PROVIDER_IDS, hostingProviderChoices, isTarget, type Target } f
 import { type LogOpts } from "./services.ts";
 import { runInit } from "./commands/init.ts";
 import { runSetup } from "./commands/setup.ts";
-import { buildAwsMicrovmImage, deleteAwsMicrovmImage, deleteAwsTaskDefinitions } from "./commands/infra.ts";
 import { runSandboxBuild } from "./commands/sandbox.ts";
 import { runChecks, runCheckCommand } from "./commands/check.ts";
-import { assertNodeEngine } from "./preflight.ts";
 import { devCiDown, devCiUp } from "./backends/dev-ci.ts";
 import { hostingProvider, hostingProviderUpFlags, type DeployContext } from "./backends/registry.ts";
 import { runConformance } from "./commands/conformance.ts";
 import { renderSlackFiles, runOutputs } from "./commands/outputs.ts";
 import { cliVersion } from "./manifest.ts";
-import { renderTerraformVars } from "./terraform.ts";
 import { gitTopLevel, promptHidden, writeEnvValue } from "./util.ts";
 import { scopeStorageKey } from "./scope-storage-key.ts";
+import { runAdminLogin } from "./commands/admin-login.ts";
+import { syncDeploymentLayer } from "./deployment-layer.ts";
 
 interface Parsed {
   positionals: string[];
@@ -123,8 +122,15 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
                                            missing secrets with per-provider instructions
   up                                       build images and bring the deployment up
      --build-from[=<qm-repo>]              build from local Dockerfiles instead of pulling
+     --build-only --image-label <label>
+       --candidate-out <file>               build immutable AWS images and write their manifest
+     --candidate <file>                    snapshot, migrate, and deploy exact AWS candidate images
+     --inactive                            deploy that candidate before this stack owns public DNS (AWS only)
+     --build-concurrency <n>                concurrent AWS candidate image builds (default: 1)
+     --restart <workloads>                  replace selected AWS tasks even when their definition is unchanged
      --dry-run                             resolve the config + report the plan, change nothing
   plan                                     an alias for up --dry-run
+  migrate --candidate <file> --yes         run only an AWS candidate's DB migrations in its target network
   check                                    validate config + sandbox/ (skills & tools); no build; verifies
                                            provider credentials whose values are present locally
     --json                                 machine-readable results keyed by contract clause
@@ -133,12 +139,14 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
   config get <dot.path>                    print one config value (raw scalar, JSON otherwise)
   slack render                             render the bot manifest (+ SSO manifest for Slack OIDC)
   outputs [--json]                         print the Web UI, health, and Slack app creation links
+  admin-login [--email <admin-email>]      print a single-use admin login link, valid for five minutes
   proof scope-key <scope-id>               derive the provider snapshot key for an exact scope
   infra render                             re-derive infra/terraform.tfvars from config
   infra build-image                        build the AWS deploy MicroVM image and record its pin
   infra delete-image --yes                 terminate its MicroVMs and delete the AWS deploy image
   infra delete-task-definitions --yes      delete the stack's AWS ECS task definition revisions
   conformance [dir] [--static]             run static gates and compare the live resolved layer
+  layer sync                               reconcile the configured deployment layer
   secrets push [--from <env-file>]         upload the computed secret set to the target store
   secrets set <KEY> [<value>]              write one .env value in place (dedupes the key, keeps
      [--from-file <path>]                  order and file mode); reads stdin or prompts when no
@@ -147,11 +155,9 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
   logs [<service>] [-f] [--tail <n>]       tail service logs (omit <service> for all, interleaved)
   down [--purge]                           stop the deployment (--purge drops docker volumes)
   rollback [--to <target>]                 roll back workloads (AWS: prior deployment manifest,
-                                           or manifest id/release label; Fly: sandbox image/tag)
+                                           or manifest id/release label)
   sandbox build [--from <img>] [--tag <t>] [--dry-run]
                                            build and validate the sandbox image locally
-  sandbox publish [--from <img>] [--app <registry/repo>] [--tag <t>] [--dry-run]
-                                           build, push, resolve digest, and record the immutable pin
 
   ${dim("Options (apply to all deploy commands):")}
     --config <path>                        path to deploy config (default: qm.config.jsonc in deploy dir)
@@ -159,7 +165,7 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
     --sandbox-dir <path>                   path to the sandbox layer dir (default: sandbox/ in the deploy dir)
 
 ${bold("DEVELOP (contributor)")} ${dim("— runs in the QM repo")}
-  dev up [--org <id>] · dev down · dev status · dev restart · dev canary · dev logs · dev doctor [options]
+  dev up [--surface web|slack|both] [--org <id>] · dev down · dev status · dev restart · dev canary · dev logs · dev doctor [options]
                                            run the supervised contributor engine in scripts/dev/
   dev --ci [up|down]                       CI mode: core only (Slack in-process), no pool lease (live-e2e)
 
@@ -297,6 +303,8 @@ async function dispatch(argv: string[]): Promise<void> {
         "follow",
         "fix",
         "sandbox",
+        "surface",
+        "no-slack",
         "no-watch",
         "org",
       ]);
@@ -321,8 +329,7 @@ async function dispatch(argv: string[]): Promise<void> {
           rejectUnknownFlags(flags, ["json", "live", "config", "env-file", "sandbox-dir", "target"]);
           rejectExtraPositionals(positionals, 0);
           const ctx = deployContext(flags);
-          assertNodeEngine(ctx.configDir);
-          const result = runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
+          const result = await runCheckCommand(ctx.config, ctx.configDir, ctx.sandboxDir, ctx.envFile, false);
           if (boolFlag(flags, "live")) {
             const checkLive = deploymentBackend(ctx).checkLive;
             if (!checkLive)
@@ -427,6 +434,17 @@ async function dispatch(argv: string[]): Promise<void> {
       return;
     }
 
+    case "admin-login": {
+      rejectUnknownFlags(flags, ["config", "env-file", "email"]);
+      rejectExtraPositionals(positionals, 0);
+      runAdminLogin({
+        configPath: strFlag(flags, "config"),
+        envFile: strFlag(flags, "env-file"),
+        email: strFlag(flags, "email"),
+      });
+      return;
+    }
+
     case "conformance": {
       rejectUnknownFlags(flags, ["static", "config", "env-file", "sandbox-dir", "target"]);
       rejectExtraPositionals(positionals, 1);
@@ -448,18 +466,23 @@ async function dispatch(argv: string[]): Promise<void> {
         throw new CliError(`usage: ${CLI_NAME} infra render|build-image|delete-image|delete-task-definitions`);
       }
       const ctx = deployContext(flags);
-      if (ctx.target !== "aws") throw new CliError(`infra ${operation} is only available for target aws`);
+      const run = hostingProvider(ctx.target).infra?.[operation];
+      if (!run) throw new CliError(`infra ${operation} is not available for target ${ctx.target}`);
       if (operation === "delete-image" || operation === "delete-task-definitions") {
         if (!boolFlag(flags, "yes"))
           throw new CliError(`infra ${operation} requires --yes`, { clause: "cli.invocation" });
-        if (operation === "delete-image") await deleteAwsMicrovmImage(ctx.config);
-        else await deleteAwsTaskDefinitions(ctx.config);
-      } else if (operation === "build-image") {
-        await buildAwsMicrovmImage(ctx.config, ctx.configPath);
-      } else {
-        runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
-        renderTerraformVars(ctx.config, ctx.configDir);
       }
+      if (operation === "render") runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
+      await run(ctx);
+      return;
+    }
+
+    case "layer": {
+      rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target"]);
+      rejectExtraPositionals(positionals, 1);
+      if (positionals[0] !== "sync") throw new CliError(`usage: ${CLI_NAME} layer sync`);
+      const ctx = deployContext(flags);
+      await syncDeploymentLayer({ ...ctx, transport: hostingProvider(ctx.target).deploymentLayerTransport });
       return;
     }
 
@@ -478,45 +501,39 @@ async function dispatch(argv: string[]): Promise<void> {
       return;
     }
 
+    case "migrate": {
+      rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "candidate", "yes"]);
+      rejectExtraPositionals(positionals, 0);
+      const ctx = deployContext(flags);
+      const candidate = strFlag(flags, "candidate");
+      if (!candidate) throw new CliError("migrate requires --candidate <file>", { clause: "cli.invocation" });
+      if (!boolFlag(flags, "yes")) throw new CliError("migrate requires --yes", { clause: "cli.invocation" });
+      const backend = deploymentBackend(ctx);
+      if (!backend.migrateCandidate) {
+        throw new CliError("migrate is only available for target aws", { clause: "cli.invocation" });
+      }
+      await backend.migrateCandidate(candidate);
+      return;
+    }
+
     case "sandbox": {
       const sub = positionals[0];
-      if (sub !== "build" && sub !== "publish") {
-        throw new CliError(
-          `usage: ${CLI_NAME} sandbox build|publish [--from <image>] [--app <registry/repo>] [--tag <label>] [--dry-run]`,
-        );
+      if (sub !== "build") {
+        throw new CliError(`usage: ${CLI_NAME} sandbox build [--from <image>] [--tag <label>] [--dry-run]`);
       }
       rejectExtraPositionals(positionals, 1);
-      rejectUnknownFlags(flags, [
-        "config",
-        "env-file",
-        "sandbox-dir",
-        "target",
-        "from",
-        "tag",
-        "dry-run",
-        ...(sub === "publish" ? ["app"] : []),
-      ]);
+      rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target", "from", "tag", "dry-run"]);
       const ctx = deployContext(flags);
       runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
       const from = strFlag(flags, "from");
-      const app = strFlag(flags, "app");
       const tag = strFlag(flags, "tag");
-      const common = {
+      runSandboxBuild({
         sandboxDir: ctx.sandboxDir,
         config: ctx.config,
         ...(from ? { from } : {}),
         ...(tag ? { tag } : {}),
         dryRun: boolFlag(flags, "dry-run"),
-      };
-      if (sub === "build") runSandboxBuild(common);
-      else {
-        await hostingProvider(ctx.target).publishSandbox(ctx, {
-          ...common,
-          configPath: ctx.configPath,
-          ...(app ? { app } : {}),
-          ...(ctx.envFile ? { envFile: ctx.envFile } : {}),
-        });
-      }
+      });
       return;
     }
 

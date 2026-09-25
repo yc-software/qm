@@ -42,6 +42,8 @@ process.env.ADMIN_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 process.env.PORTAL_PLAYGROUND = "1";
 process.env.PORTAL_PLAYGROUND_MINTS_PER_IP = "3";
+const SESSION_TTL_S = 28800;
+process.env.PORTAL_SESSION_TTL_S = String(SESSION_TTL_S);
 delete process.env.PORTAL_LOCAL_AUTH_BYPASS;
 
 const { server, mintBucketOf } = await import("../src/index.ts");
@@ -108,9 +110,9 @@ test("sliding renewal preserves the anon flag", async () => {
     org: process.env.CORE_ORG_ID ?? "acme",
     name: "Guest",
     anon: true,
-    auth: now - 15000,
-    iat: now - 15000,
-    exp: now + 13800,
+    auth: now - SESSION_TTL_S / 2 - 600,
+    iat: now - SESSION_TTL_S / 2 - 600,
+    exp: now + SESSION_TTL_S / 2 - 600,
   };
   const res = await fetch(`${base}/`, {
     headers: { ...HTML, cookie: `portal_session=${encodeURIComponent(seal(aged, key))}` },
@@ -159,6 +161,7 @@ test("boot refuses playground configurations that leak or brick", () => {
   };
   delete baseEnv.PORTAL_COOKIE_DOMAIN;
   delete baseEnv.PORTAL_APPS_DOMAIN;
+  delete baseEnv.DEPLOY_APPS_DOMAIN;
   delete baseEnv.PORTAL_DEPLOYMENTS_ENABLED;
   delete baseEnv.PORTAL_PLAYGROUND_MINTS_PER_IP;
   delete baseEnv.PORTAL_PLAYGROUND_MINT_WINDOW_S;
@@ -171,7 +174,11 @@ test("boot refuses playground configurations that leak or brick", () => {
     [{ PORTAL_PLAYGROUND_MINTS_PER_IP: "lots" }, /between 1 and 64/],
     [{ PORTAL_PLAYGROUND_MINT_WINDOW_S: "30" }, /between 60 and 86400/],
     [{ PORTAL_PLAYGROUND_MINT_WINDOW_S: "172800" }, /between 60 and 86400/],
-    [{ PORTAL_COOKIE_DOMAIN: "qm.example.com" }, /PORTAL_COOKIE_DOMAIN and PORTAL_APPS_DOMAIN unset/],
+    [{ PORTAL_COOKIE_DOMAIN: "qm.example.com" }, /the apps domain \(PORTAL_APPS_DOMAIN \/ DEPLOY_APPS_DOMAIN\) unset/],
+    [
+      { DEPLOY_APPS_DOMAIN: "apps.qm.example.com" },
+      /the apps domain \(PORTAL_APPS_DOMAIN \/ DEPLOY_APPS_DOMAIN\) unset/,
+    ],
     [{ PORTAL_DEPLOYMENTS_ENABLED: "1" }, /PORTAL_DEPLOYMENTS_ENABLED unset/],
   ];
   for (const [extra, pattern] of bad) {

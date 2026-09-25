@@ -81,3 +81,38 @@ test("policies can be updated and cleared for immediate rollback", async () => {
     "clearing an org cutover to default legacy requests a reset for every child computer",
   );
 });
+
+test("stored policies and reset requests discover removed services across restart", async () => {
+  const backing = createMemoryMap<import("../src/credentials/device-flow-cutover.ts").DeviceFlowCutoverPolicy>();
+  const resets = createMemoryMap<import("../src/credentials/device-flow-cutover.ts").DeviceFlowCutoverReset>();
+  const org = scopeId("org", "default-org");
+  const scope = scopeId("personal", "U1");
+  const first = createDeviceFlowCutoverStore(backing, { resets });
+  await first.set(org, "shared-tool", "prefer_ephemeral", "admin");
+  await first.set(scope, "retired-tool", "ephemeral_only", "admin");
+  await first.set(scopeId("personal", "U2"), "unrelated", "ephemeral_only", "admin");
+  const restarted = createDeviceFlowCutoverStore(backing, { resets });
+  assert.deepEqual(await restarted.listServices(scope), ["retired-tool", "shared-tool"]);
+  await restarted.clear(scope, "retired-tool");
+  const afterClear = createDeviceFlowCutoverStore(backing, { resets });
+  assert.deepEqual(await afterClear.listServices(scope), ["retired-tool", "shared-tool"]);
+  assert.equal(await afterClear.resolve(scope, "retired-tool"), "legacy");
+  assert.ok(await afterClear.residentResetGeneration(scope, "retired-tool"));
+});
+
+test("resident reset completion is durable per computer without changing scope policy", async () => {
+  const backing = createMemoryMap<import("../src/credentials/device-flow-cutover.ts").DeviceFlowCutoverPolicy>();
+  const resets = createMemoryMap<import("../src/credentials/device-flow-cutover.ts").DeviceFlowCutoverReset>();
+  const scope = scopeId("channel", "team");
+  const store = createDeviceFlowCutoverStore(backing, { resets });
+  await store.set(scope, "aws", "ephemeral_only", "admin");
+  await store.set(scope, "aws", "legacy", "admin");
+  const generation = await store.residentResetGeneration(scope, "aws", "computer-a");
+  assert.ok(generation);
+  await store.markResidentReset(scope, "aws", generation, "computer-a");
+  const restarted = createDeviceFlowCutoverStore(backing, { resets });
+  assert.equal(await restarted.residentResetGeneration(scope, "aws", "computer-a"), null);
+  assert.equal(await restarted.residentResetGeneration(scope, "aws", "computer-b"), generation);
+  await restarted.markResidentReset(scope, "aws", generation, "computer-b");
+  assert.equal(await restarted.residentResetGeneration(scope, "aws", "computer-b"), null);
+});

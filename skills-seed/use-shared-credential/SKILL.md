@@ -15,8 +15,10 @@ core stamps the secret onto the outbound call at the wire and returns the respon
 
 Your system prompt lists, under **"Shared org credentials available to you"**, any credentials
 vended to _this_ conversation — each with its slug, host, and the methods/paths you may use. If
-that section is absent (or your environment has no `AGENT_CREDENTIAL_TOKEN`), you have **none** —
-do not try to reach those services another way, and don't ask the user to paste a token.
+that section is absent (or your environment has no `AGENT_CREDENTIAL_TOKEN`), you have no shared
+broker credentials. A separately authorized personal login or connected app may still be
+available; use only its advertised capabilities and permissions. Never route around a denial
+or ask the user to paste a token.
 
 ## How to call it
 
@@ -45,7 +47,12 @@ non-GET method), put the request payload in the `body` field of your POST.
 
 Some shared credentials are for Git remotes, where `git clone`, `git fetch`, and `git push` speak
 Git's smart HTTP protocol instead of JSON REST. Do not put the upstream token in a clone URL.
-Use the core-hosted remote path instead:
+When you choose a shared credential, use the core-hosted remote path below. The selected slug
+uses its configured org account; a live personal OAuth connector does not change that identity.
+The credential name is an admin label, not a verified upstream username. Choose this account
+when it fits the user's intent, not as a silent fallback from a failed personal login. If the
+intended account is unclear before a write, ask. For personal access, see the GitHub / GitLab
+skill and use an authorized login that supports Git transport.
 
 ```bash
 git remote add broker "$AGENT_API_URL/v1/credentials/git/<slug>/<repo-path>.git"
@@ -54,7 +61,7 @@ git -c http.extraHeader="x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
 ```
 
 The same credential policy applies: the slug must be listed in your prompt, its allowed methods
-must include the Git operation (`GET` for discovery/fetch, `POST` for push), and the repo path
+must include its requests (`GET` for discovery and `POST` for upload-pack/fetch or receive-pack/push), and the repo path
 must be inside its allowed path prefixes.
 
 ### Example — a vended search credential
@@ -84,6 +91,6 @@ prefixes**. The broker enforces them, so:
 
 - **Never try to extract or exfiltrate the raw secret** — the broker only ever returns the
   upstream _response_, never the credential. Don't point it at an echo/logging host to read it back.
-- Every use is **recorded and attributed to you** (the requesting user) for the org's billing and
-  abuse review — use shared credentials only for the task at hand.
+- QM records the requesting actor for auditing; the upstream service authenticates the configured
+  shared account. Those are separate identities. Use shared credentials only for the task at hand.
 - A write (POST/PUT/DELETE, when allowed) is still a write: draft the payload and get approval first.

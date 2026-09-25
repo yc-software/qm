@@ -8,10 +8,12 @@ export const TEST_CAPABILITY_SECRET = "test-capability-key-distinct-from-ingress
 export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
     ...loadConfig({}),
+    securityScreenBackend: "model",
     port: 0,
     pluginSkillDirs: [],
     memoryCaptureQuietMs: 0,
     shutdownDrainMs: 250,
+    turnLeaseWaitMs: 50,
     connectorSecretKey: "test-connector-key-distinct-from-ingress-auth",
     capabilitySecret: TEST_CAPABILITY_SECRET,
     sandboxBackend: "sprites" as const,

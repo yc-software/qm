@@ -1,0 +1,20 @@
+{
+  "name": "qm-desktop",
+  "productName": "QM",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --experimental-test-module-mocks --test test/*.test.mjs",
+    "package": "node package.mjs",
+    "package:release": "node package.mjs --release",
+    "test:electron": "electron test/navigation.electron.mjs"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "electron": "44.4.3",
+    "jsdom": "^29.1.1"
+  }
+}

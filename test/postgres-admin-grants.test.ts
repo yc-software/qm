@@ -11,6 +11,7 @@ beforeEach(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
+  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS admin_grants CASCADE");
   await p.end();
 });
@@ -77,3 +78,14 @@ test(
     assert.deepEqual(ids, ["promoted-at-runtime", "seed-admin"], "redeploy preserves both seed + runtime grants");
   },
 );
+
+test("concurrent administrator provisioning preserves the first grant", { skip }, async () => {
+  const store = createPostgresAdminGrantStore(URL!);
+  const candidates = Array.from({ length: 8 }, (_, i) => grant({ createdAt: i, grantedBy: `issuer-${i}` }));
+  const inserted = await Promise.all(candidates.map((g) => store.insertIfAbsent(g)));
+  assert.equal(inserted.filter(Boolean).length, 1);
+  const winner = candidates[inserted.indexOf(true)]!;
+  assert.deepEqual(await store.all(), [winner]);
+  assert.equal(await createPostgresAdminGrantStore(URL!).insertIfAbsent(grant({ createdAt: 999 })), false);
+  assert.deepEqual(await store.all(), [winner]);
+});

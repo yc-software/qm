@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { refusalNote, refusalDelivery, postThenAckRunDelivery, isBoundaryRefusal } from "../src/slack/lib.ts";
+import { SESSION_BUSY_USER_TEXT } from "../src/core/failure-copy.ts";
 
 const ADMIN_URL = "https://portal.example.com/admin/?view=history&session=s-1";
 
@@ -21,9 +22,29 @@ test("refusalNote: a boundary (internal-only) refusal keeps the DM/internal stee
 });
 
 test("refusalNote: no adminUrl ⇒ reason only, no dangling link", () => {
-  const note = refusalNote({ reason: "session busy" }, "dm");
-  assert.match(note, /session busy/);
+  const note = refusalNote({ reason: "approval denied for git push" }, "dm");
+  assert.match(note, /approval denied for git push/);
   assert.doesNotMatch(note, /Full error/);
+});
+
+test("refusalNote: a busy session reads as a human note, with no error framing and no link", () => {
+  const note = refusalNote(
+    { status: "refused", refusalKind: "session_busy", reason: SESSION_BUSY_USER_TEXT, adminUrl: ADMIN_URL },
+    "channel",
+  );
+  assert.equal(note, SESSION_BUSY_USER_TEXT);
+  assert.doesNotMatch(note, /session busy/);
+  assert.doesNotMatch(note, /error/i);
+});
+
+test("refusalNote: a failed turn hides the internal reason but keeps the admin link", () => {
+  const note = refusalNote(
+    { status: "failed", reason: "TypeError: fetch failed at sandbox.ts:42", adminUrl: ADMIN_URL },
+    "dm",
+  );
+  assert.doesNotMatch(note, /TypeError|sandbox\.ts/);
+  assert.match(note, /something went wrong on my end/);
+  assert.match(note, /Full error: https:/);
 });
 
 test("refusalNote: a security quarantine is human-safe and hides the internal reason", () => {

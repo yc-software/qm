@@ -1,13 +1,13 @@
 # Organization layers
 
-This directory is where an organization's own deployment material lives when qm is
-customized from a private fork: a standalone private repository whose history begins as
-a clone of qm, in which core stays identical to upstream and everything
-organization-specific is confined here, under `deploy/layers/<org>/`.
+A private source fork can keep its deployment material under `deploy/layers/<org>/`.
+Core code may change independently to implement the organization's desired behavior.
+Public source checkouts keep private deployment material in a separate private
+repository. Package deployments need only that deployment repository, with no source
+fork. See [the README](../../README.md#customize-your-instance) for both paths.
 
-In upstream qm this directory holds nothing but this file, and it stays that way. A layer
-belongs to one organization's private fork and never travels upstream. The `upstream-pr` skill
-enforces that boundary; the `update-qm` skill merges upstream changes in around it.
+Upstream qm keeps only this shared README here. Organization layers never travel
+upstream; `upstream-pr` checks that boundary when a contribution is requested.
 
 ## Creating a layer
 
@@ -41,6 +41,8 @@ Point the CLI at a layer with `--config`:
 node cli/bin/qm.ts check --config deploy/layers/<org>/qm.config.jsonc
 ```
 
+For a separate deployment directory, substitute its path in both commands.
+Deploy modified services with the explicit `--build-from` workflow in the README.
 Run the CLI from the tree as shown. `npm exec qm` does not work in a source checkout
 because the workspace symlink points at `cli/`, which is unbuilt.
 

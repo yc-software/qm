@@ -2,7 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { runResultDelivery, wireRunResultDeliveries } from "../src/delivery/run-result-delivery.ts";
+import {
+  runResultDelivery,
+  wireRunResultDeliveries,
+  recordRunFailureEntry,
+  type TurnFailureSessions,
+} from "../src/delivery/run-result-delivery.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
@@ -26,6 +31,7 @@ function run(over: Partial<Run>): Run {
     request: turn("hi", "C9:171.001"),
     result: { status: "ok", reply: "the reply" },
     deliveryState: null,
+    turnUserSeq: null,
     dedupKey: null,
     attempts: 1,
     errorAttempts: 0,
@@ -45,6 +51,13 @@ test("runResultDelivery maps ok-with-reply to a recovery delivery keyed by run",
   assert.deepEqual(d, {
     destination: { type: "slack", target: "C9:171.001" },
     text: "the reply",
+    provenance: {
+      trigger: "conversation",
+      surface: "slack",
+      fireKey: "run:r-1",
+      sourceScopeId: "personal:internal:U1",
+      sourceThreadRef: "t",
+    },
     idempotencyKey: "run:r-1",
   });
 });
@@ -90,7 +103,7 @@ test("runResultDelivery STILL recovers a surface-spine turn's file attachments (
 test("runResultDelivery still posts a surface-spine turn's FAILURE note", () => {
   const spine = run({ status: "failed", result: { status: "failed", reason: "boom" } });
   spine.request = { ...spine.request, surfaceTools: true };
-  assert.equal(runResultDelivery(spine)?.text, "⚠️ I couldn't finish that turn: boom");
+  assert.equal(runResultDelivery(spine)?.text, "⚠️ I couldn't finish that turn: something went wrong on my end");
 });
 
 test("runResultDelivery recovers a security quarantine without exposing its internal reason", () => {
@@ -146,11 +159,24 @@ test("runResultDelivery carries a durable terminal task projection", () => {
   assert.deepEqual(d?.destination.taskList, [{ id: "task-1", title: "research", status: "failed" }]);
 });
 
+test("runResultDelivery links the admin error page when a resolver is wired", () => {
+  const failed = run({
+    status: "failed",
+    result: { status: "failed", sessionId: "b6f3f9e2-0000-4000-8000-000000000001", reason: "boom" },
+  });
+  const d = runResultDelivery(failed, [], (sessionId) => `https://portal.example.com/admin/?session=${sessionId}`);
+  assert.equal(
+    d?.text,
+    "⚠️ I couldn't finish that turn: something went wrong on my end — full error: https://portal.example.com/admin/?session=b6f3f9e2-0000-4000-8000-000000000001",
+  );
+});
+
 test("runResultDelivery turns a parked run into a visible failure note", () => {
   const d = runResultDelivery(
     run({ status: "failed", result: { status: "failed", reason: "lease expired (reaped)" } }),
   );
-  assert.equal(d?.text, "⚠️ I couldn't finish that turn: lease expired (reaped)");
+  assert.equal(d?.text, "⚠️ I couldn't finish that turn: something went wrong on my end");
+  assert.doesNotMatch(d?.text ?? "", /lease expired/, "the internal failure reason never reaches the user");
   assert.equal(d?.idempotencyKey, "run:r-1");
 });
 
@@ -226,6 +252,167 @@ test("wired stores: a parked run lands a durable, non-ackable failure note", asy
 
   const pending = await deliveries.pending("slack");
   assert.equal(pending.length, 1, "the park enqueues a durable recovery copy");
-  assert.equal(pending[0]!.text, "⚠️ I couldn't finish that turn: boom");
+  assert.equal(pending[0]!.text, "⚠️ I couldn't finish that turn: something went wrong on my end");
   assert.equal(pending[0]!.idempotencyKey, `run:${parked.id}`);
 });
+
+const failureSessions = async () => {
+  const { createMemorySessionStore } = await import("../src/sessions/memory-session-store.ts");
+  const sessions = createMemorySessionStore();
+  const scope = "personal:u1@example.test" as import("../src/types.ts").ScopeId;
+  const session = await sessions.getOrCreateByThread("slack:D1", "dm", scope, undefined, "slack");
+  return { sessions, session };
+};
+
+const failedRun = (over: Partial<Run> = {}): Run =>
+  run({
+    sessionId: "slack:D1",
+    status: "failed",
+    result: { status: "failed", sessionId: "slack:D1", reason: "lease expired (reaped)" },
+    ...over,
+  });
+
+test("a parked run's failure lands as a turn_failure entry in the run's own session, once", async () => {
+  const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
+  const { sessions, session } = await failureSessions();
+
+  assert.equal(await recordRunFailureEntry(sessions, failedRun()), true);
+  const entries = await sessions.getEntries(session.id);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]!.type, "system");
+  assert.deepEqual(entries[0]!.payload, {
+    kind: "turn_failure",
+    message: "I couldn't finish that turn: something went wrong on my end",
+    runId: "r-1",
+  });
+  const tape = await sessions.getTape(session.id);
+  assert.equal(tape.length, 2);
+  assert.equal(
+    tape.filter((row) => (row.payload as { turnEnd?: boolean }).turnEnd === true).length,
+    1,
+    "exactly one turnEnd checkpoint keeps model coverage intact",
+  );
+  assert.deepEqual(await sessions.getTranscriptEntries(session.id), entries);
+  assert.equal(await sessions.tapeCoverage(session.id), entries.at(-1)!.seq);
+
+  assert.equal(await recordRunFailureEntry(sessions, failedRun()), false, "recording is idempotent");
+  assert.equal((await sessions.getEntries(session.id)).length, 1);
+});
+
+test("an orchestrator-recorded in-turn failure suppresses the onTerminal entry", async () => {
+  const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
+  const { sessions, session } = await failureSessions();
+  const { lease } = await sessions.acquireLease(session.id);
+  await sessions.append(lease!, {
+    type: "system",
+    payload: { kind: "turn_failure", message: "already recorded by the turn", runId: "r-1" },
+    scopeLabel: session.scopeId,
+  });
+  await sessions.releaseLease(lease!);
+
+  assert.equal(await recordRunFailureEntry(sessions, failedRun()), false);
+  assert.equal((await sessions.getEntries(session.id)).length, 1, "no duplicate entry");
+});
+
+test("a web-drain-recorded failure delivery suppresses the onTerminal entry by its key", async () => {
+  const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
+  const { sessions, session } = await failureSessions();
+  const { lease } = await sessions.acquireLease(session.id);
+  await sessions.append(lease!, {
+    type: "system",
+    payload: { kind: "turn_failure", message: "recorded at the web drain", deliveryKey: "run:r-1" },
+    scopeLabel: session.scopeId,
+  });
+  await sessions.releaseLease(lease!);
+
+  assert.equal(await recordRunFailureEntry(sessions, failedRun()), false);
+  assert.equal((await sessions.getEntries(session.id)).length, 1);
+});
+
+test("a done run records nothing", async () => {
+  const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
+  const { sessions, session } = await failureSessions();
+  assert.equal(await recordRunFailureEntry(sessions, run({ sessionId: "slack:D1" })), false);
+  assert.equal((await sessions.getEntries(session.id)).length, 0);
+});
+
+test("wired stores: a parked Slack run gets both the durable session entry and the recovery note", async () => {
+  const { sessions, session } = await failureSessions();
+  const { runs } = createMemoryRunStore();
+  const deliveries = createDeliveryStore();
+  wireRunResultDeliveries(runs, deliveries, undefined, undefined, sessions);
+
+  const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 })).run;
+  const claimed = await runs.claim("w1", 5_000);
+  await runs.fail(parked.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
+
+  for (let i = 0; i < 50 && (await sessions.getEntries(session.id)).length === 0; i++) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  const entries = await sessions.getEntries(session.id);
+  assert.equal(entries.length, 1, "the run's own session carries the failure durably");
+  assert.deepEqual(entries[0]!.payload, {
+    kind: "turn_failure",
+    message: "I couldn't finish that turn: something went wrong on my end",
+    runId: parked.id,
+  });
+
+  const pending = await deliveries.pending("slack");
+  assert.equal(pending.length, 1, "the Slack note still goes out alongside the entry");
+  assert.match(pending[0]!.text, /couldn't finish/);
+});
+
+test("run result delivery identifies the exact source session for shared attachments", () => {
+  const delivery = runResultDelivery(
+    run({ result: { status: "ok", sessionId: "source-session", reply: "File ready", sourceAssistantEntrySeq: 7 } }),
+  );
+  assert.equal(delivery?.provenance.sourceSessionId, "source-session");
+  assert.equal(delivery?.provenance.sourceAssistantEntrySeq, 7);
+});
+
+test("private session turns cannot deliver even with a stale destination", () => {
+  assert.equal(
+    runResultDelivery(run({ request: { ...turn("private", "C9:171.001"), privateSessionMessage: true } })),
+    null,
+  );
+});
+
+test("failed internal swarm notifications never append user-facing failure entries", async () => {
+  const failed = run({ status: "failed", result: { status: "failed", reason: "swarm service unavailable" } });
+  failed.request.swarm = { swarmId: "root", recipientId: "root", messageId: "message" };
+  const sessions = {
+    getByThread: async () => {
+      throw new Error("must not access the transcript");
+    },
+  } as unknown as TurnFailureSessions;
+  assert.equal(await recordRunFailureEntry(sessions, failed), false);
+});
+
+for (const surface of ["slack", "web"] as const) {
+  for (const result of [
+    { status: "ok", reply: "INTERNAL_CHILD_REPORT" },
+    { status: "failed", reason: "internal child failure" },
+    { status: "refused", refusalKind: "security_quarantine", reason: "internal screening" },
+    { status: "pending_approval", pendingApprovals: [{ requestId: "a", command: "cmd", reason: "approval" }] },
+  ] satisfies TurnResult[]) {
+    test(`${surface}: child ${result.status} never becomes an automatic public delivery`, () => {
+      const threadRef = "agent:main:subagent:child";
+      assert.equal(
+        runResultDelivery(
+          run({
+            sessionId: threadRef,
+            status: result.status === "failed" ? "failed" : "done",
+            request: {
+              ...turn("child", "D1"),
+              surface,
+              addressed: true,
+              conversation: { kind: "dm", threadRef, audience: [actor] },
+            },
+            result,
+          }),
+        ),
+        null,
+      );
+    });
+  }
+}

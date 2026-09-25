@@ -36,6 +36,10 @@ describe("environment verbs (list / create / attach, owner-gated)", async () => 
         signingSecret: SECRET,
       }),
     );
+    await built.directory.replaceChannels(
+      [{ channelId: "C-eng", name: "eng", isPrivate: false }],
+      [{ channelId: "C-eng", principalId: "U-owner" }],
+    );
     server = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;

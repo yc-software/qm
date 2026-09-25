@@ -1,8 +1,13 @@
+import "./instrument.ts";
 import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
+import { shutdownOnUncaught } from "../util/process-guard.ts";
+import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
 
 const config = loadConfig();
 const built = buildApp(config);
+await migrateRegisteredPgSchemas(config.databaseUrl);
+await built.sandboxResources.initialize();
 await built.config.hydrate?.();
 await built.identity.hydrate();
 const { runtime } = built;
@@ -18,3 +23,4 @@ function shutdown(signal: string): void {
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+shutdownOnUncaught("qm:worker", shutdown);

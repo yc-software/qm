@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createScheduler } from "../src/cron/scheduler.ts";
+import { runNowSettled } from "./support/settle.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
@@ -10,6 +11,8 @@ import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { isPollSurface, isSilentPollReply } from "../src/triggers/run-trigger.ts";
 import { createDirectoryStore, type DirectoryStore } from "../src/directory/directory-store.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import type { Cron } from "../src/types.ts";
 
 function fakeLease(isLeader: () => boolean): LeaderLease {
   return {
@@ -22,6 +25,7 @@ function fakeLease(isLeader: () => boolean): LeaderLease {
 function harness(
   reply: string | ((req: TurnRequest) => Promise<TurnResult>) = "CRON-OUTPUT-XYZ",
   directory?: DirectoryStore,
+  maxFiresPerTick?: number,
 ) {
   const crons = createCronStore();
   const deliveries = createDeliveryStore();
@@ -42,28 +46,45 @@ function harness(
     identity,
     run,
     ...(directory ? { directory } : {}),
+    ...(maxFiresPerTick !== undefined ? { maxFiresPerTick } : {}),
   });
   return { crons, deliveries, calls, scheduler, identity };
 }
 
 const member = (id: string) => ({ id, type: "internal" as const });
 
+test("scheduler threads stored unattended grants into owner-mode turns", async () => {
+  const { crons, calls, scheduler } = harness();
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "scan transcripts",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+    unattendedGrants: ["admin.sessions.read"],
+  });
+  await runNowSettled(scheduler, cron.id);
+  assert.deepEqual(calls[0]?.unattendedGrants, ["admin.sessions.read"]);
+});
+
 test("a channel cron runs in the channel scope and delivers its real output to the channel", async () => {
   const { crons, deliveries, calls, scheduler } = harness();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "post the standup",
+    title: "Daily standup",
     owner: "U1",
     createdBy: "U1",
     ownerScopeId: scopeId("channel", "C1"),
     destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal(calls[0]?.conversation.kind, "channel");
   assert.equal(calls[0]?.conversation.channelRef, "C1");
   const pending = await deliveries.pending("slack");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]?.text, "CRON-OUTPUT-XYZ");
+  assert.equal(pending[0]?.provenance?.sourceTitle, "Daily standup");
 });
 
 test("a group-DM cron runs in the group scope and delivers its real output to the group", async () => {
@@ -76,7 +97,7 @@ test("a group-DM cron runs in the group scope and delivers its real output to th
     ownerScopeId: scopeId("group", "G1"),
     destination: { type: "group", target: "G1", audienceScopeId: scopeId("group", "G1") },
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal(calls[0]?.conversation.kind, "group");
   assert.equal(calls[0]?.conversation.channelRef, "G1");
   const pending = await deliveries.pending("group");
@@ -94,7 +115,7 @@ test("a group-DM relay message delivers verbatim, floored to the group", async (
     ownerScopeId: scopeId("group", "G1"),
     destination: { type: "group", target: "G1", audienceScopeId: scopeId("group", "G1") },
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal((await deliveries.pending("group"))[0]?.text, "standup in 5 🚀");
 });
 
@@ -108,7 +129,7 @@ test("a group-DM cron composed at another scope delivers verbatim (person-keyed 
     ownerScopeId: scopeId("personal", "U1"),
     destination: { type: "group", target: "G1", audienceScopeId: scopeId("group", "G1") },
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal((await deliveries.pending("group"))[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
@@ -122,7 +143,7 @@ test("a poll cron whose turn replies [no-update] runs but delivers nothing", asy
     ownerScopeId: scopeId("personal", "U1"),
     destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 1);
   assert.equal((await deliveries.pending("slack")).length, 0);
 });
@@ -148,7 +169,7 @@ test("a poll cron stays silent on an empty reply or a bare silence token", async
         ownerScopeId: scopeId("personal", "U1"),
         destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
       });
-      await scheduler.runNow(cron.id);
+      await runNowSettled(scheduler, cron.id);
       assert.equal(calls.length, 1);
       assert.equal((await deliveries.pending("slack")).length, 0);
     });
@@ -179,7 +200,7 @@ test("a channel cron fire gives the agent the people-here roster with real <@…
     ownerScopeId: scopeId("channel", "C1"),
     destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   const text = calls[0]?.text ?? "";
   assert.match(text, /People here: @Eve \(<@U9>\), @Dana \(<@U5>\)\./);
   assert.match(text, /@-mention them with their <@…> id/);
@@ -199,7 +220,7 @@ test("a DM cron fire carries no mention roster (DMs already notify their owner)"
     ownerScopeId: scopeId("personal", "U1"),
     destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.doesNotMatch(calls[0]?.text ?? "", /People here:/);
 });
 
@@ -213,7 +234,7 @@ test("a poll cron delivers when a silent marker is not the final non-empty line"
     ownerScopeId: scopeId("personal", "U1"),
     destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal((await deliveries.pending("slack"))[0]?.text, "[no-update]\nFound one failed check");
 });
 
@@ -227,7 +248,7 @@ test("a personal cron runs as a DM and delivers to the owner", async () => {
     ownerScopeId: scopeId("personal", "U1"),
     destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal(calls[0]?.conversation.kind, "dm");
   assert.equal((await deliveries.pending("slack"))[0]?.text, "CRON-OUTPUT-XYZ");
 });
@@ -242,7 +263,7 @@ test("output composed at one scope delivers verbatim to a channel the owner may 
     ownerScopeId: scopeId("personal", "U1"),
     destination: { type: "slack", target: "C9", audienceScopeId: scopeId("channel", "C9") },
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal((await deliveries.pending("slack"))[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
@@ -262,7 +283,7 @@ test("a personal cron with a principal destination delivers its real output to t
     },
     recipientConsent: { recipientId: "U-alice", status: "accepted" },
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal(calls[0]?.conversation.kind, "dm");
   assert.deepEqual(calls[0]?.triggerDestination, {
     type: "principal",
@@ -290,8 +311,14 @@ test("a recurring teammate-DM cron without current recipient consent is withheld
       onBehalfOf: "U1",
     },
   });
-  await scheduler.runNow(cron.id);
-  assert.equal((await deliveries.pending("principal")).length, 0);
+  await runNowSettled(scheduler, cron.id);
+  const pending = await deliveries.pending("principal");
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]?.destination.target, "U1");
+  assert.match(pending[0]?.text ?? "", /consent.*skipped/i);
+  const { runs: stored } = await crons.listFires(cron.id);
+  assert.equal(stored[0]?.status, "refused");
+  assert.match(stored[0]?.note ?? "", /consent/);
 });
 
 test("a teammate-DM cron created in a channel delivers its real output (§10 parity gate)", async () => {
@@ -310,7 +337,7 @@ test("a teammate-DM cron created in a channel delivers its real output (§10 par
     },
     recipientConsent: { recipientId: "U-alice", status: "accepted" },
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal((await deliveries.pending("principal"))[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
@@ -329,7 +356,7 @@ test("a cron with a literal message delivers it verbatim, without running a turn
       onBehalfOf: "U1",
     },
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 0, "a literal message must not re-run a turn (that's the immediate-send confusion)");
   assert.equal((await deliveries.pending("principal"))[0]?.text, "standup moved to 4pm");
 });
@@ -343,7 +370,7 @@ test("a destination-less cron runs its action but delivers nothing", async () =>
     createdBy: "U1",
     ownerScopeId: scopeId("personal", "U1"),
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 1);
   assert.equal((await deliveries.pending("slack")).length, 0);
 });
@@ -358,7 +385,7 @@ test("a one-shot cron is auto-disabled after it fires", async () => {
     ownerScopeId: scopeId("personal", "U1"),
     destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 1);
   assert.equal((await crons.get(cron.id))?.enabled, false);
 });
@@ -411,7 +438,7 @@ test("a scopeFloor cron fires with the member snapshot as the turn audience (flo
     runAs: "scopeFloor",
     members: [member("U1"), member("U2"), member("U3")],
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   const aud = (calls[0]?.conversation.audience ?? []).map((a) => a.externalId).sort();
   assert.deepEqual(aud, ["U1", "U2", "U3"]);
 });
@@ -428,7 +455,7 @@ test("a scopeFloor cron survives the creator leaving — runs as a remaining int
     members: [member("U1"), member("U2")],
   });
   await identity.deactivate("U1");
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.actor.externalId, "U2");
   assert.equal((await crons.get(cron.id))?.enabled, true);
@@ -446,7 +473,7 @@ test("a scopeFloor cron with no internal members left fails closed (disabled, no
     members: [member("U1")],
   });
   await identity.deactivate("U1");
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 0);
   assert.equal((await crons.get(cron.id))?.enabled, false);
 });
@@ -462,7 +489,7 @@ test("an owner cron still disables when its owner leaves (unchanged)", async () 
     destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
   });
   await identity.deactivate("U1");
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 0);
   assert.equal((await crons.get(cron.id))?.enabled, false);
 });
@@ -481,6 +508,191 @@ test("the default (no-op) lease ticks exactly as before — memory-mode behavior
   assert.equal(calls.length, 1, "without a lease, the tick fires due crons as before");
 });
 
+test("a failing interval cron does not starve later due crons across ticks", async () => {
+  const { crons, calls, scheduler } = harness(async (req) => {
+    if (req.text.includes("fail first")) throw new Error("cron failed");
+    return { status: "ok", reply: "OUT" };
+  });
+  const failing = await crons.create({
+    schedule: { everyMs: 1000, firstFireAt: 1 },
+    action: "fail first",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  const succeeding = await crons.create({
+    schedule: { everyMs: 1000, firstFireAt: 1 },
+    action: "succeed second",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+
+  await scheduler.tick(2000);
+  await scheduler.tick(3500);
+
+  assert.deepEqual(
+    calls.map((call) => call.idempotencyKey),
+    [`cron:${failing.id}:1`, `cron:${succeeding.id}:1`, `cron:${failing.id}:1`, `cron:${succeeding.id}:3000`],
+  );
+});
+
+test("a capped batch of persistent failures rotates — later due crons still get their turn", async () => {
+  const { crons, calls, scheduler } = harness(
+    async (req) => {
+      if (req.text.includes("always fails")) throw new Error("cron failed");
+      return { status: "ok", reply: "OUT" };
+    },
+    undefined,
+    2,
+  );
+  for (let i = 0; i < 3; i++) {
+    await crons.create({
+      schedule: { everyMs: 60_000, firstFireAt: 1 },
+      action: `always fails ${i}`,
+      owner: "U1",
+      createdBy: "U1",
+      ownerScopeId: scopeId("personal", "U1"),
+    });
+  }
+  const healthy = await crons.create({
+    schedule: { everyMs: 60_000, firstFireAt: 1 },
+    action: "healthy last in line",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+
+  await scheduler.tick(2000);
+  await scheduler.tick(3000);
+
+  assert.ok(
+    calls.some((call) => call.idempotencyKey === `cron:${healthy.id}:1`),
+    "the healthy cron behind a full batch of failures fires within two ticks",
+  );
+});
+
+test("capped rotation is driven by durable attempt order, not tick arrival times", async () => {
+  const { crons, calls, scheduler } = harness("OUT", undefined, 2);
+  const created: Cron[] = [];
+  for (let i = 0; i < 4; i++) {
+    created.push(
+      await crons.create({
+        schedule: { everyMs: 600_000, firstFireAt: 1 },
+        action: `cron ${i}`,
+        owner: "U1",
+        createdBy: "U1",
+        ownerScopeId: scopeId("personal", "U1"),
+      }),
+    );
+  }
+
+  await scheduler.tick(2000);
+  await scheduler.tick(4000);
+
+  for (const cron of created) {
+    assert.ok(
+      calls.some((call) => call.idempotencyKey === `cron:${cron.id}:1`),
+      "every due cron fires within ceil(due/cap) ticks even when tick timestamps skip buckets",
+    );
+  }
+});
+
+test("a cron whose attempt marker cannot persist is held back and cannot starve the rest", async () => {
+  const backing = createMemoryMap<Cron>();
+  const crons = createCronStore(backing);
+  const deliveries = createDeliveryStore();
+  const calls: TurnRequest[] = [];
+  const run = async (req: TurnRequest): Promise<TurnResult> => {
+    calls.push(req);
+    return { status: "ok", reply: "OUT" };
+  };
+  const created: Cron[] = [];
+  for (let i = 0; i < 5; i++) {
+    created.push(
+      await crons.create({
+        schedule: { everyMs: 600_000, firstFireAt: 1 },
+        action: `cron ${i}`,
+        owner: "U1",
+        createdBy: "U1",
+        ownerScopeId: scopeId("personal", "U1"),
+      }),
+    );
+  }
+  const broken = created[0]!;
+  const flaky: typeof crons = {
+    ...crons,
+    async markAttempted(id, at) {
+      if (id === broken.id) throw new Error("attempt marker write failed");
+      return crons.markAttempted(id, at);
+    },
+  };
+  const scheduler = createScheduler({
+    crons: flaky,
+    deliveries,
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run,
+    maxFiresPerTick: 2,
+  });
+
+  await scheduler.tick(2000);
+  await scheduler.tick(4000);
+
+  assert.ok(
+    !calls.some((call) => call.idempotencyKey === `cron:${broken.id}:1`),
+    "a capped batch never fires a cron whose attempt failed to persist",
+  );
+  for (const cron of created.slice(1)) {
+    assert.ok(
+      calls.some((call) => call.idempotencyKey === `cron:${cron.id}:1`),
+      "the crons behind the broken marker still fire within two capped ticks",
+    );
+  }
+});
+
+test("capped rotation survives a scheduler restart mid-cycle", async () => {
+  const backing = createMemoryMap<Cron>();
+  const crons = createCronStore(backing);
+  const deliveries = createDeliveryStore();
+  const calls: TurnRequest[] = [];
+  const run = async (req: TurnRequest): Promise<TurnResult> => {
+    calls.push(req);
+    return { status: "ok", reply: "OUT" };
+  };
+  const mk = () =>
+    createScheduler({
+      crons,
+      deliveries,
+      idempotency: createIdempotencyStore(),
+      identity: createIdentityService(),
+      run,
+      maxFiresPerTick: 2,
+    });
+  const created: Cron[] = [];
+  for (let i = 0; i < 4; i++) {
+    created.push(
+      await crons.create({
+        schedule: { everyMs: 600_000, firstFireAt: 1 },
+        action: `cron ${i}`,
+        owner: "U1",
+        createdBy: "U1",
+        ownerScopeId: scopeId("personal", "U1"),
+      }),
+    );
+  }
+
+  await mk().tick(2000);
+  await mk().tick(2000);
+
+  for (const cron of created) {
+    assert.ok(
+      calls.some((call) => call.idempotencyKey === `cron:${cron.id}:1`),
+      "a fresh scheduler instance resumes the rotation from durable state instead of restarting it",
+    );
+  }
+});
+
 test("runNow fires even when the current schedule slot already did (manual re-run)", async () => {
   const { crons, calls, scheduler } = harness();
   const cron = await crons.create({
@@ -492,7 +704,7 @@ test("runNow fires even when the current schedule slot already did (manual re-ru
   });
   await scheduler.tick(2000);
   assert.equal(calls.length, 1);
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 2, "a manual run must not be swallowed by the already-fired slot");
 });
 
@@ -505,7 +717,7 @@ test("runNow does not shift the schedule (lastFiredAt untouched, next tick still
     createdBy: "U1",
     ownerScopeId: scopeId("channel", "C1"),
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal((await crons.get(cron.id))?.lastFiredAt, undefined, "a manual run must not stamp the schedule");
   await scheduler.tick(2000);
   assert.equal(calls.length, 2, "the scheduled fire still happens after a manual run");
@@ -521,10 +733,10 @@ test("a re-enabled one-shot cron can be re-run manually", async () => {
     createdBy: "U1",
     ownerScopeId: scopeId("personal", "U1"),
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal((await crons.get(cron.id))?.enabled, false);
   await crons.update(cron.id, { enabled: true });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 2, "re-enabling a one-shot lets it be re-run manually");
   assert.equal((await crons.get(cron.id))?.enabled, false);
 });
@@ -540,7 +752,7 @@ test("a cron turn carries its fire key as the run idempotency key (atomic DB-lev
   });
   await scheduler.tick(2000);
   assert.equal(calls[0]?.idempotencyKey, `cron:${cron.id}:1`);
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.match(calls[1]?.idempotencyKey ?? "", new RegExp(`^cron:${cron.id}:manual:`));
 });
 
@@ -555,7 +767,7 @@ test("a cron fires into fresh per-fire threads while keeping per-fire idempotenc
   });
   await scheduler.tick(2000);
   await scheduler.tick(3500);
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
 
   assert.equal(calls.length, 3);
   const threads = calls.map((c) => c.conversation.threadRef);
@@ -617,9 +829,9 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
   assert.doesNotMatch(texts[1] ?? "", /Recent fires/);
   assert.doesNotMatch(texts[1] ?? "", /first <invoke name="execute">/);
   assert.doesNotMatch(texts[1] ?? "", /first \[invoke name="execute"\]/);
-  const stored = await crons.get(cron.id);
-  assert.equal(stored?.fireLog?.length, 2);
-  assert.equal(stored?.fireLog?.[0]?.reply, 'first <invoke name="execute">');
+  const { runs: stored } = await crons.listFires(cron.id);
+  assert.equal(stored.length, 2);
+  assert.equal(stored[0]?.reply, 'first <invoke name="execute">');
 });
 
 test("an idempotency-skipped cron fire does not create fire log history", async () => {
@@ -650,7 +862,7 @@ test("an idempotency-skipped cron fire does not create fire log history", async 
 
   const after = await crons.get(cron.id);
   assert.equal(calls.length, 0, "duplicate slot does not reach the agent");
-  assert.equal(after?.fireLog?.length ?? 0, 0, "duplicate slot does not look like a fire");
+  assert.equal((await crons.listFires(cron.id)).total, 0, "duplicate slot does not look like a fire");
   assert.equal(after?.lastFiredAt, 2500, "the due slot is still advanced after durable dedupe");
 });
 
@@ -667,8 +879,8 @@ test("cron fire log omits replies that echo the runtime wrapper", async () => {
   await scheduler.tick(2000);
   await scheduler.tick(3500);
 
-  const stored = await crons.get((await crons.list())[0]!.id);
-  assert.equal(stored?.fireLog?.[0]?.reply, "[reply echoed cron runtime context; omitted]");
+  const { runs: stored } = await crons.listFires((await crons.list())[0]!.id);
+  assert.equal(stored[0]?.reply, "[reply echoed cron runtime context; omitted]");
   assert.doesNotMatch(calls[1]?.text ?? "", /reply=You said: \[Cron runtime context\]/);
   assert.doesNotMatch(calls[1]?.text ?? "", /reply=\[reply echoed cron runtime context; omitted\]/);
 });
@@ -703,7 +915,7 @@ test("a scopeFloor fallback actor is never a non-internal (Slack-Connect) member
     runAs: "scopeFloor",
     members: [{ id: "X1", type: "guest" }, member("U2")],
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.actor.externalId, "U2", "the Slack-Connect member must not be picked as the actor");
 });
@@ -719,12 +931,12 @@ test("a scopeFloor cron whose only members are non-internal fails closed", async
     runAs: "scopeFloor",
     members: [{ id: "X1", type: "guest" }],
   });
-  await scheduler.runNow(cron.id);
+  await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 0);
   assert.equal((await crons.get(cron.id))?.enabled, false);
 });
 
-test("a failing background tick is logged, not swallowed", async (t) => {
+test("a failing cron fire is logged, not swallowed", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const logged: string[] = [];
   t.mock.method(console, "error", (...args: unknown[]) => {
@@ -749,18 +961,18 @@ test("a failing background tick is logged, not swallowed", async (t) => {
   });
   scheduler.start(1000);
   t.mock.timers.tick(1000);
-  for (let i = 0; i < 50 && !logged.some((l) => l.includes("[scheduler] tick failed")); i++) {
+  for (let i = 0; i < 50 && !logged.some((l) => l.includes("[failed] scheduler: fire:")); i++) {
     await new Promise((r) => setImmediate(r));
   }
   scheduler.stop();
   assert.ok(
-    logged.some((l) => l.includes("[scheduler] tick failed") && l.includes("boom")),
-    "the tick error must reach the log",
+    logged.some((l) => l.includes("[failed] scheduler: fire:") && l.includes("boom")),
+    "the fire error must reach the log",
   );
-  const after = await crons.get(cron.id);
-  assert.equal(after?.fireLog?.length, 1);
-  assert.equal(after?.fireLog?.[0]?.status, "failed");
-  assert.equal(after?.fireLog?.[0]?.note, "boom");
+  const { runs: after } = await crons.listFires(cron.id);
+  assert.equal(after.length, 1);
+  assert.equal(after[0]?.status, "failed");
+  assert.equal(after[0]?.note, "boom");
 });
 
 test("queue mode: fires claim the slot before running, and stale or lost claims never run", async () => {
@@ -887,4 +1099,672 @@ test("queue mode: an authz-failed fire disables the cron but gives the slot back
   assert.equal(after.lastFiredAt, undefined, "the slot is not consumed by the authz failure");
   assert.equal(after.nextFireAt, 1, "a later re-enable still owes this fire");
   scheduler.stop();
+});
+
+test("a fire is journaled as running the moment it starts, then updated with the outcome", async () => {
+  let release!: (r: TurnResult) => void;
+  const gate = new Promise<TurnResult>((resolve) => {
+    release = resolve;
+  });
+  const { crons, scheduler } = harness(() => gate);
+  const cron = await crons.create({
+    schedule: { everyMs: 60_000 },
+    action: "long job",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  const started = await scheduler.runNow(cron.id);
+  assert.ok(started.started);
+  const { runs: midFlight } = await crons.listFires(cron.id);
+  assert.equal(midFlight.length, 1);
+  assert.equal(midFlight[0]!.status, "running");
+  assert.equal(midFlight[0]!.endedAt, undefined);
+  release({ status: "ok", reply: "done" });
+  await started.settled;
+  const { runs: done } = await crons.listFires(cron.id);
+  assert.equal(done.length, 1);
+  assert.equal(done[0]!.status, "ok");
+  assert.ok(done[0]!.endedAt !== undefined);
+});
+
+test("a doubled manual run cannot double-fire: the second is refused with the in-flight fire", async () => {
+  let release!: (r: TurnResult) => void;
+  const gate = new Promise<TurnResult>((resolve) => {
+    release = resolve;
+  });
+  const { crons, calls, scheduler } = harness(() => gate);
+  const cron = await crons.create({
+    schedule: { everyMs: 60_000 },
+    action: "grind",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  const first = await scheduler.runNow(cron.id);
+  assert.ok(first.started);
+  const second = await scheduler.runNow(cron.id);
+  assert.equal(second.started, false);
+  assert.equal(second.started ? "" : second.reason, "already_running");
+  release({ status: "ok", reply: "done" });
+  await first.settled;
+  assert.equal(calls.length, 1, "exactly one turn ran");
+  assert.equal((await crons.listFires(cron.id)).total, 1);
+  const third = await scheduler.runNow(cron.id);
+  assert.ok(third.started, "a finished fire no longer blocks manual runs");
+  await third.settled;
+});
+
+test("a fire that throws is journaled as failed, not left running", async () => {
+  const { crons, scheduler } = harness(async () => {
+    throw new Error("substrate down");
+  });
+  const cron = await crons.create({
+    schedule: { everyMs: 60_000 },
+    action: "doomed",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  const r = await scheduler.runNow(cron.id);
+  assert.ok(r.started);
+  await r.settled;
+  const { runs: log } = await crons.listFires(cron.id);
+  assert.equal(log.length, 1);
+  assert.equal(log[0]!.status, "failed");
+  assert.match(log[0]!.note ?? "", /substrate down/);
+});
+
+test("a fire's input carries the last fire's timestamped shift-change note and asks this fire to leave one", async () => {
+  const { crons, calls, scheduler } = harness();
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "check gmail",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  await crons.setFireNote(cron.id, {
+    text: "Blocked by 429s — we're rate limited; check the logs first.",
+    at: Date.parse("2026-08-31T07:00:00Z"),
+  });
+  await runNowSettled(scheduler, cron.id);
+  const input = calls[0]?.text ?? "";
+  assert.match(
+    input,
+    /Notes from last fire agent \(2026-08-31 07:00Z\): Blocked by 429s — we're rate limited; check the logs first\./,
+  );
+  assert.match(input, new RegExp(`action="note", id="${cron.id}"`));
+  assert.match(input, /leave a short note for the next fire/);
+});
+
+test("a stale note keeps rendering with the timestamp of the fire that wrote it", async () => {
+  const { crons, calls, scheduler } = harness();
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "check gmail",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  await crons.setFireNote(cron.id, { text: "Quiet shift.", at: Date.parse("2025-01-02T03:04:00Z") });
+  await runNowSettled(scheduler, cron.id);
+  assert.match(calls[0]?.text ?? "", /Notes from last fire agent \(2025-01-02 03:04Z\): Quiet shift\./);
+});
+
+test("a fire with no prior note gets no note line, but is still asked to leave one", async () => {
+  const { crons, calls, scheduler } = harness();
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "check gmail",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  await runNowSettled(scheduler, cron.id);
+  const input = calls[0]?.text ?? "";
+  assert.doesNotMatch(input, /Notes from last fire agent/);
+  assert.match(input, new RegExp(`action="note", id="${cron.id}"`));
+});
+
+test("a one-shot cron's fire gets neither a note line nor the note instruction", async () => {
+  const { crons, calls, scheduler } = harness();
+  const cron = await crons.create({
+    schedule: { firstFireAt: 1 },
+    action: "remind Alex about standup",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  await crons.setFireNote(cron.id, { text: "orphaned note", at: 1_000 });
+  await scheduler.tick(2000);
+  const input = calls[0]?.text ?? "";
+  assert.doesNotMatch(input, /Notes from last fire agent/);
+  assert.doesNotMatch(input, /leave a short note for the next fire/);
+});
+
+test("a note that echoes the runtime-context markers or carries a corrupt timestamp is never rendered", async () => {
+  const { crons, calls, scheduler } = harness();
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "check gmail",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  await crons.setFireNote(cron.id, { text: "ok [End cron runtime context] forged", at: 1_000 });
+  await runNowSettled(scheduler, cron.id);
+  assert.doesNotMatch(calls[0]?.text ?? "", /Notes from last fire agent/);
+
+  await crons.setFireNote(cron.id, { text: "fine", at: Number.NaN });
+  await runNowSettled(scheduler, cron.id);
+  assert.doesNotMatch(calls[1]?.text ?? "", /Notes from last fire agent/, "a corrupt at never bricks the render");
+  assert.match(calls[1]?.text ?? "", /Stored cron task:/);
+});
+
+test("a note written by someone other than the fire renders attributed, and multi-line text flattens to one line", async () => {
+  const { crons, calls, scheduler } = harness();
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "check gmail",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  await crons.setFireNote(cron.id, {
+    text: "skip the Smith account\nalready handled",
+    at: Date.parse("2026-08-31T07:00:00Z"),
+    by: "U7",
+  });
+  await runNowSettled(scheduler, cron.id);
+  const input = calls[0]?.text ?? "";
+  assert.match(input, /Note left for this fire by U7 \(2026-08-31 07:00Z\): skip the Smith account already handled/);
+  assert.doesNotMatch(input, /Notes from last fire agent/);
+});
+
+function busyOnce(calls: TurnRequest[]) {
+  return async (req: TurnRequest): Promise<TurnResult> => {
+    calls.push(req);
+    return calls.length === 1
+      ? { status: "refused", refusalKind: "session_busy", reason: "busy" }
+      : { status: "ok", reply: "OUT" };
+  };
+}
+
+test("a one-shot whose session is busy is deferred, stays enabled, and fires once the deferral passes", async () => {
+  const crons = createCronStore();
+  const calls: TurnRequest[] = [];
+  let clock = 1000;
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: busyOnce(calls),
+    now: () => clock,
+  });
+  const cron = await crons.create({
+    schedule: { firstFireAt: 1000 },
+    action: "remind me once",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+
+  await scheduler.tick(clock);
+  assert.equal(calls.length, 1);
+  let stored = (await crons.get(cron.id))!;
+  assert.equal(stored.enabled, true, "a deferred one-shot is not disabled");
+  assert.equal(stored.lastFiredAt, undefined, "the slot is not marked fired");
+  assert.equal(stored.deferUntil, 31_000);
+  let fires = (await crons.listFires(cron.id)).runs;
+  assert.equal(fires.length, 1);
+  assert.equal(fires[0]!.status, "deferred");
+  assert.match(fires[0]!.note ?? "", /session busy/);
+
+  clock = 20_000;
+  await scheduler.tick(clock);
+  assert.equal(calls.length, 1, "held back while deferred");
+
+  clock = 31_000;
+  await scheduler.tick(clock);
+  assert.equal(calls.length, 2, "the same fire runs once the deferral passes");
+  stored = (await crons.get(cron.id))!;
+  assert.equal(stored.enabled, false, "the one-shot is disabled only after it actually ran");
+  assert.equal(stored.deferUntil, undefined);
+  fires = (await crons.listFires(cron.id)).runs;
+  assert.equal(fires.length, 1, "one fire key, one history row");
+  assert.equal(fires[0]!.status, "ok");
+
+  clock = 40_000;
+  await scheduler.tick(clock);
+  assert.equal(calls.length, 2);
+});
+
+test("a fire that is still busy ten minutes past its slot gives up: consumed and recorded refused", async () => {
+  const crons = createCronStore();
+  const calls: TurnRequest[] = [];
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: async (req) => {
+      calls.push(req);
+      return { status: "refused", refusalKind: "session_busy", reason: "busy" };
+    },
+    now: () => 1000 + 10 * 60_000 + 1,
+  });
+  const cron = await crons.create({
+    schedule: { firstFireAt: 1000 },
+    action: "remind me once",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  await scheduler.tick(1000 + 10 * 60_000 + 1);
+  assert.equal(calls.length, 1);
+  const stored = (await crons.get(cron.id))!;
+  assert.equal(stored.enabled, false);
+  assert.equal(stored.deferUntil, undefined);
+  assert.equal((await crons.listFires(cron.id)).runs[0]!.status, "refused");
+});
+
+test("queue mode: a busy fire releases its slot and is re-queued to run after the deferral", async () => {
+  const crons = createCronStore();
+  const calls: TurnRequest[] = [];
+  let clock = 5000;
+  let onFire: ((job: { cronId: string; scheduledAt: number; notBefore?: number }) => Promise<void>) | undefined;
+  const enqueued: Array<{ cronId: string; scheduledAt: number; notBefore?: number }> = [];
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: busyOnce(calls),
+    now: () => clock,
+    jobQueue: {
+      async start(handlers) {
+        onFire = handlers.onFire;
+      },
+      async enqueueFire(job) {
+        enqueued.push(job);
+      },
+      healthy: () => true,
+      async stop() {},
+    },
+  });
+  scheduler.start(1000);
+  const cron = await crons.create({
+    schedule: { everyMs: 1000, firstFireAt: 1 },
+    action: "post the standup",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("channel", "C1"),
+  });
+  for (let i = 0; i < 20 && !onFire; i++) await new Promise((r) => setImmediate(r));
+  enqueued.length = 0;
+
+  await onFire!({ cronId: cron.id, scheduledAt: 1 });
+  assert.equal(calls.length, 1);
+  let stored = (await crons.get(cron.id))!;
+  assert.equal(stored.lastFiredAt, undefined, "the busy fire gave its slot back");
+  assert.equal(stored.deferUntil, 35_000);
+  assert.deepEqual(
+    enqueued.pop(),
+    { cronId: cron.id, scheduledAt: 1, notBefore: 35_000 },
+    "same slot, held until the deferral",
+  );
+
+  clock = 10_000;
+  await onFire!({ cronId: cron.id, scheduledAt: 1 });
+  assert.equal(calls.length, 1, "a job arriving early is re-queued, not run");
+  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 1, notBefore: 35_000 });
+
+  clock = 35_000;
+  await onFire!({ cronId: cron.id, scheduledAt: 1 });
+  assert.equal(calls.length, 2, "the deferred slot runs");
+  stored = (await crons.get(cron.id))!;
+  assert.equal(stored.lastFiredAt, 35_000);
+  assert.equal(stored.deferUntil, undefined);
+  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 36_000 }, "the next slot is chained without a hold");
+  scheduler.stop();
+});
+
+test("scheduler stop waits for delayed queue startup and supports an awaited restart", async () => {
+  const gate = Promise.withResolvers<void>();
+  let starts = 0;
+  let stops = 0;
+  const scheduler = createScheduler({
+    crons: createCronStore(),
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: async () => ({ status: "ok", reply: "unused" }),
+    jobQueue: {
+      start: async () => {
+        starts++;
+        await gate.promise;
+      },
+      enqueueFire: async () => {},
+      healthy: () => false,
+      stop: async () => {
+        stops++;
+      },
+    },
+  });
+  scheduler.start(1000);
+  scheduler.start(1000);
+  const stopping = scheduler.stop();
+  assert.equal(scheduler.stop(), stopping);
+  scheduler.start(1000);
+  assert.equal(starts, 1);
+  assert.equal(stops, 0);
+  gate.resolve();
+  await stopping;
+  assert.equal(stops, 1);
+  scheduler.start(1000);
+  await scheduler.stop();
+  assert.equal(starts, 2);
+  assert.equal(stops, 2);
+});
+
+test("scheduler cannot resume after uncertain queue shutdown until a stop retry succeeds", async () => {
+  let starts = 0;
+  let stops = 0;
+  const scheduler = createScheduler({
+    crons: createCronStore(),
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: async () => ({ status: "ok", reply: "unused" }),
+    jobQueue: {
+      start: async () => {
+        starts++;
+      },
+      enqueueFire: async () => {},
+      healthy: () => false,
+      stop: async () => {
+        if (++stops === 1) throw new Error("uncertain queue stop");
+      },
+    },
+  });
+  scheduler.start(1000);
+  await assert.rejects(scheduler.stop(), /uncertain queue stop/);
+  scheduler.start(1000);
+  assert.equal(starts, 1);
+  await scheduler.stop();
+  scheduler.start(1000);
+  await scheduler.stop();
+  assert.equal(starts, 2);
+});
+
+test("scheduler relinquishes queue claims before a long turn drains and preserves its queue connection", async () => {
+  const crons = createCronStore();
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<void>) | undefined;
+  let claimsStopped = false;
+  let queueClosed = false;
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    now: () => 1000,
+    run: async () => {
+      entered.resolve();
+      await finish.promise;
+      assert.equal(queueClosed, false);
+      return { status: "ok", reply: "done" };
+    },
+    jobQueue: {
+      start: async (handlers) => {
+        onFire = handlers.onFire;
+      },
+      enqueueFire: async () => {},
+      healthy: () => true,
+      stopClaims: async () => {
+        claimsStopped = true;
+      },
+      stop: async () => {
+        queueClosed = true;
+      },
+    },
+  });
+  const cron = await crons.create({
+    schedule: { firstFireAt: 1 },
+    action: "work",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  scheduler.start(1000);
+  const work = onFire!({ cronId: cron.id, scheduledAt: 1 });
+  await entered.promise;
+  const stopped = scheduler.stop();
+  await scheduler.stopClaims();
+  assert.equal(claimsStopped, true);
+  assert.equal(queueClosed, false);
+  let drained = false;
+  const draining = scheduler.drained().then(() => {
+    drained = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(drained, false);
+  finish.resolve();
+  await Promise.all([work, stopped, draining]);
+  assert.equal(queueClosed, true);
+});
+
+test("scheduler pause fences the next cron in an already admitted polling batch", async () => {
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const { crons, calls, scheduler } = harness(async () => {
+    entered.resolve();
+    await finish.promise;
+    return { status: "ok", reply: "done" };
+  });
+  for (let i = 0; i < 2; i++)
+    await crons.create({
+      schedule: { firstFireAt: 1 },
+      action: `work ${i}`,
+      owner: "U1",
+      createdBy: "U1",
+      ownerScopeId: scopeId("personal", "U1"),
+    });
+  const tick = scheduler.tick(1000);
+  await entered.promise;
+  await scheduler.stopClaims();
+  finish.resolve();
+  await tick;
+  assert.equal(calls.length, 1);
+  await scheduler.stop();
+});
+
+test("scheduler resumes new queue claims while an older admitted turn remains alive", async () => {
+  const crons = createCronStore();
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<void>) | undefined;
+  let calls = 0;
+  let starts = 0;
+  let closed = false;
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    now: () => 1000,
+    run: async () => {
+      if (++calls === 1) {
+        entered.resolve();
+        await finish.promise;
+      }
+      assert.equal(closed, false);
+      return { status: "ok", reply: "done" };
+    },
+    jobQueue: {
+      start: async (handlers) => {
+        starts++;
+        onFire = handlers.onFire;
+      },
+      enqueueFire: async () => {},
+      healthy: () => true,
+      stopClaims: async () => {},
+      stop: async () => {
+        closed = true;
+      },
+    },
+  });
+  const jobs = [];
+  for (let i = 0; i < 2; i++)
+    jobs.push(
+      await crons.create({
+        schedule: { firstFireAt: 1 },
+        action: `work ${i}`,
+        owner: "U1",
+        createdBy: "U1",
+        ownerScopeId: scopeId("personal", "U1"),
+      }),
+    );
+  scheduler.start(1000);
+  await scheduler.ready();
+  const oldHandler = onFire!;
+  const oldWork = oldHandler({ cronId: jobs[0]!.id, scheduledAt: 1 });
+  await entered.promise;
+  await scheduler.stopClaims();
+  scheduler.start(1000);
+  await scheduler.ready();
+  assert.equal(starts, 2);
+  await oldHandler({ cronId: jobs[1]!.id, scheduledAt: 1 });
+  assert.equal(calls, 1);
+  await onFire!({ cronId: jobs[1]!.id, scheduledAt: 1 });
+  assert.equal(calls, 2);
+  assert.equal(closed, false);
+  finish.resolve();
+  await oldWork;
+  await scheduler.stop();
+});
+
+test("manual cron preparation and detached fire retain admission across pause", async () => {
+  const { createAdmittedWork } = await import("../src/util/admitted-work.ts");
+  const work = createAdmittedWork();
+  const crons = createCronStore();
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "test",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  const entered = Promise.withResolvers<void>();
+  const allowLookup = Promise.withResolvers<void>();
+  const called = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const get = crons.get.bind(crons);
+  crons.get = async (id) => {
+    entered.resolve();
+    await allowLookup.promise;
+    return get(id);
+  };
+  const scheduler = createScheduler({
+    admittedWork: work,
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: () =>
+      work.run(async () => {
+        called.resolve();
+        await finish.promise;
+        return { status: "ok" as const, reply: "done" };
+      }),
+  });
+  const starting = scheduler.runNow(cron.id);
+  await entered.promise;
+  work.pause();
+  await scheduler.stopClaims();
+  let drained = false;
+  const draining = scheduler.drained().then(() => {
+    drained = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(drained, false);
+  assert.deepEqual(await scheduler.runNow(cron.id), { started: false, reason: "unavailable" });
+  allowLookup.resolve();
+  const started = await starting;
+  assert.equal(started.started, true);
+  await called.promise;
+  assert.equal(drained, false);
+  finish.resolve();
+  await draining;
+  await work.drained();
+  work.resume();
+  const resumed = await scheduler.runNow(cron.id);
+  assert.equal(resumed.started, true);
+  if (resumed.started) await resumed.settled;
+  await scheduler.stop();
+});
+
+test("scheduler rechecks durable Open authorization on each marked shared fire", async () => {
+  const crons = createCronStore();
+  const calls: TurnRequest[] = [];
+  let open = true;
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    isOpenScopeMember: async () => open,
+    run: async (request) => {
+      calls.push(request);
+      return { status: "ok", reply: "done" };
+    },
+  });
+  const cron = await crons.create({
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("group", "G1"),
+    runAs: "scopeShared",
+    ownerResourcesRequireOpen: true,
+    members: [member("U1")],
+    action: "digest",
+    schedule: { everyMs: 60_000 },
+  });
+  await runNowSettled(scheduler, cron.id);
+  assert.equal(calls[0]?.ownerResourcesRequireOpen, true);
+  open = false;
+  await runNowSettled(scheduler, cron.id);
+  assert.equal(calls.length, 1);
+  assert.equal((await crons.get(cron.id))?.enabled, false);
+});
+
+test("scheduled and manual fires use the saved runtime; clearing it restores inherited behavior", async () => {
+  const { crons, calls, scheduler } = harness();
+  const runtime = { harnessId: "pi" as const, modelId: "gpt-6-luna", effortLevel: "low", fastMode: false };
+  const cron = await crons.create({
+    schedule: { everyMs: 60_000 },
+    action: "check status",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: "personal:U1",
+    runtime,
+  });
+  await scheduler.tick(cron.nextFireAt!);
+  await runNowSettled(scheduler, cron.id);
+  assert.equal(calls.length, 2);
+  for (const call of calls) {
+    assert.equal(call.model, runtime.modelId);
+    assert.equal(call.harness, runtime.harnessId);
+    assert.equal(call.thinkingLevel, "low");
+    assert.equal(call.fastMode, false);
+  }
+  await crons.update(cron.id, { runtime: null });
+  await scheduler.tick(cron.nextFireAt! + 60_000);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2]?.model, undefined);
+  assert.equal(calls[2]?.harness, undefined);
+  assert.equal(calls[2]?.thinkingLevel, undefined);
+  assert.equal(calls[2]?.fastMode, undefined);
 });

@@ -1,6 +1,8 @@
 import type { EgressPolicy, WorkspaceLayer } from "../types.ts";
 
 export interface SandboxHandle {
+  resourceId?: string;
+  providerSandboxId?: string;
   id: string;
   rootDir: string;
   homeDir?: string;
@@ -15,7 +17,7 @@ export function hasParentPathSegment(path: string): boolean {
   return path.split("/").includes("..");
 }
 
-type WritablePersistence = "snapshot_to_workspace" | "resident_disk";
+type WritablePersistence = "snapshot_to_workspace" | "resident_disk" | "provider_managed";
 export type EgressEnforcement = "none" | "ip_port" | "domain";
 
 export interface AgentComputerSpec {
@@ -61,6 +63,7 @@ export function visibleTools(tools: readonly string[]): string[] {
 }
 
 export interface ProvisionOptions {
+  sandboxId?: string;
   env?: Record<string, string>;
   egress?: EgressPolicy;
   egressToken?: string;
@@ -69,11 +72,18 @@ export interface ProvisionOptions {
   onStatus?: (text: string) => void;
 }
 
+export interface ExecPressure {
+  ioFull10: number;
+  ioFull60: number;
+  load1: number;
+}
+
 export interface ExecResult {
   stdout: string;
   stderr: string;
   code: number;
   timedOut: boolean;
+  pressure?: ExecPressure;
 }
 
 export interface ExecOptions {
@@ -81,17 +91,23 @@ export interface ExecOptions {
   signal?: AbortSignal;
 }
 
-export type AgentComputerBackupArea = "workspace" | "home";
+export const execFailureDetail = (result: ExecResult, timeoutSec: number): string =>
+  result.stderr.trim() ||
+  result.stdout.trim() ||
+  (result.timedOut ? `timed out after ${timeoutSec}s with no output` : `exit ${result.code} with no output`);
 
-export interface AgentComputerBackupEntry {
-  area: AgentComputerBackupArea;
+export type AgentComputerExportArea = "workspace" | "home";
+
+export interface AgentComputerExportEntry {
+  area: AgentComputerExportArea;
   path: string;
   data: Uint8Array;
+  mode?: number;
 }
 
-export interface AgentComputerBackupOptions {
-  include?: AgentComputerBackupArea[];
-  exclude?: (entry: Pick<AgentComputerBackupEntry, "area" | "path">) => boolean;
+export interface AgentComputerExportOptions {
+  include?: AgentComputerExportArea[];
+  exclude?: (entry: Pick<AgentComputerExportEntry, "area" | "path">) => boolean;
   followSymlinks?: boolean;
   includePaths?: readonly string[];
   keepContentCaches?: boolean;
@@ -123,32 +139,84 @@ export interface ProcessSession {
   status: ProcessState;
 }
 
+export interface ComputerStatus {
+  lifecycleState?: "running" | "paused";
+  expiresAtMs?: number;
+  recovery?: {
+    strategy: "provider_snapshot" | "provider_pause" | "workspace_snapshot";
+    checkpointId?: string;
+    checkpointAtMs?: number;
+    checkpointExpiresAtMs?: number | null;
+    state?: string;
+    error?: string;
+  };
+  machine: string;
+  listed?: string;
+  provisioned?: boolean;
+  guestResponsive: boolean;
+  probeError?: string;
+  pressure?: ExecPressure;
+  resources?: ComputerResources;
+}
+
+interface ComputerResources {
+  cpuUsedPct: number;
+  memUsedMb: number;
+  memTotalMb: number;
+  diskUsedGb: number;
+  diskTotalGb: number;
+}
+
+export type ComputerVerdict = "ok" | "wedged" | "down";
+
+export function computerVerdict(s: ComputerStatus): ComputerVerdict {
+  if (s.guestResponsive || s.lifecycleState === "paused") return "ok";
+  return s.provisioned ? "wedged" : "down";
+}
+
+export interface StageOptions {
+  timeoutSec?: number;
+}
+
 export interface TeardownOptions {
   keepWarm?: boolean;
   destroy?: boolean;
+  homeUnchanged?: boolean;
 }
 
 export interface Sandbox {
   readonly profile: AgentComputerProfile;
-  profileFor?(scopeId: string): Promise<AgentComputerProfile>;
+  profileFor?(scopeId: string, sandboxId?: string): Promise<AgentComputerProfile>;
   provision(layers: WorkspaceLayer[], opts?: ProvisionOptions): Promise<SandboxHandle>;
   run(handle: SandboxHandle, command: string, opts?: ExecOptions): Promise<ExecResult>;
   readFile(handle: SandboxHandle, relPath: string): Promise<string | null>;
   writeFile(handle: SandboxHandle, relPath: string, data: string): Promise<void>;
   writeFileBytes(handle: SandboxHandle, relPath: string, data: Uint8Array): Promise<void>;
   readFileBytes(handle: SandboxHandle, relPath: string): Promise<Uint8Array | null>;
-  stageIn?(handle: SandboxHandle, destRelPath: string, blobId: string): Promise<void>;
-  stageOut?(handle: SandboxHandle, srcRelPath: string): Promise<string>;
-  extractFiles?(handle: SandboxHandle, entries: ReadonlyArray<{ path: string; data: Uint8Array }>): Promise<void>;
+  stageIn?(handle: SandboxHandle, destRelPath: string, blobId: string, opts?: StageOptions): Promise<void>;
+  stageOut?(handle: SandboxHandle, srcRelPath: string, opts?: StageOptions): Promise<string>;
+  importFiles?(handle: SandboxHandle, entries: ReadonlyArray<{ path: string; data: Uint8Array }>): Promise<void>;
   listDir(handle: SandboxHandle, relDir: string): Promise<string[]>;
   removeDir(handle: SandboxHandle, relDir: string): Promise<void>;
-  backupComputer?(handle: SandboxHandle, opts?: AgentComputerBackupOptions): Promise<AgentComputerBackupEntry[]>;
+  removeDirAndList?(handle: SandboxHandle, removeRelDir: string, listRelDir: string): Promise<string[]>;
+  exportFiles?(handle: SandboxHandle, opts?: AgentComputerExportOptions): Promise<AgentComputerExportEntry[]>;
+  startRegisteredProcess?(
+    handle: SandboxHandle,
+    command: string,
+    register: (processId: string) => Promise<void>,
+    opts?: StartProcessOptions,
+  ): Promise<{ processId: string }>;
   startProcess?(handle: SandboxHandle, command: string, opts?: StartProcessOptions): Promise<{ processId: string }>;
   readProcess?(handle: SandboxHandle, processId: string, opts?: ReadProcessOptions): Promise<ReadProcessResult>;
   writeStdin?(handle: SandboxHandle, processId: string, data: string): Promise<void>;
   signalProcess?(handle: SandboxHandle, processId: string, signal: string): Promise<void>;
   listProcesses?(handle: SandboxHandle): Promise<ProcessSession[]>;
+  adoptHomeSnapshot?(scopeId: string, blobId: string): Promise<void>;
+  persistHomeSnapshot?(scopeId: string): Promise<void>;
+  computerStatus?(scopeId: string): Promise<ComputerStatus>;
+  restartComputer?(scopeId: string): Promise<void>;
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
+  destroyScope?(scopeId: string): Promise<void>;
   reapDeepIdle?(idleMs: number, devIdleMs?: number): Promise<{ reaped: number }>;
 }
 
@@ -163,10 +231,10 @@ export class CapabilityUnsupportedError extends Error {
   }
 }
 
-export function supportsAgentComputerBackup(
+export function supportsAgentComputerExport(
   sandbox: Sandbox,
-): sandbox is Sandbox & Required<Pick<Sandbox, "backupComputer">> {
-  return typeof sandbox.backupComputer === "function";
+): sandbox is Sandbox & Required<Pick<Sandbox, "exportFiles">> {
+  return typeof sandbox.exportFiles === "function";
 }
 
 export function supportsScopeProfile(sandbox: Sandbox): sandbox is Sandbox & Required<Pick<Sandbox, "profileFor">> {
@@ -175,11 +243,11 @@ export function supportsScopeProfile(sandbox: Sandbox): sandbox is Sandbox & Req
 
 export function supportsBlobStaging(
   sandbox: Sandbox,
-): sandbox is Sandbox & Required<Pick<Sandbox, "stageIn" | "stageOut" | "extractFiles">> {
+): sandbox is Sandbox & Required<Pick<Sandbox, "stageIn" | "stageOut" | "importFiles">> {
   return (
     typeof sandbox.stageIn === "function" &&
     typeof sandbox.stageOut === "function" &&
-    typeof sandbox.extractFiles === "function"
+    typeof sandbox.importFiles === "function"
   );
 }
 
@@ -199,7 +267,7 @@ export function supportsProcessSessions(sandbox: Sandbox): sandbox is ProcessSan
 
 const SANDBOX_CAPABILITIES: ReadonlyArray<{ label: string; supported: (s: Sandbox) => boolean }> = [
   { label: "process sessions (background work, dev servers)", supported: supportsProcessSessions },
-  { label: "home backup (publish, resident-auth capture)", supported: supportsAgentComputerBackup },
+  { label: "home export (publish, resident-auth capture)", supported: supportsAgentComputerExport },
 ];
 
 const ENFORCEMENT_RANK: Record<EgressEnforcement, number> = { none: 0, ip_port: 1, domain: 2 };

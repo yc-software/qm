@@ -1,8 +1,12 @@
+import { cronTriggerAuthority } from "../cron/authority.ts";
 import type { Keychain, KeychainAsk, KeychainGrant } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import type { Destination, ScopeId } from "../types.ts";
+import type { Cron, Destination, ScopeId } from "../types.ts";
 import { runTrigger, destinationVisible, type TriggerDeps, type TriggerOutcome } from "./run-trigger.ts";
+import { principalDestination, withWebTranscriptText } from "../reach/reach.ts";
 import { swallow } from "../util/errors.ts";
+import { cronIdOf } from "../sessions/session-store.ts";
+import { samePerson } from "../directory/person.ts";
 import { keychainUseCommand } from "../api/contract.ts";
 
 function resolutionInput(ask: KeychainAsk, grant?: KeychainGrant): string {
@@ -32,6 +36,7 @@ function resolutionInput(ask: KeychainAsk, grant?: KeychainGrant): string {
 }
 
 export interface AskResolutionDeps extends TriggerDeps {
+  getCron?: (id: string) => Promise<Cron | null>;
   getAsk?: (id: string) => Promise<KeychainAsk | null>;
   getGrant?: (id: string) => Promise<KeychainGrant | null>;
 }
@@ -51,23 +56,54 @@ export async function fireAskResolution(
   if (!grant && ask.status === "approved" && ask.grantId) {
     grant = (await deps.getGrant?.(ask.grantId)) ?? undefined;
   }
+  const cronId = cronIdOf(ask.requesterThreadRef);
+  const cron = cronId ? await deps.getCron?.(cronId) : undefined;
+  if (
+    cronId &&
+    (!cron ||
+      cron.archived ||
+      (!cron.enabled && (cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined)) ||
+      cron.ownerScopeId !== ask.requesterScopeId ||
+      (cron.runAs !== "scopeFloor" && !samePerson(cron.owner, ask.requesterId)))
+  ) {
+    return {
+      ran: false,
+      authzFailed: true,
+      note: "the originating cron is unavailable or no longer authorizes this request",
+    };
+  }
+  const destination = cron ? cron.destination : ask.requesterDestination;
   const outcome = await runTrigger(deps, {
-    owner: ask.requesterId,
-    ownerScopeId: ask.requesterScopeId,
+    ...cronTriggerAuthority(cron ?? { owner: ask.requesterId, ownerScopeId: ask.requesterScopeId }),
     input: resolutionInput(ask, grant),
     fireKey: `ask:${ask.id}:${ask.status}`,
     surface: "keychain-ask",
-    ...(ask.requesterDestination ? { destination: ask.requesterDestination } : {}),
+    ...(cron?.runtime ? { runtime: cron.runtime } : {}),
+    deferWhenBusy: true,
+    ...(cron
+      ? {
+          ...(cron.recipientConsent ? { recipientConsent: cron.recipientConsent } : {}),
+          recipientConsentRequired: cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined,
+        }
+      : {}),
+    ...(destination ? { destination } : {}),
     ...(ask.requesterThreadRef ? { threadRef: ask.requesterThreadRef } : {}),
   });
+  if (
+    outcome.deferred ||
+    (!outcome.ran && !outcome.authzFailed && !(await deps.idempotency.committed(`ask:${ask.id}:${ask.status}`)))
+  )
+    throw new Error("credential approval resume is waiting for the original conversation to become idle");
   if (outcome.ran && outcome.status === "ok") return outcome;
+  if (cronId && (!outcome.ran || outcome.status === "refused")) return outcome;
   if (!outcome.ran && !outcome.authzFailed) {
     const cur = await deps.getAsk?.(ask.id);
     if (cur?.notifiedAt !== undefined) return outcome;
   }
-  if (ask.requesterDestination && (await destinationVisible(deps, ask.requesterId, ask.requesterDestination))) {
+  const fallbackDestination = cronId ? principalDestination(ask.ownerId, ask.ownerId) : ask.requesterDestination;
+  if (fallbackDestination && (await destinationVisible(deps, ask.requesterId, fallbackDestination))) {
     await deps.deliveries.enqueue({
-      destination: ask.requesterDestination,
+      destination: withWebTranscriptText(fallbackDestination),
       text: fallbackText(ask),
       idempotencyKey: `ask:${ask.id}:${ask.status}:fallback`,
     });
@@ -123,7 +159,7 @@ export async function fireDropResolution(deps: TriggerDeps, drop: DropResolution
   if (outcome.ran && outcome.status === "ok") return outcome;
   if (drop.destination && (await destinationVisible(deps, drop.ownerId, drop.destination))) {
     await deps.deliveries.enqueue({
-      destination: drop.destination,
+      destination: withWebTranscriptText(drop.destination),
       text: dropFallbackText(drop),
       idempotencyKey: `drop:${drop.id}:fallback`,
     });
@@ -149,7 +185,7 @@ export function createAskExpirySweep(deps: {
       }
       try {
         await deps.fire(ask);
-        await deps.keychain.markAskNotified(ask.id);
+        await deps.keychain.markAskNotified(ask.id, ask.status);
       } catch (e) {
         swallow(`keychain: ask sweep fire failed for ${ask.id} (will retry next tick)`, e);
       }

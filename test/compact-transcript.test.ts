@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { compactTranscript, INTERRUPTED_TOOL_RESULT } from "../src/harness/context-compaction.ts";
 import type { SessionEntry } from "../src/types.ts";
 
-function ent(type: SessionEntry["type"], payload: unknown, seq = 0): SessionEntry {
-  return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: "org:default-org", createdAt: seq };
+function ent(type: SessionEntry["type"], payload: unknown, seq = 0, createdAt = 0): SessionEntry {
+  return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: "org:default-org", createdAt };
 }
+
+const NOON = Date.UTC(2026, 6, 29, 12, 0);
 
 test("compactTranscript marks an interrupted tool call (no recorded result) so the summarizer sees the gap", () => {
   const out = compactTranscript([
@@ -13,7 +15,7 @@ test("compactTranscript marks an interrupted tool call (no recorded result) so t
     ent("tool_call", { tool: "execute", command: "bash refresh.sh", callId: "c1" }, 2),
     ent("user", { text: "(system note: the platform restarted mid-turn...)" }, 3),
   ]);
-  assert.match(out, /tool_result#2: \[interrupted/);
+  assert.match(out, /tool_result for tool_call#2 \(none recorded\): \[interrupted/);
   assert.ok(out.includes(INTERRUPTED_TOOL_RESULT));
 });
 
@@ -73,4 +75,30 @@ test("compactTranscript bounds a giant prior-summary line and a giant overheard 
   ]);
   for (const line of out.split("\n"))
     assert.ok(line.length <= 16_000, `every line is bounded (got ${line.length} chars)`);
+});
+
+test("compactTranscript stamps every line with its entry's UTC timestamp", () => {
+  const out = compactTranscript([
+    ent("user", { text: "refresh the dashboard", name: "sam" }, 1, NOON),
+    ent("tool_call", { tool: "execute", command: "bash refresh.sh", callId: "c1" }, 2, NOON + 60_000),
+    ent("tool_result", { tool: "execute", callId: "c1", result: "ok", isError: false }, 3, NOON + 120_000),
+    ent("user", { overheard: true, ts: "1", name: "Bob", text: "lunch?" }, 4, NOON + 180_000),
+  ]);
+  assert.match(out, /^user#1 2026-07-29T12:00Z \(sam\): refresh the dashboard$/m);
+  assert.match(out, /^tool_call#2 2026-07-29T12:01Z: /m);
+  assert.match(out, /^tool_result#3 2026-07-29T12:02Z: /m);
+  assert.match(out, /^overheard#4 2026-07-29T12:03Z \(Bob\): lunch\?$/m);
+});
+
+test("compactTranscript stamps a chained prior summary with when it was written", () => {
+  const out = compactTranscript([
+    ent("system", { kind: "context_summary", throughSeq: 21, text: "earlier work" }, 22, NOON),
+  ]);
+  assert.equal(out, "Prior summary through seq 21 (written 2026-07-29T12:00Z): earlier work");
+});
+
+test("compactTranscript omits the stamp when an entry has no real timestamp", () => {
+  const out = compactTranscript([ent("user", { text: "hello" }, 1, 0), ent("user", { text: "again" }, 2, Number.NaN)]);
+  assert.match(out, /^user#1: hello$/m);
+  assert.match(out, /^user#2: again$/m);
 });

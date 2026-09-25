@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, request, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 
 const upstream = createServer((req: IncomingMessage, res) => {
-  res.writeHead(200, { "content-type": "application/json" });
-  res.end(JSON.stringify({ url: req.url, cookie: req.headers.cookie ?? null }));
+  res.writeHead(200, { "content-type": "application/json", "set-cookie": ["app_pref=ok", "dpl_owner=test"] });
+  res.end(
+    JSON.stringify({ url: req.url, cookie: req.headers.cookie ?? null, headers: req.headers, method: req.method }),
+  );
 });
 await new Promise<void>((r) => upstream.listen(0, r));
 const upstreamUrl = `http://localhost:${(upstream.address() as AddressInfo).port}`;
@@ -24,6 +26,62 @@ process.env.PORTAL_DEV_PRINCIPAL = "viewer@example.com";
 const { server, hostIsWithinDomain } = await import("../src/index.ts");
 await new Promise<void>((r) => server.listen(0, r));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+
+function appRequest(path: string, host: string): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const req = request(
+      `${base}${path}`,
+      {
+        headers: {
+          host,
+          cookie: "portal_session=test",
+          "x-as-principal": "admin",
+          "x-signature": "forged",
+          "x-portal-identity": "forged",
+          "sec-fetch-dest": "iframe",
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => {
+          const headers = new Headers();
+          for (const [name, values] of Object.entries(res.headers)) {
+            if (values === undefined) continue;
+            for (const value of Array.isArray(values) ? values : [values]) headers.append(name, value);
+          }
+          resolve(new Response(Buffer.concat(chunks), { status: res.statusCode, headers }));
+        });
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+test("app host requests preserve gateway auth without entering portal routes", async () => {
+  for (const path of ["/app.js?x=1", "/auth/login", "/healthz", "/api/private", "/v1/status"]) {
+    const response = await appRequest(path, "contracts.apps.qm.example.com");
+    assert.equal(response.status, 200);
+    const data = (await response.json()) as { url: string; cookie: string; headers: Record<string, string> };
+    assert.equal(data.url, path);
+    assert.equal(data.headers.host, "contracts.apps.qm.example.com");
+    assert.equal(data.cookie, "portal_session=test");
+    assert.equal(data.headers["x-qm-app-host"], "1");
+    assert.equal(data.headers["sec-fetch-dest"], "iframe");
+    assert.equal(data.headers["x-as-principal"], undefined);
+    assert.equal(data.headers["x-signature"], undefined);
+    assert.equal(data.headers["x-portal-identity"], undefined);
+    assert.equal(response.headers.get("x-frame-options"), null);
+    assert.deepEqual(response.headers.getSetCookie(), ["app_pref=ok", "dpl_owner=test"]);
+  }
+});
+
+test("nested and bare app hosts do not enter portal routes", async () => {
+  for (const host of ["apps.qm.example.com", "a.b.apps.qm.example.com"]) {
+    assert.equal((await appRequest("/auth/login", host)).status, 404);
+  }
+});
 
 test.after(() => {
   server.close();

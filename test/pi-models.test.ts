@@ -1,3 +1,4 @@
+import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -13,6 +14,8 @@ import {
   MODEL_PROVIDERS,
   SELECTABLE_BASE_MODELS,
   contextTokenBudgetForModel,
+  codexProviderModelId,
+  codexSubscriptionModelId,
 } from "../src/model/pi-models.ts";
 
 test("every selectable base model resolves against the pi-ai registry", () => {
@@ -31,6 +34,17 @@ test("selectable models span providers (multi-provider is wired)", () => {
   assert.ok(providers.has("anthropic"), "expected at least one Anthropic model");
   assert.ok(providers.has("openai"), "expected at least one OpenAI model (gpt-5.6)");
   assert.ok(providers.has("openrouter"), "expected an OpenRouter-hosted open-model option");
+});
+
+test("codex subscription ids stay namespaced inside QM and bare toward the provider", () => {
+  assert.equal(codexSubscriptionModelId("gpt-5.6-sol"), "codex/gpt-5.6-sol");
+  assert.equal(codexSubscriptionModelId("codex/gpt-5.6-sol"), "codex/gpt-5.6-sol");
+  assert.equal(codexProviderModelId("codex/gpt-5.6-sol"), "gpt-5.6-sol");
+  assert.equal(codexProviderModelId("gpt-5.6-sol"), "gpt-5.6-sol");
+  const subscription = getRequiredModel("codex/gpt-5.6-sol");
+  assert.equal(subscription.id, "codex/gpt-5.6-sol");
+  assert.equal(String(subscription.provider), "openai-codex");
+  assert.equal(getRequiredModel(codexProviderModelId(subscription.id)).provider, "openai");
 });
 
 test("unknown models are not silently accepted", () => {
@@ -90,6 +104,8 @@ test("the curated catalog contains only current model families", () => {
   assert.deepEqual(
     SELECTABLE_BASE_MODELS.map((model) => model.id),
     [
+      "claude-opus-5-5",
+      "claude-fable-5-1",
       "claude-fable-5",
       "claude-opus-5",
       "claude-opus-4-8",
@@ -98,10 +114,30 @@ test("the curated catalog contains only current model families", () => {
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
       "openrouter/auto",
     ],
   );
   assert.equal(getRequiredModel("gpt-5.6-sol").contextWindow, 1_050_000);
+  assert.equal(getRequiredModel("gpt-6-astra").contextWindow, 1_050_000);
+  assert.equal(getRequiredModel("gpt-6-sol").contextWindow, 1_050_000);
+  assert.equal(getRequiredModel("gpt-6-luna").contextWindow, 1_050_000);
+  assert.deepEqual(getRequiredModel("gpt-6-sol").cost, {
+    input: 2,
+    output: 10,
+    cacheRead: 0.2,
+    cacheWrite: 2.5,
+    tiers: [{ inputTokensAbove: 272_000, input: 4, output: 15, cacheRead: 0.4, cacheWrite: 5 }],
+  });
+  assert.deepEqual(getRequiredModel("gpt-6-luna").cost, {
+    input: 0.1,
+    output: 0.5,
+    cacheRead: 0.01,
+    cacheWrite: 0.125,
+    tiers: [{ inputTokensAbove: 272_000, input: 0.2, output: 0.75, cacheRead: 0.02, cacheWrite: 0.25 }],
+  });
 });
 
 test("auxiliary models come from the configured base model's own provider", () => {
@@ -110,7 +146,9 @@ test("auxiliary models come from the configured base model's own provider", () =
     "claude-haiku-4-5",
     "the deployment default resolves an Anthropic auxiliary",
   );
+  assert.equal(auxiliaryModelFor("claude-opus-5-5"), "claude-haiku-4-5");
   assert.equal(auxiliaryModelFor("claude-opus-4-8"), "claude-haiku-4-5");
+  assert.equal(auxiliaryModelFor("claude-fable-5-1"), "claude-haiku-4-5");
   assert.equal(auxiliaryModelFor("claude-fable-5"), "claude-haiku-4-5");
   assert.equal(
     auxiliaryModelFor("gpt-5.6-sol"),
@@ -164,14 +202,45 @@ test("an auxiliary is never less serviceable than the base model it was derived 
 });
 
 test("context token budget is half of each model's real input room", () => {
+  const fable51 = getRequiredModel("claude-fable-5-1");
+  assert.equal(fable51.contextWindow, 1_000_000);
+  assert.equal(fable51.maxTokens, 128_000);
+  assert.deepEqual(fable51.cost, {
+    input: 10,
+    output: 50,
+    cacheRead: 0.25,
+    cacheWrite: 12.5,
+    tiers: undefined,
+  });
+  assert.equal(contextTokenBudgetForModel("claude-fable-5-1"), 150_000, "a 1M window is capped, not halved");
+  const opus55 = getRequiredModel("claude-opus-5-5");
+  assert.equal(opus55.contextWindow, 1_000_000);
+  assert.equal(opus55.maxTokens, 128_000);
+  assert.equal(String(opus55.provider), "anthropic");
+  assert.deepEqual(opus55.cost, { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, tiers: undefined });
+  assert.equal(contextTokenBudgetForModel("claude-opus-5-5"), 150_000);
   assert.equal(getRequiredModel("claude-fable-5").contextWindow, 1_000_000);
-  assert.equal(contextTokenBudgetForModel("claude-fable-5"), Math.floor((1_000_000 - 128_000) * 0.5));
-  const sol = contextTokenBudgetForModel("gpt-5.6-sol");
-  assert.equal(sol, Math.floor((1_050_000 - 128_000) * 0.5));
-  assert.ok(sol !== undefined && sol < 1_050_000 * 0.5, "budget stays below half the window");
+  assert.equal(contextTokenBudgetForModel("claude-fable-5"), 150_000);
+  assert.equal(contextTokenBudgetForModel("gpt-5.6-sol"), 150_000);
   assert.equal(contextTokenBudgetForModel("claude-not-a-real-model"), undefined);
   for (const m of SELECTABLE_BASE_MODELS) {
     const budget = contextTokenBudgetForModel(m.id);
     assert.ok(budget !== undefined && budget >= 60_000, `${m.id} budget ${budget} suspiciously small`);
+    assert.ok(budget <= 150_000, `${m.id} budget ${budget} exceeds the cap`);
+  }
+});
+
+test("personal models retain canonical endpoints when org endpoints are overridden", () => {
+  const ids = ["claude-opus-5", "gpt-5.6-sol", "gpt-6-astra"];
+  const canonical = new Map(ids.map((id) => [id, getRequiredModel(id).baseUrl]));
+  setProviderBaseUrls({ anthropic: "https://org.invalid/anthropic", openai: "https://org.invalid/openai" });
+  try {
+    for (const id of ids) {
+      assert.match(getRequiredModel(id).baseUrl, /^https:\/\/org\.invalid\//);
+      assert.equal(getRequiredModel(id, false).baseUrl, canonical.get(id));
+      assert.equal(resolveModel(id, false)?.baseUrl, canonical.get(id));
+    }
+  } finally {
+    setProviderBaseUrls({});
   }
 });

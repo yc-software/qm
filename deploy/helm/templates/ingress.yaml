@@ -1,0 +1,43 @@
+{{- if .Values.ingress.enabled }}
+{{- $svcKey := .Values.ingress.service }}
+{{- $svc := index .Values.services $svcKey }}
+{{- $svcName := printf "%s-%s" (include "qm.fullname" .) $svcKey }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "qm.fullname" . }}
+  labels:
+    {{- include "qm.labels" . | nindent 4 }}
+  annotations:
+    {{- if and .Values.ingress.tls .Values.ingress.clusterIssuer }}
+    cert-manager.io/cluster-issuer: {{ .Values.ingress.clusterIssuer | quote }}
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    - hosts:
+        {{- range .Values.ingress.hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .Values.ingress.tlsSecretName | default (printf "%s-tls" (include "qm.fullname" .)) }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $svcName }}
+                port:
+                  number: {{ $svc.port }}
+    {{- end }}
+{{- end }}

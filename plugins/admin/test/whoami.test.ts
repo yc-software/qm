@@ -7,8 +7,16 @@ import { mintPortalIdentity } from "../../chassis/src/portal-identity.ts";
 let lastActor: string | null = null;
 let lastSigned = false;
 let lastPortalIdentity: string | null = null;
+let transientWhoamiFailures = 0;
+let whoamiRequests = 0;
 const core = createServer((req: IncomingMessage, res) => {
   if (req.method === "GET" && (req.url ?? "").startsWith("/v1/admin/whoami")) {
+    whoamiRequests++;
+    if (transientWhoamiFailures > 0) {
+      transientWhoamiFailures--;
+      res.writeHead(502, { "content-type": "application/json" });
+      return void res.end(JSON.stringify({ error: "temporarily_unavailable" }));
+    }
     lastActor = (req.headers["x-admin-actor"] as string) ?? null;
     lastSigned = Boolean(req.headers["x-timestamp"] && req.headers["x-signature"]);
     lastPortalIdentity = (req.headers["x-portal-identity"] as string) ?? null;
@@ -26,6 +34,7 @@ const corePort = (core.address() as AddressInfo).port;
 
 process.env.CORE_API_URL = `http://localhost:${corePort}`;
 process.env.CORE_SIGNING_SECRET = "admin-whoami-test-secret";
+process.env.INBOX_USERS = "U-admin";
 
 const { server } = await import("../src/index.ts");
 await new Promise<void>((r) => server.listen(0, r));
@@ -49,6 +58,19 @@ test("admin HTML ships a hash-only script policy and transport/browser isolation
   assert.equal(r.headers.get("x-frame-options"), "DENY");
 });
 
+test("managed Slack form navigation retains origin without disclosing the admin path", async () => {
+  const previous = process.env.QM_SLACK_SERVICE_URL;
+  process.env.QM_SLACK_SERVICE_URL = "https://slack.example.test";
+  try {
+    const r = await api("/connectors?private=hidden");
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get("referrer-policy"), "strict-origin");
+  } finally {
+    if (previous === undefined) delete process.env.QM_SLACK_SERVICE_URL;
+    else process.env.QM_SLACK_SERVICE_URL = previous;
+  }
+});
+
 test("/api/whoami with cookie admin=U-admin → 200 with the core's admin status", async () => {
   const r = await api("/api/whoami", "admin=U-admin");
   assert.equal(r.status, 200);
@@ -58,6 +80,7 @@ test("/api/whoami with cookie admin=U-admin → 200 with the core's admin status
     isAdmin: true,
     role: "org_admin",
     scopeId: "org:acme",
+    permissions: ["inbox"],
   });
   assert.equal(lastActor, "U-admin@acme", "x-admin-actor forwarded as <sub>@<org>");
   assert.equal(lastSigned, true, "source-auth headers present when CORE_SIGNING_SECRET is set");
@@ -66,7 +89,7 @@ test("/api/whoami with cookie admin=U-admin → 200 with the core's admin status
 test("/api/whoami with cookie admin=U-rando → 200 { isAdmin:false } (any non-empty cookie is trusted identity; the core decides)", async () => {
   const r = await api("/api/whoami", "admin=U-rando");
   assert.equal(r.status, 200);
-  assert.deepEqual(await r.json(), { principal: "U-rando", org: "acme", isAdmin: false });
+  assert.deepEqual(await r.json(), { principal: "U-rando", org: "acme", isAdmin: false, permissions: [] });
 });
 
 test("/api/whoami with NO admin cookie → 401 signed_out", async () => {
@@ -118,6 +141,7 @@ test("a forwarded portal identity is relayed to core (so an enforcing core can v
     isAdmin: true,
     role: "org_admin",
     scopeId: "org:acme",
+    permissions: ["inbox"],
   });
 });
 
@@ -132,6 +156,15 @@ test("an unsigned or wrongly-signed portal identity is not accepted as an admin 
     const r = await fetch(`${base}/api/whoami`, { headers: { "x-portal-identity": token } });
     assert.equal(r.status, 401, `forged identity ${token.slice(0, 24)}… must not authenticate`);
   }
+});
+
+test("a transient core failure is retried before admin bootstrap fails", async () => {
+  transientWhoamiFailures = 1;
+  whoamiRequests = 0;
+  const r = await api("/api/me", "admin=U-admin");
+  assert.equal(r.status, 200);
+  assert.equal(whoamiRequests, 2);
+  assert.equal(((await r.json()) as { isAdmin?: boolean }).isAdmin, true);
 });
 
 test("core unreachable → /api/whoami returns 502 core_unreachable (outage, not a not-admin verdict)", async () => {

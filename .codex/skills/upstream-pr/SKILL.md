@@ -1,16 +1,15 @@
 ---
 name: upstream-pr
-description: Send a change to upstream qm without leaking organization-specific context. Use when asked to "upstream this", "open a PR against qm", "contribute this back", or when a fix made in a private fork belongs in core qm.
+description: Send a change to upstream qm without leaking organization-specific context. Use when asked to "upstream this", "open a PR against qm", "contribute this back", or when explicitly asked to contribute a downstream change.
 ---
 
 # upstream-pr
 
-An organization customizes qm from a private fork: a standalone private repository in
-which everything organization-specific lives under `deploy/layers/<org>/` and the rest
-of the tree stays identical to upstream. That rest is what this skill means by core:
-every file outside the organization's layer directory, including the plugins, the CLI,
-the docs, and CI, not just the runtime under `src/`. A private fork's working tree
-therefore holds two kinds of material at once, and only one of them may travel upstream.
+Source forks may change core freely. This skill applies only when an upstream
+contribution is requested; maintaining a local change does not require contributing it.
+Keep private deployment material in `deploy/layers/<org>/` in a private source fork or
+in a separate private deployment repository for public source. Core means the runtime,
+plugins, CLI, docs, and CI, and may also contain private details that must be scrubbed.
 
 Upstream qm is shared with organizations other than yours, and anything pushed there is
 permanent: it stays reachable by SHA in every clone and fork even after a deleted branch or
@@ -21,7 +20,7 @@ See [`deploy/layers/README.md`](../../../deploy/layers/README.md) for the bounda
 
 ## Where the branch will go
 
-`git remote -v` tells you which of three situations you are in. This decides the push
+`git remote -v`, the source tree, and repository metadata identify the situation. This decides the push
 target only; the scrub steps below run in every case.
 
 - `origin` is `yc-software/qm`: you are in upstream qm. Push the branch to `origin`
@@ -29,20 +28,23 @@ target only; the scrub steps below run in every case.
 - `origin` is a GitHub fork of qm, meaning a repository created with GitHub's fork
   feature and living inside qm's fork network: push to `origin` and open a normal
   cross-repo PR.
-- `origin` is anything else, including a repository with no remotes: treat it as a
-  private fork. Assume the working tree holds organization material even if
+- A standalone source fork: assume it may hold private material even if
   `deploy/layers/` looks empty, and read "Pushing from a private fork" below.
+- A package deployment or unrelated repository: prepare the contribution in a separate
+  clean upstream checkout; never push its history to upstream.
 
 Judge by where `origin` points, not by the repository's name. A repository named
-`<org>/qm-<something>` in the same GitHub organization as the source is still a private
-fork.
+`<org>/qm-<something>` in the same GitHub organization as the source may still be a
+separate downstream repository.
 
 ## Decide whether the change belongs upstream
 
 Ask what the change would mean to an organization that is not yours. It belongs upstream
 when it is a fix or capability in core qm that any deployment would want. It does not
 belong upstream when it only makes sense given how your organization is set up: its tools,
-its vocabulary, its providers, its process. That change belongs in `deploy/layers/<org>/`.
+its vocabulary, its providers, its process. Keep that change downstream: deployment
+material belongs in the layer or private deployment repository, while source behavior
+may remain a local core modification.
 
 A change that is generic in substance but written against org-specific fixtures needs its
 fixtures rewritten first. Model them on the account-neutral fixtures under `deploy/stacks/`
@@ -60,6 +62,9 @@ nothing:
 ```bash
 git status --porcelain
 ```
+
+Use `upstream` below for the verified upstream remote; in an upstream checkout use
+`origin` instead throughout these commands and the history checks.
 
 Then:
 
@@ -104,8 +109,8 @@ organization's layer directory. The shared `deploy/layers/README.md` is core and
 change, which is why the pattern matches only paths inside an organization's
 subdirectory.
 
-**2. No organization identifiers in content, messages, or authorship.** Build the term list
-by reading your own layer: `qm.config.jsonc` has the org slug and public URL host,
+**2. No private organization identifiers in content, messages, or authorship.** Build the
+term list from the private deployment and local core changes, wherever they live: `qm.config.jsonc` has the org slug and public URL host,
 `.env.example` has the computed secret names, `.env` has the secret values,
 `slack-app-manifest.yml` has workspace and app names, `infra/terraform.tfvars` has cloud
 account and repository coordinates, and `sandbox/` has internal tool and system names. Add
@@ -182,8 +187,9 @@ same reason, pass `--repo` to every `gh` command you run in a private fork: with
 `gh pr edit 1` can silently overwrite PR #1 of the source repository. If that happens, the
 prior body is recoverable through the GraphQL `userContentEdits` field.
 
-After the PR merges, do not also commit the change to the private fork. It arrives through the
-next `update-qm` sync, and committing it in both places guarantees a conflict.
+After the PR merges, bring it downstream through `update-qm`. Preserve any existing local
+implementation while reconciling it with the merged version; do not blindly apply the
+patch again.
 
 ## If something leaked
 

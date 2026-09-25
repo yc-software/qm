@@ -1,12 +1,12 @@
 ---
 name: dev-instance
-description: Run the current worktree as a production-shaped local dev instance — core, Slack, web UI, admin, portal, on a real Pi LLM + Postgres — reachable in Slack as your own bot. Each developer uses their own set of Slack apps from their own machine's pool store, so many worktrees (yours and a teammate's) can run reachable at once without colliding. Use when asked to /dev-instance, "spin this up so I can QA it in Slack", or "let me test your branch end to end".
+description: Run the current worktree as a production-shaped local dev instance with web, Slack, or both, on a real LLM + Postgres. Each developer uses their own set of Slack apps from their own machine's pool store, so many worktrees (yours and a teammate's) can run reachable at once without colliding. Use when asked to /dev-instance, "spin this up so I can QA it in Slack", or "let me test your branch end to end".
 ---
 
 # dev-instance
 
-`dev-instance` runs the current worktree as a full, production-shaped stack on your
-machine and makes it reachable in Slack as one of _your_ bots. It is the way to QA a
+`dev-instance` runs the current worktree with the surfaces needed for the task.
+Choose web for browser/admin work, Slack for bot work, and both only for cross-surface QA. It is the way to QA a
 branch end to end: real LLM turns, a real sandbox, a real local Postgres (empty by
 default; opt in to prod data), and the real Slack/web/admin surfaces.
 
@@ -14,7 +14,9 @@ Use the repo-root launcher (a thin wrapper over the TypeScript CLI in `scripts/d
 every command accepts `--json` for machine-readable output):
 
 ```bash
-bash scripts/dev-instance.sh up
+bash scripts/dev-instance.sh up --surface web
+bash scripts/dev-instance.sh up --surface slack
+bash scripts/dev-instance.sh up --surface both
 bash scripts/dev-instance.sh status
 bash scripts/dev-instance.sh down
 bash scripts/dev-instance.sh doctor
@@ -27,28 +29,42 @@ bash scripts/dev-instance.sh logs [child] [-f]
 `npm run dev-instance:doctor` are equivalent. The Codex-visible skill copy lives at
 `.codex/skills/dev-instance/SKILL.md`; keep the two skill descriptions equivalent.
 
+New instances default to web only. `npm run dev-instance:web`,
+`npm run dev-instance:slack`, and `npm run dev-instance:both` select a surface explicitly.
+Bare `up` preserves the mode of an existing instance. Explicitly selecting a different
+surface tears down and boots the worktree again, claiming the appropriate slot.
+`--no-slack` (and `DEV_INSTANCE_NO_SLACK=1`) remain aliases for web only.
+
 ## What `up` Starts
 
-`up` claims one free Slack app slot from **this machine's** pool store (see "Slack reach"
+`up --surface slack` and `up --surface both` claim one free Slack app slot from **this machine's** pool store (see "Slack reach"
 below), then spawns a **per-slot supervisor daemon** that owns the production-shaped stack:
 
-- core API + workers
-- Slack Socket Mode plugin (connected as the claimed app's bot)
-- web UI surface
-- admin surface
-- portal front door proxying `/web-ui/` and `/admin/`
+- core API + workers in every mode
+- Slack Socket Mode plugin in `slack` and `both`
+- web UI, admin, and portal front door in `web` and `both`
 
-The supervisor restarts crashed children with backoff, waits for a port to actually free
-before respawning (no more EADDRINUSE), health-probes everything every 10s, and writes a
+Web-only instances need no Slack app or pool credentials. Slack-only instances skip
+web dependencies, builds, and web/portal processes.
+
+Port slots expand automatically beyond 16, up to the TCP port range (8,207 slots at
+the default base port of 8080); machine resources will usually limit capacity first.
+Slots 1–16 retain their existing ports. Allocation skips occupied port blocks.
+Startup refuses occupied ports without terminating their listeners; if a port is
+taken after allocation, stop the failed instance and retry `up` to select a free block.
+
+The supervisor restarts crashed children with backoff, refuses occupied ports,
+health-probes everything every 10s, and writes a
 heartbeat so slot reclaim can tell "actively in use" from "abandoned".
 
-**`up` only prints success after proving the bot is reachable**: the Slack socket must be
+**When Slack is enabled, `up` only prints success after proving the bot is reachable**: the Slack socket must be
 the app's _only_ connection (`num_connections == 1`, read from the hello frame) and — when
 the slot has a `CANARY_CHANNEL` — a posted canary message must arrive back over that same
-socket. If another machine/worktree holds a connection to the app (the classic "boots LIVE
-but deaf" failure), `up` detects it, flags the slot for 30 minutes, and auto-rotates to the
-next one, reporting the thief's hello host. A canary that never returns on a clean socket
-means a stale Slack app; `up` flags and rotates past that too.
+socket. If Slack reports multiple connections, `up` flags the slot for 30 minutes and
+auto-rotates to the next one. The count is a snapshot from the last hello frame, not
+a continuously refreshed inventory. Its `debug_info.host` identifies Slack's server,
+not another client's machine; it cannot locate a competing instance. A canary that
+never returns leaves delivery unverified; `up` flags and rotates past that too.
 
 **Re-running `up` on a live instance is a reload, not a no-op**: it re-reads your shell
 env, dev.env, and `.env`, diffs against what the children are running, and does a rolling
@@ -109,9 +125,16 @@ canary message is deleted right after it round-trips. `CANARY_CHANNEL=<channel i
 slot env overrides. With no eligible channel at all, `up` prints `delivery unverified` (or
 fails under `--strict`).
 
-A forgotten instance cleans itself up: after 8 hours with no Slack events and no CLI
-actions the supervisor tears itself down and frees the slot
-(`DEV_INSTANCE_IDLE_HOURS` overrides; `0` disables).
+If its worktree disappears, the supervisor shuts down its children and releases its
+lease on the next heartbeat (within 15 seconds, plus shutdown time). Always run `down`
+before intentionally removing a worktree.
+
+A forgotten instance cleans itself up: after 24 hours with no handled Slack turns,
+interactions, reloads, or restarts, the supervisor tears itself down and frees the slot
+on its next idle check (every 10 minutes). Ambient workspace events, health checks,
+status reads, and canaries (including `dev doctor`) do not reset the timer. This is
+an idle timeout, not a fixed 24-hour lifetime. It only retires instances running this
+supervisor; extra connections on another host must be stopped on that host. `DEV_INSTANCE_IDLE_HOURS` overrides the timeout; `0` disables it.
 
 ## Real by Default
 
@@ -119,8 +142,14 @@ The dev instance should exercise the real system:
 
 - real LLM: needs a model credential for the harness you run. Core supports several
   (`HARNESS=pi|opencode|codex|claude`); the launcher picks one from the credentials it
-  finds and honours an explicit `HARNESS`. Set the key your chosen harness expects, or
-  pass `DEV_INSTANCE_ALLOW_MOCK=1` for a deliberate no-model wiring check
+  finds and honours an explicit `HARNESS`. Set the key your chosen harness expects. For
+  Codex, a ChatGPT OAuth session is also supported: `HARNESS=codex` discovers a valid
+  `$HOME/.codex/auth.json`, or you can set `CODEX_AUTH_FILE` to another auth file. Core
+  refreshes OAuth tokens centrally and hands the Codex child ephemeral material (no
+  refresh token). Pass `DEV_INSTANCE_ALLOW_MOCK=1` for a deliberate no-model wiring
+  check. The auth-file path is for local dev instances; deployed production processes
+  use an API key or a keychain credential (`CODEX_AUTH_CREDENTIAL` /
+  `CLAUDE_AUTH_CREDENTIAL`), whose secret lives encrypted in its owner's keychain.
 - real durability: uses `DATABASE_URL` when supplied; otherwise starts/reuses a local
   Docker Postgres container and runs core with `SESSION_STORE=postgres` and
   `RUN_STORE=postgres`
@@ -162,10 +191,15 @@ self-API calls can reach your local core. None of that runs on the default local
 
 ## After Startup
 
-Report the slot, portal URL, Slack handle, and log directory. To test Slack-specific
+Report the slot, enabled surfaces, their URLs or Slack handle, and log directory. To test Slack-specific
 behavior, DM the printed `@<handle>` (on Alice's machine that's one of `@bot1 … @bot10`)
-in `example.slack.com`; for admin and web behavior, open the printed portal URL. Tear down
-with `bash scripts/dev-instance.sh down` when QA is finished.
+in `example.slack.com`; for admin and web behavior, open the printed portal URL. Keep
+review instances running until the PR merges. After merge, run
+`bash scripts/dev-instance.sh down` from that worktree with the same pool-store override
+used for `up`, before removing the worktree. Verify the instance's supervisor and children
+have exited and its lease is released. Keep shared Postgres and persistent data intact.
+If the user asks to keep the instance beyond merge, retain its worktree too. For work
+without a PR, tear down when QA is finished unless the user requested a running demo.
 
 ## Troubleshooting
 
@@ -176,20 +210,26 @@ port squatters, machine-wide token orphans, Docker daemon — and prints a ranke
 with a remedy per finding. `doctor --fix` applies the safe ones (child restarts).
 
 **Bot never replies to a DM (silent bot).** The new `up` catches the two big causes at
-boot: another live connection to the same app (auto-rotates, names the thief's host) and a
-stale Slack app whose events never arrive (canary fails → flags the slot and rotates). If
-deafness appears mid-session, the 10s health probe logs `DEGRADED: num_connections=N` in
-`supervisor.log` and the periodic canary flags delivery loss; `dev canary` gives you an
-on-demand proof either way. `dev up --rotate` moves to a fresh slot.
+boot: multiple reported connections to the same app (flags the slot and auto-rotates)
+and a Slack app whose events never arrive (canary fails → flags the slot and rotates).
+Check local processes and other deployments before attributing a connection count to
+a live competitor. After cleanup, reconnect to obtain a fresh hello count; rereading
+health alone returns the previous snapshot. The 10s health probe logs
+`DEGRADED: num_connections=N` in `supervisor.log` when it observes a count transition
+above one, but cannot detect a new competitor while the hello snapshot is unchanged.
+Periodic canaries can detect delivery loss; `dev canary` tests delivery on demand.
+A successful canary does not establish exclusivity. `dev up --rotate` moves to a fresh slot.
 
-For a slot flagged `canary-failed`, the app itself is stale and needs rebuilding (~5 min):
-at api.slack.com **signed into the example workspace** (the dev console is
+For a slot flagged `canary-failed`, check networking, event subscriptions, permissions,
+and competing connections first. If the app configuration needs rebuilding, use
+api.slack.com **signed into the example workspace** (the dev console is
 per-workspace-identity — use "Sign in to another workspace" if it lists the wrong one):
 Create New App → From a manifest → paste `src/slack/manifest.json` (give it a unique
 `name` and bot `display_name`; old handles stay taken) → Install to Workspace → Basic
 Information → App-Level Tokens → Generate with the `connections:write` scope. Write the Bot
 token (`xoxb-…`) and app-level token (`xapp-…`) into `poolN.env`, delete `poolN.flag.json`,
-then run `up` again. (If you own the existing app, just reinstalling it also works.)
+then run `up` again to verify the replacement. Reinstalling an existing app may also
+resolve configuration drift; verify delivery afterward.
 
 Two smaller gotchas: a freshly-created bot isn't in Slack's "New message" people search for a
 minute or two — open its DM deterministically via `conversations.open` (bot token + your user

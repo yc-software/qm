@@ -44,6 +44,11 @@ export const MEMORY_CONSOLIDATION_PROMPT = [
   "  user-stated conventions about them, and keep one existence-level fact for a standing",
   "  system the user relies on (a cron, a watcher, an integration).",
   "- NEVER delete or weaken a fact the user explicitly asked to remember.",
+  "- A fact recording the user's own words instructing the assistant — a standing rule,",
+  "  preference, or directive about how future work should be done — must survive VERBATIM:",
+  "  never DELETE it and never reword it in an UPDATE. One exception: when two such facts",
+  "  duplicate each other, keep one verbatim and DELETE the redundant copy — unless they carry",
+  "  different `(said in …)` sources, in which case keep both.",
   "- Preserve any `(said in …)` suffix verbatim — it records where a fact was stated and",
   "  scopes it. Keep it through an UPDATE, and never merge two facts that carry different",
   "  `(said in …)` sources.",
@@ -133,7 +138,9 @@ export function createConsolidator(deps: {
   const degraded = new Set<ScopeId>();
   async function maintain(scopeId: ScopeId): Promise<void> {
     if (degraded.has(scopeId) || !deps.harness.oneShot) return;
-    const body = await deps.memory.read(scopeId);
+    const guarded = deps.memory.readHead && deps.memory.replaceIfRevision;
+    const head = guarded ? await deps.memory.readHead!(scopeId) : undefined;
+    const body = head?.content ?? (await deps.memory.read(scopeId));
     const bullets = body.split("\n").filter(isBullet);
     if (!bullets.length) return;
 
@@ -142,10 +149,14 @@ export function createConsolidator(deps: {
     try {
       out = await deps.harness.oneShot(MEMORY_CONSOLIDATION_PROMPT, numbered);
     } catch {
-      return;
+      out = "";
     }
     const at = now();
     const next = applyConsolidationActions(body, parseConsolidationActions(out ?? ""), at);
+    if (head) {
+      await deps.memory.replaceIfRevision!(scopeId, next, head.revision, "system");
+      return;
+    }
     await deps.memory.replace(scopeId, next, "system");
 
     const after = await deps.memory.read(scopeId);
@@ -172,8 +183,8 @@ export function createConsolidatingMemory(
   const perScope = createKeyedQueue<ScopeId>();
   const memory: MemoryService = {
     ...base,
-    async capture(s, facts, at, author) {
-      const added = await perScope(s, () => base.capture(s, facts, at, author));
+    async capture(s, facts, at, author, context) {
+      const added = await perScope(s, () => base.capture(s, facts, at, author, context));
       if (added > 0) void perScope(s, () => consolidator.maybeMaintain(s)).catch(() => {});
       return added;
     },

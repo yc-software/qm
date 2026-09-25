@@ -11,15 +11,18 @@ before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
+  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS turn_metrics CASCADE");
   await p.end();
 });
 
-test("pg metrics sink: persists samples, filters by scope + since, newest-first", { skip }, async () => {
+test("pg metrics sink: persists samples, filters by scope + since, newest-first", { skip }, async (t) => {
   const sink = createPostgresMetricsSink(URL!);
   const s1 = scopeId("channel", "C1");
   const s2 = scopeId("channel", "C2");
 
+  const now = Date.now();
+  const clock = t.mock.method(Date, "now", () => now);
   sink.record({
     totalMs: 100,
     ttftMs: 40,
@@ -45,11 +48,15 @@ test("pg metrics sink: persists samples, filters by scope + since, newest-first"
     cacheWrite: 0,
     uncachedInput: 1000,
   });
+  clock.mock.mockImplementation(() => now + 1);
   sink.record({ totalMs: 200, status: "paused", scopeLabel: s2, sessionId: "sess-B" });
+  clock.mock.restore();
   await settle(async () => (await sink.list({ limit: 100 })).length === 2);
 
   const all = await sink.list({ limit: 100 });
   assert.equal(all.length, 2, "both samples persisted");
+  assert.equal(all[0]!.ts, now + 1);
+  assert.equal(all[1]!.ts, now);
   assert.equal(all[0]!.scopeLabel, s2);
   assert.equal(all[0]!.status, "paused");
   assert.equal(all[0]!.ttftMs, undefined, "an absent TTFT stays absent (not 0)");
@@ -110,6 +117,7 @@ test("pg metrics sink: survives a fresh sink over the same table (durability)", 
 test("pg metrics sink: back-fills optional columns onto a pre-existing minimal table", { skip }, async () => {
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
+  await p.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'admin/scoped-events/turn_metrics/%'");
   await p.query("DROP TABLE IF EXISTS turn_metrics CASCADE");
   await p.query(
     `CREATE TABLE turn_metrics(

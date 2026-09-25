@@ -14,10 +14,16 @@ async function npmInstall(dir: string, logLabel: string, log: (msg: string) => v
 
 export async function ensureDeps(
   worktree: string,
-  opts: { watch: boolean; webUiBasePath: string },
+  opts: { web?: boolean; watch: boolean; webUiBasePath: string },
   log: (msg: string) => void,
 ): Promise<void> {
   if (!existsSync(join(worktree, "node_modules/emoji-datasource"))) await npmInstall(worktree, "core", log);
+  if (opts.web === false) return;
+  if (
+    !existsSync(join(worktree, "plugins/admin/node_modules/lit")) ||
+    !existsSync(join(worktree, "plugins/admin/node_modules/esbuild"))
+  )
+    await npmInstall(join(worktree, "plugins/admin"), "admin plugin", log);
   if (!existsSync(join(worktree, "plugins/web-ui/node_modules/vite")))
     await npmInstall(join(worktree, "plugins/web-ui"), "web-ui plugin", log);
   if (!opts.watch) {

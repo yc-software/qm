@@ -15,9 +15,12 @@ Before cloud mutation, read `qm.config.jsonc` when it exists. Its `target` is
 the selected provider; confirm it with the operator and do not offer to change
 it in place. If the repository has not been initialized, collect:
 
-- hosting target: a cloud provider, Fly.io or AWS. Recommend Fly.io when the
-  operator has no preference. The docker target runs everything on the local
-  machine, is for a quick local test drive only, and is outside this
+- hosting target: a cloud provider — Fly.io, AWS, or Porter. Recommend Fly.io
+  when the operator has no preference. Porter deploys onto a Kubernetes
+  cluster in the operator's own cloud account and has no `qm` CLI target:
+  choosing it switches this workflow to `references/porter.md`, which drives
+  the Porter CLI and dashboard directly. The docker target runs everything on
+  the local machine, is for a quick local test drive only, and is outside this
   workflow; never present it as the recommended path for a real deployment;
 - the first administrator's verified work email;
 - how people sign in: the built-in `auth` broker, which emails a one-time link,
@@ -108,7 +111,13 @@ register: the CLI generates the broker's signing key and the portal's client
 credentials and derives every `OIDC_*` value from `publicUrl`. Setting any of
 them by hand is refused.
 
-What the operator supplies is a way to send those emails. Do not ask them to
+Email setup can be deferred: after deployment, `qm admin-login` prints a
+single-use link for the configured administrator, valid for five minutes.
+It needs the deployment's local signing secret and creates no account or role
+grant. Keep the link private. `qm setup` asks whether to configure email now;
+skip that step for an initial administrator-only deployment.
+
+For ordinary user sign-in, the operator supplies a way to send emails. Do not ask them to
 pick a transport by name; ask what they already use for email. An existing
 mail account or relay (Google Workspace, Postmark, SES, Fastmail) means SMTP —
 recommend it, since it needs no DNS work — and only an operator who prefers

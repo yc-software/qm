@@ -66,7 +66,7 @@ test("sandbox build with an empty layer is a clear error", () => {
   const dir = tmp("sb-empty");
   try {
     writeConfig(dir, { orgId: "acme", target: "docker" });
-    const r = runCli(["sandbox", "build", "--dry-run"], { cwd: dir, env: { FLY_SANDBOX_APP_NAME: "" } });
+    const r = runCli(["sandbox", "build", "--dry-run"], { cwd: dir });
     assert.equal(r.code, 1);
     assert.match(r.out, /nothing to build/);
   } finally {

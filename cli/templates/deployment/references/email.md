@@ -1,13 +1,21 @@
 # Email transport for sign-in links
 
-Sign-in uses the built-in `auth` broker, which emails a one-time link. It needs
-one transport. SMTP is the default recommendation: any existing mail account or
+Ordinary sign-in uses the built-in `auth` broker, which emails a one-time link.
+Administrators can start without email: leave the sender and selected transport's
+credentials unset, then run `qm admin-login` after deployment. It prints a private,
+single-use login link valid for five minutes. The selected account must already
+have `org_admin` access. Other users need email or an external identity provider.
+
+Email sign-in needs one transport. SMTP is the default recommendation: any existing mail account or
 relay works and there is no DNS wait. Pick Resend only when the operator
 prefers it and has DNS control over a domain they are happy to send from.
 
 Set `env.auth.AUTH_EMAIL_TRANSPORT` to `resend` or `smtp` before collecting
-secrets, then run `npm exec qm -- setup`, which prompts for exactly the
-credentials that choice needs and generates every key itself.
+secrets, then run `npm exec qm -- setup` and choose to configure email. It prompts
+for exactly the credentials that choice needs and generates every signing key
+itself. Email sign-in activates when the sender and every selected credential
+are present. Missing credentials disable email sign-in without stopping QM or
+`qm admin-login`, even if a sender is still configured.
 
 ## What you can do, and what only the operator can
 
@@ -96,6 +104,16 @@ addresses. That is enough for a single administrator signing in with the
 verified address; for a whole team, the operator requests production access
 from the SES console (usually granted within a day) or verifies each
 recipient.
+
+## Invitation emails for external users
+
+Admins invite people outside the organization from the admin Users tab or by
+chatting with QM. Core emails those invitations through Resend, so the CLI
+delivers `RESEND_API_KEY` and `AUTH_EMAIL_FROM` to core as well as to the
+broker. Both are optional on core: without them the invitation is still created
+and the admin shares the sign-in link by hand. Core also receives
+`AUTH_ALLOWED_EMAIL_DOMAIN`, so an address in the organization's own domain is
+refused as an external user; those people sign in directly.
 
 ## Who may sign in
 

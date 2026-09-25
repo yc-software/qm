@@ -4,7 +4,7 @@ const CODE_PLACEHOLDER = /\u0000CODE(\d+)\u0000/g;
 export function extractDirectives<T>(
   reply: string,
   directiveRe: RegExp,
-  trailingRe: RegExp,
+  trailing: RegExp | ((text: string) => string),
   onMatch: (groups: string[]) => T | undefined,
 ): { text: string; matches: T[] } {
   if (!reply) return { text: reply ?? "", matches: [] };
@@ -18,7 +18,7 @@ export function extractDirectives<T>(
     if (parsed !== undefined) matches.push(parsed);
     return "";
   });
-  const stripped = text.replace(trailingRe, "");
+  const stripped = typeof trailing === "function" ? trailing(text) : text.replace(trailing, "");
   if (stripped !== text) {
     changed = true;
     text = stripped;
@@ -26,7 +26,9 @@ export function extractDirectives<T>(
   if (!changed) return { text: reply, matches };
   text = text
     .replace(CODE_PLACEHOLDER, (_m, i: string) => code[Number(i)] ?? "")
-    .replace(/[ \t]+\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   return { text, matches };

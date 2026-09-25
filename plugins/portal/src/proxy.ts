@@ -4,7 +4,14 @@ import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/po
 
 const IDENTITY_TTL_MS = 60_000;
 
-const FORWARD_REQUEST_HEADERS = ["content-type", "accept", "accept-language", "user-agent", "accept-encoding"];
+const FORWARD_REQUEST_HEADERS = [
+  "content-type",
+  "accept",
+  "accept-language",
+  "user-agent",
+  "accept-encoding",
+  "sec-fetch-dest",
+];
 
 const DROP_RESPONSE_HEADERS = new Set([
   "connection",
@@ -32,10 +39,24 @@ export function requestPort(upstream: URL): string | undefined {
   return upstream.port || undefined;
 }
 
+function declaresFrameAncestors(headers: Record<string, string | string[]>): boolean {
+  const csp = headers["content-security-policy"];
+  const text = typeof csp === "string" ? csp : (csp?.join(",") ?? "");
+  return /(^|[;,])\s*frame-ancestors\s/i.test(text);
+}
+
 function relay(
   req: IncomingMessage,
   res: ServerResponse,
-  target: { protocol: string; hostname: string; port?: string; path: string; headers: Record<string, string> },
+  target: {
+    protocol: string;
+    hostname: string;
+    port?: string;
+    path: string;
+    headers: Record<string, string | string[]>;
+    honorFramePolicy?: boolean;
+    forwardCookies?: boolean;
+  },
 ): void {
   const up = httpRequest(
     {
@@ -50,9 +71,11 @@ function relay(
       const out: Record<string, string | string[]> = {};
       for (const [k, v] of Object.entries(upRes.headers)) {
         if (v === undefined) continue;
-        if (DROP_RESPONSE_HEADERS.has(k.toLowerCase())) continue;
+        if (DROP_RESPONSE_HEADERS.has(k.toLowerCase()) && !(k.toLowerCase() === "set-cookie" && target.forwardCookies))
+          continue;
         out[k] = v;
       }
+      if (target.honorFramePolicy && declaresFrameAncestors(out)) res.removeHeader("x-frame-options");
       res.writeHead(upRes.statusCode ?? 502, out);
       upRes.on("error", () => res.destroy());
       upRes.pipe(res);
@@ -82,6 +105,7 @@ export interface SurfaceTarget {
   displayName?: string;
   impersonator?: string;
   identitySecret?: string;
+  authenticatedPrincipal?: string;
   nowMs?: number;
 }
 
@@ -97,6 +121,7 @@ export function proxyToSurface(req: IncomingMessage, res: ServerResponse, t: Sur
     base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
       {
         p: t.principal,
+        ...(t.authenticatedPrincipal ? { authenticatedAs: t.authenticatedPrincipal } : {}),
         ...(t.displayName ? { n: t.displayName } : {}),
         ...(t.impersonator ? { imp: t.impersonator } : {}),
         exp: now + IDENTITY_TTL_MS,
@@ -109,15 +134,30 @@ export function proxyToSurface(req: IncomingMessage, res: ServerResponse, t: Sur
     protocol: upstream.protocol,
     hostname: upstream.hostname,
     port: requestPort(upstream),
-    path: `${t.forwardPath}${t.search}`,
+    path: `${upstream.pathname.replace(/\/$/, "")}${t.forwardPath}${t.search}`,
     headers,
+    honorFramePolicy: true,
   });
 }
+
+export const FORWARD_WEBHOOK_HEADERS = [
+  "content-type",
+  "x-hub-signature-256",
+  "x-github-event",
+  "x-github-delivery",
+  "x-github-hook-id",
+  "x-slack-signature",
+  "x-slack-request-timestamp",
+  "stripe-signature",
+  "x-signature",
+  "x-delivery-id",
+];
 
 export const FORWARD_AGENT_API_HEADERS = [
   "content-type",
   "content-length",
   "accept",
+  "accept-encoding",
   "x-agent-capability",
   "x-content-sha256",
   "git-protocol",
@@ -168,6 +208,7 @@ export function proxyToDeployment(req: IncomingMessage, res: ServerResponse, t: 
 }
 
 export interface UpstreamTarget {
+  forwardCookies?: boolean;
   baseUrl: string;
   path: string;
   search: string;
@@ -192,8 +233,41 @@ export function proxyToUpstream(
     hostname: upstream.hostname,
     port: requestPort(upstream),
     path: `${t.path}${t.search}`,
+    ...(t.forwardCookies ? { forwardCookies: true } : {}),
     headers,
   });
 }
 
 export const FORWARD_BROKER_HEADERS = ["accept", "accept-language", "user-agent", "content-type", "content-length"];
+
+export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBase: string): void {
+  const upstream = new URL(coreBase);
+  const blocked = new Set([
+    ...DROP_RESPONSE_HEADERS,
+    "x-signature",
+    "x-timestamp",
+    "x-as-principal",
+    "x-admin-actor",
+    "x-agent-capability",
+    PORTAL_IDENTITY_HEADER,
+    "x-qm-app-host",
+    "forwarded",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-forwarded-for",
+    ...(req.headers.connection ?? "").split(",").map((name) => name.trim().toLowerCase()),
+  ]);
+  const headers: Record<string, string | string[]> = { "x-qm-app-host": "1" };
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (value !== undefined && !blocked.has(name)) headers[name] = value;
+  }
+  res.removeHeader("x-frame-options");
+  relay(req, res, {
+    protocol: upstream.protocol,
+    hostname: upstream.hostname,
+    port: requestPort(upstream),
+    path: req.url ?? "/",
+    headers,
+    forwardCookies: true,
+  });
+}

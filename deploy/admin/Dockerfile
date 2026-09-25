@@ -2,11 +2,17 @@ FROM node:24-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83
 
 WORKDIR /app
 
+COPY plugins/admin/package.json plugins/admin/package-lock.json ./
+RUN npm ci --omit=dev && rm -rf /root/.npm /tmp/node-compile-cache
+
 COPY plugins/admin/src ./src
+COPY plugins/admin/ui ./ui
 COPY plugins/chassis/src /chassis/src
 COPY plugins/admin/public ./public
 COPY plugins/admin/tsconfig.json ./
 
+ARG GIT_SHA=
+ENV GIT_SHA=$GIT_SHA
 ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080

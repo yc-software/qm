@@ -25,6 +25,10 @@ jobs:
         run: |
           npm ci
           npm run typecheck
+      - name: Desktop sign-in tests
+        run: |
+          npm ci --prefix desktop --ignore-scripts
+          npm test --prefix desktop
 
   core-tests:
     name: Core tests (${{ matrix.shard }}/5)
@@ -42,6 +46,8 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install
         run: npm ci
+      - name: Build connector SDK
+        run: npm run build:connector-sdk
       - name: Verify root test shard plan
         if: matrix.shard == 1
         run: npm run test:root:shard:check
@@ -72,8 +78,15 @@ jobs:
           cache-dependency-path: |
             cli/package-lock.json
             package-lock.json
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
       - name: Install, typecheck, unit + packaged-artifact + e2e tests
         working-directory: cli
+        env:
+          QM_TERRAFORM_BIN: terraform
+          QM_TEST_TERRAFORM: terraform
         run: |
           npm ci
           npm run typecheck
@@ -89,8 +102,8 @@ jobs:
           npm run typecheck:contract
           node --test "deploy/stacks/*/test/*.test.ts"
 
-  cli-version:
-    name: CLI version bump
+  coauthor-trailers:
+    name: Co-author trailers
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -98,29 +111,30 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Require a version bump when the published package changes
+      - name: Reject AI coauthors and GitHub noreply coauthor addresses
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          git fetch --no-tags --quiet https://github.com/yc-software/qm.git main
           base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
-          changed=$(git diff --name-only "$base" "$HEAD_SHA" -- \
-            cli/bin cli/src cli/templates cli/manifest.json cli/package.json \
-            cli/package-lock.json cli/README.md cli/LICENSE cli/tsconfig.json cli/tsconfig.build.json)
-          [ -n "$changed" ] || exit 0
-          base_version=$(git show "${base}:cli/package.json" | jq -r .version)
-          head_version=$(git show "${HEAD_SHA}:cli/package.json" | jq -r .version)
-          highest=$(printf '%s\n%s\n' "$base_version" "$head_version" | sort -V | tail -1)
-          if [ "$base_version" = "$head_version" ] || [ "$highest" != "$head_version" ]; then
-            printf '%s\n' "$changed" >&2
-            echo "these files ship in @yc-software/qm; bump cli/package.json past $base_version" >&2
-            exit 1
-          fi
-          case "$head_version" in
-            [0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "cli/package.json version must be semver, got $head_version" >&2; exit 1 ;;
-          esac
+          offenders=""
+          for sha in $(git rev-list "$base..$HEAD_SHA" --not FETCH_HEAD); do
+            if git log -1 --format='%(trailers:key=Co-authored-by,valueonly)' "$sha" \
+              | grep -Ei '(@users\.noreply\.github\.com|noreply@(openai|anthropic|cursor)\.com|^(Codex|Claude Code|Claude (Opus|Sonnet|Haiku)|Copilot|Cursor)([[:space:]<]|$))' > /dev/null; then
+              offenders="$offenders $sha"
+            fi
+          done
+          [ -n "$offenders" ] || exit 0
+          echo "$offenders" | xargs git show -s --format='%h %s' >&2
+          echo "Co-Authored-By trailers must credit human contributors, not AI tools." >&2
+          echo "Remove Codex, Claude, and other AI coauthor trailers from the listed PR commits." >&2
+          echo "Co-Authored-By trailers must not use @users.noreply.github.com addresses:" >&2
+          echo "GitHub credits them to whichever account owns that username, which may be a stranger." >&2
+          echo "This repo bans all such addresses, including your own privacy address;" >&2
+          echo "use the contributor's real email, or drop the trailer." >&2
+          exit 1
 
   lint:
     name: Lint
@@ -138,6 +152,7 @@ jobs:
         run: |
           npm ci
           npm ci --prefix plugins/web-ui
+          npm ci --prefix desktop --ignore-scripts
       - name: Formatting
         run: npm run format:check
       - name: Lint whole repo, incl. plugins
@@ -172,10 +187,28 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install
         run: npm ci
+      - name: Build connector SDK
+        run: npm run build:connector-sdk
       - name: Postgres-backed tests (durability + cross-process)
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
         run: npm run test:pg
+      - name: Swarm HTTP runtime tests
+        env:
+          SWARM_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
+        run: node --experimental-test-module-mocks --test test/swarm-orchestrator.test.ts
+      - name: Model registry cross-process tests
+        env:
+          MODEL_OVERLAY_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
+        run: node --experimental-test-module-mocks --test test/model-overlay-postgres.test.ts
+      - name: Memorable provider e2e (real CLI against Postgres)
+        env:
+          MEMORABLE_E2E_DB_URL: postgres://postgres:postgres@localhost:5432/qm
+          MEMORABLE_E2E_BIN: node node_modules/memorable-cli/dist/cli.js
+        run: |
+          # Pinned vendor CLI under test; not shipped, so the repo's release-age guard is bypassed for this install only.
+          npm i --no-save --no-audit --no-fund --min-release-age=0 memorable-cli@0.5.15
+          node --test test/e2e/memorable-cli.e2e.test.ts
 
   admin-plugin:
     name: Admin plugin
@@ -208,8 +241,11 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             plugins/web-ui/package-lock.json
-      - name: Install core dependencies
-        run: npm ci
+            plugins/admin/package-lock.json
+      - name: Install core and mounted admin dependencies
+        run: |
+          npm ci
+          npm ci --prefix plugins/admin
       - name: Install, typecheck, test, build
         working-directory: plugins/web-ui
         run: |
@@ -249,6 +285,8 @@ jobs:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: plugins/portal/package-lock.json
+      - name: Install embedded auth dependencies
+        run: npm ci --prefix plugins/auth
       - name: Install, typecheck, test
         working-directory: plugins/portal
         run: |

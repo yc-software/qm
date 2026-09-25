@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverPlugins } from "../src/plugins.ts";
@@ -144,6 +144,38 @@ test("a source plugin folder whose name isn't a lowercase DNS label is an error,
 
 test("a bare deployment with no plugins/ dir and no config plugins discovers nothing", () => {
   const dir = deployment(() => {});
+  try {
+    const { plugins, errors } = discoverPlugins(dir, makeConfig([]));
+    assert.deepEqual(plugins, []);
+    assert.deepEqual(errors, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a symlinked plugin folder is discovered as a source plugin (layers share one plugin via symlink)", () => {
+  const dir = deployment((d) => {
+    mkdirSync(join(d, "real-plugin"), { recursive: true });
+    writeFileSync(join(d, "real-plugin", "Dockerfile"), "FROM scratch\n");
+    mkdirSync(join(d, "plugins"), { recursive: true });
+    symlinkSync(join(d, "real-plugin"), join(d, "plugins", "relay"));
+  });
+  try {
+    const { plugins, errors } = discoverPlugins(dir, makeConfig([]));
+    assert.deepEqual(errors, []);
+    assert.equal(plugins.length, 1);
+    assert.equal(plugins[0]!.name, "relay");
+    assert.equal(plugins[0]!.kind, "source");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a broken symlink in plugins/ is ignored, not a crash", () => {
+  const dir = deployment((d) => {
+    mkdirSync(join(d, "plugins"), { recursive: true });
+    symlinkSync(join(d, "nowhere"), join(d, "plugins", "ghost"));
+  });
   try {
     const { plugins, errors } = discoverPlugins(dir, makeConfig([]));
     assert.deepEqual(plugins, []);

@@ -32,25 +32,39 @@ export interface SlackManifests {
   sso: string;
 }
 
+function isSlackHost(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    const host = new URL(value).hostname;
+    return host === "slack.com" || host.endsWith(".slack.com");
+  } catch {
+    return false;
+  }
+}
+
 export function usesSlackOidc(config: QmConfig): boolean {
   const portal = config.env.portal ?? {};
   return ["OIDC_AUTH_ENDPOINT", "OIDC_TOKEN_ENDPOINT", "OIDC_USERINFO_ENDPOINT", "OIDC_ISSUER"].some((name) =>
-    portal[name]?.includes("slack.com"),
+    isSlackHost(portal[name]),
   );
 }
 
 export function renderSlackManifests(config: QmConfig): SlackManifests {
+  const name = config.botName ?? "qm";
   const bot = JSON.parse(template("slack-manifest.json")) as {
     display_information: { name: string; description: string };
     features: { bot_user: { display_name: string } };
   };
-  bot.display_information.name = "qm";
-  bot.display_information.description = `qm workspace agent for ${config.orgId}`;
-  bot.features.bot_user.display_name = "qm";
+  bot.display_information.name = name;
+  bot.display_information.description = `${name} workspace agent for ${config.orgId}`;
+  bot.features.bot_user.display_name = name;
 
   const sso = JSON.parse(template("slack-sso-manifest.json")) as {
+    display_information: { name: string; description: string };
     oauth_config: { redirect_urls: string[] };
   };
+  sso.display_information.name = `${name} SSO`;
+  sso.display_information.description = `Sign in to your ${name} deployment with Slack`;
   sso.oauth_config.redirect_urls = [`${config.publicUrl.replace(/\/$/, "")}/auth/callback`];
 
   return {

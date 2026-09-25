@@ -64,6 +64,73 @@ export function runInherit(cmd: string, args: string[], opts: { cwd?: string; en
   });
 }
 
+export function runInheritAsync(
+  cmd: string,
+  args: string[],
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (opts.signal?.aborted) return reject(new CliError(`${cmd} cancelled`));
+    const grouped = process.platform !== "win32";
+    const child = spawn(cmd, args, { stdio: "inherit", detached: grouped, ...procOpts(opts) });
+    let cancellation: Promise<void> | undefined;
+    const groupAlive = () => {
+      if (!child.pid) return false;
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+        throw error;
+      }
+    };
+    const killGroup = (signal: NodeJS.Signals) => {
+      if (!child.pid) return;
+      try {
+        process.kill(-child.pid, signal);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    };
+    const cancel = () => {
+      cancellation = (async () => {
+        if (!child.pid) return;
+        if (!grouped) {
+          const killed = spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+          if (killed.status !== 0 && child.exitCode === null)
+            throw new CliError(`${cmd} process tree could not be cancelled`);
+          return;
+        }
+        killGroup("SIGTERM");
+        const deadline = Date.now() + 5000;
+        while (groupAlive() && Date.now() < deadline) await sleep(25);
+        if (groupAlive()) killGroup("SIGKILL");
+        const killDeadline = Date.now() + 5000;
+        while (groupAlive() && Date.now() < killDeadline) await sleep(25);
+        if (groupAlive()) throw new CliError(`${cmd} process group did not exit after cancellation`);
+      })();
+      cancellation.catch(reject);
+    };
+    const cleanup = () => opts.signal?.removeEventListener("abort", cancel);
+    opts.signal?.addEventListener("abort", cancel, { once: true });
+    child.once("error", (error) => {
+      cleanup();
+      reject(error);
+    });
+    child.once("close", async (code, signal) => {
+      cleanup();
+      try {
+        await cancellation;
+        if (opts.signal?.aborted) reject(new CliError(`${cmd} cancelled`));
+        else if (code === 0) resolve();
+        else reject(new CliError(`${cmd} exited with ${signal ?? code}`));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
 export function spawnBackground(
   cmd: string,
   args: string[],
@@ -208,21 +275,45 @@ export function isInvalidSecret(name: string, value: string | undefined): boolea
     );
   }
   return (
-    (name === "CONNECTOR_SECRET_KEY" || name === "CORE_SIGNING_SECRET" || name === "SKILL_SIGNING_SECRET") &&
+    (name === "CONNECTOR_SECRET_KEY" ||
+      name === "CORE_SIGNING_SECRET" ||
+      name === "SKILL_SIGNING_SECRET" ||
+      name === "DEPLOYMENT_CONTROL_SECRET") &&
     candidate.length < 32
   );
+}
+
+// One line of a dotenv file, following Node's --env-file semantics for the
+// `export ` prefix and quoted values ('', "", ``: the quotes are stripped and
+// \n expands to a newline inside double quotes). Two deliberate divergences
+// from Node, both pinned by tests: a `#` inside an unquoted value is part of
+// the value (tokens and URL fragments), and a quoted value ends on its own
+// line (writeEnvValue never emits multi-line values).
+function parseEnvLine(raw: string): [key: string, value: string] | undefined {
+  let line = raw.trim();
+  if (!line || line.startsWith("#")) return undefined;
+  if (line.startsWith("export ")) line = line.slice("export ".length).trimStart();
+  const eq = line.indexOf("=");
+  if (eq <= 0) return undefined;
+  const key = line.slice(0, eq).trim();
+  let value = line.slice(eq + 1).trim();
+  const quote = value[0];
+  if (quote === '"' || quote === "'" || quote === "`") {
+    const end = value.indexOf(quote, 1);
+    if (end > 0) {
+      value = value.slice(1, end);
+      if (quote === '"') value = value.replaceAll("\\n", "\n");
+    }
+  }
+  return [key, value];
 }
 
 export function readEnvFile(path: string): Map<string, string> {
   const out = new Map<string, string>();
   if (!existsSync(path)) return out;
   for (const raw of readFileSync(path, "utf8").split("\n")) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const eq = line.indexOf("=");
-    if (eq <= 0) continue;
-    const key = line.slice(0, eq).trim();
-    if (isEnvVarName(key)) out.set(key, line.slice(eq + 1));
+    const entry = parseEnvLine(raw);
+    if (entry && isEnvVarName(entry[0])) out.set(entry[0], entry[1]);
   }
   return out;
 }

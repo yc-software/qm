@@ -18,8 +18,6 @@ function makeDeployment(config: Record<string, unknown>, setup: (dir: string) =>
       services: ["core"],
       sandbox: {
         app: "wiretest-sandboxes",
-        image:
-          "registry.fly.io/wiretest-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
       },
       ...config,
     }),
@@ -58,6 +56,17 @@ async function plan(configDir: string, opts: { sandboxDir?: string } = {}): Prom
   }
   return lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 }
+
+test("local sandbox dry-run derives a deployment-scoped runnable image", async () => {
+  const dir = makeDeployment({ sandbox: { backend: "local" } });
+  try {
+    const out = await plan(dir);
+    assert.match(out, /sandbox: local image qm-wiretest-sandbox-local:latest/);
+    assert.match(out, /LOCAL_SANDBOX_IMAGE/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("the deployment's sandbox/ skills + tools wire into the core via DEPLOYMENT_LAYER", async () => {
   const dir = makeDeployment({}, sandboxLayer);
@@ -104,7 +113,6 @@ test("sandbox.app/env/secretEnv become the core's FLY_* + FLY_RESIDENT_ENV_* env
     {
       sandbox: {
         app: "wire-sandboxes",
-        image: "registry.fly.io/wire-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
         env: { TZ: "UTC" },
         secretEnv: ["COMPANY_API_TOKEN"],
       },
@@ -113,8 +121,6 @@ test("sandbox.app/env/secretEnv become the core's FLY_* + FLY_RESIDENT_ENV_* env
   );
   try {
     const out = await plan(dir);
-    assert.match(out, /FLY_SANDBOX_APP_NAME/);
-    assert.match(out, /FLY_BASE_IMAGE/);
     assert.match(out, /FLY_RESIDENT_ENV_TZ/);
     assert.match(out, /FLY_RESIDENT_ENV_COMPANY_API_TOKEN/);
   } finally {
@@ -126,7 +132,6 @@ test("a missing secretEnv value is warned, not invented", async () => {
   const dir = makeDeployment({
     sandbox: {
       app: "s",
-      image: "registry.fly.io/s@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
       secretEnv: ["NOPE_TOKEN"],
     },
   });
@@ -138,7 +143,7 @@ test("a missing secretEnv value is warned, not invented", async () => {
   }
 });
 
-test("model → PI_MODEL and host ports follow the offset map (core+0, portal+1, web-ui+2, admin+3)", async () => {
+test("model → PI_MODEL and host ports follow the offset map (core+0, portal+1, combined web-ui+2)", async () => {
   const dir = makeDeployment({ model: "claude-opus-4-8", services: ["core", "portal", "web-ui", "admin"] });
   try {
     const out = await plan(dir);
@@ -146,7 +151,7 @@ test("model → PI_MODEL and host ports follow the offset map (core+0, portal+1,
     assert.match(out, /host :8080/);
     assert.match(out, /host :8081/);
     assert.match(out, /host :8082/);
-    assert.match(out, /host :8083/);
+    assert.doesNotMatch(out, /host :8083/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

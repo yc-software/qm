@@ -106,10 +106,54 @@ test("the events carry the session UUID and a timestamp", async () => {
   assert.ok(typeof settle!.at === "number" && settle!.at > 0);
 });
 
+test("a shed-participants event is rehydrated from the session store before subscribers see it", async () => {
+  const built = freshApp();
+  const thread = "web:U1:shed";
+  const turned = await built.app.turn(dm("hello", thread));
+  const got: SessionStateEvent[] = [];
+  built.app.subscribeSessionStates((e) => got.push(e));
+  built.sessionStateBus.emit({
+    threadRef: thread,
+    sessionId: turned.sessionId!,
+    state: "working",
+    at: 7,
+    participantsShed: true,
+  });
+  assert.ok(await waitFor(() => got.length > 0), "the flagged event reached the subscriber");
+  assert.deepEqual(got[0]!.participants, ["U1"], "the routing field is rebuilt from durable session membership");
+  assert.equal(got[0]!.participantsShed, undefined, "the internal shed flag never leaves the app");
+  assert.equal(got[0]!.state, "working");
+});
+
+test("a shed event still reaches subscribers when the participant lookup fails", async () => {
+  const built = freshApp();
+  const thread = "web:U1:shed-fail";
+  await built.app.turn(dm("hello", thread));
+  built.sessions.participantsOf = async () => {
+    throw new Error("db down");
+  };
+  const got: SessionStateEvent[] = [];
+  built.app.subscribeSessionStates((e) => got.push(e));
+  built.sessionStateBus.emit({ threadRef: thread, state: "working", at: 8, participantsShed: true });
+  assert.ok(await waitFor(() => got.length > 0), "the transition is not dropped with the lookup");
+  assert.equal(got[0]!.participants, undefined);
+  assert.equal(got[0]!.participantsShed, undefined);
+});
+
+test("a shed event for an unknown thread still reaches subscribers, just without participants", async () => {
+  const built = freshApp();
+  const got: SessionStateEvent[] = [];
+  built.app.subscribeSessionStates((e) => got.push(e));
+  built.sessionStateBus.emit({ threadRef: "web:U1:ghost", state: "idle", at: 9, participantsShed: true });
+  assert.ok(await waitFor(() => got.length > 0));
+  assert.equal(got[0]!.participants, undefined);
+  assert.equal(got[0]!.participantsShed, undefined);
+});
+
 test("GET /v1/session-state/events streams transitions as SSE frames", async () => {
   const built = freshApp();
   built.runtime.start();
-  const core = createInsecureTestServer(built.app, {});
+  const core = createInsecureTestServer(built.app, { webhookReceiver: built.webhookReceiver });
   core.listen(0);
   const base = `http://localhost:${(core.address() as AddressInfo).port}`;
   try {
@@ -210,7 +254,10 @@ test("a FAILED (parked) run still settles from durable truth: leftover blocking 
   const leased = await built.runs.claimById(run.id, "w1", 30_000);
   assert.ok(leased);
   await built.runs.fail(run.id, leased!.leaseToken!, "kaboom", { retry: false });
-  assert.ok(await waitFor(() => statesFor(got, thread).length > 0), "terminal emitted a settle");
+  assert.ok(
+    await waitFor(() => statesFor(got, thread).some((state) => state !== "working")),
+    "terminal emitted a settle",
+  );
   const settle = got.find((e) => e.threadRef === thread && e.state !== "working");
   assert.equal(settle?.state, "awaiting_approval", "the undecided blocking approval keeps the session awaiting");
   assert.equal(settle?.sessionId, uuid, "the frame carries the durable session UUID, not the threadRef");

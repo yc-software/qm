@@ -16,7 +16,7 @@ const SCHEMA = [
 ];
 
 export function createPostgresMemoryService(connectionString: string): MemoryService {
-  const { q, pool } = createPgPool(connectionString, SCHEMA);
+  const { q, pool } = createPgPool(connectionString, "memory/store/0001", SCHEMA);
 
   async function currentBody(scopeId: string): Promise<string> {
     const rows = await q("SELECT body FROM memory_revisions WHERE scope_id = $1 ORDER BY seq DESC LIMIT 1", [scopeId]);

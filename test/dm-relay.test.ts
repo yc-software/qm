@@ -60,12 +60,16 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
     ]);
     await built.app.upsertChannels(
       [
+        { channelId: "C", name: "current" },
         { channelId: "C-eng", name: "eng" },
         { channelId: "C-d1", name: "design-frontend" },
         { channelId: "C-d2", name: "design-backend" },
         { channelId: "C-secret", name: "secret", isPrivate: true },
       ],
-      [{ channelId: "C-secret", principalId: "U-carol" }],
+      [
+        { channelId: "C", principalId: "U-carol" },
+        { channelId: "C-secret", principalId: "U-carol" },
+      ],
     );
     await built.app.upsertGroups([
       { groupId: "G-jrs", principalId: "U-carol" },
@@ -321,7 +325,8 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
     const pending = await built.app.pendingDeliveries("principal");
     const d = pending.find((x) => x.id === body.deliveryId);
     assert.ok(d, "delivery is in the principal queue");
-    assert.equal(d!.text, "Carol asked me to pass on:\nship it 🚀");
+    assert.equal(d!.text, "ship it 🚀");
+    assert.equal(d!.destination.relaySender, "Carol");
     assert.equal(d!.destination.onBehalfOf, "U-carol");
   });
 
@@ -352,7 +357,8 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
     const pending = await built.app.pendingDeliveries("group");
     const d = pending.find((x) => x.id === body.deliveryId);
     assert.ok(d, "delivery is in the group queue");
-    assert.equal(d!.text, "Carol asked me to pass on:\nheads up");
+    assert.equal(d!.text, "heads up");
+    assert.equal(d!.destination.relaySender, "Carol");
     assert.equal(d!.destination.type, "group");
     assert.equal(d!.destination.target, "G-jrs");
   });

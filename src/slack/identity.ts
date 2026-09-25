@@ -91,9 +91,11 @@ export function probeIdentityMode(members: SlackUser[], ownTeamId: string): Slac
 }
 
 export interface ChannelMeta {
+  is_im?: boolean;
   name?: string;
   is_ext_shared?: boolean;
   is_pending_ext_shared?: boolean;
+  is_member?: boolean;
   is_mpim?: boolean;
   is_private?: boolean;
   purpose?: { value?: string };
@@ -162,17 +164,21 @@ export function allInternalChannelMembers(
   if (!complete) return undefined;
   if (isExternallyShared(info)) return undefined;
   if (members.some((m) => m.isExternalGuest)) return undefined;
+  return internalChannelMembers(members, true);
+}
+
+export function internalChannelMembers(members: ActorAssertion[], complete: boolean): string[] | undefined {
+  if (!complete) return undefined;
   const ids = new Set<string>();
-  for (const m of members) if (m.externalId) ids.add(m.externalId);
+  for (const m of members) if (m.externalId && !m.isExternalGuest) ids.add(m.externalId);
   return [...ids];
 }
 
 export async function resolveChannelMembership(opts: {
   memberIds: readonly string[];
   actor: ActorAssertion;
-  actorSlackId: string;
+  actorSlackId: string | undefined;
   info: ChannelMeta | undefined;
-  maxClassifyMembers: number;
   classify(id: string): Promise<{ actor: ActorAssertion; ok: boolean }>;
 }): Promise<{
   audience: ActorAssertion[];
@@ -180,8 +186,8 @@ export async function resolveChannelMembership(opts: {
   slackIdsByPrincipal?: Map<string, string>;
 }> {
   const { memberIds, actor, info } = opts;
-  if (memberIds.length > opts.maxClassifyMembers) return { audience: [actor, externalMarker()] };
-  if (!memberIds.includes(opts.actorSlackId)) return { audience: [actor, externalMarker()] };
+  if (!actor.isBot && (opts.actorSlackId === undefined || !memberIds.includes(opts.actorSlackId)))
+    return { audience: [actor, externalMarker()] };
 
   const members: ActorAssertion[] = [];
   const slackIdsByPrincipal = new Map<string, string>();

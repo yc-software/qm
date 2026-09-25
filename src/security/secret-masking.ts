@@ -1,6 +1,5 @@
 const NON_SECRET_ENV_KEYS = new Set([
   "AGENT_API_URL",
-  "AGENT_OUTBOX",
   "AWS_REGION",
   "AWS_DEFAULT_REGION",
   "BROWSE_LAB_MAX_STEPS",
@@ -21,6 +20,7 @@ export function createSecretValueMasker(env: Record<string, string> | undefined)
     const uri = encodeURIComponent(value);
     if (uri !== value) variants.push({ needle: uri, label: key });
     variants.push({ needle: Buffer.from(value, "utf8").toString("base64").replace(/=+$/, ""), label: key });
+    variants.push({ needle: Buffer.from(value, "utf8").toString("base64url"), label: key });
   }
   if (!variants.length) return (text) => text;
   variants.sort((a, b) => b.needle.length - a.needle.length);
@@ -30,4 +30,24 @@ export function createSecretValueMasker(env: Record<string, string> | undefined)
     }
     return text;
   };
+}
+
+export class MaskedExecutionError extends Error {}
+
+export function createExactSecretValueMasker(values: Iterable<string>): (text: string) => string {
+  const secrets = [...new Set(values)].filter(Boolean).sort((a, b) => b.length - a.length);
+  if (!secrets.length) return (text) => text;
+  const pattern = new RegExp(secrets.map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
+  return (text) => text.replace(pattern, () => "<redacted:credential>");
+}
+
+export function executionSecretEnv(
+  env: Record<string, string> | undefined,
+  fields: readonly { key: string; value: string; secret?: boolean }[] = [],
+): Record<string, string> {
+  const secrets = Object.fromEntries(Object.entries(env ?? {}).filter(([key]) => !NON_SECRET_ENV_KEYS.has(key)));
+  const injected = fields.filter((field) => env?.[field.key] === field.value);
+  for (const field of injected) if (field.secret === false) delete secrets[field.key];
+  for (const field of injected) if (field.secret !== false) secrets[field.key] = field.value;
+  return secrets;
 }

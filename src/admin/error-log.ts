@@ -1,3 +1,5 @@
+import { reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
+import { errorAlreadyReported, markErrorReported } from "../util/errors.ts";
 import type { ScopeId } from "../types.ts";
 import { createTimestampedEventSink } from "./scoped-event-sink.ts";
 
@@ -11,9 +13,9 @@ export interface ErrorEvent {
 }
 
 export interface ErrorLog {
-  record(e: Omit<ErrorEvent, "ts">): void;
+  record(e: Omit<ErrorEvent, "ts">, error?: unknown): void;
   flush(): Promise<void>;
-  list(opts?: { scopeId?: string; sessionId?: string; limit?: number }): Promise<ErrorEvent[]>;
+  list(opts?: { scopeId?: string; sessionId?: string; limit?: number; offset?: number }): Promise<ErrorEvent[]>;
   count(opts?: { scopeId?: string; sessionId?: string }): Promise<number>;
 }
 
@@ -26,5 +28,18 @@ export function createErrorLog(): ErrorLog {
     flush: async () => {},
     list: (opts = {}) => sink.list(opts),
     count: async (opts = {}) => (await sink.list({ ...opts, limit: MAX })).length,
+  };
+}
+
+export function withErrorReporting(store: ErrorLog): ErrorLog {
+  return {
+    ...store,
+    record(event, error) {
+      if (!errorAlreadyReported(error)) {
+        reportBackendError(error ?? new Error("Recorded backend failure"), `${event.category}:${event.code}`);
+        markErrorReported(error);
+      }
+      store.record(event);
+    },
   };
 }

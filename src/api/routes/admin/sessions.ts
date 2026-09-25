@@ -7,7 +7,14 @@ import {
   type Session,
   type SessionEntry,
 } from "../../../types.ts";
-import { transcriptEntries, type LlmRequestRecord } from "../../../sessions/session-store.ts";
+import {
+  sessionCategory,
+  transcriptEntries,
+  type LlmRequestRecord,
+  type SessionCategory,
+  type SessionSummary,
+} from "../../../sessions/session-store.ts";
+import { createTranscriptSource } from "../../../harness/tape-projection.ts";
 import { swallowAs } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
@@ -17,10 +24,8 @@ import {
   cronWakeOrigin,
   deliveryOrigin,
   parseSessionWakeRef,
-  sessionCategory,
   sessionKind,
   sessionOrigin,
-  type AdminSessionCategory,
   type AdminSessionOrigin,
 } from "./origins.ts";
 
@@ -90,9 +95,14 @@ async function deliveryProvenanceSidecars(
         return;
       }
       const seqBounds = group.map((d) => d.provenance!.sourceUserSeq).filter((s): s is number => s !== undefined);
-      const sourceEntries = seqBounds.length
-        ? ((await deps.sessions?.getEntries(sourceSession.id, { sinceSeq: Math.min(...seqBounds) })) ?? [])
-        : [];
+      const sourceEntries =
+        seqBounds.length && deps.sessions
+          ? (
+              await createTranscriptSource(deps.sessions).forRender(sourceSession.id, {
+                sinceSeq: Math.min(...seqBounds),
+              })
+            ).entries
+          : [];
       const turnSeqsFor = (p: DeliveryProvenance): Set<number> => {
         const seqs = new Set<number>();
         if (p.sourceUserSeq === undefined) return seqs;
@@ -122,6 +132,30 @@ async function deliveryProvenanceSidecars(
   return out;
 }
 
+function requireAdminSession(ctx: ApiCtx, id: string) {
+  return requireScopedResource(
+    ctx,
+    () => ctx.deps.sessions?.get(id),
+    (s) => s.scopeId,
+    "session",
+    "fallback",
+  );
+}
+
+async function cronFireResults(app: App, summaries: readonly SessionSummary[]): Promise<Map<string, string>> {
+  const results = new Map<string, string>();
+  const rowThreadRefs = new Set<string>();
+  for (const s of summaries) {
+    if (parseSessionWakeRef(s.threadRef)?.trigger === "cron") rowThreadRefs.add(s.threadRef);
+  }
+  if (!rowThreadRefs.size) return results;
+  for (const fire of await app.cronFiresByThreadRefs([...rowThreadRefs])) {
+    const digest = fire.reply?.trim() || fire.note?.trim();
+    if (digest) results.set(fire.threadRef, digest);
+  }
+  return results;
+}
+
 export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, url } = ctx;
   const authz = await requireScopedAdmin(ctx);
@@ -130,7 +164,7 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
   audit(deps, { principalId: actor.id, action: "sessions.read", resource: "sessions", scopeLabel: scope });
   const orgWide = parseScopeId(scope).kind === "org";
   const categoryParam = url.searchParams.get("category") ?? "conversation";
-  let category: AdminSessionCategory | "all" = "conversation";
+  let category: SessionCategory | "all" = "conversation";
   if (categoryParam === "background" || categoryParam === "all") category = categoryParam;
   const categoryFilter = category === "all" ? undefined : category;
   const originParam = url.searchParams.get("origin");
@@ -206,7 +240,7 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
       ...(originFilter ? { origin: originFilter } : {}),
       ...(cronId ? { cronId } : {}),
     })) ?? [];
-  const categories = new Map(summaries.map((s) => [s.id, sessionCategory(s)]));
+  const categories = new Map(summaries.map((s) => [s.id, sessionCategory(s.origin)]));
   const background = summaries.filter((s) => categories.get(s.id) === "background");
   const sentCounts =
     deps.deliveries && background.length
@@ -214,16 +248,27 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
           .sentCountsBySourceSessions(background.map((s) => ({ sessionId: s.id, threadRef: s.threadRef })))
           .catch(swallowAs("api: admin sessions sent counts failed", null))
       : null;
-  const needCrons = !!cronId || summaries.some((s) => parseSessionWakeRef(s.threadRef)?.trigger === "cron");
-  const cronLookup = needCrons ? new Map((await app.listCrons()).map((c) => [c.id, c])) : undefined;
+  const fireResults = await cronFireResults(app, summaries);
+  const pageCronIds = new Set<string>(cronId ? [cronId] : []);
+  for (const s of summaries) {
+    const wake = parseSessionWakeRef(s.threadRef);
+    if (wake?.trigger === "cron") pageCronIds.add(wake.sourceId);
+  }
+  const pageCrons = await Promise.all([...pageCronIds].map(async (id) => [id, await app.getCron(id)] as const));
+  const cronLookup = new Map(pageCrons.flatMap(([id, cron]) => (cron ? [[id, cron] as const] : [])));
   const sessions = await Promise.all(
-    summaries.map(async (s) => ({
-      ...s,
-      category: categories.get(s.id)!,
-      kind: sessionKind(s),
-      origin: await sessionOrigin(app, s, scope, cronLookup),
-      ...(sentCounts && categories.get(s.id) === "background" ? { delivered: sentCounts.get(s.id) ?? 0 } : {}),
-    })),
+    summaries.map(async (s) => {
+      const cronRow = parseSessionWakeRef(s.threadRef)?.trigger === "cron";
+      const result = cronRow ? fireResults.get(s.threadRef) || s.lastMessage || s.firstMessage : undefined;
+      return {
+        ...s,
+        category: categories.get(s.id)!,
+        kind: sessionKind(s),
+        origin: await sessionOrigin(app, s, scope, cronLookup),
+        ...(sentCounts && categories.get(s.id) === "background" ? { delivered: sentCounts.get(s.id) ?? 0 } : {}),
+        ...(result ? { result } : {}),
+      };
+    }),
   );
   return sendJson(res, 200, {
     scopeId: scope,
@@ -256,12 +301,7 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
 export async function getAdminSessionLlm(ctx: ApiCtx): Promise<void> {
   const { res, deps, params, url } = ctx;
   const id = params.id!;
-  const scoped = await requireScopedResource(
-    ctx,
-    () => deps.sessions?.get(id),
-    (s) => s.scopeId,
-    "session",
-  );
+  const scoped = await requireAdminSession(ctx, id);
   if (!scoped) return;
   const { actor, record: session } = scoped;
   audit(deps, { principalId: actor.id, action: "session.llm.read", resource: id, scopeLabel: session.scopeId });
@@ -281,19 +321,16 @@ export async function getAdminSessionLlm(ctx: ApiCtx): Promise<void> {
 export async function getAdminSession(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, params, url } = ctx;
   const id = params.id!;
-  const scoped = await requireScopedResource(
-    ctx,
-    () => deps.sessions?.get(id),
-    (s) => s.scopeId,
-    "session",
-  );
+  const scoped = await requireAdminSession(ctx, id);
   if (!scoped) return;
   const { actor, scope, record: session } = scoped;
   audit(deps, { principalId: actor.id, action: "session.read", resource: id, scopeLabel: session.scopeId });
   const want = Math.max(1, Number(url.searchParams.get("limit")) || TRANSCRIPT_LIMIT_DEFAULT);
   const all = want >= TRANSCRIPT_LIMIT_MAX;
   const limit = Math.min(want, TRANSCRIPT_LIMIT_MAX);
-  const raw = (await deps.sessions?.getEntries(id, all ? undefined : { limit: limit + 1 })) ?? [];
+  const raw = deps.sessions
+    ? (await createTranscriptSource(deps.sessions).forRender(id, all ? undefined : { limit: limit + 1 })).entries
+    : [];
   const hasMore = !all && raw.length > limit;
   const entries = await labelTranscriptEntries(
     app,
@@ -339,6 +376,7 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
       origin: await deliveryOrigin(app, d, scope),
       ...(d.recipientThreadRef ? { recipientThreadRef: d.recipientThreadRef } : {}),
       ...(d.deliveredAt !== null ? { deliveredAt: d.deliveredAt } : {}),
+      ...(d.expiredAt !== undefined ? { expiredAt: d.expiredAt } : {}),
       ...(d.shadow ? { shadow: true } : {}),
     })),
   );

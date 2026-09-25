@@ -135,7 +135,7 @@ test("keychain overview wires managed connector grants into account controls", (
     /keychainConnectorCredentials\.filter\(\(credential\) => hosts\.has\(credential\.host\)\)/,
   );
   assert.match(connectorsSource, /isActiveGrant\(grant, credentialsById\.get\(grant\.credentialId\)\)/);
-  assert.match(connectorsSource, /c\.kind !== "file" && c\.expiresAt/);
+  assert.match(connectorsSource, /isExpiredCredential\(c\)/);
 });
 
 test("destructive controls settle duplicate attempts while a mutation is busy", () => {
@@ -155,8 +155,46 @@ test("keychain rows reserve success badges for actionable states", () => {
   assert.match(connectorsSource, /<span class="kc-state warning">Reconnect needed<\/span>/);
 });
 
+test("keychain index keeps operational state and removes redundant explanatory copy", () => {
+  assert.doesNotMatch(connectorsSource, /Accounts and credentials your agent may use on your behalf/);
+  assert.doesNotMatch(connectorsSource, /Provider APIs the agent can use as you/);
+  assert.doesNotMatch(connectorsSource, /API keys, tokens, and files you added/);
+  assert.doesNotMatch(connectorsSource, /kc-summary|kc-resource-description|No audited use yet|Last used |Added \$\{/);
+  assert.match(connectorsSource, /class="kc-access-label">Access/);
+  assert.match(connectorsSource, /expires \$\{fmtDate\(/);
+  assert.match(connectorsSource, />\s*Revoke\s*</);
+  assert.match(connectorsSource, /encrypted one-time page next/);
+});
+
+test("keychain access rows retain security-relevant mode and purpose", () => {
+  assert.match(connectorsSource, /accessModeLabel\(ask\.requestedMode\)/);
+  assert.match(connectorsSource, /ask\.purpose/);
+  assert.equal(connectorsSource.match(/accessModeLabel\(grant\.mode\)/g)?.length, 2);
+  assert.equal(connectorsSource.match(/grant\.purpose/g)?.length, 2);
+});
+
 test("keychain actions keep secondary weight and compact mobile sizing", () => {
   assert.match(connectorsSource, /\$\{available \? html`<button class="btn" type="button"/);
   assert.doesNotMatch(shellCssSource, /\.kc-hero-actions \.btn\s*\{\s*flex:\s*1;/);
   assert.doesNotMatch(shellCssSource, /sidebar-closed \.kc-hero-copy/);
+});
+
+test("keychain page renders loading placeholders instead of empty states while loading", () => {
+  assert.match(connectorsSource, /let connectorsLoading = false/);
+  assert.match(connectorsSource, /let keysLoading = false/);
+  assert.match(connectorsSource, /connectorsLoading && !connectorsEverLoaded/);
+  assert.match(connectorsSource, /keysLoading && !keysEverLoaded/);
+  assert.match(connectorsSource, /keysLoading = true;\s*\n\s*drawConnectors\(\)/);
+  assert.match(connectorsSource, /if \(accountsLoading\) accountsContent = loadingPlaceholder\("Loading accounts/);
+  assert.match(
+    connectorsSource,
+    /if \(keysLoadingFresh\) credentialsContent = loadingPlaceholder\("Loading credentials/,
+  );
+
+  assert.match(
+    connectorsSource,
+    /api<\{ providers\?: Record<string, ConnectorProvider> \}>\("\/api\/connectors"\)\.then\(/,
+  );
+  assert.doesNotMatch(connectorsSource, /drawConnectors\((true|false)\)/);
+  assert.match(shellCssSource, /\.kc-loading \.spinner/);
 });

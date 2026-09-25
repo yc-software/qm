@@ -12,8 +12,6 @@ test("the hosting provider registry owns target discovery and lifecycle capabili
     const provider = hostingProvider(id);
     assert.equal(provider.id, id);
     assert.equal(typeof provider.scaffold.renderConfig, "function");
-    assert.equal(typeof provider.publishSandbox, "function");
-    assert.equal(typeof provider.requiresSandboxApp, "boolean");
     assert.equal(typeof provider.validateConfig, "function");
   }
   assert.deepEqual(hostingProvider("docker").upFlags, ["build-from", "only"]);
@@ -27,6 +25,11 @@ test("the hosting provider registry owns target discovery and lifecycle capabili
     "image-repo-prefix",
     "build-only",
     "yes",
+    "candidate",
+    "candidate-out",
+    "inactive",
+    "restart",
+    "build-concurrency",
   ]);
 });
 

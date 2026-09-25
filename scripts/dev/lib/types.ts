@@ -13,7 +13,7 @@ export const EXIT = {
 } as const;
 
 export type ChildName = "core" | "web" | "admin" | "portal";
-export const CHILD_ORDER: ChildName[] = ["core", "web", "admin", "portal"];
+export const CHILD_ORDER: ChildName[] = ["core", "web", "portal"];
 
 export interface SlotPorts {
   core: number;
@@ -68,6 +68,7 @@ export interface BootPhaseEvent {
 
 export interface BootResult {
   ok: boolean;
+  webEnabled?: boolean;
   slackEnabled?: boolean;
   reason?: string;
   slot: string;
@@ -95,6 +96,7 @@ export interface StatusReport {
   sandbox: { backend: string; detail: string };
   durability: { sessionStore: string; runStore: string; databaseUrl: boolean };
   harness: string;
+  webEnabled?: boolean;
   slackEnabled: boolean;
   watch: boolean;
   turnsLive: boolean;
@@ -102,16 +104,20 @@ export interface StatusReport {
   children: Record<string, ChildStatus & { slack?: SlackHealth }>;
 }
 
+export type DevSandboxBackend = "local" | "sprites" | "smolmachines" | "e2b" | "porter" | "agent37" | "superserve";
+export type DevSandboxChoice = DevSandboxBackend | "auto";
+
 export interface BootSpec {
   slot: string;
   worktree: string;
   branch: string;
   callerEnv: Record<string, string>;
   watch: boolean;
-  sandbox: "local" | "sprites" | "auto";
+  sandbox: DevSandboxChoice;
   canaryChannel?: string;
   strict: boolean;
   slack?: boolean;
+  web?: boolean;
 }
 
 export interface LeaseInfo {

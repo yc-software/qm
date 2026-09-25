@@ -82,12 +82,16 @@ test("activeThreads projects sub-conversations with recent activity, newest firs
     { container: "C1", ts: "2.0", sub: "T-a", text: "a2", createdAt: 2 },
     { container: "C1", ts: "3.0", sub: "T-b", text: "b1", createdAt: 3 },
     { container: "C1", ts: "4.0", text: "top-level, no sub", createdAt: 4 },
+    { container: "C1", ts: "5.0", sub: "T-c", text: "gone", deleted: true, createdAt: 5 },
   ]);
   const threads = await cache.activeThreads({ container: "C1" });
-  assert.equal(threads.length, 2, "only the two sub-conversations are threads (the top-level message isn't)");
+  assert.equal(threads.length, 2, "only the two live sub-conversations are threads (top-level and deleted aren't)");
   assert.equal(threads[0]!.sub, "T-b", "newest activity first");
   const a = threads.find((t) => t.sub === "T-a")!;
   assert.equal(a.messageCount, 2);
+  const limited = await cache.activeThreads({ container: "C1", limit: 1 });
+  assert.equal(limited.length, 1);
+  assert.equal(limited[0]!.sub, "T-b");
 });
 
 test("eager membership maintenance: ingest keeps a container's members fresh, ungated by bodies", async () => {
@@ -300,4 +304,184 @@ test("mentionsSelf round-trips through ingest → readMessages (memory)", async 
   await cache.ingest([{ container: "C1", ts: "1.0", text: "@bot help", editedAt: 5, createdAt: 1 }]);
   const after = await cache.readMessages("C1");
   assert.equal(after.find((m) => m.ts === "1.0")!.mentionsSelf, true, "an edit keeps the prior self-mention flag");
+});
+
+test("revisedSince returns messages edited or deleted after the watermark, stamping deletions once", async () => {
+  const cache = createMemorySurfaceCache();
+  await cache.ingest([
+    { container: "Cr", ts: "1.0", text: "a", createdAt: 1 },
+    { container: "Cr", ts: "2.0", text: "b", createdAt: 2 },
+    { container: "Cr", ts: "3.0", text: "c", createdAt: 3 },
+  ]);
+  const before = Date.now();
+  await cache.ingest([{ container: "Cr", ts: "1.0", text: "a2", editedAt: before + 10 }]);
+  await cache.ingest([{ container: "Cr", ts: "2.0", deleted: true }]);
+  const revised = (await cache.revisedSince("Cr", before - 1)).sort((a, b) => (a.ts < b.ts ? -1 : 1));
+  assert.deepEqual(
+    revised.map((m) => [m.ts, m.text, m.deleted ?? false]),
+    [
+      ["1.0", "a2", false],
+      ["2.0", "b", true],
+    ],
+  );
+  const firstDeletedAt = revised[1]!.deletedAt;
+  assert.ok(firstDeletedAt && firstDeletedAt >= before);
+  await cache.ingest([{ container: "Cr", ts: "2.0", deleted: true }]);
+  assert.equal(
+    (await cache.revisedSince("Cr", 0))[1]!.deletedAt,
+    firstDeletedAt,
+    "a repeat delete keeps the first stamp",
+  );
+  assert.equal((await cache.revisedSince("Cr", before + 10)).length, 1, "the watermark itself is included");
+  assert.deepEqual(await cache.revisedSince("Cr", before + 11), []);
+  assert.deepEqual(await cache.revisedSince("Cother", 0), []);
+  assert.deepEqual(
+    await cache.revisedSince("Cr", 0),
+    await cache.revisedSince("Cr", 1),
+    "never-revised rows never match",
+  );
+});
+
+test("revisedSince includes the bot's own edits and can be scoped to one thread", async () => {
+  const cache = createMemorySurfaceCache();
+  await cache.ingest([
+    { container: "Ct", ts: "1.0", text: "root", createdAt: 1 },
+    { container: "Ct", ts: "1.5", sub: "1.0", text: "reply", createdAt: 2 },
+    { container: "Ct", ts: "2.0", text: "other root", createdAt: 3 },
+    { container: "Ct", ts: "2.5", sub: "2.0", text: "bot reply", self: true, createdAt: 4 },
+  ]);
+  await cache.ingest([
+    { container: "Ct", ts: "1.0", text: "root edited", editedAt: 10 },
+    { container: "Ct", ts: "1.5", sub: "1.0", text: "reply edited", editedAt: 11 },
+    { container: "Ct", ts: "2.0", text: "other root edited", editedAt: 12 },
+    { container: "Ct", ts: "2.5", sub: "2.0", text: "bot reply edited", self: true, editedAt: 13 },
+  ]);
+  assert.deepEqual(
+    (await cache.revisedSince("Ct", 0)).map((m) => m.ts),
+    ["2.5", "2.0", "1.5", "1.0"],
+  );
+  assert.deepEqual(
+    (await cache.revisedSince("Ct", 0, { thread: "1.0" })).map((m) => m.ts),
+    ["1.5", "1.0"],
+  );
+  assert.deepEqual(
+    (await cache.revisedSince("Ct", 0, { thread: "2.0" })).map((m) => m.ts),
+    ["2.5", "2.0"],
+  );
+});
+
+test("cache revisions preserve attachments and parent against stale handled events", async () => {
+  const cache = createMemorySurfaceCache();
+  try {
+    const base = { container: "CSNAPSHOT", ts: "2.0" };
+    await cache.ingest([{ ...base, sub: "1.0", text: "latest", editedAt: 20, files: [{ fileId: "F1", name: "one" }] }]);
+    await cache.ingest([
+      { ...base, sub: "wrong", text: "stale", editedAt: 10, handled: true, files: [{ fileId: "F2" }] },
+    ]);
+    let [message] = await cache.readMessages(base.container, { at: base.ts });
+    assert.equal(message?.text, "latest");
+    assert.equal(message?.sub, "1.0");
+    assert.equal(message?.handled, true);
+    assert.deepEqual(
+      message?.files?.map((f) => f.fileId),
+      ["F1"],
+    );
+    await cache.ingest([{ ...base, sub: null, text: "root corrected", editedAt: 30 }]);
+    [message] = await cache.readMessages(base.container, { at: base.ts });
+    assert.equal(message?.sub, undefined);
+    assert.deepEqual(
+      message?.files?.map((f) => f.fileId),
+      ["F1"],
+    );
+    await cache.ingest([{ ...base, text: "replacement", editedAt: 40, files: [{ fileId: "F2", name: "renamed" }] }]);
+    [message] = await cache.readMessages(base.container, { at: base.ts });
+    assert.equal(message?.sub, undefined);
+    assert.deepEqual(
+      message?.files?.map((f) => [f.fileId, f.name]),
+      [["F2", "renamed"]],
+    );
+    await cache.ingest([{ ...base, text: "empty", editedAt: 50, files: [] }]);
+    await cache.ingest([{ ...base, text: "stale", editedAt: 40, files: [{ fileId: "F2" }] }]);
+    [message] = await cache.readMessages(base.container, { at: base.ts });
+    assert.equal(message?.text, "empty");
+    assert.equal(message?.files?.length ?? 0, 0);
+    await cache.ingest([{ ...base, deleted: true }]);
+    await cache.ingest([{ ...base, sub: "wrong", text: "revive", editedAt: 60, files: [{ fileId: "F3" }] }]);
+    [message] = await cache.readMessages(base.container, { at: base.ts, includeDeleted: true });
+    assert.equal(message?.deleted, true);
+    assert.equal(message?.text, "empty");
+    assert.equal(message?.sub, undefined);
+    assert.equal(message?.files?.length ?? 0, 0);
+  } finally {
+    await cache.close();
+  }
+});
+
+test("cache selects exact timestamps and oldest pages with live reply counts", async () => {
+  const cache = createMemorySurfaceCache();
+  try {
+    const container = "CSELECT";
+    await cache.ingest([
+      { container, ts: "1.0", sub: null, text: "first" },
+      { container, ts: "2.0", sub: "1.0", text: "reply" },
+      { container, ts: "3.0", sub: "1.0", text: "deleted reply", deleted: true },
+      { container, ts: "4.0", sub: null, text: "second root" },
+      { container: "OTHER", ts: "5.0", sub: "1.0", text: "other container" },
+    ]);
+    assert.deepEqual(
+      (await cache.readMessages(container, { timestamps: ["4.0", "1.0", "missing"] })).map((m) => m.ts),
+      ["1.0", "4.0"],
+    );
+    assert.deepEqual(await cache.readMessages(container, { timestamps: [] }), []);
+    await assert.rejects(cache.readMessages(container, { timestamps: Array(501).fill("1.0") }), /500/);
+    const [oldest] = await cache.readMessages(container, { sub: null, oldestFirst: true, limit: 1 });
+    assert.equal(oldest?.ts, "1.0");
+    assert.equal(oldest?.replyCount, 1);
+    assert.deepEqual(
+      (await cache.readMessages(container, { sub: null, limit: 1 })).map((m) => m.ts),
+      ["4.0"],
+    );
+    assert.deepEqual(
+      (await cache.readMessages(container, { sub: "1.0", oldestFirst: true })).map((m) => m.ts),
+      ["2.0"],
+    );
+    await cache.ingest([{ container, ts: "2.0", sub: null, text: "corrected" }]);
+    assert.equal((await cache.readMessages(container, { at: "1.0" }))[0]?.replyCount, 0);
+  } finally {
+    await cache.close();
+  }
+});
+
+test("channel history includes broadcasts while exact roots exclude them", async () => {
+  const cache = createMemorySurfaceCache();
+  try {
+    const container = "CBROADCAST";
+    await cache.ingest([
+      { container, ts: "1.0", sub: null, text: "root" },
+      { container, ts: "2.0", sub: "1.0", text: "ordinary reply" },
+      { container, ts: "3.0", sub: "1.0", text: "broadcast", broadcast: true, editedAt: 20 },
+    ]);
+    await cache.ingest([
+      { container, ts: "3.0", sub: "1.0", text: "stale", broadcast: false, editedAt: 10, handled: true },
+    ]);
+    await cache.ingest([{ container, ts: "3.0", sub: "1.0", text: "edit without subtype", editedAt: 30 }]);
+    assert.deepEqual(
+      (await cache.readMessages(container, { channelHistory: true })).map((m) => m.ts),
+      ["1.0", "3.0"],
+    );
+    assert.deepEqual(
+      (await cache.readMessages(container, { sub: null })).map((m) => m.ts),
+      ["1.0"],
+    );
+    assert.equal((await cache.readMessages(container, { at: "3.0" }))[0]?.broadcast, true);
+    await cache.ingest([
+      { container, ts: "3.0", sub: "1.0", text: "corrected subtype", broadcast: false, editedAt: 40 },
+    ]);
+    assert.deepEqual(
+      (await cache.readMessages(container, { channelHistory: true })).map((m) => m.ts),
+      ["1.0"],
+    );
+  } finally {
+    await cache.close();
+  }
 });

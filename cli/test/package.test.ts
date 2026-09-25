@@ -143,15 +143,6 @@ test(
       const awsBin = join(awsDeployment, "node_modules", ".bin", "qm");
       rmSync(tarball);
 
-      const deploymentConfig = join(deployment, "qm.config.jsonc");
-      writeFileSync(
-        deploymentConfig,
-        readFileSync(deploymentConfig, "utf8").replace(
-          '"sandbox": { "app": "acme-sandboxes" }',
-          `"sandbox": { "app": "acme-sandboxes", "image": "registry.fly.io/acme-sandboxes@sha256:${"a".repeat(64)}" }`,
-        ),
-      );
-
       assert.ok(existsSync(join(deployment, "deployment.md")));
       assert.ok(existsSync(join(deployment, ".codex", "skills", "deploy-qm", "SKILL.md")));
       for (const provider of ["fly", "aws", "slack"]) {
@@ -194,9 +185,12 @@ test(
       assert.doesNotMatch(flyPlan, /source checkout|deploy\/core\/Dockerfile/);
       const generatedCore = join(deployment, ".generated", "fly", "acme", "core.fly.toml");
       assert.ok(existsSync(generatedCore));
-      assert.doesNotMatch(readFileSync(generatedCore, "utf8"), /^\s*PI_(?:MODEL|DETECT_MODEL)\s*=/m);
+      const generatedCoreToml = readFileSync(generatedCore, "utf8");
+      assert.doesNotMatch(generatedCoreToml, /^\s*PI_(?:MODEL|DETECT_MODEL)\s*=/m);
+      assert.match(generatedCoreToml, /\[\[restart\]\]\n\s*policy = "always"/);
+      assert.match(generatedCoreToml, /\[\[vm\]\]\n\s*size = "performance-2x"\n\s*memory = "4gb"/);
       assert.match(
-        execFileSync(bin, ["sandbox", "publish", "--dry-run"], { cwd: deployment, encoding: "utf8", env }),
+        execFileSync(bin, ["sandbox", "build", "--dry-run"], { cwd: deployment, encoding: "utf8", env }),
         /qm-sandbox-base@sha256:a{64}/,
       );
       const outputs = JSON.parse(
@@ -285,6 +279,7 @@ else if (command === "secretsmanager get-secret-value") {
       assert.ok(packed[0]!.files.some(({ path }) => path === "templates/aws/microvm-agent/agent.mjs"));
       assert.ok(packed[0]!.files.some(({ path }) => path === "templates/deployment/deployment.md"));
       assert.ok(packed[0]!.files.some(({ path }) => path === "templates/deployment/references/fly.md"));
+      assert.ok(packed[0]!.files.some(({ path }) => path === "templates/deployment/references/porter.md"));
       assert.ok(packed[0]!.files.some(({ path }) => path === "templates/fly/core.toml"));
       assert.ok(!packed[0]!.files.some(({ path }) => path === "src/contract.ts" || path === "bin/qm.ts"));
     } finally {

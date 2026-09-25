@@ -6,12 +6,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createServer, createInsecureTestServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
 import { isUnclassifiedWrite } from "../src/api/user-scoped-routes.ts";
+import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
@@ -32,6 +33,8 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       portalIdentitySecret: PID,
       requireSignedPortalIdentity: true,
       scheduler: built.scheduler,
+      identity: built.identity,
+      sessionShares: built.sessionShares,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -59,6 +62,54 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     assert.equal((await get({ "x-portal-identity": await token("U1", SOURCE) })).status, 401);
   });
 
+  it("run event streams require a verified actor and preserve run visibility", async () => {
+    const actor = { id: "internal:U1", type: "internal" as const };
+    const { run } = await built.runs.enqueue({
+      sessionId: "identity-gate-run",
+      request: {
+        actor,
+        conversation: { kind: "dm", threadRef: "identity-gate-run", audience: [actor] },
+        origin: { kind: "direct" },
+        text: "test request",
+      },
+    });
+    const claimed = await built.runs.claimById(run.id, "identity-gate-worker", 60_000);
+    assert.ok(claimed?.leaseToken);
+    await built.runs.complete(run.id, claimed.leaseToken, { status: "ok", reply: "owner-only result" });
+    const strictServer = createServer(built.app, {
+      signingSecret: SOURCE,
+      capabilitySecret: CAP,
+      portalIdentitySecret: PID,
+      production: true,
+    });
+    await new Promise<void>((resolve) => strictServer.listen(0, "127.0.0.1", resolve));
+    const strictBase = `http://127.0.0.1:${(strictServer.address() as AddressInfo).port}`;
+    const read = (identity?: string) => {
+      const path = `/v1/runs/${run.id}/events?nonce=${crypto.randomUUID()}`;
+      return fetch(`${strictBase}${path}`, {
+        headers: {
+          ...signedHeaders(SOURCE, "GET", path, ""),
+          ...(identity ? { "x-portal-identity": identity } : {}),
+        },
+        signal: AbortSignal.timeout(5_000),
+      });
+    };
+    try {
+      assert.equal((await read()).status, 401);
+      assert.equal((await read(await token(actor.id, SOURCE))).status, 401);
+      assert.equal((await read(await token("internal:U2"))).status, 404);
+      const response = await read(await token(actor.id));
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+      const body = await response.text();
+      assert.match(body, /owner-only result/);
+      assert.match(body, /RUN_FINISHED/);
+    } finally {
+      strictServer.closeAllConnections();
+      await new Promise<void>((resolve) => strictServer.close(() => resolve()));
+    }
+  });
+
   it("production implies signed identity on the raw deployment proxy", async () => {
     const prodServer = createInsecureTestServer(built.app, { production: true, portalIdentitySecret: PID });
     await new Promise<void>((resolve) => prodServer.listen(0, resolve));
@@ -83,6 +134,8 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       "/v1/memory/history?principalId=",
       "/v1/contexts/policy?scope=channel:C1&principalId=",
       "/v1/sessions/s1/background?viewer=",
+      "/v1/shared-sessions/token?viewer=",
+      "/v1/shared-sessions/token/files/file?viewer=",
       "/v1/sessions/s1/background/p1/output?viewer=",
     ]) {
       assert.equal((await fetch(`${base}${path}U1`)).status, 401, `${path} without an identity`);
@@ -93,6 +146,19 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       );
       const mine = await fetch(`${base}${path}U1`, { headers: { "x-portal-identity": alice } });
       assert.ok(mine.status !== 401 && mine.status !== 403, `${path} as myself should reach the handler`);
+    }
+  });
+
+  it("session sharing mutations bind the portal actor", async () => {
+    for (const method of ["POST"]) {
+      for (const headers of [{}, { "x-portal-identity": await token("U1") }]) {
+        const response = await fetch(`${base}/v1/sessions/s1/share`, {
+          method,
+          headers: { "content-type": "application/json", ...headers },
+          body: JSON.stringify({ principalId: "U2" }),
+        });
+        assert.equal(response.status, "x-portal-identity" in headers ? 403 : 401);
+      }
     }
   });
 
@@ -211,9 +277,34 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     );
   });
 
-  it("binds deployment and approval routes to the verified actor", async () => {
+  it("binds webhook, deployment, and approval routes to the verified actor", async () => {
     const alice = await token("U1");
     const aliceHeaders = { "content-type": "application/json", "x-portal-identity": alice };
+    const webhook = await built.app.createWebhook({
+      ownerScopeId: "personal:U2",
+      owner: "U2",
+      createdBy: "U2",
+      action: "private webhook",
+      verification: { scheme: "hmac-sha256", secret: "webhook-secret" },
+    });
+    assert.equal((await fetch(`${base}/v1/webhooks?viewer=U2`, { headers: aliceHeaders })).status, 403);
+    assert.deepEqual(
+      (
+        (await (await fetch(`${base}/v1/webhooks?viewer=U1`, { headers: aliceHeaders })).json()) as {
+          webhooks: unknown[];
+        }
+      ).webhooks,
+      [],
+    );
+    assert.equal(
+      (
+        await fetch(`${base}/v1/webhooks/${webhook.id}/disable?principalId=U1`, {
+          method: "POST",
+          headers: aliceHeaders,
+        })
+      ).status,
+      403,
+    );
 
     const deployment = {
       id: "deployment-u2",

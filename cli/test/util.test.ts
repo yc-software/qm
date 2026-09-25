@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalJson, flyBin, isInvalidSecret, readEnvFile, writeEnvValue } from "../src/util.ts";
+import { canonicalJson, runInheritAsync, flyBin, isInvalidSecret, readEnvFile, writeEnvValue } from "../src/util.ts";
 
 test("managed credential encryption keys require strong material", () => {
   assert.equal(isInvalidSecret("CONNECTOR_SECRET_KEY", "short"), true);
@@ -104,6 +104,39 @@ test("writeEnvValue rejects invalid keys and multi-line values", (t) => {
   assert.throws(() => writeEnvValue(file, "GOOD_KEY", "a\nb"));
 });
 
+test("readEnvFile matches Node --env-file for export prefixes and quoted values", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, ".env");
+  writeFileSync(
+    file,
+    [
+      'DQ="wrapped#value"',
+      "SQ='single'",
+      "BT=`tick`",
+      "export EXPORTED=yes",
+      'ESCAPED="line1\\nline2"',
+      'TRAILING="abc" rest is ignored',
+      'UNCLOSED="keeps raw',
+      "SPACED=  padded  ",
+      "",
+    ].join("\n"),
+  );
+  assert.deepEqual(
+    [...readEnvFile(file)],
+    [
+      ["DQ", "wrapped#value"],
+      ["SQ", "single"],
+      ["BT", "tick"],
+      ["EXPORTED", "yes"],
+      ["ESCAPED", "line1\nline2"],
+      ["TRAILING", "abc"],
+      ["UNCLOSED", '"keeps raw'],
+      ["SPACED", "padded"],
+    ],
+  );
+});
+
 async function withFakeStdin<T>(fn: (emit: (bytes: Buffer) => void) => Promise<T>): Promise<T> {
   const { EventEmitter } = await import("node:events");
   const fake = Object.assign(new EventEmitter(), {
@@ -151,4 +184,9 @@ test("promptHidden treats Ctrl-D as enter on a non-empty buffer and as cancel on
     emit(Buffer.from([0x04]));
     await assert.rejects(() => pending, /secret entry cancelled/);
   });
+});
+
+test("async inherited processes reject spawn errors and signal termination", async () => {
+  await assert.rejects(runInheritAsync("/definitely-missing-qm-command", []), /ENOENT/);
+  await assert.rejects(runInheritAsync(process.execPath, ["-e", 'process.kill(process.pid, "SIGTERM")']), /SIGTERM/);
 });

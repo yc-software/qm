@@ -16,7 +16,7 @@ export interface WakeSweepOptions {
 
 export interface WakeSweep {
   start(): void;
-  stop(): void;
+  stop(): Promise<void>;
   sweep(): Promise<{ swept: number; fresh: number }>;
 }
 

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { escapeHtml } from "../../chassis/src/http.ts";
-import { senderAddress, type AuthConfig } from "./config.ts";
+import { emailConfigured, senderAddress, type AuthConfig } from "./config.ts";
 import { smtpDeliver } from "./smtp.ts";
 
 export interface OutgoingEmail {
@@ -65,7 +65,8 @@ function smtpMailer(cfg: AuthConfig): Mailer {
   };
 }
 
-export function mailerFor(cfg: AuthConfig): Mailer {
+export function mailerFor(cfg: AuthConfig): Mailer | null {
+  if (!emailConfigured(cfg)) return null;
   return cfg.transport === "smtp" ? smtpMailer(cfg) : resendMailer(cfg);
 }
 
@@ -128,7 +129,7 @@ export function renderSignInEmail(args: {
     link,
     "",
     `The link works once and expires in ${args.ttlMinutes} minutes. Open it in the browser you started from.`,
-    "If you did not ask to sign in, ignore this message — nothing happens until you confirm.",
+    "If you did not ask to sign in, ignore this message. Nothing happens until you confirm.",
   ].join("\n");
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="light"></head>
@@ -142,7 +143,7 @@ export function renderSignInEmail(args: {
 <p style="margin:0 0 24px"><a href="${escapeHtml(link)}" style="display:inline-block;background:#0a0a0a;color:#ffffff;text-decoration:none;font-weight:600;padding:13px 22px;border-radius:10px">Sign in</a></p>
 <p style="margin:0 0 8px;color:#737373;font-size:13px">Or paste this address into your browser:</p>
 <p style="margin:0 0 24px;word-break:break-all;font-size:12px;color:#525252">${escapeHtml(link)}</p>
-<p style="margin:0;color:#737373;font-size:13px">If you did not ask to sign in, ignore this message — nothing happens until you confirm.</p>
+<p style="margin:0;color:#737373;font-size:13px">If you did not ask to sign in, ignore this message. Nothing happens until you confirm.</p>
 </td></tr></table>
 </td></tr></table>
 </body></html>`;

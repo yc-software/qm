@@ -1,10 +1,31 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readConfig } from "../src/config.ts";
-import { renderMessage, renderSignInEmail, resendMailer } from "../src/email.ts";
+import { mailerFor, renderMessage, renderSignInEmail, resendMailer } from "../src/email.ts";
 import { testEnv } from "./helpers.ts";
 
 const cfg = readConfig(testEnv());
+
+test("no mailer is created with missing or incomplete email configuration", () => {
+  for (const transport of ["resend", "smtp"]) {
+    assert.equal(
+      mailerFor(
+        readConfig(testEnv({ AUTH_EMAIL_TRANSPORT: transport, AUTH_EMAIL_FROM: undefined, RESEND_API_KEY: undefined })),
+      ),
+      null,
+    );
+    const complete = {
+      AUTH_EMAIL_TRANSPORT: transport,
+      SMTP_HOST: "smtp.example.com",
+      SMTP_USERNAME: "u",
+      SMTP_PASSWORD: "p",
+    };
+    const credentials = transport === "resend" ? ["RESEND_API_KEY"] : ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"];
+    for (const name of ["AUTH_EMAIL_FROM", ...credentials]) {
+      assert.equal(mailerFor(readConfig(testEnv({ ...complete, [name]: undefined }))), null, `${transport}: ${name}`);
+    }
+  }
+});
 
 test("the sign-in email carries the link once in both alternatives and never a bare secret", () => {
   const message = renderSignInEmail({

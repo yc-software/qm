@@ -7,6 +7,7 @@ import {
   buildAuthorizeUrl,
   exchangeCode,
   fetchUserinfo,
+  hostedDomainHint,
   resolvePrincipal,
   verifyIdToken,
   type OidcConfig,
@@ -46,6 +47,29 @@ test("buildAuthorizeUrl carries code+PKCE+state+nonce", () => {
   assert.equal(u.searchParams.get("nonce"), "NO");
   assert.equal(u.searchParams.get("code_challenge"), "CH");
   assert.equal(u.searchParams.get("code_challenge_method"), "S256");
+  assert.equal(u.searchParams.get("prompt"), null);
+  assert.equal(u.searchParams.get("hd"), null);
+});
+
+test("buildAuthorizeUrl forwards prompt and hosted-domain hints when configured", () => {
+  const google: OidcConfig = {
+    ...cfg,
+    authEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+    issuer: "https://accounts.google.com",
+    prompt: "select_account",
+    hostedDomain: "example.com",
+  };
+  const u = new URL(buildAuthorizeUrl(google, { state: "ST", nonce: "NO", challenge: "CH" }));
+  assert.equal(u.origin + u.pathname, "https://accounts.google.com/o/oauth2/v2/auth");
+  assert.equal(u.searchParams.get("prompt"), "select_account");
+  assert.equal(u.searchParams.get("hd"), "example.com");
+});
+
+test("hostedDomainHint applies only to the Google issuer with a domain gate", () => {
+  assert.equal(hostedDomainHint("https://accounts.google.com", "example.com"), "example.com");
+  assert.equal(hostedDomainHint("https://accounts.google.com", undefined), undefined);
+  assert.equal(hostedDomainHint("https://accounts.google.com", ""), undefined);
+  assert.equal(hostedDomainHint("https://slack.com", "example.com"), undefined);
 });
 
 test("exchangeCode posts client_secret_basic + PKCE verifier and parses the token", async () => {
@@ -149,102 +173,193 @@ test("verifyIdToken requires a valid signature, issuer, audience, subject, nonce
   await assert.rejects(verifyIdToken(provider, signed, "wrong", fetchJwks), /nonce/);
 });
 
-test("resolvePrincipal claim=sub returns the subject untouched", () => {
-  assert.equal(resolvePrincipal({ claim: "sub" }, { sub: "U1", claims: {}, userinfo: { email: "a@b.com" } }), "U1");
+test("resolvePrincipal claim=sub returns the subject untouched", async () => {
+  assert.deepEqual(
+    await resolvePrincipal({ claim: "sub" }, { sub: "U1", claims: {}, userinfo: { email: "a@b.com" } }),
+    { sub: "U1" },
+  );
 });
 
-test("resolvePrincipal claim=email returns the verified email, normalized", () => {
-  const got = resolvePrincipal(
+test("resolvePrincipal claim=email returns the verified email, normalized", async () => {
+  const got = await resolvePrincipal(
     { claim: "email" },
     { sub: "g-123", claims: {}, userinfo: { email: " Alice@Example.com ", email_verified: true } },
   );
-  assert.equal(got, "alice@example.com");
+  assert.deepEqual(got, { sub: "alice@example.com" });
 });
 
-test("resolvePrincipal claim=email requires the verified userinfo response", () => {
-  assert.throws(
-    () =>
-      resolvePrincipal(
-        { claim: "email" },
-        { sub: "g-123", claims: { email: "a@acme.com", email_verified: "true" }, userinfo: {} },
-      ),
+test("resolvePrincipal claim=email requires the verified userinfo response", async () => {
+  await assert.rejects(
+    resolvePrincipal(
+      { claim: "email" },
+      { sub: "g-123", claims: { email: "a@acme.com", email_verified: "true" }, userinfo: {} },
+    ),
     /no email/,
   );
 });
 
-test("resolvePrincipal claim=email rejects missing or unverified emails", () => {
-  assert.throws(() => resolvePrincipal({ claim: "email" }, { sub: "g", claims: {}, userinfo: {} }), /no email/);
-  assert.throws(
-    () => resolvePrincipal({ claim: "email" }, { sub: "g", claims: {}, userinfo: { email: "a@b.com" } }),
+test("resolvePrincipal claim=email rejects missing or unverified emails", async () => {
+  await assert.rejects(resolvePrincipal({ claim: "email" }, { sub: "g", claims: {}, userinfo: {} }), /no email/);
+  await assert.rejects(
+    resolvePrincipal({ claim: "email" }, { sub: "g", claims: {}, userinfo: { email: "a@b.com" } }),
     /not verified/,
   );
-  assert.throws(
-    () =>
-      resolvePrincipal(
-        { claim: "email" },
-        { sub: "g", claims: {}, userinfo: { email: "a@b.com", email_verified: false } },
-      ),
+  await assert.rejects(
+    resolvePrincipal(
+      { claim: "email" },
+      { sub: "g", claims: {}, userinfo: { email: "a@b.com", email_verified: false } },
+    ),
     /not verified/,
   );
 });
 
-test("resolvePrincipal allowedEmailDomain gates the email suffix and the hd claim", () => {
+test("resolvePrincipal allowedEmailDomain gates the email suffix and the hd claim", async () => {
   const rule = { claim: "email" as const, allowedEmailDomain: "example.com" };
-  const ok = resolvePrincipal(rule, {
+  const ok = await resolvePrincipal(rule, {
     sub: "g",
     claims: {},
     userinfo: { email: "a@example.com", email_verified: true, hd: "example.com" },
   });
-  assert.equal(ok, "a@example.com");
-  assert.throws(
-    () => resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email: "a@gmail.com", email_verified: true } }),
+  assert.deepEqual(ok, { sub: "a@example.com" });
+  await assert.rejects(
+    resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email: "a@gmail.com", email_verified: true } }),
     /permitted domain/,
   );
-  assert.throws(
-    () =>
-      resolvePrincipal(rule, {
-        sub: "g",
-        claims: {},
-        userinfo: { email: "a@example.com", email_verified: true, hd: "evil.com" },
-      }),
+  await assert.rejects(
+    resolvePrincipal(rule, {
+      sub: "g",
+      claims: {},
+      userinfo: { email: "a@example.com", email_verified: true, hd: "evil.com" },
+    }),
     /permitted domain/,
   );
-  assert.throws(
-    () =>
-      resolvePrincipal(rule, {
-        sub: "g",
-        claims: {},
-        userinfo: { email: "a@notexample.com", email_verified: true },
-      }),
+  await assert.rejects(
+    resolvePrincipal(rule, {
+      sub: "g",
+      claims: {},
+      userinfo: { email: "a@notexample.com", email_verified: true },
+    }),
     /permitted domain/,
   );
 });
 
-test("resolvePrincipal allowedEmails permits only the seeded verified addresses", () => {
+test("resolvePrincipal allowedEmails permits only the seeded verified addresses", async () => {
   const rule = { claim: "email" as const, allowedEmails: ["Admin@Example.com"] };
-  assert.equal(
-    resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email: "admin@example.com", email_verified: true } }),
-    "admin@example.com",
+  assert.deepEqual(
+    await resolvePrincipal(rule, {
+      sub: "g",
+      claims: {},
+      userinfo: { email: "admin@example.com", email_verified: true },
+    }),
+    { sub: "admin@example.com" },
   );
-  assert.throws(
-    () =>
-      resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email: "other@example.com", email_verified: true } }),
+  await assert.rejects(
+    resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email: "other@example.com", email_verified: true } }),
     /permitted email list/,
   );
 });
 
-test("resolvePrincipal permits an email matching either the list or domain", () => {
+test("resolvePrincipal permits an email matching either the list or domain", async () => {
   const rule = {
     claim: "email" as const,
     allowedEmails: ["admin@gmail.com"],
     allowedEmailDomain: "example.com",
   };
   for (const email of ["admin@gmail.com", "member@example.com"]) {
-    assert.equal(resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email, email_verified: true } }), email);
+    assert.deepEqual(
+      await resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email, email_verified: true } }),
+      { sub: email },
+    );
   }
-  assert.throws(
-    () =>
-      resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email: "other@gmail.com", email_verified: true } }),
+  await assert.rejects(
+    resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email: "other@gmail.com", email_verified: true } }),
     /permitted domain/,
+  );
+  await assert.rejects(
+    resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email: "member@example.com", email_verified: false } }),
+    /not verified/,
+  );
+});
+
+test("resolvePrincipal admits an invited external address that the env rules reject", async () => {
+  const rule = { claim: "email" as const, allowedEmailDomain: "example.com", allowedEmails: ["admin@example.com"] };
+  const asked: string[] = [];
+  const invited = async (email: string): Promise<{ allowed: boolean }> => {
+    asked.push(email);
+    return { allowed: email === "guest@partner.test" };
+  };
+  const verified = (email: string, extra: Record<string, unknown> = {}) => ({
+    sub: "g",
+    claims: {},
+    userinfo: { email, email_verified: true, ...extra },
+  });
+
+  assert.deepEqual(await resolvePrincipal(rule, verified("Admin@Example.com"), invited), { sub: "admin@example.com" });
+  assert.deepEqual(asked, [], "an address the env rules permit never consults core");
+
+  assert.deepEqual(await resolvePrincipal(rule, verified(" Guest@Partner.test "), invited), {
+    sub: "guest@partner.test",
+  });
+  assert.deepEqual(asked, ["guest@partner.test"], "core is asked with the normalized address");
+  assert.deepEqual(
+    await resolvePrincipal(rule, verified("guest@partner.test", { hd: "partner.test" }), invited),
+    { sub: "guest@partner.test" },
+    "a foreign hd claim does not block an invited address",
+  );
+
+  await assert.rejects(resolvePrincipal(rule, verified("stranger@partner.test"), invited), /permitted/);
+  await assert.rejects(
+    resolvePrincipal(
+      { claim: "email", allowedEmails: ["admin@example.com"] },
+      verified("stranger@partner.test"),
+      invited,
+    ),
+    /permitted email list/,
+  );
+
+  asked.length = 0;
+  await assert.rejects(
+    resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email: "guest@partner.test" } }, invited),
+    /not verified/,
+  );
+  await assert.rejects(resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: {} }, invited), /no email/);
+  assert.deepEqual(asked, [], "an unverified or missing email is refused before core is consulted");
+
+  await assert.rejects(
+    resolvePrincipal(rule, verified("guest@partner.test"), async () => {
+      throw new Error("core down");
+    }),
+    /core down/,
+  );
+});
+
+test("resolvePrincipal preserves deployment-only admission and fails closed for broker logins", async () => {
+  const args = { sub: "idp-subject", claims: {}, userinfo: { email: " Guest@Partner.test ", email_verified: true } };
+  for (const claim of ["email", "sub"] as const) {
+    const rule = { claim, requireCoreAdmission: true };
+    assert.deepEqual(await resolvePrincipal(rule, args, async () => ({ allowed: true, appOnly: true })), {
+      sub: "guest@partner.test",
+      appOnly: true,
+    });
+    assert.deepEqual(await resolvePrincipal(rule, args, async () => ({ allowed: true })), {
+      sub: claim === "sub" ? "idp-subject" : "guest@partner.test",
+    });
+    await assert.rejects(
+      resolvePrincipal(rule, args, async () => ({ allowed: false })),
+      /not permitted/,
+    );
+    await assert.rejects(
+      resolvePrincipal(rule, args, async () => {
+        throw new Error("offline");
+      }),
+      /offline/,
+    );
+  }
+  assert.deepEqual(
+    await resolvePrincipal({ claim: "email", allowedEmailDomain: "example.com" }, args, async () => ({
+      allowed: true,
+      appOnly: true,
+    })),
+    { sub: "guest@partner.test", appOnly: true },
   );
 });

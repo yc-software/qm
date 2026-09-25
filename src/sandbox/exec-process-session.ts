@@ -25,6 +25,7 @@ export interface ExecProcessSessions {
 }
 
 const PROC_BASE = "${HOME:-/root}/.agent-proc";
+export const processSessionDir = (processId: string): string => `${PROC_BASE}/${processId}`;
 const REBOOT_RC = 137;
 const BOOT_ID_SH = `cat /proc/sys/kernel/random/boot_id 2>/dev/null || sysctl -n kern.boottime 2>/dev/null || true`;
 const REAP_SH = [
@@ -47,10 +48,25 @@ function parseStatus(raw: string): ProcessState {
   return { state: "running" };
 }
 
+function redactPipedIntoWithToken(command: string): string {
+  const segments = command.split("|");
+  let sink = segments.length - 1;
+  while (sink > 0 && !/--with-token\b/i.test(segments[sink]!)) sink--;
+  if (sink === 0) return command;
+  const upstream = segments.slice(0, sink).join("|");
+  const producer = /(?:printf|echo)\s/i.exec(upstream);
+  if (!producer || !upstream.slice(producer.index + producer[0].length).trim()) return command;
+  const consumed = /^[\s\S]*--with-token\b/i.exec(segments[sink]!)![0];
+  const rest = command.slice(upstream.length + 1 + consumed.length);
+  return `${upstream.slice(0, producer.index)}echo <redacted>${upstream.slice(upstream.trimEnd().length)}|${consumed}${rest}`;
+}
+
 export function redactCommand(command: string, env?: Record<string, string>): string {
-  return createSecretValueMasker(env)(command)
-    .replace(/(--?(?:token|password|secret|client[-_]?secret|api[-_]?key)[ =])\S+/gi, "$1<redacted>")
-    .replace(/(--with-token\b)/gi, "$1")
+  const flagsRedacted = createSecretValueMasker(env)(command).replace(
+    /(--?(?:token|password|secret|client[-_]?secret|api[-_]?key)[ =])\S+/gi,
+    "$1<redacted>",
+  );
+  return redactPipedIntoWithToken(flagsRedacted)
     .replace(
       /(export\s+\w*(?:PASS|PASSWORD|SECRET|TOKEN|KEY|IDENTIFIER|CREDENTIAL|PROXY_USER)\w*=')[^']*'/gi,
       "$1<redacted>'",
@@ -68,7 +84,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
         .map(([k, v]) => `export ${k}=${shq(v)}`)
         .join("; ");
       const script = [
-        `P="${PROC_BASE}/${processId}"`,
+        `P="${processSessionDir(processId)}"`,
         `mkdir -p "$P"`,
         `printf '%s' '${b64(command)}' | base64 -d > "$P/cmd"`,
         ...(envExports ? [`printf '%s' '${b64(envExports)}' | base64 -d > "$P/env"`] : []),
@@ -95,7 +111,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
       const waitMs = Math.max(0, opts?.waitMs ?? 0);
       const iters = Math.ceil(waitMs / 100);
       const script = [
-        `P="${PROC_BASE}/${processId}"`,
+        `P="${processSessionDir(processId)}"`,
         `[ -d "$P" ] || { echo "MISSING=1"; exit 0; }`,
         REAP_SH,
         `_reap "$P"`,
@@ -132,7 +148,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
     async writeStdin(handle, processId, data): Promise<void> {
       assertId(processId);
       const script = [
-        `P="${PROC_BASE}/${processId}"`,
+        `P="${processSessionDir(processId)}"`,
         `[ -p "$P/in" ] || { echo "MISSING=1"; exit 1; }`,
         `printf '%s' '${b64(data)}' | base64 -d > "$P/in"`,
       ].join("\n");
@@ -149,7 +165,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
           ? `[ -f "$P/code" ] || echo 137 > "$P/code"`
           : `if ! kill -0 -"$pid" 2>/dev/null && ! kill -0 "$pid" 2>/dev/null; then [ -f "$P/code" ] || echo 143 > "$P/code"; fi`;
       const script = [
-        `P="${PROC_BASE}/${processId}"`,
+        `P="${processSessionDir(processId)}"`,
         `pid=$(cat "$P/pid" 2>/dev/null) || exit 0`,
         `kill -${sig} -"$pid" 2>/dev/null || kill -${sig} "$pid" 2>/dev/null || true`,
         sentinelLine,

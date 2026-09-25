@@ -22,6 +22,13 @@ test("focused create/edit flows leave list search and filters untouched on open 
   );
 });
 
+test("skill rows omit redundant active, local-source, and box decorations", () => {
+  const variant = bodyOf("skillVariant");
+  assert.doesNotMatch(variant, /icon\(Box|>Active<|skill-active|skill-variant-icon/);
+  assert.doesNotMatch(source, /Created here/);
+  assert.match(variant, />Archived</);
+});
+
 test("closing a focused flow clears an unfinished edit loading notice", () => {
   assert.match(bodyOf("startEdit"), /skillsNotice = "Loading skill instructions…"/);
   assert.match(bodyOf("closeFocusedFlow"), /skillsNotice = ""/);

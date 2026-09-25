@@ -1,0 +1,286 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { createInboxFixture, inboxRuntime, until } from "./inbox-composer-fixture.ts";
+
+test("draft is the first editable chat message and Send it submits the combined instruction", async () => {
+  const { dom, vite, host, close } = await createInboxFixture();
+  try {
+    await vite.ssrLoadModule("/src/shell.ts");
+    const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
+    appState.me = { user: "taylor@example.com" };
+    const { chatTpl, toInboxItem, inboxState, resetInboxState } = await vite.ssrLoadModule("/src/inbox.ts");
+    const { render } = await vite.ssrLoadModule("lit");
+    for (const source of ["gmail", "slack"]) {
+      for (const instruction of ["", "Make it shorter"]) {
+        render(null, host);
+        resetInboxState();
+        const ledger = {
+          id: `item-${source}-${instruction.length}`,
+          loopId: "loop-1",
+          state: "held",
+          source,
+          sourcePayload: { title: "Re: Update", from: "Sam", snippet: "Any news?" },
+          proposal: {
+            data: { body: "Original draft", to: ["sam@example.com"], subject: "Re: Update" },
+            by: "agent",
+            at: 100,
+          },
+          thread: [],
+          updatedAt: 100,
+        };
+        const item = toInboxItem(ledger);
+        inboxState.items = [item];
+        const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+        let finish!: () => void;
+        const requested = new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        let release!: () => void;
+        const response = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        globalThis.fetch = async (url, init) => {
+          if (String(url).includes("runtime-config")) return Response.json(inboxRuntime);
+          const body = JSON.parse(String(init?.body));
+          calls.push({ path: String(url), body });
+          if (String(url).endsWith("/action")) {
+            assert.equal(body.kind, "edit");
+            ledger.proposal.data = body.args.proposal;
+            ledger.proposal.at = 101;
+          } else {
+            finish();
+            await response;
+          }
+          return new Response(JSON.stringify({ item: ledger }), { headers: { "content-type": "application/json" } });
+        };
+        render(chatTpl(item), host);
+        await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
+        const first = host.querySelector(".inbox-chat-log")!.firstElementChild!;
+        const draft = first.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!;
+        assert.ok(draft, "draft is inside the first chat message");
+        assert.equal(draft.value, "Original draft");
+        draft.value = "Edited draft";
+        draft.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+        const input = host.querySelector<HTMLTextAreaElement>(".composer-input")!;
+        input.value = instruction;
+        input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+        const send = host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!;
+        assert.equal(send.parentElement, host.querySelector(".inbox-chat-suggestions"));
+        assert.equal(send.parentElement!.firstElementChild, send);
+        assert.equal(host.querySelector(".inbox-chat-composer")!.textContent!.includes("Dismiss"), false);
+        send.click();
+        send.click();
+        await requested;
+        assert.deepEqual(
+          calls.map((call) => call.path),
+          [`/api/loops/loop-1/items/${item.id}/action`, `/api/loops/loop-1/items/${item.id}/followup`],
+        );
+        assert.equal((calls[0]!.body.args as { proposal: { body: string } }).proposal.body, "Edited draft");
+        assert.deepEqual(calls[1]!.body, {
+          message: instruction ? `${instruction}\n\nSend it` : "Send it",
+          expectedProposalAt: 101,
+          model: "gpt-5.6-sol",
+          harness: "pi",
+          thinkingLevel: "medium",
+          fastMode: false,
+        });
+        render(chatTpl(item), host);
+        assert.equal(host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.disabled, true);
+        assert.equal(host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!.disabled, true);
+        release();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        item.thread = [{ role: "human", text: "Make it shorter", at: 102 }];
+        render(chatTpl(item), host);
+        assert.equal(host.querySelectorAll(".inbox-chat-suggestions .inbox-suggest-chip.primary").length, 1);
+        assert.equal(host.querySelectorAll(".inbox-chat-suggestion").length, 0);
+        for (const status of ["sent", "dismissed", "replied"]) {
+          render(chatTpl({ ...item, status }), host);
+          assert.equal(host.querySelector(".inbox-chat-suggestions"), null);
+        }
+      }
+    }
+    render(null, host);
+    resetInboxState();
+    const staleLedger = {
+      id: "stale-save",
+      loopId: "loop-1",
+      state: "held",
+      source: "gmail",
+      sourcePayload: {},
+      proposal: { data: { body: "Original" }, by: "agent", at: 100 },
+      thread: [],
+      updatedAt: 100,
+    };
+    const staleItem = toInboxItem(staleLedger);
+    inboxState.items = [staleItem];
+    const staleCalls: string[] = [];
+    globalThis.fetch = async (url) => {
+      if (String(url).includes("runtime-config")) return Response.json(inboxRuntime);
+      staleCalls.push(String(url));
+      if (String(url).endsWith("/action")) return Response.json({ message: "draft changed" }, { status: 409 });
+      staleLedger.proposal = { data: { body: "New agent draft" }, by: "agent", at: 200 };
+      return Response.json({ item: staleLedger });
+    };
+    render(chatTpl(staleItem), host);
+    await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
+    const staleDraft = host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!;
+    staleDraft.value = "My edited reply";
+    staleDraft.dispatchEvent(new dom.window.Event("input"));
+    staleDraft.dispatchEvent(new dom.window.Event("blur"));
+    host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.click();
+    await until(() => Boolean(host.querySelector(".composer-error")));
+    assert.equal(staleCalls.filter((url) => url.endsWith("/action")).length, 1);
+    assert.equal(staleCalls.filter((url) => url.endsWith("/followup")).length, 0);
+    assert.equal(host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!.value, "My edited reply");
+    // Different items keep separate picks and never rewrite the main composer's defaults.
+    const { embeddedComposer } = await vite.ssrLoadModule("/src/embedded-composer.ts");
+    const { html } = await vite.ssrLoadModule("lit");
+    const submissions: Array<{ text: string; model: string; fastMode: boolean }> = [];
+    let unavailable = false;
+    globalThis.fetch = async (_url, init) => {
+      assert.notEqual(init?.method, "PUT", "an embedded picker must not change scope defaults");
+      return Response.json(
+        unavailable
+          ? { ...inboxRuntime, effective: { ...inboxRuntime.effective, modelId: "deleted-model" } }
+          : inboxRuntime,
+      );
+    };
+    const embedded = (key: string) =>
+      html`${embeddedComposer(key, {
+        prepareSubmit: () => async (text: string, options: { model: string; fastMode: boolean }) =>
+          submissions.push({ text, ...options }),
+      })}`;
+    render(embedded("test-inbox-first"), host);
+    await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
+    host.querySelector<HTMLButtonElement>(".loadout-button")!.click();
+    host.querySelector<HTMLButtonElement>(".loadout-add")!.click();
+    const terra = host.querySelector<HTMLButtonElement>('[aria-label="Add GPT-5.6 Terra to presets"]')!;
+    terra.click();
+    host.querySelector<HTMLButtonElement>(".loadout-button")!.click();
+    host.querySelector<HTMLButtonElement>('[aria-label="Fast"][role="menuitemcheckbox"]')!.click();
+    assert.equal(host.querySelector(".runtime-default-btn"), null);
+    assert.equal(localStorage.getItem("web-ui:fast-mode"), null);
+    assert.equal(localStorage.getItem("web-ui:loadout"), null);
+    assert.equal(host.querySelector(".loadout-make-default, .loadout-foot-btn"), null);
+    const fill = (text: string) => {
+      const input = host.querySelector<HTMLTextAreaElement>(".composer-input")!;
+      input.value = text;
+      input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    };
+    fill("First item");
+    host.querySelector<HTMLButtonElement>(".send-btn")!.click();
+    await until(() => submissions.length === 1);
+    assert.equal(submissions[0]!.model, "gpt-5.6-terra");
+    assert.equal(submissions[0]!.fastMode, true);
+    render(embedded("test-inbox-second"), host);
+    await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
+    fill("Second item");
+    host.querySelector<HTMLButtonElement>(".send-btn")!.click();
+    await until(() => submissions.length === 2);
+    assert.equal(submissions[1]!.model, "gpt-5.6-sol");
+    assert.equal(submissions[1]!.fastMode, false);
+    render(embedded("test-inbox-first"), host);
+    await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
+    assert.match(host.querySelector(".loadout-button")!.textContent!, /Terra/);
+    host.querySelector<HTMLButtonElement>(".loadout-button")!.click();
+    await until(
+      () => host.querySelector('[aria-label="Fast"][role="menuitemcheckbox"]')?.getAttribute("aria-checked") === "true",
+    );
+    const { invalidateRuntimeConfigs } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
+    invalidateRuntimeConfigs();
+    unavailable = true;
+    render(embedded("test-inbox-deleted-model"), host);
+    await until(() => Boolean(host.querySelector('select option[value="pi:gpt-5.6-sol"]')));
+    const replacement = host.querySelector<HTMLSelectElement>("select")!;
+    replacement.value = "pi:gpt-5.6-sol";
+    replacement.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
+    unavailable = false;
+    invalidateRuntimeConfigs();
+    for (const nextKey of ["frozen-item", "different-item"]) {
+      const called: string[] = [];
+      const pending = (key: string, label: string) =>
+        html`${embeddedComposer(key, {
+          prepareSubmit: () => async () => {
+            called.push(label);
+          },
+        })}`;
+      render(pending("frozen-item", "approved snapshot"), host);
+      await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
+      fill("Send it");
+      host.querySelector<HTMLButtonElement>(".send-btn")!.click();
+      // A rerender (or navigation) can happen while files are being uploaded.
+      render(pending(nextKey, "new snapshot"), host);
+      await until(() => called.length === 1);
+      assert.deepEqual(called, ["approved snapshot"]);
+    }
+    const { storedDraft } = await vite.ssrLoadModule("/src/drafts.ts");
+    let rejectAfterNavigation: (error: Error) => void;
+    render(
+      html`${embeddedComposer("navigation-failure", {
+        prepareSubmit: () => () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectAfterNavigation = reject;
+          }),
+      })}`,
+      host,
+    );
+    await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
+    fill("Keep this on the first item");
+    host.querySelector<HTMLButtonElement>(".send-btn")!.click();
+    await until(() => Boolean(rejectAfterNavigation));
+    render(embedded("navigation-other"), host);
+    rejectAfterNavigation!(new Error("Failed after navigation"));
+    await until(() => storedDraft("navigation-failure") === "Keep this on the first item");
+    assert.equal(host.querySelector<HTMLTextAreaElement>(".composer-input")?.value ?? "", "");
+    for (const failure of ["save", "followup"]) {
+      render(null, host);
+      resetInboxState();
+      const ledger = {
+        id: `failure-${failure}`,
+        loopId: "loop-1",
+        state: "held",
+        source: "gmail",
+        sourcePayload: { title: "Update", from: "Sam", snippet: "Any news?" },
+        proposal: { data: { body: "Original draft" }, by: "agent", at: 100 },
+        thread: [],
+        updatedAt: 100,
+      };
+      const item = toInboxItem(ledger);
+      inboxState.items = [item];
+      const calls: string[] = [];
+      globalThis.fetch = async (url) => {
+        if (String(url).includes("runtime-config")) return Response.json(inboxRuntime);
+        calls.push(String(url));
+        if (String(url).endsWith("/action"))
+          return new Response(JSON.stringify({ message: "Save unavailable" }), { status: 502 });
+        if (String(url).endsWith("/followup"))
+          return new Response(JSON.stringify({ message: "the draft changed; review it before continuing" }), {
+            status: 409,
+          });
+        return Response.json({
+          item: { ...ledger, proposal: { ...ledger.proposal, data: { body: "New server draft" }, at: 101 } },
+        });
+      };
+      render(chatTpl(item), host);
+      if (failure === "save") {
+        const draft = host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!;
+        draft.value = "Keep my edit";
+        draft.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+      }
+      await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
+      host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.click();
+      await until(() => Boolean(host.querySelector(".composer-error")));
+      render(chatTpl(inboxState.items[0]), host);
+      assert.equal(host.querySelector<HTMLTextAreaElement>(".composer-input")!.value, "Send it");
+      assert.equal(
+        host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!.value,
+        failure === "save" ? "Keep my edit" : "New server draft",
+      );
+      assert.equal(calls.filter((path) => path.endsWith("/followup")).length, failure === "save" ? 0 : 1);
+      assert.equal(host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.disabled, false);
+    }
+  } finally {
+    await close();
+  }
+});

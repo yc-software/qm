@@ -13,8 +13,11 @@ import {
   PROVIDERS,
   type FetchLike,
   type ResolvedClient,
+  type OAuthState,
 } from "../src/connectors/oauth.ts";
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
+import { createOAuthFlowStore } from "../src/connectors/oauth-flow-store.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 const env = {
   GOOGLE_OAUTH_CLIENT_ID: "gid",
@@ -481,4 +484,24 @@ test("X refresh captures the ROTATED refresh token (single-use) — the connecti
   assert.equal(fresh.accessToken, "xat2");
   assert.equal(fresh.refreshToken, "new-rt", "the rotated refresh token replaces the old one");
   assert.equal(fresh.expiresAt, 5_000 + 7200_000);
+});
+
+test("oauth flow store — a short opaque state resolves once, then expires", async () => {
+  const store = createOAuthFlowStore(createMemoryMap<OAuthState>(), { now: () => 1_000 });
+  const flowId = await store.start({
+    provider: "x",
+    principalId: "person@example.com",
+    redirectUri: "https://example.test/v1/connectors/oauth/x/callback",
+    codeVerifier: "verifier",
+  });
+  assert.equal(flowId.length, 43);
+  assert.equal(await store.finish("nope"), null);
+  const opened = await store.finish(flowId);
+  assert.equal(opened?.codeVerifier, "verifier");
+  assert.equal(opened?.nonce, flowId);
+  assert.equal(await store.finish(flowId), null, "single use");
+
+  const stale = createOAuthFlowStore(createMemoryMap<OAuthState>(), { now: () => 1_000, ttlMs: 10 });
+  const staleId = await stale.start({ provider: "x", principalId: "U1", redirectUri: "https://example.test/cb" }, 0);
+  assert.equal(await stale.finish(staleId), null, "expired");
 });

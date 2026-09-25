@@ -1,9 +1,11 @@
+import { applyRuntimeOptions } from "./runtime-fixture.ts";
+import { metadata } from "./model-metadata.ts";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { Context } from "@earendil-works/pi-ai";
 import { makeOpenerStreamFn } from "../src/core-bridge.ts";
-import { applyRuntimeOptions, getModelOptions } from "../src/model-options.ts";
+import { getModelOptions } from "../src/model-options.ts";
 
 const realFetch = globalThis.fetch;
 
@@ -12,12 +14,18 @@ afterEach(() => {
 });
 
 test("a web turn submits the fetched OpenRouter model selected by runtime config", async () => {
-  applyRuntimeOptions(
+  await applyRuntimeOptions(
     null,
     ["pi"],
     { pi: ["anthropic/claude-sonnet-4.5"] },
     { harnessId: "pi", modelId: "anthropic/claude-sonnet-4.5" },
-    { "anthropic/claude-sonnet-4.5": { name: "Anthropic: Claude Sonnet 4.5", provider: "openrouter" } },
+    {
+      "anthropic/claude-sonnet-4.5": metadata(
+        "anthropic/claude-sonnet-4.5",
+        "Anthropic: Claude Sonnet 4.5",
+        "openrouter",
+      ),
+    },
   );
   const model = getModelOptions()[0]!.model;
   const submitted: Record<string, unknown>[] = [];

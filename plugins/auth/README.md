@@ -1,23 +1,22 @@
 # auth — the built-in sign-in broker
 
 An OIDC authorization server that speaks exactly the subset
-[`plugins/portal`](../portal/src/oidc.ts) consumes, so the portal keeps talking
-standard OIDC and never grows a second authentication path. Instead of an
+[`plugins/portal`](../portal/src/oidc.ts) consumes. Instead of an
 external identity provider, people prove who they are by opening a one-time link
 emailed to an allowed address.
 
 ## Endpoints
 
-| Route                                   | Reached by                                  | Notes                                                                          |
-| --------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------ |
-| `GET /authorize`                        | browser, via the portal at `/idp/authorize` | validates the request and renders the email form                               |
-| `POST /authorize`                       | browser, via the portal                     | always answers with the same confirmation page, then emails a link out of band |
-| `GET /verify`                           | browser, via the portal at `/idp/verify`    | consumes the link and redirects to the portal's `/auth/callback` with a code   |
-| `POST /token`                           | portal, over the private network            | HTTP Basic client auth, authorization-code grant, PKCE S256                    |
-| `GET /userinfo`                         | portal, over the private network            | Bearer access token, verified statelessly                                      |
-| `GET /.well-known/jwks.json`            | portal, over the private network            | the ES256 public key                                                           |
-| `GET /.well-known/openid-configuration` | operators                                   | discovery, for debugging                                                       |
-| `GET /healthz`                          | the platform                                | liveness                                                                       |
+| Route                                   | Reached by                                  | Notes                                                                                          |
+| --------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `GET /authorize`                        | browser, via the portal at `/idp/authorize` | validates the request and renders the email form                                               |
+| `POST /authorize`                       | browser, via the portal                     | with email configured, answers with the same confirmation page, then emails a link out of band |
+| `GET /verify`                           | browser, via the portal at `/idp/verify`    | consumes the link and redirects to the portal's `/auth/callback` with a code                   |
+| `POST /token`                           | portal, over the private network            | HTTP Basic client auth, authorization-code grant, PKCE S256                                    |
+| `GET /userinfo`                         | portal, over the private network            | Bearer access token, verified statelessly                                                      |
+| `GET /.well-known/jwks.json`            | portal, over the private network            | the ES256 public key                                                                           |
+| `GET /.well-known/openid-configuration` | operators                                   | discovery, for debugging                                                                       |
+| `GET /healthz`                          | the platform                                | liveness                                                                                       |
 
 The broker is never published directly. The portal republishes only the three
 browser-facing routes under `AUTH_BROKER_PREFIX` (`/idp` by default), which is
@@ -37,28 +36,51 @@ a claim the broker fails closed and refuses the sign-in.
 
 ## Configuration
 
-Every value below is set by `qm` from the deployment config and the secret
-store; the broker refuses to start if any of it is missing or a placeholder.
+Values below are set by `qm` from the deployment config and the secret store.
+Authentication keys and an email allowlist or domain remain required. Email
+delivery is optional; missing or incomplete email configuration disables delivery.
+Fully supplied email configuration is validated at boot.
 
-| Variable                                                                        | Source                                 |
-| ------------------------------------------------------------------------------- | -------------------------------------- |
-| `AUTH_ISSUER`, `AUTH_CLIENT_ID`, `AUTH_REDIRECT_URI`                            | derived from `publicUrl`               |
-| `AUTH_CLIENT_SECRET`, `AUTH_TOKEN_SECRET`, `AUTH_SIGNING_JWK`                   | generated by `qm setup`                |
-| `AUTH_ALLOWED_EMAILS`, `AUTH_ALLOWED_EMAIL_DOMAIN`                              | the operator's admin address or domain |
-| `AUTH_EMAIL_FROM`, `AUTH_BRAND_NAME`                                            | the operator's verified sender         |
-| `AUTH_EMAIL_TRANSPORT` and the chosen transport's variables (below)             | the operator's email provider          |
-| `AUTH_LINK_TTL_S`, `AUTH_CODE_TTL_S`, `AUTH_ACCESS_TTL_S`, `AUTH_REQUEST_TTL_S` | optional, capped                       |
-| `AUTH_SEND_WINDOW_S`, `AUTH_SEND_LIMIT_PER_EMAIL`, `AUTH_SEND_LIMIT_PER_IP`     | optional                               |
-| `CORE_API_URL`, `CORE_ORG_ID`, `CORE_SIGNING_SECRET`                            | the chassis core block                 |
+| Variable                                                                        | Source                                                                                                                      |
+| ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_ISSUER`, `AUTH_CLIENT_ID`, `AUTH_REDIRECT_URI`                            | derived from `publicUrl`                                                                                                    |
+| `AUTH_CLIENT_SECRET`, `AUTH_TOKEN_SECRET`, `AUTH_SIGNING_JWK`                   | generated by `qm setup`                                                                                                     |
+| `AUTH_ALLOWED_EMAILS`, `AUTH_ALLOWED_EMAIL_DOMAIN`                              | the operator's admin address or domain                                                                                      |
+| `AUTH_EMAIL_FROM`                                                               | the operator's verified sender                                                                                              |
+| `AUTH_BRAND_NAME`                                                               | `botName` in the deployment config; the Admin page's live branding, when set, takes precedence on rendered pages and emails |
+| `AUTH_EMAIL_TRANSPORT` and the chosen transport's variables (below)             | the operator's email provider                                                                                               |
+| `AUTH_LINK_TTL_S`, `AUTH_CODE_TTL_S`, `AUTH_ACCESS_TTL_S`, `AUTH_REQUEST_TTL_S` | optional, capped                                                                                                            |
+| `AUTH_SEND_WINDOW_S`, `AUTH_SEND_LIMIT_PER_EMAIL`, `AUTH_SEND_LIMIT_PER_IP`     | optional                                                                                                                    |
+| `CORE_API_URL`, `CORE_ORG_ID`, `CORE_SIGNING_SECRET`                            | the chassis core block                                                                                                      |
 
 The signing key is single, not a set: rotating it means redeploying, and links
 minted by the previous key stop verifying at that moment.
 
+## Invited external users
+
+An address an org admin has invited as an external user (Admin → Users, or by
+asking the agent) may sign in until its expiry even though it is on neither
+`AUTH_ALLOWED_EMAILS` nor `AUTH_ALLOWED_EMAIL_DOMAIN`. The env list is checked
+first and settles the answer on its own; only an address it does not cover is
+looked up in core over the signed core client (`GET
+/v1/auth/broker/email-allowed`), at every step — when the link is requested,
+when it is opened, and when the code is exchanged — so a revoked or expired
+invitation stops working at once. A lookup that fails or times out counts as not
+allowed. One of the two env variables is still required at boot.
+
 ## Email transport
 
-`AUTH_EMAIL_TRANSPORT` selects one of two, and the broker refuses to start
-without that transport's credentials. `AUTH_EMAIL_FROM` is the verified sender
-either way, optionally as `Name <sender@example.com>`.
+`AUTH_EMAIL_TRANSPORT` selects Resend (the default) or SMTP. When
+`AUTH_EMAIL_FROM` or any of the selected transport's credentials are absent, the
+broker starts without email delivery. The sign-in page and submissions return
+503 with “Email delivery isn't configured”; no form is offered and no email is
+claimed to have been sent. Previously issued links and codes keep their normal
+expiration and single-use checks.
+
+To enable email sign-in, configure the selected transport's credentials and
+`AUTH_EMAIL_FROM`, then restart. The sender must be verified and may be written
+as `Name <sender@example.com>`. Supplying only part of the configuration leaves
+email delivery disabled. Fully supplied but invalid configuration is refused at boot.
 
 | Transport | Variables                                                                             | Notes                                                                                                                                                                                                                                                   |
 | --------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -85,3 +107,38 @@ the per-address budget is what bounds a single source. Both are durable claims,
 so they survive restarts, and both are keyed by an HMAC under
 `AUTH_TOKEN_SECRET` so another plugin holding the shared core signing secret
 cannot compute — and pre-claim — a chosen mailbox's slots.
+
+## Remembered browsers
+
+Verifying an email link creates a durable broker session in core's Postgres store.
+The browser receives an HttpOnly, Secure, SameSite=Lax cookie scoped to the issuer
+path (`/idp` behind the portal). Core stores only a hash of the random token; the
+cookie also carries a broker-only MAC, so another plugin's core signing credential
+cannot manufacture an email sign-in. Rotating `AUTH_TOKEN_SECRET` invalidates all
+remembered cookies.
+
+`AUTH_SESSION_IDLE_S` defaults to 30 days and `AUTH_SESSION_ABSOLUTE_S` defaults
+to 90 days. Both are whole seconds; the idle limit must not exceed the absolute
+limit, and the absolute limit cannot exceed 90 days. Reauthorization slides the
+idle expiry without moving the original authentication time or absolute expiry.
+The broker rechecks email eligibility before issuing and exchanging a code.
+
+`prompt=login` and `max_age=0` always require a fresh email. A positive `max_age`
+compares against the original email authentication time, also returned as
+`auth_time` in the ID token. `prompt=none` returns `login_required` when silent
+reauthentication is unavailable. Invalid prompt and max-age values fail closed.
+
+The portal forwards only the broker cookie to `/idp` and preserves all broker
+Set-Cookie headers. Ordinary `POST /auth/logout` clears both local cookies.
+`POST /auth/logout?everywhere=1` additionally revokes all remembered browsers for
+the authenticated email principal. The signed core endpoint
+`POST /v1/auth/broker/sessions/revoke` accepts `{ "email": "user@example.com" }`
+from that user's portal identity or an authorized administrator. These operations
+prevent future silent reauthentication; already-issued stateless portal sessions
+remain valid until their normal expiry.
+
+When hosted by a portal with trusted OIDC and an explicit provider label configured,
+the embedded broker receives
+its trusted provider label and shows an alternate sign-in link throughout the
+email flow. The link starts a fresh trusted login through the portal, without
+submitting an email or linking the two identities. Standalone brokers omit it.

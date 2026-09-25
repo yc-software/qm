@@ -27,6 +27,13 @@ test("core deploy image includes git", () => {
   );
   for (const line of dockerfile.split("\n").filter((candidate) => candidate.startsWith("COPY "))) {
     const sources = line.trim().split(/\s+/).slice(1, -1);
+    if (sources[0]?.startsWith("--from=")) {
+      const stage = sources[0].slice("--from=".length);
+      const stages = [...dockerfile.matchAll(/^FROM\s+\S+\s+AS\s+(\S+)$/gm)].map((match) => match[1]);
+      assert.ok(stages.includes(stage), `core Dockerfile COPY references an undeclared stage: ${stage}`);
+      assert.ok(sources.length > 1, "stage COPY must include a source path");
+      continue;
+    }
     for (const source of sources) {
       assert.equal(existsSync(join(repoRoot, source)), true, `core Dockerfile COPY source does not exist: ${source}`);
     }

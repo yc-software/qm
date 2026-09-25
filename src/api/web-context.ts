@@ -1,5 +1,6 @@
 import type { SessionEntry, SurfaceContextQuery, SurfaceContextResult } from "../types.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
+import { createTranscriptSource } from "../harness/tape-projection.ts";
 
 const WEB_CONTEXT_MESSAGE_CHARS = 600;
 const WEB_CONTEXT_READ_CAP = 500;
@@ -75,7 +76,10 @@ export function webConversationWindow(
 }
 
 export async function answerWebContextRequest(
-  sessions: Pick<SessionStore, "sessionsByThreadRefs" | "visibleEntries">,
+  sessions: Pick<
+    SessionStore,
+    "sessionsByThreadRefs" | "visibleEntries" | "getEntries" | "getTape" | "latestEntrySeq" | "participantWindowsOf"
+  >,
   query: SurfaceContextQuery,
 ): Promise<{ result?: SurfaceContextResult; error?: string }> {
   if (query.file)
@@ -89,7 +93,7 @@ export async function answerWebContextRequest(
   const [session] = await sessions.sessionsByThreadRefs([target]);
   if (!session) return { error: "that conversation isn't readable on the web surface" };
   const viewer = query.viewer?.trim() || owner;
-  const entries = await sessions.visibleEntries(session.id, viewer);
+  const { entries } = await createTranscriptSource(sessions).forViewer(session.id, viewer);
   const root = target.slice(target.lastIndexOf(":") + 1);
   return { result: webConversationWindow(entries, owner, root, query) };
 }

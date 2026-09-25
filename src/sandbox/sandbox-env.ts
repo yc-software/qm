@@ -27,6 +27,20 @@ export const DROPPED_PROXY_ENV = new Set([
   "NO_PROXY",
 ]);
 
+export function forceThroughProxyEnv(egressProxyUrl: string, token: string): Record<string, string> {
+  const u = new URL(egressProxyUrl);
+  const url = `${u.protocol}//x:${token}@${u.host}`;
+  const noProxy = "localhost,127.0.0.1,::1";
+  return {
+    HTTPS_PROXY: url,
+    HTTP_PROXY: url,
+    NO_PROXY: noProxy,
+    https_proxy: url,
+    http_proxy: url,
+    no_proxy: noProxy,
+  };
+}
+
 export function proxyExportPrefix(handle: SandboxHandle): string {
   const picked = Object.entries(handle.env ?? {}).filter(([key]) => DROPPED_PROXY_ENV.has(key));
   if (!picked.length) return "";

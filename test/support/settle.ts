@@ -1,3 +1,10 @@
+import type { Scheduler } from "../../src/cron/scheduler.ts";
+
+export async function runNowSettled(scheduler: Scheduler, cronId: string): Promise<void> {
+  const r = await scheduler.runNow(cronId);
+  if (r.started) await r.settled;
+}
+
 export const settle = async (check: () => Promise<boolean>): Promise<void> => {
   const deadline = Date.now() + 15_000;
   let lastError: unknown;

@@ -23,7 +23,7 @@ test("getRun resolves the threadRef to the real UUID and builds the admin link f
   assert.notEqual(got?.result?.sessionId, threadRef);
   assert.equal(
     got?.result?.adminUrl,
-    `https://portal.example.com/admin/history?session=${session.id}`,
+    `https://portal.example.com/admin/history/s/${session.id}`,
     "admin link built from the org's portal + resolved UUID",
   );
 });

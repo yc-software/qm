@@ -19,6 +19,8 @@ export function createPostgresEgressAuditSink(connectionString: string): EgressA
     connectionString,
     table: "egress_events",
     columns: COLUMNS,
+
+    schema: { expectedChecksum: "cfbf4ab51c2b0a4ac45eaeeb7a7011d7b2a4a4d9c21072473ed27400b03fe054" },
     defaultLimit: 5000,
     equalityFilters: { scopeId: "scope_label", source: "source" },
     persistErrorMessage: "[egress-audit] failed to persist egress decision:",

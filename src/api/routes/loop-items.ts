@@ -1,0 +1,674 @@
+import { z } from "zod";
+import type { Cron, Loop, LoopItem, LoopSourcePayload } from "../../types.ts";
+import { canonicalJson } from "../../util/objects.ts";
+import { errMessage } from "../../util/errors.ts";
+import { sendJson } from "../http.ts";
+import { isObj } from "./shared.ts";
+import { type ApiCtx, type Route } from "./route.ts";
+import {
+  requireLoopAuthority,
+  canAdministerLoop,
+  loadAdministrable,
+  loopDeps,
+  actingPrincipal,
+  type LoopServiceDeps,
+} from "./loops.ts";
+import { scopeId, parseScopeId } from "../../types.ts";
+import { isResolved, isLedgerState, ledgerItemView, ledgerState, sortLedgerItems } from "../../loops/ledger-view.ts";
+import { loopItemId, type IngestEntryInput } from "../../loops/item-ledger.ts";
+import { addressList } from "../../loops/sources/adapter.ts";
+import { adapterForItem, sourceAdapter } from "../../loops/sources/index.ts";
+import {
+  ensureDefaultInboxLoops,
+  renderSourceInboxTask,
+  findInboxLoop,
+  INBOX_LEDGER_MAX_ITEMS,
+  INBOX_LEDGER_RETENTION_MS,
+  INBOX_SYNC_DEFAULT_EVERY_MS,
+  INBOX_SYNC_TASK_VERSION,
+} from "../../loops/inbox-loop.ts";
+import { migrateInbox } from "../../loops/inbox-migration.ts";
+import { THINKING_LEVELS, isHarnessId } from "../../model/pi-models.ts";
+import { principalDestination } from "../../reach/reach.ts";
+
+const MAX_ITEMS_PER_INGEST = 50;
+const MAX_SOURCE_PAYLOAD_BYTES = 64_000;
+const MAX_PROPOSAL_BYTES = 32_000;
+const MAX_FOLLOWUP_CHARS = 4_000;
+const MAX_EXTERNAL_REPLY_CHARS = 500;
+
+function jsonSize(value: unknown): number {
+  return JSON.stringify(value)?.length ?? 0;
+}
+
+function parseIngestEntry(loop: Loop, raw: unknown): IngestEntryInput | { error: string } {
+  if (!isObj(raw)) return { error: "item must be an object" };
+  const adapter = sourceAdapter(raw.source);
+  if (adapter) {
+    if (loop.sources && !loop.sources.includes(adapter.id)) {
+      return { error: `this loop does not accept "${adapter.id}" items` };
+    }
+    const parsed = adapter.parse(raw);
+    if ("error" in parsed) return parsed;
+    return {
+      loopId: loop.id,
+      dedupeKey: parsed.dedupeKey,
+      source: adapter.id,
+      summary: parsed.summary,
+      sourcePayload: parsed.sourcePayload,
+      sourceAt: parsed.sourceAt,
+      ...(parsed.proposal ? { proposal: { ...parsed.proposal, by: "agent" as const } } : {}),
+    };
+  }
+  if (typeof raw.source === "string" && raw.source.trim()) {
+    return { error: `unknown source "${raw.source}"` };
+  }
+  const dedupeKey = typeof raw.dedupeKey === "string" ? raw.dedupeKey.trim() : "";
+  if (!dedupeKey || dedupeKey.length > 300) return { error: "dedupeKey (<=300 chars) required" };
+  if (!isObj(raw.sourcePayload)) return { error: "sourcePayload must be an object" };
+  if (jsonSize(raw.sourcePayload) > MAX_SOURCE_PAYLOAD_BYTES) {
+    return { error: `sourcePayload must be under ${MAX_SOURCE_PAYLOAD_BYTES} bytes of JSON` };
+  }
+  const sourceAt =
+    typeof raw.sourceAt === "number" && Number.isFinite(raw.sourceAt) && raw.sourceAt > 0 ? raw.sourceAt : undefined;
+  const summary = typeof raw.summary === "string" && raw.summary.trim() ? raw.summary.trim().slice(0, 500) : undefined;
+  let proposal: { data: LoopSourcePayload } | undefined;
+  if (raw.proposal !== undefined) {
+    const data = isObj(raw.proposal) && isObj(raw.proposal.data) ? raw.proposal.data : raw.proposal;
+    if (!isObj(data)) return { error: "proposal must be an object" };
+    if (jsonSize(data) > MAX_PROPOSAL_BYTES) {
+      return { error: `proposal must be under ${MAX_PROPOSAL_BYTES} bytes of JSON` };
+    }
+    proposal = { data };
+  }
+  return {
+    loopId: loop.id,
+    dedupeKey,
+    sourcePayload: raw.sourcePayload,
+    ...(summary !== undefined ? { summary } : {}),
+    ...(sourceAt !== undefined ? { sourceAt } : {}),
+    ...(proposal ? { proposal: { ...proposal, by: "agent" as const } } : {}),
+  };
+}
+
+function readableItems(ctx: ApiCtx, loop: Loop): boolean {
+  if (!ctx.capability || parseScopeId(loop.ownerScopeId).kind !== "personal") return true;
+  if (ctx.capability.privateScope === true) return true;
+  sendJson(ctx.res, 403, {
+    error: "forbidden",
+    message: "a personal loop's items are reachable only from its owner's own scope",
+  });
+  return false;
+}
+
+async function listItems(ctx: ApiCtx): Promise<void> {
+  const loaded = await loadAdministrable(ctx);
+  if (!loaded) return;
+  const { deps, loop } = loaded;
+  if (!readableItems(ctx, loop)) return;
+  const wanted = ctx.url.searchParams.get("state");
+  if (wanted !== null && !isLedgerState(wanted)) {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "unknown state filter" });
+  }
+  if ((loop.surface === "inbox" || loop.surface?.startsWith("inbox:")) && loop.owner === loaded.acting.actorId) {
+    const openMail = (await deps.items.byLoop(loop.id)).filter(
+      (item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail",
+    );
+    await ctx.deps.inboxSourceRefresh?.(loop.owner, openMail);
+  }
+  const all = sortLedgerItems(await deps.items.byLoop(loop.id));
+  const items = wanted === null ? all : all.filter((item) => ledgerState(item) === wanted);
+  const counts: Record<string, number> = {};
+  for (const item of all) {
+    const state = ledgerState(item);
+    counts[state] = (counts[state] ?? 0) + 1;
+  }
+  sendJson(ctx.res, 200, { loop, items: items.map(ledgerItemView), counts });
+}
+
+async function ingestItems(ctx: ApiCtx): Promise<void> {
+  const loaded = await loadAdministrable(ctx);
+  if (!loaded) return;
+  const { deps, loop } = loaded;
+  if (loop.surface === "inbox" && loop.state !== "enabled")
+    return sendJson(ctx.res, 409, {
+      error: "migration_pending",
+      message: "This Inbox producer has been retired or paused for migration.",
+    });
+  if (!ctx.capability) {
+    return sendJson(ctx.res, 403, { error: "forbidden", message: "ledger items are ingested by the agent" });
+  }
+  if (!readableItems(ctx, loop)) return;
+  const body = isObj(ctx.body) ? ctx.body : {};
+  if (!Array.isArray(body.items) || body.items.length === 0) {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "items (non-empty array) required" });
+  }
+  if (body.items.length > MAX_ITEMS_PER_INGEST) {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: `at most ${MAX_ITEMS_PER_INGEST} items per call` });
+  }
+  const sessionId = ctx.capability.threadRef
+    ? ((await ctx.deps.sessions?.getByThread(ctx.capability.threadRef))?.id ?? undefined)
+    : undefined;
+  const entries: IngestEntryInput[] = [];
+  const existingItems = await deps.items.byLoop(loop.id);
+  for (const [at, raw] of body.items.entries()) {
+    const parsed = parseIngestEntry(loop, raw);
+    if ("error" in parsed) {
+      return sendJson(ctx.res, 400, { error: "bad_request", message: `items[${at}]: ${parsed.error}` });
+    }
+    if (parsed.source === "slack") {
+      const adapter = sourceAdapter("slack")!;
+      const existing = existingItems.find(
+        (item) =>
+          (item.source ?? item.sourcePayload?.source) === "slack" && adapter.matchesEvent(item, parsed.dedupeKey),
+      );
+      // Retain the ID, human edits and resolution watermark of legacy channel-keyed cards.
+      if (existing) parsed.dedupeKey = existing.sourceKey;
+    }
+    entries.push(sessionId && parsed.proposal ? { ...parsed, proposal: { ...parsed.proposal, sessionId } } : parsed);
+  }
+  const outcome = await deps.items.ingest(entries);
+  await deps.items.prune(loop.id, { maxItems: INBOX_LEDGER_MAX_ITEMS, retentionMs: INBOX_LEDGER_RETENTION_MS });
+  sendJson(ctx.res, 200, outcome);
+}
+
+async function loadItem(
+  ctx: ApiCtx,
+): Promise<{ deps: LoopServiceDeps; loop: Loop; item: LoopItem; actorId: string } | null> {
+  const loaded = await loadAdministrable(ctx);
+  if (!loaded) return null;
+  if (!readableItems(ctx, loaded.loop)) return null;
+  const item = await loaded.deps.items.get(ctx.params.itemId ?? "");
+  if (item && item.loopId !== loaded.loop.id && item.previousLoopId === loaded.loop.id) {
+    const target = await loaded.deps.store.get(item.loopId);
+    if (target && (await canAdministerLoop(ctx, target, loaded.acting)))
+      return { deps: loaded.deps, loop: target, item, actorId: loaded.acting.actorId };
+  }
+  if (!item || item.loopId !== loaded.loop.id) {
+    sendJson(ctx.res, 404, { error: "not_found", message: "no such ledger item" });
+    return null;
+  }
+  return { deps: loaded.deps, loop: loaded.loop, item, actorId: loaded.acting.actorId };
+}
+
+const IMAGE_MAX_BYTES = 8_000_000;
+
+function imageUrlFromItem(item: LoopItem, ctxIndex: number, imageIndex: number): string | null {
+  const payload = item.sourcePayload ?? {};
+  let list: unknown;
+  if (ctxIndex === -1) {
+    list = payload.images;
+  } else if (Array.isArray(payload.context) && isObj(payload.context[ctxIndex])) {
+    list = (payload.context[ctxIndex] as { images?: unknown }).images;
+  }
+  if (!Array.isArray(list)) return null;
+  const url = list[imageIndex];
+  return typeof url === "string" && url.startsWith("https://") ? url : null;
+}
+
+async function serveItemImage(ctx: ApiCtx): Promise<void> {
+  const loaded = await loadItem(ctx);
+  if (!loaded) return;
+  const { loop, item } = loaded;
+  const ctxIndex = Number.parseInt(ctx.url.searchParams.get("ctx") ?? "", 10);
+  const imageIndex = Number.parseInt(ctx.url.searchParams.get("i") ?? "", 10);
+  if (!Number.isInteger(ctxIndex) || !Number.isInteger(imageIndex) || imageIndex < 0 || ctxIndex < -1) {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "ctx and i required" });
+  }
+  const url = imageUrlFromItem(item, ctxIndex, imageIndex);
+  if (!url) return sendJson(ctx.res, 404, { error: "not_found", message: "no such image on this item" });
+  const host = new URL(url).hostname;
+  const slackHosted = host === "slack.com" || host.endsWith(".slack.com");
+  let authHeader: Record<string, string> = {};
+  if (slackHosted) {
+    const tokens = ctx.deps.loopSourceTokens;
+    const token = tokens
+      ? ((await tokens.connectorAccessToken("slack.com", loop.owner, "personal")) ??
+        (await tokens.connectorAccessToken("slack.com", loop.owner)))
+      : null;
+    if (!token) return sendJson(ctx.res, 502, { error: "not_connected", message: "Slack is not connected" });
+    authHeader = { authorization: `Bearer ${token}` };
+  }
+  let upstream: Response;
+  try {
+    upstream = await fetch(url, { headers: authHeader, redirect: "follow" });
+  } catch (e) {
+    return sendJson(ctx.res, 502, { error: "upstream", message: errMessage(e) });
+  }
+  const type = upstream.headers.get("content-type") ?? "";
+  if (!upstream.ok || !upstream.body || !type.startsWith("image/")) {
+    return sendJson(ctx.res, 502, { error: "upstream", message: `upstream returned ${upstream.status} ${type}` });
+  }
+  const bytes = Buffer.from(await upstream.arrayBuffer());
+  if (bytes.length > IMAGE_MAX_BYTES) return sendJson(ctx.res, 502, { error: "upstream", message: "image too large" });
+  ctx.res.writeHead(200, {
+    "content-type": type,
+    "content-length": String(bytes.length),
+    "cache-control": "private, max-age=3600",
+  });
+  ctx.res.end(bytes);
+}
+
+async function getItem(ctx: ApiCtx): Promise<void> {
+  const loaded = await loadItem(ctx);
+  if (!loaded) return;
+  if (
+    ctx.url.searchParams.get("refreshSource") === "1" &&
+    (loaded.loop.surface === "inbox" || loaded.loop.surface?.startsWith("inbox:")) &&
+    loaded.loop.owner === loaded.actorId
+  )
+    await ctx.deps.inboxSourceRefresh?.(loaded.loop.owner, [loaded.item]);
+  sendJson(ctx.res, 200, {
+    item: ledgerItemView((await loaded.deps.items.get(loaded.item.id)) ?? loaded.item),
+    outputs: (await loaded.deps.outputs.byItem(loaded.item.id)).filter((output) => output.loopId === loaded.loop.id),
+  });
+}
+
+function sameProposalData(item: LoopItem, data: LoopSourcePayload): boolean {
+  return item.proposal !== undefined && canonicalJson(item.proposal.data) === canonicalJson(data);
+}
+
+function proposalFrom(item: LoopItem, raw: unknown): LoopSourcePayload | null {
+  const adapter = adapterForItem(item);
+  const data = isObj(raw) && isObj(raw.data) ? raw.data : raw;
+  if (!isObj(data)) return null;
+  if (jsonSize(data) > MAX_PROPOSAL_BYTES) return null;
+  return adapter ? adapter.parseProposal(data) : data;
+}
+
+async function actOnItem(ctx: ApiCtx): Promise<void> {
+  const loaded = await loadItem(ctx);
+  if (!loaded) return;
+  const { deps, loop } = loaded;
+  let item = loaded.item;
+  const body = isObj(ctx.body) ? ctx.body : {};
+  const kind = typeof body.kind === "string" ? body.kind.trim() : "";
+  const proposalAuthor = ctx.capability ? ("agent" as const) : ("human" as const);
+  if (!kind) return sendJson(ctx.res, 400, { error: "bad_request", message: "kind required" });
+  const args = isObj(body.args) ? body.args : {};
+
+  const expectedAt = typeof args.expectedProposalAt === "number" ? args.expectedProposalAt : undefined;
+  const draftChanged = (): void =>
+    sendJson(ctx.res, 409, {
+      error: "conflict",
+      message: "the draft changed since you last saw it; review the new draft before sending",
+    });
+
+  if (kind === "edit") {
+    const data = proposalFrom(item, args.proposal ?? args);
+    if (!data) return sendJson(ctx.res, 400, { error: "bad_request", message: "proposal is not valid for this item" });
+    if (expectedAt !== undefined && item.proposal && item.proposal.at !== expectedAt) return draftChanged();
+    if (sameProposalData(item, data)) return sendJson(ctx.res, 200, { item: ledgerItemView(item) });
+    const next = await deps.items.setProposal(
+      item.id,
+      { data, by: proposalAuthor },
+      expectedAt !== undefined ? { expectedAt } : undefined,
+    );
+    if (!next && expectedAt !== undefined) return draftChanged();
+    if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next) });
+  }
+
+  if (kind === "dismiss") {
+    const next = await deps.items.recordAction(item.id, { kind, outcome: "dismissed" });
+    if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next) });
+  }
+
+  if (kind === "reply") {
+    if (!ctx.actor?.p || item.sourcePayload?.sentChat !== true) return sendJson(ctx.res, 403, { error: "forbidden" });
+    const next = await deps.items.reopen(item.id, { sentReply: true });
+    if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "a reply is already being drafted" });
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next) });
+  }
+
+  if (kind === "reopen") {
+    const next = await deps.items.reopen(item.id);
+    if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is not dismissed" });
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next) });
+  }
+
+  if (kind === "replied") {
+    const text = typeof args.text === "string" ? args.text.trim().slice(0, MAX_EXTERNAL_REPLY_CHARS) : "";
+    const next = await deps.items.recordAction(item.id, {
+      kind,
+      outcome: "dismissed",
+      ...(typeof args.sourceAt === "number" ? { sourceAt: args.sourceAt } : {}),
+      ...(text ? { result: text } : {}),
+    });
+    if (!next) {
+      return sendJson(ctx.res, 409, { error: "conflict", message: "this item was already actioned from here" });
+    }
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next) });
+  }
+
+  if (kind === "send" && item.status !== "ready") {
+    return sendJson(ctx.res, 409, { error: "not_ready", message: "This item needs a fresh draft before sending" });
+  }
+  if (ledgerState(item) === "actioned") {
+    return sendJson(ctx.res, 409, { error: "already_actioned", message: "this item was already actioned" });
+  }
+
+  if (expectedAt !== undefined && item.proposal && item.proposal.at !== expectedAt) return draftChanged();
+
+  if (args.proposal !== undefined) {
+    const data = proposalFrom(item, args.proposal);
+    if (!data) return sendJson(ctx.res, 400, { error: "bad_request", message: "proposal is not valid for this item" });
+    if (!sameProposalData(item, data)) {
+      const revised = await deps.items.setProposal(
+        item.id,
+        { data, by: proposalAuthor },
+        expectedAt !== undefined ? { expectedAt } : undefined,
+      );
+      if (!revised && expectedAt !== undefined) return draftChanged();
+      item = revised ?? item;
+    }
+  }
+
+  const adapter = adapterForItem(item);
+  if (adapter?.actions.includes(kind)) {
+    const tokens = ctx.deps.loopSourceTokens;
+    if (!tokens) return sendJson(ctx.res, 404, { error: "not_found", message: "connectors are not wired" });
+    const decisionToken = await deps.items.acquireDecision(item.id);
+    if (!decisionToken)
+      return sendJson(ctx.res, 409, { error: "conflict", message: "an action is already in progress" });
+    try {
+      const current = await deps.items.get(item.id);
+      if (!current || ledgerState(current) === "actioned")
+        return sendJson(ctx.res, 409, { error: "already_actioned", message: "this item was already actioned" });
+      if (current.proposal?.at !== item.proposal?.at) return draftChanged();
+      item = current;
+      const slackClient = ctx.deps.loopSlackClient;
+      const result = await adapter.act(
+        { owner: loop.owner, actor: proposalAuthor, tokens, ...(slackClient ? { slackClient } : {}) },
+        item,
+        kind,
+        args,
+      );
+      if (!result.ok) {
+        if (result.partial) await deps.items.appendThread(item.id, [{ role: "system", text: result.message }]);
+        const statusByReason = { not_connected: 409, bad_item: 400, upstream: 502 } as const;
+        return sendJson(ctx.res, statusByReason[result.reason], { error: result.reason, message: result.message });
+      }
+      if (result.payloadPatch) item = (await deps.items.annotate(item.id, result.payloadPatch)) ?? item;
+      if (result.resolves === false) return sendJson(ctx.res, 200, { item: ledgerItemView(item) });
+      const next = await deps.items.recordAction(item.id, { kind, outcome: "actioned", result: result.result });
+      return sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item) });
+    } finally {
+      await deps.items.releaseDecision(item.id, decisionToken);
+    }
+  }
+
+  if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
+  if (!(await requireLoopAuthority(ctx, deps, loop))) return;
+  const turn = await deps.fire.itemAction(loop, item, kind, args, loaded.actorId);
+  if (!turn.ok) {
+    return sendJson(ctx.res, 502, { error: "action_failed", message: turn.userNote ?? "the agent turn did not run" });
+  }
+  await deps.items.appendThread(item.id, [{ role: "agent", text: turn.reply ?? `Did "${kind}".` }]);
+  const next = await deps.items.recordAction(item.id, {
+    kind,
+    outcome: "actioned",
+    ...(turn.reply ? { result: turn.reply } : {}),
+  });
+  sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item) });
+}
+
+const followUpOptionsSchema = z.object({
+  model: z.string().trim().min(1).optional(),
+  harness: z.string().trim().refine(isHarnessId, "unsupported harness").optional(),
+  thinkingLevel: z.string().trim().pipe(z.enum(THINKING_LEVELS)).optional(),
+  fastMode: z.boolean().optional(),
+  attachments: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        blobId: z.string().min(1),
+        mimetype: z.string(),
+        sizeBytes: z.int().min(1).max(1_000_000_000),
+      }),
+    )
+    .max(10)
+    .optional(),
+});
+
+async function followUpOnItem(ctx: ApiCtx): Promise<void> {
+  const loaded = await loadItem(ctx);
+  if (!loaded) return;
+  const { deps, loop, item } = loaded;
+  if (!(await requireLoopAuthority(ctx, deps, loop))) return;
+  const body = isObj(ctx.body) ? ctx.body : {};
+  const parsed = followUpOptionsSchema.safeParse(body);
+  if (!parsed.success)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: parsed.error.issues[0]?.message });
+  const options = parsed.data;
+  const message = typeof body.message === "string" ? body.message.trim() : "";
+  if (!message && !options.attachments?.length)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "message required" });
+  if (message.length > MAX_FOLLOWUP_CHARS) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: `message must be under ${MAX_FOLLOWUP_CHARS} chars`,
+    });
+  }
+  if (typeof body.expectedProposalAt === "number" && item.proposal?.at !== body.expectedProposalAt) {
+    return sendJson(ctx.res, 409, { error: "conflict", message: "the draft changed; review it before continuing" });
+  }
+  if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
+  try {
+    const next = await deps.fire.followUp(
+      loop,
+      item,
+      message || "Please review the attached files.",
+      loaded.actorId,
+      options,
+    );
+    sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item) });
+  } catch (e) {
+    sendJson(ctx.res, 502, { error: "followup_failed", message: errMessage(e) });
+  }
+}
+
+function syncTaskVersionOf(cron: Cron | null): number | null {
+  const m = /Inbox sync v(\d+)\./.exec(cron?.action ?? "");
+  return m ? Number(m[1]) : null;
+}
+
+export function cronSummary(cron: Cron | null): {
+  id: string;
+  enabled: boolean;
+  schedule: Cron["schedule"];
+  lastFiredAt?: number;
+  taskVersion: number | null;
+  currentTaskVersion: number;
+} | null {
+  if (!cron) return null;
+  return {
+    id: cron.id,
+    enabled: cron.enabled,
+    schedule: cron.schedule,
+    ...(cron.lastFiredAt !== undefined ? { lastFiredAt: cron.lastFiredAt } : {}),
+    taskVersion: syncTaskVersionOf(cron),
+    currentTaskVersion: INBOX_SYNC_TASK_VERSION,
+  };
+}
+
+async function getInboxLoop(ctx: ApiCtx): Promise<void> {
+  const deps = loopDeps(ctx);
+  if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
+  const acting = actingPrincipal(ctx);
+  if (!acting) return;
+  const loop =
+    (await deps.store.list()).find(
+      (candidate) => candidate.owner === acting.actorId && candidate.surface === "inbox:gmail",
+    ) ?? (await findInboxLoop(deps.store, acting.actorId));
+  const cron = loop?.cronId ? await ctx.app.getCron(loop.cronId) : null;
+  sendJson(ctx.res, 200, { loop, syncCron: cronSummary(cron) });
+}
+
+export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
+  const owner = ctx.actor?.p;
+  if (!owner) return sendJson(ctx.res, 403, { error: "forbidden" });
+  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", owner))))
+    return sendJson(ctx.res, 403, { error: "feature_disabled" });
+  const deps = loopDeps(ctx);
+  if (!deps) return sendJson(ctx.res, 404, { error: "not_found" });
+  const body = isObj(ctx.body) ? ctx.body : {};
+  const threadId = typeof body.threadId === "string" ? body.threadId.trim() : "";
+  if (!threadId || threadId.length > 200 || jsonSize(body) > MAX_SOURCE_PAYLOAD_BYTES)
+    return sendJson(ctx.res, 400, { error: "bad_request" });
+  const text = (key: string, max: number): string => (typeof body[key] === "string" ? body[key].slice(0, max) : "");
+  const accountType = body.accountType === undefined ? "default" : body.accountType;
+  const to = addressList(body.to === undefined ? [] : [body.to]);
+  const cc = addressList(body.cc === undefined ? [] : [body.cc]);
+  if (
+    typeof accountType !== "string" ||
+    !["default", "personal", "company"].includes(accountType) ||
+    to === null ||
+    cc === null
+  )
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "invalid account or recipient headers" });
+  const payload = {
+    title: text("subject", 300),
+    from: text("from", 500),
+    snippet: text("text", 50000),
+    gmail: {
+      threadId,
+      accountType,
+      messageId: text("messageId", 200),
+      subject: text("subject", 300),
+      to: to ?? [],
+      cc: cc ?? [],
+      rfcMessageId: text("rfcMessageId", 400),
+    },
+    sentChat: true,
+  } as LoopSourcePayload;
+  const defaults = await ensureDefaultInboxLoops(deps.store, owner);
+  const loop = defaults.find((entry) => entry.sources?.includes("gmail"))!;
+  const dedupeKey = accountType === "default" ? `sent-chat:${threadId}` : `sent-chat:${accountType}:${threadId}`;
+  let item = (await deps.items.byLoop(loop.id)).find((entry) => entry.sourceKey === dedupeKey);
+  const id = item?.id ?? loopItemId(loop.id, dedupeKey);
+  if (!item) {
+    await deps.items.ingest([
+      {
+        loopId: loop.id,
+        dedupeKey,
+        source: "gmail",
+        summary: text("subject", 300),
+        proposal: { data: { body: "" }, by: "human" },
+        sourcePayload: payload,
+      },
+    ]);
+    item = (await deps.items.get(id)) ?? undefined;
+  }
+  if (!item) return sendJson(ctx.res, 500, { error: "chat_unavailable" });
+  item = (await deps.items.annotate(id, payload, { summary: text("subject", 300) })) ?? item;
+  if (item.actionKind === "sent") item = (await deps.items.reopen(id, { sentReply: true })) ?? item;
+  ctx.res.setHeader("Cache-Control", "no-store");
+  sendJson(ctx.res, 200, { item: ledgerItemView(item) });
+}
+
+async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
+  const deps = loopDeps(ctx);
+  if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
+  const acting = actingPrincipal(ctx);
+  if (!acting) return;
+  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", acting.actorId))))
+    return sendJson(ctx.res, 403, { error: "feature_disabled" });
+  const body = isObj(ctx.body) ? ctx.body : {};
+  const everyMs =
+    typeof body.everyMs === "number" && Number.isFinite(body.everyMs)
+      ? Math.max(5 * 60 * 1000, Math.min(24 * 60 * 60 * 1000 - 1, Math.floor(body.everyMs)))
+      : INBOX_SYNC_DEFAULT_EVERY_MS;
+  const enable = body.enabled !== false;
+  const owner = acting.actorId;
+  try {
+    const defaults = await ensureDefaultInboxLoops(deps.store, owner);
+    const legacy = await findInboxLoop(deps.store, owner);
+    if (legacy && (!ctx.deps.uiState || !(await migrateInbox(deps, ctx.deps.uiState, legacy, defaults))))
+      return sendJson(ctx.res, 409, {
+        error: "migration_pending",
+        message: "The existing Inbox is still being migrated. Sync remains paused.",
+      });
+    const requested = typeof body.loopId === "string" ? body.loopId : null;
+    const targets = defaults.filter((loop) => !requested || loop.id === requested);
+    if (!targets.length) return sendJson(ctx.res, 404, { error: "not_found" });
+    const results: Array<{ loop: Loop | null; syncCron: ReturnType<typeof cronSummary> }> = [];
+    for (const loop of targets) {
+      const sync = async () => {
+        const current = (await deps.store.get(loop.id)) ?? loop;
+        const source = current.sources![0]!;
+        let cron = current.cronId ? await ctx.app.getCron(current.cronId) : null;
+        if (!cron && enable) {
+          cron = await ctx.app.createCron({
+            loopId: loop.id,
+            runAs: current.runAs,
+            ownerScopeId: loop.ownerScopeId,
+            owner,
+            createdBy: owner,
+            destination: principalDestination(owner, owner),
+            schedule: { everyMs },
+            title: `${loop.name} sync`,
+            action: renderSourceInboxTask(loop.id, source),
+          });
+          await deps.store.update(loop.id, { cronId: cron.id });
+        }
+        if (cron) {
+          if (enable && syncTaskVersionOf(cron) !== INBOX_SYNC_TASK_VERSION)
+            await ctx.app.updateCron(cron.id, {
+              action: renderSourceInboxTask(loop.id, source),
+              title: `${loop.name} sync`,
+            });
+          await ctx.app.setCronEnabled(cron.id, enable);
+          if (enable && current.state === "paused") await deps.store.setState(loop.id, "enabled");
+        }
+        results.push({
+          loop: await deps.store.get(loop.id),
+          syncCron: cronSummary(cron ? await ctx.app.getCron(cron.id) : null),
+        });
+      };
+      if (deps.lock) await deps.lock.withLock(`loop-lifecycle:${loop.id}`, sync);
+      else await sync();
+    }
+    sendJson(ctx.res, 200, { ...results[0], loops: results });
+  } catch (err) {
+    sendJson(ctx.res, 400, { error: "bad_request", message: errMessage(err) });
+  }
+}
+
+function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: ApiCtx) => Promise<void> {
+  return (ctx) => {
+    const lock = loopDeps(ctx)?.lock;
+    return lock && !ctx.capability
+      ? lock.withLock(`loop-lifecycle:${ctx.params.id ?? ""}`, async () => {
+          const loaded = await loadItem(ctx);
+          if (!loaded) return;
+          return loaded.loop.id === ctx.params.id
+            ? handler(ctx)
+            : lock.withLock(`loop-lifecycle:${loaded.loop.id}`, () => handler(ctx));
+        })
+      : handler(ctx);
+  };
+}
+
+export const loopItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "POST", path: "/v1/loops/inbox/sent-chat", auth: "source", handle: ensureSentChat },
+  { method: "GET", path: "/v1/loops/inbox", auth: "either", handle: getInboxLoop },
+  { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
+  { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },
+  { method: "POST", path: "/v1/loops/:id/items", auth: "either", handle: ingestItems },
+  { method: "GET", path: "/v1/loops/:id/items/:itemId", auth: "either", handle: getItem },
+  { method: "GET", path: "/v1/loops/:id/items/:itemId/image", auth: "source", handle: serveItemImage },
+  {
+    method: "POST",
+    path: "/v1/loops/:id/items/:itemId/action",
+    auth: "either",
+    handle: serializeItemAction(actOnItem),
+  },
+  {
+    method: "POST",
+    path: "/v1/loops/:id/items/:itemId/followup",
+    auth: "either",
+    handle: serializeItemAction(followUpOnItem),
+  },
+];

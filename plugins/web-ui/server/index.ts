@@ -1,25 +1,39 @@
+import "./instrument.ts";
+import { browserErrorConfig } from "./browser-error-config.ts";
+import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
+import { appEditSlug } from "../src/app-edit.ts";
+import { composioCallbackUrl } from "./composio-return.ts";
+import { sharedSessionHtml } from "./shared-session.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable } from "node:stream";
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join, normalize } from "node:path";
+import { randomBytes } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import {
+  fetchCoreText,
   signedHeaders,
   withSourceAuthNonce,
   CAPABILITY_HEADER,
   type HttpMethod,
 } from "../../chassis/src/core-client.ts";
+import { findRoute } from "../../chassis/src/router.ts";
 import {
   json,
+  gzipAccepted,
   readBody as readBodyCapped,
   cookie,
   PayloadTooLargeError,
-  serveEmojiFavicon,
+  sendBuffered,
+  serveFavicon,
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
+import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
+import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
+
 import {
   CORE_API_URL as CORE,
   CORE_ORG_ID as ORG,
@@ -28,7 +42,10 @@ import {
   portFromEnv,
 } from "../../chassis/src/env.ts";
 
+const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 const PORT = portFromEnv(8096);
+const welcomeCohort = process.env.WEB_UI_WELCOME_COHORT?.trim().slice(0, 40) || undefined;
+const suggestedActivities = parseSuggestedActivities(process.env.WEB_UI_SUGGESTED_ACTIVITIES);
 const PUBLIC_URL = (process.env.WEB_UI_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
 const ALLOW_UNSIGNED_TEST_IDENTITY =
@@ -39,6 +56,28 @@ const ALLOW = (process.env.WEB_UI_PRINCIPALS ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+export function isInboxUser(principalId: string, configuredUsers = process.env.INBOX_USERS): boolean {
+  return principalInAllowlist(principalId, configuredUsers);
+}
+
+export function isLoopsUser(principalId: string, configuredUsers = process.env.LOOPS_USERS): boolean {
+  const normalizedPrincipalId = principalId.trim().toLowerCase();
+  if (!normalizedPrincipalId) return false;
+  return (configuredUsers ?? "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean)
+    .includes(normalizedPrincipalId);
+}
+
+async function hasInboxLoopPreview(user: string): Promise<boolean> {
+  try {
+    const response = await coreFetch("GET", `/v1/inbox/access?principalId=${encodeURIComponent(user)}`, "", 2_000);
+    return response.status === 200 && JSON.parse(response.text).enabled === true;
+  } catch {
+    return false;
+  }
+}
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = join(ROOT, "dist-web");
@@ -48,17 +87,42 @@ const brandingCache = createBrandingCache(async () => {
   if (r.status !== 200) throw new Error(`surface-config ${r.status}`);
   const b = (JSON.parse(r.text) as { branding?: Record<string, unknown> }).branding;
   return {
+    ...(typeof b?.orgName === "string" ? { orgName: b.orgName } : {}),
     ...(typeof b?.accent === "string" ? { accent: b.accent } : {}),
     ...(typeof b?.mark === "string" ? { mark: b.mark } : {}),
+    ...(typeof b?.markUrl === "string" ? { markUrl: b.markUrl } : {}),
     ...(typeof b?.selfLabel === "string" ? { selfLabel: b.selfLabel } : {}),
   };
 });
 
+async function serveWebManifest(res: ServerResponse): Promise<void> {
+  const branding = await brandingCache.forRender();
+  const name = branding.selfLabel || "QM";
+  const manifest = {
+    name,
+    short_name: name,
+    start_url: "/",
+    scope: "/",
+    display: "standalone",
+    orientation: "any",
+    background_color: "#ffffff",
+    theme_color: "#ffffff",
+    icons: [
+      {
+        src: process.env.WEB_UI_FAVICON_SVG ? "/favicon.svg" : "/brand-mark.svg",
+        sizes: "any",
+        type: "image/svg+xml",
+        purpose: "any maskable",
+      },
+    ],
+  };
+  res.writeHead(200, { "content-type": "application/manifest+json; charset=utf-8", "cache-control": "no-cache" });
+  res.end(JSON.stringify(manifest));
+}
+
 async function brandIndexHtml(html: string): Promise<string> {
   const branding = await brandingCache.forRender();
-  const branded = injectBranding(html, branding);
-  const label = branding.selfLabel?.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return label ? branded.replace(/<title>[^<]*<\/title>/, () => `<title>${label} · Web</title>`) : branded;
+  return injectBranding(html, branding, { titleSuffix: "· Web" });
 }
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
@@ -66,10 +130,6 @@ const portalTokenStore = new AsyncLocalStorage<string | undefined>();
 const runOwners = new Map<string, string>();
 const runThreadKeys = new Map<string, string>();
 const activeRunsByThread = new Map<string, string[]>();
-
-function ownsRun(runId: string, user: string): boolean {
-  return runOwners.get(runId) === user;
-}
 
 function threadKey(user: string, threadRef: string): string {
   return `${user}\0${threadRef}`;
@@ -126,18 +186,38 @@ const CONTENT_TYPES: Record<string, string> = {
   ".wasm": "application/wasm",
 };
 
+const analyticsKey = process.env.POSTHOG_API_KEY?.trim();
+if (analyticsKey && !/^phc_[A-Za-z0-9]+$/.test(analyticsKey))
+  throw new Error("POSTHOG_API_KEY must be a public project ingestion token");
+const analyticsHost = new URL((analyticsKey && process.env.POSTHOG_HOST?.trim()) || "https://us.i.posthog.com");
+if (
+  analyticsKey &&
+  (analyticsHost.protocol !== "https:" ||
+    analyticsHost.username ||
+    analyticsHost.password ||
+    analyticsHost.search ||
+    analyticsHost.hash ||
+    analyticsHost.pathname !== "/")
+) {
+  throw new Error("POSTHOG_HOST must be an HTTPS origin");
+}
+const analyticsConfig = analyticsKey ? { apiKey: analyticsKey, host: analyticsHost.origin } : undefined;
+
+const browserErrors = browserErrorConfig(process.env);
+const browserErrorOrigin = browserErrors ? new URL(browserErrors.dsn).origin : undefined;
+
 const SPA_CSP = [
   "default-src 'self'",
   "script-src 'self' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  "connect-src 'self'",
-  "frame-src 'self' https:",
+  `connect-src 'self'${analyticsConfig ? ` ${analyticsConfig.host}` : ""}${browserErrorOrigin ? ` ${browserErrorOrigin}` : ""}`,
+  "frame-src 'self' data: https:",
   "worker-src 'self' blob:",
   "frame-ancestors 'self'",
   "base-uri 'none'",
-  "form-action 'self'",
+  `form-action 'self'${process.env.QM_SLACK_SERVICE_URL ? ` ${new URL(process.env.QM_SLACK_SERVICE_URL).origin} https://slack.com` : ""}`,
   "object-src 'none'",
 ].join("; ");
 
@@ -146,13 +226,41 @@ function withSecurityHeaders(headers: Record<string, string>): Record<string, st
     ...headers,
     "content-security-policy": SPA_CSP,
     "strict-transport-security": "max-age=63072000; includeSubDomains",
-    "referrer-policy": "no-referrer",
+    "referrer-policy": process.env.QM_SLACK_SERVICE_URL ? "strict-origin" : "no-referrer",
     "x-frame-options": "SAMEORIGIN",
     "x-content-type-options": "nosniff",
   };
 }
 
+const PLAYGROUND_CSP = [
+  "sandbox allow-scripts allow-pointer-lock",
+  "default-src 'none'",
+  "script-src 'unsafe-inline'",
+  "style-src 'unsafe-inline'",
+  "img-src data: blob:",
+  "media-src data: blob:",
+  "font-src data:",
+  "connect-src 'none'",
+  "worker-src blob:",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join("; ");
+
 const UNTRUSTED_CONTENT_SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
+const APPS_FRAME_DOMAIN = (process.env.DEPLOY_APPS_DOMAIN ?? "").toLowerCase();
+const FILE_FRAME_ANCESTORS = APPS_FRAME_DOMAIN
+  ? `frame-ancestors 'self' *.${APPS_FRAME_DOMAIN}`
+  : "frame-ancestors 'self'";
+
+function framedByOwnSurfaces(
+  res: ServerResponse,
+  headers: Record<string, string>,
+  csp: string,
+): Record<string, string> {
+  res.removeHeader("x-frame-options");
+  const { "x-frame-options": _blanketDeny, ...rest } = headers;
+  return { ...rest, "content-security-policy": csp };
+}
 
 interface ViteDevServer {
   middlewares(req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void): void;
@@ -162,26 +270,11 @@ interface ViteDevServer {
 type CreateViteServer = (opts: Record<string, unknown>) => Promise<ViteDevServer>;
 
 function relay(res: ServerResponse, r: { status: number; text: string }): void {
-  res.writeHead(r.status, { "content-type": "application/json", "x-content-type-options": "nosniff" });
-  res.end(r.text);
+  sendBuffered(res, r.status, { "content-type": "application/json", "x-content-type-options": "nosniff" }, r.text);
 }
 
 function sendHtml(res: ServerResponse, status: number, html: string): void {
-  res.writeHead(status, withSecurityHeaders({ "content-type": "text/html; charset=utf-8" }));
-  res.end(html);
-}
-
-const SSE_CORE_POLL_MS = 100;
-const SSE_STALE_POLL_MS = 1_000;
-const SSE_IDLE_MS = 6 * 60_000;
-const SSE_STALE_GRACE_MS = 10 * 60_000;
-const SSE_HEARTBEAT_MS = 15_000;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => {
-    const t = setTimeout(r, ms);
-    t.unref?.();
-  });
+  sendBuffered(res, status, withSecurityHeaders({ "content-type": "text/html; charset=utf-8" }), html);
 }
 
 function sseEvent(res: ServerResponse, event: string, data: unknown): void {
@@ -225,18 +318,72 @@ function callbackHtml(query: string): string {
   return `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=../../../?${safe}"><title>Connector</title>`;
 }
 
+type WebConversation = {
+  kind: "dm" | "channel" | "group";
+  threadRef: string;
+  channelRef?: string;
+  channelName?: string;
+};
+
 function conversationForScope(
   user: string,
   threadRef: string,
   scope: string | undefined,
   channelName: string | undefined,
-): { kind: "dm" | "channel" | "group"; threadRef: string; channelRef?: string; channelName?: string } | null {
+): WebConversation | null {
   if (!scope || scope === `personal:${user}`) return { kind: "dm", threadRef };
   const sep = scope.indexOf(":");
   const kind = scope.slice(0, sep);
   const ref = scope.slice(sep + 1);
   if ((kind !== "channel" && kind !== "group") || !ref) return null;
   return { kind, channelRef: ref, threadRef, ...(channelName ? { channelName } : {}) };
+}
+
+function resolveWebConversation(
+  user: string,
+  threadRef: string,
+  scope: string | undefined,
+  channelName: string | undefined,
+): { conversation: WebConversation } | { error: string; message: string } {
+  if (
+    !threadRef.startsWith(`web:${user}:`) &&
+    !threadRef.startsWith(SUBAGENT_THREAD_PREFIX) &&
+    !(scope?.startsWith("channel:") || scope?.startsWith("group:"))
+  ) {
+    return { error: "forbidden_thread", message: "this conversation can only be continued from its own context" };
+  }
+  const conversation = conversationForScope(user, threadRef, scope, channelName);
+  if (!conversation) {
+    return {
+      error: "forbidden_scope",
+      message: "you can only chat in your personal context or a shared context you're in",
+    };
+  }
+  return { conversation };
+}
+
+function webTurnBase(
+  req: IncomingMessage,
+  user: string,
+  conversation: WebConversation,
+  threadRef: string,
+  text: string,
+) {
+  const displayName = resolveIdentity(req)?.name ?? null;
+  const appSlug = appEditSlug(threadRef, user);
+  return {
+    surface: "web",
+    actor: { externalId: user, ...(displayName ? { displayName } : {}) },
+    conversation,
+    liveActor: true,
+    deliveryTarget: threadRef,
+    ...(appSlug
+      ? {
+          conversationHeader: `The user is chatting beside their deployed app ${JSON.stringify(appSlug)}. Requests about this app refer to that deployment. Use the existing app source and publish updates to the same deployment when requested. This context does not grant additional permissions.`,
+        }
+      : {}),
+    text,
+  };
 }
 
 interface Identity {
@@ -313,7 +460,6 @@ let deliveriesPollInFlight = false;
 
 interface PendingWebDelivery {
   id: string;
-  idempotencyKey: string;
   createdAt: number;
   destination?: { target?: string };
 }
@@ -333,11 +479,10 @@ async function drainWebDeliveries(): Promise<void> {
     const now = Date.now();
     for (const d of pending) {
       const target = d.destination?.target ?? "";
-      const isRecovery = d.idempotencyKey.startsWith("run:");
-      const conns = !isRecovery ? deliveryClients.get(ownerOfWebThread(target) ?? "") : undefined;
+      const conns = deliveryClients.get(ownerOfWebThread(target) ?? "");
       if (conns && conns.size) {
         for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
-      } else if (!isRecovery && now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
+      } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
         continue;
       }
       await coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`).catch(() => {});
@@ -349,6 +494,7 @@ async function drainWebDeliveries(): Promise<void> {
   }
 }
 
+const SSE_HEARTBEAT_MS = 15_000;
 const STATE_FEED_RECONNECT_MS = Number(process.env.STATE_FEED_RECONNECT_MS ?? 3_000);
 
 interface SessionStateFrame {
@@ -374,19 +520,23 @@ function forwardSessionState(frame: SessionStateFrame): void {
   }
 }
 
-async function runStateFeed(): Promise<void> {
+async function consumeCoreFeed(
+  path: string,
+  eventName: string,
+  onEvent: (data: unknown) => void,
+  onReconnect?: () => void,
+): Promise<void> {
   let dropped = false;
   for (;;) {
     try {
-      const signedPath = withSourceAuthNonce("/v1/session-state/events", CORE_SIGNING_SECRET);
+      const signedPath = withSourceAuthNonce(path, CORE_SIGNING_SECRET);
       const r = await fetch(`${CORE}${signedPath}`, {
         headers: signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
       });
       if (r.status === 200 && r.body) {
         if (dropped) {
           dropped = false;
-          for (const conns of deliveryClients.values())
-            for (const res of conns) sseEvent(res, "session_state_resync", {});
+          onReconnect?.();
         }
         const reader = r.body.getReader();
         const decoder = new TextDecoder();
@@ -398,14 +548,16 @@ async function runStateFeed(): Promise<void> {
           const frames = buf.split("\n\n");
           buf = frames.pop() ?? "";
           for (const frame of frames) {
-            if (!frame.split("\n").some((l) => l === "event: session_state")) continue;
-            const data = frame
-              .split("\n")
-              .find((l) => l.startsWith("data: "))
-              ?.slice("data: ".length);
+            const lines = frame.split("\n");
+            if (lines.some((l) => l === `event: ${eventName}_resync`)) {
+              onReconnect?.();
+              continue;
+            }
+            if (!lines.some((l) => l === `event: ${eventName}`)) continue;
+            const data = lines.find((l) => l.startsWith("data: "))?.slice("data: ".length);
             if (!data) continue;
             try {
-              forwardSessionState(JSON.parse(data) as SessionStateFrame);
+              onEvent(JSON.parse(data));
             } catch {
               void 0;
             }
@@ -420,25 +572,48 @@ async function runStateFeed(): Promise<void> {
   }
 }
 
+function runStateFeed(): Promise<void> {
+  return consumeCoreFeed(
+    "/v1/session-state/events",
+    "session_state",
+    (data) => forwardSessionState(data as SessionStateFrame),
+    () => {
+      for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "session_state_resync", {});
+    },
+  );
+}
+
+function runInboxFeed(): Promise<void> {
+  return consumeCoreFeed(
+    "/v1/loop-items/events",
+    "loop_item",
+    (data) => {
+      const ev = data as { owner?: string; loopId?: string; itemId?: string; op?: string };
+      if (!ev.owner || !ev.loopId || !ev.itemId) return;
+      for (const clients of deliveryClients.values()) for (const res of clients) sseEvent(res, "inbox_resync", {});
+    },
+    () => {
+      for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "inbox_resync", {});
+    },
+  );
+}
+
 async function coreFetch(
   method: HttpMethod,
   pathWithQuery: string,
   rawBody = "",
   timeoutMs?: number,
 ): Promise<{ status: number; text: string }> {
-  const signedPath = withSourceAuthNonce(pathWithQuery, CORE_SIGNING_SECRET);
   const portalTok = portalTokenStore.getStore();
-  const r = await fetch(`${CORE}${signedPath}`, {
+  return fetchCoreText({
+    origin: CORE,
+    secret: CORE_SIGNING_SECRET,
     method,
-    headers: {
-      ...signedHeaders(CORE_SIGNING_SECRET, method, signedPath, rawBody),
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-    },
-    ...(rawBody ? { body: rawBody } : {}),
-    ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
-    redirect: "manual",
+    path: pathWithQuery,
+    body: rawBody,
+    headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
   });
-  return { status: r.status, text: await r.text() };
 }
 
 async function coreFetchCap(
@@ -465,12 +640,80 @@ async function coreFetchCap(
   return { status: r.status, text: await r.text() };
 }
 
-async function postTurnAndMint(res: ServerResponse, turn: unknown, user: string, threadRef: string): Promise<void> {
-  const r = await coreFetch("POST", `/v1/turns?async=1`, JSON.stringify(turn));
+async function relayCore(res: ServerResponse, method: HttpMethod, pathWithQuery: string, rawBody = ""): Promise<void> {
+  relay(res, await coreFetch(method, pathWithQuery, rawBody));
+}
+
+async function relayCap(res: ServerResponse, method: HttpMethod, pathWithQuery: string, rawBody = ""): Promise<void> {
+  relay(res, await coreFetchCap(method, pathWithQuery, rawBody));
+}
+
+/**
+ * Read and parse a JSON object body, or answer 400 and return null — a null
+ * return always means the response has been sent. Only plain objects come
+ * back (a body of `null`, `false`, or a bare string is a 400, never a falsy
+ * value a caller could mistake for "already answered"). Routes that
+ * historically tolerated an empty body keep that via allowEmpty; strict
+ * routes (allowEmpty=false) refuse it, so e.g. a bare POST cannot read as
+ * "clear the display name".
+ */
+async function readJson<T extends object>(
+  req: IncomingMessage,
+  res: ServerResponse,
+  allowEmpty = true,
+): Promise<T | null> {
+  try {
+    const raw = await readBody(req);
+    if (!raw && !allowEmpty) {
+      json(res, 400, { error: "bad_request" });
+      return null;
+    }
+    const parsed: unknown = JSON.parse(raw || "{}");
+    if (typeof parsed !== "object" || parsed === null) {
+      json(res, 400, { error: "bad_request" });
+      return null;
+    }
+    return parsed as T;
+  } catch (e) {
+    if (e instanceof PayloadTooLargeError) throw e;
+    json(res, 400, { error: "bad_request" });
+    return null;
+  }
+}
+
+const SEND_KEY_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+
+function namespacedSendKey(user: string, raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const key = raw.trim();
+  return SEND_KEY_PATTERN.test(key) ? `web:${encodeURIComponent(user)}:${key}` : undefined;
+}
+
+async function postTurnAndMint(
+  req: IncomingMessage,
+  res: ServerResponse,
+  turn: Record<string, unknown>,
+  user: string,
+  threadRef: string,
+): Promise<void> {
+  const startedAt = performance.now();
+  let runId: string | undefined;
+  res.once("finish", () => {
+    console.info("[web] turn response", {
+      runId,
+      status: res.statusCode,
+      elapsedMs: Math.round(performance.now() - startedAt),
+    });
+  });
+  const r = await coreFetch(
+    "POST",
+    `/v1/turns?async=1`,
+    JSON.stringify({ ...turn, ...(resolveIdentity(req)?.impersonator ? { analyticsSuppressed: true } : {}) }),
+  );
   if (r.status >= 200 && r.status < 300) {
     try {
       const parsed = JSON.parse(r.text) as Record<string, unknown> & { runId?: string };
-      const runId = parsed.runId;
+      runId = parsed.runId;
       if (runId) {
         rememberRun(runId, user, threadRef);
         return json(res, r.status, parsed);
@@ -492,6 +735,44 @@ async function userPermissions(): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+interface CoreWebhook {
+  id: string;
+  ownerScopeId: string;
+  owner: string;
+  createdBy: string;
+  action: string;
+  verification: { scheme: string; secret?: string };
+  filters?: Array<{ path: string; in: string[] }>;
+  destination?: unknown;
+  enabled: boolean;
+  createdAt: number;
+  lastFiredAt?: number;
+  lastDeliveryId?: string;
+  lastError?: string;
+}
+
+async function setWebhookEnabledViaCore(
+  res: ServerResponse,
+  user: string,
+  id: string,
+  verb: "disable" | "enable",
+): Promise<void> {
+  const r = await coreFetch("GET", `/v1/webhooks?viewer=${encodeURIComponent(user)}`);
+  if (r.status < 200 || r.status >= 300) return relay(res, r);
+  let webhooks: CoreWebhook[] = [];
+  try {
+    webhooks = (JSON.parse(r.text) as { webhooks?: CoreWebhook[] }).webhooks ?? [];
+  } catch {
+    void 0;
+  }
+  if (!webhooks.some((w) => w.id === id)) return json(res, 404, { error: "not_found" });
+  return relayCore(
+    res,
+    "POST",
+    `/v1/webhooks/${encodeURIComponent(id)}/${verb}?principalId=${encodeURIComponent(user)}`,
+  );
 }
 
 interface CoreCron {
@@ -561,8 +842,8 @@ async function uploadBlobFromRequest(req: IncomingMessage, res: ServerResponse, 
     return json(res, 400, { error: "bad_request", message: "sha (hex sha-256) required" });
   }
   const staged = await stageUploadStream(req, sha256);
-  res.writeHead(staged.status, { "content-type": staged.headers.get("content-type") ?? "application/json" });
-  return void res.end(await staged.text());
+  const headers = { "content-type": staged.headers.get("content-type") ?? "application/json" };
+  return sendBuffered(res, staged.status, headers, await staged.text());
 }
 
 async function uploadFileFromRequest(
@@ -580,8 +861,8 @@ async function uploadFileFromRequest(
   const staged = await stageUploadStream(req, sha256);
   const stagedText = await staged.text();
   if (!staged.ok) {
-    res.writeHead(staged.status, { "content-type": staged.headers.get("content-type") ?? "application/json" });
-    return void res.end(stagedText);
+    const headers = { "content-type": staged.headers.get("content-type") ?? "application/json" };
+    return sendBuffered(res, staged.status, headers, stagedText);
   }
   const stagedBody = JSON.parse(stagedText) as { blobId: string };
   const body = JSON.stringify({
@@ -593,8 +874,7 @@ async function uploadFileFromRequest(
     blobId: stagedBody.blobId,
   });
   const registered = await coreFetch("POST", "/v1/files/upload", body);
-  res.writeHead(registered.status, { "content-type": "application/json" });
-  return void res.end(registered.text);
+  return sendBuffered(res, registered.status, { "content-type": "application/json" }, registered.text);
 }
 
 async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> {
@@ -613,24 +893,29 @@ async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> 
   }
   if (filePath.endsWith("index.html")) {
     const branded = await brandIndexHtml(readFileSync(filePath, "utf8"));
-    res.writeHead(
-      200,
-      withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" }),
-    );
-    return void res.end(branded);
+    const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
+    return sendBuffered(res, 200, headers, branded);
   }
-  const type = CONTENT_TYPES[extname(filePath)] ?? "application/octet-stream";
-  res.writeHead(
-    200,
-    withSecurityHeaders({
-      "content-type": type,
-      "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
-    }),
-  );
-  createReadStream(filePath).pipe(res);
+  const headers = withSecurityHeaders({
+    "content-type": CONTENT_TYPES[extname(filePath)] ?? "application/octet-stream",
+    "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
+    vary: "accept-encoding",
+  });
+  const packed = `${filePath}.gz`;
+  if (gzipAccepted(res.req) && existsSync(packed)) {
+    res.writeHead(200, { ...headers, "content-encoding": "gzip" });
+    return void pipeFile(res, packed);
+  }
+  res.writeHead(200, headers);
+  pipeFile(res, filePath);
 }
 
-const APPS_FRAME_DOMAIN = (process.env.DEPLOY_APPS_DOMAIN ?? "").toLowerCase();
+function pipeFile(res: ServerResponse, filePath: string): void {
+  const stream = createReadStream(filePath);
+  stream.on("error", () => res.destroy());
+  res.on("close", () => stream.destroy());
+  stream.pipe(res);
+}
 
 async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
   const slug = (url.searchParams.get("slug") ?? "").toLowerCase();
@@ -645,14 +930,8 @@ async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: 
     html = readFileSync(filePath, "utf8");
   }
   const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
-  headers["content-security-policy"] = SPA_CSP.replace(
-    "frame-ancestors 'self'",
-    `frame-ancestors 'self' ${slug}.${APPS_FRAME_DOMAIN}`,
-  );
-  delete headers["x-frame-options"];
-  res.removeHeader("x-frame-options");
-  res.writeHead(200, headers);
-  res.end(await brandIndexHtml(html));
+  const csp = SPA_CSP.replace("frame-ancestors 'self'", `frame-ancestors 'self' ${slug}.${APPS_FRAME_DOMAIN}`);
+  sendBuffered(res, 200, framedByOwnSurfaces(res, headers, csp), await brandIndexHtml(html));
   return true;
 }
 
@@ -708,6 +987,2118 @@ async function serveVite(req: IncomingMessage, res: ServerResponse, path: string
   return true;
 }
 
+interface WebCtx {
+  req: IncomingMessage;
+  res: ServerResponse;
+  url: URL;
+  user: string;
+  params: Record<string, string>;
+}
+
+type WebRoute = { handle: (c: WebCtx) => unknown } & (
+  { method: string; path: string } | { match: (method: string, pathname: string) => boolean }
+);
+
+function scriptCapableContentType(contentType: string): boolean {
+  const mime = (contentType.split(";")[0] ?? "").trim().toLowerCase();
+  return (
+    mime === "text/html" ||
+    mime === "application/xhtml+xml" ||
+    mime === "image/svg+xml" ||
+    mime === "text/xml" ||
+    mime === "application/xml" ||
+    mime.endsWith("+xml")
+  );
+}
+
+async function serveInboxItemImage(c: WebCtx): Promise<unknown> {
+  const { res, url } = c;
+  const qs = new URLSearchParams({ principalId: c.user });
+  const ctxParam = url.searchParams.get("ctx");
+  const iParam = url.searchParams.get("i");
+  if (ctxParam) qs.set("ctx", ctxParam);
+  if (iParam) qs.set("i", iParam);
+  const corePath = withSourceAuthNonce(
+    `/v1/loops/${encodeURIComponent(c.params.id!)}/items/${encodeURIComponent(c.params.itemId!)}/image?${qs.toString()}`,
+    CORE_SIGNING_SECRET,
+  );
+  const portalTok = portalTokenStore.getStore();
+  const r = await fetch(`${CORE}${corePath}`, {
+    headers: {
+      ...signedHeaders(CORE_SIGNING_SECRET, "GET", corePath, ""),
+      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+    },
+  });
+  if (!r.ok || !r.body) {
+    res.writeHead(r.status === 404 ? 404 : 502, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ error: r.status === 404 ? "not_found" : "upstream_error" }));
+  }
+  const contentType = r.headers.get("content-type") ?? "application/octet-stream";
+  res.writeHead(200, {
+    "content-type": contentType.startsWith("image/") ? contentType : "application/octet-stream",
+    "cache-control": "private, max-age=3600",
+    "content-security-policy": "sandbox",
+    "x-content-type-options": "nosniff",
+  });
+  return res.end(Buffer.from(await r.arrayBuffer()));
+}
+
+async function serveFileContent(c: WebCtx, playground = false): Promise<unknown> {
+  const { res, user, url } = c;
+  const id = c.params.id!;
+  const corePath = withSourceAuthNonce(
+    `/v1/files/${encodeURIComponent(id)}/content?viewer=${encodeURIComponent(user)}`,
+    CORE_SIGNING_SECRET,
+  );
+  const portalTok = portalTokenStore.getStore();
+  const r = await fetch(`${CORE}${corePath}`, {
+    headers: {
+      ...signedHeaders(CORE_SIGNING_SECRET, "GET", corePath, ""),
+      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+    },
+    redirect: "manual",
+  });
+  if (!r.ok || !r.body) {
+    res.writeHead(r.status === 404 ? 404 : 502, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ error: r.status === 404 ? "not_found" : "upstream_error" }));
+  }
+  const contentType = r.headers.get("content-type") ?? "application/octet-stream";
+  if (playground && !contentType.toLowerCase().startsWith("text/html")) {
+    res.writeHead(415, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ error: "not_a_playground" }));
+  }
+  if (playground) {
+    res.writeHead(200, {
+      "content-type": url.searchParams.get("source") === "1" ? "text/plain; charset=utf-8" : contentType,
+      "content-security-policy": PLAYGROUND_CSP,
+      "referrer-policy": "no-referrer",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+    });
+    return Readable.fromWeb(r.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
+  }
+
+  const csp = scriptCapableContentType(contentType)
+    ? `${UNTRUSTED_CONTENT_SANDBOX_CSP}; ${FILE_FRAME_ANCESTORS}`
+    : FILE_FRAME_ANCESTORS;
+  const headers = {
+    "content-type": contentType,
+    ...(r.headers.get("content-length") ? { "content-length": r.headers.get("content-length")! } : {}),
+    ...(r.headers.get("content-disposition") ? { "content-disposition": r.headers.get("content-disposition")! } : {}),
+    "x-content-type-options": "nosniff",
+  };
+  res.writeHead(200, framedByOwnSurfaces(res, headers, csp));
+  return Readable.fromWeb(r.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
+}
+
+const apiRoutes: readonly WebRoute[] = [
+  {
+    method: "GET",
+    path: "/api/files/by-name/content",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const name = url.searchParams.get("name")?.trim();
+      if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
+      let cursor: string | undefined;
+      let match: { id: string; createdAt: number } | undefined;
+      for (let page = 0; page < 50; page++) {
+        const qs = new URLSearchParams({ viewer: user, limit: "200" });
+        if (cursor) qs.set("cursor", cursor);
+        const listed = await coreFetch("GET", `/v1/files?${qs.toString()}`);
+        if (listed.status !== 200) return relay(res, listed);
+        let body: {
+          owned?: Array<{ id?: string; name?: string; createdAt?: number; openable?: boolean }>;
+          shared?: Array<{ id?: string; name?: string; createdAt?: number; openable?: boolean }>;
+          nextCursor?: string;
+        };
+        try {
+          body = JSON.parse(listed.text) as typeof body;
+        } catch {
+          return json(res, 502, { error: "upstream_error" });
+        }
+        for (const file of [...(body.owned ?? []), ...(body.shared ?? [])]) {
+          if (file.name !== name || file.openable === false || typeof file.id !== "string") continue;
+          const createdAt = typeof file.createdAt === "number" ? file.createdAt : 0;
+          if (!match || createdAt > match.createdAt) match = { id: file.id, createdAt };
+        }
+        cursor = body.nextCursor;
+        if (!cursor) break;
+      }
+      if (!match) return json(res, 404, { error: "not_found" });
+      res.writeHead(302, { location: `/api/files/${encodeURIComponent(match.id)}/content` });
+      return res.end();
+    },
+  },
+
+  { method: "GET", path: "/api/playgrounds/:id", handle: (c) => serveFileContent(c, true) },
+  {
+    method: "GET",
+    path: "/api/user-model-auth/status",
+    handle: async (c) =>
+      relayCore(c.res, "GET", `/v1/user-model-auth/status?principalId=${encodeURIComponent(c.user)}`),
+  },
+  {
+    method: "POST",
+    path: "/api/user-model-auth/account",
+    handle: async (c) => {
+      const p = JSON.parse((await readBody(c.req)) || "{}") as { account?: unknown; provider?: unknown };
+      return relayCore(
+        c.res,
+        "POST",
+        "/v1/user-model-auth/account",
+        JSON.stringify({ principalId: c.user, account: p.account, provider: p.provider }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/user-model-auth/api-key",
+    handle: async (c) => {
+      const p = JSON.parse((await readBody(c.req)) || "{}") as { provider?: unknown; apiKey?: unknown };
+      const body = JSON.stringify({ principalId: c.user, provider: p.provider, apiKey: p.apiKey });
+      return relayCore(c.res, "POST", "/v1/user-model-auth/api-key", body);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/user-model-auth/disconnect",
+    handle: async (c) => {
+      const p = JSON.parse((await readBody(c.req)) || "{}") as { provider?: unknown };
+      return relayCore(
+        c.res,
+        "POST",
+        "/v1/user-model-auth/disconnect",
+        JSON.stringify({ principalId: c.user, provider: p.provider }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/user-model-auth/chatgpt/start",
+    handle: async (c) =>
+      relayCore(c.res, "POST", "/v1/user-model-auth/chatgpt/start", JSON.stringify({ principalId: c.user })),
+  },
+  {
+    method: "POST",
+    path: "/api/user-model-auth/chatgpt/poll",
+    handle: async (c) => {
+      const p = JSON.parse((await readBody(c.req)) || "{}") as { deviceAuthId?: unknown; userCode?: unknown };
+      const body = JSON.stringify({ principalId: c.user, deviceAuthId: p.deviceAuthId, userCode: p.userCode });
+      return relayCore(c.res, "POST", "/v1/user-model-auth/chatgpt/poll", body);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/user-model-auth/claude/start",
+    handle: async (c) =>
+      relayCore(c.res, "POST", "/v1/user-model-auth/claude/start", JSON.stringify({ principalId: c.user })),
+  },
+  {
+    method: "POST",
+    path: "/api/user-model-auth/claude/complete",
+    handle: async (c) => {
+      const p = JSON.parse((await readBody(c.req)) || "{}") as { code?: unknown; verifier?: unknown };
+      const body = JSON.stringify({ principalId: c.user, code: p.code, verifier: p.verifier });
+      return relayCore(c.res, "POST", "/v1/user-model-auth/claude/complete", body);
+    },
+  },
+
+  {
+    method: "GET",
+    path: "/api/composio/callback",
+    handle: async (c) => {
+      c.res.setHeader("Cache-Control", "no-store");
+      c.res.setHeader("Referrer-Policy", "no-referrer");
+      const result = await coreFetch(
+        "POST",
+        "/v1/composio/complete-auth",
+        JSON.stringify({ sessionUri: c.url.searchParams.get("session_uri") }),
+      );
+      if (result.status !== 200) return relay(c.res, result);
+      const data = JSON.parse(result.text) as { returnTo?: string | null };
+      const base = new URL(PUBLIC_URL);
+      const target = data.returnTo
+        ? new URL(data.returnTo, base)
+        : new URL("./?view=settings", `${PUBLIC_URL.replace(/\/$/, "")}/`);
+      if (target.origin !== base.origin) return json(c.res, 400, { error: "invalid_return_url" });
+      c.res.writeHead(303, { location: target.href });
+      c.res.end();
+    },
+  },
+  { method: "GET", path: "/api/composio/slack", handle: (c) => relayCore(c.res, "GET", "/v1/composio/slack") },
+  {
+    method: "POST",
+    path: "/api/composio/slack/authorize",
+    handle: async (c) => {
+      const body = await readJson<{ returnTo?: unknown; state?: unknown }>(c.req, c.res, false);
+      if (!body) return;
+      const callback = composioCallbackUrl(PUBLIC_URL, body.returnTo, body.state);
+      if (!callback) return json(c.res, 400, { error: "invalid_return_url" });
+      const url = new URL(callback);
+      url.searchParams.delete("composioReturn");
+      url.searchParams.set("slackReturn", String(body.state));
+      c.res.setHeader("Cache-Control", "no-store");
+      return relayCore(c.res, "POST", "/v1/composio/slack/authorize", JSON.stringify({ callbackUrl: url.href }));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/composio/slack/complete",
+    handle: async (c) => {
+      const body = await readJson<{ ticket?: unknown }>(c.req, c.res, false);
+      if (!body) return;
+      c.res.setHeader("Cache-Control", "no-store");
+      return relayCore(c.res, "POST", "/v1/composio/slack/complete", JSON.stringify({ ticket: body.ticket }));
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/composio/toolkits",
+    handle: async (c) =>
+      relayCore(
+        c.res,
+        "GET",
+        `/v1/composio/toolkits?${new URLSearchParams({ cursor: c.url.searchParams.get("cursor") ?? "" })}`,
+      ),
+  },
+  {
+    method: "GET",
+    path: "/api/composio/connections",
+    handle: async (c) => {
+      c.res.setHeader("Cache-Control", "no-store");
+      return relayCore(
+        c.res,
+        "GET",
+        `/v1/composio/connections?${new URLSearchParams({ cursor: c.url.searchParams.get("cursor") ?? "" })}`,
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/composio/authorize",
+    handle: async (c) => {
+      const body = await readJson<{ toolkit?: unknown; returnTo?: unknown; state?: unknown }>(c.req, c.res, false);
+      if (!body) return;
+      c.res.setHeader("Cache-Control", "no-store");
+      const callbackUrl = composioCallbackUrl(PUBLIC_URL, body.returnTo, body.state);
+      if (!callbackUrl && (body.returnTo !== undefined || body.state !== undefined)) {
+        return json(c.res, 400, { error: "invalid_return_url" });
+      }
+      return relayCore(
+        c.res,
+        "POST",
+        "/v1/composio/authorize",
+        JSON.stringify({ toolkit: body.toolkit, ...(callbackUrl ? { callbackUrl } : {}) }),
+      );
+    },
+  },
+  {
+    match: (_method, pathname) => pathname === "/me",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      res.setHeader("set-cookie", sessionCookie(user));
+      const [allPermissions, workspaceUrl, authStatus, activityConfig, companyBranding] = await Promise.all([
+        userPermissions(),
+        slackWorkspaceUrl(),
+        coreFetch("GET", `/v1/user-model-auth/status?principalId=${encodeURIComponent(user)}`, "", 5_000).catch(
+          () => null,
+        ),
+        coreFetch("GET", "/v1/suggested-activities", "", 2_000)
+          .then((response) => response.status === 200 && JSON.parse(response.text).enabled === true)
+          .catch(() => false),
+        brandingCache.forRender(),
+      ]);
+      if (authStatus === null || authStatus.status !== 200) {
+        return json(res, 503, {
+          error: "unavailable",
+          message: "the assistant is briefly unavailable — retry shortly",
+        });
+      }
+      const parsed = JSON.parse(authStatus.text) as {
+        individualModelAuth?: boolean;
+        account?: string;
+        connections?: { provider: string }[];
+      };
+      const permissions = allPermissions.filter((permission) => permission !== "loops" && permission !== "inbox");
+      if (await hasInboxLoopPreview(user)) {
+        if (isLoopsUser(user)) permissions.push("loops");
+        if (isInboxUser(user)) permissions.push("inbox");
+      }
+      return json(res, 200, {
+        user,
+        org: ORG,
+        companyName: companyBranding.orgName?.trim() || null,
+        ...(analyticsConfig && !resolveIdentity(req)?.impersonator ? { analytics: analyticsConfig } : {}),
+        ...(browserErrors && !resolveIdentity(req)?.impersonator ? { browserErrors } : {}),
+        mode: AUTH_MODE,
+        slackWorkspaceUrl: workspaceUrl,
+        individualModelAuth: parsed.individualModelAuth === true,
+        modelAuthConnected:
+          parsed.connections?.some(
+            (c) => !parsed.account || parsed.account === "personal" || parsed.account === c.provider,
+          ) ?? false,
+        impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
+        displayName: resolveIdentity(req)?.name ?? null,
+        ...(welcomeCohort ? { welcomeCohort } : {}),
+        ...(suggestedActivities.length ? { suggestedActivities } : {}),
+        ...(activityConfig ? { suggestedActivitiesGeneration: true } : {}),
+        permissions,
+      });
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/blobs",
+    handle: async (c) => {
+      const { req, res, url } = c;
+      return uploadBlobFromRequest(req, res, declaredSha(url));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/files/upload",
+    handle: async (c) => {
+      const { req, res, url, user } = c;
+      return uploadFileFromRequest(
+        req,
+        res,
+        user,
+        url.searchParams.get("scope"),
+        declaredSha(url),
+        uploadFileName(url),
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/resources/search",
+    handle: (c) =>
+      relayCore(
+        c.res,
+        "GET",
+        `/v1/resources/search?principalId=${encodeURIComponent(c.user)}&q=${encodeURIComponent((c.url.searchParams.get("q") ?? "").slice(0, 500))}`,
+      ),
+  },
+  {
+    method: "GET",
+    path: "/api/search",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const q = url.searchParams.get("q") ?? "";
+      const limit = url.searchParams.get("limit");
+      return relayCore(
+        res,
+        "GET",
+        `/v1/sessions/search?principalId=${encodeURIComponent(user)}&q=${encodeURIComponent(q)}${
+          limit ? `&limit=${encodeURIComponent(limit)}` : ""
+        }`,
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(res, "GET", `/v1/sessions?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/contexts",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(res, "GET", `/v1/contexts?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/contexts/:scope/ambient-policy",
+    handle: async (c) => {
+      const { res, user } = c;
+      const scope = c.params.scope!;
+      return relayCore(
+        res,
+        "GET",
+        `/v1/contexts/policy?principalId=${encodeURIComponent(user)}&scope=${encodeURIComponent(scope)}`,
+      );
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/contexts/:scope/ambient-policy",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const scope = c.params.scope!;
+      const p = await readJson<{ orders?: unknown; bots?: unknown; ambientEnabled?: unknown; baseUpdatedAt?: unknown }>(
+        req,
+        res,
+      );
+      if (!p) return;
+      return relayCore(
+        res,
+        "PUT",
+        "/v1/contexts/policy",
+        JSON.stringify({
+          principalId: user,
+          scope,
+          orders: p.orders,
+          bots: p.bots,
+          ambientEnabled: p.ambientEnabled,
+          baseUpdatedAt: p.baseUpdatedAt,
+        }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/projects",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const p = await readJson<{ name?: unknown }>(req, res);
+      if (!p) return;
+      const name = typeof p.name === "string" ? p.name.trim().slice(0, 200) : "";
+      if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
+      return relayCore(res, "POST", "/v1/projects", JSON.stringify({ principalId: user, name }));
+    },
+  },
+  {
+    method: "PATCH",
+    path: "/api/projects/:id",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      const p = await readJson<{ name?: unknown }>(req, res);
+      if (!p) return;
+      const name = typeof p.name === "string" ? p.name.trim().slice(0, 200) : "";
+      if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
+      return relayCore(
+        res,
+        "PATCH",
+        `/v1/projects/${encodeURIComponent(id)}`,
+        JSON.stringify({ principalId: user, name }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/projects/:id/members",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      const p = await readJson<{ memberId?: unknown }>(req, res);
+      if (!p) return;
+      const memberId = typeof p.memberId === "string" ? p.memberId.trim() : "";
+      if (!memberId) return json(res, 400, { error: "bad_request", message: "memberId required" });
+      return relayCore(
+        res,
+        "POST",
+        `/v1/projects/${encodeURIComponent(id)}/members`,
+        JSON.stringify({ principalId: user, memberId }),
+      );
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/projects/:id/slack-channel",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      const p = await readJson<{ channel?: unknown }>(req, res);
+      if (!p) return;
+      const channel = typeof p.channel === "string" ? p.channel.trim().slice(0, 200) : "";
+      if (!channel) return json(res, 400, { error: "bad_request", message: "channel required" });
+      return relayCore(
+        res,
+        "PUT",
+        `/v1/projects/${encodeURIComponent(id)}/slack-channel`,
+        JSON.stringify({ principalId: user, channel }),
+      );
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/projects/:id/slack-channel",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
+        "DELETE",
+        `/v1/projects/${encodeURIComponent(id)}/slack-channel`,
+        JSON.stringify({ principalId: user }),
+      );
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/projects/:id/members/:memberId",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      const memberId = c.params.memberId!;
+      return relayCore(
+        res,
+        "DELETE",
+        `/v1/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`,
+        JSON.stringify({ principalId: user }),
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/directory/resolve",
+    handle: async (c) => {
+      const { res, url } = c;
+      const q = (url.searchParams.get("q") ?? "").trim().slice(0, 80);
+      if (!q) return json(res, 400, { error: "bad_request", message: "q required" });
+      return relayCore(res, "GET", `/v1/directory/resolve?q=${encodeURIComponent(q)}`);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/suggested-activities",
+    handle: async (c) => {
+      const input = JSON.parse((await readBody(c.req)) || "{}") as { timezone?: unknown };
+      const response = await coreFetch(
+        "POST",
+        "/v1/suggested-activities",
+        JSON.stringify({ principalId: c.user, seeds: suggestedActivities, timezone: input.timezone }),
+        60_000,
+      );
+      return json(c.res, response.status, JSON.parse(response.text));
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/surface-config",
+    handle: async (c) => {
+      const { res } = c;
+      return relayCore(res, "GET", "/v1/surface-config");
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/ui-state",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const key = url.searchParams.get("key") ?? "";
+      const qs = new URLSearchParams({ principalId: user, key });
+      return relayCore(res, "GET", `/v1/ui-state?${qs.toString()}`);
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/ui-state",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const body = await readJson<Record<string, unknown>>(req, res);
+      if (!body) return;
+      return relayCore(res, "PUT", "/v1/ui-state", JSON.stringify({ ...body, principalId: user }));
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/inbox",
+    handle: async (c) => {
+      const { res, user } = c;
+      const qs = new URLSearchParams({ principalId: user });
+      for (const key of ["cursor", "loopId", "view", "itemId"]) {
+        const value = c.url.searchParams.get(key);
+        if (value) qs.set(key, value);
+      }
+      return relayCore(res, "GET", `/v1/inbox?${qs}`);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/inbox/sent-chat",
+    handle: async ({ req, res, user }) => {
+      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+      res.setHeader("Cache-Control", "no-store");
+      return relayCore(res, "POST", "/v1/loops/inbox/sent-chat", await readBody(req));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/inbox/selection",
+    handle: async (c) =>
+      relayCore(c.res, "PUT", `/v1/inbox?principalId=${encodeURIComponent(c.user)}`, await readBody(c.req)),
+  },
+  {
+    method: "POST",
+    path: "/api/inbox/sync-cron",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/loops/inbox/sync-cron?principalId=${encodeURIComponent(user)}`,
+        await readBody(req),
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/loops/:id/items",
+    handle: async (c) => {
+      const { res, user, url } = c;
+      const qs = new URLSearchParams({ principalId: user });
+      const state = url.searchParams.get("state");
+      if (state) qs.set("state", state);
+      return relayCore(res, "GET", `/v1/loops/${encodeURIComponent(c.params.id!)}/items?${qs.toString()}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/loops/:id/items/:itemId",
+    handle: async (c) => {
+      const { res, user, params, url } = c;
+      const qs = new URLSearchParams({ principalId: user });
+      if (url.searchParams.get("refreshSource") === "1") qs.set("refreshSource", "1");
+      return relayCore(
+        res,
+        "GET",
+        `/v1/loops/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}?${qs.toString()}`,
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/loops/:id/items/:itemId/image",
+    handle: serveInboxItemImage,
+  },
+  ...(["action", "followup"] as const).map((leaf): WebRoute => ({
+    method: "POST",
+    path: `/api/loops/:id/items/:itemId/${leaf}`,
+    handle: async (c) => {
+      const { req, res, user, params } = c;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/loops/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}/${leaf}?principalId=${encodeURIComponent(user)}`,
+        await readBody(req),
+      );
+    },
+  })),
+  {
+    method: "GET",
+    path: "/api/runtime-config",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const scopeId = url.searchParams.get("scopeId") || `personal:${user}`;
+      const qs = new URLSearchParams({ principalId: user, scopeId });
+      if (url.searchParams.get("account") === "company") qs.set("account", "company");
+      return relayCore(res, "GET", `/v1/runtime-config?${qs.toString()}`);
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/runtime-config",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const body = await readJson<Record<string, unknown>>(req, res);
+      if (!body) return;
+      const scopeId = typeof body.scopeId === "string" && body.scopeId ? body.scopeId : `personal:${user}`;
+      return relayCore(res, "PUT", "/v1/runtime-config", JSON.stringify({ ...body, principalId: user, scopeId }));
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/channel-header-pin",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const scopeId = url.searchParams.get("scopeId") || `personal:${user}`;
+      const qs = new URLSearchParams({ principalId: user, scopeId });
+      return relayCore(res, "GET", `/v1/channel-header-pin?${qs.toString()}`);
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/channel-header-pin",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const body = await readJson<Record<string, unknown>>(req, res);
+      if (!body) return;
+      const scopeId = typeof body.scopeId === "string" && body.scopeId ? body.scopeId : `personal:${user}`;
+      return relayCore(res, "PUT", "/v1/channel-header-pin", JSON.stringify({ ...body, principalId: user, scopeId }));
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/scope-resources",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const scope = url.searchParams.get("scope");
+      if (!scope) return json(res, 400, { error: "bad_request", message: "scope required" });
+      const qs = new URLSearchParams({ principalId: user, scope });
+      return relayCore(res, "GET", `/v1/scope-resources?${qs.toString()}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/skills",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const qs = new URLSearchParams({ principalId: user });
+      if (url.searchParams.get("includeShadowed") === "1") qs.set("includeShadowed", "1");
+      return relayCore(res, "GET", `/v1/skills?${qs.toString()}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/skills/:id",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(res, "GET", `/v1/skills/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/skills",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const p = await readJson<{ name?: unknown; description?: unknown; body?: unknown; scopeId?: unknown }>(req, res);
+      if (!p) return;
+      const draft: { name?: string; description?: string; body?: string; scopeId?: string } = {};
+      if (typeof p.name === "string") draft.name = p.name;
+      if (typeof p.description === "string") draft.description = p.description;
+      if (typeof p.body === "string") draft.body = p.body;
+      if (typeof p.scopeId === "string") draft.scopeId = p.scopeId;
+      return relayCore(res, "POST", "/v1/skills", JSON.stringify({ principalId: user, ...draft }));
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/skills/:id",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      const p = await readJson<{ description?: unknown; body?: unknown }>(req, res);
+      if (!p) return;
+      const patch: { description?: string; body?: string } = {};
+      if (typeof p.description === "string") patch.description = p.description;
+      if (typeof p.body === "string") patch.body = p.body;
+      return relayCore(
+        res,
+        "PUT",
+        `/v1/skills/${encodeURIComponent(id)}`,
+        JSON.stringify({ principalId: user, ...patch }),
+      );
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/skills/:id",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(res, "DELETE", `/v1/skills/${encodeURIComponent(id)}`, JSON.stringify({ principalId: user }));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/skills/:id/restore",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/skills/${encodeURIComponent(id)}/restore`,
+        JSON.stringify({ principalId: user }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/sessions/:id/share",
+    handle: async ({ req, res, user, params }: WebCtx) => {
+      res.setHeader("Cache-Control", "no-store");
+      const body = await readJson<{ audience?: unknown }>(req, res);
+      if (!body) return;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/sessions/${encodeURIComponent(params.id!)}/share`,
+        JSON.stringify({ principalId: user, audience: body.audience }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/sessions/:id/title",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/sessions/${encodeURIComponent(id)}/title`,
+        JSON.stringify({ principalId: user }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/sessions/:id/adopt",
+    handle: async (c) => {
+      const p = await readJson<{ parentSessionId?: unknown }>(c.req, c.res);
+      if (!p) return;
+      if (typeof p.parentSessionId !== "string") return json(c.res, 400, { error: "bad_request" });
+      return relayCore(
+        c.res,
+        "POST",
+        `/v1/sessions/${encodeURIComponent(c.params.id!)}/adopt`,
+        JSON.stringify({ principalId: c.user, parentSessionId: p.parentSessionId }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/sessions/:id/detach",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/sessions/${encodeURIComponent(id)}/detach`,
+        JSON.stringify({ principalId: user }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/sessions/:id/fork",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      const p = await readJson<{ upToSeq?: unknown }>(req, res);
+      if (!p) return;
+      const upToSeq = typeof p.upToSeq === "number" ? p.upToSeq : undefined;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/sessions/${encodeURIComponent(id)}/fork`,
+        JSON.stringify({ principalId: user, ...(upToSeq !== undefined ? { upToSeq } : {}) }),
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions/:id/approvals",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
+        "GET",
+        `/v1/sessions/${encodeURIComponent(id)}/approvals?viewer=${encodeURIComponent(user)}`,
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions/:id/background/:pid/output",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const id = c.params.id!;
+      const pid = c.params.pid!;
+      const sinceCursor = url.searchParams.get("sinceCursor") ?? "0";
+      return relayCore(
+        res,
+        "GET",
+        `/v1/sessions/${encodeURIComponent(id)}/background/${encodeURIComponent(pid)}/output?viewer=${encodeURIComponent(user)}&sinceCursor=${encodeURIComponent(sinceCursor)}`,
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions/:id/background",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
+        "GET",
+        `/v1/sessions/${encodeURIComponent(id)}/background?viewer=${encodeURIComponent(user)}`,
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions/:id/entries/:seq",
+    handle: async (c) => {
+      const { res, user } = c;
+      const { id, seq } = c.params as { id: string; seq: string };
+      if (!/^\d+$/.test(seq)) return json(c.res, 404, { error: "not found" });
+      return relayCore(
+        res,
+        "GET",
+        `/v1/sessions/${encodeURIComponent(id)}/entries/${seq}?viewer=${encodeURIComponent(user)}`,
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions/:id",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const id = c.params.id!;
+      const qs = new URLSearchParams({ viewer: user });
+      for (const p of ["tailTurns", "sinceSeq", "beforeSeq"] as const) {
+        const v = url.searchParams.get(p);
+        if (v !== null) qs.set(p, v);
+      }
+      const cancel = new AbortController();
+      const onClose = () => cancel.abort();
+      res.once("close", onClose);
+      try {
+        const portalTok = portalTokenStore.getStore();
+        return relay(
+          res,
+          await fetchCoreText({
+            origin: CORE,
+            secret: CORE_SIGNING_SECRET,
+            method: "GET",
+            path: `/v1/sessions/${encodeURIComponent(id)}?${qs.toString()}`,
+            headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+            signal: AbortSignal.any([cancel.signal, AbortSignal.timeout(30_000)]),
+            retrySafeRead: true,
+          }),
+        );
+      } catch (error) {
+        if (!cancel.signal.aborted) throw error;
+      } finally {
+        res.off("close", onClose);
+      }
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/files/:id/content",
+    handle: serveFileContent,
+  },
+  {
+    method: "GET",
+    path: "/api/files/:id/content/:name",
+    handle: serveFileContent,
+  },
+  {
+    method: "GET",
+    path: "/api/files",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const qs = new URLSearchParams({ viewer: user });
+      const limit = url.searchParams.get("limit");
+      if (limit) qs.set("limit", limit);
+      const cursor = url.searchParams.get("cursor");
+      if (cursor) qs.set("cursor", cursor);
+      const scope = url.searchParams.get("scope");
+      if (scope) qs.set("scope", scope);
+      return relayCore(res, "GET", `/v1/files?${qs.toString()}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/memory",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(res, "GET", `/v1/memory?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/memory/history",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(res, "GET", `/v1/memory/history?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/memory/restore",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const p = await readJson<{ revision?: unknown; expectedRevision?: unknown }>(req, res, false);
+      if (!p) return;
+      const revision = typeof p.revision === "string" ? p.revision : "";
+      const expectedRevision = typeof p.expectedRevision === "string" ? p.expectedRevision : "";
+      return relayCore(
+        res,
+        "POST",
+        "/v1/memory/restore",
+        JSON.stringify({ principalId: user, revision, expectedRevision }),
+      );
+    },
+  },
+  {
+    method: "PUT",
+    path: "/api/memory",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const p = await readJson<{ content?: unknown; revision?: unknown }>(req, res, false);
+      if (!p) return;
+      if (typeof p.content !== "string")
+        return json(res, 400, { error: "bad_request", message: "content must be a string" });
+      const content = p.content;
+      const revision =
+        typeof p.revision === "string"
+          ? p.revision
+          : await coreFetch("GET", `/v1/memory?principalId=${encodeURIComponent(user)}`).then((head) => {
+              try {
+                return String((JSON.parse(head.text) as { revision?: unknown }).revision ?? "");
+              } catch {
+                return "";
+              }
+            });
+      return relayCore(res, "PUT", "/v1/memory", JSON.stringify({ principalId: user, content, revision }));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/sessions/:id",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      const p = await readJson<{ title?: unknown; archived?: unknown; pinned?: unknown; color?: unknown }>(
+        req,
+        res,
+        false,
+      );
+      if (!p) return;
+      const patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null } = {};
+      if (p.title === null || typeof p.title === "string") patch.title = p.title as string | null;
+      if (typeof p.archived === "boolean") patch.archived = p.archived;
+      if (typeof p.pinned === "boolean") patch.pinned = p.pinned;
+      if (p.color === null || typeof p.color === "string") patch.color = p.color as string | null;
+      if (
+        patch.title === undefined &&
+        patch.archived === undefined &&
+        patch.pinned === undefined &&
+        patch.color === undefined
+      ) {
+        return json(res, 400, { error: "bad_request", message: "title, archived, pinned, or color required" });
+      }
+      return relayCore(
+        res,
+        "POST",
+        `/v1/sessions/${encodeURIComponent(id)}`,
+        JSON.stringify({ principalId: user, ...patch }),
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/connectors",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(res, "GET", `/v1/connectors/oauth/status?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/connectors/:provider/start",
+    handle: async (c) => {
+      const { res, user } = c;
+      const provider = c.params.provider!;
+      const callback = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`;
+      const params = new URLSearchParams({ principalId: user, redirectUri: callback, returnTo: "/keychain" });
+      const corePath = `/v1/connectors/oauth/${encodeURIComponent(provider)}/start?${params.toString()}`;
+      return relayCore(res, "GET", corePath);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/connectors/revoke",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const p = await readJson<{ provider?: unknown; host?: unknown }>(req, res, false);
+      if (!p) return;
+      const provider = typeof p.provider === "string" ? p.provider : "";
+      const host = typeof p.host === "string" ? p.host : "";
+      if (!provider && !host) return json(res, 400, { error: "bad_request", message: "provider or host required" });
+      const rawBody = JSON.stringify({ principalId: user, ...(provider ? { provider } : { host }) });
+      return relayCore(res, "POST", "/v1/connectors/oauth/revoke", rawBody);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/keychain/credentials",
+    handle: async (c) => {
+      const { res } = c;
+      return relayCap(res, "GET", "/v1/keychain/credentials");
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/keychain/overview",
+    handle: async (c) => {
+      const { res } = c;
+      return relayCap(res, "GET", "/v1/keychain/overview");
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/keychain/grants/:id/revoke",
+    handle: async (c) => {
+      const { res } = c;
+      const id = c.params.id!;
+      return relayCap(res, "POST", `/v1/keychain/grants/${encodeURIComponent(id)}/revoke`, "{}");
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/keychain/drops",
+    handle: async (c) => {
+      const { req, res } = c;
+      const p = await readJson<{ service?: unknown; purpose?: unknown; envKey?: unknown }>(req, res, false);
+      if (!p) return;
+      const draft = {
+        ...(typeof p.service === "string" ? { service: p.service } : {}),
+        ...(typeof p.purpose === "string" ? { purpose: p.purpose } : {}),
+        ...(typeof p.envKey === "string" ? { envKey: p.envKey } : {}),
+      };
+      return relayCap(res, "POST", "/v1/keychain/drops", JSON.stringify(draft));
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/keychain/credentials/:id",
+    handle: async (c) => {
+      const { res } = c;
+      const id = c.params.id!;
+      if (!id) return json(res, 400, { error: "bad_request", message: "credential id required" });
+      return relayCap(res, "DELETE", `/v1/keychain/credentials/${encodeURIComponent(id)}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/deployments",
+    handle: async (c) => {
+      const { res, user } = c;
+      const r = await coreFetch("GET", `/v1/deployments?principalId=${encodeURIComponent(user)}`);
+      if (r.status !== 200) {
+        return relay(res, r);
+      }
+      let deployments: Array<Record<string, unknown>>;
+      try {
+        const parsed = JSON.parse(r.text) as { deployments?: Array<Record<string, unknown>> };
+        deployments = parsed.deployments ?? [];
+      } catch {
+        return json(res, 502, { error: "bad_core_response" });
+      }
+      return json(res, 200, {
+        deployments: deployments.map((d) => ({ ...d, webUrl: `/deployments/${encodeURIComponent(String(d.id))}/` })),
+      });
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/deployments/:id",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      if (!id || id.includes("/")) return json(res, 404, { error: "not_found" });
+      const r = await coreFetch(
+        "GET",
+        `/v1/deployments/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
+      );
+      if (r.status !== 200) return relay(res, r);
+      try {
+        const parsed = JSON.parse(r.text) as { deployment?: Record<string, unknown> };
+        if (!parsed.deployment) return json(res, 502, { error: "bad_core_response" });
+        return json(res, 200, {
+          deployment: {
+            ...parsed.deployment,
+            webUrl: `/deployments/${encodeURIComponent(String(parsed.deployment.id))}/`,
+          },
+        });
+      } catch {
+        return json(res, 502, { error: "bad_core_response" });
+      }
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/deployments/:id/share",
+    handle: async ({ res, params }) => relayCap(res, "GET", `/v1/deployments/${encodeURIComponent(params.id!)}/share`),
+  },
+  {
+    method: "POST",
+    path: "/api/deployments/:id/share",
+    handle: async ({ req, res, params }) => {
+      const body = await readJson<{
+        scope?: unknown;
+        recipient?: unknown;
+        email?: unknown;
+        access?: unknown;
+        public?: unknown;
+      }>(req, res, false);
+      if (!body) return;
+      return relayCap(
+        res,
+        "POST",
+        `/v1/deployments/${encodeURIComponent(params.id!)}/share`,
+        JSON.stringify({
+          scope: body.scope,
+          recipient: body.recipient,
+          email: body.email,
+          access: body.access,
+          public: body.public,
+        }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/deployments/:id/display-name",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      if (!(await gateManageDeployment(res, user, id))) return;
+      const p = await readJson<{ displayName?: unknown }>(req, res, false);
+      if (!p) return;
+      const displayName = String(p.displayName ?? "");
+      return relayCore(
+        res,
+        "POST",
+        `/v1/deployments/${encodeURIComponent(id)}/display-name`,
+        JSON.stringify({ displayName }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/deployments/:id/name",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      if (!(await gateManageDeployment(res, user, id))) return;
+      const p = await readJson<{ name?: unknown }>(req, res, false);
+      if (!p) return;
+      const name = String(p.name ?? "");
+      return relayCore(res, "POST", `/v1/deployments/${encodeURIComponent(id)}/name`, JSON.stringify({ name }));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/deployments/:id/embed-ancestors",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      if (!(await gateManageDeployment(res, user, id))) return;
+      const p = await readJson<{ embedAncestors?: unknown }>(req, res, false);
+      if (!p) return;
+      const embedAncestors = Array.isArray(p.embedAncestors) ? p.embedAncestors : [];
+      return relayCore(
+        res,
+        "POST",
+        `/v1/deployments/${encodeURIComponent(id)}/embed-ancestors`,
+        JSON.stringify({ embedAncestors }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/deployments/:id/archive",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      if (!(await gateManageDeployment(res, user, id))) return;
+      return relayCore(res, "POST", `/v1/deployments/${encodeURIComponent(id)}/archive`);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/deployments/:id/restore",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      if (!(await gateManageDeployment(res, user, id))) return;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/deployments/${encodeURIComponent(id)}/restore`,
+        JSON.stringify({ principalId: user }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/approvals/:requestId",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const requestId = c.params.requestId!;
+      if (!requestId || requestId.includes("/")) return json(res, 404, { error: "not_found" });
+      const p = await readJson<{ approved?: unknown; scope?: unknown; idempotencyKey?: unknown }>(req, res, false);
+      if (!p) return;
+      if (typeof p.approved !== "boolean") return json(res, 400, { error: "bad_request" });
+      const approved = p.approved;
+      const scope = p.scope === "once" || p.scope === "session" || p.scope === "always" ? p.scope : undefined;
+      const idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
+
+      const fetched = await coreFetch("GET", `/v1/approvals/${encodeURIComponent(requestId)}`);
+      if (fetched.status !== 200) {
+        return sendBuffered(res, fetched.status, { "content-type": "application/json" }, fetched.text);
+      }
+      let record: CoreApprovalRecord;
+      try {
+        record = JSON.parse(fetched.text) as CoreApprovalRecord;
+      } catch {
+        return json(res, 502, { error: "bad_core_response" });
+      }
+      const threadRef =
+        typeof record.request?.conversation?.threadRef === "string" ? record.request.conversation.threadRef : "";
+      const actor = typeof record.request?.actor?.externalId === "string" ? record.request.actor.externalId : "";
+      if ((!threadRef.startsWith("web:") && !threadRef.startsWith("swarm:")) || actor !== user || !record.request) {
+        return json(res, 404, { error: "not_found" });
+      }
+      if (!threadRef.startsWith(`web:${user}:`)) {
+        const sessionId = typeof record.sessionId === "string" ? record.sessionId : "";
+        const visible = sessionId
+          ? await coreFetch(
+              "GET",
+              `/v1/sessions/${encodeURIComponent(sessionId)}?viewer=${encodeURIComponent(user)}&tailTurns=1`,
+            )
+          : null;
+        if (visible?.status !== 200) return json(res, 404, { error: "not_found" });
+        if (threadRef.startsWith("swarm:")) {
+          const session = (JSON.parse(visible.text) as { session?: { threadRef?: string; surface?: string } }).session;
+          if (session?.surface !== "swarm" || session.threadRef !== threadRef)
+            return json(res, 404, { error: "not_found" });
+        }
+      }
+
+      const approval = { requestId, approved, ...(scope ? { scope } : {}) };
+      const replay: Record<string, unknown> = { ...record.request, approval };
+      delete replay.idempotencyKey;
+      if (idempotencyKey) replay.idempotencyKey = idempotencyKey;
+      return postTurnAndMint(req, res, replay, user, threadRef);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/turn",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const ownPrefix = `web:${user}:`;
+      let text = "";
+      let threadRef = `${ownPrefix}default`;
+      let model: string | undefined;
+      let harness: string | undefined;
+      let thinkingLevel: string | undefined;
+      let fastMode: boolean | undefined;
+      let timezone: string | undefined;
+      let scope: string | undefined;
+      let channelName: string | undefined;
+      const attachments: CoreAttachment[] = [];
+      let approval: { requestId: string; approved: boolean; scope?: string } | undefined;
+      let proactiveOpener = false;
+      let idempotencyKey: string | undefined;
+      try {
+        const p = JSON.parse(await readBody(req));
+        text = String(p.text ?? "");
+        idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
+        if (
+          !idempotencyKey &&
+          typeof p.clientTurnId === "string" &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(p.clientTurnId)
+        )
+          idempotencyKey = `web:${user}:${p.clientTurnId}`;
+        if (p.proactiveOpener === true) proactiveOpener = true;
+        if (p.approval && typeof p.approval.requestId === "string" && typeof p.approval.approved === "boolean") {
+          approval = {
+            requestId: p.approval.requestId,
+            approved: p.approval.approved,
+            ...(p.approval.scope === "once" || p.approval.scope === "session" || p.approval.scope === "always"
+              ? { scope: p.approval.scope }
+              : {}),
+          };
+        }
+        if (
+          typeof p.threadRef === "string" &&
+          (p.threadRef.startsWith("web:") || p.threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
+        )
+          threadRef = p.threadRef;
+        if (typeof p.scopeId === "string" && p.scopeId) scope = p.scopeId;
+        if (typeof p.channelName === "string" && p.channelName.trim()) channelName = p.channelName.trim().slice(0, 200);
+        if (typeof p.model === "string" && p.model) model = p.model;
+        if (typeof p.harness === "string") harness = p.harness;
+        if (typeof p.thinkingLevel === "string") thinkingLevel = p.thinkingLevel;
+        if (typeof p.fastMode === "boolean") fastMode = p.fastMode;
+        if (typeof p.timezone === "string" && p.timezone.trim()) timezone = p.timezone.trim().slice(0, 64);
+        if (Array.isArray(p.attachments)) {
+          for (const raw of p.attachments as unknown[]) {
+            if (!raw || typeof raw !== "object") continue;
+            const a = raw as { name?: unknown; mimetype?: unknown; sizeBytes?: unknown; blobId?: unknown };
+            if (typeof a.name !== "string" || typeof a.blobId !== "string" || !a.blobId) continue;
+            attachments.push({
+              name: a.name,
+              mimetype: typeof a.mimetype === "string" && a.mimetype ? a.mimetype : "application/octet-stream",
+              sizeBytes: typeof a.sizeBytes === "number" ? a.sizeBytes : 0,
+              blobId: a.blobId,
+            });
+          }
+        }
+      } catch (e) {
+        if (e instanceof PayloadTooLargeError) throw e;
+      }
+      if (!text.trim() && attachments.length === 0 && !approval && !proactiveOpener)
+        return json(res, 400, { error: "empty message" });
+
+      const resolved = resolveWebConversation(user, threadRef, scope, channelName);
+      if ("error" in resolved) return json(res, 403, resolved);
+
+      const turn = {
+        ...webTurnBase(req, user, resolved.conversation, threadRef, text),
+        ...(harness ? { harness } : {}),
+        ...(model ? { model } : {}),
+        ...(thinkingLevel ? { thinkingLevel } : {}),
+        ...(typeof fastMode === "boolean" ? { fastMode } : {}),
+        ...(timezone ? { timezone } : {}),
+        ...(attachments.length ? { attachments } : {}),
+        ...(approval ? { approval } : {}),
+        ...(proactiveOpener ? { proactiveOpener: true } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      };
+      return postTurnAndMint(req, res, turn, user, threadRef);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/deliveries/events",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      res.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+      });
+      res.write(": open\n\n");
+      let set = deliveryClients.get(user);
+      if (!set) {
+        set = new Set();
+        deliveryClients.set(user, set);
+      }
+      set.add(res);
+      const beat = setInterval(() => res.write(": ping\n\n"), SSE_HEARTBEAT_MS);
+      beat.unref?.();
+      req.on("close", () => {
+        clearInterval(beat);
+        const s = deliveryClients.get(user);
+        if (s) {
+          s.delete(res);
+          if (!s.size) deliveryClients.delete(user);
+        }
+      });
+      return;
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/runs/active",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const threadRef = url.searchParams.get("threadRef") ?? "";
+      if (!threadRef.startsWith("web:") && !threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
+        return json(res, 404, { error: "not_found" });
+      let queued: Array<{ runId: string; text: string; hasAttachments?: boolean }> = [];
+      let durableRunId: string | null = null;
+      const durable = await coreFetch("GET", `/v1/runs?threadRef=${encodeURIComponent(threadRef)}`);
+      if (durable.status >= 200 && durable.status < 300) {
+        try {
+          const parsed = JSON.parse(durable.text) as { runId?: string | null; queued?: typeof queued };
+          durableRunId = parsed.runId ?? null;
+          queued = parsed.queued ?? [];
+        } catch {
+          /* leave the queue empty; the run lookups below still answer */
+        }
+      }
+      const tryRun = async (runId: string, ownedByUser = true): Promise<boolean> => {
+        const r = await coreFetch("GET", `/v1/runs/${encodeURIComponent(runId)}`);
+        if (r.status < 200 || r.status >= 300) {
+          if (ownedByUser) forgetRun(runId);
+          return false;
+        }
+        let run: { status?: string };
+        try {
+          run = JSON.parse(r.text) as { status?: string };
+        } catch {
+          json(res, 502, { error: "bad_core_response" });
+          return true;
+        }
+        if (run.status === "done" || run.status === "failed") {
+          forgetRun(runId);
+          return false;
+        }
+        rememberRun(runId, user, threadRef);
+        const waiting = queued.filter((q) => q.runId !== runId);
+        json(res, 200, { runId, run, ...(waiting.length ? { queued: waiting } : {}) });
+        return true;
+      };
+      if (durableRunId && (await tryRun(durableRunId, false))) return;
+      for (const runId of Array.from(activeRunsByThread.get(threadKey(user, threadRef)) ?? [])) {
+        if (await tryRun(runId)) return;
+      }
+      json(res, 200, { runId: null, run: null, ...(queued.length ? { queued } : {}) });
+      return;
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/runs/:id/signal",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      const p = await readJson<{
+        kind?: unknown;
+        text?: unknown;
+        threadRef?: unknown;
+        scopeId?: unknown;
+        channelName?: unknown;
+        queuedRunId?: unknown;
+      }>(req, res, false);
+      if (!p) return;
+      const kind = typeof p.kind === "string" ? p.kind : "";
+      const text = typeof p.text === "string" ? p.text : undefined;
+      const threadRef =
+        typeof p.threadRef === "string" &&
+        (p.threadRef.startsWith("web:") || p.threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
+          ? p.threadRef
+          : "";
+      let steerFields: { request: ReturnType<typeof webTurnBase> } | undefined;
+      if (kind === "steer" && text !== undefined && threadRef) {
+        const scope = typeof p.scopeId === "string" && p.scopeId ? p.scopeId : undefined;
+        const channelName =
+          typeof p.channelName === "string" && p.channelName.trim() ? p.channelName.trim().slice(0, 200) : undefined;
+        const resolved = resolveWebConversation(user, threadRef, scope, channelName);
+        if ("error" in resolved) return json(res, 403, resolved);
+        steerFields = { request: webTurnBase(req, user, resolved.conversation, threadRef, text) };
+      }
+      return relayCore(
+        res,
+        "POST",
+        `/v1/runs/${encodeURIComponent(id)}/signal`,
+        JSON.stringify({
+          kind,
+          ...(text !== undefined ? { text } : {}),
+          ...steerFields,
+          ...(typeof p.queuedRunId === "string" ? { queuedRunId: p.queuedRunId } : {}),
+        }),
+      );
+    },
+  },
+  {
+    method: "PATCH",
+    path: "/api/runs/:id/input",
+    handle: async (c) => {
+      const body = await readJson<{ text?: unknown; expectedText?: unknown }>(c.req, c.res, false);
+      if (!body) return;
+      return relayCore(c.res, "PATCH", `/v1/runs/${encodeURIComponent(c.params.id!)}/input`, JSON.stringify(body));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/runs/:id/withdraw",
+    handle: async (c) => {
+      const { res } = c;
+      const id = c.params.id!;
+      const r = await coreFetch("POST", `/v1/runs/${encodeURIComponent(id)}/withdraw`);
+      if (r.status >= 200 && r.status < 300) forgetRun(id);
+      return relay(res, r);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/runs/:id/events",
+    handle: async (c) => {
+      const { res } = c;
+      const id = c.params.id!;
+      const controller = new AbortController();
+      res.on("close", () => controller.abort());
+      const path = withSourceAuthNonce(`/v1/runs/${encodeURIComponent(id)}/events`, CORE_SIGNING_SECRET);
+      const portalTok = portalTokenStore.getStore();
+      try {
+        const upstream = await fetch(`${CORE}${path}`, {
+          headers: {
+            ...signedHeaders(CORE_SIGNING_SECRET, "GET", path, ""),
+            ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+          },
+          signal: controller.signal,
+          redirect: "manual",
+        });
+        if (controller.signal.aborted) return;
+        if (!upstream.ok || !upstream.body) {
+          json(res, upstream.status, { error: "stream_unavailable" });
+          return;
+        }
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache, no-transform",
+          connection: "keep-alive",
+          "x-accel-buffering": "no",
+        });
+        const source = Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]);
+        source.on("error", () => res.destroy());
+        source.pipe(res);
+      } catch {
+        if (!controller.signal.aborted) {
+          if (res.headersSent) res.destroy();
+          else json(res, 502, { error: "stream_unavailable" });
+        }
+      }
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/runs/:id",
+    handle: async (c) => {
+      const { res } = c;
+      const id = c.params.id!;
+      const r = await coreFetch("GET", `/v1/runs/${encodeURIComponent(id)}`);
+      try {
+        const s = (JSON.parse(r.text) as { status?: string }).status;
+        if (s === "done" || s === "failed") forgetRun(id);
+      } catch {
+        void 0;
+      }
+      return relay(res, r);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/inbox/sent/:messageId",
+    handle: async ({ res, user, params, url }) => {
+      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+      const query = new URLSearchParams();
+      const accountType = url.searchParams.get("accountType");
+      if (accountType) query.set("accountType", accountType);
+      res.setHeader("Cache-Control", "no-store");
+      return relayCore(
+        res,
+        "GET",
+        `/v1/connectors/gmail/sent/${encodeURIComponent(params.messageId!)}${query.size ? `?${query}` : ""}`,
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/inbox/sent",
+    handle: async ({ res, user, url }) => {
+      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+      const params = new URLSearchParams();
+      for (const key of ["pageToken", "accountType"]) {
+        const value = url.searchParams.get(key);
+        if (value) params.set(key, value);
+      }
+      res.setHeader("Cache-Control", "no-store");
+      return relayCore(res, "GET", `/v1/connectors/gmail/sent?${params}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/loops",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(res, "GET", `/v1/loops?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/webhooks",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relay(res, await coreFetch("GET", `/v1/webhooks?viewer=${encodeURIComponent(user)}`));
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/webhooks/:id/events",
+    handle: async ({ res, user, params }) =>
+      relay(
+        res,
+        await coreFetch(
+          "GET",
+          `/v1/webhooks/${encodeURIComponent(params.id!)}/events?viewer=${encodeURIComponent(user)}`,
+        ),
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/loops",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      return relayCore(res, "POST", `/v1/loops?principalId=${encodeURIComponent(user)}`, await readBody(req));
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/loops/:id",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(
+        res,
+        "GET",
+        `/v1/loops/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(user)}`,
+      );
+    },
+  },
+  {
+    method: "PATCH",
+    path: "/api/loops/:id",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      return relayCore(
+        res,
+        "PATCH",
+        `/v1/loops/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(user)}`,
+        await readBody(req),
+      );
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/loops/:id",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(
+        res,
+        "DELETE",
+        `/v1/loops/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(user)}`,
+      );
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/loops/:id/ingestion",
+    handle: async ({ res, user, params }) =>
+      relayCore(
+        res,
+        "GET",
+        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion?principalId=${encodeURIComponent(user)}`,
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/loops/:id/ingestion",
+    handle: async ({ req, res, user, params }) =>
+      relayCore(
+        res,
+        "POST",
+        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion?principalId=${encodeURIComponent(user)}`,
+        await readBody(req),
+      ),
+  },
+  {
+    method: "PATCH",
+    path: "/api/loops/:id/ingestion/:sourceId",
+    handle: async ({ req, res, user, params }) =>
+      relayCore(
+        res,
+        "PATCH",
+        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion/${encodeURIComponent(params.sourceId!)}?principalId=${encodeURIComponent(user)}`,
+        await readBody(req),
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/loops/:id/fire",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/loops/${encodeURIComponent(c.params.id!)}/fire?principalId=${encodeURIComponent(user)}`,
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/loops/:id/outputs/:outputId/decide",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/loops/${encodeURIComponent(c.params.id!)}/outputs/${encodeURIComponent(c.params.outputId!)}/decide?principalId=${encodeURIComponent(user)}`,
+        await readBody(req),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/loops/:id/grants",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/loops/${encodeURIComponent(c.params.id!)}/grants?principalId=${encodeURIComponent(user)}`,
+        await readBody(req),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/loops/:id/autopilot",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/loops/${encodeURIComponent(c.params.id!)}/autopilot?principalId=${encodeURIComponent(user)}`,
+        await readBody(req),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/webhooks",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      let action: string;
+      let verification: { scheme: string; secret?: string } = { scheme: "hmac-sha256" };
+      let filters: Array<{ path: string; in: string[] }> | undefined;
+      try {
+        const p = JSON.parse(await readBody(req)) as {
+          action?: unknown;
+          verification?: { scheme?: unknown; secret?: unknown };
+          filters?: unknown;
+          destination?: unknown;
+        };
+        action = String(p.action ?? "").trim();
+        if (p.verification !== undefined) {
+          if (
+            typeof p.verification !== "object" ||
+            p.verification === null ||
+            typeof p.verification.scheme !== "string"
+          ) {
+            return json(res, 400, {
+              error: "unsupported_verification",
+              message: "verification requires a scheme (HMAC-SHA256, GitHub, Slack, or Stripe)",
+            });
+          }
+          verification = {
+            scheme: p.verification.scheme,
+            ...(p.verification.secret ? { secret: String(p.verification.secret) } : {}),
+          };
+        }
+        if (p.filters !== undefined) {
+          if (
+            !Array.isArray(p.filters) ||
+            !p.filters.every((filter: unknown) => {
+              if (!filter || typeof filter !== "object") return false;
+              const candidate = filter as { path?: unknown; in?: unknown };
+              return (
+                typeof candidate.path === "string" &&
+                candidate.path.trim().length > 0 &&
+                Array.isArray(candidate.in) &&
+                candidate.in.length > 0 &&
+                candidate.in.every((value) => typeof value === "string" && value.trim().length > 0)
+              );
+            })
+          )
+            return json(res, 400, {
+              error: "invalid_filters",
+              message: "every filter requires a path and at least one value",
+            });
+          filters = p.filters as Array<{ path: string; in: string[] }>;
+        }
+        if (p.destination !== undefined) {
+          return json(res, 400, {
+            error: "invalid_destination",
+            message: "choose webhook destinations with the agent so teammate and channel names can be resolved safely",
+          });
+        }
+      } catch (e) {
+        if (e instanceof PayloadTooLargeError) throw e;
+        return json(res, 400, { error: "bad_request", message: "expected JSON body" });
+      }
+      if (!action)
+        return json(res, 400, {
+          error: "action_required",
+          message: "an action (the agent's instructions) is required",
+        });
+      if (!["hmac-sha256", "github", "slack", "stripe"].includes(verification.scheme)) {
+        return json(res, 400, {
+          error: "unsupported_verification",
+          message: "choose HMAC-SHA256, GitHub, Slack, or Stripe signature verification",
+        });
+      }
+      if (!verification.secret) {
+        verification = { ...verification, secret: randomBytes(32).toString("hex") };
+      }
+      const reqBody = JSON.stringify({
+        ownerScopeId: `personal:${user}`,
+        owner: user,
+        createdBy: user,
+        action,
+        verification,
+        ...(filters ? { filters } : {}),
+      });
+      return relay(res, await coreFetch("POST", "/v1/webhooks", reqBody));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/webhooks/:id/disable",
+    handle: (c) => setWebhookEnabledViaCore(c.res, c.user, c.params.id!, "disable"),
+  },
+  {
+    method: "POST",
+    path: "/api/webhooks/:id/enable",
+    handle: (c) => setWebhookEnabledViaCore(c.res, c.user, c.params.id!, "enable"),
+  },
+  {
+    method: "GET",
+    path: "/api/crons",
+    handle: async (c) => {
+      const { res, user } = c;
+      const r = await coreFetch("GET", `/v1/crons?viewer=${encodeURIComponent(user)}`);
+      if (r.status < 200 || r.status >= 300) {
+        return relay(res, r);
+      }
+      let crons: CoreCron[] = [];
+      let visible: CoreCron[] = [];
+      try {
+        const parsed = JSON.parse(r.text) as { crons?: CoreCron[]; visible?: CoreCron[] };
+        crons = parsed.crons ?? [];
+        visible = parsed.visible ?? [];
+      } catch {
+        void 0;
+      }
+      return json(res, 200, { crons, visible });
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/crons/:id/runs",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relay(
+        res,
+        await coreFetch(
+          "GET",
+          `/v1/crons/${encodeURIComponent(id)}/runs?principalId=${encodeURIComponent(user)}&limit=20`,
+        ),
+      );
+    },
+  },
+  {
+    method: "PATCH",
+    path: "/api/crons/:id",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      let patch: {
+        title?: string;
+        task?: string;
+        schedule?: unknown;
+        enabled?: boolean;
+        archived?: boolean;
+        runtime?: unknown;
+      } = {};
+      try {
+        const p = JSON.parse(await readBody(req)) as {
+          title?: unknown;
+          task?: unknown;
+          schedule?: unknown;
+          enabled?: unknown;
+          archived?: unknown;
+          runtime?: unknown;
+        };
+        if ("runtime" in p) patch = { ...patch, runtime: p.runtime };
+        if ("title" in p) {
+          if (typeof p.title !== "string")
+            return json(res, 400, { error: "bad_request", message: "title must be a string" });
+          patch = { ...patch, title: p.title.trim() };
+        }
+        if ("task" in p) {
+          if (typeof p.task !== "string" || !p.task.trim())
+            return json(res, 400, { error: "bad_request", message: "task must be a non-empty string" });
+          patch = { ...patch, task: p.task.trim() };
+        }
+        if ("schedule" in p) patch = { ...patch, schedule: p.schedule };
+        if ("enabled" in p) {
+          if (typeof p.enabled !== "boolean")
+            return json(res, 400, { error: "bad_request", message: "enabled must be a boolean" });
+          patch = { ...patch, enabled: p.enabled };
+        }
+        if ("archived" in p) {
+          if (typeof p.archived !== "boolean")
+            return json(res, 400, { error: "bad_request", message: "archived must be a boolean" });
+          patch = { ...patch, archived: p.archived };
+        }
+      } catch (e) {
+        if (e instanceof PayloadTooLargeError) throw e;
+        return json(res, 400, { error: "bad_request", message: "expected JSON body" });
+      }
+      if (Object.keys(patch).length === 0)
+        return json(res, 400, {
+          error: "bad_request",
+          message: "expected title, task, schedule, enabled, archived, or runtime",
+        });
+      if (patch.archived === true) patch = { ...patch, enabled: false };
+      return relayCore(
+        res,
+        "PATCH",
+        `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
+        JSON.stringify(patch),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/crons/:id/disable",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/crons/${encodeURIComponent(id)}/disable?principalId=${encodeURIComponent(user)}`,
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/crons/:id/enable",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
+        "PATCH",
+        `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
+        JSON.stringify({ enabled: true, archived: false }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/crons/:id/run",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(res, "POST", `/v1/crons/${encodeURIComponent(id)}/run?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/api/crons/:id",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(res, "DELETE", `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+];
+
 const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
   const path = url.pathname;
@@ -715,8 +3106,16 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
   if (method === "GET" && path === "/healthz") return json(res, 200, { ok: true });
   if (method === "GET" && path === "/favicon.svg") {
-    return serveEmojiFavicon(res, process.env.WEB_UI_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F", "no-cache");
+    return serveFavicon(
+      res,
+      {
+        svg: process.env.WEB_UI_FAVICON_SVG,
+        emoji: process.env.WEB_UI_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F",
+      },
+      "no-cache",
+    );
   }
+  if (method === "GET" && path === "/manifest.webmanifest") return serveWebManifest(res);
 
   if (method === "POST" && path === "/signin") {
     if (!COOKIE_AUTH) return json(res, 404, { error: "not_found" });
@@ -763,1101 +3162,74 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     return sendHtml(res, ok ? 200 : 400, callbackHtml(q));
   }
 
-  if (path === "/me" || path.startsWith("/api/")) {
-    const user = cookieUser(req);
-    if (!user) return unauthorized(res, req);
-
-    if (path === "/me") {
-      res.setHeader("set-cookie", sessionCookie(user));
-      const permissions = await userPermissions();
-      return json(res, 200, {
-        user,
-        org: ORG,
-        mode: AUTH_MODE,
-        slackWorkspaceUrl: await slackWorkspaceUrl(),
-        impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
-        permissions,
-      });
-    }
-
-    if (method === "POST" && path === "/api/blobs") {
-      return uploadBlobFromRequest(req, res, declaredSha(url));
-    }
-
-    if (method === "POST" && path === "/api/files/upload") {
-      return uploadFileFromRequest(
-        req,
-        res,
-        user,
-        url.searchParams.get("scope"),
-        declaredSha(url),
-        uploadFileName(url),
-      );
-    }
-
-    if (method === "GET" && path === "/api/sessions") {
-      const r = await coreFetch("GET", `/v1/sessions?principalId=${encodeURIComponent(user)}`);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/contexts") {
-      const r = await coreFetch("GET", `/v1/contexts?principalId=${encodeURIComponent(user)}`);
-      return relay(res, r);
-    }
-
-    const contextPolicy = path.match(/^\/api\/contexts\/([^/]+)\/ambient-policy$/);
-    if (method === "GET" && contextPolicy) {
-      const scope = decodeURIComponent(contextPolicy[1]!);
-      const r = await coreFetch(
-        "GET",
-        `/v1/contexts/policy?principalId=${encodeURIComponent(user)}&scope=${encodeURIComponent(scope)}`,
-      );
-      return relay(res, r);
-    }
-    if (method === "PUT" && contextPolicy) {
-      const scope = decodeURIComponent(contextPolicy[1]!);
-      let p: { orders?: unknown; bots?: unknown; ambientEnabled?: unknown; baseUpdatedAt?: unknown };
-      try {
-        p = JSON.parse((await readBody(req)) || "{}") as typeof p;
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch(
-        "PUT",
-        "/v1/contexts/policy",
-        JSON.stringify({
-          principalId: user,
-          scope,
-          orders: p.orders,
-          bots: p.bots,
-          ambientEnabled: p.ambientEnabled,
-          baseUpdatedAt: p.baseUpdatedAt,
-        }),
-      );
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path === "/api/projects") {
-      let name = "";
-      try {
-        const p = JSON.parse((await readBody(req)) || "{}") as { name?: unknown };
-        if (typeof p.name === "string") name = p.name.trim().slice(0, 200);
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
-      const r = await coreFetch("POST", "/v1/projects", JSON.stringify({ principalId: user, name }));
-      return relay(res, r);
-    }
-
-    const renameProject = path.match(/^\/api\/projects\/([^/]+)$/);
-    if (method === "PATCH" && renameProject) {
-      const id = decodeURIComponent(renameProject[1]!);
-      let name = "";
-      try {
-        const p = JSON.parse((await readBody(req)) || "{}") as { name?: unknown };
-        if (typeof p.name === "string") name = p.name.trim().slice(0, 200);
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
-      const r = await coreFetch(
-        "PATCH",
-        `/v1/projects/${encodeURIComponent(id)}`,
-        JSON.stringify({ principalId: user, name }),
-      );
-      return relay(res, r);
-    }
-
-    const addProjectMember = path.match(/^\/api\/projects\/([^/]+)\/members$/);
-    if (method === "POST" && addProjectMember) {
-      const id = decodeURIComponent(addProjectMember[1]!);
-      let memberId = "";
-      try {
-        const p = JSON.parse((await readBody(req)) || "{}") as { memberId?: unknown };
-        if (typeof p.memberId === "string") memberId = p.memberId.trim();
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      if (!memberId) return json(res, 400, { error: "bad_request", message: "memberId required" });
-      const r = await coreFetch(
-        "POST",
-        `/v1/projects/${encodeURIComponent(id)}/members`,
-        JSON.stringify({ principalId: user, memberId }),
-      );
-      return relay(res, r);
-    }
-
-    const removeProjectMember = path.match(/^\/api\/projects\/([^/]+)\/members\/([^/]+)$/);
-    if (method === "DELETE" && removeProjectMember) {
-      const id = decodeURIComponent(removeProjectMember[1]!);
-      const memberId = decodeURIComponent(removeProjectMember[2]!);
-      const r = await coreFetch(
-        "DELETE",
-        `/v1/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`,
-        JSON.stringify({ principalId: user }),
-      );
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/directory/resolve") {
-      const q = (url.searchParams.get("q") ?? "").trim().slice(0, 80);
-      if (!q) return json(res, 400, { error: "bad_request", message: "q required" });
-      const r = await coreFetch("GET", `/v1/directory/resolve?q=${encodeURIComponent(q)}`);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/surface-config") {
-      const r = await coreFetch("GET", "/v1/surface-config");
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/runtime-config") {
-      const scopeId = url.searchParams.get("scopeId") || `personal:${user}`;
-      const qs = new URLSearchParams({ principalId: user, scopeId });
-      const r = await coreFetch("GET", `/v1/runtime-config?${qs.toString()}`);
-      return relay(res, r);
-    }
-
-    if (method === "PUT" && path === "/api/runtime-config") {
-      let body: Record<string, unknown>;
-      try {
-        body = JSON.parse((await readBody(req)) || "{}") as Record<string, unknown>;
-      } catch {
-        return json(res, 400, { error: "bad_request" });
-      }
-      const scopeId = typeof body.scopeId === "string" && body.scopeId ? body.scopeId : `personal:${user}`;
-      const r = await coreFetch("PUT", "/v1/runtime-config", JSON.stringify({ ...body, principalId: user, scopeId }));
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/scope-resources") {
-      const scope = url.searchParams.get("scope");
-      if (!scope) return json(res, 400, { error: "bad_request", message: "scope required" });
-      const qs = new URLSearchParams({ principalId: user, scope });
-      const r = await coreFetch("GET", `/v1/scope-resources?${qs.toString()}`);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/skills") {
-      const qs = new URLSearchParams({ principalId: user });
-      if (url.searchParams.get("includeShadowed") === "1") qs.set("includeShadowed", "1");
-      const r = await coreFetch("GET", `/v1/skills?${qs.toString()}`);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path.startsWith("/api/skills/")) {
-      const id = decodeURIComponent(path.slice("/api/skills/".length));
-      const r = await coreFetch("GET", `/v1/skills/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`);
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path === "/api/skills") {
-      const draft: { name?: string; description?: string; body?: string; scopeId?: string } = {};
-      try {
-        const p = JSON.parse((await readBody(req)) || "{}") as {
-          name?: unknown;
-          description?: unknown;
-          body?: unknown;
-          scopeId?: unknown;
-        };
-        if (typeof p.name === "string") draft.name = p.name;
-        if (typeof p.description === "string") draft.description = p.description;
-        if (typeof p.body === "string") draft.body = p.body;
-        if (typeof p.scopeId === "string") draft.scopeId = p.scopeId;
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch("POST", "/v1/skills", JSON.stringify({ principalId: user, ...draft }));
-      return relay(res, r);
-    }
-
-    if (method === "PUT" && path.startsWith("/api/skills/")) {
-      const id = decodeURIComponent(path.slice("/api/skills/".length));
-      const patch: { description?: string; body?: string } = {};
-      try {
-        const p = JSON.parse((await readBody(req)) || "{}") as { description?: unknown; body?: unknown };
-        if (typeof p.description === "string") patch.description = p.description;
-        if (typeof p.body === "string") patch.body = p.body;
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch(
-        "PUT",
-        `/v1/skills/${encodeURIComponent(id)}`,
-        JSON.stringify({ principalId: user, ...patch }),
-      );
-      return relay(res, r);
-    }
-
-    if (method === "DELETE" && path.startsWith("/api/skills/")) {
-      const id = decodeURIComponent(path.slice("/api/skills/".length));
-      const r = await coreFetch(
-        "DELETE",
-        `/v1/skills/${encodeURIComponent(id)}`,
-        JSON.stringify({ principalId: user }),
-      );
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/skills/") && path.endsWith("/restore")) {
-      const id = decodeURIComponent(path.slice("/api/skills/".length, -"/restore".length));
-      const r = await coreFetch(
-        "POST",
-        `/v1/skills/${encodeURIComponent(id)}/restore`,
-        JSON.stringify({ principalId: user }),
-      );
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/sessions/") && path.endsWith("/title")) {
-      const id = decodeURIComponent(path.slice("/api/sessions/".length, -"/title".length));
-      const r = await coreFetch(
-        "POST",
-        `/v1/sessions/${encodeURIComponent(id)}/title`,
-        JSON.stringify({ principalId: user }),
-      );
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/sessions/") && path.endsWith("/fork")) {
-      const id = decodeURIComponent(path.slice("/api/sessions/".length, -"/fork".length));
-      let upToSeq: number | undefined;
-      try {
-        const p = JSON.parse((await readBody(req)) || "{}") as { upToSeq?: unknown };
-        if (typeof p.upToSeq === "number") upToSeq = p.upToSeq;
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch(
-        "POST",
-        `/v1/sessions/${encodeURIComponent(id)}/fork`,
-        JSON.stringify({ principalId: user, ...(upToSeq !== undefined ? { upToSeq } : {}) }),
-      );
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path.startsWith("/api/sessions/") && path.endsWith("/approvals")) {
-      const id = decodeURIComponent(path.slice("/api/sessions/".length, -"/approvals".length));
-      const r = await coreFetch(
-        "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/approvals?viewer=${encodeURIComponent(user)}`,
-      );
-      return relay(res, r);
-    }
-
-    const bgOutput = path.match(/^\/api\/sessions\/([^/]+)\/background\/([^/]+)\/output$/);
-    if (method === "GET" && bgOutput) {
-      const id = decodeURIComponent(bgOutput[1]!);
-      const pid = decodeURIComponent(bgOutput[2]!);
-      const sinceCursor = url.searchParams.get("sinceCursor") ?? "0";
-      const r = await coreFetch(
-        "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/background/${encodeURIComponent(pid)}/output?viewer=${encodeURIComponent(user)}&sinceCursor=${encodeURIComponent(sinceCursor)}`,
-      );
-      return relay(res, r);
-    }
-    if (method === "GET" && path.startsWith("/api/sessions/") && path.endsWith("/background")) {
-      const id = decodeURIComponent(path.slice("/api/sessions/".length, -"/background".length));
-      const r = await coreFetch(
-        "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/background?viewer=${encodeURIComponent(user)}`,
-      );
-      return relay(res, r);
-    }
-
-    if (method === "GET" && /^\/api\/sessions\/[^/]+\/entries\/\d+$/.test(path)) {
-      const [, , , rawId, , seq] = path.split("/");
-      const id = decodeURIComponent(rawId!);
-      const r = await coreFetch(
-        "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/entries/${seq}?viewer=${encodeURIComponent(user)}`,
-      );
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path.startsWith("/api/sessions/")) {
-      const id = decodeURIComponent(path.slice("/api/sessions/".length));
-      const qs = new URLSearchParams({ viewer: user });
-      for (const p of ["tailTurns", "sinceSeq", "beforeSeq"] as const) {
-        const v = url.searchParams.get(p);
-        if (v !== null) qs.set(p, v);
-      }
-      const r = await coreFetch("GET", `/v1/sessions/${encodeURIComponent(id)}?${qs.toString()}`);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path.startsWith("/api/files/") && path.endsWith("/content")) {
-      const id = decodeURIComponent(path.slice("/api/files/".length, -"/content".length));
-      const corePath = withSourceAuthNonce(
-        `/v1/files/${encodeURIComponent(id)}/content?viewer=${encodeURIComponent(user)}`,
-        CORE_SIGNING_SECRET,
-      );
-      const portalTok = portalTokenStore.getStore();
-      const r = await fetch(`${CORE}${corePath}`, {
+  if (method === "GET" && path.startsWith("/share/")) {
+    const match = path.match(/^\/share\/(internal|external)\/([a-f0-9-]{36})(?:\/files\/([a-f0-9-]{36}))?$/);
+    if (!match) return json(res, 404, { error: "not_found" });
+    const external = match[1] === "external";
+    const user = external ? null : cookieUser(req);
+    if (!external && !user) return json(res, 401, { error: "sign in" });
+    const corePath = `/v1/${external ? "public-shares" : "shared-sessions"}/${match[2]}${match[3] ? `/files/${match[3]}` : ""}?${external ? "" : `viewer=${encodeURIComponent(user!)}&`}inline=${url.searchParams.get("inline") === "1" ? "1" : "0"}`;
+    if (match[3]) {
+      const signedPath = withSourceAuthNonce(corePath, CORE_SIGNING_SECRET);
+      const portalTok = external ? null : portalTokenStore.getStore();
+      const response = await fetch(`${CORE}${signedPath}`, {
         headers: {
-          ...signedHeaders(CORE_SIGNING_SECRET, "GET", corePath, ""),
+          ...signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
           ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
         },
         redirect: "manual",
       });
-      if (!r.ok || !r.body) {
-        res.writeHead(r.status === 404 ? 404 : 502, { "content-type": "application/json" });
-        return res.end(JSON.stringify({ error: r.status === 404 ? "not_found" : "upstream_error" }));
-      }
-      res.writeHead(200, {
-        "content-type": r.headers.get("content-type") ?? "application/octet-stream",
-        ...(r.headers.get("content-length") ? { "content-length": r.headers.get("content-length")! } : {}),
-        ...(r.headers.get("content-disposition")
-          ? { "content-disposition": r.headers.get("content-disposition")! }
-          : {}),
-        "content-security-policy": UNTRUSTED_CONTENT_SANDBOX_CSP,
+      const headers: Record<string, string> = {
+        "cache-control": "no-store",
+        "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
-      });
-      return Readable.fromWeb(r.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
-    }
-
-    if (method === "GET" && path === "/api/files") {
-      const qs = new URLSearchParams({ viewer: user });
-      const limit = url.searchParams.get("limit");
-      if (limit) qs.set("limit", limit);
-      const cursor = url.searchParams.get("cursor");
-      if (cursor) qs.set("cursor", cursor);
-      const scope = url.searchParams.get("scope");
-      if (scope) qs.set("scope", scope);
-      const r = await coreFetch("GET", `/v1/files?${qs.toString()}`);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/memory") {
-      const r = await coreFetch("GET", `/v1/memory?principalId=${encodeURIComponent(user)}`);
-      return relay(res, r);
-    }
-    if (method === "GET" && path === "/api/memory/history") {
-      const r = await coreFetch("GET", `/v1/memory/history?principalId=${encodeURIComponent(user)}`);
-      return relay(res, r);
-    }
-    if (method === "POST" && path === "/api/memory/restore") {
-      let revision = "";
-      let expectedRevision = "";
-      try {
-        const p = JSON.parse(await readBody(req)) as { revision?: unknown; expectedRevision?: unknown };
-        if (typeof p.revision === "string") revision = p.revision;
-        if (typeof p.expectedRevision === "string") expectedRevision = p.expectedRevision;
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch(
-        "POST",
-        "/v1/memory/restore",
-        JSON.stringify({ principalId: user, revision, expectedRevision }),
-      );
-      return relay(res, r);
-    }
-    if (method === "PUT" && path === "/api/memory") {
-      let content: string;
-      let revision: string;
-      try {
-        const p = JSON.parse(await readBody(req)) as { content?: unknown; revision?: unknown };
-        if (typeof p.content !== "string")
-          return json(res, 400, { error: "bad_request", message: "content must be a string" });
-        content = p.content;
-        revision =
-          typeof p.revision === "string"
-            ? p.revision
-            : await coreFetch("GET", `/v1/memory?principalId=${encodeURIComponent(user)}`).then((head) => {
-                try {
-                  return String((JSON.parse(head.text) as { revision?: unknown }).revision ?? "");
-                } catch {
-                  return "";
-                }
-              });
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch("PUT", "/v1/memory", JSON.stringify({ principalId: user, content, revision }));
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/sessions/")) {
-      const id = decodeURIComponent(path.slice("/api/sessions/".length));
-      const patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null } = {};
-      try {
-        const p = JSON.parse(await readBody(req)) as {
-          title?: unknown;
-          archived?: unknown;
-          pinned?: unknown;
-          color?: unknown;
-        };
-        if (p.title === null || typeof p.title === "string") patch.title = p.title as string | null;
-        if (typeof p.archived === "boolean") patch.archived = p.archived;
-        if (typeof p.pinned === "boolean") patch.pinned = p.pinned;
-        if (p.color === null || typeof p.color === "string") patch.color = p.color as string | null;
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      if (
-        patch.title === undefined &&
-        patch.archived === undefined &&
-        patch.pinned === undefined &&
-        patch.color === undefined
-      ) {
-        return json(res, 400, { error: "bad_request", message: "title, archived, pinned, or color required" });
-      }
-      const r = await coreFetch(
-        "POST",
-        `/v1/sessions/${encodeURIComponent(id)}`,
-        JSON.stringify({ principalId: user, ...patch }),
-      );
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/connectors") {
-      const r = await coreFetch("GET", `/v1/connectors/oauth/status?principalId=${encodeURIComponent(user)}`);
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/connectors/") && path.endsWith("/start")) {
-      const provider = path.slice("/api/connectors/".length, -"/start".length);
-      const callback = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`;
-      const params = new URLSearchParams({ principalId: user, redirectUri: callback, returnTo: "/keychain" });
-      const corePath = `/v1/connectors/oauth/${encodeURIComponent(provider)}/start?${params.toString()}`;
-      const r = await coreFetch("GET", corePath);
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path === "/api/connectors/revoke") {
-      let provider: string;
-      let host: string;
-      try {
-        const parsed = JSON.parse(await readBody(req)) as { provider?: unknown; host?: unknown };
-        provider = typeof parsed.provider === "string" ? parsed.provider : "";
-        host = typeof parsed.host === "string" ? parsed.host : "";
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      if (!provider && !host) return json(res, 400, { error: "bad_request", message: "provider or host required" });
-      const rawBody = JSON.stringify({ principalId: user, ...(provider ? { provider } : { host }) });
-      const r = await coreFetch("POST", "/v1/connectors/oauth/revoke", rawBody);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/keychain/credentials") {
-      const r = await coreFetchCap("GET", "/v1/keychain/credentials");
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/keychain/overview") {
-      const r = await coreFetchCap("GET", "/v1/keychain/overview");
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/keychain/grants/") && path.endsWith("/revoke")) {
-      const id = decodeURIComponent(path.slice("/api/keychain/grants/".length, -"/revoke".length));
-      const r = await coreFetchCap("POST", `/v1/keychain/grants/${encodeURIComponent(id)}/revoke`, "{}");
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path === "/api/keychain/drops") {
-      let draft: { service?: string; purpose?: string; envKey?: string };
-      try {
-        const p = JSON.parse(await readBody(req)) as { service?: unknown; purpose?: unknown; envKey?: unknown };
-        draft = {
-          ...(typeof p.service === "string" ? { service: p.service } : {}),
-          ...(typeof p.purpose === "string" ? { purpose: p.purpose } : {}),
-          ...(typeof p.envKey === "string" ? { envKey: p.envKey } : {}),
-        };
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetchCap("POST", "/v1/keychain/drops", JSON.stringify(draft));
-      return relay(res, r);
-    }
-
-    if (method === "DELETE" && path.startsWith("/api/keychain/credentials/")) {
-      const id = decodeURIComponent(path.slice("/api/keychain/credentials/".length));
-      if (!id) return json(res, 400, { error: "bad_request", message: "credential id required" });
-      const r = await coreFetchCap("DELETE", `/v1/keychain/credentials/${encodeURIComponent(id)}`);
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path.startsWith("/api/deployments/") && path.endsWith("/owner-url")) {
-      const id = decodeURIComponent(path.slice("/api/deployments/".length, -"/owner-url".length));
-      if (!id || id.includes("/")) return json(res, 404, { error: "not_found" });
-      const r = await coreFetch(
-        "GET",
-        `/v1/deployments/${encodeURIComponent(id)}/owner-url?principalId=${encodeURIComponent(user)}`,
-      );
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path === "/api/deployments") {
-      const r = await coreFetch("GET", `/v1/deployments?principalId=${encodeURIComponent(user)}`);
-      if (r.status !== 200) {
-        return relay(res, r);
-      }
-      let deployments: Array<Record<string, unknown>>;
-      try {
-        const parsed = JSON.parse(r.text) as { deployments?: Array<Record<string, unknown>> };
-        deployments = parsed.deployments ?? [];
-      } catch {
-        return json(res, 502, { error: "bad_core_response" });
-      }
-      return json(res, 200, {
-        deployments: deployments.map((d) => ({ ...d, webUrl: `/deployments/${encodeURIComponent(String(d.id))}/` })),
-      });
-    }
-
-    if (method === "GET" && path.startsWith("/api/deployments/")) {
-      const id = decodeURIComponent(path.slice("/api/deployments/".length));
-      if (!id || id.includes("/")) return json(res, 404, { error: "not_found" });
-      const r = await coreFetch(
-        "GET",
-        `/v1/deployments/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
-      );
-      if (r.status !== 200) return relay(res, r);
-      try {
-        const parsed = JSON.parse(r.text) as { deployment?: Record<string, unknown> };
-        if (!parsed.deployment) return json(res, 502, { error: "bad_core_response" });
-        return json(res, 200, {
-          deployment: {
-            ...parsed.deployment,
-            webUrl: `/deployments/${encodeURIComponent(String(parsed.deployment.id))}/`,
-          },
-        });
-      } catch {
-        return json(res, 502, { error: "bad_core_response" });
-      }
-    }
-
-    if (method === "POST" && path.startsWith("/api/deployments/") && path.endsWith("/display-name")) {
-      const id = decodeURIComponent(path.slice("/api/deployments/".length, -"/display-name".length));
-      if (!(await gateManageDeployment(res, user, id))) return;
-      let displayName: string;
-      try {
-        displayName = String((JSON.parse(await readBody(req)) as { displayName?: unknown }).displayName ?? "");
-      } catch {
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch(
-        "POST",
-        `/v1/deployments/${encodeURIComponent(id)}/display-name`,
-        JSON.stringify({ displayName }),
-      );
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/deployments/") && path.endsWith("/name")) {
-      const id = decodeURIComponent(path.slice("/api/deployments/".length, -"/name".length));
-      if (!(await gateManageDeployment(res, user, id))) return;
-      let name: string;
-      try {
-        name = String((JSON.parse(await readBody(req)) as { name?: unknown }).name ?? "");
-      } catch {
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch("POST", `/v1/deployments/${encodeURIComponent(id)}/name`, JSON.stringify({ name }));
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/deployments/") && path.endsWith("/archive")) {
-      const id = decodeURIComponent(path.slice("/api/deployments/".length, -"/archive".length));
-      if (!(await gateManageDeployment(res, user, id))) return;
-      const r = await coreFetch("POST", `/v1/deployments/${encodeURIComponent(id)}/archive`);
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/deployments/") && path.endsWith("/restore")) {
-      const id = decodeURIComponent(path.slice("/api/deployments/".length, -"/restore".length));
-      if (!(await gateManageDeployment(res, user, id))) return;
-      const r = await coreFetch(
-        "POST",
-        `/v1/deployments/${encodeURIComponent(id)}/restore`,
-        JSON.stringify({ principalId: user }),
-      );
-      return relay(res, r);
-    }
-
-    if (method === "POST" && path.startsWith("/api/approvals/")) {
-      const requestId = decodeURIComponent(path.slice("/api/approvals/".length));
-      if (!requestId || requestId.includes("/")) return json(res, 404, { error: "not_found" });
-      let approved = false;
-      let scope: "once" | "session" | "always" | undefined;
-      try {
-        const p = JSON.parse(await readBody(req)) as { approved?: unknown; scope?: unknown };
-        approved = p.approved === true;
-        if (p.scope === "once" || p.scope === "session" || p.scope === "always") scope = p.scope;
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-      }
-
-      const fetched = await coreFetch("GET", `/v1/approvals/${encodeURIComponent(requestId)}`);
-      if (fetched.status !== 200) {
-        res.writeHead(fetched.status, { "content-type": "application/json" });
-        return res.end(fetched.text);
-      }
-      let record: CoreApprovalRecord;
-      try {
-        record = JSON.parse(fetched.text) as CoreApprovalRecord;
-      } catch {
-        return json(res, 502, { error: "bad_core_response" });
-      }
-      const threadRef =
-        typeof record.request?.conversation?.threadRef === "string" ? record.request.conversation.threadRef : "";
-      const actor = typeof record.request?.actor?.externalId === "string" ? record.request.actor.externalId : "";
-      if (!threadRef.startsWith("web:") || actor !== user || !record.request) {
-        return json(res, 404, { error: "not_found" });
-      }
-      if (!threadRef.startsWith(`web:${user}:`)) {
-        const sessionId = typeof record.sessionId === "string" ? record.sessionId : "";
-        const visible = sessionId
-          ? await coreFetch(
-              "GET",
-              `/v1/sessions/${encodeURIComponent(sessionId)}?viewer=${encodeURIComponent(user)}&tailTurns=1`,
-            )
-          : null;
-        if (visible?.status !== 200) return json(res, 404, { error: "not_found" });
-      }
-
-      const approval = { requestId, approved, ...(scope ? { scope } : {}) };
-      return postTurnAndMint(res, { ...record.request, approval }, user, threadRef);
-    }
-
-    if (method === "POST" && path === "/api/turn") {
-      const ownPrefix = `web:${user}:`;
-      let text = "";
-      let threadRef = `${ownPrefix}default`;
-      let model: string | undefined;
-      let harness: string | undefined;
-      let thinkingLevel: string | undefined;
-      let fastMode: boolean | undefined;
-      let timezone: string | undefined;
-      let scope: string | undefined;
-      let channelName: string | undefined;
-      const attachments: CoreAttachment[] = [];
-      let approval: { requestId: string; approved: boolean; scope?: string } | undefined;
-      let proactiveOpener = false;
-      try {
-        const p = JSON.parse(await readBody(req));
-        text = String(p.text ?? "");
-        if (p.proactiveOpener === true) proactiveOpener = true;
-        if (p.approval && typeof p.approval.requestId === "string" && typeof p.approval.approved === "boolean") {
-          approval = {
-            requestId: p.approval.requestId,
-            approved: p.approval.approved,
-            ...(p.approval.scope === "once" || p.approval.scope === "session" || p.approval.scope === "always"
-              ? { scope: p.approval.scope }
-              : {}),
-          };
-        }
-        if (typeof p.threadRef === "string" && p.threadRef.startsWith("web:")) threadRef = p.threadRef;
-        if (typeof p.scopeId === "string" && p.scopeId) scope = p.scopeId;
-        if (typeof p.channelName === "string" && p.channelName.trim()) channelName = p.channelName.trim().slice(0, 200);
-        if (typeof p.model === "string" && p.model) model = p.model;
-        if (typeof p.harness === "string") harness = p.harness;
-        if (typeof p.thinkingLevel === "string") thinkingLevel = p.thinkingLevel;
-        if (typeof p.fastMode === "boolean") fastMode = p.fastMode;
-        if (typeof p.timezone === "string" && p.timezone.trim()) timezone = p.timezone.trim().slice(0, 64);
-        if (Array.isArray(p.attachments)) {
-          for (const raw of p.attachments as unknown[]) {
-            if (!raw || typeof raw !== "object") continue;
-            const a = raw as { name?: unknown; mimetype?: unknown; sizeBytes?: unknown; blobId?: unknown };
-            if (typeof a.name !== "string" || typeof a.blobId !== "string" || !a.blobId) continue;
-            attachments.push({
-              name: a.name,
-              mimetype: typeof a.mimetype === "string" && a.mimetype ? a.mimetype : "application/octet-stream",
-              sizeBytes: typeof a.sizeBytes === "number" ? a.sizeBytes : 0,
-              blobId: a.blobId,
-            });
-          }
-        }
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-      }
-      if (!text.trim() && attachments.length === 0 && !approval && !proactiveOpener)
-        return json(res, 400, { error: "empty message" });
-
-      if (!threadRef.startsWith(ownPrefix) && !(scope?.startsWith("channel:") || scope?.startsWith("group:"))) {
-        return json(res, 403, {
-          error: "forbidden_thread",
-          message: "this conversation can only be continued from its own context",
-        });
-      }
-
-      const conversation = conversationForScope(user, threadRef, scope, channelName);
-      if (!conversation) {
-        return json(res, 403, {
-          error: "forbidden_scope",
-          message: "you can only chat in your personal context or a shared context you're in",
-        });
-      }
-
-      const displayName = resolveIdentity(req)?.name ?? null;
-      const turn = {
-        surface: "web",
-        actor: { externalId: user, ...(displayName ? { displayName } : {}) },
-        conversation,
-        liveActor: true,
-        deliveryTarget: threadRef,
-        text,
-        ...(harness ? { harness } : {}),
-        ...(model ? { model } : {}),
-        ...(thinkingLevel ? { thinkingLevel } : {}),
-        ...(typeof fastMode === "boolean" ? { fastMode } : {}),
-        ...(timezone ? { timezone } : {}),
-        ...(attachments.length ? { attachments } : {}),
-        ...(approval ? { approval } : {}),
-        ...(proactiveOpener ? { proactiveOpener: true } : {}),
+        "content-security-policy": "default-src 'none'; sandbox",
       };
-      return postTurnAndMint(res, turn, user, threadRef);
+      for (const name of ["content-type", "content-length", "content-disposition"]) {
+        const value = response.headers.get(name);
+        if (value) headers[name] = value;
+      }
+      res.writeHead(response.status, headers);
+      if (!response.body) return res.end();
+      const stream = Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]);
+      res.on("close", () => stream.destroy());
+      stream.on("error", () => res.destroy());
+      return stream.pipe(res);
     }
+    const result = await coreFetch("GET", corePath);
+    const dev = vite && !external;
+    const template = dev
+      ? await vite!.transformIndexHtml("/shared.html", readFileSync(join(ROOT, "shared.html"), "utf8"))
+      : readFileSync(join(DIST, "shared.html"), "utf8");
+    res.writeHead(result.status, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+      "X-Robots-Tag": "noindex, nofollow",
+      "Content-Security-Policy": `default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src ${dev ? "ws: wss:" : "'none'"}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
+    });
+    return res.end(
+      sharedSessionHtml(await brandIndexHtml(template), result.status === 200 ? JSON.parse(result.text) : null),
+    );
+  }
 
-    if (method === "GET" && path === "/api/deliveries/events") {
-      res.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        connection: "keep-alive",
-        "x-accel-buffering": "no",
-      });
-      res.write(": open\n\n");
-      let set = deliveryClients.get(user);
-      if (!set) {
-        set = new Set();
-        deliveryClients.set(user, set);
-      }
-      set.add(res);
-      const beat = setInterval(() => res.write(": ping\n\n"), SSE_HEARTBEAT_MS);
-      beat.unref?.();
-      req.on("close", () => {
-        clearInterval(beat);
-        const s = deliveryClients.get(user);
-        if (s) {
-          s.delete(res);
-          if (!s.size) deliveryClients.delete(user);
-        }
-      });
-      return;
+  if (path === "/me" || path.startsWith("/api/")) {
+    const user = cookieUser(req);
+    if (!user) return unauthorized(res, req);
+    const inboxPath = path === "/api/inbox" || path.startsWith("/api/inbox/");
+    const loopsPath = path === "/api/loops" || path.startsWith("/api/loops/");
+    if ((inboxPath || loopsPath) && !(await hasInboxLoopPreview(user)))
+      return json(res, 403, { error: "feature_disabled" });
+    if (inboxPath && !isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+    const ledgerPath =
+      /^\/api\/loops\/[^/]+\/items(\/|$)/.test(path) || /^\/api\/loops\/[^/]+\/outputs\/[^/]+\/decide$/.test(path);
+    if (loopsPath && !isLoopsUser(user) && !(ledgerPath && isInboxUser(user))) {
+      return json(res, 403, { error: "forbidden" });
     }
-
-    if (method === "GET" && path === "/api/runs/active") {
-      const threadRef = url.searchParams.get("threadRef") ?? "";
-      if (!threadRef.startsWith("web:")) return json(res, 404, { error: "not_found" });
-      const tryRun = async (runId: string, ownedByUser = true): Promise<boolean> => {
-        const r = await coreFetch("GET", `/v1/runs/${encodeURIComponent(runId)}`);
-        if (r.status < 200 || r.status >= 300) {
-          if (ownedByUser) forgetRun(runId);
-          return false;
-        }
-        let run: { status?: string };
-        try {
-          run = JSON.parse(r.text) as { status?: string };
-        } catch {
-          json(res, 502, { error: "bad_core_response" });
-          return true;
-        }
-        if (run.status === "done" || run.status === "failed") {
-          forgetRun(runId);
-          return false;
-        }
-        rememberRun(runId, user, threadRef);
-        json(res, 200, { runId, run });
-        return true;
-      };
-      for (const runId of Array.from(activeRunsByThread.get(threadKey(user, threadRef)) ?? [])) {
-        if (await tryRun(runId)) return;
-      }
-      const d = await coreFetch("GET", `/v1/runs?threadRef=${encodeURIComponent(threadRef)}`);
-      if (d.status >= 200 && d.status < 300) {
-        let runId: string | null = null;
-        try {
-          runId = (JSON.parse(d.text) as { runId?: string | null }).runId ?? null;
-        } catch {
-          void 0;
-        }
-        if (runId && (await tryRun(runId, false))) return;
-      }
-      json(res, 200, { runId: null, run: null });
-      return;
-    }
-
-    if (method === "POST" && path.startsWith("/api/runs/") && path.endsWith("/signal")) {
-      const id = decodeURIComponent(path.slice("/api/runs/".length, -"/signal".length));
-      let kind = "";
-      let text: string | undefined;
-      try {
-        const p = JSON.parse(await readBody(req)) as { kind?: unknown; text?: unknown };
-        if (typeof p.kind === "string") kind = p.kind;
-        if (typeof p.text === "string") text = p.text;
-      } catch (e) {
-        if (e instanceof PayloadTooLargeError) throw e;
-        return json(res, 400, { error: "bad_request" });
-      }
-      const r = await coreFetch(
-        "POST",
-        `/v1/runs/${encodeURIComponent(id)}/signal`,
-        JSON.stringify({ kind, ...(text !== undefined ? { text } : {}) }),
-      );
-      return relay(res, r);
-    }
-
-    if (method === "GET" && path.startsWith("/api/runs/") && path.endsWith("/events")) {
-      const id = decodeURIComponent(path.slice("/api/runs/".length, -"/events".length));
-      let closed = false;
-      req.on("close", () => {
-        closed = true;
-      });
-      if (!ownsRun(id, user)) {
-        const auth = await coreFetch("GET", `/v1/runs/${encodeURIComponent(id)}`);
-        if (auth.status < 200 || auth.status >= 300)
-          return json(res, auth.status === 404 ? 404 : 502, {
-            error: auth.status === 404 ? "not_found" : "upstream_error",
-          });
-      }
-      if (closed) return;
-      res.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        connection: "keep-alive",
-        "x-accel-buffering": "no",
-      });
-      res.write(": open\n\n");
-      let acc = "";
-      let activityLen = 0;
-      let lastStale: boolean | null = null;
-      let staleSince: number | null = null;
-      let lastProgressAt = Date.now();
-      let lastBeat = lastProgressAt;
-      for (;;) {
-        if (closed) return;
-        let r: { status: number; text: string };
-        try {
-          r = await coreFetch("GET", `/v1/runs/${encodeURIComponent(id)}`);
-        } catch {
-          try {
-            r = await coreFetch("GET", `/v1/runs/${encodeURIComponent(id)}`);
-          } catch {
-            sseEvent(res, "failed", { reason: "upstream_unreachable" });
-            break;
-          }
-        }
-        if (closed) return;
-        if (r.status < 200 || r.status >= 300) {
-          sseEvent(res, "failed", { reason: `HTTP ${r.status}` });
-          break;
-        }
-        let run: {
-          status?: string;
-          result?: unknown;
-          partial?: string;
-          alive?: boolean;
-          stale?: boolean;
-          replyComplete?: boolean;
-          activity?: unknown[];
-          startedAt?: number | null;
-          finishedAt?: number | null;
-        } = {};
-        let parsed = true;
-        try {
-          run = JSON.parse(r.text);
-        } catch {
-          parsed = false;
-        }
-        const now = Date.now();
-        const partial = typeof run.partial === "string" ? run.partial : "";
-        const activity = Array.isArray(run.activity) ? run.activity : [];
-        if (partial.length > acc.length) {
-          acc = partial;
-          sseEvent(res, "partial", { partial: acc });
-          lastProgressAt = now;
-          lastBeat = now;
-        }
-        if (activity.length > activityLen) {
-          activityLen = activity.length;
-          sseEvent(res, "activity", { activity, startedAt: run.startedAt ?? null });
-          lastProgressAt = now;
-          lastBeat = now;
-        }
-        if (parsed) {
-          if (run.stale === true) staleSince ??= now;
-          else staleSince = null;
-          if ((run.stale === true) !== lastStale) {
-            lastStale = run.stale === true;
-            sseEvent(res, "stale", { stale: lastStale });
-            lastBeat = now;
-          }
-        }
-        if (now - lastBeat > SSE_HEARTBEAT_MS) {
-          if (run.alive === true) sseEvent(res, "alive", { at: now });
-          else if (lastStale === true) sseEvent(res, "stale", { stale: true });
-          else res.write(": ping\n\n");
-          lastBeat = now;
-        }
-        if (run.alive === true || (staleSince !== null && now - staleSince < SSE_STALE_GRACE_MS)) lastProgressAt = now;
-        const terminal = run.status === "done" || run.status === "failed" || run.result != null;
-        if (terminal || run.replyComplete) {
-          forgetRun(id);
-          sseEvent(res, "done", {
-            status: run.status ?? null,
-            result: run.result ?? null,
-            partial: acc,
-            activity,
-            replyComplete: run.replyComplete ?? false,
-            startedAt: run.startedAt ?? null,
-            finishedAt: run.finishedAt ?? null,
-          });
-          break;
-        }
-        if (now - lastProgressAt > SSE_IDLE_MS) break;
-        await sleep(lastStale === true ? SSE_STALE_POLL_MS : SSE_CORE_POLL_MS);
-      }
-      if (!closed) res.end();
-      return;
-    }
-
-    if (method === "GET" && path.startsWith("/api/runs/")) {
-      const id = decodeURIComponent(path.slice("/api/runs/".length));
-      const r = await coreFetch("GET", `/v1/runs/${encodeURIComponent(id)}`);
-      try {
-        const s = (JSON.parse(r.text) as { status?: string }).status;
-        if (s === "done" || s === "failed") forgetRun(id);
-      } catch {
-        void 0;
-      }
-      return relay(res, r);
-    }
-
-    if (path === "/api/crons" || path.startsWith("/api/crons/")) {
-      if (method === "GET" && path === "/api/crons") {
-        const r = await coreFetch("GET", `/v1/crons?viewer=${encodeURIComponent(user)}`);
-        if (r.status < 200 || r.status >= 300) {
-          return relay(res, r);
-        }
-        let crons: CoreCron[] = [];
-        let visible: CoreCron[] = [];
-        try {
-          const parsed = JSON.parse(r.text) as { crons?: CoreCron[]; visible?: CoreCron[] };
-          crons = parsed.crons ?? [];
-          visible = parsed.visible ?? [];
-        } catch {
-          void 0;
-        }
-        return json(res, 200, { crons, visible });
-      }
-
-      if (method === "GET" && path.startsWith("/api/crons/") && path.endsWith("/runs")) {
-        const id = decodeURIComponent(path.slice("/api/crons/".length, -"/runs".length));
-        return relay(
-          res,
-          await coreFetch(
-            "GET",
-            `/v1/crons/${encodeURIComponent(id)}/runs?principalId=${encodeURIComponent(user)}&limit=20`,
-          ),
-        );
-      }
-
-      if (method === "PATCH" && path.startsWith("/api/crons/") && !path.slice("/api/crons/".length).includes("/")) {
-        const id = decodeURIComponent(path.slice("/api/crons/".length));
-        let patch: { title?: string; task?: string; schedule?: unknown; enabled?: boolean; archived?: boolean } = {};
-        try {
-          const p = JSON.parse(await readBody(req)) as {
-            title?: unknown;
-            task?: unknown;
-            schedule?: unknown;
-            enabled?: unknown;
-            archived?: unknown;
-          };
-          if ("title" in p) {
-            if (typeof p.title !== "string")
-              return json(res, 400, { error: "bad_request", message: "title must be a string" });
-            patch = { ...patch, title: p.title.trim() };
-          }
-          if ("task" in p) {
-            if (typeof p.task !== "string" || !p.task.trim())
-              return json(res, 400, { error: "bad_request", message: "task must be a non-empty string" });
-            patch = { ...patch, task: p.task.trim() };
-          }
-          if ("schedule" in p) patch = { ...patch, schedule: p.schedule };
-          if ("enabled" in p) {
-            if (typeof p.enabled !== "boolean")
-              return json(res, 400, { error: "bad_request", message: "enabled must be a boolean" });
-            patch = { ...patch, enabled: p.enabled };
-          }
-          if ("archived" in p) {
-            if (typeof p.archived !== "boolean")
-              return json(res, 400, { error: "bad_request", message: "archived must be a boolean" });
-            patch = { ...patch, archived: p.archived };
-          }
-        } catch (e) {
-          if (e instanceof PayloadTooLargeError) throw e;
-          return json(res, 400, { error: "bad_request", message: "expected JSON body" });
-        }
-        if (Object.keys(patch).length === 0)
-          return json(res, 400, {
-            error: "bad_request",
-            message: "expected title, task, schedule, enabled, or archived",
-          });
-        if (patch.archived === true) patch = { ...patch, enabled: false };
-        const r = await coreFetch(
-          "PATCH",
-          `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
-          JSON.stringify(patch),
-        );
-        return relay(res, r);
-      }
-
-      if (method === "POST" && path.endsWith("/disable")) {
-        const id = decodeURIComponent(path.slice("/api/crons/".length, -"/disable".length));
-        const r = await coreFetch(
-          "POST",
-          `/v1/crons/${encodeURIComponent(id)}/disable?principalId=${encodeURIComponent(user)}`,
-        );
-        return relay(res, r);
-      }
-
-      if (method === "POST" && path.endsWith("/enable")) {
-        const id = decodeURIComponent(path.slice("/api/crons/".length, -"/enable".length));
-        const r = await coreFetch(
-          "PATCH",
-          `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
-          JSON.stringify({ enabled: true, archived: false }),
-        );
-        return relay(res, r);
-      }
-
-      if (method === "POST" && path.endsWith("/run")) {
-        const id = decodeURIComponent(path.slice("/api/crons/".length, -"/run".length));
-        const r = await coreFetch(
-          "POST",
-          `/v1/crons/${encodeURIComponent(id)}/run?principalId=${encodeURIComponent(user)}`,
-        );
-        return relay(res, r);
-      }
-
-      if (method === "DELETE" && path.startsWith("/api/crons/") && !path.slice("/api/crons/".length).includes("/")) {
-        const id = decodeURIComponent(path.slice("/api/crons/".length));
-        const r = await coreFetch(
-          "DELETE",
-          `/v1/crons/${encodeURIComponent(id)}?principalId=${encodeURIComponent(user)}`,
-        );
-        return relay(res, r);
-      }
-
-      return json(res, 404, { error: "not found" });
-    }
-
-    return json(res, 404, { error: "not found" });
+    const found = findRoute(apiRoutes, method, path);
+    if (!found) return json(res, 404, { error: "not found" });
+    return found.route.handle({ req, res, url, user, params: found.params });
   }
 
   if (method === "GET" && path.startsWith("/deployments/")) {
@@ -1890,6 +3262,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   if (method === "GET" && path === "/app-edit" && (await serveAppEditHtml(req, res, url))) return;
 
   if (method === "GET") {
+    if (path.startsWith("/assets/")) return await serveStatic(res, path);
     if (await serveVite(req, res, path)) return;
     return await serveStatic(res, path === "/" ? "/index.html" : path);
   }
@@ -1897,7 +3270,23 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   json(res, 404, { error: "not found" });
 };
 
+let adminModule: Promise<typeof import("../../admin/src/index.ts")> | undefined;
+
 export const handler = async (req: IncomingMessage, res: ServerResponse) => {
+  const originalUrl = req.url ?? "/";
+  const path = originalUrl.split("?")[0]!;
+  if (process.env.ADMIN_ENABLED !== "0" && (path === "/admin" || path.startsWith("/admin/"))) {
+    req.url = originalUrl.slice("/admin".length) || "/";
+    if (req.url.startsWith("?")) req.url = `/${req.url}`;
+    try {
+      process.env.ADMIN_BASE_PATH ??= "/admin";
+      adminModule ??= import("../../admin/src/index.ts");
+      await (await adminModule).handler(req, res);
+    } finally {
+      req.url = originalUrl;
+    }
+    return;
+  }
   res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("x-content-type-options", "nosniff");
@@ -1918,7 +3307,8 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
 
 const server = createServer((req, res) => {
   void handler(req, res).catch((err: unknown) => {
-    console.error(`[web-ui] 502 ${req.method ?? "?"} ${req.url ?? "?"}:`, err);
+    reportBackendError(err);
+    console.error("%s", `[web-ui] 502 ${req.method ?? "?"} ${req.url ?? "?"}:`, String(err));
     if (!res.headersSent) json(res, 502, { error: "bad_gateway", message: "upstream error" });
     else res.end();
   });
@@ -1933,16 +3323,19 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
           `[web-ui] surface on http://localhost:${PORT} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
         );
         if (!WEB_UI_DEV && !existsSync(join(DIST, "index.html")))
-          console.warn("[web-ui] dist-web/ not built — run `npm run build`");
-        if (COOKIE_AUTH && ALLOW.length === 0)
-          console.warn("[web-ui] WEB_UI_PRINCIPALS unset — any principal id may sign in (dev only)");
+          console.warn("[web-ui] dist-web/ not built, run `npm run build`");
+        if (ALLOW.length === 0)
+          console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
         const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
         t.unref?.();
         void runStateFeed();
+        void runInboxFeed();
       });
     })
-    .catch((err: unknown) => {
-      console.error("[web-ui] failed to start:", err);
+    .catch(async (err: unknown) => {
+      reportBackendError(err);
+      console.error("[web-ui] failed to start:", String(err));
+      await flushErrorReporting();
       process.exit(1);
     });
 }

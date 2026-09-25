@@ -11,7 +11,35 @@ export const isVirtualService = (s: string): s is VirtualServiceName =>
   (VIRTUAL_SERVICE_NAMES as readonly string[]).includes(s);
 export const isDeclaredService = (s: string): s is DeclaredServiceName => isServiceName(s) || isVirtualService(s);
 
-export const runnableServices = (names: readonly DeclaredServiceName[]): ServiceName[] => names.filter(isServiceName);
+export function serviceHost(name: string): string {
+  if (name === "admin") return "web-ui";
+  if (name === "auth") return "portal";
+  if (name === "slack") return "core";
+  return name;
+}
+
+export const runnableServices = (names: readonly DeclaredServiceName[]): ServiceName[] =>
+  [...new Set(names.map(serviceHost))].filter(isServiceName);
+
+export function hostedServiceEnv(
+  services: readonly DeclaredServiceName[],
+  env: Partial<Record<DeclaredServiceName, Record<string, string>>>,
+  host: string,
+): Record<string, string> {
+  if (host === "core" || serviceHost(host) !== host) return { ...env[host as DeclaredServiceName] };
+  const out: Record<string, string> =
+    host === "web-ui" ? { ADMIN_ENABLED: services.includes("admin") ? "1" : "0" } : {};
+  for (const service of services.filter((name) => serviceHost(name) === host)) {
+    for (const [name, value] of Object.entries(env[service] ?? {})) {
+      if (name === "PORT") continue;
+      if (out[name] !== undefined && out[name] !== value) {
+        throw new Error(`Conflicting ${name} settings in services hosted by ${host}`);
+      }
+      out[name] = value;
+    }
+  }
+  return out;
+}
 
 export function virtualServiceEnv(
   services: readonly DeclaredServiceName[],
@@ -38,7 +66,7 @@ export interface LogOpts {
   tail?: number;
 }
 
-export interface FlyServiceCtx {
+export interface ServiceCtx {
   appPrefix: string;
   orgId: string;
   deployAppPrefix: string;
@@ -46,10 +74,15 @@ export interface FlyServiceCtx {
   hasPortal: boolean;
   hasAuth: boolean;
   authAllowedEmailDomain?: string;
+  brand?: BrandEnv;
+  /** Provider-supplied internal URL other services use to reach core. */
+  coreUrl: string;
+  /** Provider-supplied internal base URL of the auth service. */
+  authUrl: string;
 }
 
 interface FlyServiceSpec {
-  managed: (s: FlyServiceCtx) => Record<string, string>;
+  managed: (s: ServiceCtx) => Record<string, string>;
   stackKeys: string[];
   deployFlags: string[];
   flycast?: boolean;
@@ -74,14 +107,40 @@ export interface ServiceDef {
   fly?: FlyServiceSpec;
 }
 
-export function orgEnv(service: string, orgId: string, publicUrl: string, hasPortal: boolean): Record<string, string> {
+export interface BrandEnv {
+  botName?: string;
+  orgName?: string;
+}
+
+export const brandEnvOf = (c: { botName?: string; orgName?: string }): BrandEnv | undefined =>
+  c.botName || c.orgName
+    ? { ...(c.botName ? { botName: c.botName } : {}), ...(c.orgName ? { orgName: c.orgName } : {}) }
+    : undefined;
+
+export function orgEnv(
+  service: string,
+  orgId: string,
+  publicUrl: string,
+  hasPortal: boolean,
+  brand?: BrandEnv,
+): Record<string, string> {
   const base = publicUrl.replace(/\/$/, "");
   const identity: Record<string, string> = service === "core" ? { ORG_ID: orgId } : { CORE_ORG_ID: orgId };
   const webUiUrl = base;
-  if (service === "core") return { ...identity, PUBLIC_WEB_URL: base, WEB_UI_PUBLIC_URL: webUiUrl };
-  if (service === "web-ui") return { ...identity, WEB_UI_PUBLIC_URL: webUiUrl };
-  if (service === "portal") return { ...identity, PORTAL_PUBLIC_URL: base };
+  if (service === "core") {
+    return {
+      ...identity,
+      PUBLIC_WEB_URL: base,
+      WEB_UI_PUBLIC_URL: webUiUrl,
+      ...(brand?.botName ? { ORG_BRAND_SELF_LABEL: brand.botName } : {}),
+      ...(brand?.orgName ? { ORG_BRAND_ORG_NAME: brand.orgName } : {}),
+    };
+  }
+  if (service === "web-ui") return { ...identity, WEB_UI_PUBLIC_URL: webUiUrl, ADMIN_BASE_PATH: "/admin" };
+  if (service === "portal")
+    return { ...identity, PORTAL_PUBLIC_URL: base, ...(brand?.botName ? { AUTH_BRAND_NAME: brand.botName } : {}) };
   if (service === "admin" && hasPortal) return { ...identity, ADMIN_BASE_PATH: "/admin" };
+  if (service === "auth") return { ...identity, ...(brand?.botName ? { AUTH_BRAND_NAME: brand.botName } : {}) };
   return identity;
 }
 
@@ -107,23 +166,27 @@ export function brokerWiring(
   o: { publicUrl: string; authBaseUrl: string; allowedEmailDomain?: string },
 ): Record<string, string> {
   const base = o.publicUrl.replace(/\/$/, "");
-  const internal = o.authBaseUrl.replace(/\/$/, "");
   const issuer = `${base}${AUTH_PATH_PREFIX}`;
   if (service === "portal") {
     return {
-      AUTH_BROKER_UPSTREAM: internal,
+      AUTH_BROKER_UPSTREAM: "http://127.0.0.1:8099",
+      AUTH_EMBEDDED: "1",
+      AUTH_ISSUER: issuer,
+      AUTH_CLIENT_ID,
+      AUTH_REDIRECT_URI: `${base}/auth/callback`,
       AUTH_BROKER_PREFIX: AUTH_PATH_PREFIX,
       OIDC_CLIENT_ID: AUTH_CLIENT_ID,
       OIDC_ISSUER: issuer,
       OIDC_AUTH_ENDPOINT: `${issuer}/authorize`,
-      OIDC_TOKEN_ENDPOINT: `${internal}/token`,
-      OIDC_USERINFO_ENDPOINT: `${internal}/userinfo`,
-      OIDC_JWKS_URI: `${internal}/.well-known/jwks.json`,
+      OIDC_TOKEN_ENDPOINT: "http://127.0.0.1:8099/token",
+      OIDC_USERINFO_ENDPOINT: "http://127.0.0.1:8099/userinfo",
+      OIDC_JWKS_URI: "http://127.0.0.1:8099/.well-known/jwks.json",
       OIDC_SCOPES: "openid email",
       OIDC_PRINCIPAL_CLAIM: "email",
       ...(o.allowedEmailDomain ? { OIDC_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain } : {}),
     };
   }
+  if (service === "core") return o.allowedEmailDomain ? { AUTH_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain } : {};
   if (service === "auth") {
     return {
       AUTH_ISSUER: issuer,
@@ -134,19 +197,19 @@ export function brokerWiring(
   return {};
 }
 
-const flyCoreUrl = (s: FlyServiceCtx): string => `http://${s.appPrefix}-core.internal:8080`;
-const flyAuthUrl = (s: FlyServiceCtx): string => `http://${s.appPrefix}-auth.flycast`;
-
-const pluginWiring = (service: string, s: FlyServiceCtx): Record<string, string> => ({
-  CORE_API_URL: flyCoreUrl(s),
-  ...orgEnv(service, s.orgId, s.publicUrl, s.hasPortal),
-  ...(s.hasAuth
+const brokerEnv = (service: string, s: ServiceCtx): Record<string, string> =>
+  s.hasAuth
     ? brokerWiring(service, {
         publicUrl: s.publicUrl,
-        authBaseUrl: flyAuthUrl(s),
+        authBaseUrl: s.authUrl,
         ...(s.authAllowedEmailDomain ? { allowedEmailDomain: s.authAllowedEmailDomain } : {}),
       })
-    : {}),
+    : {};
+
+const pluginWiring = (service: string, s: ServiceCtx): Record<string, string> => ({
+  CORE_API_URL: s.coreUrl,
+  ...orgEnv(service, s.orgId, s.publicUrl, s.hasPortal, s.brand),
+  ...brokerEnv(service, s),
 });
 
 const CATALOG: Record<ServiceName, ServiceDef> = {
@@ -158,7 +221,8 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
     docker: { image: "core", internalPort: 8080, portEnv: "PORT", hostPortOffset: 0 },
     fly: {
       managed: (s) => ({
-        ...orgEnv("core", s.orgId, s.publicUrl, s.hasPortal),
+        ...orgEnv("core", s.orgId, s.publicUrl, s.hasPortal, s.brand),
+        ...brokerEnv("core", s),
         FLY_DEPLOY_APP_PREFIX: s.deployAppPrefix,
       }),
       stackKeys: [
@@ -168,7 +232,6 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
         "S3_REGION",
         "PUBLIC_WEB_URL",
         "FLY_ORG",
-        "FLY_DEPLOY_BASE_IMAGE",
         "PI_DETECT_MODEL",
       ],
       deployFlags: ["--ha=false"],
@@ -214,7 +277,7 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
       managed: (s) => ({
         ...pluginWiring("portal", s),
         WEB_UI_UPSTREAM: `http://${s.appPrefix}-web-ui.flycast`,
-        ADMIN_UPSTREAM: `http://${s.appPrefix}-admin.internal:8080`,
+        ADMIN_UPSTREAM: `http://${s.appPrefix}-web-ui.flycast/admin`,
       }),
       stackKeys: [
         "PORTAL_PUBLIC_URL",
@@ -229,6 +292,7 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
         "OIDC_JWKS_URI",
         "OIDC_SCOPES",
         "OIDC_PRINCIPAL_CLAIM",
+        "OIDC_PROMPT",
         "AUTH_BROKER_UPSTREAM",
         "AUTH_BROKER_PREFIX",
       ],

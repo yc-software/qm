@@ -1,4 +1,4 @@
 interface:
   display_name: "Update QM"
-  short_description: "Merge upstream qm into this private fork"
-  default_prompt: "Use $update-qm to sync this private fork with upstream qm and open the sync PR."
+  short_description: "Update a QM source fork or package deployment"
+  default_prompt: "Use $update-qm to update this QM source fork or package deployment and open a PR."

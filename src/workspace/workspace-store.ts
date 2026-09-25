@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, readdir, rm } from "node:fs/promises";
+import { mkdir, readFile, writeFile, readdir, opendir, rm } from "node:fs/promises";
 import { join, resolve, relative, isAbsolute, dirname } from "node:path";
 import type { ScopeId } from "../types.ts";
 import { scopeStorageKey } from "../util/scope-storage-key.ts";
@@ -10,7 +10,7 @@ export interface WorkspaceStore {
   readBytes(scopeId: ScopeId, relPath: string): Promise<Uint8Array | null>;
   write(scopeId: ScopeId, relPath: string, data: string | Uint8Array): Promise<void>;
   remove(scopeId: ScopeId, relPath: string): Promise<void>;
-  list(scopeId: ScopeId): Promise<string[]>;
+  list(scopeId: ScopeId, opts?: { limit: number }): Promise<string[]>;
 }
 
 function safeJoin(baseDir: string, relPath: string): string {
@@ -58,8 +58,24 @@ export function createLocalWorkspaceStore(rootDir: string): WorkspaceStore {
     async remove(scopeId, relPath) {
       await rm(safeJoin(scopeDir(scopeId), relPath), { force: true });
     },
-    async list(scopeId) {
+    async list(scopeId, opts) {
       try {
+        if (opts) {
+          const limit = Math.max(0, Math.floor(opts.limit));
+          const paths: string[] = [];
+          const dirs = [scopeDir(scopeId)];
+          let inspected = 0;
+          while (dirs.length && paths.length < limit && inspected < limit * 8) {
+            const dir = dirs.shift()!;
+            for await (const entry of await opendir(dir)) {
+              if (++inspected > limit * 8 || paths.length >= limit) break;
+              const path = join(dir, entry.name);
+              if (entry.isFile()) paths.push(path);
+              else if (entry.isDirectory()) dirs.push(path);
+            }
+          }
+          return paths;
+        }
         const entries = await readdir(scopeDir(scopeId), { recursive: true, withFileTypes: true });
         return entries.filter((e) => e.isFile()).map((e) => join(e.parentPath, e.name));
       } catch {

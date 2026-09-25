@@ -1,12 +1,29 @@
 import type { Destination, Monitor, ScopeId } from "../types.ts";
 import type { MonitorStore } from "./monitor-store.ts";
-import type { ProcessRegistry } from "../processes/process-registry.ts";
+import type { ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
 
-export interface BackgroundWatchResult {
+export interface BackgroundWatchArmedResult {
   monitorId: string;
   processId: string;
   reattached: boolean;
   expiresAt: number;
+}
+
+interface BackgroundWatchCompletedResult {
+  processId: string;
+  completed: true;
+  registryStatus: ProcessStatus;
+  exitCode?: number;
+  outputTail: string;
+  cursor?: number;
+}
+
+export type BackgroundWatchResult = BackgroundWatchArmedResult | BackgroundWatchCompletedResult;
+
+export interface BackgroundOutputTail {
+  outputTail: string;
+  cursor?: number;
+  exitCode?: number;
 }
 
 export interface BackgroundUnwatchResult {
@@ -25,6 +42,33 @@ export interface MonitorBroker {
 
 const EXPIRY_GRACE_MS = 5 * 60_000;
 const MAX_PATTERN_CHARS = 256;
+const WATCH_COMPLETED_TAIL_BYTES = 4 * 1024;
+
+export async function readBackgroundOutputTail(
+  maxBytes: number,
+  readNext: (cursor: number, maxBytes: number) => Promise<{ chunks: string; cursor: number; exitCode?: number }>,
+): Promise<BackgroundOutputTail> {
+  let cursor = 0;
+  let outputTail = "";
+  let exitCode: number | undefined;
+  for (;;) {
+    const read = await readNext(cursor, maxBytes);
+    if (read.exitCode !== undefined) exitCode = read.exitCode;
+    if (read.chunks) {
+      const bytes = Buffer.from(outputTail + read.chunks);
+      outputTail =
+        bytes.length > maxBytes ? bytes.subarray(bytes.length - maxBytes).toString("utf8") : bytes.toString("utf8");
+    }
+    if (!read.chunks || read.cursor === cursor) {
+      return {
+        outputTail,
+        cursor: read.cursor,
+        ...(exitCode !== undefined ? { exitCode } : {}),
+      };
+    }
+    cursor = read.cursor;
+  }
+}
 
 export function compileMonitorPattern(pattern: string): (line: string) => boolean {
   if (!pattern || pattern.length > MAX_PATTERN_CHARS)
@@ -52,6 +96,7 @@ export function compileMonitorPattern(pattern: string): (line: string) => boolea
 export interface MonitorBrokerDeps {
   store: MonitorStore;
   registry: ProcessRegistry;
+  readOutputTail(processId: string, maxBytes: number): Promise<BackgroundOutputTail>;
   scopeId: string;
   owner: string;
   ownerScopeId: ScopeId;
@@ -69,7 +114,15 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
         throw new Error("no such background job to watch");
       }
       if (rec.status !== "running") {
-        throw new Error(`background job already ${rec.status} — nothing left to watch`);
+        const tail = await deps.readOutputTail(processId, WATCH_COMPLETED_TAIL_BYTES);
+        return {
+          processId,
+          completed: true,
+          registryStatus: rec.status,
+          ...(tail.exitCode !== undefined ? { exitCode: tail.exitCode } : {}),
+          outputTail: tail.outputTail,
+          ...(tail.cursor !== undefined ? { cursor: tail.cursor } : {}),
+        };
       }
       if (opts?.pattern !== undefined) {
         try {

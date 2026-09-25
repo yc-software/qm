@@ -1,3 +1,5 @@
+import { slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
+import type { SlackHistoryReader } from "./history.ts";
 import { swallow } from "../util/errors.ts";
 import {
   type ActorAssertion,
@@ -5,20 +7,19 @@ import {
   type ReactionTally,
   type RecentMessage,
   type SlackFile,
-  type ThreadMessage,
   MAX_RECENT_MESSAGES,
-  collectEarlierThreadFiles,
+  MAX_TOP_LEVEL_CONTEXT_AGE_S,
   decodeSlackEntities,
   isOversize,
   recentWindow,
 } from "./lib.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { SlackConversationKind } from "./messaging.ts";
+import { type SlackHistoryMessage } from "./payloads.ts";
+import { messageWithForwardedContent } from "./forwards.ts";
 
 export const RECENT_HISTORY_LIMIT = 200;
 export const RECENT_THREAD_LIMIT = 200;
-const MAX_EXPANDED_THREADS = 5;
-const EXPANDED_THREAD_REPLY_LIMIT = RECENT_THREAD_LIMIT;
 export const MAX_NAME_LOOKUPS = 10;
 const RECENT_KEEP_SUBTYPES = new Set(["file_share", "bot_message", "thread_broadcast"]);
 const MEMBERS_SHOW_MAX = 40;
@@ -35,13 +36,21 @@ export function reactionTallies(raw: unknown): ReactionTally[] {
 export interface ConversationSerializer {
   shapeRecentMessages(
     client: any,
-    raw: any[],
+    raw: SlackHistoryMessage[],
     triggerTs: string,
     nameById: Map<string, string>,
   ): Promise<RecentMessage[]>;
   serializeSlackConversation(
     client: any,
-    inc: { kind: "dm" | "channel"; channel: string; threadTs?: string; ts: string; files: SlackFile[] },
+    inc: {
+      kind: "dm" | "channel";
+      channel: string;
+      threadTs?: string;
+      ts: string;
+      files: SlackFile[];
+      rawText?: string;
+      userId?: string;
+    },
     ctx: {
       audience: ActorAssertion[];
       channelName?: string;
@@ -49,7 +58,7 @@ export interface ConversationSerializer {
       kind?: SlackConversationKind;
       slackIdsByPrincipal?: ReadonlyMap<string, string>;
     },
-  ): Promise<{ view: ConversationView; earlierFiles: SlackFile[] }>;
+  ): Promise<{ view: ConversationView }>;
   recentMessageWindow: number;
 }
 
@@ -58,21 +67,27 @@ export function createConversationSerializer(deps: {
   directory: Directory;
   externalParticipantsEnabled(): Promise<boolean>;
   recentMessages?: number;
+  readHistory: SlackHistoryReader;
+  historyRateLimitOptions?: { managed?: boolean; setupUrl?: string };
 }): ConversationSerializer {
   const { ids, directory, externalParticipantsEnabled } = deps;
   const RECENT_MESSAGE_WINDOW = deps.recentMessages
     ? Math.min(RECENT_THREAD_LIMIT, Math.floor(deps.recentMessages))
     : MAX_RECENT_MESSAGES;
 
-  function isConversationMessage(m: any): boolean {
+  function isConversationMessage(m: SlackHistoryMessage): m is SlackHistoryMessage & { ts: string } {
     return Boolean(m.ts && !(m.subtype && !RECENT_KEEP_SUBTYPES.has(m.subtype)));
   }
 
-  function isSelfMessage(m: any): boolean {
+  function isSelfMessage(m: SlackHistoryMessage): boolean {
     return Boolean((m.user && m.user === ids.botUserId) || (ids.ownBotId && m.bot_id === ids.ownBotId));
   }
 
-  function messageAuthorName(m: any, nameById: Map<string, string>, botNameById: Map<string, string>): string {
+  function messageAuthorName(
+    m: SlackHistoryMessage,
+    nameById: Map<string, string>,
+    botNameById: Map<string, string>,
+  ): string {
     if (m.bot_profile?.name) return String(m.bot_profile.name);
     if (m.username) return String(m.username);
     if (m.user) return nameById.get(m.user) ?? m.user;
@@ -82,7 +97,7 @@ export function createConversationSerializer(deps: {
 
   async function resolveMissingAuthorNames(
     client: any,
-    messages: any[],
+    messages: SlackHistoryMessage[],
     nameById: Map<string, string>,
     botNameById: Map<string, string>,
   ): Promise<void> {
@@ -109,40 +124,9 @@ export function createConversationSerializer(deps: {
     ]);
   }
 
-  async function fetchRawConversation(client: any, channel: string, threadTs: string | undefined): Promise<any[]> {
-    try {
-      if (threadTs) {
-        return (
-          (await client.conversations.replies({ channel, ts: threadTs, limit: RECENT_THREAD_LIMIT })).messages ?? []
-        );
-      }
-      const history = ((await client.conversations.history({ channel, limit: RECENT_HISTORY_LIMIT })).messages ?? [])
-        .slice()
-        .reverse();
-      const threadParents = history.filter((m: any) => m.ts && Number(m.reply_count) > 0).slice(-MAX_EXPANDED_THREADS);
-      const expanded = await Promise.all(
-        threadParents.map(async (p: any) => {
-          try {
-            return (
-              (await client.conversations.replies({ channel, ts: p.ts, limit: EXPANDED_THREAD_REPLY_LIMIT }))
-                .messages ?? []
-            );
-          } catch {
-            return [];
-          }
-        }),
-      );
-      const byTs = new Map<string, any>();
-      for (const m of [...history, ...expanded.flat()]) if (m?.ts) byTs.set(m.ts, m);
-      return [...byTs.values()];
-    } catch {
-      return [];
-    }
-  }
-
   async function shapeRecentMessages(
     client: any,
-    raw: any[],
+    raw: SlackHistoryMessage[],
     triggerTs: string,
     nameById: Map<string, string>,
   ): Promise<RecentMessage[]> {
@@ -153,25 +137,34 @@ export function createConversationSerializer(deps: {
     });
     const botNameById = new Map<string, string>();
     await resolveMissingAuthorNames(client, kept, nameById, botNameById);
-    return kept.map((m) => ({
-      ts: m.ts as string,
-      name: messageAuthorName(m, nameById, botNameById),
-      ...(m.user || m.bot_id ? { authorId: String(m.user || m.bot_id) } : {}),
-      text: decodeSlackEntities(String(m.text ?? "").trim()),
-      ...(m.ts === triggerTs ? { isTrigger: true } : {}),
-      ...(m.bot_id ? { isBot: true } : {}),
-      ...(isSelfMessage(m) ? { isSelf: true } : {}),
-      ...(m.thread_ts && String(m.thread_ts) !== m.ts ? { parentTs: String(m.thread_ts) } : {}),
-      ...(reactionTallies(m.reactions).length ? { reactions: reactionTallies(m.reactions) } : {}),
-      ...(Array.isArray(m.files) && m.files.length
-        ? { files: (m.files as any[]).map((f) => String(f?.name ?? f?.title ?? f?.id ?? "file")) }
-        : {}),
-    }));
+    return kept.map((m) => {
+      const content = messageWithForwardedContent(m);
+      return {
+        ts: m.ts,
+        name: messageAuthorName(m, nameById, botNameById),
+        ...(m.user || m.bot_id ? { authorId: String(m.user || m.bot_id) } : {}),
+        text: decodeSlackEntities(content.text.trim()),
+        ...(m.ts === triggerTs ? { isTrigger: true } : {}),
+        ...(m.bot_id ? { isBot: true } : {}),
+        ...(isSelfMessage(m) ? { isSelf: true } : {}),
+        ...(m.thread_ts && String(m.thread_ts) !== m.ts ? { parentTs: String(m.thread_ts) } : {}),
+        ...(reactionTallies(m.reactions).length ? { reactions: reactionTallies(m.reactions) } : {}),
+        ...(content.files.length ? { files: content.files.map((f) => slackFileName(f)) } : {}),
+      };
+    });
   }
 
   async function serializeSlackConversation(
     client: any,
-    inc: { kind: "dm" | "channel"; channel: string; threadTs?: string; ts: string; files: SlackFile[] },
+    inc: {
+      kind: "dm" | "channel";
+      channel: string;
+      threadTs?: string;
+      ts: string;
+      files: SlackFile[];
+      rawText?: string;
+      userId?: string;
+    },
     ctx: {
       audience: ActorAssertion[];
       channelName?: string;
@@ -179,7 +172,7 @@ export function createConversationSerializer(deps: {
       kind?: SlackConversationKind;
       slackIdsByPrincipal?: ReadonlyMap<string, string>;
     },
-  ): Promise<{ view: ConversationView; earlierFiles: SlackFile[] }> {
+  ): Promise<{ view: ConversationView }> {
     const empty: ConversationView = {
       channel: { kind: ctx.kind ?? inc.kind },
       members: [],
@@ -188,8 +181,7 @@ export function createConversationSerializer(deps: {
       files: [],
       omittedFiles: [],
     };
-    if (ctx.audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled()))
-      return { view: empty, earlierFiles: [] };
+    if (ctx.audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled())) return { view: empty };
 
     const nameById = new Map<string, string>();
     for (const a of ctx.audience) {
@@ -198,15 +190,24 @@ export function createConversationSerializer(deps: {
       const slackId = ctx.slackIdsByPrincipal?.get(a.externalId);
       if (slackId) nameById.set(slackId, a.displayName);
     }
-    const raw = await fetchRawConversation(client, inc.channel, inc.threadTs);
-    const messages = recentWindow(await shapeRecentMessages(client, raw, inc.ts, nameById), RECENT_MESSAGE_WINDOW);
-    const earlierFiles = collectEarlierThreadFiles(raw as ThreadMessage[], {
-      triggerTs: inc.ts,
-      botUserId: ids.botUserId,
-      ownBotId: ids.ownBotId,
-      have: inc.files,
-      inThread: Boolean(inc.threadTs),
+    const page = await deps.readHistory(client, inc.channel, inc.threadTs, undefined, true).catch((error) => {
+      swallow("slack: conversation context", error);
+      return {
+        raw: [] as SlackHistoryMessage[],
+        hasMore: true,
+        note:
+          slackHistoryRateLimitMessage(error, deps.historyRateLimitOptions) ??
+          "Slack context could not be read; earlier messages may be missing.",
+      };
     });
+    const raw = page.raw;
+    if (inc.rawText !== undefined && !raw.some((m) => m.ts === inc.ts))
+      raw.push({ ts: inc.ts, text: inc.rawText, user: inc.userId, thread_ts: inc.threadTs, files: inc.files });
+    const messages = recentWindow(
+      await shapeRecentMessages(client, raw, inc.ts, nameById),
+      RECENT_MESSAGE_WINDOW,
+      inc.threadTs ? undefined : { triggerTs: inc.ts, maxAgeSeconds: MAX_TOP_LEVEL_CONTEXT_AGE_S },
+    );
 
     const members =
       ctx.audience.length > 0 && ctx.audience.length <= MEMBERS_SHOW_MAX
@@ -240,9 +241,8 @@ export function createConversationSerializer(deps: {
       here = { kind: "top-level" };
     }
 
-    const allFiles = [...inc.files, ...earlierFiles];
-    const files = allFiles.filter((f) => !isOversize(f)).map((f) => ({ name: slackFileName(f) }));
-    const omittedFiles = allFiles
+    const files = inc.files.filter((f) => !isOversize(f)).map((f) => ({ name: slackFileName(f) }));
+    const omittedFiles = inc.files
       .filter((f) => isOversize(f))
       .map((f) => ({ name: slackFileName(f), reason: "too-big" as const }));
 
@@ -258,8 +258,9 @@ export function createConversationSerializer(deps: {
       files,
       omittedFiles,
       nameById,
+      ...("note" in page && page.note ? { contextNote: page.note } : {}),
     };
-    return { view, earlierFiles };
+    return { view };
   }
 
   return { shapeRecentMessages, serializeSlackConversation, recentMessageWindow: RECENT_MESSAGE_WINDOW };

@@ -238,7 +238,6 @@ describe("the Slack surface opening a group DM", () => {
     };
     const f = createSurfaceContextFulfiller({
       core: core as never,
-      bridge: {} as never,
       directory: directory as never,
       serializer: {} as never,
       botToken: "xoxb-test",
@@ -290,7 +289,13 @@ describe("the Slack surface opening a group DM", () => {
 describe("pushing the group roster when Slack won't list group DMs", () => {
   it("omits the roster rather than replacing it with an empty one", async () => {
     const pushes: Array<Record<string, unknown>> = [];
-    const core = { pushDirectory: async (body: Record<string, unknown>) => void pushes.push(body) };
+    const core = {
+      pushDirectory: async (body: Record<string, unknown>) => {
+        pushes.push(body);
+        return true;
+      },
+      holdDirectorySync: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
+    };
     const client = {
       users: { info: async () => ({ user: undefined }) },
       conversations: { info: async () => ({ channel: undefined }) },
@@ -325,6 +330,197 @@ describe("pushing the group roster when Slack won't list group DMs", () => {
     assert.equal(pushes.length, 1);
     assert.ok(Array.isArray(pushes[0]!.channels), "channels still push");
     assert.equal("groupMembers" in pushes[0]!, false, "an unknown roster is absent, never an empty replacement");
+  });
+});
+
+describe("the directory crawl when another instance holds the sync lease", () => {
+  it("skips the channel crawl and the push instead of racing the leader", async () => {
+    const pushes: Array<Record<string, unknown>> = [];
+    const listedMethods: string[] = [];
+    const core = {
+      pushDirectory: async (body: Record<string, unknown>) => {
+        pushes.push(body);
+        return true;
+      },
+      holdDirectorySync: async () => null,
+    };
+    const client = {
+      users: { info: async () => ({ user: undefined }) },
+      async *paginate(method: string) {
+        listedMethods.push(method);
+        if (method === "users.list") {
+          yield { members: [{ id: "U1", team_id: "T1", name: "alice", profile: { email: "alice@x.com" } }] };
+          return;
+        }
+        yield { channels: [{ id: "C1", name: "eng", is_member: true }] };
+      },
+    };
+    const dir = createDirectory({
+      core: core as never,
+      ids: {
+        ownTeamId: "T1",
+        botUserId: "UBOT",
+        ownBotId: "BBOT",
+        botHandle: "qm",
+        ownWorkspaceUrl: "",
+        identityMode: "email",
+      },
+    });
+
+    const snap = await dir.getUserSnapshot(client);
+    await new Promise((r) => setTimeout(r, 50));
+
+    assert.ok(snap?.byId.has("U1"), "the local snapshot still refreshes for classification");
+    assert.equal(pushes.length, 0);
+    assert.deepEqual(listedMethods, ["users.list"], "no channel or group crawl runs on the follower");
+  });
+
+  it("retries a skipped sync until the lease frees, then applies the queued revocation", async () => {
+    const pushes: Array<Record<string, unknown>> = [];
+    let locked = true;
+    const core = {
+      pushDirectory: async (body: Record<string, unknown>) => {
+        pushes.push(body);
+        return true;
+      },
+      holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<unknown>) =>
+        locked ? null : fn(new Promise<void>(() => {})),
+    };
+    const client = {
+      users: { info: async () => ({ user: undefined }) },
+      async *paginate(method: string) {
+        if (method === "users.list") {
+          yield {
+            members: [
+              { id: "U1", team_id: "T1", name: "alice", profile: { email: "alice@x.com" } },
+              { id: "U2", team_id: "T1", name: "kai", profile: { email: "kai@x.com" } },
+            ],
+          };
+          return;
+        }
+        if (method === "conversations.list") {
+          yield { channels: [{ id: "C1", name: "eng", is_member: true, is_private: true }] };
+          return;
+        }
+        yield { members: ["U1"] };
+      },
+    };
+    const dir = createDirectory({
+      core: core as never,
+      syncRetryMs: 5,
+      ids: {
+        ownTeamId: "T1",
+        botUserId: "UBOT",
+        ownBotId: "BBOT",
+        botHandle: "qm",
+        ownWorkspaceUrl: "",
+        identityMode: "email",
+      },
+    });
+
+    await dir.forceDirectorySync(client, "C1", "kai@x.com");
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(pushes.length, 0, "nothing lands while the lease is held elsewhere");
+
+    locked = false;
+    const deadline = Date.now() + 2000;
+    while (!pushes.length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+
+    const revocations = pushes.at(-1)?.channelRevocations as Array<Record<string, string>>;
+    assert.deepEqual(revocations, [{ channelId: "C1", principalId: "kai@x.com" }]);
+  });
+
+  it("retries a push the store refused as stale until the revocation actually lands", async () => {
+    const pushes: Array<Record<string, unknown>> = [];
+    let refusals = 1;
+    const core = {
+      pushDirectory: async (body: Record<string, unknown>) => {
+        pushes.push(body);
+        return refusals-- <= 0;
+      },
+      holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
+    };
+    const client = {
+      users: { info: async () => ({ user: undefined }) },
+      async *paginate(method: string) {
+        if (method === "users.list") {
+          yield {
+            members: [
+              { id: "U1", team_id: "T1", name: "alice", profile: { email: "alice@x.com" } },
+              { id: "U2", team_id: "T1", name: "kai", profile: { email: "kai@x.com" } },
+            ],
+          };
+          return;
+        }
+        if (method === "conversations.list") {
+          yield { channels: [{ id: "C1", name: "eng", is_member: true, is_private: true }] };
+          return;
+        }
+        yield { members: ["U1"] };
+      },
+    };
+    const dir = createDirectory({
+      core: core as never,
+      syncRetryMs: 5,
+      ids: {
+        ownTeamId: "T1",
+        botUserId: "UBOT",
+        ownBotId: "BBOT",
+        botHandle: "qm",
+        ownWorkspaceUrl: "",
+        identityMode: "email",
+      },
+    });
+
+    await dir.forceDirectorySync(client, "C1", "kai@x.com");
+    const deadline = Date.now() + 2000;
+    while (pushes.length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+
+    assert.ok(pushes.length >= 2, "the refused push is retried");
+    const revocations = pushes.at(-1)?.channelRevocations as Array<Record<string, string>>;
+    assert.deepEqual(revocations, [{ channelId: "C1", principalId: "kai@x.com" }]);
+  });
+
+  it("discards a crawl whose lease was lost mid-flight instead of pushing it", async () => {
+    const pushes: Array<Record<string, unknown>> = [];
+    const core = {
+      pushDirectory: async (body: Record<string, unknown>) => {
+        pushes.push(body);
+        return true;
+      },
+      holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<unknown>) => fn(Promise.resolve()),
+    };
+    const client = {
+      users: { info: async () => ({ user: undefined }) },
+      async *paginate(method: string) {
+        if (method === "users.list") {
+          yield { members: [{ id: "U1", team_id: "T1", name: "alice", profile: { email: "alice@x.com" } }] };
+          return;
+        }
+        if (method === "conversations.list") {
+          yield { channels: [{ id: "C1", name: "eng", is_member: true }] };
+          return;
+        }
+        yield { members: ["U1"] };
+      },
+    };
+    const dir = createDirectory({
+      core: core as never,
+      ids: {
+        ownTeamId: "T1",
+        botUserId: "UBOT",
+        ownBotId: "BBOT",
+        botHandle: "qm",
+        ownWorkspaceUrl: "",
+        identityMode: "email",
+      },
+    });
+
+    const snap = await dir.getUserSnapshot(client);
+    await new Promise((r) => setTimeout(r, 50));
+
+    assert.ok(snap?.byId.has("U1"));
+    assert.equal(pushes.length, 0, "a crawl finished after losing the lease never reaches the store");
   });
 });
 

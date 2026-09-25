@@ -26,6 +26,16 @@ function start(
   opts: { portalUrl?: string } = { portalUrl: "http://callback.test" },
 ): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "consent-")), signingSecret: SECRET }));
+  void built.directory.replaceChannels(
+    [
+      { channelId: "C1", name: "consent", isPrivate: false },
+      { channelId: "C9", name: "connectors", isPrivate: false },
+    ],
+    [
+      { channelId: "C1", principalId: "U1" },
+      { channelId: "C9", principalId: "U1" },
+    ],
+  );
   const server = createServer(built.app, {
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,

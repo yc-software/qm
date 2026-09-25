@@ -11,10 +11,10 @@ dashboard you generated from a query. A turn's sandbox is torn down when the tur
 ends; publishing ships your files to a separate, long-lived runtime that keeps running
 and gets a stable link.
 
-Publishing is a **first-class primitive**: the `publish` tool, alongside
-`execute`/`read`/`write`. Build the app in the workspace as usual (write files, install
-deps with `execute`, test it), then call `publish` on the directory. The app must listen
-on the `PORT` env var (the runtime sets it).
+Publish with the `apps` tool, action `publish`. Build the app in the workspace with
+`files` actions `write` / `read`; install dependencies and test with `sandbox` action
+`exec` (`execute` before sandbox-resource activation). Then publish the directory.
+The app must listen on the `PORT` env var (the runtime sets it).
 
 ## Match the house style (the default)
 
@@ -22,12 +22,12 @@ Anything browsable you publish should look designed, not defaulted. Before you b
 UI, load the design skills and apply your organization's **house style** unless the user
 asked for a different look:
 
-- **The deployment's house-style skill** — if a `*-design` skill is installed (list
-  `skills/`), it carries the org's look as ready-to-paste CSS and design tokens. Start
+- **The deployment's house-style skill** — if the Skills index lists a `*-design` skill,
+  it carries the org's look as ready-to-paste CSS and design tokens. Start
   there for the look.
-- **`skills/taste-skill/SKILL.md`** — the design _process_: reading the brief, layout,
+- **`taste-skill`** — the design _process_: reading the brief, layout,
   hierarchy, verifying the result, avoiding generic AI-design slop.
-- **`skills/popular-web-designs/SKILL.md`** — when the user wants a specific visual
+- **`popular-web-designs`** — when the user wants a specific visual
   reference (Stripe, Linear, Vercel…).
 
 This is about the page a person sees — skip it for an internal-only API or a script with
@@ -38,22 +38,34 @@ no UI.
 First publish, and every later update — same call, same `name`, a new immutable version:
 
 ```
-publish({ dir: "dist", entrypoint: "node server.js", name: "status-board" })
+apps({ action: "publish", dir: "dist", entrypoint: "node server.js", name: "status-board" })
 ```
 
 Roll back to an earlier version (an instant pointer flip):
 
 ```
-publish({ name: "status-board", rollbackTo: 3 })
+apps({ action: "publish", name: "status-board", rollbackTo: 3 })
 ```
 
 Give an auto-named deployment a friendly link:
 
 ```
-publish({ renameFrom: "s-1176-p-5050", name: "status-board" })
+apps({ action: "publish", renameFrom: "s-1176-p-5050", name: "status-board" })
 ```
 
-`publish` returns `{ id, name, version, url, dataDir? }` — give the user the `url` (`/d/<name>/`).
+`apps` action `publish` returns `{ id, name, version, url, dataDir? }` — give the user the full absolute `url`, whose path is `/d/<name>/`.
+
+## App bar and editing
+
+On a configured app subdomain, signed-in people who can manage the app automatically
+see a slim top bar. Chat opens a resizable editing conversation beside the app. Normal
+app links and refreshes keep editing available for the signed-in session; viewers with
+read-only access see the app alone.
+
+The bar uses a consistent neutral appearance, independent of the app's theme. Its
+name follows the app document title. The drawer opens directly into an empty composer;
+the app identity is supplied as conversation context, not pasted into the draft. The
+conversation survives app reloads after a publish.
 
 ## Durable data — where app state must live
 
@@ -84,7 +96,8 @@ the same as the app _working_. So for anything browsable, sanity-check it locall
 publish:
 
 1. Run it locally. Start the server in the background on a port — e.g.
-   `PORT=8080 node server.js` via the `background` tool, so it keeps serving while you check.
+   `PORT=8080 node server.js` via `sandbox` action `start_process` (`background` action `start`
+   before sandbox-resource activation), so it keeps serving while you check.
 2. Probe it with `curl` — confirm it answers, returns the status you expect, and the main
    page/endpoint is actually there (real content, not a stack trace or a blank 500):
 
@@ -93,19 +106,27 @@ publish:
    ```
 
 3. If it's broken, fix it and check again — don't tell the user a site is ready before you've
-   confirmed it serves. Only once it checks out do you `publish` and hand over the
+   confirmed it serves. Only once it checks out do you call `apps` action `publish` and hand over the
    `/d/<name>/` link.
 
 ## Sharing — say who can reach it
 
-By default a deployment is reachable only by its **owner scope** (personal for a DM, the
-team/channel for a channel turn). Share it the same way you'd share a file:
+Publication uses the conversation's default audience when `audience` is omitted.
+Pass `audience: []` to suppress default grants for an owner-only publication; this does
+not revoke existing explicit grants. Supply publication-time grants with `audience`:
 
 ```
-publish({
+apps({
+  action: "publish",
   dir: "dist", entrypoint: "node server.js", name: "status-board",
-  share: [{ scope: "org:acme", permission: "read" }],
+  audience: [{ scope: "org:acme", permission: "read" }],
 })
+```
+
+For a later grant, use the app ID or handle:
+
+```
+apps({ action: "share", id: "status-board", toScope: "org", permission: "read" })
 ```
 
 - **read** = can reach the app. **write** = can also manage it (redeploy/rollback).
@@ -119,6 +140,9 @@ publish({
   `renameFrom` lets you change it on request without losing history or shares.
 - **Immutable versions + rollback.** Every publish is a new immutable version; `rollbackTo`
   is an instant pointer flip. Safe to ship often.
+- **Env carries over.** `env` is baked into each version; a republish that omits `env` keeps
+  the most recent version's (including a failed attempt), and passing `env` replaces it
+  (`{}` clears).
 - **Posture-aware egress.** Deployment network access follows the operator's configured
   deployment provider and egress policy. Declare required hosts and credentials explicitly;
   never assume arbitrary outbound access.
@@ -139,7 +163,7 @@ publish({
 
 ## If you can't publish
 
-Publishing needs the deployment runtime to be available on this computer. If `publish`
+Publishing needs the deployment runtime to be available on this computer. If `apps` action `publish`
 errors (e.g. the runtime/Docker isn't present, the command is missing), **do not silently
 fall back to sending the files and tell the user they can "view the site" there.** Sending
 a file delivers it as a **downloadable attachment**, not a hosted, browsable site — a

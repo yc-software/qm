@@ -2,14 +2,20 @@ import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../../types.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import { runShadowScreen, type SecurityScreenHook } from "../../security/security-screener.ts";
-import { UNSCREENED_REASON, type SecurityScreenVerdict } from "../../security/security-posture.ts";
+import {
+  securityScreenSystemPrompt,
+  UNSCREENED_REASON,
+  type SecurityScreenVerdict,
+} from "../../security/security-posture.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import type { HarnessLlmRequestRecord } from "../../harness/harness.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
+import { headSlice } from "../../util/text.ts";
 import type { OrchestratorDeps } from "./types.ts";
 
 const DEFAULT_SECURITY_SCREEN_TIMEOUT_MS = 15_000;
+const MAX_SCREEN_REQUEST_CHARS = 2_000;
 
 const unscreenedVerdict = (): SecurityScreenVerdict => ({
   decision: "auto",
@@ -21,12 +27,13 @@ export type SecurityClassifier = (
   payload: string,
   actorId: string,
   scopeLabel: ScopeId,
-  recordLlmRequest?: (rec: HarnessLlmRequestRecord) => void | Promise<void>,
+  recordLlmRequest?: (rec: HarnessLlmRequestRecord, signal?: AbortSignal) => void | Promise<void>,
   context?: {
     hook?: SecurityScreenHook;
     surface?: string;
     origin?: TurnOrigin["kind"];
     requestId?: string;
+    request?: string;
   },
 ) => Promise<SecurityScreenVerdict | undefined>;
 
@@ -34,6 +41,16 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
   return async function classifySecurityData(payload, actorId, scopeLabel, recordLlmRequest, context = {}) {
     if (!deps.securityScreener && !deps.harness.models.screenSecurity) return undefined;
     const timeoutMs = deps.securityScreenTimeoutMs ?? DEFAULT_SECURITY_SCREEN_TIMEOUT_MS;
+    const flagger = deps.config?.getAutoFlaggerConfig();
+    let request: { origin: string; text: string; truncated: boolean } | undefined;
+    if (context.hook === "tool_response" && context.request?.trim()) {
+      request = {
+        origin: context.origin ?? "unknown",
+        text: headSlice(context.request, MAX_SCREEN_REQUEST_CHARS).toWellFormed(),
+        truncated: context.request.length > MAX_SCREEN_REQUEST_CHARS,
+      };
+    }
+    const modelPayload = request ? JSON.stringify({ request, payload }) : payload;
     const attempt = async (): Promise<SecurityScreenVerdict | undefined> => {
       const abort = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -41,7 +58,14 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
       const requestId = context.requestId ?? randomUUID();
       const modelScreen = () =>
         deps.harness.models.screenSecurity?.({
-          payload,
+          payload: modelPayload,
+          ...(flagger
+            ? {
+                harnessId: flagger.harnessId,
+                modelId: flagger.modelId,
+                systemPrompt: securityScreenSystemPrompt(flagger.rubric),
+              }
+            : {}),
           signal: abort.signal,
           recordModelCall: (rec) => {
             deps.modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec });
@@ -70,6 +94,7 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
             metadata: {
               ...(context.surface ? { surface: context.surface } : {}),
               ...(context.origin ? { origin: context.origin } : {}),
+              ...(request ? { request } : {}),
             },
             requestId,
             signal: abort.signal,

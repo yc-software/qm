@@ -1,6 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderTaskList, createTaskListPresenter, createAckPresenter, stripAckPrefix } from "../src/slack/lib.ts";
+import {
+  renderTaskList,
+  createTaskListPresenter,
+  createAckPresenter,
+  stripAckPrefix,
+  renderGoalNotice,
+  createGoalNoticePresenter,
+  deliveryMetadata,
+} from "../src/slack/lib.ts";
 
 test("renderTaskList renders every terminal state", () => {
   assert.equal(
@@ -72,6 +80,29 @@ test("task presenter posts once, updates in place, checkpoints, and finalizes th
     "surface",
     "update:171.2:*1 task*\n✓ ~research~",
     "update:171.2:Final answer",
+  ]);
+});
+
+test("finalize stamps the delivery marker on the task message; progress updates carry none", async () => {
+  const updates: Array<{ text: string; metadata?: unknown }> = [];
+  const presenter = createTaskListPresenter({
+    post: async () => "171.9",
+    update: async (_ts, text, _blocks, metadata) => {
+      updates.push({ text, ...(metadata ? { metadata } : {}) });
+    },
+    checkpoint: async () => {},
+    remove: async () => {},
+    onSurfacePosted: () => {},
+  });
+  await presenter.onTasks([{ id: "a", title: "research", status: "pending" }]);
+  await presenter.onTasks([{ id: "a", title: "research", status: "completed" }]);
+  assert.equal(await presenter.finalize("Final answer", deliveryMetadata("run:R7")), true);
+  assert.deepEqual(updates, [
+    { text: "*1 task*\n✓ ~research~" },
+    {
+      text: "Final answer",
+      metadata: { event_type: "qm_delivery", event_payload: { idempotency_key: "run:R7" } },
+    },
   ]);
 });
 
@@ -309,4 +340,37 @@ test("ack presenter does not report a failed post as surfaced", async () => {
   presenter.onFirstBlock("On it.");
   await presenter.settle();
   assert.equal(presenter.postedAck(), undefined);
+});
+
+test("renderGoalNotice: one line per status, floor shown while active", () => {
+  assert.equal(
+    renderGoalNotice({ objective: "get the tests\ngreen <fast>", status: "active", floor: "30m" }),
+    "◐ Pursuing goal: get the tests green &lt;fast&gt; · at least 30m",
+  );
+  assert.equal(renderGoalNotice({ objective: "obj", status: "complete" }), "✓ Goal complete: obj");
+  assert.equal(renderGoalNotice({ objective: "obj", status: "blocked" }), "✕ Goal blocked: obj");
+  assert.equal(renderGoalNotice({ objective: "obj", status: "paused" }), "⏸ Goal paused: obj");
+});
+
+test("goal notice presenter posts once, updates in place, and dedupes", async () => {
+  const posts: string[] = [];
+  const updates: Array<{ ts: string; text: string }> = [];
+  const presenter = createGoalNoticePresenter({
+    post: async (text) => {
+      posts.push(text);
+      return "111.222";
+    },
+    update: async (ts, text) => {
+      updates.push({ ts, text });
+    },
+  });
+  await presenter.onGoal({ objective: "obj", status: "active" });
+  await presenter.onGoal({ objective: "obj", status: "active" });
+  await presenter.onGoal({ objective: "obj", status: "complete" });
+  await presenter.settle();
+  assert.equal(posts.length, 1);
+  assert.match(posts[0]!, /Pursuing goal/);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0]!.ts, "111.222");
+  assert.match(updates[0]!.text, /Goal complete/);
 });

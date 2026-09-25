@@ -24,7 +24,7 @@ test("no-op lease: hold runs fn and returns its value (single-instance dev/test 
 });
 
 test("pg lease: while the leader's fn is running, a SECOND instance on the same key is skipped", { skip }, async () => {
-  const pg = createPgPool(URL!, []);
+  const pg = createPgPool(URL!);
   try {
     const leader = createPostgresLeaderLease(pg);
     const other = createPostgresLeaderLease(pg);
@@ -57,7 +57,7 @@ test(
   "pg lease: a second in-process hold on the same instance's held key is skipped (no reentrant win)",
   { skip },
   async () => {
-    const pg = createPgPool(URL!, []);
+    const pg = createPgPool(URL!);
     try {
       const lease = createPostgresLeaderLease(pg);
       const started = deferred();
@@ -82,7 +82,7 @@ test(
 );
 
 test("pg lease: a separate key is independent (each loop has its own leader gate)", { skip }, async () => {
-  const pg = createPgPool(URL!, []);
+  const pg = createPgPool(URL!);
   try {
     const a = createPostgresLeaderLease(pg);
     const b = createPostgresLeaderLease(pg);
@@ -108,7 +108,7 @@ test("pg lease: a separate key is independent (each loop has its own leader gate
 });
 
 test("pg lease: fn throwing still releases the lock (and the error propagates)", { skip }, async () => {
-  const pg = createPgPool(URL!, []);
+  const pg = createPgPool(URL!);
   try {
     const a = createPostgresLeaderLease(pg);
     const b = createPostgresLeaderLease(pg);
@@ -128,8 +128,8 @@ test(
   "pg lease: a dead holder's lock auto-releases with its connection (no TTL wait), and the holder recovers",
   { skip },
   async () => {
-    const holderPool = createPgPool(URL!, []);
-    const standbyPool = createPgPool(URL!, []);
+    const holderPool = createPgPool(URL!);
+    const standbyPool = createPgPool(URL!);
     try {
       const holder = createPostgresLeaderLease(holderPool);
       const standby = createPostgresLeaderLease(standbyPool);

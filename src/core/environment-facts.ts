@@ -9,7 +9,7 @@ export interface WorkspaceLayoutInfo {
 
 export function renderComputerBlock(spec: AgentComputerSpec | undefined, layout: WorkspaceLayoutInfo): string {
   if (!spec) return "";
-  const lines: string[] = ["## This machine"];
+  const lines: string[] = ["## Sandbox environment profile"];
 
   const size: string[] = [];
   if (spec.cpus) size.push(`${spec.cpus} vCPU`);
@@ -25,9 +25,7 @@ export function renderComputerBlock(spec: AgentComputerSpec | undefined, layout:
 
   const cwd = spec.workdir ?? ".";
   const home = spec.homeDir ?? "~";
-  const ws = [
-    `Your workspace is \`${cwd}\` (read-write) and persists across turns — keep your work here, including anything you'll \`publish\` (publish ships files in your workspace, not files elsewhere under \`$HOME\`). \`$HOME\` (\`${home}\`) also persists and holds your logins and config.`,
-  ];
+  const ws = [`The workspace path is \`${cwd}\` (read-write). \`$HOME\` (\`${home}\`) holds native logins and config.`];
   if (layout.hasGlobal) ws.push("Shared org files are at `./global` (read-only).");
   if (layout.teamCount > 0) {
     ws.push(`Team files are at \`./team-*\` (read-only; ${layout.teamCount} mounted).`);
@@ -51,13 +49,13 @@ export function renderResidentLoginsBlock(
     "## Your logins",
     "Native logins on your computer (resident — each tool authenticates with its own; checked recently):",
     "Logins survive machine replacement automatically: the platform keeps an encrypted copy core-side and restores it onto a fresh machine; they are never written into workspace backups.",
-    "To (re)log in, run the login command with the `background` tool (action=start), not `execute` — a device-flow login prints a URL/code then blocks waiting for the person to approve. Relay the URL/code, then `watch`/`poll` until it exits; never kill it mid-flight. Capture into your keychain is automatic.",
+    "To (re)log in, start the login command as a background process using the available process controls. A device-flow login prints a URL/code then waits for the person to approve. Relay the URL/code, then watch or poll the process until it exits; never kill it mid-flight. Capture into your keychain is automatic.",
   ];
   for (const c of present) {
     if (record.connectors[c.id] === "active") {
       lines.push(`- ${c.label} — ✓ signed in`);
     } else {
-      lines.push(`- ${c.label} — ✗ not signed in; to use it: \`background\` start \`${c.reauth}\``);
+      lines.push(`- ${c.label} — ✗ not signed in; to use it: start \`${c.reauth}\` as a background process`);
     }
   }
   return lines.join("\n");
@@ -69,24 +67,29 @@ export function renderConnectedAppsBlock(
   connectionsUrl?: string,
 ): string {
   const allowed = new Set(availableProviders);
-  const entries = Object.entries(record?.providers ?? {}).filter(([name]) => allowed.has(name));
+  const entries = Object.entries(record?.providers ?? {})
+    .filter(([name]) => allowed.has(name))
+    .sort(([a], [b]) => a.localeCompare(b));
   const connected = entries.filter(([, e]) => e.connected && !e.needsReconnect).map(([name]) => connectorLabel(name));
   const reconnect = entries
     .filter(([, e]) => e.needsReconnect)
     .map(([name, e]) => `${connectorLabel(name)}${e.refreshError ? ` (refresh failed: ${e.refreshError})` : ""}`);
-  const lines = ["## Connected apps"];
+  const lines = [
+    "## Connected apps",
+    "This list covers direct OAuth only; it does not describe app access through separately authorized credentials. Use the matching access skill for those, respecting explicit app restrictions and account permissions.",
+  ];
   if (!availableProviders.length) {
-    lines.push("No app connections are enabled by the admin. Do not suggest or offer any app connection.");
+    lines.push("No direct OAuth app connections are configured. Do not offer direct OAuth consent links.");
     return lines.join("\n");
   }
   const connectedNames = new Set(entries.filter(([, e]) => e.connected).map(([name]) => name));
-  const available = availableProviders.filter((name) => !connectedNames.has(name));
+  const available = availableProviders.filter((name) => !connectedNames.has(name)).sort();
   if (available.length) {
     lines.push(
-      `Available to connect: ${available.map(connectorLabel).join(", ")}. Only suggest or offer app connections in this admin-configured list.`,
+      `Available to connect: ${available.map(connectorLabel).join(", ")}. Only offer direct OAuth consent links for this admin-configured list.`,
     );
   } else {
-    lines.push("Only suggest or offer app connections in the admin-configured list below.");
+    lines.push("Only offer direct OAuth consent links for the admin-configured list below.");
   }
   if (connectionsUrl) lines.push(`Connection page: ${connectionsUrl}`);
   if (connected.length) {

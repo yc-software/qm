@@ -54,19 +54,37 @@ test("GET / serves gzip + etag when gzip is accepted", async () => {
   assert.match(html, /<!doctype html>|<html/i);
 });
 
-test("GET / without gzip serves identity HTML with the same etag", async () => {
+test("GET / respects a client that explicitly refuses gzip with q=0", async () => {
+  const r = await raw("/", { "accept-encoding": "gzip;q=0, identity" });
+  assert.equal(r.status, 200);
+  assert.equal(r.headers["content-encoding"], undefined);
+  assert.equal(r.headers["vary"], "accept-encoding");
+  assert.match(r.body.toString("utf8"), /<!doctype html>|<html/i);
+});
+
+test("GET / without gzip serves identity HTML under its own etag", async () => {
   const r = await raw("/");
   assert.equal(r.status, 200);
   assert.equal(r.headers["content-encoding"], undefined);
   assert.match(r.body.toString("utf8"), /<!doctype html>|<html/i);
+  const packed = await raw("/", { "accept-encoding": "gzip" });
+  assert.notEqual(r.headers["etag"], packed.headers["etag"], "each encoding needs its own validator");
 });
 
 test("GET / with matching if-none-match → 304", async () => {
   const first = await raw("/", { "accept-encoding": "gzip" });
   const etag = first.headers["etag"] as string;
-  const r = await raw("/", { "if-none-match": etag });
+  const r = await raw("/", { "accept-encoding": "gzip", "if-none-match": etag });
   assert.equal(r.status, 304);
   assert.equal(r.body.length, 0);
+});
+
+test("revalidating a cached gzip entry as an identity client gets the identity bytes, never a 304", async () => {
+  const packed = await raw("/", { "accept-encoding": "gzip" });
+  const r = await raw("/", { "if-none-match": packed.headers["etag"] as string });
+  assert.equal(r.status, 200);
+  assert.equal(r.headers["content-encoding"], undefined);
+  assert.match(r.body.toString("utf8"), /<!doctype html>|<html/i);
 });
 
 test("a JSON api route round-trips intact through the gzip proxy path", async () => {

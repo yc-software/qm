@@ -95,13 +95,12 @@ const getCfg = async (base: string) =>
       slug: string;
       name: string;
       host: string;
+      deployments?: boolean;
       hasSecret: boolean;
       enabled: boolean;
       grantees: string[];
-      usageCount: number;
-      usageTruncated: boolean;
       updatedAt: number;
-      injection?: { header?: string; scheme?: string };
+      injection?: { header?: string; scheme?: string; actor?: boolean };
       allowedMethods?: string[];
       allowedPathPrefixes?: string[];
     }>;
@@ -125,8 +124,7 @@ test("admin creates a credential (default org-wide); GET projects it WITHOUT the
     assert.ok(cred);
     assert.equal(cred!.hasSecret, true);
     assert.deepEqual(cred!.grantees, ["org:default-org"]);
-    assert.equal(cred!.usageCount, 0);
-    assert.equal(cred!.usageTruncated, false);
+    assert.equal("usageCount" in cred, false);
     assert.doesNotMatch(JSON.stringify(cfg), /super-secret-bearer/);
   } finally {
     await srv.close();
@@ -210,7 +208,7 @@ test("env-delivery credential: envKey validated, host refused, duplicates refuse
   }
 });
 
-test("env-delivery refuses person/team grantees — grants don't gate env injection, so the ACL must not pretend otherwise", async () => {
+test("env-delivery accepts person/team grantees — grants now gate env injection like broker calls", async () => {
   const srv = start();
   try {
     const narrowed = await putCred(srv.base, {
@@ -221,18 +219,17 @@ test("env-delivery refuses person/team grantees — grants don't gate env inject
       secret: "s1",
       grantees: ["personal:alice@default-org"],
     });
-    assert.equal(narrowed.status, 400);
-    assert.match(await narrowed.text(), /don't gate them/);
+    assert.equal(narrowed.status, 200, "a person grant on an env credential is allowed");
 
     const orgWide = await putCred(srv.base, {
-      slug: "browse-steel",
-      name: "Steel",
+      slug: "browse-steel-wide",
+      name: "Steel wide",
       delivery: "env",
-      envKey: "STEEL_API_KEY",
+      envKey: "STEEL_WIDE_API_KEY",
       secret: "s1",
       grantees: ["org:default-org"],
     });
-    assert.equal(orgWide.status, 200, "the org grant itself is fine");
+    assert.equal(orgWide.status, 200, "the org grant is fine too");
   } finally {
     await srv.close();
   }
@@ -291,7 +288,7 @@ test("partial credential updates preserve capability lists while explicit empty 
       name: "K",
       secret: "s",
       host: "h.example",
-      injection: { header: "X-Key", scheme: "Token" },
+      injection: { header: "X-Key", scheme: "Token", actor: true },
       allowedMethods: ["POST"],
       allowedPathPrefixes: ["/v1/"],
       enabled: true,
@@ -305,7 +302,7 @@ test("partial credential updates preserve capability lists while explicit empty 
     loaded = (await getCfg(srv.base)).serviceCredentials[0]!;
     assert.deepEqual(loaded.allowedMethods, ["POST"]);
     assert.deepEqual(loaded.allowedPathPrefixes, ["/v1/"]);
-    assert.deepEqual(loaded.injection, { header: "X-Key", scheme: "Token" });
+    assert.deepEqual(loaded.injection, { header: "X-Key", scheme: "Token", actor: true });
     assert.equal(loaded.enabled, true);
 
     assert.equal(
@@ -721,7 +718,7 @@ test("re-sharing reconciles the ACL allow-list (org-wide → specific people →
   }
 });
 
-test("a non-org/personal/team grantee is rejected", async () => {
+test("a channel grantee is accepted and saved", async () => {
   const srv = start();
   try {
     await putCred(srv.base, { slug: "k", name: "K", secret: "s", host: "h.example" });
@@ -730,7 +727,26 @@ test("a non-org/personal/team grantee is rejected", async () => {
       slug: "k",
       name: "K",
       host: "h.example",
-      grantees: ["channel:C1"],
+      grantees: ["channel:C1", "personal:bob"],
+      expectedUpdatedAt: version,
+    });
+    assert.equal(r.status, 200);
+    assert.deepEqual((await getCfg(srv.base)).serviceCredentials[0]!.grantees.sort(), ["channel:C1", "personal:bob"]);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a non-org/personal/team/channel grantee is rejected", async () => {
+  const srv = start();
+  try {
+    await putCred(srv.base, { slug: "k", name: "K", secret: "s", host: "h.example" });
+    const version = (await getCfg(srv.base)).serviceCredentials[0]!.updatedAt;
+    const r = await putCred(srv.base, {
+      slug: "k",
+      name: "K",
+      host: "h.example",
+      grantees: ["group:G1"],
       expectedUpdatedAt: version,
     });
     assert.equal(r.status, 400);
@@ -745,6 +761,16 @@ test("a non-org/personal/team grantee is rejected", async () => {
     });
     assert.equal(disguised.status, 400);
     assert.match(await disguised.text(), /personal:channel:C1/);
+
+    const emptyRef = await putCred(srv.base, {
+      slug: "k",
+      name: "K",
+      host: "h.example",
+      grantees: ["channel:"],
+      expectedUpdatedAt: version,
+    });
+    assert.equal(emptyRef.status, 400);
+    assert.match(await emptyRef.text(), /grantee must be/);
   } finally {
     await srv.close();
   }
@@ -755,6 +781,8 @@ test("credential capability grammar rejects malformed headers, methods, and path
   try {
     const base = { slug: "k", name: "K", secret: "s", host: "h.example" };
     assert.equal((await putCred(srv.base, { ...base, injection: { header: "Bad Header" } })).status, 400);
+    assert.equal((await putCred(srv.base, { ...base, injection: { header: "X-QM-Actor" } })).status, 400);
+    assert.equal((await putCred(srv.base, { ...base, injection: { actor: "true" } })).status, 400);
     assert.equal((await putCred(srv.base, { ...base, allowedMethods: ["GET /oops"] })).status, 400);
     assert.equal((await putCred(srv.base, { ...base, allowedPathPrefixes: ["relative/path"] })).status, 400);
     assert.equal((await getCfg(srv.base)).serviceCredentials.length, 0);
@@ -974,6 +1002,7 @@ function buildWithCapture() {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "svc-cred-stamp-")),
+      maxAttempts: 1,
       signingSecret: SECRET,
       apiBaseUrl: "http://core.internal",
     }),
@@ -984,11 +1013,17 @@ function buildWithCapture() {
     captured = opts?.env;
     return realProvision(layers, opts);
   };
-  return { built, env: () => captured };
+  let executed: Record<string, string> | undefined;
+  const realRun = built.sandbox.run.bind(built.sandbox);
+  built.sandbox.run = (handle, command, opts) => {
+    if (command === "echo hi" || command === "echo bot") executed = handle.env;
+    return realRun(handle, command, opts);
+  };
+  return { built, env: () => captured, executionEnv: () => executed };
 }
 
-test("orchestrator stamps AGENT_CREDENTIAL_TOKEN with an org-wide credential's slug", async () => {
-  const { built, env } = buildWithCapture();
+test("orchestrator vends a capability for only the requested org credential", async () => {
+  const { built, env, executionEnv } = buildWithCapture();
   await built.serviceCreds.setServiceCredential("org:default-org", {
     slug: "x-firehose",
     name: "X",
@@ -1003,13 +1038,52 @@ test("orchestrator stamps AGENT_CREDENTIAL_TOKEN with an org-wide credential's s
     grantedBy: "admin",
   });
 
-  const res = await built.app.turn(dm("!run echo hi"));
+  await built.serviceCreds.setServiceCredential("org:default-org", {
+    slug: "unselected",
+    name: "Unselected",
+    secret: "synthetic-unused",
+    host: "other.example.com",
+  });
+  await built.acl.grant({
+    ownerScopeId: "org:default-org",
+    ref: "service-cred:unselected",
+    granteeScopeId: "org:default-org",
+    permission: "read",
+    grantedBy: "admin",
+  });
+  await built.app.turn(dm("!run echo hi"));
+  assert.equal(executionEnv()?.AGENT_CREDENTIAL_TOKEN, undefined);
+  const res = await built.app.turn(
+    dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["service_x-firehose"] })}`),
+  );
   assert.equal(res.status, "ok", res.reason);
-  const token = env()?.AGENT_CREDENTIAL_TOKEN;
+  assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined);
+  const token = executionEnv()?.AGENT_CREDENTIAL_TOKEN;
   assert.ok(token, "expected a credential-broker token in the sandbox env");
   const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
   assert.equal(claims?.aud, CREDENTIAL_BROKER_AUD);
   assert.deepEqual(claims?.credentials, ["x-firehose"]);
+
+  const actor = { externalId: "B-LEGACY", isBot: true };
+  await built.app.turn({
+    surface: "slack",
+    actor,
+    botActor: true,
+    liveActor: true,
+    conversation: {
+      kind: "channel",
+      threadRef: "ch:C1:bot",
+      channelRef: "C1",
+      isPrivate: true,
+      audience: [actor],
+      publishMembers: [actor],
+    },
+    text: `!execute ${JSON.stringify({ command: "echo bot", credentials: ["service_x-firehose"] })}`,
+  });
+  const botClaims = await verifyCapabilityToken(executionEnv()!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(botClaims?.botActor, true);
+  assert.equal(botClaims?.liveActor, true);
+  assert.deepEqual(botClaims?.members, [{ id: "B-LEGACY", type: "internal" }]);
 });
 
 test("orchestrator does NOT stamp a credential granted only to someone else", async () => {
@@ -1028,9 +1102,75 @@ test("orchestrator does NOT stamp a credential granted only to someone else", as
     grantedBy: "admin",
   });
 
+  await assert.rejects(
+    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["service_x-firehose"] })}`)),
+    /not available/,
+  );
   const res = await built.app.turn(dm("!run echo hi"));
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "an unentitled session must get no credential token");
+});
+
+test("a channel grantee stamps the credential in that channel's conversations and nowhere else", async () => {
+  const { built, env, executionEnv } = buildWithCapture();
+  await built.serviceCreds.setServiceCredential("org:default-org", {
+    slug: "x-firehose",
+    name: "X",
+    secret: "s",
+    host: "api.x.com",
+  });
+  await built.acl.grant({
+    ownerScopeId: "org:default-org",
+    ref: "service-cred:x-firehose",
+    granteeScopeId: "channel:C1",
+    permission: "read",
+    grantedBy: "admin",
+  });
+
+  const channelTurn = (channelRef: string): TurnRequest => ({
+    surface: "slack",
+    actor: internalActor,
+    conversation: {
+      kind: "channel",
+      threadRef: `ch:${channelRef}:t1`,
+      channelRef,
+      audience: [internalActor, { externalId: "U2" }],
+      publishMembers: [internalActor, { externalId: "U2" }],
+    },
+    text: "!run echo hi",
+  });
+
+  await built.app.turn(channelTurn("C1"));
+  assert.equal(executionEnv()?.AGENT_CREDENTIAL_TOKEN, undefined);
+  let res = await built.app.turn({
+    ...channelTurn("C1"),
+    text: `!execute ${JSON.stringify({ command: "echo hi", credentials: ["service_x-firehose"] })}`,
+  });
+  assert.equal(res.status, "ok", res.reason);
+  assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined);
+  const token = executionEnv()?.AGENT_CREDENTIAL_TOKEN;
+  assert.ok(token, "the granted channel's conversation should get a credential token");
+  const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
+  assert.deepEqual(claims?.credentials, ["x-firehose"]);
+
+  await assert.rejects(
+    built.app.turn({
+      ...channelTurn("C2"),
+      text: `!execute ${JSON.stringify({ command: "echo hi", credentials: ["service_x-firehose"] })}`,
+    }),
+    /not available/,
+  );
+  res = await built.app.turn(channelTurn("C2"));
+  assert.equal(res.status, "ok", res.reason);
+  assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "another channel must not get the credential");
+
+  await assert.rejects(
+    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["service_x-firehose"] })}`)),
+    /not available/,
+  );
+  res = await built.app.turn(dm("!run echo hi"));
+  assert.equal(res.status, "ok", res.reason);
+  assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "a member's DM must not get a channel-granted credential");
 });
 
 test("orchestrator stamps nothing when the org has no service credentials (zero-cost common path)", async () => {
@@ -1063,7 +1203,12 @@ test("the system prompt advertises an entitled credential (host/methods/paths) s
   assert.match(reply, /Shared org credentials available to you/);
   assert.match(reply, /\/v1\/credentials\/broker/);
   assert.match(reply, /x-agent-capability: \$AGENT_CREDENTIAL_TOKEN/);
-  assert.match(reply, /x-firehose.*api\.x\.com.*GET.*\/2\/tweets\/search\//s);
+  assert.match(reply, /x-firehose.*X firehose.*api\.x\.com.*GET.*\/2\/tweets\/search\//s);
+  assert.match(reply, /clone\/fetch\/push using a shared org credential/);
+  assert.match(reply, /configured org account, not automatically the requesting user's account/);
+  assert.match(reply, /live personal OAuth connector does not switch this route's identity/);
+  assert.match(reply, /Choose among credentials authorized for this conversation/);
+  assert.match(reply, /does not identify the upstream username/);
 });
 
 test("the system prompt does NOT advertise a credential the session isn't entitled to", async () => {
@@ -1083,4 +1228,120 @@ test("the system prompt does NOT advertise a credential the session isn't entitl
   });
   const res = await built.app.turn(dm("!sysprompt"));
   assert.doesNotMatch(res.reply ?? "", /Shared org credentials available to you/);
+});
+
+test("the published-apps switch defaults on, round-trips, survives a partial update, and rejects non-booleans", async () => {
+  const srv = start();
+  try {
+    await putCred(srv.base, { slug: "acme-data", name: "Acme data", secret: "s", host: "relay.example" });
+    let loaded = (await getCfg(srv.base)).serviceCredentials.find((c) => c.slug === "acme-data")!;
+    assert.equal(loaded.deployments, true);
+    assert.equal(
+      (
+        await putCred(srv.base, {
+          slug: "acme-data",
+          name: "Acme data",
+          host: "relay.example",
+          deployments: false,
+          expectedUpdatedAt: loaded.updatedAt,
+        })
+      ).status,
+      200,
+    );
+    loaded = (await getCfg(srv.base)).serviceCredentials.find((c) => c.slug === "acme-data")!;
+    assert.equal(loaded.deployments, false);
+    assert.equal(
+      (
+        await putCred(srv.base, {
+          slug: "acme-data",
+          name: "Acme data renamed",
+          host: "relay.example",
+          expectedUpdatedAt: loaded.updatedAt,
+        })
+      ).status,
+      200,
+    );
+    loaded = (await getCfg(srv.base)).serviceCredentials.find((c) => c.slug === "acme-data")!;
+    assert.equal(loaded.deployments, false, "a partial update keeps the switch as it was");
+    const bad = await putCred(srv.base, {
+      slug: "acme-data",
+      name: "Acme data",
+      host: "relay.example",
+      deployments: "no",
+      expectedUpdatedAt: loaded.updatedAt,
+    });
+    assert.equal(bad.status, 400);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("credential lists batch grants and finish without usage reads", async (t) => {
+  const srv = start();
+  t.after(srv.close);
+  for (const slug of ["first", "second"]) {
+    assert.equal(
+      (await putCred(srv.base, { slug, name: slug, host: "api.example.com", secret: "private" })).status,
+      200,
+    );
+  }
+  const listGrants = t.mock.method(srv.built.acl, "list");
+  t.mock.method(srv.built.acl, "grantsFor", () => {
+    throw new Error("per-credential grant read");
+  });
+  t.mock.method(srv.built.credentialUsage, "list", () => {
+    throw new Error("raw usage read");
+  });
+  t.mock.method(srv.built.credentialUsage, "summary", () => {
+    throw new Error("summary read on list path");
+  });
+  const response = await fetch(`${srv.base}/v1/admin/scopes/org:default-org?view=credentials`, {
+    headers: ADMIN,
+    signal: AbortSignal.timeout(500),
+  });
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as { serviceCredentials: { grantees: string[]; usageCount?: number }[] };
+  assert.equal(body.serviceCredentials.length, 2);
+  assert.equal(listGrants.mock.callCount(), 1);
+  for (const credential of body.serviceCredentials) {
+    assert.deepEqual(credential.grantees, ["org:default-org"]);
+    assert.equal(credential.usageCount, undefined);
+  }
+});
+
+test("usage summaries authorize before reads and include only the requested scope's credentials", async (t) => {
+  const srv = start();
+  t.after(srv.close);
+  await putCred(srv.base, { slug: "summary", name: "Summary", host: "api.example.com", secret: "private" });
+  srv.built.credentialUsage.record({
+    slug: "summary",
+    host: "api.example.com",
+    status: "ok",
+    scopeLabel: "personal:U1",
+    principalId: "U1",
+  });
+  srv.built.credentialUsage.record({
+    slug: "unlisted",
+    host: "api.example.com",
+    status: "ok",
+    scopeLabel: "personal:U2",
+    principalId: "U2",
+  });
+  const read = t.mock.method(srv.built.serviceCreds, "listServiceCredentials");
+  const summarize = t.mock.method(srv.built.credentialUsage, "summary");
+  const path = `${srv.base}/v1/admin/scopes/org:default-org/credential-usage`;
+  assert.equal((await fetch(path, { headers: { "x-admin-actor": "nobody@default-org" } })).status, 403);
+  assert.equal(read.mock.callCount(), 0);
+  assert.equal(summarize.mock.callCount(), 0);
+  const response = await fetch(path, { headers: ADMIN });
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as {
+    summaries: { slug: string; usageCount: number; recentUsagePrincipals: string[] }[];
+  };
+  assert.equal(body.summaries.length, 1);
+  assert.equal(body.summaries[0]!.slug, "summary");
+  assert.equal(body.summaries[0]!.usageCount, 1);
+  assert.deepEqual(body.summaries[0]!.recentUsagePrincipals, ["U1"]);
+  assert.deepEqual(summarize.mock.calls[0]!.arguments, [["summary"]]);
+  assert.doesNotMatch(JSON.stringify(body), /private|unlisted|U2/);
 });

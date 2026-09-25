@@ -3,11 +3,9 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runChecks } from "../src/commands/check.ts";
+import { runChecks, runCheckCommand } from "../src/commands/check.ts";
 import type { QmConfig } from "../src/config.ts";
 import { computedSecrets, renderEnvExample } from "../src/secrets.ts";
-
-const PINNED_SANDBOX_IMAGE = `registry.fly.io/acme-sandboxes@sha256:${"b".repeat(64)}`;
 
 const CONFIG: QmConfig = {
   contract: 1,
@@ -19,7 +17,7 @@ const CONFIG: QmConfig = {
   skills: [],
   env: {},
   imageOverrides: {},
-  sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+  sandbox: { app: "acme-sandboxes" },
 };
 
 function deployment(setup: (dir: string) => void, config: Partial<QmConfig> = {}): { dir: string; config: QmConfig } {
@@ -178,6 +176,15 @@ test("a bare deployment (no sandbox/, no plugins) passes", () => {
   }
 });
 
+test("docker with sandbox.backend local passes without a Fly sandbox app", () => {
+  const d = deployment(() => {}, { sandbox: { backend: "local", image: "qm-sandbox-local:latest" } });
+  try {
+    assert.doesNotThrow(() => check(d));
+  } finally {
+    rmSync(d.dir, { recursive: true, force: true });
+  }
+});
+
 test("AWS requires exact ECS/ECR coordinates for discovered plugins", () => {
   const plugin = { name: "linear", image: "ghcr.io/acme/linear:1" };
   const aws = {
@@ -207,6 +214,42 @@ test("AWS requires exact ECS/ECR coordinates for discovered plugins", () => {
     d.config.aws!.services.linear!.architecture = "amd64";
     delete d.config.aws!.services.linear;
     assert.throws(() => check(d), /aws\.services\.linear/);
+  } finally {
+    rmSync(d.dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS accepts retained bundled coordinates only when their host is enabled", () => {
+  const d = deployment(() => {}, {
+    target: "aws",
+    services: ["core", "web-ui", "admin", "portal", "auth"],
+    aws: {
+      accountId: "123456789012",
+      region: "us-west-2",
+      cluster: "acme",
+      deployRoleArn: "arn:aws:iam::123456789012:role/deploy",
+      secretsPrefix: "acme/",
+      imageLabel: "release",
+      networking: { cloudMapNamespace: "acme.internal" },
+      services: Object.fromEntries(
+        ["core", "web-ui", "admin", "portal", "auth"].map((name) => [
+          name,
+          { ecrRepository: name, ecsService: `acme-${name}`, cpu: 512, memory: 1024 },
+        ]),
+      ),
+    },
+  });
+  try {
+    assert.doesNotThrow(() => check(d));
+    delete d.config.aws!.services["web-ui"];
+    assert.throws(() => check(d), /aws\.services\.web-ui/);
+    d.config.services = ["core"];
+    delete d.config.aws!.services.portal;
+    assert.throws(() => check(d), /aws\.services\.(admin|auth)/);
+    delete d.config.aws!.services.admin;
+    delete d.config.aws!.services.auth;
+    d.config.aws!.services.unused = { ecrRepository: "unused", ecsService: "unused", cpu: 512, memory: 1024 };
+    assert.throws(() => check(d), /aws\.services\.unused/);
   } finally {
     rmSync(d.dir, { recursive: true, force: true });
   }
@@ -259,20 +302,18 @@ test("secret-looking literals in plugin and sandbox env fail config.no-secret-va
     plugins: [{ name: "linear", image: "ghcr.io/x:1", env: { LINEAR_API_KEY: "lin_x" } }],
   });
   const viaSandbox = deployment(() => {}, {
-    sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE, env: { GH_TOKEN: "ghp_x" } },
+    sandbox: { app: "acme-sandboxes", env: { GH_TOKEN: "ghp_x" } },
   });
   const viaKey = deployment(() => {}, { env: { core: { AWS_SECRET_ACCESS_KEY: "aws_x" } } });
   const viaCred = deployment(() => {}, {
     sandbox: {
       app: "acme-sandboxes",
-      image: PINNED_SANDBOX_IMAGE,
       env: { PGPASSWORD: "pg_x", GOOGLE_CREDENTIALS: "{}" },
     },
   });
   const benign = deployment(() => {}, {
     sandbox: {
       app: "acme-sandboxes",
-      image: PINNED_SANDBOX_IMAGE,
       env: { JWT_PUBLIC_KEY: "MFkw...", GOOGLE_APPLICATION_CREDENTIALS: "/run/secrets/gcp.json" },
     },
   });
@@ -466,5 +507,33 @@ test("a delivered secret name shadowing renderer-derived env fails config.secret
     rmSync(overridden.dir, { recursive: true, force: true });
     rmSync(benign.dir, { recursive: true, force: true });
     rmSync(dockerTarget.dir, { recursive: true, force: true });
+  }
+});
+
+test("quiet checks reject invalid supplied sandbox credentials just like human checks", async (t) => {
+  const { dir, config } = deployment(() => {});
+  writeFileSync(join(dir, ".env"), "FLY_SANDBOX_API_TOKEN=fm2_invalid\n");
+  t.mock.method(globalThis, "fetch", async () => new Response("", { status: 403 }));
+  try {
+    for (const report of [false, true]) {
+      await assert.rejects(
+        runCheckCommand(config, dir, join(dir, "sandbox"), undefined, report),
+        /cannot access the Fly app/,
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("only public PostHog ingestion tokens may be configured as plaintext", () => {
+  for (const value of ["phc_example123", "phx_personal123", "private-token"]) {
+    const d = deployment(() => {}, { env: { core: { POSTHOG_API_KEY: value } } });
+    try {
+      if (value.startsWith("phc_")) assert.doesNotThrow(() => check(d));
+      else assert.throws(() => check(d), /POSTHOG_API_KEY belongs in the target secret store/);
+    } finally {
+      rmSync(d.dir, { recursive: true, force: true });
+    }
   }
 });

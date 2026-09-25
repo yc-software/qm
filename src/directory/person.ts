@@ -1,6 +1,36 @@
-export function personKey(id: string | null | undefined): string {
+export interface PrincipalLinkResolver {
+  canonical(key: string): string | undefined;
+  aliases(key: string): readonly string[];
+}
+
+let links: PrincipalLinkResolver | null = null;
+
+export function installPrincipalLinks(resolver: PrincipalLinkResolver | null): void {
+  links = resolver;
+}
+
+export function foldPrincipalId(id: string | null | undefined): string {
   const s = (id ?? "").trim();
   return s.includes("@") ? s.toLowerCase() : s;
+}
+
+export function canonicalPerson(id: string): string {
+  const key = foldPrincipalId(id);
+  if (!key) return id;
+  return links?.canonical(key) ?? id;
+}
+
+export function personIds(id: string): string[] {
+  const key = foldPrincipalId(id);
+  if (!key) return [];
+  const canonical = links?.canonical(key) ?? id.trim();
+  return [canonical, ...(links?.aliases(foldPrincipalId(canonical)) ?? [])];
+}
+
+export function personKey(id: string | null | undefined): string {
+  const key = foldPrincipalId(id);
+  if (!key) return "";
+  return foldPrincipalId(links?.canonical(key) ?? key);
 }
 
 export function samePerson(a: string | null | undefined, b: string | null | undefined): boolean {

@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { sandboxCoreEnv, type QmConfig } from "../src/config.ts";
+import { type QmConfig } from "../src/config.ts";
+import { FLY_TEMPLATE_ENV_DEFAULTS } from "../src/target-env-defaults.ts";
 import {
-  FLY_TEMPLATE_ENV_DEFAULTS,
   computedSecrets,
+  serviceSecretValue,
   renderEnvExample,
   runtimeSecretNames,
   secretDestinations,
@@ -159,16 +160,7 @@ test("model credentials are optional at deploy time because Admin onboarding can
   assert.equal(secretByName(docker, "ANTHROPIC_API_KEY").required, false);
 });
 
-test("the Fly sandbox token avoids flyctl's FLY_API_TOKEN authentication variable", () => {
-  const fly = makeConfig({ target: "fly" });
-  const sandbox = secretByName(fly, "FLY_SANDBOX_API_TOKEN");
-  assert.ok(sandbox.required);
-  assert.deepEqual(runtimeSecretNames("core", sandbox), ["FLY_API_TOKEN"]);
-  assert.ok(!computedSecrets(fly).some((secret) => secret.name === "FLY_API_TOKEN"));
-});
-
-test("the Fly tokens belong to a Fly target, and the publisher token only to a Fly deploy provider", () => {
-  assert.ok(secretByName(makeConfig({ target: "fly" }), "FLY_SANDBOX_API_TOKEN").required);
+test("the Fly publisher token belongs only to a Fly deploy provider", () => {
   assert.ok(!computedSecrets(makeConfig({ target: "fly" })).some((secret) => secret.name === "FLY_DEPLOY_API_TOKEN"));
   assert.ok(
     secretByName(makeConfig({ target: "fly", env: { core: { DEPLOY_PROVIDER: "fly" } } }), "FLY_DEPLOY_API_TOKEN")
@@ -190,6 +182,16 @@ test("the sprites token is a catalog secret when the sandbox backend is sprites"
       (secret) => secret.name === "SPRITES_TOKEN",
     ),
   );
+});
+
+test("the Agent37 key is required for either sandbox route", () => {
+  for (const config of [
+    makeConfig({ env: { core: { SANDBOX_BACKEND: "agent37" } } }),
+    makeConfig({ env: { core: { SANDBOX_SECONDARY_BACKEND: "agent37" } } }),
+    makeConfig({ sandbox: { backend: "agent37" } }),
+  ]) {
+    assert.equal(secretByName(config, "AGENT37_API_KEY").required, true);
+  }
 });
 
 test("naming a base model provider makes that provider's key a required deployment secret", () => {
@@ -330,43 +332,39 @@ test("PORTAL_IDENTITY_SECRET reaches every service that signs or verifies a port
   const secret = secretByName(config, "PORTAL_IDENTITY_SECRET");
   assert.deepEqual(
     [...secretDestinations(secret).keys()].sort(),
-    ["admin", "core", "portal", "web-ui"],
+    ["core", "portal", "web-ui"],
     "core verifies with PORTAL_IDENTITY_SECRET, so a surface left without it signs with a different key and every request it makes is rejected",
   );
 });
 
-test("a fly deployment tells core which sandbox substrate to boot", () => {
-  const config = makeConfig({
-    target: "fly",
-    sandbox: {
-      app: "acme-sb",
-      image: "registry.fly.io/acme-sb@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
-    },
-  });
-  assert.equal(
-    sandboxCoreEnv(config).env.SANDBOX_BACKEND,
-    "sprites",
-    "core refuses to boot in production unless SANDBOX_BACKEND is set explicitly",
-  );
+test("INBOX_USERS is one optional secret shared by web-ui and admin", () => {
+  const config = makeConfig({ services: ["core", "web-ui", "admin"] });
+  const allowlist = secretByName(config, "INBOX_USERS");
+  assert.equal(allowlist.required, false);
+  assert.deepEqual(allowlist.services, ["admin", "web-ui"]);
+  assert.deepEqual([...secretDestinations(allowlist).keys()], ["web-ui"]);
+  assert.deepEqual(runtimeSecretNames("web-ui", allowlist), ["INBOX_USERS"]);
+  assert.deepEqual(runtimeSecretNames("admin", allowlist), ["INBOX_USERS"]);
+  assert.match(renderEnvExample(config), /Inbox, Calendar, and Design System\. \(admin, web-ui\)/);
+  assert.match(renderEnvExample(config), /^# INBOX_USERS=\s{2}# optional$/m);
 });
 
-test("an explicit sandbox.backend wins, and non-fly targets keep their own default", () => {
-  const pinned = makeConfig({
-    target: "fly",
-    sandbox: {
-      app: "acme-sb",
-      backend: "sprites",
-      image: "registry.fly.io/acme-sb@sha256:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
-    },
-  });
-  assert.equal(sandboxCoreEnv(pinned).env.SANDBOX_BACKEND, "sprites");
-  const docker = makeConfig({
-    sandbox: {
-      app: "acme-sb",
-      image: "registry.fly.io/acme-sb@sha256:3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
-    },
-  });
-  assert.equal(sandboxCoreEnv(docker).env.SANDBOX_BACKEND, undefined);
+test("the invitation-email pair reaches core as optional secrets on every topology", () => {
+  for (const name of ["RESEND_API_KEY", "AUTH_EMAIL_FROM"]) {
+    const alone = secretByName(makeConfig(), name);
+    assert.equal(alone.required, false);
+    assert.deepEqual([...secretDestinations(alone).keys()], ["core"]);
+    assert.match(alone.description, /admin Users tab or by chatting with QM/);
+    assert.match(renderEnvExample(makeConfig()), new RegExp(`^# ${name}=  # optional$`, "m"));
+
+    const broker = makeConfig({
+      services: ["core", "portal", "auth"],
+      env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } },
+    });
+    const shared = secretByName(broker, name);
+    assert.equal(shared.required, false);
+    assert.deepEqual([...secretDestinations(shared).keys()].sort(), ["core", "portal"]);
+  }
 });
 
 test("the .env.example catalog names every secret exactly once", () => {
@@ -379,4 +377,97 @@ test("the .env.example catalog names every secret exactly once", () => {
     const duplicated = declared.filter((name, i) => declared.indexOf(name) !== i);
     assert.deepEqual(duplicated, [], `services=${services.join("+")} lists a secret twice`);
   }
+});
+
+test("runtime model provider override controls the required billing key", () => {
+  const config = makeConfig({
+    modelProvider: "anthropic",
+    env: { core: { HARNESS: "pi", MODEL_PROVIDER: " openrouter " } },
+  });
+  assert.equal(secretByName(config, "OPENROUTER_API_KEY").required, true);
+  assert.equal(secretByName(config, "ANTHROPIC_API_KEY").required, false);
+});
+
+test("combined auth rejects two source secrets for the same environment name", () => {
+  const config = makeConfig({
+    services: ["portal", "auth"],
+    secretEnv: {
+      portal: { RESEND_API_KEY: "PORTAL_RESEND" },
+      auth: { RESEND_API_KEY: "AUTH_RESEND" },
+    },
+  });
+  assert.throws(
+    () => serviceSecretValue(config, "auth", "RESEND_API_KEY", new Map()),
+    /would receive env RESEND_API_KEY from both/,
+  );
+});
+
+test("scope-selected providers require both Modal and Sprites credentials", () => {
+  const config = makeConfig({
+    env: { core: { SANDBOX_BACKEND: "sprites", SANDBOX_SCOPE_BACKENDS: '{"personal":"modal","channel":"sprites"}' } },
+  });
+  const required = computedSecrets(config)
+    .filter((secret) => secret.required)
+    .map((secret) => secret.name);
+  for (const name of ["SPRITES_TOKEN", "MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"])
+    assert.ok(required.includes(name), name);
+});
+
+test("a scope routed to superserve requires its API key even when it is not the primary backend", () => {
+  const config = makeConfig({
+    env: { core: { SANDBOX_BACKEND: "local", SANDBOX_SCOPE_BACKENDS: '{"channel":"superserve"}' } },
+  });
+  assert.equal(secretByName(config, "SUPERSERVE_API_KEY").required, true);
+});
+
+test("shared Fly publishing requires private peers only when selected", () => {
+  for (const provider of ["fly", "aws"]) {
+    for (const shared of [false, true]) {
+      const config = makeConfig({
+        target: "aws",
+        env: {
+          core: {
+            DEPLOY_PROVIDER: provider,
+            ...(shared ? { FLY_DEPLOY_SHARED_APP_NAME: "acme-apps" } : {}),
+          },
+        },
+      });
+      const peer = computedSecrets(config).find((secret) => secret.name === "FLY_DEPLOY_WIREGUARD_PEERS");
+      assert.equal(Boolean(peer?.required), provider === "fly" && shared);
+      if (provider === "fly" && shared) assert.doesNotMatch(renderEnvExample(config), /tokens create org/);
+    }
+  }
+});
+
+test("deployment control credentials are conditional and cannot be delivered to plugins or sandboxes", () => {
+  assert.equal(
+    computedSecrets(makeConfig()).some((secret) => secret.name === "DEPLOYMENT_CONTROL_SECRET"),
+    false,
+  );
+  const aws = { backgroundWorkControl: true } as NonNullable<QmConfig["aws"]>;
+  const config = makeConfig({ target: "aws", aws });
+  const control = secretByName(config, "DEPLOYMENT_CONTROL_SECRET");
+  assert.equal(control.required, true);
+  assert.deepEqual(control.services, ["core"]);
+  assert.throws(
+    () =>
+      computedSecrets({
+        ...config,
+        plugins: [{ name: "external", secrets: [{ name: "DEPLOYMENT_CONTROL_SECRET" }] }],
+      }),
+    /only to core/,
+  );
+  assert.throws(
+    () => computedSecrets({ ...config, sandbox: { app: "sandbox", secretEnv: ["DEPLOYMENT_CONTROL_SECRET"] } }),
+    /only to core/,
+  );
+  assert.throws(
+    () =>
+      computedSecrets({
+        ...config,
+        services: ["core", "portal"],
+        secretEnv: { portal: { TOKEN: "DEPLOYMENT_CONTROL_SECRET" } },
+      }),
+    /only to core/,
+  );
 });

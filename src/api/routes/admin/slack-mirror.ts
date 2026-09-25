@@ -35,10 +35,14 @@ export async function listSlackMirrorContainers(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   audit(deps, { principalId: actor.id, action: "slack_mirror.read", resource: "slack-mirror", scopeLabel: scope });
-  const raw = await app.listSurfaceContainers();
+  const raw = await app.listSurfaceContainers({ limit: SLACK_MIRROR_PAGE_MAX + 1 });
+  const hasMore = raw.length > SLACK_MIRROR_PAGE_MAX;
   const channelsById = new Map((await app.directoryChannels()).map((c) => [c.channelId.toLowerCase(), c.name]));
-  const containers = raw.map((c) => ({ ...c, name: c.name ?? channelsById.get(c.container.toLowerCase()) }));
-  return sendJson(res, 200, { scopeId: scope, containers });
+  const containers = (hasMore ? raw.slice(0, SLACK_MIRROR_PAGE_MAX) : raw).map((c) => ({
+    ...c,
+    name: c.name ?? channelsById.get(c.container.toLowerCase()),
+  }));
+  return sendJson(res, 200, { scopeId: scope, containers, hasMore, limit: SLACK_MIRROR_PAGE_MAX });
 }
 
 export async function listSlackMirrorMessages(ctx: ApiCtx): Promise<void> {
@@ -67,8 +71,10 @@ export async function listSlackMirrorMessages(ctx: ApiCtx): Promise<void> {
       mentions: names.mentions(m.text, m.mentions),
     }));
   if (q) {
-    const messages = withNames(await app.searchSurface(q, { ...(container ? { container } : {}), limit }));
-    return sendJson(res, 200, { scopeId: scope, mode: "search", query: q, messages });
+    const found = await app.searchSurface(q, { ...(container ? { container } : {}), limit: limit + 1 });
+    const truncated = found.length > limit;
+    const messages = withNames(truncated ? found.slice(0, limit) : found);
+    return sendJson(res, 200, { scopeId: scope, mode: "search", query: q, messages, hasMore: truncated, limit });
   }
   const before = url.searchParams.get("before") ?? undefined;
   const raw = await app.readSurfaceMessages(container, {

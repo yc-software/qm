@@ -7,6 +7,8 @@ import {
   slackSectionBlocks,
   resolveMentionsInText,
   neutralizeMassMentions,
+  neutralizeMentions,
+  wireMentionKeys,
   setMentionIndex,
   inlineCode,
 } from "../src/slack/lib.ts";
@@ -172,16 +174,16 @@ test("armUserMentions: plain @name arms to <@id> via toSlackMrkdwn", () => {
   setMentionIndex(
     new Map([
       ["ankit", "U111"],
-      ["regan", "U222"],
-      ["regan bell", "U222"],
+      ["alex", "U222"],
+      ["alex morgan", "U222"],
       ["ren", "U888"],
       ["renée", "U999"],
     ]),
   );
   try {
     assert.equal(toSlackMrkdwn("thanks @ankit!"), "thanks <@U111>!");
-    assert.equal(toSlackMrkdwn("@Regan Bell said so"), "<@U222> said so");
-    assert.equal(toSlackMrkdwn("cc @regan can you look"), "cc <@U222> can you look");
+    assert.equal(toSlackMrkdwn("@Alex Morgan said so"), "<@U222> said so");
+    assert.equal(toSlackMrkdwn("cc @alex can you look"), "cc <@U222> can you look");
     assert.equal(toSlackMrkdwn("ping @unknown-person"), "ping @unknown-person");
     assert.equal(toSlackMrkdwn("email me a@ankit.com"), "email me a@ankit.com");
     assert.equal(toSlackMrkdwn("`@ankit` and ```\n@ankit\n```"), "`@ankit` and ```\n@ankit\n```");
@@ -204,6 +206,73 @@ test("armUserMentions: reserved broadcast names never arm", () => {
   try {
     assert.equal(toSlackMrkdwn("hey @here look"), "hey @here look");
     assert.equal(toSlackMrkdwn("<!here> look"), "@​here look");
+  } finally {
+    setMentionIndex(new Map());
+  }
+});
+
+test("tilde fences are stashed like backtick fences, contents unconverted", () => {
+  assert.equal(toSlackMrkdwn("~~~\n**not bold** [x](y)\n~~~"), "```\n**not bold** [x](y)\n```");
+  assert.equal(toSlackMrkdwn("~~~python\nprint('hi')\n~~~"), "```python\nprint('hi')\n```");
+});
+
+test("a tilde fence quoting backtick fences is kept verbatim", () => {
+  const md = "~~~\nUse ```bash\nls\n``` to fence\n~~~";
+  assert.equal(toSlackMrkdwn(md), md);
+});
+
+test("strikethrough tildes are not mistaken for fences", () => {
+  assert.equal(toSlackMrkdwn("~~gone~~ stays strike"), "~gone~ stays strike");
+});
+
+test("a reformatted table too big for one section is chunked without splitting the fence open", () => {
+  const rows = Array.from({ length: 200 }, (_, i) => `| cell ${i} | ${"x".repeat(30)} |`).join("\n");
+  const md = "| head | data |\n|---|---|\n" + rows;
+  const blocks = slackSectionBlocks(toSlackMrkdwn(md));
+  assert.ok(blocks.length > 1, "the table spans several sections");
+  for (const b of blocks) {
+    const t = (b as { text: { text: string } }).text.text;
+    assert.ok(t.length <= 2_900);
+    assert.equal(
+      (t.match(/```/g) ?? []).length % 2,
+      0,
+      `section leaves a fence dangling: ${JSON.stringify(t.slice(0, 60))}`,
+    );
+  }
+});
+
+test("pathological tilde inputs stay linear-time and unmangled", () => {
+  const unclosed = "~~~x\n".repeat(8_000);
+  const t0 = performance.now();
+  const out = toSlackMrkdwn(unclosed);
+  const elapsed = performance.now() - t0;
+  assert.ok(elapsed < 1_000, `pathological input took ${Math.round(elapsed)}ms`);
+  assert.equal(out, unclosed, "openers with no closer anywhere stay verbatim");
+
+  const many = Array.from({ length: 500 }, (_, i) => `~~~\nblock ${i} **kept**\n~~~`).join("\n\n");
+  const converted = toSlackMrkdwn(many);
+  assert.ok(!converted.includes("~~~"), "every closed tilde fence converts");
+  assert.ok(converted.includes("block 499 **kept**"), "fence bodies are untouched");
+});
+
+test("an unclosed backtick fence after a tilde fence leaves the tail verbatim", () => {
+  assert.equal(toSlackMrkdwn("~~~\na\n~~~\nthen ``` dangling"), "```\na\n```\nthen ``` dangling");
+});
+
+test("wire mentions can be disarmed wholesale or only for the identities another author wrote", () => {
+  const text = "hey <@U1|ada> and <@U2>, <!here> <!channel|channel> <!subteam^S9|@eng> <!subteam^S8>";
+  assert.equal(neutralizeMentions(text), "hey @ada and @U2, @\u200bhere @\u200bchannel @eng @S8");
+  assert.deepEqual([...wireMentionKeys("<@U1|ada> <!HERE> <!subteam^S9|@eng> <@U1>")], ["@u1", "!here", "!subteam^s9"]);
+  assert.equal(
+    neutralizeMentions(text, wireMentionKeys("<@U2> <!here>")),
+    "hey <@U1|ada> and @U2, @\u200bhere <!channel|channel> <!subteam^S9|@eng> <!subteam^S8>",
+  );
+});
+
+test("a label-less wire mention is disarmed to the person's name when the directory knows it", () => {
+  setMentionIndex(new Map([["ada", "U1"]]));
+  try {
+    assert.equal(neutralizeMentions("hi <@U1> and <@U2>"), "hi @ada and @U2");
   } finally {
     setMentionIndex(new Map());
   }

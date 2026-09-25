@@ -8,8 +8,7 @@
   "flyOrg": "personal",
   "imageFrom": "qm",
   "sandbox": {
-    "app": "demo-agent-sandboxes",
-    "image": "registry.fly.io/demo-agent-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"
+    "app": "demo-agent-sandboxes"
   },
   "services": ["core", "admin", "web-ui", "portal"],
   "vms": {
@@ -19,7 +18,6 @@
     "core": {
       "WEB_UI_PUBLIC_URL": "https://demo-agent.example.com/web-ui",
       "PUBLIC_WEB_URL": "https://demo-agent.example.com",
-      "FLY_SANDBOX_APP_NAME": "demo-agent-sandboxes",
       "SNAPSHOT_STORE": "s3",
       "TRANSFER_STORE": "s3",
       "S3_BUCKET": "demo-agent-data",

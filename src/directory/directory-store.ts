@@ -12,6 +12,7 @@ export interface DirectoryChannel {
   channelId: string;
   name: string;
   isPrivate?: boolean;
+  isExternal?: boolean;
 }
 
 export interface ChannelMembership {
@@ -46,6 +47,8 @@ export interface DirectoryStore {
     channels: DirectoryChannel[],
     channelMembers?: ChannelMembership[],
     syncedAt?: number,
+    channelRosterIds?: string[],
+    revocations?: ChannelMembership[],
   ): Promise<boolean>;
   list(): Promise<DirectoryMember[]>;
   listChannels(): Promise<DirectoryChannel[]>;
@@ -54,13 +57,20 @@ export interface DirectoryStore {
   resolveChannel(query: string): Promise<ChannelResolution>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
   channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
+  channelMemberIds(channelId: string): Promise<string[] | undefined>;
   channelPrivacy(channelId: string): Promise<boolean | undefined>;
-  replaceGroups(groupMembers: GroupMembership[], syncedAt?: number): Promise<boolean>;
+  replaceGroups(
+    groupMembers: GroupMembership[],
+    syncedAt?: number,
+    groupIds?: string[],
+    groupRosterIds?: string[],
+  ): Promise<boolean>;
   upsertGroup(groupId: string, principalIds: readonly string[]): Promise<void>;
   resolveGroupByParticipants(participants: readonly string[]): Promise<GroupResolution>;
   groupMember(groupId: string, principalId: string): Promise<boolean>;
   groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
   listGroupsFor(principalId: string): Promise<string[]>;
+  conversationMembers(kind: "channel" | "group", id: string): Promise<DirectoryMember[] | undefined>;
   listChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
   setWorkspaceUrl(url: string): Promise<void>;
   meta(): Promise<DirectoryMeta>;
@@ -69,7 +79,7 @@ export interface DirectoryStore {
 export const MAX_CANDIDATES = 10;
 export const normDirectoryQuery = (s: string): string => s.trim().toLowerCase().replace(/^[@#]/, "");
 
-function pickMatch<T>(
+export function pickMatch<T>(
   items: T[],
   query: string,
   id: (t: T) => string,
@@ -93,7 +103,10 @@ export function createDirectoryStore(): DirectoryStore {
   let members: DirectoryMember[] = [];
   let channels: DirectoryChannel[] = [];
   let channelMembers: Map<string, Set<string>> | undefined;
+  let knownChannelRosters: Set<string> | undefined;
   let groupMembers: Map<string, Set<string>> | undefined;
+  let listedGroupIds: Set<string> | undefined;
+  let knownGroupRosters: Set<string> | undefined;
   let groupsSynced = false;
   let workspaceUrl: string | undefined;
   const syncedAts = new Map<string, number>();
@@ -121,41 +134,71 @@ export function createDirectoryStore(): DirectoryStore {
       members = next.filter((m) => m.principalId && m.type === "internal");
       return true;
     },
-    async replaceChannels(nextChannels, nextChannelMembers, syncedAt) {
+    async replaceChannels(nextChannels, nextChannelMembers, syncedAt, nextChannelRosterIds, revocations = []) {
       if (!acceptSync("channels", syncedAt)) return false;
       channels = nextChannels.filter((c) => c.channelId && c.name);
+      const listed = new Set(channels.map((channel) => channel.channelId));
+      knownChannelRosters = knownChannelRosters
+        ? new Set([...knownChannelRosters].filter((channelId) => listed.has(channelId)))
+        : undefined;
       if (nextChannelMembers !== undefined) {
-        const byChannel = new Map<string, Set<string>>();
+        const rosterIds = new Set(nextChannelRosterIds ?? channels.map((channel) => channel.channelId));
+        const byChannel = new Map(
+          [...(channelMembers ?? [])].filter(([channelId]) => listed.has(channelId) && !rosterIds.has(channelId)),
+        );
+        for (const channelId of rosterIds) if (listed.has(channelId)) byChannel.set(channelId, new Set());
         for (const m of nextChannelMembers) {
-          if (!m.channelId || !m.principalId) continue;
+          if (!m.channelId || !m.principalId || !rosterIds.has(m.channelId) || !listed.has(m.channelId)) continue;
           (byChannel.get(m.channelId) ?? byChannel.set(m.channelId, new Set()).get(m.channelId)!).add(m.principalId);
         }
         channelMembers = byChannel;
+        knownChannelRosters ??= new Set();
+        for (const channelId of rosterIds) if (listed.has(channelId)) knownChannelRosters.add(channelId);
+      }
+      for (const member of revocations) {
+        if (listed.has(member.channelId) && member.principalId)
+          channelMembers?.get(member.channelId)?.delete(member.principalId);
       }
       return true;
     },
     async channelMember(channelId, principalId) {
+      if (channels.some((channel) => channel.channelId === channelId && channel.isPrivate && channel.isExternal))
+        return false;
       return channelMembers?.get(channelId)?.has(principalId) ?? false;
     },
+    async channelMemberIds(channelId) {
+      if (!knownChannelRosters?.has(channelId)) return undefined;
+      return [...(channelMembers?.get(channelId) ?? [])];
+    },
     async channelMembership(channelId, principalId) {
-      const memberships = channelMembers;
       const channel = channels.find((candidate) => candidate.channelId === channelId);
-      if (!memberships || !channel) return undefined;
-      const member = memberships.get(channelId)?.has(principalId) ?? false;
+      if (!channel || !knownChannelRosters?.has(channelId)) return undefined;
+      const member = channelMembers?.get(channelId)?.has(principalId) ?? false;
       return member || channel.isPrivate === true ? member : undefined;
     },
     async channelPrivacy(channelId) {
       const channel = channels.find((candidate) => candidate.channelId === channelId);
       return channel ? channel.isPrivate === true : undefined;
     },
-    async replaceGroups(nextGroupMembers, syncedAt) {
+    async replaceGroups(nextGroupMembers, syncedAt, nextGroupIds, nextGroupRosterIds) {
       if (!acceptSync("groups", syncedAt)) return false;
-      const byGroup = new Map<string, Set<string>>();
+      const legacy = nextGroupIds === undefined || nextGroupRosterIds === undefined;
+      const listed = new Set((nextGroupIds ?? nextGroupMembers.map((member) => member.groupId)).filter(Boolean));
+      const rosterIds = new Set((nextGroupRosterIds ?? [...listed]).filter((groupId) => listed.has(groupId)));
+      const byGroup = new Map(
+        [...(groupMembers ?? [])].filter(([groupId]) => listed.has(groupId) && !rosterIds.has(groupId)),
+      );
+      for (const groupId of rosterIds) byGroup.set(groupId, new Set());
       for (const m of nextGroupMembers) {
-        if (!m.groupId || !m.principalId) continue;
+        if (!m.groupId || !m.principalId || !rosterIds.has(m.groupId)) continue;
         (byGroup.get(m.groupId) ?? byGroup.set(m.groupId, new Set()).get(m.groupId)!).add(m.principalId);
       }
       groupMembers = byGroup;
+      listedGroupIds = listed;
+      knownGroupRosters = legacy
+        ? new Set(rosterIds)
+        : new Set([...(knownGroupRosters ?? [])].filter((groupId) => listed.has(groupId)));
+      for (const groupId of rosterIds) knownGroupRosters.add(groupId);
       groupsSynced = true;
       return true;
     },
@@ -165,6 +208,10 @@ export function createDirectoryStore(): DirectoryStore {
       const byGroup = groupMembers ?? new Map<string, Set<string>>();
       byGroup.set(groupId, new Set(ids));
       groupMembers = byGroup;
+      listedGroupIds ??= new Set();
+      listedGroupIds.add(groupId);
+      knownGroupRosters ??= new Set();
+      knownGroupRosters.add(groupId);
       const stored = syncedAts.get("groups");
       syncedAts.set("groups", Math.max(stored ?? 0, Date.now()));
     },
@@ -183,17 +230,38 @@ export function createDirectoryStore(): DirectoryStore {
       return groupMembers?.get(groupId)?.has(principalId) ?? false;
     },
     async groupMembership(groupId, principalId) {
-      const memberships = groupMembers;
-      if (!memberships || !groupsSynced) return undefined;
-      return memberships.get(groupId)?.has(principalId) ?? false;
+      if (!groupsSynced) return undefined;
+      if (!listedGroupIds?.has(groupId)) return false;
+      if (!knownGroupRosters?.has(groupId)) return undefined;
+      return groupMembers?.get(groupId)?.has(principalId) ?? false;
     },
     async listGroupsFor(principalId) {
       const memberships = groupMembers;
       if (!memberships) return [];
       return [...memberships].filter(([, members]) => members.has(principalId)).map(([groupId]) => groupId);
     },
+    async conversationMembers(kind, id) {
+      let ids: string[];
+      if (kind === "channel") {
+        const channel = channels.find((candidate) => candidate.channelId === id);
+        if (!channel || channel.isExternal || !knownChannelRosters?.has(id)) return undefined;
+        ids = [...(channelMembers?.get(id) ?? [])];
+      } else {
+        if (!knownGroupRosters?.has(id)) return undefined;
+        ids = [...(groupMembers?.get(id) ?? [])];
+      }
+      if (!ids.length) return undefined;
+      const roster = ids
+        .map((principalId) => members.find((member) => samePerson(member.principalId, principalId)))
+        .filter((member): member is DirectoryMember => member !== undefined);
+      return roster.length === ids.length ? roster : undefined;
+    },
     async listChannelsFor(principalId) {
-      return channels.filter((c) => !c.isPrivate || (channelMembers?.get(c.channelId)?.has(principalId) ?? false));
+      return channels.filter(
+        (channel) =>
+          !channel.isPrivate ||
+          (!channel.isExternal && (channelMembers?.get(channel.channelId)?.has(principalId) ?? false)),
+      );
     },
     async list() {
       return members;

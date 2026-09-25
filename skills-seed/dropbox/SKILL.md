@@ -132,7 +132,7 @@ curl -sS -X POST 'https://content.dropboxapi.com/2/files/upload' \
   -H 'Dropbox-API-Path-Root: {".tag":"root","root":"ROOT_NAMESPACE_ID"}' \
   -H 'Dropbox-API-Arg: {"path":"/Reports/q3.pdf","mode":"add","autorename":true}' \
   -H 'Content-Type: application/octet-stream' \
-  --data-binary @outbox/q3.pdf
+  --data-binary @q3.pdf
 ```
 
 Create a shared link (returns a `url`; a 409 `shared_link_already_exists` carries the

@@ -1,3 +1,4 @@
+import { resolvePgCaTrust } from "../persistence/pg-pool.ts";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
@@ -5,6 +6,7 @@ import { mintSignedPayload } from "../auth/signed-token.ts";
 import { signedRequestHeaders } from "../auth/source-auth-sign.ts";
 import { loadConfig, type Config } from "../config.ts";
 import { errMessage } from "../util/errors.ts";
+import { sleep } from "../util/async.ts";
 
 export const PARALLEL_EXCEPTION_QUERY = `
   SELECT n.nspname AS schema_name, p.proname AS function_name
@@ -88,21 +90,23 @@ export async function checkSlackCredentials(
 }
 
 export async function stagingApiHeaders(
-  orgId: string,
   principalId: string,
   sourceSecret: string,
   portalIdentitySecret: string,
+  method: string,
   path: string,
+  body = "",
+  base: Record<string, string> = {},
   nowMs = Date.now(),
 ): Promise<Record<string, string>> {
   const portalIdentity = await mintSignedPayload({ p: principalId, exp: nowMs + 60_000 }, portalIdentitySecret);
   return signedRequestHeaders(
     sourceSecret,
-    "GET",
+    method,
     path,
-    "",
+    body,
     {
-      "x-admin-actor": `${principalId}@${orgId}`,
+      ...base,
       [PORTAL_IDENTITY_HEADER]: portalIdentity,
     },
     Math.floor(nowMs / 1000),
@@ -115,6 +119,10 @@ export async function checkLiveSession(
   config: LiveSessionConfig,
   baseUrl: string,
   fetchImpl: FetchLike = fetch,
+  timing: { now: () => number; sleep: (ms: number) => Promise<void>; timeout?: (ms: number) => AbortSignal } = {
+    now: Date.now,
+    sleep,
+  },
 ): Promise<void> {
   const { orgId, portalIdentitySecret, signingSecret: sourceSecret } = config;
   if (!orgId) throw new Error("live session smoke requires ORG_ID");
@@ -122,15 +130,28 @@ export async function checkLiveSession(
   if (!portalIdentitySecret) throw new Error("live session smoke requires PORTAL_IDENTITY_SECRET");
   const principalId = firstAdminPrincipal(config.adminGrants);
   const root = baseUrl.replace(/\/+$/, "");
-  const request = async (method: "GET" | "POST", path: string, body?: unknown, admin = false): Promise<unknown> => {
+  const request = async (
+    method: "GET" | "POST",
+    path: string,
+    body?: unknown,
+    admin = false,
+    signal?: AbortSignal,
+  ): Promise<unknown> => {
     const raw = body === undefined ? "" : JSON.stringify(body);
-    const headers = admin
-      ? await stagingApiHeaders(orgId, principalId, sourceSecret, portalIdentitySecret, path)
-      : signedRequestHeaders(sourceSecret, method, path, raw);
+    const headers = await stagingApiHeaders(
+      principalId,
+      sourceSecret,
+      portalIdentitySecret,
+      method,
+      path,
+      raw,
+      admin ? { "x-admin-actor": `${principalId}@${orgId}` } : {},
+    );
     const response = await fetchImpl(`${root}${path}`, {
       method,
       headers: { ...headers, ...(raw ? { "content-type": "application/json" } : {}) },
       ...(raw ? { body: raw } : {}),
+      ...(signal ? { signal } : {}),
     });
     const text = await response.text();
     if (!response.ok)
@@ -164,11 +185,19 @@ export async function checkLiveSession(
     if (turn.reply?.trim() !== expectedReply) throw new Error("live session received an unexpected model reply");
 
     const sessionPath = `/v1/sessions/${encodeURIComponent(turn.sessionId)}?viewer=${encodeURIComponent(principalId)}&tailTurns=1`;
-    const persisted = (await request("GET", sessionPath)) as {
+    const titleDeadline = timing.now() + 60_000;
+    const titleSignal = (timing.timeout ?? AbortSignal.timeout)(60_000);
+    let persisted = (await request("GET", sessionPath, undefined, false, titleSignal)) as {
       session?: { title?: string | null };
       entries?: Array<{ type?: string }>;
     };
-    if (!persisted.session?.title?.trim()) throw new Error("live session has no generated title");
+    while (!persisted.session?.title?.trim() && timing.now() < titleDeadline && !titleSignal.aborted) {
+      await timing.sleep(Math.min(500, titleDeadline - timing.now()));
+      if (timing.now() >= titleDeadline || titleSignal.aborted) break;
+      persisted = (await request("GET", sessionPath, undefined, false, titleSignal)) as typeof persisted;
+    }
+    if (timing.now() >= titleDeadline || titleSignal.aborted || !persisted.session?.title?.trim())
+      throw new Error("live session has no generated title");
     if (!persisted.entries?.some((entry) => entry.type === "user"))
       throw new Error("live session has no persisted user turn");
     if (!persisted.entries.some((entry) => entry.type === "assistant")) {
@@ -225,7 +254,9 @@ async function checkApi(
 ): Promise<void> {
   const path = `/v1/admin/sessions?scope=${encodeURIComponent(`org:${orgId}`)}&limit=5&_smoke=${randomUUID()}`;
   const response = await fetch(`http://127.0.0.1:${port}${path}`, {
-    headers: await stagingApiHeaders(orgId, principalId, sourceSecret, portalIdentitySecret, path),
+    headers: await stagingApiHeaders(principalId, sourceSecret, portalIdentitySecret, "GET", path, "", {
+      "x-admin-actor": `${principalId}@${orgId}`,
+    }),
   });
   const body = await response.text();
   if (!response.ok) throw new Error(`staging session API returned ${response.status}: ${body.slice(0, 500)}`);
@@ -237,6 +268,8 @@ type PostdeployConfig = Pick<
   Config,
   | "adminGrants"
   | "databaseUrl"
+  | "databaseCaCert"
+  | "databaseCaCertFile"
   | "flyAppName"
   | "orgId"
   | "port"
@@ -246,15 +279,20 @@ type PostdeployConfig = Pick<
   | "slack"
 >;
 
-async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
-  const { databaseUrl, orgId, portalIdentitySecret, signingSecret: sourceSecret } = config;
+async function checkDatabase(config: PostdeployConfig): Promise<void> {
+  const { databaseUrl } = config;
   if (!databaseUrl) throw new Error("postdeploy smoke requires DATABASE_URL");
-  if (!orgId) throw new Error("postdeploy smoke requires ORG_ID");
-  if (!sourceSecret) throw new Error("postdeploy smoke requires CORE_SIGNING_SECRET");
-  if (!portalIdentitySecret) throw new Error("postdeploy smoke requires PORTAL_IDENTITY_SECRET");
-
   const pg = (await import("pg")).default;
-  const client = new pg.Client({ connectionString: databaseUrl });
+  const client = new pg.Client({
+    connectionString: databaseUrl,
+    connectionTimeoutMillis: 30_000,
+    query_timeout: 30_000,
+    statement_timeout: 30_000,
+    ...resolvePgCaTrust({
+      ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
+      ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
+    }),
+  });
   await client.connect();
   try {
     const unsafe = await client.query(PARALLEL_EXCEPTION_QUERY);
@@ -266,6 +304,15 @@ async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
   } finally {
     await client.end();
   }
+}
+
+async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
+  const { orgId, portalIdentitySecret, signingSecret: sourceSecret } = config;
+  if (!orgId) throw new Error("postdeploy smoke requires ORG_ID");
+  if (!sourceSecret) throw new Error("postdeploy smoke requires CORE_SIGNING_SECRET");
+  if (!portalIdentitySecret) throw new Error("postdeploy smoke requires PORTAL_IDENTITY_SECRET");
+
+  await checkDatabase(config);
 
   await checkApi(
     orgId,
@@ -279,11 +326,21 @@ async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
   console.log("deployed staging database, API, services, public route, and Slack smoke passed");
 }
 
+export async function runSessionSmoke(config: PostdeployConfig, baseUrl: string): Promise<void> {
+  await checkLiveSession(config, baseUrl, (input, init) => {
+    const timeout = AbortSignal.timeout(
+      init?.method === "POST" && new URL(String(input)).pathname === "/v1/turns" ? 300_000 : 30_000,
+    );
+    return fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([timeout, init.signal]) : timeout });
+  });
+  if (config.databaseUrl) await checkDatabase(config);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const config = loadConfig();
   if (process.argv[2] === "session") {
-    await checkLiveSession(config, process.argv[3] ?? `http://127.0.0.1:${config.port}`);
-    console.log("live session smoke passed");
+    await runSessionSmoke(config, process.argv[3] ?? `http://127.0.0.1:${config.port}`);
+    console.log("database and live session smoke passed");
   } else {
     await runPostdeploySmoke(config);
   }

@@ -14,7 +14,8 @@ import {
   writeSlotFlag,
 } from "./lib/pool.ts";
 import {
-  claimSlotLock,
+  claimPortSlot,
+  claimSlotPorts,
   heartbeatFresh,
   leaseReclaimReason,
   leaseStale,
@@ -41,7 +42,7 @@ import { sweepSlackTokenOrphans } from "./lib/orphans.ts";
 import { destroyLocalDevSandboxes } from "./lib/sandbox.ts";
 import { bestEffort, errMessage, formatAge, nowEpoch, sleep } from "./lib/util.ts";
 import { runDoctor } from "./commands/doctor.ts";
-import type { BootPhaseEvent, BootResult, LeaseInfo } from "./lib/types.ts";
+import type { BootPhaseEvent, BootResult, DevSandboxChoice, LeaseInfo } from "./lib/types.ts";
 import { CHILD_ORDER, EXIT } from "./lib/types.ts";
 import { validOrgId } from "../../cli/src/config.ts";
 
@@ -58,6 +59,7 @@ function parseCli() {
         follow: { type: "boolean", short: "f", default: false },
         fix: { type: "boolean", default: false },
         sandbox: { type: "string", default: "auto" },
+        surface: { type: "string" },
         "no-slack": { type: "boolean", default: false },
         "no-watch": { type: "boolean", default: false },
         org: { type: "string" },
@@ -75,7 +77,7 @@ const command = positionals[0] ?? "up";
 const store = poolStore();
 
 const commandOptions: Record<string, readonly string[]> = {
-  up: ["json", "force", "strict", "rotate", "sandbox", "no-slack", "no-watch", "org"],
+  up: ["json", "force", "strict", "rotate", "sandbox", "surface", "no-slack", "no-watch", "org"],
   down: ["json"],
   status: ["json"],
   restart: ["json"],
@@ -116,7 +118,18 @@ function emitJson(payload: unknown): void {
 }
 
 const orgId = opts.org ?? process.env.DEV_INSTANCE_ORG_ID ?? "acme";
-const withSlack = !opts["no-slack"] && process.env.DEV_INSTANCE_NO_SLACK !== "1";
+const requestedSurface =
+  opts.surface ?? (opts["no-slack"] || process.env.DEV_INSTANCE_NO_SLACK === "1" ? "web" : undefined);
+if (requestedSurface !== undefined && !["web", "slack", "both"].includes(requestedSurface)) {
+  console.error("dev: --surface must be web, slack, or both");
+  process.exit(EXIT.usage);
+}
+if (opts.surface && opts["no-slack"] && opts.surface !== "web") {
+  console.error("dev: --no-slack conflicts with --surface " + opts.surface);
+  process.exit(EXIT.usage);
+}
+let withSlack = requestedSurface === "slack" || requestedSurface === "both";
+let withWeb = requestedSurface !== "slack";
 const devCallerEnv = (): Record<string, string> => ({ ...callerEnvSnapshot(), DEV_INSTANCE_ORG_ID: orgId });
 
 async function legacyTeardown(lease: LeaseInfo): Promise<void> {
@@ -160,12 +173,18 @@ async function reclaimReclaimable(): Promise<boolean> {
   return false;
 }
 
-function claimNext(exclude: Set<string>): string | null {
+async function claimNext(exclude: Set<string>): Promise<string | null> {
   const slots = listSlots(store);
   const ordered = [...slots.filter((s) => !slotFlagged(s, store)), ...slots.filter((s) => slotFlagged(s, store))];
   for (const slot of ordered) {
     if (exclude.has(slot)) continue;
-    if (!claimSlotLock(slot, store)) continue;
+    try {
+      if (!(await claimSlotPorts(slot, store))) continue;
+    } catch (error) {
+      out(`skip ${slot}: ${errMessage(error)}`);
+      exclude.add(slot);
+      continue;
+    }
     if (!slotValid(slot, store)) {
       releaseSlotLock(slot, store);
       out(`skip ${slot}: tokens missing/invalid in ${join(store, `${slot}.env`)}`);
@@ -173,22 +192,6 @@ function claimNext(exclude: Set<string>): string | null {
       continue;
     }
     return slot;
-  }
-  return null;
-}
-
-// Slackless instances need only a port/lock slot, not a provisioned Slack app.
-// Prefer slot numbers with no poolN.env so a browser-only instance never squats
-// a slot a Slack-enabled worktree could use; fall back to configured ones.
-const MAX_PORT_SLOTS = 16; // slotPorts spaces port families 16 apart
-
-function claimPortSlot(exclude: Set<string>): string | null {
-  const configured = new Set(listSlots(store));
-  const all = Array.from({ length: MAX_PORT_SLOTS }, (_, i) => `pool${i + 1}`);
-  const ordered = [...all.filter((s) => !configured.has(s)), ...all.filter((s) => configured.has(s))];
-  for (const slot of ordered) {
-    if (exclude.has(slot)) continue;
-    if (claimSlotLock(slot, store)) return slot;
   }
   return null;
 }
@@ -219,6 +222,7 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
       `admin_port=${ports.admin}`,
       `portal_port=${ports.portal}`,
       `slack=${withSlack ? "1" : "0"}`,
+      `web=${withWeb ? "1" : "0"}`,
       "booting=1",
       `owner_pid=${process.pid}`,
       `created_epoch=${nowEpoch()}`,
@@ -245,10 +249,11 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
         branch,
         callerEnv,
         watch: !opts["no-watch"] && callerEnv.DEV_INSTANCE_WATCH !== "0",
-        sandbox: opts.sandbox as "local" | "sprites" | "auto",
+        sandbox: opts.sandbox as DevSandboxChoice,
         canaryChannel,
         strict: opts.strict,
         slack: withSlack,
+        web: withWeb,
       },
       null,
       2,
@@ -305,14 +310,17 @@ function printSuccess(result: BootResult, branch: string): void {
       : `[ok] dev instance up -- slot ${result.slot} (browser only -- Slack off)`,
   );
   out(`   branch : ${branch}`);
-  out(`   portal : http://localhost:${ports.portal}  -> prod-style front door: the assistant at / and /admin`);
+  if (result.webEnabled !== false)
+    out(`   portal : http://localhost:${ports.portal}  -> prod-style front door: the assistant at / and /admin`);
   out(
     `   core   : http://localhost:${ports.core}  (org=${orgId}, session_store=${meta.session_store}, run_store=${meta.run_store})`,
   );
   if (slackLive) out(`   slack  : @${result.handle}  -> mention it in example.slack.com to test`);
-  out(`   web    : http://localhost:${ports.portal}/  (direct: http://localhost:${ports.web})`);
-  out(`   admin  : http://localhost:${ports.portal}/admin/   (direct: http://localhost:${ports.admin})`);
-  out(`   logs   : ${lock}/{core,web,admin,portal,supervisor}.log`);
+  if (result.webEnabled !== false)
+    out(`   web    : http://localhost:${ports.portal}/  (direct: http://localhost:${ports.web})`);
+  if (result.webEnabled !== false)
+    out(`   admin  : http://localhost:${ports.portal}/admin/   (direct: http://localhost:${ports.web}/admin/)`);
+  out(`   logs   : ${lock}`);
   out(`   status : dev status   |   diagnose: dev doctor   |   apply env/code changes: dev up (reloads in place)`);
   out(`   down   : dev down   (auto-reaped if this worktree is removed)`);
 }
@@ -325,9 +333,16 @@ async function cmdUp(): Promise<number> {
 
   const mine = myLease(worktree, store);
   if (mine) {
+    if (requestedSurface === undefined) {
+      withSlack = mine.meta.slack !== "0";
+      withWeb = mine.meta.web !== "0";
+    }
     const sock = resolveSocketPath(mine.lockDir);
     if (await supervisorReachable(sock)) {
-      if (opts.rotate) {
+      if (withSlack !== (mine.meta.slack !== "0") || withWeb !== (mine.meta.web !== "0")) {
+        out(`switching surfaces on ${mine.slot}...`);
+        await teardownLease(mine);
+      } else if (opts.rotate) {
         out(`rotating away from ${mine.slot}...`);
         writeSlotFlag(mine.slot, { reason: "manual rotate", at: nowEpoch() }, store);
         await teardownLease(mine);
@@ -357,10 +372,11 @@ async function cmdUp(): Promise<number> {
 
   const excluded = new Set<string>();
   const waitMax = Number(process.env.DEV_INSTANCE_WAIT || 120);
-  const claim = (): string | null => (withSlack ? claimNext(excluded) : claimPortSlot(excluded));
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    let slot = claim();
-    if (!slot && (await reclaimReclaimable())) slot = claim();
+  const claim = (): Promise<string | null> => (withSlack ? claimNext(excluded) : claimPortSlot(excluded, store));
+  const maxAttempts = withSlack ? Math.max(1, listSlots(store).length) : 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let slot = await claim();
+    if (!slot && (await reclaimReclaimable())) slot = await claim();
     if (!slot && waitMax > 0 && attempt === 1) {
       out("");
       out(
@@ -374,8 +390,8 @@ async function cmdUp(): Promise<number> {
         await sleep(5000);
         waited += 5;
         await reapStale();
-        if (await reclaimReclaimable()) slot = claim();
-        if (!slot) slot = claim();
+        if (await reclaimReclaimable()) slot = await claim();
+        if (!slot) slot = await claim();
       }
     }
     if (!slot) {
@@ -402,12 +418,12 @@ async function cmdUp(): Promise<number> {
         {
           reason: "stolen",
           at: nowEpoch(),
-          detail: `num_connections=${result.numConnections} host=${result.helloHost ?? "?"}`,
+          detail: `num_connections=${result.numConnections} slack_server=${result.helloHost ?? "?"}`,
         },
         store,
       );
       out(
-        `[!] slot ${slot} is STOLEN: ${result.numConnections} connections open to its Slack app (another machine/worktree holds one; hello host: ${result.helloHost ?? "?"}).`,
+        `[!] slot ${slot}: Slack reported ${result.numConnections} connections at the last hello; exclusivity is unverified (Slack server: ${result.helloHost ?? "?"}, not a client host).`,
       );
       out(`    flagged ${slot} for 30min and rotating to the next slot...`);
       excluded.add(slot);
@@ -481,22 +497,27 @@ async function cmdStatus(): Promise<number> {
   );
   for (const slot of known) {
     const lock = lockDir(slot, store);
-    const ports = slotPorts(slot);
     const flag = readSlotFlag(slot, store);
-    if (!existsSync(lock)) {
-      rows.push({ slot, state: flag && slotFlagged(slot, store) ? `flagged(${flag.reason})` : "free", ports });
-      continue;
-    }
     const lease = leases.find((l) => l.slot === slot);
-    if (!lease) continue;
-    const sock = resolveSocketPath(lock);
-    if (await supervisorReachable(sock)) {
-      const res = await supervisorRequest(sock, "GET", "/status", undefined, 5000).catch(() => null);
+    if (lease && (await supervisorReachable(resolveSocketPath(lock)))) {
+      const res = await supervisorRequest(resolveSocketPath(lock), "GET", "/status", undefined, 5000).catch(() => null);
       if (res?.body) {
         rows.push({ ...res.body, mine: res.body.worktree === worktree, flag });
         continue;
       }
     }
+    let ports;
+    try {
+      ports = slotPorts(slot);
+    } catch (error) {
+      rows.push({ slot, state: "invalid", reason: errMessage(error), worktree: lease?.meta.worktree });
+      continue;
+    }
+    if (!existsSync(lock)) {
+      rows.push({ slot, state: flag && slotFlagged(slot, store) ? `flagged(${flag.reason})` : "free", ports });
+      continue;
+    }
+    if (!lease) continue;
     const meta = lease.meta;
     const alive = CHILD_ORDER.filter((n) => pidAlive(readPidFile(lock, `${n}.pid`)));
     let state = "dead";
@@ -545,17 +566,18 @@ async function cmdStatus(): Promise<number> {
       [
         String(r.slot).padEnd(7),
         state.padEnd(18),
-        `${ports.core}/${ports.web}/${ports.admin}/${ports.portal}`.padEnd(21),
+        (ports ? `${ports.core}/${ports.web}/${ports.admin}/${ports.portal}` : "-").padEnd(21),
         age.padEnd(8),
         (r.mine ? "this" : "").padEnd(5),
         String(r.branch ?? "-").padEnd(28),
-        String(r.worktree ?? "(available)"),
+        String(r.reason ?? r.worktree ?? "(available)"),
       ].join(" "),
     );
   }
-  const taken = rows.filter((r) => r.state !== "free" && !String(r.state).startsWith("flagged")).length;
+  const invalid = rows.filter((r) => r.state === "invalid").length;
+  const free = rows.filter((r) => r.state === "free" || String(r.state).startsWith("flagged")).length;
   console.log("");
-  console.log(`${taken} taken / ${rows.length - taken} free / ${rows.length} slots total`);
+  console.log(`${rows.length - free - invalid} taken / ${free} free / ${invalid} invalid / ${rows.length} known slots`);
   console.log("live = supervised + verified. Reclaim never touches a slot with a fresh supervisor heartbeat.");
   return EXIT.ok;
 }
@@ -641,10 +663,15 @@ async function main(): Promise<number> {
     case "logs":
       return await cmdLogs();
     case "doctor":
-      return await runDoctor({ json: opts.json, fix: opts.fix, store, slack: withSlack });
+      return await runDoctor({
+        json: opts.json,
+        fix: opts.fix,
+        store,
+        slack: requestedSurface === undefined ? myLease(repoRoot(), store)?.meta.slack === "1" : withSlack,
+      });
     default:
       console.error(
-        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|auto] [--no-slack] [--no-watch] [--org id] [--fix]",
+        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|e2b|porter|agent37|superserve|auto] [--surface web|slack|both] [--no-slack] [--no-watch] [--org id] [--fix]",
       );
       return EXIT.usage;
   }

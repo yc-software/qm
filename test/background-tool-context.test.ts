@@ -203,3 +203,17 @@ test("off-Fly degradation: with NO broker the four mutating methods throw the 'u
   const list = await ctx.backgroundList();
   assert.deepEqual(list, []);
 });
+
+test("registerLogin passes through createToolContext to the tool layer", async () => {
+  const calls: string[] = [];
+  const ctx = ctxFor({
+    registerLogin: async (service, paths) => {
+      calls.push(`${service}:${paths.map((p) => p.path).join(",")}`);
+      return { service, captured: true };
+    },
+  });
+  assert.ok(ctx.registerLogin, "the callback survives context construction");
+  const result = await ctx.registerLogin!("demotool", [{ path: ".demotool/credentials", kind: "file" }]);
+  assert.deepEqual(result, { service: "demotool", captured: true });
+  assert.deepEqual(calls, ["demotool:.demotool/credentials"]);
+});

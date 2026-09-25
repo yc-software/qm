@@ -24,6 +24,21 @@ function freshApp(overrides: Partial<Config> = {}) {
 
 const actor = { externalId: "U1" };
 
+test("file memory compare-and-set permits only one writer for a revision", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "memory-cas-")));
+  const memory = createMemoryService(workspace);
+  const target = scopeId("personal", "cas-user");
+  await memory.replace(target, "# Memory\n\n- original");
+  const head = await memory.readHead!(target);
+
+  const results = await Promise.all([
+    memory.replaceIfRevision!(target, "# Memory\n\n- first", head.revision),
+    memory.replaceIfRevision!(target, "# Memory\n\n- second", head.revision),
+  ]);
+
+  assert.deepEqual(results.sort(), [false, true]);
+});
+
 function dm(text: string, thread: string): TurnRequest {
   return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
 }
@@ -184,7 +199,7 @@ test("lossy scope names cannot share a local workspace directory", async () => {
   assert.notEqual(ws.scopeDir(scopeId("channel", "a/b")), ws.scopeDir(scopeId("channel", "a?b")));
 });
 
-test("'* fact' bullets participate in capture dedupe, the facts cap, and query()", async () => {
+test("'* fact' bullets participate in capture dedupe and query(); capture never evicts old facts", async () => {
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-star-")));
   const mem = createMemoryService(ws);
   const sid = scopeId("personal", "U1");
@@ -200,8 +215,8 @@ test("'* fact' bullets participate in capture dedupe, the facts cap, and query()
   assert.equal(await mem.capture(sid, ["Lives in Seattle"], at), 1);
   const after = await mem.read(sid);
   assert.match(after, /- \(2026-05-31\) Lives in Seattle/, "the new fact is appended");
-  assert.doesNotMatch(after, /star fact 0\n/, "'* ' bullets count toward the cap — the oldest was dropped");
-  assert.match(after, /star fact 1\n/, "only the overflow was dropped");
+  assert.match(after, /star fact 0\n/, "the oldest fact survives — capture never drops");
+  assert.match(after, /star fact 1\n/);
 });
 
 test("query() retrieves matching facts and is scope-keyed (boundary-safe)", async () => {

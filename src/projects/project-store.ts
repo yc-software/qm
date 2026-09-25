@@ -8,12 +8,21 @@ import { createKeyedQueue } from "../util/async.ts";
 
 const PROJECT_GROUP_PREFIX = "web-project-";
 
+interface ProjectSlackChannel {
+  channelId: string;
+  channelName: string;
+  linkedBy: string;
+  linkedAt: number;
+}
+
 export interface Project {
   id: string;
   orgId: string;
   name: string;
   ownerId: string;
   memberIds: string[];
+  channelMemberIds?: string[];
+  slackChannel?: ProjectSlackChannel;
   createdAt: number;
   updatedAt: number;
 }
@@ -31,6 +40,20 @@ export interface ProjectStore {
   addMember(id: string, actorId: string, memberId: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
   removeMember(id: string, actorId: string, memberId: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
   rename(id: string, ownerId: string, name: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
+  setSlackChannel(
+    id: string,
+    actorId: string,
+    link: { channelId: string; channelName: string } | null,
+    effect?: ProjectMutationEffect,
+  ): Promise<ProjectMutation>;
+  syncChannelMembers(
+    id: string,
+    memberIds: readonly string[],
+    channelName?: string,
+    effect?: ProjectMutationEffect,
+  ): Promise<ProjectMutation>;
+  listLinked(): Promise<Project[]>;
+  slackChannel(groupRef: string): Promise<ProjectSlackChannel | undefined>;
   recognizes(groupRef: string): boolean;
   membership(groupRef: string, principalId: string): Promise<boolean | undefined>;
   members(groupRef: string): Promise<string[] | undefined>;
@@ -63,7 +86,12 @@ function cleanName(name: string): string {
 }
 
 function visible(project: Project): Project {
-  return { ...project, memberIds: [...project.memberIds] };
+  return {
+    ...project,
+    memberIds: [...project.memberIds],
+    ...(project.channelMemberIds ? { channelMemberIds: [...project.channelMemberIds] } : {}),
+    ...(project.slackChannel ? { slackChannel: { ...project.slackChannel } } : {}),
+  };
 }
 
 export function createProjectStore(
@@ -88,6 +116,10 @@ export function createProjectStore(
     if (!id) return undefined;
     const project = await backing.get(id);
     return project?.orgId === configOrgId() ? project : undefined;
+  }
+
+  function effectiveMemberIds(project: Project): string[] {
+    return [...new Set([...project.memberIds, ...(project.channelMemberIds ?? [])])];
   }
 
   async function mutate(
@@ -164,7 +196,7 @@ export function createProjectStore(
             project.orgId === configOrgId() &&
             isActiveMember(project.ownerId) &&
             isActiveMember(principalId) &&
-            project.memberIds.includes(principalId),
+            effectiveMemberIds(project).includes(principalId),
         )
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .map(visible);
@@ -195,18 +227,101 @@ export function createProjectStore(
         return result;
       });
     },
+    async setSlackChannel(id, actorId, link, effect) {
+      return withLock(id, async () => {
+        if (!backing.update) throw new Error("project store requires DurableMap.update");
+        const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
+        let changed = false;
+        const updated = await backing.update(id, (project) => {
+          const isMember = project.memberIds.some((member) => samePerson(member, actorId));
+          if (!isMember || !isActiveMember(project.ownerId) || !isActiveMember(actorId)) {
+            outcome.status = "forbidden";
+            return project;
+          }
+          outcome.status = "ok";
+          const current = project.slackChannel;
+          if (!link) {
+            if (!current) return project;
+            changed = true;
+            const { slackChannel: _dropped, channelMemberIds: _members, ...rest } = project;
+            return rest;
+          }
+          if (current && current.channelId === link.channelId && current.channelName === link.channelName)
+            return project;
+          changed = true;
+          return {
+            ...project,
+            slackChannel: {
+              channelId: link.channelId,
+              channelName: link.channelName,
+              linkedBy: actorId,
+              linkedAt: now(),
+            },
+          };
+        });
+        if (!updated) return { status: "not_found" };
+        if (outcome.status !== "ok") return { status: outcome.status };
+        const result = { status: "ok" as const, project: visible(updated), changed };
+        await effect?.(result);
+        return result;
+      });
+    },
+    async syncChannelMembers(id, memberIds, channelName, effect) {
+      return withLock(id, async () => {
+        if (!backing.update) throw new Error("project store requires DurableMap.update");
+        const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
+        let changed = false;
+        const next = [...new Set(memberIds)].sort();
+        const updated = await backing.update(id, (project) => {
+          if (!project.slackChannel || !isActiveMember(project.ownerId)) {
+            outcome.status = "forbidden";
+            return project;
+          }
+          outcome.status = "ok";
+          const current = [...(project.channelMemberIds ?? [])].sort();
+          const sameMembers = current.length === next.length && current.every((m, i) => m === next[i]);
+          const nextName = channelName ?? project.slackChannel.channelName;
+          const sameName = nextName === project.slackChannel.channelName;
+          if (sameMembers && sameName) return project;
+          changed = true;
+          return {
+            ...project,
+            channelMemberIds: next,
+            slackChannel: { ...project.slackChannel, channelName: nextName },
+            ...(sameMembers ? {} : { updatedAt: Math.max(now(), project.updatedAt + 1) }),
+          };
+        });
+        if (!updated) return { status: "not_found" };
+        if (outcome.status !== "ok") return { status: outcome.status };
+        const result = { status: "ok" as const, project: visible(updated), changed };
+        await effect?.(result);
+        return result;
+      });
+    },
+    async listLinked() {
+      return (await backing.all())
+        .filter((project) => project.orgId === configOrgId() && project.slackChannel && isActiveMember(project.ownerId))
+        .map(visible);
+    },
+    async slackChannel(groupRef) {
+      const project = await projectForGroup(groupRef);
+      if (!project || !isActiveMember(project.ownerId) || !project.slackChannel) return undefined;
+      return { ...project.slackChannel };
+    },
     recognizes: isProjectGroupRef,
     async membership(groupRef, principalId) {
       const project = await projectForGroup(groupRef);
       return project
-        ? isActiveMember(project.ownerId) && isActiveMember(principalId) && project.memberIds.includes(principalId)
+        ? isActiveMember(project.ownerId) &&
+            isActiveMember(principalId) &&
+            effectiveMemberIds(project).includes(principalId)
         : undefined;
     },
     async members(groupRef) {
       const project = await projectForGroup(groupRef);
       if (!project) return undefined;
       return isActiveMember(project.ownerId)
-        ? project.memberIds.filter((principalId) => isActiveMember(principalId))
+        ? effectiveMemberIds(project).filter((principalId) => isActiveMember(principalId))
         : [];
     },
     async version(groupRef) {

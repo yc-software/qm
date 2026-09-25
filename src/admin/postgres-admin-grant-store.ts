@@ -24,7 +24,7 @@ const SCHEMA_SQL = [
 ];
 
 export function createPostgresAdminGrantStore(connectionString: string): AdminGrantPersistence {
-  const pg = createPgPool(connectionString, SCHEMA_SQL);
+  const pg = createPgPool(connectionString, "admin/grants/0001", SCHEMA_SQL);
 
   return {
     async all() {
@@ -39,6 +39,15 @@ export function createPostgresAdminGrantStore(connectionString: string): AdminGr
          DO UPDATE SET granted_by = EXCLUDED.granted_by, created_at = EXCLUDED.created_at`,
         [g.principalId, g.scopeId, g.role, g.grantedBy ?? null, g.createdAt ?? null],
       );
+    },
+    async insertIfAbsent(g) {
+      const result = await pg.query(
+        `INSERT INTO admin_grants (principal_id, scope_id, role, granted_by, created_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (principal_id, scope_id, role) DO NOTHING`,
+        [g.principalId, g.scopeId, g.role, g.grantedBy ?? null, g.createdAt ?? null],
+      );
+      return (result.rowCount ?? 0) > 0;
     },
     async remove(principalId, scopeId, role) {
       await pg.query("DELETE FROM admin_grants WHERE principal_id = $1 AND scope_id = $2 AND role = $3", [

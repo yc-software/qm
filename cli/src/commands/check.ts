@@ -5,9 +5,9 @@ import { readEnvFile } from "../util.ts";
 import { CliError, errMessage, header, note, ok, step, warn } from "../log.ts";
 import { validateSandboxLayer, type SandboxValidation } from "../sandbox-layer.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
-import { mockHarnessWarning, sandboxPinPending, type QmConfig } from "../config.ts";
+import { mockHarnessWarning, type QmConfig } from "../config.ts";
 import { computedSecrets, runtimeSecretNames, type ComputedSecret } from "../secrets.ts";
-import { isVirtualService, runnableServices } from "../services.ts";
+import { hostedServiceEnv, isVirtualService, runnableServices } from "../services.ts";
 import { serviceEnvironment } from "../backends/aws.ts";
 import { hostingProvider } from "../backends/registry.ts";
 
@@ -30,9 +30,6 @@ export function runChecks(
   const configError = (message: string, clause = "config.v1"): void => void configErrors.push({ clause, message });
   const provider = hostingProvider(config.target);
   configErrors.push(...provider.validateConfig(config, plugins));
-  if (provider.requiresSandboxApp && !config.sandbox?.app?.trim()) {
-    configError("contract sandbox.app: a Fly agent-computer app is required for docker and fly targets");
-  }
   for (const skill of config.skills) {
     const path = resolve(configDir, skill);
     let isDirectory: boolean;
@@ -67,7 +64,7 @@ export function runChecks(
   if (config.target === "aws" && config.aws) {
     for (const workload of runnableServices(config.services)) {
       if (!config.aws.services[workload]) continue;
-      const configured = new Set(Object.keys(config.env[workload] ?? {}));
+      const configured = new Set(Object.keys(hostedServiceEnv(config.services, config.env, workload)));
       if (workload === "core") {
         for (const service of config.services.filter(isVirtualService)) {
           for (const name of Object.keys(config.env[service] ?? {})) configured.add(name);
@@ -98,6 +95,7 @@ export function runChecks(
         secretNames.has(name) ||
         (/(?:_SECRET|_TOKEN|_KEY|_CREDENTIALS?|PASSWORD)$/.test(name) &&
           !name.endsWith("PUBLIC_KEY") &&
+          !(name === "POSTHOG_API_KEY" && /^phc_[A-Za-z0-9]+$/.test(value)) &&
           !/^[.~/]/.test(value));
       if (secretish) {
         configError(
@@ -147,9 +145,6 @@ export function runChecks(
     for (const w of layer.warnings) warn(w);
     const mockHarness = mockHarnessWarning(config);
     if (mockHarness) warn(mockHarness);
-    if (sandboxPinPending(config)) {
-      warn("no sandbox layer image is pinned yet; run `qm sandbox publish` to record one before `qm up` renders core");
-    }
   }
 
   const errors = [
@@ -172,13 +167,17 @@ export async function runCheckCommand(
   configDir: string,
   sandboxDir: string,
   envFile?: string,
-): Promise<void> {
-  header(`qm check — ${config.orgId}`);
+  report = true,
+): Promise<ChecksResult> {
+  if (report) header(`qm check — ${config.orgId}`);
   assertNodeEngine(configDir);
-  runChecks(config, configDir, sandboxDir, { report: true });
+  const result = runChecks(config, configDir, sandboxDir, { report });
   const secrets = readEnvFile(envFile ?? join(configDir, ".env"));
-  await flySandboxTokenPreflight(config, secrets);
-  await emailTransportPreflight(config, secrets);
-  note("");
-  ok("check passed — config, sandbox layer, and plugins are valid.");
+  await flySandboxTokenPreflight(config, secrets, fetch, report);
+  await emailTransportPreflight(config, secrets, report);
+  if (report) {
+    note("");
+    ok("check passed — config, sandbox layer, and plugins are valid.");
+  }
+  return result;
 }

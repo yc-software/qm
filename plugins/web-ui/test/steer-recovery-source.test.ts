@@ -28,24 +28,35 @@ test("resuming a tracked run pulls the transcript first so the triggering messag
 
 const composer = readFileSync(new URL("../src/composer.ts", import.meta.url), "utf8");
 
-test("a steer typed before the run slot goes live is held and delivered, never dropped", () => {
-  const at = composer.indexOf("async function sendSteer");
+test("a message typed mid-turn is never dropped by the run-slot window — it queues through core", () => {
+  // sendSteer's held-steer machinery (steerWhenLive/deliverSteer) is gone: mid-turn Enter now
+  // queues via POST /api/turn regardless of run-slot state, so there is no submit window in
+  // which a message can silently vanish. The queue path gates only on text and thread.
+  const at = composer.indexOf("async function queueDraft");
   assert.ok(at >= 0);
-  const body = composer.slice(at, composer.indexOf("async function deliverSteer", at));
-  // the old guard silently returned when the slot had no run id yet
-  assert.doesNotMatch(
+  const body = composer.slice(at, composer.indexOf("async function enqueueTurn", at));
+  assert.doesNotMatch(body, /hasLiveRun\(\)/, "queueing must not depend on the run slot");
+  assert.match(body, /if \(\(!text && !staged\.length\) \|\| !threadRef\) return;/);
+  assert.match(
     body,
-    /if \(!text \|\| !ctx\.chat\.hasLiveRun\(\)\) return;/,
-    "steer dropped in the submit window",
+    /if \(!\(await enqueueTurn\(agent, threadRef, text, uploaded, queuedFilesKey\(sendable\)\)\)\) \{\s*if \(stillHere\(\)\) restoreStagedOnFailure\(text, sendable, composerState\.error\);/,
+    "a queue core never took goes back in the composer, files included",
   );
-  assert.match(body, /steerWhenLive\(agent, text, 0\);/);
+  assert.ok(composer.indexOf("function steerWhenLive") < 0, "the held-steer shim is gone with its window");
 });
 
-test("steerWhenLive settles every way a run slot can: live steer, ended resend, timeout restore", () => {
-  const at = composer.indexOf("function steerWhenLive");
-  assert.ok(at >= 0);
-  const body = composer.slice(at, composer.indexOf("// The run ended before the steer landed", at));
-  assert.match(body, /void deliverSteer\(agent, text\);/);
-  assert.match(body, /recoverEndedRunSteer\(agent, text, \{\}\);/);
-  assert.match(body, /composerState\.draft = composerState\.draft\.trim\(\)/);
+test("a failed steer keeps the durable queue and does not resubmit into a different conversation", () => {
+  const at = composer.indexOf("async function steerQueued");
+  const body = composer.slice(at, composer.indexOf("async function sendPrompt", at));
+  assert.doesNotMatch(body, /enqueueTurn|withdrawRun/);
+  assert.match(body, /Could not confirm steering/);
+  assert.match(body, /if \(agent !== ctx\.chat\.state\.agent \|\| threadRef !== ctx\.chat\.state\.threadRef\) return/);
+});
+
+test("concurrent clicks share one in-flight steer", () => {
+  const at = composer.indexOf("async function steerQueued");
+  const body = composer.slice(at, composer.indexOf("async function sendPrompt", at));
+  assert.ok(body.indexOf("pendingSteers.has(queued.runId)") < body.indexOf('signalLiveRun("steer"'));
+  assert.match(body, /pendingSteers.add\(queued.runId\)/);
+  assert.match(body, /finally \{\s*pendingSteers.delete\(queued.runId\)/);
 });

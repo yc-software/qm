@@ -28,6 +28,10 @@ export function liveRunExitCode(failures: number, observational: boolean): 0 | 1
   return failures > 0 && !observational ? 1 : 0;
 }
 
+export function releaseBlockers<T extends Pick<ScenarioResult, "status">>(results: readonly T[]): T[] {
+  return results.filter((result) => result.status !== "pass");
+}
+
 export type TimelineSnapshot = ReturnType<Timeline["toJSON"]>;
 
 export interface Env {
@@ -77,6 +81,7 @@ const STABLE_MS = 5000;
 export interface WaitOpts {
   timeoutMs?: number;
   match?: RegExp;
+  accept?: (message: SlackMessage) => boolean;
   afterTs?: string;
   onFrame?: (text: string) => void;
   record?: (msgTs: string, text: string) => void;
@@ -111,6 +116,7 @@ async function waitForFinalBotMessage(
       const text = m.text ?? "";
       if (isLiveStatusText(text)) continue;
       if (opts.match && !opts.match.test(text)) continue;
+      if (opts.accept && !opts.accept(m)) continue;
       const entry = seen.get(m.ts);
       if (entry && entry.text === text && Date.now() - entry.firstSeen >= STABLE_MS) return m;
     }

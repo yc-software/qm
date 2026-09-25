@@ -15,12 +15,18 @@ function flakyPgPool(failures: number): PgPool {
       remaining--;
       throw new Error("transient pg failure");
     }
-    return { rows: [{ token: "t", json: { n: 1 } }], rowCount: 1 };
+    return {
+      rows: [{ token: "t", json: { n: 1 } }],
+      rowCount: 1,
+    };
   }
   return {
+    sessionPool: () => Promise.reject(new Error("not backed by a real pool")),
     pool: () => Promise.reject(new Error("not backed by a real pool")),
     query,
     q: async (text, params) => (await query(text, params ?? [])).rows,
+    registerMigration: () => {},
+    migrate: async () => {},
     close: async () => {},
   };
 }
@@ -35,6 +41,9 @@ test("admin grants: a failed seed is retried on the next call (rejection not cac
   let failures = 1;
   const rows: AdminGrant[] = [];
   const persist: AdminGrantPersistence = {
+    async insertIfAbsent() {
+      throw new Error("not exercised");
+    },
     async all() {
       if (failures > 0) {
         failures--;
@@ -56,7 +65,7 @@ test("admin grants: a failed seed is retried on the next call (rejection not cac
 });
 
 test("pg pool: a failed init is retried with a fresh attempt (rejection not cached)", async () => {
-  const pg = createPgPool("postgres://127.0.0.1:9/nope", ["SELECT 1"]);
+  const pg = createPgPool("postgres://127.0.0.1:9/nope", "test/retry/unreachable/0001", ["SELECT 1"]);
   const first = await pg.q("SELECT 1").catch((e: unknown) => e);
   const second = await pg.q("SELECT 1").catch((e: unknown) => e);
   assert.ok(first instanceof Error);
@@ -66,9 +75,27 @@ test("pg pool: a failed init is retried with a fresh attempt (rejection not cach
 });
 
 test("pg pool: an idle-client 'error' is logged, not fatal", { skip }, async () => {
-  const pg = createPgPool(URL!, ["SELECT 1"]);
+  const pg = createPgPool(URL!, "test/retry/live/0001", ["SELECT 1"]);
   const pool = await pg.pool();
   assert.doesNotThrow(() => pool.emit("error", new Error("backend died")));
   assert.deepEqual((await pg.query("SELECT 1 AS one")).rows, [{ one: 1 }], "pool keeps serving queries");
+  await pg.close();
+});
+
+test("pg pool: a timeoutMs query gives the connection back usable, not poisoned", { skip }, async () => {
+  const pg = createPgPool(URL!, "test/retry/timeout/0001", ["SELECT 1"]);
+  await assert.rejects(
+    () => pg.q("SELECT pg_sleep(5)", [], { timeoutMs: 150 }),
+    /statement timeout/i,
+    "a query past its budget is cancelled by Postgres instead of hanging",
+  );
+  assert.deepEqual(await pg.q("SELECT 1 AS one"), [{ one: 1 }], "the pool keeps serving after a timeout");
+  assert.deepEqual(
+    await pg.q("SELECT 2 AS two", [], { timeoutMs: 5_000 }),
+    [{ two: 2 }],
+    "a query inside its budget returns normally",
+  );
+  const [row] = await pg.q("SHOW statement_timeout");
+  assert.equal(row!.statement_timeout, "0", "the budget does not leak onto the next borrower of the connection");
   await pg.close();
 });

@@ -1,6 +1,7 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import type { BudgetTracker } from "./budget.ts";
 import { DEFAULT_BUDGET_WINDOW_MS } from "./budget.ts";
+import { reportFailure } from "../util/errors.ts";
 
 export function createPostgresBudgetTracker(
   connectionString: string,
@@ -10,7 +11,7 @@ export function createPostgresBudgetTracker(
   const orgLimitUsd = opts.orgLimitUsd ?? Infinity;
   const windowMs = opts.windowMs ?? DEFAULT_BUDGET_WINDOW_MS;
   const orgKey = "@org";
-  const { q } = createPgPool(connectionString, [
+  const { q } = createPgPool(connectionString, "ratelimit/budget/0001", [
     `CREATE TABLE IF NOT EXISTS budget_spend(
         id BIGSERIAL PRIMARY KEY,
         principal_id TEXT NOT NULL,
@@ -45,7 +46,7 @@ export function createPostgresBudgetTracker(
           );
         }
       } catch (err) {
-        console.error("[budget] failed to persist spend:", err);
+        reportFailure("budget: persist spend", err);
       }
     },
   };

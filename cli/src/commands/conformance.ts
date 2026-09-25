@@ -5,9 +5,12 @@ import { CliError, errMessage, header, ok, step } from "../log.ts";
 import { parseToolDescriptor, type ToolDescriptor } from "../sandbox-layer.ts";
 import { canonicalJson } from "../util.ts";
 import { runChecks } from "./check.ts";
+import { hostingProvider } from "../backends/registry.ts";
 
 export function expectedDescriptors(bundle: DeploymentLayerBundle): ToolDescriptor[] {
-  return bundle.tools.map((file) => parseToolDescriptor(file.content, file.path));
+  return bundle.tools
+    .filter((file) => /^tools\/[^/]+\/tool\.json$/.test(file.path))
+    .map((file) => parseToolDescriptor(file.content, file.path));
 }
 
 export interface ConformanceDeployment {
@@ -36,8 +39,8 @@ export async function runConformance(
   try {
     response = await deploymentLayerRequest({
       config,
-      target,
       configDir,
+      transport: hostingProvider(target).deploymentLayerTransport,
       method: "GET",
       ...(envFile ? { envFile } : {}),
     });

@@ -20,6 +20,7 @@ function fakeSandbox(opts?: { seedOutput?: string }) {
   const starts: Array<{ command: string; opts?: StartProcessOptions }> = [];
   const signals: Array<{ id: string; signal: string }> = [];
   const writes: Array<{ id: string; data: string }> = [];
+  const readErrors = new Map<string, unknown>();
   let n = 0;
 
   const sandbox: ProcessSandbox = {
@@ -53,6 +54,11 @@ function fakeSandbox(opts?: { seedOutput?: string }) {
       return { processId };
     },
     async readProcess(_h, id, opts) {
+      if (readErrors.has(id)) {
+        const error = readErrors.get(id);
+        readErrors.delete(id);
+        throw error;
+      }
       if (missing.has(id)) throw new Error(`no such process session: ${id}`);
       const p = procs.get(id);
       if (!p) throw new Error(`no such process session: ${id}`);
@@ -104,6 +110,7 @@ function fakeSandbox(opts?: { seedOutput?: string }) {
       }
     },
     vanish: (id: string) => missing.add(id),
+    failNextRead: (id: string, error: unknown) => readErrors.set(id, error),
   };
 }
 
@@ -134,9 +141,9 @@ test("start registers a REDACTED background row and returns an id + initial outp
   assert.equal(rows[0]!.command, redactCommand("bg: npm run build"));
 });
 
-test("start does not expose the foreground turn's outbox to a durable background job", async () => {
+test("start does not leak the foreground turn's env to a durable background job", async () => {
   const { broker, starts } = build();
-  await broker.start({ ...handle, env: { AGENT_OUTBOX: "/workspace/.agent-turn/turn-1/outbox" } }, "long-job");
+  await broker.start({ ...handle, env: { AGENT_API_TOKEN: "turn-token" } }, "long-job");
   assert.deepEqual(starts[0]!.opts?.env, { PYTHONUNBUFFERED: "1" });
 });
 
@@ -366,6 +373,17 @@ test("liveness probe: a row whose backend process is gone is deleted and a fresh
   assert.equal(rows[0]!.processId, second.processId);
 });
 
+test("liveness probe: a transient backend error preserves the running process and registry row", async () => {
+  const { broker, registry, starts, failNextRead } = build();
+  const first = await broker.start(handle, "long-build");
+  const error = new Error("backend unavailable");
+  failNextRead(first.processId, error);
+
+  await assert.rejects(broker.start(handle, "long-build"), error);
+  assert.equal(starts.length, 1);
+  assert.equal((await registry.get(first.processId))?.status, "running");
+});
+
 test("TTL clamp: a requested lifetime above the max is clamped (mirrors PR C's ceiling clamp)", async () => {
   const ttlMaxMs = 60 * 60_000;
   const { broker, registry } = build({ ttlMs: 30 * 60_000, ttlMaxMs });
@@ -432,4 +450,31 @@ test("start stamps the conversation's sessionRef on the registry row", async () 
   const bare = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: SCOPE, pollMs: 20 });
   const { processId: p2 } = await bare.start(handle, "sleep 61");
   assert.equal((await registry.get(p2))?.sessionRef, undefined);
+});
+
+test("background jobs retain sandbox identity across default changes and reattach only on that sandbox", async () => {
+  const { sandbox } = fakeSandbox();
+  const registry = createMemoryProcessRegistry();
+  const a = { ...handle, id: "a", resourceId: "resource-a" };
+  const b = { ...handle, id: "b", resourceId: "resource-b" };
+  const selected: string[] = [];
+  const broker = createBackgroundBroker({
+    sandbox,
+    registry,
+    scopeId: SCOPE,
+    pollMs: 0,
+    provisionSandbox: async (id) => {
+      selected.push(id);
+      return id === a.resourceId ? a : b;
+    },
+  });
+  const first = await broker.start(a, "work");
+  const second = await broker.start(b, "work");
+  assert.notEqual(first.processId, second.processId);
+  assert.equal((await registry.get(first.processId))?.sandboxId, a.resourceId);
+  assert.equal((await broker.handleFor!(first.processId))?.id, a.id);
+  await broker.poll(b, first.processId);
+  await broker.write(b, first.processId, "hello");
+  await broker.stop(b, first.processId);
+  assert.deepEqual(selected, [a.resourceId, a.resourceId, a.resourceId, a.resourceId]);
 });

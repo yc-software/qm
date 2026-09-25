@@ -1,9 +1,9 @@
 import { extract as tarExtract, pack as tarPack } from "tar-stream";
 
-export async function makeTar(entries: Array<{ path: string; data: Uint8Array }>): Promise<Buffer> {
+export async function makeTar(entries: Array<{ path: string; data: Uint8Array; mode?: number }>): Promise<Buffer> {
   const pack = tarPack();
   for (const entry of entries) {
-    pack.entry({ name: entry.path, mode: 0o644, mtime: new Date(0) }, Buffer.from(entry.data));
+    pack.entry({ name: entry.path, mode: entry.mode ?? 0o644, mtime: new Date(0) }, Buffer.from(entry.data));
   }
   pack.finalize();
   const chunks: Buffer[] = [];
@@ -11,13 +11,13 @@ export async function makeTar(entries: Array<{ path: string; data: Uint8Array }>
   return Buffer.concat(chunks);
 }
 
-export async function parseTar(raw: Uint8Array): Promise<Array<{ path: string; data: Buffer }>> {
+export async function parseTar(raw: Uint8Array): Promise<Array<{ path: string; data: Buffer; mode?: number }>> {
   if (!raw.length) return [];
   const buf = Buffer.from(raw);
   if (buf.length < 1024 || buf.subarray(buf.length - 1024).some((byte) => byte !== 0)) {
     throw new Error("tar archive truncated: missing end-of-archive marker");
   }
-  const entries: Array<{ path: string; data: Buffer }> = [];
+  const entries: Array<{ path: string; data: Buffer; mode?: number }> = [];
   const extract = tarExtract();
   const done = new Promise<void>((resolve, reject) => {
     extract.on("finish", resolve);
@@ -27,7 +27,12 @@ export async function parseTar(raw: Uint8Array): Promise<Array<{ path: string; d
     const chunks: Buffer[] = [];
     stream.on("data", (chunk: Buffer) => chunks.push(chunk));
     stream.on("end", () => {
-      if (header.type === "file") entries.push({ path: header.name, data: Buffer.concat(chunks) });
+      if (header.type === "file")
+        entries.push({
+          path: header.name,
+          data: Buffer.concat(chunks),
+          ...(typeof header.mode === "number" ? { mode: header.mode & 0o777 } : {}),
+        });
       next();
     });
     stream.on("error", (err) => extract.destroy(err));

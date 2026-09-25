@@ -83,3 +83,28 @@ export function egressDecision(host: string, policy: EgressPolicy | undefined): 
   }
   return { allow: true, verdict: "ok" };
 }
+
+export function intersectEgressPolicies(source: EgressPolicy, target: EgressPolicy | null): EgressPolicy {
+  if (!target) return source;
+  const left = source.allowedHosts ?? [];
+  const right = target.allowedHosts ?? [];
+  let allowedHosts = left.length ? left : right;
+  if (left.length && right.length) {
+    allowedHosts = [
+      ...new Set(
+        left.flatMap((a) =>
+          right.flatMap((b) => {
+            if (hostMatches(a, b)) return [a];
+            return hostMatches(b, a) ? [b] : [];
+          }),
+        ),
+      ),
+    ];
+    if (!allowedHosts.length) throw new Error("source and target sandbox egress allowlists have no overlap");
+  }
+  return {
+    allowedHosts,
+    deniedHosts: [...new Set([...(source.deniedHosts ?? []), ...(target.deniedHosts ?? [])])],
+    ...(source.denyPrivateNetworks || target.denyPrivateNetworks ? { denyPrivateNetworks: true } : {}),
+  };
+}

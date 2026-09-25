@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decodeProtectedHeader } from "jose";
+import { CompactSign, decodeProtectedHeader } from "jose";
 import { mintSignedPayload, signingKeyId, verifySignedPayload } from "../src/auth/signed-token.ts";
 
 const SECRET = "test-secret";
@@ -26,6 +27,15 @@ test("rejects tampered payloads, tampered signatures, and the wrong secret", asy
   assert.equal(await verifySignedPayload(`${header}.${payload}.${sig}`, SECRET), null);
   assert.equal(await verifySignedPayload(token.slice(0, -1) + "X", SECRET), null);
   assert.equal(await verifySignedPayload(token, "other-secret"), null);
+});
+
+test("still verifies tokens carrying the previous key identifier", async () => {
+  const value = { version: "previous-kid" };
+  const previousKid = createHash("sha256").update(SECRET).digest("base64url").slice(0, 8);
+  const token = await new CompactSign(new TextEncoder().encode(JSON.stringify(value)))
+    .setProtectedHeader({ alg: "HS256", kid: previousKid })
+    .sign(new TextEncoder().encode(SECRET));
+  assert.deepEqual(await verifySignedPayload(token, SECRET), value);
 });
 
 test("key rotation: a verifier holding several secrets accepts tokens minted under any of them", async () => {

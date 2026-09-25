@@ -19,7 +19,7 @@ function recordReapEvent(errors: ErrorLog, e: ReapEvent): void {
 
 export interface Reaper {
   start(): void;
-  stop(): void;
+  stop(): Promise<void>;
   sweep(): Promise<{ requeued: number; parked: number }>;
 }
 

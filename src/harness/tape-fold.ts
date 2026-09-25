@@ -1,7 +1,8 @@
 import type { Principal, ScopeId } from "../types.ts";
 import type { TapeRecord } from "../sessions/session-store.ts";
+import { deliveryNote, legacyDeliveryNoteManifest } from "../core/attachments.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
-import { INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
+import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
 
 export function filterTapeForAudience(
   rows: readonly TapeRecord[],
@@ -177,7 +178,7 @@ function contextEvent(row: TapeRecord): TapeEvent | null {
 
 type Foldable = { out: unknown[]; boundaries: Array<{ pos: number; entrySeq: number }> };
 
-function assistantDroppedAtReplay(m: unknown): boolean {
+export function assistantDroppedAtReplay(m: unknown): boolean {
   const msg = m as { role?: string; stopReason?: string };
   return msg?.role === "assistant" && (msg.stopReason === "aborted" || msg.stopReason === "error");
 }
@@ -211,6 +212,14 @@ function healDanglingCalls(out: unknown[], at: number): void {
   }
 }
 
+function withoutThinking(messages: readonly unknown[]): unknown[] {
+  return messages.map((m) => {
+    const msg = m as { role?: unknown; content?: unknown };
+    if (msg?.role !== "assistant" || !Array.isArray(msg.content)) return m;
+    return { ...msg, content: msg.content.filter((b) => (b as { type?: unknown } | null)?.type !== "thinking") };
+  });
+}
+
 export function foldTape(rows: readonly TapeRecord[]): unknown[] {
   const f: Foldable = { out: [], boundaries: [] };
   for (const row of rows) {
@@ -223,21 +232,21 @@ export function foldTape(rows: readonly TapeRecord[]): unknown[] {
     const ev = contextEvent(row);
     if (ev) {
       if (ev.event === "legacy_import") {
-        f.out = [...(ev.messages ?? [])];
+        f.out = healLegacyAssistantVoice(ev.messages ?? []);
         f.boundaries = row.coversEntrySeq !== undefined ? [{ pos: f.out.length, entrySeq: row.coversEntrySeq }] : [];
       } else if (ev.event === "legacy_patch") {
-        f.out.push(...(ev.messages ?? []));
+        f.out.push(...healLegacyAssistantVoice(ev.messages ?? []));
         if (row.coversEntrySeq !== undefined) f.boundaries.push({ pos: f.out.length, entrySeq: row.coversEntrySeq });
       } else if (ev.event === "compaction") {
         const cut =
           row.coversEntrySeq !== undefined
             ? [...f.boundaries].reverse().find((b) => b.entrySeq <= row.coversEntrySeq!)
             : undefined;
-        const kept = cut ? f.out.slice(cut.pos) : [...f.out];
+        const kept = withoutThinking(cut ? f.out.slice(cut.pos) : f.out);
         f.out = [
           {
             role: "user",
-            content: [{ type: "text", text: `[Earlier conversation summary]\n${ev.text}` }],
+            content: [{ type: "text", text: `${CONTEXT_SUMMARY_HEADER}\n${ev.text}` }],
             timestamp: row.createdAt,
           },
           ...kept,
@@ -255,6 +264,45 @@ export function foldTape(rows: readonly TapeRecord[]): unknown[] {
     if (row.kind === "message" && row.payload != null) f.out.push(row.payload);
   }
   return f.out;
+}
+
+const LEGACY_CONTINUATION_LINE = "(continuing after the tool result above)";
+
+function healLegacyAssistantVoice(messages: readonly unknown[]): unknown[] {
+  const out: unknown[] = [];
+  for (const m of messages) {
+    const msg = m as { role?: string; content?: unknown; timestamp?: number };
+    if (msg?.role !== "assistant" || !Array.isArray(msg.content)) {
+      out.push(m);
+      continue;
+    }
+    const kept: unknown[] = [];
+    const manifests: string[] = [];
+    let droppedContinuation = false;
+    for (const block of msg.content) {
+      const b = block as { type?: string; text?: unknown };
+      const text = b?.type === "text" && typeof b.text === "string" ? b.text : null;
+      if (text !== null && text.trim() === LEGACY_CONTINUATION_LINE) {
+        droppedContinuation = true;
+        continue;
+      }
+      const manifest = text !== null ? legacyDeliveryNoteManifest(text) : null;
+      if (manifest !== null) manifests.push(manifest);
+      else kept.push(block);
+    }
+    if (!manifests.length && !droppedContinuation) {
+      out.push(m);
+      continue;
+    }
+    if (kept.length) out.push({ ...(m as Record<string, unknown>), content: kept });
+    if (manifests.length)
+      out.push({
+        role: "user",
+        content: manifests.map((manifest) => ({ type: "text", text: deliveryNote(manifest) })),
+        timestamp: msg.timestamp ?? 0,
+      });
+  }
+  return out;
 }
 
 export function planTapeSeed(

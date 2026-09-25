@@ -38,7 +38,11 @@ under `/idp/`, so the issuer and the sign-in pages live on the portal's own
 origin while the token, userinfo, and JWKS calls stay on the private network.
 The self-hoster supplies an admin address, a verified sender, and a Resend key
 or SMTP credentials; the CLI generates the broker's signing key and the portal's
-client credentials and wires both sides. Dropping `"auth"` from `services` hands
+client credentials and wires both sides. Core receives the same `RESEND_API_KEY`
+and `AUTH_EMAIL_FROM`, which let admins email invitations to external users from
+the admin Users tab or by chatting with QM; both are optional on core, and
+without them the invitation is still created and the sign-in link is shared by
+hand. Dropping `"auth"` from `services` hands
 sign-in back to an external identity provider, which then has to register the
 exact `<publicUrl>/auth/callback` redirect.
 

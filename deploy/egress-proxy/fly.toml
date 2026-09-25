@@ -25,9 +25,11 @@ primary_region = "sjc"
     timeout = "2s"
     grace_period = "10s"
 
+# Envoy + the Node decision service sit at ~130mb resident before serving anything,
+# which leaves almost no headroom on 256mb under real fleet traffic.
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "256mb"
+  memory = "512mb"
 
 kill_signal = "SIGTERM"
 kill_timeout = "10s"

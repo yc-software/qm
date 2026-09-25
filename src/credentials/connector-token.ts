@@ -16,12 +16,18 @@ export function withOperatorTokenFallback(
   secrets: SecretSource = createEnvSecretSource(),
 ): ConnectorTokenStore {
   return {
+    operatorFallbackHosts: serviceHosts,
+    ...(store.listConnectorsByOwners
+      ? { listConnectorsByOwners: (ownerIds: string[]) => store.listConnectorsByOwners!(ownerIds) }
+      : {}),
     setConnectorToken: (host, principalId, token, accountType) =>
       store.setConnectorToken(host, principalId, token, accountType),
     deleteConnectorToken: (host, principalId, accountType) =>
       store.deleteConnectorToken(host, principalId, accountType),
     connectorTokenStatus: (host, principalId, accountType) =>
       store.connectorTokenStatus(host, principalId, accountType),
+    connectorDerivedAuth: (host, principalId, accountType) =>
+      store.connectorDerivedAuth(host, principalId, accountType),
     async connectorAccessToken(host, principalId, accountType) {
       const token = await store.connectorAccessToken(host, principalId, accountType);
       if (token !== null) return token;

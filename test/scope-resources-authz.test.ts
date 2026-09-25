@@ -4,6 +4,7 @@ import { createApp, type App, type AppDeps } from "../src/api/app.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
+import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
@@ -18,6 +19,7 @@ const orgScope = scopeId("org", ORG);
 function makeDeps() {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   const crons = createCronStore();
+  const webhooks = createWebhookStore();
   const acl = createAclStore();
   const identity = {
     classify: (id: string) => ({ id, type: "internal" }),
@@ -35,7 +37,7 @@ function makeDeps() {
   const skills = createSkillStore();
   const deployRows: Deployment[] = [];
   const deploy = { listDeployments: async () => deployRows };
-  return { files, crons, acl, identity, directory, sessions, skills, deploy, deployRows };
+  return { files, crons, webhooks, acl, identity, directory, sessions, skills, deploy, deployRows };
 }
 
 async function setup(): Promise<{ app: App; deps: ReturnType<typeof makeDeps> }> {
@@ -74,6 +76,13 @@ async function setup(): Promise<{ app: App; deps: ReturnType<typeof makeDeps> }>
   await deps.crons.create({
     schedule: { everyMs: 60_000 },
     action: "summarize",
+    owner: "U2",
+    createdBy: "U2",
+    ownerScopeId: channelScope,
+  });
+  await deps.webhooks.create({
+    action: "triage",
+    verification: { scheme: "github", secret: "scope-secret" },
     owner: "U2",
     createdBy: "U2",
     ownerScopeId: channelScope,
@@ -140,7 +149,7 @@ async function setup(): Promise<{ app: App; deps: ReturnType<typeof makeDeps> }>
   return { app: createApp(deps as unknown as AppDeps), deps };
 }
 
-test("a member sees a channel's files (incl. personally-owned deliverables), crons, deployments and skills", async () => {
+test("a member sees a channel's files (incl. personally-owned deliverables), webhooks, crons, deployments and skills", async () => {
   const { app } = await setup();
   const out = await app.listScopeResources(U1, channelScope);
   assert.ok(out, "U1 is a member of C1");
@@ -150,6 +159,8 @@ test("a member sees a channel's files (incl. personally-owned deliverables), cro
   );
   assert.equal(out!.crons.length, 1, "only C1's cron, not C2's");
   assert.equal(out!.crons[0]!.action, "summarize");
+  assert.equal(out!.webhooks.length, 1);
+  assert.equal(out!.webhooks[0]!.action, "triage");
   assert.deepEqual(
     out!.deployments.map((d) => d.name),
     ["C1 dashboard"],
@@ -274,4 +285,20 @@ test("every file a context lists is one the viewer is authorized to open", async
     const sharedToViewer = grants.some((g) => myScopes.includes(g.granteeScopeId));
     assert.ok(ownedByViewer || sharedToViewer, `${f.name} is openable by U1 (owned or ACL-granted)`);
   }
+});
+
+test("webhook secrets are redacted by the route, not the app layer", async () => {
+  // The app returns the raw webhook (the route redacts). A C1 webhook created with a secret
+  // still carries it here — proving redaction is the route's job, mirroring the flat list.
+  const deps = makeDeps();
+  await deps.webhooks.create({
+    action: "signed",
+    verification: { scheme: "hmac-sha256", secret: "topsecret" },
+    owner: U1,
+    createdBy: U1,
+    ownerScopeId: channelScope,
+  });
+  const app = createApp(deps as unknown as AppDeps);
+  const out = await app.listScopeResources(U1, channelScope);
+  assert.equal(out!.webhooks[0]!.verification.secret, "topsecret");
 });

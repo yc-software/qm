@@ -21,12 +21,12 @@ test("the release is the sole sandbox-base publisher and bakes in the browser en
     workflow,
     /- name: sandbox-base\n\s+dockerfile: fly\/Dockerfile\n\s+build-args: INSTALL_BROWSER_ENGINE=1\n/,
   );
-  assert.match(workflow, /build-args: \$\{\{ matrix\.build-args \}\}/);
+  assert.match(workflow, /build-args: \|\n\s+\$\{\{ matrix\.build-args \}\}\n\s+GIT_SHA=\$\{\{ github\.sha \}\}/);
   assert.equal(existsSync(".github/workflows/publish-sandbox-base.yml"), false);
   assert.equal(existsSync(".github/workflows/publish-images.yml"), false);
 });
 
-test("the release signs private images without requiring anonymous registry access", () => {
+test("the release verifies the sandbox base digest is anonymously pullable", () => {
   const workflow = readFileSync(".github/workflows/release-package.yml", "utf8");
 
   assert.doesNotMatch(workflow, /anonymously pullable|DOCKER_CONFIG="\$probe"/);
@@ -69,7 +69,7 @@ test("publishing the CLI is a separate, attested, main-only operation", () => {
   assert.match(workflow, /^ {2}workflow_call:$/m);
   assert.doesNotMatch(workflow, /^ {2}push:$/m);
   assert.doesNotMatch(workflow, /^ {2}pull_request:$/m);
-  assert.match(workflow, /if: github\.ref == 'refs\/heads\/main'/);
+  assert.match(workflow, /if: github\.repository == 'yc-software\/qm' && github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /permissions:\s+contents: read\s+id-token: write/);
   assert.match(workflow, /registry-url: https:\/\/registry\.npmjs\.org/);
   assert.match(workflow, /npm publish --provenance --access public/);
@@ -126,16 +126,24 @@ test("one dispatchable workflow drives the whole release, main-only and in order
     workflow,
     /^ {2}images:\n[\s\S]*?needs: preflight\n[\s\S]*?uses: \.\/\.github\/workflows\/release-package\.yml$/m,
   );
-  assert.match(workflow, /^ {2}cli:\n[\s\S]*?needs: images\n[\s\S]*?uses: \.\/\.github\/workflows\/publish-cli\.yml$/m);
+  assert.match(
+    workflow,
+    /^ {2}cli:\n[\s\S]*?needs:\n {6}- preflight\n {6}- images\n[\s\S]*?uses: \.\/\.github\/workflows\/publish-cli\.yml\n {4}with:\n {6}version: \$\{\{ needs\.preflight\.outputs\.version \}\}$/m,
+  );
   assert.match(workflow, /^ {2}release:\n[\s\S]*?needs:\n {6}- preflight\n {6}- cli$/m);
   assert.match(workflow, /concurrency:\n {2}group: release\n {2}cancel-in-progress: false/);
 });
 
-test("the release refuses a tag it already published and writes the tag last", () => {
+test("the release bumps its own version past everything already released", () => {
   const workflow = readFileSync(".github/workflows/release.yml", "utf8");
 
-  assert.match(workflow, /tag="v\$\(jq -r \.version cli\/package\.json\)"/);
-  assert.match(workflow, /is already released; bump cli\/package\.json before releasing again/);
+  assert.match(workflow, /pkg=\$\(jq -r \.version cli\/package\.json\)/);
+  assert.match(workflow, /cli\/package\.json version must be semver/);
+  assert.match(workflow, /matching-refs\/tags\/v/);
+  assert.match(workflow, /npm view @yc-software\/qm version/);
+  assert.match(workflow, /version="\$major\.\$minor\.\$\(\(patch \+ 1\)\)"/);
+  assert.match(workflow, /tag="v\$version"/);
+  assert.match(workflow, /already exists; refusing to move it/);
   assert.ok(
     workflow.indexOf("already released") < workflow.indexOf("gh release create"),
     "the tag gate runs before anything is published",

@@ -1,0 +1,15 @@
+version: v2
+name: qm-web-ui
+build:
+  method: docker
+  context: .
+  dockerfile: ./deploy/web-ui/Dockerfile
+services:
+  - name: web-ui
+    type: web
+    private: true
+    run: node server/index.ts
+    instances: 1
+    cpuCores: 0.25
+    ramMegabytes: 512
+    port: 8080

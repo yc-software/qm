@@ -118,7 +118,7 @@ else console.log("ok");
       core: { HARNESS: "mock", SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" },
     },
     imageOverrides: {},
-    sandbox: { app: "acme-sandboxes", image: `registry.fly.io/acme-sandboxes@sha256:${"a".repeat(64)}` },
+    sandbox: { app: "acme-sandboxes" },
   };
   const configPath = join(dir, "custom-deployment.jsonc");
   writeFileSync(configPath, JSON.stringify(config, null, 2));
@@ -127,7 +127,6 @@ else console.log("ok");
     const calls = readFileSync(log, "utf8");
     assert.match(calls, /storage create --name acme-data --app acme-core --org personal --yes/);
     assert.match(calls, /secrets unset --stage -a acme-core SECURITY_SCREEN_PROXY_TOKEN/);
-    assert.match(calls, /secrets unset --stage -a acme-core FLY_DEPLOY_API_TOKEN/);
     assert.ok(calls.indexOf("secrets unset") < calls.indexOf("deploy"));
     assert.ok(calls.indexOf("storage create") < calls.indexOf("deploy"));
     assert.equal(

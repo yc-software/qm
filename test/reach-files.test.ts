@@ -71,11 +71,11 @@ describe("POST /v1/reach with files", () => {
   });
 
   it("composes named workspace files into the delivery as attachments (the silent-drop bug)", async () => {
-    await seedFile("U-carol", "outbox/report.md", "# hello Alice\n");
+    await seedFile("U-carol", "reports/report.md", "# hello Alice\n");
     const res = await post(
       base,
       "/v1/reach",
-      { text: "here's the report", recipient: "Alice", files: ["outbox/report.md"] },
+      { text: "here's the report", recipient: "Alice", files: ["reports/report.md"] },
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(res.status, 200);
@@ -100,13 +100,13 @@ describe("POST /v1/reach with files", () => {
     const res = await post(
       base,
       "/v1/reach",
-      { text: "doomed", recipient: "Alice", files: ["outbox/nope.md"] },
+      { text: "doomed", recipient: "Alice", files: ["reports/nope.md"] },
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(res.status, 400);
     const body = (await res.json()) as any;
     assert.equal(body.error, "attach_failed");
-    assert.match(body.message, /outbox\/nope\.md \(not found\)/);
+    assert.match(body.message, /reports\/nope\.md \(not found\)/);
     assert.match(body.message, /nothing was sent/);
     assert.equal(
       (await built.app.pendingDeliveries("principal")).length,
@@ -116,26 +116,26 @@ describe("POST /v1/reach with files", () => {
   });
 
   it("rolls back the good file's staging when a mixed list fails — no orphaned blob or artifact behind the 400", async () => {
-    await seedFile("U-carol", "outbox/kept.md", "the good file\n");
+    await seedFile("U-carol", "reports/kept.md", "the good file\n");
     await built.blobTransfer.sweep(0);
     const res = await post(
       base,
       "/v1/reach",
-      { text: "mixed", recipient: "Alice", files: ["outbox/kept.md", "outbox/gone.md"] },
+      { text: "mixed", recipient: "Alice", files: ["reports/kept.md", "reports/gone.md"] },
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(res.status, 400);
     const body = (await res.json()) as any;
     assert.equal(body.error, "attach_failed");
-    assert.match(body.message, /outbox\/gone\.md \(not found\)/);
+    assert.match(body.message, /reports\/gone\.md \(not found\)/);
     assert.equal(await built.blobTransfer.sweep(0), 0, "no orphaned transfer blob for the good file");
     const owned = await built.files.listOwnedByScopes([scopeId("personal", "U-carol")]);
     assert.ok(!owned.files.some((f) => f.name === "kept.md"), "no orphaned artifact for the good file");
-    await seedFile("U-carol", "outbox/kept2.md", "also good\n");
+    await seedFile("U-carol", "reports/kept2.md", "also good\n");
     const res2 = await post(
       base,
       "/v1/reach",
-      { text: "mixed2", recipient: "Alice", files: ["outbox/gone.md", "outbox/kept2.md"] },
+      { text: "mixed2", recipient: "Alice", files: ["reports/gone.md", "reports/kept2.md"] },
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(res2.status, 400);
@@ -145,11 +145,11 @@ describe("POST /v1/reach with files", () => {
   });
 
   it("resolves the target BEFORE staging files: a bad recipient refuses with nothing created", async () => {
-    await seedFile("U-carol", "outbox/orphan.md", "would leak\n");
+    await seedFile("U-carol", "reports/orphan.md", "would leak\n");
     const res = await post(
       base,
       "/v1/reach",
-      { text: "to no one", recipient: "Nobody Realname", files: ["outbox/orphan.md"] },
+      { text: "to no one", recipient: "Nobody Realname", files: ["reports/orphan.md"] },
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(res.status, 404);
@@ -165,7 +165,7 @@ describe("POST /v1/reach with files", () => {
     const res = await post(
       base,
       "/v1/reach",
-      { text: "x", recipient: "Alice", files: "outbox/report.md" },
+      { text: "x", recipient: "Alice", files: "reports/report.md" },
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(res.status, 400);
@@ -191,7 +191,7 @@ describe("POST /v1/reach with files", () => {
     const res2 = await post(
       base,
       "/v1/reach",
-      { text: "x", recipient: "Alice", files: ["outbox/../../etc/passwd"] },
+      { text: "x", recipient: "Alice", files: ["reports/../../etc/passwd"] },
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(res2.status, 400);
@@ -201,7 +201,7 @@ describe("POST /v1/reach with files", () => {
     const res = await post(
       base,
       "/v1/reach",
-      { react: { ts: "123.456", emoji: "tada" }, channel: "eng", files: ["outbox/report.md"] },
+      { react: { ts: "123.456", emoji: "tada" }, channel: "eng", files: ["reports/report.md"] },
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(res.status, 400);
@@ -212,7 +212,7 @@ describe("POST /v1/reach with files", () => {
     const res = await post(
       bareBase,
       "/v1/reach",
-      { text: "x", recipient: "Alice", files: ["outbox/report.md"] },
+      { text: "x", recipient: "Alice", files: ["reports/report.md"] },
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(res.status, 501);

@@ -8,6 +8,7 @@ import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sin
 import { signedRequestHeaders } from "./auth/source-auth-sign.ts";
 import { createSweeper } from "./util/sweeper.ts";
 import { errMessage } from "./util/errors.ts";
+import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { numEnv } from "./config.ts";
 import type { EgressPolicy, ScopeId } from "./types.ts";
 import { isPrivateNetworkIp } from "./util/network.ts";
@@ -18,12 +19,16 @@ const DENY_ALL: EgressPolicy = { allowedHosts: ["deny.invalid"], deniedHosts: []
 
 const METADATA_HOSTS = ["metadata.google.internal", "metadata.goog"];
 
-const LINK_LOCAL = new BlockList();
-LINK_LOCAL.addSubnet("169.254.0.0", 16, "ipv4");
-LINK_LOCAL.addSubnet("fe80::", 10, "ipv6");
-LINK_LOCAL.addAddress("fd00:ec2::254", "ipv6");
+const BLOCKED = new BlockList();
+BLOCKED.addSubnet("169.254.0.0", 16, "ipv4");
+BLOCKED.addSubnet("fe80::", 10, "ipv6");
+BLOCKED.addAddress("fd00:ec2::254", "ipv6");
+BLOCKED.addSubnet("127.0.0.0", 8, "ipv4");
+BLOCKED.addSubnet("0.0.0.0", 8, "ipv4");
+BLOCKED.addAddress("::1", "ipv6");
+BLOCKED.addAddress("::", "ipv6");
 
-export function isLinkLocalOrMetadataIp(ip: string): boolean {
+export function isBlockedDestinationIp(ip: string): boolean {
   const s = ip
     .trim()
     .toLowerCase()
@@ -31,7 +36,7 @@ export function isLinkLocalOrMetadataIp(ip: string): boolean {
     .replace(/%.*$/, "");
   const fam = isIP(s);
   if (!fam) return false;
-  return LINK_LOCAL.check(s, fam === 4 ? "ipv4" : "ipv6");
+  return BLOCKED.check(s, fam === 4 ? "ipv4" : "ipv6");
 }
 
 function isAlwaysBlockedHost(host: string): boolean {
@@ -40,7 +45,7 @@ function isAlwaysBlockedHost(host: string): boolean {
     .toLowerCase()
     .replace(/^\[(.*)\]$/, "$1")
     .replace(/\.$/, "");
-  if (isIP(h)) return isLinkLocalOrMetadataIp(h);
+  if (isIP(h)) return isBlockedDestinationIp(h);
   return METADATA_HOSTS.some((m) => h === m || h.endsWith(`.${m}`));
 }
 
@@ -108,7 +113,7 @@ async function decide(
   if (
     ips.some(
       (ip) =>
-        isLinkLocalOrMetadataIp(ip) ||
+        isBlockedDestinationIp(ip) ||
         isHostDenied(ip, policy?.deniedHosts) ||
         (policy?.denyPrivateNetworks === true && !privateAllowed && isPrivateNetworkIp(ip)),
     )
@@ -241,11 +246,14 @@ function main(): void {
   const tokenless = process.env.EGRESS_TOKENLESS === "open" ? ("open" as const) : ("deny" as const);
   const server = buildEgressAuthzServer({ ...(capabilitySecret ? { capabilitySecret } : {}), audit, tokenless });
   server.listen(port, "127.0.0.1", () => console.log(`[egress-authz] listening on 127.0.0.1:${port}`));
-  for (const sig of ["SIGTERM", "SIGINT"] as const) {
-    process.on(sig, () =>
-      server.close(() => void (relay ? relay.flush() : Promise.resolve()).finally(() => process.exit(0))),
-    );
-  }
+  let shuttingDown = false;
+  const shutdown = (): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    server.close(() => void (relay ? relay.flush() : Promise.resolve()).finally(() => process.exit()));
+  };
+  for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, shutdown);
+  shutdownOnUncaught("egress-authz", shutdown);
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) main();

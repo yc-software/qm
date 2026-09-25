@@ -1,6 +1,8 @@
 export interface OrgBranding {
+  orgName?: string;
   accent?: string;
   mark?: string;
+  markUrl?: string;
   selfLabel?: string;
 }
 
@@ -29,7 +31,7 @@ export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): 
         warmed = true;
         nextAt = Date.now() + REFRESH_MS;
       } catch (err) {
-        if (process.env.BRANDING_DEBUG) console.error("[branding] fetch failed:", err);
+        if (process.env.BRANDING_DEBUG) console.error("[branding] fetch failed:", String(err));
         nextAt = Date.now() + RETRY_MS;
       } finally {
         inflight = null;
@@ -59,18 +61,32 @@ export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): 
 const escapeAttr = (v: string): string =>
   v.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-export function injectBranding(html: string, branding: OrgBranding): string {
-  const { accent, mark, selfLabel } = branding;
+const CSS_HOSTILE = /[<>{}"'();\\]/;
+const cssSafe = (v: string | undefined): v is string => !!v && !CSS_HOSTILE.test(v);
+const cssUrlSafe = (v: string | undefined): v is string => cssSafe(v) && /^https:\/\/\S+$/.test(v);
+
+export function injectBranding(html: string, branding: OrgBranding, opts?: { titleSuffix?: string }): string {
+  const { accent, mark, markUrl, selfLabel } = branding;
   let out = html;
   if (selfLabel) {
     out = out.replace(
       /(<meta name="brand-self-label" content=")[^"]*(")/,
       (_m, pre: string, post: string) => `${pre}${escapeAttr(selfLabel)}${post}`,
     );
+    out = out.replace(
+      /(<meta name="apple-mobile-web-app-title" content=")[^"]*(")/,
+      (_m, pre: string, post: string) => `${pre}${escapeAttr(selfLabel)}${post}`,
+    );
+    if (opts?.titleSuffix) {
+      const title = escapeAttr(`${selfLabel} ${opts.titleSuffix}`);
+      out = out.replace(/<title>[^<]*<\/title>/, () => `<title>${title}</title>`);
+    }
   }
-  const decls = [...(accent ? [`--brand-accent:${accent}`] : []), ...(mark ? [`--brand-mark:"${mark}"`] : [])].join(
-    ";",
-  );
+  const decls = [
+    ...(cssSafe(accent) ? [`--brand-accent:${accent}`] : []),
+    ...(cssSafe(mark) ? [`--brand-mark:"${mark}"`] : []),
+    ...(cssUrlSafe(markUrl) ? [`--brand-mark-image:url("${markUrl}")`] : []),
+  ].join(";");
   if (decls) out = out.replace("</head>", () => `<style>:root{${decls}}</style></head>`);
   return out;
 }

@@ -2,7 +2,8 @@ import { clip, inlineCode } from "./util.ts";
 import { parseDeliveryTarget } from "./delivery.ts";
 import type { AgentRequestActionId } from "./agent-requests.ts";
 
-export type ApprovalActionId = "hilo_allow_once" | "hilo_allow_session" | "hilo_allow_always" | "hilo_deny";
+export const APPROVAL_ACTION_IDS = ["hilo_allow_once", "hilo_allow_session", "hilo_allow_always", "hilo_deny"] as const;
+export type ApprovalActionId = (typeof APPROVAL_ACTION_IDS)[number];
 
 export interface PendingApproval {
   requestId: string;
@@ -10,6 +11,7 @@ export interface PendingApproval {
   reason: string;
   purpose?: string;
   summary?: string;
+  kind?: "approval" | "input";
   grantModes?: { session: boolean; always: boolean };
 }
 
@@ -50,19 +52,22 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
   const items = approvals.length
     ? approvals
     : [{ requestId: "", command: "unknown command", reason: "requires approval" }];
-  const text = items
-    .map((p) =>
-      p.purpose
-        ? `Approval needed: ${clip(p.purpose, 400)}`
-        : `Approval needed before I can run ${inlineCode(p.command)}.`,
-    )
-    .join("\n");
+  const describe = (p: (typeof items)[number]): string => {
+    if (p.kind === "input") return "My security screen flagged part of this message. Allow it?";
+    if (p.purpose) return `Approval needed: ${clip(p.purpose, 400)}`;
+    return `Approval needed before I can run ${inlineCode(p.command)}.`;
+  };
+  const text = items.map(describe).join("\n");
   const blocks: Array<Record<string, unknown>> = [];
   for (const p of items) {
-    const lines = [":lock: *Approval needed.*"];
+    const lines = [
+      p.kind === "input"
+        ? ":lock: *My security screen flagged part of this message. Allow it?*"
+        : ":lock: *Approval needed.*",
+    ];
     if (p.summary) lines.push(clip(p.summary, 400));
     if (p.purpose) lines.push(`*Why:* ${clip(p.purpose, 400)}`);
-    lines.push(`*Command:* ${inlineCode(p.command)}`);
+    if (p.kind !== "input") lines.push(`*Command:* ${inlineCode(p.command)}`);
     lines.push(`*Flagged as:* ${clip(p.reason, 200)}`);
     blocks.push({
       type: "section",
@@ -88,6 +93,8 @@ export interface StoredApproval {
   reason?: string;
   purpose?: string;
   summary?: string;
+  kind?: "approval" | "input";
+  grantModes?: { session: boolean; always: boolean };
   request?: Record<string, unknown>;
 }
 
@@ -101,11 +108,13 @@ export interface RecoveredApprovalContext {
   reason: string;
   purpose?: string;
   summary?: string;
+  kind?: "approval" | "input";
+  grantModes?: { session: boolean; always: boolean };
   turn: Record<string, unknown>;
 }
 
 export function recoveredApprovalContext(
-  stored: Pick<StoredApproval, "command" | "reason" | "purpose" | "summary" | "request">,
+  stored: Pick<StoredApproval, "command" | "reason" | "purpose" | "summary" | "kind" | "grantModes" | "request">,
   click: { channel: string; threadTs?: string },
 ): RecoveredApprovalContext | null {
   const req = stored.request as
@@ -122,6 +131,7 @@ export function recoveredApprovalContext(
     surface: _surface,
     async: _async,
     idempotencyKey: _idempotencyKey,
+    redeliveryKey: _redeliveryKey,
     approval: _approval,
     relayInput: _relayInput,
     intakePreambleMs: _intakePreambleMs,
@@ -142,6 +152,8 @@ export function recoveredApprovalContext(
     reason: stored.reason ?? "requires approval",
     ...(stored.purpose ? { purpose: stored.purpose } : {}),
     ...(stored.summary ? { summary: stored.summary } : {}),
+    ...(stored.kind ? { kind: stored.kind } : {}),
+    ...(stored.grantModes ? { grantModes: stored.grantModes } : {}),
     turn,
   };
 }
@@ -151,6 +163,7 @@ type ApprovalBegin<T> = { state: "missing" } | { state: "busy" } | { state: "rea
 export interface ApprovalRegistry<T> {
   remember(id: string, ctx: T): void;
   get(id: string): T | undefined;
+  busy(id: string): boolean;
   begin(id: string): ApprovalBegin<T>;
   settle(id: string): void;
   release(id: string): void;
@@ -164,6 +177,9 @@ export function createApprovalRegistry<T>(): ApprovalRegistry<T> {
     },
     get(id) {
       return pending.get(id)?.ctx;
+    },
+    busy(id) {
+      return pending.get(id)?.inFlight === true;
     },
     begin(id) {
       const entry = pending.get(id);

@@ -82,3 +82,17 @@ test("audit log is now bounded (latent leak fixed) and preserves insertion order
   assert.equal(events[0]?.at, 1, "oldest event dropped");
   assert.equal(events[events.length - 1]?.at, 50000, "newest retained, oldest-first order");
 });
+
+test("error log pages beyond the former 200-record window after filtering", async () => {
+  const log = createErrorLog();
+  for (let i = 0; i < 260; i++)
+    log.record({ category: "turn", code: String(i), message: "failure", scopeLabel: s1, sessionId: "one" });
+  log.record({ category: "turn", code: "other", message: "failure", scopeLabel: s2 });
+  const page = await log.list({ scopeId: s1, sessionId: "one", offset: 200, limit: 50 });
+  assert.equal(page.length, 50);
+  assert.equal(page[0]?.code, "59");
+  assert.equal(page.at(-1)?.code, "10");
+  assert.equal((await log.list({ scopeId: s1, offset: 250, limit: 50 })).length, 10);
+  assert.equal((await log.list({ scopeId: s1, offset: 260, limit: 50 })).length, 0);
+  assert.equal(await log.count({ scopeId: s1 }), 260);
+});

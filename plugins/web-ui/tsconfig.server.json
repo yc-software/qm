@@ -11,7 +11,10 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      "@sentry/node": ["./node_modules/@sentry/node/build/types/index.d.ts"]
+    }
   },
   "include": ["server/**/*.ts"]
 }

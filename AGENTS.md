@@ -6,6 +6,11 @@ To run and test, see [`README.md`](./README.md).
 
 Two habits that keep task-focused changes from scarring the rest of the repo:
 
+- **Do not add AI authorship attribution to commits or pull requests.** Omit
+  `Co-authored-by` trailers for Codex, Claude, or other AI tools, and omit
+  tool-generated attribution footers such as `Generated with Codex`. Preserve
+  legitimate human coauthors. CI rejects AI coauthor trailers on new PR commits;
+  do not rewrite existing repository history to remove attribution.
 - **Fix every instance, not just the reported one.** When you find a bug or a pattern
   worth changing, grep the whole repo (`src/`, `plugins/`, `test/`, `scripts/`) for the
   same pattern and fix all of it in the same change. One autocorrected call site with
@@ -59,37 +64,53 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   Slack Mac app, and don't ask permission first — do it on your own; don't wait to be
   asked. Skip it for trivial refactors, docs, config, or pure-logic changes already
   covered by tests.
-- **Screenshot every front-end change in the PR.** Anything an operator or user sees
-  rendered — admin/web/portal UI, Slack surfaces, emails — ships with a screenshot of the
-  after state (before/after when it's a change to something that already existed) in the PR
-  description, so a reviewer sees the result without booting it. Can't reach the surface
-  live? Render it against realistic data and say so.
+  Leave review instances running until the PR merges, unless the user asks to stop
+  earlier. After merge, tear down that worktree's instance and verify its processes
+  and lease are gone before removing the worktree. Preserve shared Postgres and
+  persistent data. If the user asks to keep an instance beyond merge, keep its
+  worktree too.
+- **Keep screenshots out of Git and app assets.** Never commit screenshots or create
+  a tracked screenshots directory, including under docs or QA. Capture review images
+  in a temporary directory outside the checkout or an ignored local output directory,
+  and attach them to the PR or host them externally. Do not bundle review screenshots
+  into the app. Only actual product assets, such as icons and instructional media,
+  belong in the app bundle.
+- **Demo every front-end change in the PR.** Anything an operator or user sees
+  rendered — admin/web/portal UI, Slack surfaces, emails — ships with a way for a
+  reviewer to see the result without booting it. Prefer a link to a live demo app
+  (e.g. the built UI served against a small mock API, published internally) so the
+  reviewer can click around the real thing; note in the PR what's mocked. Fall back
+  to screenshots only when a live demo isn't practical (e.g. Slack surfaces, emails),
+  and then show the after state (before/after for changes to something that existed),
+  rendered against realistic data. Attach or externally host these screenshots; never
+  commit them to satisfy this requirement.
 
-## Private forks
+## Deployment repositories and source forks
 
-Organizations run qm from private forks of this repository. A private fork is a
-standalone private repository whose history begins as a clone of qm. Everything
-organization-specific is confined to `deploy/layers/<org>/`, and every file outside
-that directory, which these rules call core, stays byte-identical to upstream. Core
-here covers the plugins, the CLI, the docs, and CI as much as the runtime under
-`src/`. A private fork is created with a plain clone and never with
-GitHub's fork feature, because a GitHub fork of a public repository cannot be made
-private and its commits stay fetchable by SHA from the public side. The README section
-"Customize your instance" gives the creation procedure.
+Before acting, run `git remote -v` and inspect the checkout. `origin` pointing at
+`yc-software/qm` identifies upstream. Another origin alone does not identify a source
+fork: a package deployment has its own `qm.config.jsonc` and pinned `@yc-software/qm`
+dependency, while a source fork carries the QM source tree and upstream ancestry.
 
-Before you act, determine which repository this checkout is by running `git remote -v`.
-If `origin` points at `yc-software/qm`, you are in upstream qm. If `origin`
-points anywhere else, you are in a private fork, and five rules apply. Do not edit core;
-a change to core belongs in upstream qm, and the `upstream-pr` skill sends it there
-without leaking organization context. Keep every organization-specific file under
-`deploy/layers/<org>/`. Sync from upstream with the `update-qm` skill, which merges and
-never rebases. Pass `--repo` to every `gh` command, because `gh` may otherwise pick the
-upstream repository through the `upstream` remote and read or edit the wrong
-repository's pull requests. Never reference an upstream issue or pull request by number
-(`yc-software/qm#123`) in a fork's PRs, issues, comments, or commit messages: GitHub
-mirrors such mentions onto the referenced upstream item as a permanent timeline event,
-so the fork's existence and the mentioning title become visible to whoever GitHub
-decides may see them. Name upstream work in plain words instead.
+Package deployments customize config, tools, skills, and services without copying core.
+Source forks may modify core freely, including runtime, plugins, CLI, docs, and CI;
+contributing those changes upstream is optional. Keep private deployment material under
+`deploy/layers/<org>/` in private source forks or in a separate private deployment
+repository for public source checkouts. Secrets never enter Git. The README section
+"Customize your instance" documents both paths and explicit source builds.
+
+Create private source forks as standalone repositories outside GitHub's fork network.
+Seed only `main` and set the default branch explicitly; never use `git push --mirror`.
+Use `update-qm` to merge source updates without rebasing published history or discarding
+intentional local changes. Land source-sync PRs without squashing or rebasing away their
+upstream ancestry. Package deployments update their dependency instead.
+
+In downstream repositories, pass `--repo` to every `gh` command so the upstream remote
+cannot redirect an operation. When contributing from private work, use `upstream-pr`
+to prepare a clean branch and scrub outgoing content and history. Never reference an
+upstream issue or PR by number in private repository PRs, issues, comments, or commit
+messages: GitHub cross-references can disclose their existence and titles upstream.
+Name upstream work in plain words instead.
 
 ## Durable by default
 

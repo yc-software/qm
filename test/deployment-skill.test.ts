@@ -11,7 +11,7 @@ test("package-consumer deployment skill covers both self-owned providers and the
   const root = read("cli/templates/deployment/deployment.md");
   for (const phrase of [
     "Before cloud mutation",
-    "Fly.io or AWS",
+    "Fly.io, AWS, or Porter",
     "deployment repository",
     "npm ci",
     "slack render",
@@ -36,6 +36,7 @@ test("package-consumer deployment skill covers both self-owned providers and the
     ".codex/skills/deploy-qm/agents/openai.yaml",
     ".codex/skills/deploy-qm/references/fly.md",
     ".codex/skills/deploy-qm/references/aws.md",
+    ".codex/skills/deploy-qm/references/porter.md",
     ".codex/skills/deploy-qm/references/slack.md",
     ".codex/skills/deploy-qm/references/email.md",
   ]) {
@@ -47,6 +48,7 @@ test("package-consumer deployment skill covers both self-owned providers and the
     "cli/templates/deployment/SKILL.md",
     "cli/templates/deployment/references/fly.md",
     "cli/templates/deployment/references/aws.md",
+    "cli/templates/deployment/references/porter.md",
     "cli/templates/deployment/references/slack.md",
     "cli/templates/deployment/references/email.md",
   ]) {
@@ -77,12 +79,38 @@ test("the deploy skill tells an agent where the sign-in email transport comes fr
   );
 });
 
+test("the porter reference walks the dashboard steps an agent cannot skip", () => {
+  const porter = read("cli/templates/deployment/references/porter.md");
+  for (const phrase of [
+    "dashboard.porter.run/cloud-accounts",
+    "Admin-role",
+    "PERMISSION_DENIED",
+    "ADMIN_GRANTS",
+    "AUTH_ALLOWED_EMAILS",
+    "porter apply",
+    "linux/amd64",
+  ]) {
+    assert.ok(porter.includes(phrase), `porter reference covers ${phrase}`);
+  }
+  assert.match(porter, /operator links one themselves/, "cloud-account linking is called out as the operator's step");
+  assert.match(read("cli/templates/deployment/deployment.md"), /references\/porter\.md/);
+  assert.match(
+    read(".codex/skills/deploy-qm/references/porter.md"),
+    /cli\/templates\/deployment\/references\/porter\.md/,
+  );
+});
+
 test("connector onboarding is governed by the live admin-configured list", () => {
   const onboarding = read("plugins/onboarding/skills/onboarding/SKILL.md");
   const connectApps = read("skills-seed/connect-apps/SKILL.md");
   for (const skill of [onboarding, connectApps]) {
     assert.match(skill, /configured by (?:the |your )?admin/i);
     assert.doesNotMatch(skill, /Slack and Google first|Slack, Google, Notion, Linear, and GitHub/);
+  }
+  for (const skill of [onboarding, connectApps]) {
+    assert.match(skill, /composio`? skill/);
+    assert.match(skill, /never switch credentials to evade a denial/i);
+    assert.doesNotMatch(skill, /If it says none are enabled, skip|offer none when that list is/);
   }
   assert.match(onboarding, /complete allowlist|same allowlist/);
   assert.doesNotMatch(onboarding, /machine-local credentials such as|`gh`, `glab`, or AWS/);
@@ -123,4 +151,34 @@ test("each provider has an independent agent-computer proof", () => {
   assert.match(aws, /## Agent-computer proof/);
   assert.match(aws, /deployment-owned S3 home\s+snapshot/);
   assert.match(aws, /workspace\/qm-computer-proof\.txt/);
+});
+
+test("onboarding composes existing access skills without a provider-setup prerequisite", () => {
+  const onboarding = read("plugins/onboarding/skills/onboarding/SKILL.md");
+  const admin = read("skills-seed/admin/SKILL.md");
+  assert.ok(onboarding.indexOf("### Slack bot first") < onboarding.indexOf("### Personal connections"));
+  assert.match(onboarding, /Reuse their connected accounts after checking identity and permissions/);
+  assert.match(onboarding, /project key is not proof that a personal account is connected/);
+  assert.match(onboarding, /skip account connection/);
+  assert.match(onboarding, /help configure a new source only if they ask/);
+  assert.match(onboarding, /never ask regular users to provision it/);
+  assert.match(admin, /GET \/v1\/admin\/slack-installation/);
+  assert.match(admin, /installAvailable: true/);
+  assert.match(admin, /App Configuration Tokens/);
+  assert.match(admin, /not the refresh token/);
+  assert.match(admin, /manage other apps they own/);
+  assert.match(admin, /then discards (?:it|the token)/);
+  assert.match(admin, /Never paste it in chat, memory, files, or the keychain/);
+  assert.match(admin, /Require a real reply before claiming the bot works/);
+  assert.doesNotMatch(admin, /## Guide org OAuth app setup/);
+});
+
+test("onboarding includes the Slack configuration-token walkthrough", () => {
+  const asset = "docs/images/slack-app-config-token-setup.gif";
+  const skill = read("plugins/onboarding/skills/onboarding/SKILL.md");
+  assert.ok(skill.includes(`https://raw.githubusercontent.com/yc-software/qm/main/${asset}`));
+  assert.match(skill, /shows generation and copying/);
+  assert.match(skill, /select their own workspace/);
+  assert.match(skill, /secure setup\s+form, never into chat/);
+  assert.equal(readFileSync(asset).subarray(0, 6).toString("ascii"), "GIF89a");
 });

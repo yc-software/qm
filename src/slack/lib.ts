@@ -1,10 +1,13 @@
 export { isBoundaryRefusal, refusalDelivery, postThenAckRunDelivery, refusalNote } from "./refusals.ts";
 export { inlineCode, clip, sleep } from "./util.ts";
+export { safeChunks } from "./safe-cut.ts";
 export {
   decodeSlackEntities,
   resolveMentionsInText,
   stripMention,
   neutralizeMassMentions,
+  neutralizeMentions,
+  wireMentionKeys,
   toSlackMrkdwn,
   setMentionIndex,
   isReservedMentionName,
@@ -27,6 +30,7 @@ export {
   computeChannelAudience,
   computePublishMembers,
   allInternalChannelMembers,
+  internalChannelMembers,
   resolveChannelMembership,
 } from "./identity.ts";
 export {
@@ -39,6 +43,7 @@ export {
   hasContent,
   isThreadReply,
   createThreadTracker,
+  channelThreadRef,
   dmThreadRef,
   dedupeKey,
   createDeduper,
@@ -49,10 +54,9 @@ export {
 } from "./message-gating.ts";
 export {
   type SlackFile,
+  hydrateSlackFiles,
   MAX_ATTACHMENT_BYTES,
   isOversize,
-  type ThreadMessage,
-  collectEarlierThreadFiles,
   isTrustedSlackHost,
   attachmentFromBytes,
   MAX_ATTACHMENTS_PER_TURN,
@@ -64,6 +68,7 @@ export {
 } from "./attachments.ts";
 export {
   type ApprovalActionId,
+  APPROVAL_ACTION_IDS,
   approvalCardDestination,
   approvalMessage,
   type StoredApproval,
@@ -72,6 +77,7 @@ export {
 } from "./approval-cards.ts";
 export {
   type AgentRequestActionId,
+  AGENT_REQUEST_ACTION_IDS,
   type AgentRequestDirective,
   agentRequestMessage,
   AGENT_REQUEST_INSTRUCTION,
@@ -101,6 +107,7 @@ export {
   buildContextWindow,
   type RecentMessage,
   MAX_RECENT_MESSAGES,
+  MAX_TOP_LEVEL_CONTEXT_AGE_S,
   recentWindow,
   resolveMentions,
   type ConversationView,
@@ -118,6 +125,8 @@ export {
   channelWelcomeMessage,
   surfaceHeaderText,
   headerUpdate,
+  isSurfaceHeaderMessage,
+  findHeaderPin,
   createSurfaceHeaderEnsurer,
   scopeSurfaceUrl,
   type SurfaceHeaderClient,
@@ -129,6 +138,14 @@ export {
   createDeliveryTracker,
   deliverWithRetry,
   postWithVerify,
+  findPostedByKey,
+  recoveryVerifyOldest,
+  deliveryMetadata,
+  type DeliveryMetadata,
+  type PostedPart,
+  type PostMessageArgs,
+  SLACK_POST_SPLIT_LIMIT,
+  SLACK_TEXT_LIMIT,
 } from "./delivery.ts";
 export {
   DEFAULT_ACK_REACTIONS,
@@ -139,4 +156,8 @@ export {
   renderTaskList,
   type TaskListPresenter,
   createTaskListPresenter,
+  renderGoalNotice,
+  type GoalNoticeView,
+  type GoalNoticePresenter,
+  createGoalNoticePresenter,
 } from "./presenters.ts";

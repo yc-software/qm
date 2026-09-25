@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync } from "node:fs";
+import { readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { countTokens } from "../src/util/tokens.ts";
-import { createPiHarness } from "../src/harness/pi-harness.ts";
+import { createPiHarness, stableCwd } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 
 function countTempDirs(prefix: string): number {
@@ -52,15 +53,36 @@ test("every turn composes the freshly resolved system prompt", async () => {
   assert.equal(recorded[1]!.inputTokens, countTokens(second) + countTokens("hi"));
 });
 
-test("each turn removes its isolated resource directories", async () => {
+test("the cwd pi appends to the system prompt is one constant path per harness", () => {
+  assert.equal(stableCwd("pi"), join(tmpdir(), "pi-cwd"));
+  assert.equal(stableCwd("pi"), stableCwd("pi"));
+});
+
+test("each turn removes its agent directory and reuses one constant cwd", async () => {
   const prefix = `pi-turn-${process.pid}`;
   const harness = createPiHarness({ tempDirPrefix: prefix });
   const recorded: Array<{ model: string; inputTokens: number; entryCount: number }> = [];
 
   await runIgnoringPromptError(harness, recordingTurn("BASE", recorded, "cleanup"));
+  await runIgnoringPromptError(harness, recordingTurn("BASE", recorded, "cleanup-2"));
 
+  assert.equal(countTempDirs(`${prefix}-agent-`), 0);
+  assert.equal(countTempDirs(`${prefix}-cwd`), 1);
+  rmSync(stableCwd(prefix), { recursive: true, force: true });
+});
+
+test("a squatted shared cwd falls back to a per-turn cwd that is removed afterwards", async () => {
+  const prefix = `pi-squat-${process.pid}`;
+  writeFileSync(stableCwd(prefix), "not a directory");
+  const harness = createPiHarness({ tempDirPrefix: prefix });
+  const recorded: Array<{ model: string; inputTokens: number; entryCount: number }> = [];
+
+  await runIgnoringPromptError(harness, recordingTurn("BASE", recorded, "squat"));
+
+  assert.equal(recorded.length, 1, "the turn still reached the model call");
   assert.equal(countTempDirs(`${prefix}-cwd-`), 0);
   assert.equal(countTempDirs(`${prefix}-agent-`), 0);
+  rmSync(stableCwd(prefix), { force: true });
 });
 
 test("the Pi harness exposes no session-reset hook after removing session state", () => {

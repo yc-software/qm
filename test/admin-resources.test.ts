@@ -13,7 +13,7 @@ import { ADMIN_RESOURCES } from "../src/api/routes/admin-resources.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
-function brokeredLayer(): string {
+function credentialLayer(): string {
   const dir = mkdtempSync(join(tmpdir(), "admin-res-layer-"));
   mkdirSync(join(dir, "tools/acmecli"), { recursive: true });
   writeFileSync(
@@ -24,30 +24,29 @@ function brokeredLayer(): string {
         check: "acmecli me",
         reauth: "acmecli login --use-device-code",
         credentialPaths: [{ path: ".acmecli", kind: "directory" }],
-        broker: {
-          kind: "aws-role",
-          roleArnEnv: "TEST_BROKER_ROLE_ARN",
-          region: "us-west-2",
-          sessionActions: ["execute-api:Invoke"],
-        },
       },
     }),
   );
   return dir;
 }
 
-function start(harnessId = "pi"): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function start(harnessId = "pi", withLayer = true): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-res-")), deploymentLayerDir: brokeredLayer() }),
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "admin-res-")),
+      ...(withLayer ? { deploymentLayerDir: credentialLayer() } : {}),
+    }),
   );
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,
+    sessions: built.sessions,
     acl: built.acl,
     serviceCreds: built.serviceCreds,
     deviceFlowCutover: built.deviceFlowCutover,
-    brokeredServices: () => built.brokeredTools.map((tool) => tool.service),
+    featureFlags: built.featureFlags,
+    credentialServices: () => built.credentialTools.map((tool) => tool.service),
     channelPolicy: built.channelPolicy,
     harnessId,
   });
@@ -55,6 +54,59 @@ function start(harnessId = "pi"): { base: string; built: BuiltApp; close: () => 
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
+
+test("security flags are visible and legacy session taint can be released by an org admin", async () => {
+  const srv = start();
+  try {
+    srv.built.auditLog.record({
+      at: 123,
+      principalId: "U1",
+      action: "security_posture.flagged",
+      resource: "slack",
+      scopeLabel: "channel:C1",
+      status: "pending_approval",
+      detail: JSON.stringify({ cause: "strict-verdict", source: ["overheard"] }),
+    });
+    const flags = await fetch(`${srv.base}/v1/admin/security/flags?limit=1`, { headers: ADMIN });
+    assert.equal(flags.status, 200);
+    assert.deepEqual((await flags.json()) as unknown, {
+      flags: [
+        {
+          at: 123,
+          principal: "U1",
+          scope: "channel:C1",
+          surface: "slack",
+          detail: '{"cause":"strict-verdict","source":["overheard"]}',
+        },
+      ],
+    });
+
+    const session = await srv.built.sessions.getOrCreateByThread("legacy-taint", "dm", "personal:U1");
+    const lease = (await srv.built.sessions.acquireLease(session.id)).lease!;
+    await srv.built.sessions.append(lease, {
+      type: "user",
+      payload: { text: "legacy", securityTainted: true },
+      scopeLabel: "personal:U1",
+    });
+    await srv.built.sessions.releaseLease(lease);
+    const denied = await fetch(`${srv.base}/v1/admin/security/release`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-admin-actor": "nobody@default-org" },
+      body: JSON.stringify({ sessionId: session.id }),
+    });
+    assert.equal(denied.status, 403);
+    const released = await fetch(`${srv.base}/v1/admin/security/release`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({ sessionId: session.id }),
+    });
+    assert.equal(released.status, 200);
+    const payload = (await srv.built.sessions.getEntries(session.id))[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.securityTainted, undefined);
+  } finally {
+    await srv.close();
+  }
+});
 
 test("GET /v1/admin/resources returns a manifest entry for every registered resource", async () => {
   const srv = start();
@@ -72,6 +124,7 @@ test("GET /v1/admin/resources returns a manifest entry for every registered reso
     assert.equal(byId.get("base-model")?.target, "any");
     assert.ok((byId.get("base-model")?.enumValues?.length ?? 0) > 0);
     assert.deepEqual(byId.get("security-posture")?.enumValues, ["dangerous", "auto", "strict"]);
+    assert.deepEqual(byId.get("sharing-posture")?.enumValues, ["isolated", "open"]);
     assert.equal(byId.get("service-credentials")?.target, "org");
     assert.equal(byId.get("service-credentials")?.secret, true);
     assert.equal(byId.has("import"), false);
@@ -174,20 +227,25 @@ test("branding governance validates, round-trips through surface-config, clears,
       400,
     );
     assert.equal(
+      (await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ accent: "#aabbccddee" }) })).status,
+      400,
+    );
+    assert.equal(
       (
         await fetch(url, {
           method: "PUT",
           headers: ADMIN,
-          body: JSON.stringify({ accent: "#6366f1", mark: "Q", selfLabel: "qm" }),
+          body: JSON.stringify({ accent: "#6366f1", mark: "Q", selfLabel: "{{qm}}", orgName: "Acme Corp" }),
         })
       ).status,
       200,
     );
     const readBack = (await (
       await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })
-    ).json()) as { branding?: { accent?: string } };
+    ).json()) as { branding?: { accent?: string; orgName?: string } };
     assert.equal(readBack.branding?.accent, "#6366f1");
-    assert.deepEqual(await surfaceBranding(), { accent: "#6366f1", mark: "Q", selfLabel: "qm" });
+    assert.equal(readBack.branding?.orgName, "Acme Corp");
+    assert.deepEqual(await surfaceBranding(), { orgName: "Acme Corp", accent: "#6366f1", mark: "Q", selfLabel: "qm" });
     assert.equal(
       (await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ mark: "<b>xy" }) })).status,
       200,
@@ -228,7 +286,7 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
   const srv = start("pi");
   try {
     srv.built.config.setApprovedHarnesses(["pi", "codex", "claude"]);
-    srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6", "gpt-5.5"]);
+    srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6", "claude-opus-4-8", "gpt-5.5"]);
     srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "claude-opus-4-8" });
     await srv.built.config.flushScope("org:default-org");
     const url = `${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal:alice`;
@@ -240,21 +298,8 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
     };
     assert.equal(initial.effective.harnessId, "pi");
     assert.equal(initial.scopeOverride, null);
-    assert.deepEqual(initial.modelsByHarness.claude, ["claude-sonnet-4-6"]);
+    assert.deepEqual(initial.modelsByHarness.claude, ["claude-sonnet-4-6", "claude-opus-4-8"]);
     assert.deepEqual(initial.modelsByHarness.codex, ["gpt-5.5"]);
-
-    const outsidePicker = await fetch(`${srv.base}/v1/runtime-config`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        principalId: "alice",
-        scopeId: "personal:alice",
-        harnessId: "claude",
-        modelId: "claude-haiku-4-5",
-      }),
-    });
-    assert.equal(outsidePicker.status, 400);
-    assert.equal(((await outsidePicker.json()) as { error: string }).error, "model_not_enabled");
 
     const set = await fetch(`${srv.base}/v1/runtime-config`, {
       method: "PUT",
@@ -365,6 +410,27 @@ test("a generic resource round-trips through the registry dispatch + read loop",
   }
 });
 
+test("feature flag table changes one scope live without restart", async () => {
+  const srv = start();
+  try {
+    const endpoint = `${srv.base}/v1/admin/scopes/org:default-org/feature-flags`;
+    assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "channel:C1"), false);
+    const enable = await fetch(endpoint, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ featureName: "inbox_loops", scopeId: "channel:C1", on: true }),
+    });
+    assert.equal(enable.status, 200);
+    assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "channel:C1"), true);
+    assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "channel:C2"), false);
+    const read = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
+    const flags = ((await read.json()) as { featureFlags: Array<{ enabledScopes: string[] }> }).featureFlags;
+    assert.deepEqual(flags[0]?.enabledScopes, ["channel:C1"]);
+  } finally {
+    await srv.close();
+  }
+});
+
 test("device-flow cutover is scope-specific, audited, and reverses without deleting records", async () => {
   const srv = start();
   try {
@@ -391,7 +457,7 @@ test("device-flow cutover is scope-specific, audited, and reverses without delet
       body: JSON.stringify({ service: "aws", mode: "ephemeral_only" }),
     });
     assert.equal(unsupported.status, 400);
-    assert.match(await unsupported.text(), /no isolated adapter/);
+    assert.match(await unsupported.text(), /no credential paths/);
 
     const rollback = await fetch(endpoint, {
       method: "PUT",
@@ -444,6 +510,49 @@ test("security posture round-trips through durable scoped governance", async () 
       body: JSON.stringify({ posture: "YOLO" }),
     });
     assert.equal(invalid.status, 400);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("sharing posture round-trips through scoped governance with organization and room vetoes", async () => {
+  const srv = start();
+  try {
+    const org = "org:default-org";
+    const personal = "personal:U1";
+    const room = "channel:C1";
+    const read = async (scope: string) => {
+      const response = await fetch(`${srv.base}/v1/admin/scopes/${scope}`, { headers: ADMIN });
+      assert.equal(response.status, 200);
+      return (await response.json()) as { sharingPosture: string };
+    };
+    const put = async (scope: string, posture: string) =>
+      fetch(`${srv.base}/v1/admin/scopes/${scope}/sharing-posture`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify({ posture }),
+      });
+
+    assert.equal((await read(org)).sharingPosture, "isolated");
+    assert.equal((await put(org, "open")).status, 200);
+    assert.equal((await read(room)).sharingPosture, "open");
+    assert.equal((await put(personal, "isolated")).status, 200);
+    assert.equal((await read(personal)).sharingPosture, "isolated");
+    assert.equal((await put(room, "isolated")).status, 200);
+    assert.equal((await read(room)).sharingPosture, "isolated");
+    assert.equal((await put(org, "isolated")).status, 200);
+    assert.equal((await put(room, "open")).status, 200);
+    assert.equal((await read(room)).sharingPosture, "isolated");
+    assert.equal((await put(org, "invalid")).status, 400);
+    const reset = await fetch(`${srv.base}/v1/admin/scopes/${room}/sharing-posture`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ inherit: true }),
+    });
+    assert.equal(reset.status, 200);
+    assert.equal(await srv.built.config.getSharingPostureOwnDurable(room), null);
+    assert.equal((await put(org, "open")).status, 200);
+    assert.equal((await read(room)).sharingPosture, "open");
   } finally {
     await srv.close();
   }
@@ -524,6 +633,70 @@ test("base-model is a sparse per-scope override: a channel pins its own model, e
     assert.equal(clear.status, 200);
     const afterClear = await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, { headers: ADMIN });
     assert.equal(((await afterClear.json()) as { baseModel: string | null }).baseModel, null);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("admin runtime saves reasoning level and fast mode with the default model", async () => {
+  const srv = start();
+  const url = `${srv.base}/v1/admin/scopes/org:default-org/runtime`;
+  try {
+    srv.built.config.setApprovedHarnesses(["pi", "opencode", "codex"]);
+    await srv.built.config.flushScope("org:default-org");
+    const saved = await fetch(url, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ harnessId: "pi", modelId: "claude-opus-5", effortLevel: "high", fastMode: true }),
+    });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(await srv.built.config.getRuntimeSelectionDurable("org:default-org"), {
+      harnessId: "pi",
+      modelId: "claude-opus-5",
+      effortLevel: "high",
+      fastMode: true,
+      orgRevision: 1,
+      revision: 1,
+    });
+
+    const changedModel = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/base-model`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ modelId: "claude-fable-5" }),
+    });
+    assert.equal(changedModel.status, 200);
+    assert.deepEqual(await srv.built.config.getRuntimeSelectionDurable("org:default-org"), {
+      harnessId: "pi",
+      modelId: "claude-fable-5",
+      effortLevel: "high",
+      fastMode: false,
+      orgRevision: 2,
+      revision: 2,
+    });
+
+    const unsupported = await fetch(url, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ harnessId: "pi", modelId: "claude-fable-5", effortLevel: "low", fastMode: true }),
+    });
+    assert.equal(unsupported.status, 200);
+    assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.fastMode, false);
+
+    const openCode = await fetch(url, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ harnessId: "opencode", modelId: "claude-opus-5", effortLevel: "auto", fastMode: true }),
+    });
+    assert.equal(openCode.status, 200);
+    assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.fastMode, true);
+
+    for (const body of [
+      { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "extreme", fastMode: true },
+      { harnessId: "codex", modelId: "gpt-5.5", effortLevel: "max", fastMode: false },
+      { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "high", fastMode: "yes" },
+    ]) {
+      assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify(body) })).status, 400);
+    }
   } finally {
     await srv.close();
   }
@@ -659,6 +832,151 @@ test("webui-models is an org-wide string-list read back via admin GET and surfac
     assert.equal(clear.status, 200);
     const afterClear = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
     assert.equal(((await afterClear.json()) as { webuiModels: string[] | null }).webuiModels, null);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("internal-member-overrides is org-only, validates entries, audits, and round-trips", async () => {
+  const srv = start();
+  try {
+    const wrongScope = await fetch(`${srv.base}/v1/admin/scopes/personal:U1/internal-member-overrides`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ members: ["u1"] }),
+    });
+    assert.equal(wrongScope.status, 400);
+    assert.match(((await wrongScope.json()) as { message: string }).message, /org-wide/);
+
+    const notArray = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/internal-member-overrides`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ members: "u1" }),
+    });
+    assert.equal(notArray.status, 400);
+    assert.match(((await notArray.json()) as { message: string }).message, /requires/);
+
+    const badEntry = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/internal-member-overrides`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ members: ["ok@example.com", "  "] }),
+    });
+    assert.equal(badEntry.status, 400);
+    assert.match(((await badEntry.json()) as { message: string }).message, /non-empty string/);
+
+    const put = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/internal-member-overrides`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ members: [" Contractor@EXAMPLE.com ", "U123ABC", "contractor@example.com"] }),
+    });
+    assert.equal(put.status, 200);
+    assert.deepEqual(srv.built.config.getInternalMemberOverrides(), ["contractor@example.com", "u123abc"]);
+    const adminGet = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
+    assert.deepEqual(((await adminGet.json()) as { internalMemberOverrides: string[] }).internalMemberOverrides, [
+      "contractor@example.com",
+      "u123abc",
+    ]);
+    assert.ok(
+      (await srv.built.auditLog.events()).some((event) => event.action === "identity.internal-override.update"),
+    );
+
+    const clear = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/internal-member-overrides`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ members: [] }),
+    });
+    assert.equal(clear.status, 200);
+    assert.deepEqual(srv.built.config.getInternalMemberOverrides(), []);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("GET /v1/admin/slack-emoji surfaces 404 without a token, and serves the plugin-published catalog once one exists", async () => {
+  const srv = start();
+  try {
+    let r = await fetch(`${srv.base}/v1/admin/slack-emoji`, { headers: ADMIN });
+    assert.equal(r.status, 404);
+    assert.equal(((await r.json()) as { error?: string }).error, "not_configured");
+
+    await srv.built.slackCore.publishEmojiCatalog({
+      galaxy_brain: "https://emoji.slack-edge.com/T0/galaxy_brain/abc.png",
+    });
+    r = await fetch(`${srv.base}/v1/admin/slack-emoji`, { headers: ADMIN });
+    assert.equal(r.status, 200);
+    const body = (await r.json()) as { emoji: Record<string, string>; standard: unknown[] };
+    assert.equal(body.emoji.galaxy_brain, "https://emoji.slack-edge.com/T0/galaxy_brain/abc.png");
+    assert.ok(body.standard.length > 1000);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("historical cutover policies remain visible and clearable without layer tools", async () => {
+  const srv = start("pi", false);
+  try {
+    const scope = "channel:C1";
+    await srv.built.deviceFlowCutover.set("org:default-org", "retired", "ephemeral_only", "admin");
+    const read = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(scope)}`, { headers: ADMIN });
+    const body = (await read.json()) as { deviceFlowCutover: { retired: { effective: string } } };
+    assert.equal(body.deviceFlowCutover.retired.effective, "ephemeral_only");
+    const update = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(scope)}/device-flow-cutover`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ service: "retired", mode: "legacy" }),
+    });
+    assert.equal(update.status, 200);
+    const clear = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(scope)}/device-flow-cutover`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ service: "retired", mode: "inherit" }),
+    });
+    assert.equal(clear.status, 200);
+    assert.equal(await srv.built.deviceFlowCutover.resolve(scope, "retired"), "ephemeral_only");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("org purpose runtimes round-trip, validate, and clear independently", async () => {
+  const srv = start();
+  const scopeUrl = `${srv.base}/v1/admin/scopes/org:default-org`;
+  const get = async () =>
+    (await (await fetch(`${scopeUrl}?view=models`, { headers: ADMIN })).json()) as Record<string, unknown>;
+  const put = (resource: string, body: unknown, scope = "org:default-org", headers = ADMIN) =>
+    fetch(`${srv.base}/v1/admin/scopes/${scope}/${resource}`, { method: "PUT", headers, body: JSON.stringify(body) });
+  try {
+    assert.equal((await get()).cronRuntime, null);
+    assert.equal((await get()).subagentRuntime, null);
+    for (const purpose of ["cron", "subagent"] as const) {
+      const resource = `${purpose}-runtime`;
+      const choice = { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "low", fastMode: false };
+      assert.equal(
+        (await put(resource, choice, "org:default-org", { ...ADMIN, "x-admin-actor": "nobody@default-org" })).status,
+        403,
+      );
+      assert.equal((await put(resource, choice, "personal:alice")).status, 400);
+      for (const bad of [
+        { ...choice, harnessId: "invalid" },
+        { ...choice, harnessId: "codex" },
+        { ...choice, modelId: "invalid" },
+        { ...choice, effortLevel: "invalid" },
+        { ...choice, fastMode: "yes" },
+        { ...choice, modelId: "claude-fable-5", fastMode: true },
+        { modelId: choice.modelId },
+      ])
+        assert.equal((await put(resource, bad)).status, 400);
+      assert.equal((await put(resource, choice)).status, 200);
+      assert.deepEqual((await get())[`${purpose}Runtime`], choice);
+      assert.equal((await put(resource, { harnessId: "pi", modelId: choice.modelId })).status, 200);
+      assert.deepEqual((await get())[`${purpose}Runtime`], { harnessId: "pi", modelId: choice.modelId });
+      assert.equal((await put(resource, { inherit: true })).status, 200);
+      assert.equal((await get())[`${purpose}Runtime`], null);
+      assert.equal((await put(resource, choice)).status, 200);
+      assert.equal((await put(resource, null)).status, 200);
+      assert.equal((await get())[`${purpose}Runtime`], null);
+    }
+    assert.equal((await get()).runtime, null);
   } finally {
     await srv.close();
   }

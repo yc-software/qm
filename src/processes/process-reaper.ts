@@ -4,6 +4,7 @@ import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-l
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { processIsGone } from "../sandbox/process-poll.ts";
 import type { ProcessSandbox } from "../sandbox/sandbox.ts";
+import { errMessage } from "../util/errors.ts";
 
 const PROCESS_REAPER_LEASE_KEY = "processes:reaper";
 
@@ -19,7 +20,10 @@ export function createReaperKillHook(
   const termGraceMs = opts?.termGraceMs ?? 5_000;
   const killGraceMs = opts?.killGraceMs ?? 2_000;
   return async (rec) => {
-    const handle = await sandbox.provision([{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }]);
+    const handle = await sandbox.provision(
+      [{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }],
+      rec.sandboxId ? { sandboxId: rec.sandboxId } : undefined,
+    );
     try {
       await sandbox.signalProcess(handle, rec.processId, "TERM");
       let status = await awaitProcessExit(sandbox, handle, rec.processId, termGraceMs);
@@ -38,7 +42,7 @@ export function createReaperKillHook(
 
 export interface ProcessReaper {
   start(): void;
-  stop(): void;
+  stop(): Promise<void>;
   sweep(): Promise<{ reaped: number }>;
 }
 
@@ -66,7 +70,9 @@ export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReap
       if (!flipped) continue;
       reaped++;
       if (opts.onReaped)
-        await opts.onReaped(rec).catch((err) => console.error("[process-reaper] onReaped hook failed:", err));
+        await opts
+          .onReaped(rec)
+          .catch((err) => console.error("[process-reaper] onReaped hook failed:", errMessage(err)));
     }
     return { reaped };
   }

@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const SCRIPT = join(process.cwd(), "skills-seed", "google-workspace", "scripts", "gmail.py");
@@ -72,4 +74,53 @@ test("intra-paragraph line breaks survive as <br> in the html mirror", { skip: !
   const html = mime.parts["text/html"];
   assert.ok(html, "html part exists");
   assert.ok(html.includes("Two lines<br>in one paragraph"), "intra-paragraph breaks become <br>");
+});
+
+test(
+  "api calls go through curl, which can tunnel the sandbox's https CONNECT egress proxy",
+  { skip: !havePython },
+  () => {
+    const dir = mkdtempSync(join(tmpdir(), "gmail-curl-"));
+    const argsFile = join(dir, "args.json");
+    const stub = join(dir, "curl");
+    writeFileSync(
+      stub,
+      `#!/usr/bin/env python3\nimport json, sys\nbody = sys.stdin.read() if "@-" in sys.argv else ""\n` +
+        `json.dump({"argv": sys.argv[1:], "stdin": body}, open(${JSON.stringify(argsFile)}, "w"))\n` +
+        `print('{"id":"m1","threadId":"t1"}\\n200', end="")\n`,
+    );
+    chmodSync(stub, 0o755);
+    const out = execFileSync("python3", [SCRIPT, "send-draft", "d1"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${dir}:${process.env.PATH}`,
+        VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM: "tok",
+        HTTPS_PROXY: "https://proxy.internal:3128",
+      },
+    });
+    assert.deepEqual(JSON.parse(out), { id: "m1", threadId: "t1" });
+    const recorded = JSON.parse(readFileSync(argsFile, "utf8"));
+    const sendUrl = recorded.argv.find((a: string) => a.startsWith("https://"));
+    assert.equal(sendUrl, "https://gmail.googleapis.com/gmail/v1/users/me/drafts/send");
+    assert.ok(recorded.argv.includes("Authorization: Bearer tok"));
+    assert.equal(recorded.stdin, '{"id": "d1"}');
+  },
+);
+
+test("non-2xx responses exit with the status and body excerpt", { skip: !havePython }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "gmail-curl-"));
+  const stub = join(dir, "curl");
+  writeFileSync(
+    stub,
+    `#!/usr/bin/env python3\nimport sys\nsys.stdin.read()\nprint('{"error":"nope"}\\n403', end="")\n`,
+  );
+  chmodSync(stub, 0o755);
+  const res = spawnSync("python3", [SCRIPT, "send-draft", "d1"], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM: "tok" },
+  });
+  assert.notEqual(res.status, 0);
+  assert.ok(res.stderr.includes("gmail api 403"));
+  assert.ok(res.stderr.includes("nope"));
 });

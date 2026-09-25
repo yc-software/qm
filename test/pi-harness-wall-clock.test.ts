@@ -76,3 +76,52 @@ test("a hanging abort() does not block the grace race", async () => {
   });
   assert.equal(outcome, "abandoned");
 });
+
+test("extendMs pushes the deadline while it returns time; prompt settling during an extension → ok", async () => {
+  let release!: () => void;
+  const prompting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let asked = 0;
+  const outcome = await raceTurnWallClock(prompting, {
+    capMs: 20,
+    graceMs: 10,
+    abort: async () => {},
+    extendMs: () => {
+      asked++;
+      setTimeout(release, 10);
+      return 50;
+    },
+  });
+  assert.equal(outcome, "ok");
+  assert.equal(asked, 1);
+});
+
+test("extendMs can extend repeatedly, then expiring (0) runs the normal abort path", async () => {
+  let release!: () => void;
+  const prompting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let asked = 0;
+  const outcome = await raceTurnWallClock(prompting, {
+    capMs: 10,
+    graceMs: 5_000,
+    abort: async () => release(),
+    extendMs: () => (++asked < 3 ? 10 : 0),
+  });
+  assert.equal(outcome, "aborted");
+  assert.equal(asked, 3);
+});
+
+test("without extendMs the cap behaves exactly as before", async () => {
+  let release!: () => void;
+  const prompting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const outcome = await raceTurnWallClock(prompting, {
+    capMs: 20,
+    graceMs: 5_000,
+    abort: async () => release(),
+  });
+  assert.equal(outcome, "aborted");
+});

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { collectOutbound, type ArtifactRegistration } from "../src/core/attachments.ts";
+import { collectNamedOutbound, type ArtifactRegistration } from "../src/core/attachments.ts";
 import { defaultPublishAudience } from "../src/resolution/publish-audience.ts";
 import { createApp, type AppDeps } from "../src/api/app.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -65,9 +65,10 @@ function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore
 test("a file delivered in a PUBLIC channel is auto-shared (read) with the org — visible to other members", async () => {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   const acl = createAclStore();
-  await collectOutbound(
-    memSandbox({ "outbox/flag.png": PNG }),
+  await collectNamedOutbound(
+    memSandbox({ "flag.png": PNG }),
     HANDLE,
+    ["flag.png"],
     createMemoryBlobTransferStore(),
     registration(files, acl, false, "channel"),
   );
@@ -87,9 +88,10 @@ test("a file delivered in a PUBLIC channel is auto-shared (read) with the org �
 test("a file delivered in a DM stays owner-only — no auto-share", async () => {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   const acl = createAclStore();
-  await collectOutbound(
-    memSandbox({ "outbox/note.txt": Buffer.from("private") }),
+  await collectNamedOutbound(
+    memSandbox({ "note.txt": Buffer.from("private") }),
     HANDLE,
+    ["note.txt"],
     createMemoryBlobTransferStore(),
     registration(files, acl, undefined, "dm"),
   );

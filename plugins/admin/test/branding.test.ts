@@ -1,4 +1,6 @@
+import { readAdminSource } from "./admin-source.ts";
 import { test } from "node:test";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
@@ -28,6 +30,7 @@ await new Promise<void>((r) => core.listen(0, r));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_ORG_ID = "acme";
 process.env.CORE_SIGNING_SECRET = "admin-branding-test-secret";
+process.env.INBOX_USERS = "U-admin";
 
 const { server } = await import("../src/index.ts");
 await new Promise<void>((r) => server.listen(0, r));
@@ -47,22 +50,72 @@ test("cold start: the FIRST shell render already carries the org branding", asyn
     "self-label meta injected regardless of the shell's formatting",
   );
   assert.match(html, /--brand-mark:"Y"/, "brand mark variable injected for the badge");
+  assert.match(html, /<title>QM Admin<\/title>/, "tab title carries the configured label");
 });
 
 test("the shell's badge and product name are branding-driven, not hardcoded", () => {
   const shell = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
-  assert.match(shell, /content:\s*var\(--brand-mark,\s*"A"\)/, "badge glyph reads --brand-mark");
-  assert.match(shell, /id="brand-product"/, "header product name is script-addressable");
+  assert.match(shell, /content:\s*var\(--brand-mark\)/, "badge glyph reads --brand-mark");
+  assert.match(shell, /--brand-mark:\s*none;/, "and falls back to the shipped mark when the org sets none");
+  assert.match(shell, /\[data-brand-product\]/, "every product name is script-addressable");
 });
 
 test("a branding save acks only after the shell reflects it — the post-save reload can't be stale", async () => {
   const put = await fetch(`${base}/api/scopes/${encodeURIComponent("org:acme")}/branding`, {
     method: "PUT",
     headers: { cookie: "admin=U-admin", "content-type": "application/json" },
-    body: JSON.stringify({ accent: "#0055ff", mark: "Z", selfLabel: "Zed" }),
+    body: JSON.stringify({
+      accent: "#0055ff",
+      mark: "Z",
+      markUrl: "https://cdn.example.com/icon.png",
+      selfLabel: "Zed",
+    }),
   });
   assert.equal(put.status, 200);
   const html = await (await fetch(`${base}/`)).text();
   assert.match(html, /--brand-accent:#0055ff/);
+  assert.match(
+    html,
+    /--brand-mark-image:url\("https:\/\/cdn\.example\.com\/icon\.png"\)/,
+    "the cache key follows the icon, so a re-brand is not served a stale shell",
+  );
   assert.match(html, /<meta name="brand-self-label" content="Zed"\s*\/?>/);
+  assert.match(html, /<title>Zed Admin<\/title>/, "tab title follows the saved label");
+});
+
+test("the brand icon is a CSS variable the org can point at its own image", () => {
+  const shell = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+  assert.match(
+    shell,
+    /var\(--brand-mark-image, url\("\.\/brand-mark\.svg"\)\)/,
+    "the badge paints from the variable and falls back to the shipped mark",
+  );
+  assert.match(readAdminSource(), /id="branding-mark-url"/, "the admin form can set it");
+  assert.match(
+    shell,
+    /governanceUI.settings.load\(r.data, scope, "branding"\)/,
+    "loads the state-driven branding editor",
+  );
+});
+
+test("design system routes embed the shared component library and retain the script CSP", async () => {
+  for (const path of ["/design-system", "/design"]) {
+    const response = await fetch(base + path, { headers: { cookie: "admin=U-admin" } });
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    const css = readFileSync(new URL("../public/admin-components.css", import.meta.url), "utf8");
+    assert.ok(html.includes("<style data-admin-components>" + css + "</style>"));
+    const script = html.match(/<script>([\s\S]*?)<\/script>/i)?.[1];
+    assert.ok(script);
+    const hash = createHash("sha256").update(script).digest("base64");
+    assert.ok(response.headers.get("content-security-policy")?.includes("sha256-" + hash));
+  }
+});
+
+test("design system routes use the inbox allowlist", async () => {
+  for (const path of ["/design-system", "/design-system/", "/design", "/design/"]) {
+    const denied = await fetch(base + path, { headers: { cookie: "admin=U-rando" } });
+    assert.equal(denied.status, 404);
+    assert.deepEqual(await denied.json(), { error: "not_found" });
+  }
 });

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTar, parseTar } from "../src/sandbox/tar.ts";
@@ -106,4 +106,23 @@ test("system tar extracts makeTar output, including PAX long-name entries", asyn
   execFileSync("tar", ["-xf", "in.tar"], { cwd: dir });
   assert.equal(readFileSync(join(dir, "plain.txt"), "utf8"), "plain");
   assert.equal(readFileSync(join(dir, long)).toString("hex"), "090807");
+});
+
+test("tar round-trips per-entry modes, and a 0600 file survives an export/import cycle", async () => {
+  const entries = [
+    { path: "secret.pem", data: Buffer.from("key"), mode: 0o600 },
+    { path: "config.yml", data: Buffer.from("cfg"), mode: 0o644 },
+    { path: "default.txt", data: Buffer.from("d") },
+  ];
+  const parsed = await parseTar(await makeTar(entries));
+  const byPath = new Map(parsed.map((e) => [e.path.replace(/^\.\//, ""), e.mode]));
+  assert.equal(byPath.get("secret.pem"), 0o600);
+  assert.equal(byPath.get("config.yml"), 0o644);
+  assert.equal(byPath.get("default.txt"), 0o644);
+
+  const dir = mkdtempSync(join(tmpdir(), "tar-mode-"));
+  writeFileSync(join(dir, "in.tar"), await makeTar(entries));
+  execFileSync("tar", ["-xpf", "in.tar"], { cwd: dir });
+  const mode = statSync(join(dir, "secret.pem")).mode & 0o777;
+  assert.equal(mode, 0o600, "system tar -xp applies the 0600 header on extraction");
 });

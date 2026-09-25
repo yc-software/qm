@@ -37,8 +37,7 @@ function sprites(): Sandbox {
   const dir = mkdtempSync(join(tmpdir(), "sprites-kill-ws-"));
   return createSpritesSandbox(createLocalWorkspaceStore(dir), {
     token: "test-token",
-    client: ff.client,
-    fetchImpl: ff.fetchImpl,
+    baseUrl: ff.baseUrl,
   });
 }
 const rw = [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" as const }];
@@ -56,14 +55,13 @@ test("run() with a signal wraps the command in the killable process group; witho
   assert.ok(ff.execScripts()[mark]!.includes("exec setsid sh -c"), "a signal ⇒ the command runs killable");
 });
 
-test("run(): an already-aborted signal fires a separate SIGKILL exec at the recorded group", async () => {
+test("run(): an already-aborted signal never starts the command", async () => {
   const sb = sprites();
   const h = await sb.provision(rw);
 
+  const before = ff.execScripts().length;
   const ctrl = new AbortController();
   ctrl.abort();
-  await sb.run(h, "true", { signal: ctrl.signal });
-  await new Promise((r) => setTimeout(r, 50));
-  const killCalls = ff.execScripts().filter((script) => script.includes("kill -KILL"));
-  assert.ok(killCalls.length >= 1, "an aborted signal fires a separate kill-the-group exec");
+  await assert.rejects(sb.run(h, "true", { signal: ctrl.signal }), /aborted/i);
+  assert.equal(ff.execScripts().length, before);
 });

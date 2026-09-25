@@ -25,9 +25,20 @@ export interface MonitorStore {
   enabled(): Promise<Monitor[]>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   delete(id: string): Promise<void>;
+  deleteDefunct(now: number): Promise<number>;
   advance(id: string, fields: { cursor: number; tail?: string; firedAt?: number }): Promise<void>;
   update(id: string, fields: { instructions?: string; pattern?: string; cursor?: number }): Promise<void>;
   recordError(id: string, error: string): Promise<void>;
+}
+
+const DEFUNCT_MONITOR_GRACE_MS = 7 * 24 * 60 * 60_000;
+
+function lastActivityAt(m: Monitor): number {
+  return Math.max(m.expiresAt ?? 0, m.lastFiredAt ?? 0, m.createdAt);
+}
+
+function defunctBefore(cutoff: number): (m: Monitor) => boolean {
+  return (m) => !m.enabled && lastActivityAt(m) <= cutoff;
 }
 
 export function createMonitorStore(backing: DurableMap<Monitor> = createMemoryMap<Monitor>()): MonitorStore {
@@ -56,6 +67,19 @@ export function createMonitorStore(backing: DurableMap<Monitor> = createMemoryMa
       return setTriggerEnabled(backing, id, enabled);
     },
     delete: (id) => backing.delete(id),
+    async deleteDefunct(now) {
+      const isDefunct = defunctBefore(now - DEFUNCT_MONITOR_GRACE_MS);
+      let deleted = 0;
+      for (const m of (await backing.all()).filter(isDefunct)) {
+        if (backing.deleteIf) {
+          if (await backing.deleteIf(m.id, isDefunct)) deleted++;
+        } else {
+          await backing.delete(m.id);
+          deleted++;
+        }
+      }
+      return deleted;
+    },
     async advance(id, fields) {
       await backing.merge(id, {
         cursor: fields.cursor,

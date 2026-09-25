@@ -11,6 +11,7 @@ before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
+  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS egress_events CASCADE");
   await p.end();
 });
@@ -18,11 +19,13 @@ before(async () => {
 test(
   "pg egress-audit sink: persists firewall decisions, filters by scope/source/since, newest-first",
   { skip },
-  async () => {
+  async (t) => {
     const sink = createPostgresEgressAuditSink(URL!);
     const s1 = scopeId("personal", "U1");
     const s2 = scopeId("personal", "U2");
 
+    const now = Date.now();
+    const clock = t.mock.method(Date, "now", () => now);
     sink.record({
       source: "proxy",
       host: "api.github.com",
@@ -34,6 +37,7 @@ test(
       scopeLabel: s1,
       principalId: "U1",
     });
+    clock.mock.mockImplementation(() => now + 1);
     sink.record({
       source: "proxy",
       host: "pastebin.com",
@@ -43,10 +47,13 @@ test(
       port: 443,
       scopeLabel: s2,
     });
+    clock.mock.restore();
     await settle(async () => (await sink.list({ limit: 100 })).length === 2);
 
     const all = await sink.list({ limit: 100 });
     assert.equal(all.length, 2, "both decisions persisted");
+    assert.equal(all[0]!.ts, now + 1);
+    assert.equal(all[1]!.ts, now);
     assert.equal(all[0]!.scopeLabel, s2, "newest first");
     assert.equal(all[0]!.allowed, false);
     assert.equal(all[0]!.verdict, "host_denied");

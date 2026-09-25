@@ -1,7 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import bolt from "@slack/bolt";
 import type { Receiver, ReceiverEvent, App as BoltApp } from "@slack/bolt";
-import { createDeferredEnvelopeAck, describeEnvelope, isGatedEnvelope } from "./deferred-ack.ts";
+import { createDeferredEnvelopeAck, describeEnvelope, envelopeStageFor, isGatedEnvelope } from "./deferred-ack.ts";
+import type { EnvelopeStaging } from "./envelope-staging.ts";
 import { errMessage } from "../util/errors.ts";
 import { PayloadTooLargeError, readBody } from "../../plugins/chassis/src/http.ts";
 
@@ -16,6 +17,7 @@ export interface HttpEventsReceiverOptions {
   host?: string;
   path?: string;
   capMs?: number;
+  staging?: EnvelopeStaging;
 }
 
 function respond(res: ServerResponse, status: number, body: unknown): void {
@@ -73,6 +75,7 @@ export function createHttpEventsReceiver(opts: HttpEventsReceiverOptions): Recei
       ...(opts.capMs !== undefined ? { capMs: opts.capMs } : {}),
       label,
       onWithhold: () => respond(res, 503, { error: "not_persisted" }),
+      ...envelopeStageFor(opts.staging, body),
     });
     const retryNum = Number(header(req, "x-slack-retry-num"));
     const event: ReceiverEvent = {

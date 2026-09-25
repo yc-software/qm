@@ -31,6 +31,10 @@ export function allConversations(): Conversation[] {
   return [...live];
 }
 
+export function isLiveConversation(conv: Conversation): boolean {
+  return live.has(conv);
+}
+
 export function mainConversation(): Conversation {
   main ??= createConversation({
     pane: false,
@@ -48,15 +52,29 @@ export function mainConversation(): Conversation {
   return main;
 }
 
-export function paneDensity(el: HTMLElement): DensityTier {
+export function paneDensity(el: HTMLElement): DensityTier | null {
   const r = el.getBoundingClientRect();
-  return densityTierFor(r.width || el.clientWidth, r.height || el.clientHeight);
+  const width = r.width || el.clientWidth;
+  const height = r.height || el.clientHeight;
+  return width > 0 && height > 0 ? densityTierFor(width, height) : null;
 }
 
 let exitCanvas: () => void = () => {};
 
 export function onExitCanvas(fn: () => void): void {
   exitCanvas = fn;
+}
+
+let inboxItemHandler: ((event: { loopId: string; itemId: string; op: string }) => void) | null = null;
+
+export function onInboxItemEvent(fn: (event: { loopId: string; itemId: string; op: string }) => void): void {
+  inboxItemHandler = fn;
+}
+
+let inboxResyncHandler: (() => void) | null = null;
+
+export function onInboxResync(fn: () => void): void {
+  inboxResyncHandler = fn;
 }
 
 let deliveryStreamOpen = false;
@@ -70,20 +88,25 @@ export function ensureDeliveryStream(): void {
       for (const conv of live) conv.onDelivery(threadRef);
     },
     (event) => {
-      const { list, matched } = applySessionState(sessionsState.list, event);
+      if (event.state === "metadata") {
+        void refreshSessions({ silent: true });
+        return;
+      }
+      const { list, matched } = applySessionState(sessionsState.list, { ...event, state: event.state });
       if (matched) {
         sessionsState.list = list;
         renderList();
+        const parentId = list.find((session) => session.threadRef === event.threadRef)?.parentSessionId;
+        if (parentId) for (const conv of live) if (conv.state.sessionId === parentId) conv.redraw();
       } else {
         void refreshSessions({ silent: true });
       }
-      // A run can start server-side for an open conversation without this tab asking
-      // for it (a steer replayed as a fresh turn after its run ended, a cron wake, a
-      // message from another surface). Attach the open view instead of waiting for a
-      // visibilitychange, so the new turn — and its triggering message — show up live.
       if (event.state === "working") for (const conv of live) conv.resumeIfIdle();
+      else for (const conv of live) conv.onDelivery(event.threadRef);
     },
     () => void refreshSessions({ silent: true }),
+    (event) => inboxItemHandler?.(event),
+    () => inboxResyncHandler?.(),
   );
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;

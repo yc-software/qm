@@ -1,4 +1,4 @@
-import type { CandidateDestination, Cron, Monitor } from "../../types.ts";
+import type { CandidateDestination, Cron, Monitor, Webhook } from "../../types.ts";
 import type { DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
 
 export function deliveryMenu(candidates: CandidateDestination[], defaultKey: string | undefined): string {
@@ -17,6 +17,16 @@ export function deliveryMenu(candidates: CandidateDestination[], defaultKey: str
   ].join("\n");
 }
 
+export function renderProjectHomeChannel(channelName: string): string {
+  const name = channelName.replace(/^#/, "");
+  return [
+    "## Project home channel",
+    `This project is linked to the Slack channel #${name} — that channel is where the project's people follow the work.`,
+    `Treat it as the default external audience: schedule deliveries there (the \`cron\` tool's \`channel: "${name}"\`), and when asked to report out or notify the team, post there with \`reach\` (\`channel: "${name}"\`).`,
+    "Project membership follows the channel: everyone in the channel is a member of this project, and people joining or leaving the channel join or leave the project with it.",
+  ].join("\n");
+}
+
 const OBLIGATIONS_CAP = 10;
 function cronSchedulePromptLabel(c: Cron): string {
   const schedule = c.schedule;
@@ -26,9 +36,9 @@ function cronSchedulePromptLabel(c: Cron): string {
     : `once at ${new Date(schedule.firstFireAt ?? c.createdAt).toISOString()}`;
 }
 
-export function renderStandingObligations(crons: Cron[], monitors: Monitor[]): string | null {
-  const total = crons.length + monitors.length;
-  if (total === 0) return null;
+export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], monitors: Monitor[]): string {
+  const total = crons.length + webhooks.length + monitors.length;
+  if (total === 0) return "## Already scheduled here\nNo active scheduled work was found for this conversation.";
   const snippet = (s: string) => (s.length > 100 ? `${s.slice(0, 97)}…` : s).replace(/\s+/g, " ");
   const lines = [
     ...crons
@@ -37,13 +47,19 @@ export function renderStandingObligations(crons: Cron[], monitors: Monitor[]): s
         (c) =>
           `- cron \`${c.id}\`${c.title ? ` "${c.title}"` : ""} (${cronSchedulePromptLabel(c)}, owner ${c.owner}): ${snippet(c.action ?? c.message ?? "")}`,
       ),
+    ...webhooks.slice(0, OBLIGATIONS_CAP).map((w) => `- webhook \`${w.id}\` (owner ${w.owner}): ${snippet(w.action)}`),
     ...monitors.slice(0, OBLIGATIONS_CAP).map((m) => `- job watch on \`${m.processId}\`: ${snippet(m.command)}`),
   ];
   return [
     "## Already scheduled here",
-    "Standing work set up for this conversation — it exists, don't re-create it. Pause one of **yours** that's stale or done with `cron` action=disable.",
     ...lines,
-    ...(total > lines.length ? [`…and ${total - lines.length} more — \`cron\` action=list.`] : []),
+    ...(total > lines.length
+      ? [
+          `…and ${total - lines.length} more — \`cron\` action=list${
+            webhooks.length > OBLIGATIONS_CAP ? " / `webhook` action=list" : ""
+          }.`,
+        ]
+      : []),
   ].join("\n");
 }
 

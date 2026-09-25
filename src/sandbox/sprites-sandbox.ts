@@ -1,305 +1,473 @@
 import { randomUUID } from "node:crypto";
-import { SpritesClient } from "@fly/sprites";
-import type { WorkspaceLayer } from "../types.ts";
+import { setTimeout as wait } from "node:timers/promises";
+import type { Readable } from "node:stream";
+import { APIError, SpritesClient, type Checkpoint, type SpriteCheck, type StreamMessage } from "@fly/sprites";
+import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { createKeyedQueue } from "../util/async.ts";
-import { swallowAs, errMessage } from "../util/errors.ts";
+import { jitteredBackoffMs, retryAfterMs, withAbort, withTimeout } from "../util/async.ts";
+import { swallow, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
-import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import { materializeRoLayers } from "./ro-layers.ts";
+import { createExecProcessSessions, processSessionDir, type ExecProcessIo } from "./exec-process-session.ts";
 import {
-  BLOB_TRANSFER_TTL_MS,
-  createExecBackup,
-  createExecBlobStaging,
+  createBackendBlobStaging,
+  createExecExport,
   createExecFileOps,
-  posixJoin,
+  type BlobStagingOptions,
 } from "./exec-file-ops.ts";
-import { ephemeralCredLinkScript, type CredentialPathSpec } from "../credentials/resident-paths.ts";
-import { DROPPED_PROXY_ENV, proxyExportPrefix } from "./sandbox-env.ts";
-import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../auth/capability-token.ts";
-import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
-import { CAPABILITY_HEADER } from "../api/contract.ts";
+import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
-import { shortHash } from "../util/crypto.ts";
-import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
+import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
+import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
+import { createLayerToolInstaller } from "./layer-tool-install.ts";
+import {
+  createHomeSnapshotOps,
+  HOME_SNAPSHOT_PRUNE,
+  snapshotDue,
+  type HomeSnapshotStore,
+  type SnapshotBookkeeping,
+} from "./home-snapshot.ts";
+import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import type {
   AgentComputerProfile,
-  ExecOptions,
+  ComputerStatus,
+  ExecPressure,
   ExecResult,
-  ProvisionOptions,
   Sandbox,
   SandboxHandle,
+  StartProcessOptions,
   TeardownOptions,
 } from "./sandbox.ts";
 
 const HOME_DIR = "/home/sprite";
-const WORKSPACE_BASENAME = "workspace";
-const RO_LAYERS_TAR = ".ro-layers.tar";
-const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
-const MISSING_RC = 44;
-const READ_CHUNK = 512 * 1024;
+const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
+export const SCRIPT_RUNNER = 's=$(mktemp) && cat > "$s" && sh "$s" </dev/null; rc=$?; rm -f "$s"; exit $rc';
 const EXIT_GRACE_MS = 60_000;
-const DEFAULT_SPRITES_BASE_URL = "https://api.sprites.dev";
+const GUEST_PROBE_TIMEOUT_SEC = 15;
+const KEEPALIVE_TIMEOUT_SEC = 20;
+const CHECKPOINT_INTERVAL_MS = 5 * 60_000;
+const CHECKPOINT_COMMENT = "qm turn end";
+const KEEPALIVE_EXPIRE = "5m";
+const KEEPALIVE_RENEW_SEC = 60;
+const SPRITE_CPUS = 8;
+const SPRITE_DISK_GB = 100;
+const PRESSURE_RECORD_FULL60 = 75;
+const PRESSURE_CLEAR_FULL60 = 40;
 
-export interface SpritesClientLike {
-  getSprite(name: string): Promise<unknown>;
-  createSprite(name: string): Promise<unknown>;
-  deleteSprite(name: string): Promise<void>;
+function parsePressure(ioFull10Raw: string, ioFull60Raw: string, load1Raw: string): ExecPressure | undefined {
+  const ioFull10 = Number.parseFloat(ioFull10Raw);
+  const ioFull60 = Number.parseFloat(ioFull60Raw);
+  const load1 = Number.parseFloat(load1Raw);
+  if (!Number.isFinite(ioFull60) || ioFull60 < 0) return undefined;
+  return {
+    ioFull10: Number.isFinite(ioFull10) && ioFull10 >= 0 ? ioFull10 : ioFull60,
+    ioFull60,
+    load1: Number.isFinite(load1) && load1 >= 0 ? load1 : 0,
+  };
 }
 
-export interface SpritesSandboxOptions {
+export function spritesErrorDetail(e: unknown): string {
+  if (!(e instanceof APIError)) return errMessage(e);
+  const parts = [e.message];
+  if (e.statusCode !== undefined) parts.push(`http ${e.statusCode}`);
+  if (e.errorCode && e.errorCode !== e.message) parts.push(e.errorCode);
+  const retryAfter = e.getRetryAfterSeconds();
+  if (retryAfter !== undefined && !e.message.includes("retry after")) parts.push(`retry after ${retryAfter}s`);
+  return parts.join("; ");
+}
+
+export async function retrySpritesControl<T>(operation: () => Promise<T>, timeoutMs = 60_000): Promise<T> {
+  const signal = AbortSignal.timeout(timeoutMs);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await withAbort(operation, signal);
+    } catch (error) {
+      signal.throwIfAborted();
+      if (!(error instanceof APIError) || ![429, 500, 502, 503, 504].includes(error.statusCode ?? 0) || attempt >= 4)
+        throw error;
+      const seconds = error.getRetryAfterSeconds();
+      const delay = seconds === undefined ? undefined : retryAfterMs(new Headers({ "retry-after": String(seconds) }));
+      try {
+        await wait(delay ?? jitteredBackoffMs(attempt), undefined, { signal });
+      } catch (error) {
+        signal.throwIfAborted();
+        throw error;
+      }
+    }
+  }
+}
+
+const isMissing = (e: unknown): boolean => e instanceof APIError && e.statusCode === 404;
+
+const describeCheck = (check: SpriteCheck): string => `${check.status}${check.reason ? ` (${check.reason})` : ""}`;
+
+export function processKeepaliveScript(processId: string): string {
+  const task = `qm-proc-${processId}`;
+  const api = "curl -sf --unix-socket /.sprite/api.sock -H 'Content-Type: application/json'";
+  const loop = [
+    `P="${processSessionDir(processId)}"`,
+    `while [ ! -f "$P/code" ] && kill -0 "$(cat "$P/pid" 2>/dev/null)" 2>/dev/null; do`,
+    `  ${api} -X PUT -d '{"expire":"${KEEPALIVE_EXPIRE}"}' http://sprite/v1/tasks/${task} >/dev/null 2>&1 || true`,
+    `  i=0; while [ $i -lt ${KEEPALIVE_RENEW_SEC} ] && [ ! -f "$P/code" ]; do sleep 1; i=$((i+1)); done`,
+    `done`,
+    `${api} -X DELETE http://sprite/v1/tasks/${task} >/dev/null 2>&1 || true`,
+  ].join("\n");
+  return `LOOP=${shq(loop)}; if command -v setsid >/dev/null 2>&1; then setsid sh -c "$LOOP" >/dev/null 2>&1 & else sh -c "$LOOP" >/dev/null 2>&1 & fi; echo OK`;
+}
+
+export interface SpritesSandboxOptions extends BlobStagingOptions {
   token?: string;
   baseUrl?: string;
   namePrefix?: string;
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
-  blobTransfer?: BlobTransferStore;
-  signingSecret?: string;
-  capabilitySecret?: string;
-  apiBaseUrl?: string;
+  memoryMb?: number;
+  checkpointIntervalMs?: number;
+  snapshots?: HomeSnapshotStore;
+  initializationStore?: DurableMap<{ pending: boolean }>;
+  advisoryLock?: AdvisoryLock;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
-  client?: SpritesClientLike;
-  fetchImpl?: typeof fetch;
+  connectorSdk?: () => Promise<ConnectorSdkBundle>;
+  layerToolFiles?: () => readonly LayerInstallFile[];
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
-export const spriteScopeName = (prefix: string, id: string): string => {
-  const cleaned = id
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return `${prefix}-${cleaned.slice(0, 40).replace(/-+$/, "") || "scope"}-${shortHash(id)}`;
-};
+interface RawExec {
+  rc: number;
+  stdout: Buffer;
+  stderr: Buffer;
+}
 
 export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSandboxOptions = {}): Sandbox {
-  if ((!opts.client || !opts.fetchImpl) && !opts.token)
-    throw new Error("SANDBOX_BACKEND=sprites requires SPRITES_TOKEN");
-  const client: SpritesClientLike =
-    opts.client ?? (new SpritesClient(opts.token!, opts.baseUrl ? { baseURL: opts.baseUrl } : {}) as SpritesClientLike);
-  const fetchImpl = opts.fetchImpl ?? fetch;
-  const baseUrl = (opts.baseUrl ?? DEFAULT_SPRITES_BASE_URL).replace(/\/+$/, "");
+  if (!opts.token) throw new Error("SANDBOX_BACKEND=sprites requires SPRITES_TOKEN");
+  const client = new SpritesClient(opts.token, opts.baseUrl ? { baseURL: opts.baseUrl } : {});
+  const sprite = (name: string) => client.sprite(name);
   const prefix = opts.namePrefix ?? "qm";
+  const initializationStore = opts.initializationStore ?? createMemoryMap<{ pending: boolean }>();
+  const advisoryLock = opts.advisoryLock ?? createMemoryAdvisoryLock();
+  const withLifecycle = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
+    advisoryLock.withLock(`sprites-lifecycle:${name}`, fn);
+  const requireInitialized = async (name: string): Promise<void> => {
+    if ((await initializationStore.get(name))?.pending)
+      throw new Error(`sprites ${name}: initialization is incomplete; refusing to capture or restore a checkpoint`);
+  };
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
-  const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
-  const provisionQueue = createKeyedQueue<string>();
+  const checkpointIntervalMs = opts.checkpointIntervalMs ?? CHECKPOINT_INTERVAL_MS;
 
   const ensured = new Set<string>();
-  const scopeByName = new Map<string, string>();
-  const scratchKeyByName = new Map<string, string>();
-  const activeScratch = new Map<string, number>();
+  const resourcesApplied = new Set<string>();
+  const egressPolicyByName = new Map<string, string>();
+  const pressureEpisodes = new Set<string>();
+  const checkpointBooks = new Map<string, SnapshotBookkeeping>();
 
-  interface RawExec {
-    rc: number;
-    stdout: Buffer;
-    stderr: Buffer;
+  const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
+    try {
+      opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
+    } catch (e) {
+      swallow(`sprites-sandbox: ${code} report`, e);
+    }
+  };
+
+  async function attempt<T>(what: string, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (e) {
+      throw new Error(`sprites ${what}: ${spritesErrorDetail(e)}`, { cause: e });
+    }
   }
 
-  async function postExec(name: string, argv: string[], timeoutSec: number, body?: Uint8Array): Promise<RawExec> {
-    const qs = new URLSearchParams();
-    if (body) qs.append("stdin", "true");
-    for (const a of argv) qs.append("cmd", a);
-    const res = await fetchImpl(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}/exec?${qs}`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${opts.token ?? ""}`, "content-type": "application/octet-stream" },
-      ...(body ? { body: Buffer.from(body) } : {}),
-      signal: AbortSignal.timeout(timeoutSec * 1000 + EXIT_GRACE_MS),
-    });
-    if (!res.ok) throw new Error(`sprites exec ${name}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
-    const raw = Buffer.from(await res.arrayBuffer());
-    let rc = 0;
+  async function spawnExec(name: string, argv: string[], stdin: Buffer, deadlineMs: number): Promise<RawExec> {
+    const cmd = sprite(name).spawn(argv[0]!, argv.slice(1));
     const out: Buffer[] = [];
     const err: Buffer[] = [];
-    let i = 0;
-    while (i < raw.length) {
-      const id = raw[i]!;
-      if (id === 3) {
-        rc = raw[i + 1] ?? 0;
-        i += 2;
-        continue;
-      }
-      i++;
-      const start = i;
-      while (i < raw.length && raw[i]! >= 4) i++;
-      const payload = raw.subarray(start, i);
-      if (id === 1) out.push(payload);
-      else if (id === 2) err.push(payload);
+    const collect = (stream: Readable, into: Buffer[]): Promise<void> =>
+      new Promise((resolve) => {
+        stream.on("data", (chunk: Buffer) => into.push(chunk));
+        stream.once("end", resolve);
+      });
+    const exited = new Promise<number>((resolve, reject) => {
+      cmd.on("error", (e) => reject(new Error(`sprites exec ${name}: ${errMessage(e)}`, { cause: e })));
+      cmd.once("exit", resolve);
+      cmd.once("spawn", () => cmd.stdin.end(stdin));
+    });
+    try {
+      const [rc] = await withTimeout(
+        () => Promise.all([exited, collect(cmd.stdout, out), collect(cmd.stderr, err)]),
+        deadlineMs,
+        `sprites exec ${name}`,
+      );
+      return { rc, stdout: Buffer.concat(out), stderr: Buffer.concat(err) };
+    } catch (e) {
+      cmd.kill();
+      throw e;
+    } finally {
+      cmd.close();
     }
-    return { rc, stdout: Buffer.concat(out), stderr: Buffer.concat(err) };
   }
 
   async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
     const uid = randomUUID();
     const out = `/tmp/.exec-${uid}.out`;
     const err = `/tmp/.exec-${uid}.err`;
-    const wrapped = `timeout ${timeoutSec} sh -c ${shq(script)} > ${out} 2> ${err}; __rc=$?; printf '%s %s %s\\n' "$__rc" "$(wc -c < ${out})" "$(wc -c < ${err})"; base64 < ${out}; base64 < ${err}; rm -f ${out} ${err}`;
-    const r = await postExec(name, ["sh", "-c", wrapped], timeoutSec);
-    const text = r.stdout.toString("utf8");
-    const nl = text.indexOf("\n");
-    const header = text
-      .slice(0, nl < 0 ? undefined : nl)
-      .trim()
-      .split(/\s+/);
-    if (r.rc !== 0 || nl < 0 || header.length !== 3) {
-      throw new Error(`sprites exec ${name}: bad envelope (rc=${r.rc}): ${text.slice(0, 120)}`);
+    const psi = `$(awk -F'[= ]+' '/^full/{print $3, $5; f=1} END{if(!f)print "-1 -1"}' /proc/pressure/io 2>/dev/null || echo '-1 -1')`;
+    const load = `$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo -1)`;
+    const body = `/tmp/.exec-${uid}.sh`;
+    const eof = `__QM_EOF_${uid}__`;
+    const wrapped =
+      `cat > ${body} <<'${eof}'\n${script}\n${eof}\n` +
+      `timeout ${timeoutSec} sh ${body} > ${out} 2> ${err}; __rc=$?; printf '%s %s %s %s %s\\n' "$__rc" "$(wc -c < ${out})" "$(wc -c < ${err})" "${psi}" "${load}"; cat ${out} ${err}; rm -f ${out} ${err} ${body}`;
+    const r = await spawnExec(
+      name,
+      ["sh", "-c", SCRIPT_RUNNER],
+      Buffer.from(wrapped, "utf8"),
+      timeoutSec * 1000 + EXIT_GRACE_MS,
+    );
+    const nl = r.stdout.indexOf(0x0a);
+    const header = (nl < 0 ? r.stdout : r.stdout.subarray(0, nl)).toString("utf8").trim().split(/\s+/);
+    if (r.rc !== 0 || nl < 0 || header.length < 3) {
+      const detail = r.stderr.toString("utf8").trim() || r.stdout.toString("utf8").slice(0, 120);
+      throw new Error(`sprites exec ${name}: bad envelope (rc=${r.rc}): ${detail}`);
     }
+    const pressure = header.length === 6 ? parsePressure(header[3]!, header[4]!, header[5]!) : undefined;
+    if (pressure) notePressure(name, pressure);
     const code = Number.parseInt(header[0]!, 10);
     const outLen = Number.parseInt(header[1]!, 10);
     const errLen = Number.parseInt(header[2]!, 10);
-    const b64 = text.slice(nl + 1).replace(/\s+/g, "");
-    const outB64 = Math.ceil(outLen / 3) * 4;
-    const outBuf = Buffer.from(b64.slice(0, outB64), "base64");
-    const errBuf = Buffer.from(b64.slice(outB64), "base64");
+    const start = nl + 1;
+    const outBuf = r.stdout.subarray(start, start + outLen);
+    const errBuf = r.stdout.subarray(start + outLen, start + outLen + errLen);
     if (outBuf.length !== outLen || errBuf.length !== errLen) {
       throw new Error(
         `sprites exec ${name}: truncated stream (${outBuf.length}/${outLen} out, ${errBuf.length}/${errLen} err)`,
       );
     }
-    return { stdout: outBuf.toString("utf8"), stderr: errBuf.toString("utf8"), code, timedOut: code === 124 };
+    return {
+      stdout: outBuf.toString("utf8"),
+      stderr: errBuf.toString("utf8"),
+      code,
+      timedOut: code === 124,
+      ...(pressure ? { pressure } : {}),
+    };
+  }
+
+  function notePressure(name: string, pressure: ExecPressure): void {
+    if (pressure.ioFull60 >= PRESSURE_RECORD_FULL60 && !pressureEpisodes.has(name)) {
+      pressureEpisodes.add(name);
+      reportError(
+        "agent_computer",
+        "io_pressure_high",
+        `sprite ${name}: io pressure full avg60=${pressure.ioFull60}% (load ${pressure.load1}) — disk-bound work is stalling`,
+        base.scopeFor(name),
+      );
+    } else if (pressure.ioFull60 < PRESSURE_CLEAR_FULL60) {
+      pressureEpisodes.delete(name);
+    }
   }
 
   async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
-    const script = `mkdir -p "$(dirname ${shq(absPath)})" && cat > ${shq(absPath)} && wc -c < ${shq(absPath)}`;
-    const r = await postExec(name, ["sh", "-c", script], 120, data);
-    const written = Number.parseInt(r.stdout.toString("utf8").trim(), 10);
-    if (r.rc !== 0 || written !== data.length) {
-      throw new Error(
-        `sprites write ${absPath} failed (rc=${r.rc}, ${Number.isFinite(written) ? written : 0}/${data.length} bytes)`,
-      );
+    const fs = sprite(name).filesystem();
+    const tmp = `${absPath}.part.${randomUUID()}`;
+    await attempt(`write ${absPath} failed`, async () => {
+      await fs.writeFile(tmp, Buffer.from(data));
+      await fs.rename(tmp, absPath);
+    });
+  }
+
+  async function readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null> {
+    try {
+      return await sprite(name).filesystem().readFile(absPath, null);
+    } catch (e) {
+      if ((e as { code?: string }).code === "ENOENT") return null;
+      throw new Error(`sprites read ${absPath} failed: ${spritesErrorDetail(e)}`, { cause: e });
     }
   }
 
   const egressProxyHost = opts.egressProxyUrl ? new URL(opts.egressProxyUrl).hostname : undefined;
-  const egressPolicyByName = new Map<string, string>();
 
   async function ensureEgressPolicy(name: string): Promise<void> {
-    const rules = [{ domain: egressProxyHost!, action: "allow" }];
+    const rules = [{ domain: egressProxyHost!, action: "allow" as const }];
     const want = JSON.stringify(rules);
     if (egressPolicyByName.get(name) === want) return;
-    const url = `${baseUrl}/v1/sprites/${encodeURIComponent(name)}/policy/network`;
-    const headers = { authorization: `Bearer ${opts.token ?? ""}`, "content-type": "application/json" };
-    const res = await fetchImpl(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ rules }),
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!res.ok)
-      throw new Error(`sprites egress policy ${name}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
-    const check = await fetchImpl(url, { headers, signal: AbortSignal.timeout(30_000) });
-    const got = (await check.json().catch(() => null)) as {
-      rules?: Array<{ domain?: string; action?: string }>;
-    } | null;
+    const s = sprite(name);
+    await attempt(`egress policy ${name}`, () => retrySpritesControl(() => s.updateNetworkPolicy({ rules })));
+    const got = await attempt(`egress policy readback ${name}`, () => retrySpritesControl(() => s.getNetworkPolicy()));
     const norm = (d?: string) => (d ?? "").toLowerCase().replace(/\.$/, "");
-    const only = got?.rules?.length === 1 ? got.rules[0] : undefined;
+    const only = got.rules?.length === 1 ? got.rules[0] : undefined;
     const bound = !!only && norm(only.domain) === norm(egressProxyHost) && only.action?.toLowerCase() === "allow";
-    if (!check.ok || !bound)
+    if (!bound)
       throw new Error(`sprites egress policy ${name}: readback mismatch (${JSON.stringify(got).slice(0, 200)})`);
     egressPolicyByName.set(name, want);
   }
 
-  function spritesProxyEnv(token: string): Record<string, string> {
-    const u = new URL(opts.egressProxyUrl!);
-    const url = `${u.protocol}//x:${token}@${u.host}`;
-    const noProxy = "localhost,127.0.0.1,::1";
-    return {
-      HTTPS_PROXY: url,
-      HTTP_PROXY: url,
-      NO_PROXY: noProxy,
-      https_proxy: url,
-      http_proxy: url,
-      no_proxy: noProxy,
-    };
+  async function applyResources(name: string): Promise<void> {
+    if (opts.memoryMb === undefined || resourcesApplied.has(name)) return;
+    await attempt(`resources policy ${name}`, () =>
+      sprite(name).updateResourcesPolicy({ memory: { limitMB: opts.memoryMb! } }),
+    );
+    resourcesApplied.add(name);
   }
 
-  async function readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null> {
-    const script =
-      `[ -e ${shq(absPath)} ] || exit ${MISSING_RC}; s=$(wc -c < ${shq(absPath)}); echo "$s"; ` +
-      `if [ "$s" -le ${READ_CHUNK} ]; then base64 < ${shq(absPath)}; fi`;
-    const r = await postExec(name, ["sh", "-c", script], 120);
-    if (r.rc === MISSING_RC) return null;
-    const text = r.stdout.toString("utf8");
-    if (r.rc !== 0) throw new Error(`sprites read ${absPath} failed (${r.rc}): ${text.slice(0, 200)}`);
-    const nl = text.indexOf("\n");
-    const declared = Number.parseInt(text.slice(0, nl < 0 ? undefined : nl).trim(), 10);
-    if (!Number.isFinite(declared)) throw new Error(`sprites read ${absPath}: bad size (${text.slice(0, 40)})`);
-    const parts: Buffer[] = [];
-    if (declared <= READ_CHUNK) {
-      parts.push(Buffer.from(text.slice(nl + 1).replace(/\s+/g, ""), "base64"));
-    } else {
-      for (let i = 0; i < Math.ceil(declared / READ_CHUNK); i++) {
-        const chunk = `dd if=${shq(absPath)} bs=${READ_CHUNK} skip=${i} count=1 2>/dev/null | base64`;
-        const c = await postExec(name, ["sh", "-c", chunk], 120);
-        if (c.rc !== 0) throw new Error(`sprites read ${absPath} chunk ${i} failed (${c.rc})`);
-        parts.push(Buffer.from(c.stdout.toString("utf8").replace(/\s+/g, ""), "base64"));
-      }
+  async function spriteExists(name: string): Promise<boolean> {
+    try {
+      await retrySpritesControl(() => client.getSprite(name));
+      return true;
+    } catch (e) {
+      if (isMissing(e)) return false;
+      throw new Error(`sprites get ${name}: ${spritesErrorDetail(e)}`, { cause: e });
     }
-    const data = Buffer.concat(parts);
-    if (data.length !== declared) {
-      throw new Error(`sprites read ${absPath}: truncated (${data.length}/${declared})`);
-    }
-    return data;
   }
 
-  async function ensureSprite(
-    key: string,
-    name: string,
-    onStatus?: (text: string) => void,
-  ): Promise<{ coldStart: boolean }> {
-    return provisionQueue(key, async () => {
-      if (ensured.has(name)) return { coldStart: false };
-      let exists = false;
-      try {
-        await client.getSprite(name);
-        exists = true;
-      } catch (error) {
-        void error;
-      }
-      if (!exists) {
+  async function deleteSprite(name: string): Promise<void> {
+    try {
+      await retrySpritesControl(() => client.deleteSprite(name));
+    } catch (e) {
+      if (!isMissing(e)) throw new Error(`sprites delete ${name}: ${spritesErrorDetail(e)}`, { cause: e });
+    }
+  }
+
+  const homeSnapshots = opts.snapshots
+    ? createHomeSnapshotOps<string>({
+        label: "sprites",
+        homeDir: HOME_DIR,
+        homeTarPath: HOME_TAR,
+        prunePaths: [
+          ...HOME_SNAPSHOT_PRUNE,
+          ...ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => `./${rel}`),
+        ],
+        store: opts.snapshots,
+        io: {
+          runCommand: async (name, script, timeoutMs) => {
+            const r = await execRaw(name, script, Math.ceil(timeoutMs / 1000));
+            return { exitCode: r.code, stdout: r.stdout, stderr: r.stderr };
+          },
+          readFileBytes: readAbsBytes,
+          writeFileBytes: writeAbsBytes,
+        },
+      })
+    : undefined;
+
+  async function exportHome(name: string, scope: string): Promise<void> {
+    await requireInitialized(name);
+    if (!homeSnapshots || !(await spriteExists(name))) return;
+    await homeSnapshots.snapshotHome(scope, name);
+  }
+
+  async function settleStream(stream: AsyncIterable<StreamMessage>, what: string): Promise<void> {
+    let failure: string | undefined;
+    for await (const msg of stream) {
+      if (msg.type === "error") failure = msg.error ?? msg.data ?? "error";
+      else if (msg.type === "complete") failure = undefined;
+    }
+    if (failure !== undefined) throw new Error(`${what}: ${failure}`);
+  }
+
+  async function createCheckpoint(name: string): Promise<void> {
+    await settleStream(await sprite(name).createCheckpoint(CHECKPOINT_COMMENT), `sprites checkpoint ${name}`);
+  }
+
+  async function latestCheckpoint(name: string): Promise<Checkpoint | undefined> {
+    const list = await retrySpritesControl(() => sprite(name).listCheckpoints());
+    return list
+      .filter((c) => c.id !== "Current" && !c.health)
+      .sort((a, b) => b.createTime.getTime() - a.createTime.getTime())[0];
+  }
+
+  async function restoreLatestCheckpoint(name: string): Promise<Checkpoint | undefined> {
+    const latest = await latestCheckpoint(name);
+    if (!latest) return undefined;
+    await settleStream(await sprite(name).restoreCheckpoint(latest.id), `sprites restore ${name} ${latest.id}`);
+    return latest;
+  }
+
+  async function checkpointIfDue(name: string, tdOpts?: TeardownOptions): Promise<void> {
+    await requireInitialized(name);
+    const book = checkpointBooks.get(name) ?? {};
+    checkpointBooks.set(name, book);
+    if (!tdOpts?.homeUnchanged) book.homeDirty = true;
+    if (!snapshotDue(book, tdOpts, checkpointIntervalMs)) return;
+    try {
+      await createCheckpoint(name);
+      book.lastSnapshotMs = Date.now();
+      book.homeDirty = false;
+    } catch (e) {
+      reportError("sandbox_snapshot", "checkpoint_failed", errMessage(e), base.scopeFor(name));
+    }
+  }
+
+  const forget = (name: string): void => {
+    ensured.delete(name);
+    resourcesApplied.delete(name);
+    pressureEpisodes.delete(name);
+    egressPolicyByName.delete(name);
+    checkpointBooks.delete(name);
+  };
+
+  const base = createExecSandboxBase({
+    workspace,
+    label: "sprites",
+    prefix,
+    homeDir: HOME_DIR,
+    defaultTimeoutSec,
+    credentialPaths: opts.credentialPaths ?? [],
+    installLayerTools: withConnectorSdk(
+      HOME_DIR,
+      createLayerToolInstaller(opts.layerToolFiles ?? (() => [])),
+      opts.connectorSdk,
+    ),
+    combineLayerToolPrep: true,
+    egressProxyUrl: opts.egressProxyUrl,
+    deleteFailureCode: "sprite_delete_failed",
+    onError: opts.onError,
+    exec: execRaw,
+    writeAbsBytes,
+    readAbsBytes,
+    ensureResident(name, onStatus) {
+      return withLifecycle(name, async () => {
+        const pending = (await initializationStore.get(name))?.pending;
+        if (ensured.has(name) && !pending) return { coldStart: false };
+        const exists = await spriteExists(name);
+        if (exists && !pending) {
+          await applyResources(name);
+          ensured.add(name);
+          return { coldStart: false };
+        }
+        await initializationStore.put(name, { pending: true });
         try {
-          onStatus?.("Creating the sandbox…");
+          onStatus?.("Preparing the sandbox…");
         } catch (error) {
           void error;
         }
+        const scope = base.scopeFor(name);
         try {
-          await client.createSprite(name);
+          if (!exists) await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
+          await applyResources(name);
+          const hydrated = homeSnapshots && scope ? await homeSnapshots.hydrateHome(scope, name) : false;
+          await initializationStore.delete(name);
           ensured.add(name);
-          return { coldStart: true };
-        } catch (createErr) {
-          try {
-            await client.getSprite(name);
-          } catch {
-            throw createErr;
-          }
+          return { coldStart: !hydrated };
+        } catch (e) {
+          forget(name);
+          reportError("sandbox_hydrate", "hydrate_failed", errMessage(e), scope);
+          await deleteSprite(name).catch((deleteErr) =>
+            swallow("sprites-sandbox: delete after failed hydrate", deleteErr),
+          );
+          throw e;
         }
-      }
+      });
+    },
+    isProvisioned: (name) => ensured.has(name),
+    async recreateScratch(name) {
+      if (await spriteExists(name)) await deleteSprite(name);
+      await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
+      await applyResources(name);
       ensured.add(name);
-      return { coldStart: false };
-    });
-  }
-
-  async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
-    const name = spriteScopeName(`${prefix}-scratch`, key);
-    return provisionQueue(`scratch:${key}`, async () => {
-      scratchKeyByName.set(name, key);
-      const active = activeScratch.get(name) ?? 0;
-      if (active === 0 && !ensured.has(name)) {
-        let stale = true;
-        try {
-          await client.getSprite(name);
-        } catch {
-          stale = false;
-        }
-        if (stale) await client.deleteSprite(name).catch(swallowAs("sprites-sandbox: stale scratch delete", undefined));
-        await client.createSprite(name);
-        ensured.add(name);
-      }
-      activeScratch.set(name, active + 1);
-      return { name, coldStart: active === 0 };
-    });
-  }
+    },
+    deleteInstance: deleteSprite,
+    forgetInstance: forget,
+    ensureEgress: ensureEgressPolicy,
+  });
 
   const profile: AgentComputerProfile = {
     backend: "sprites",
@@ -307,7 +475,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     processSessions: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
-      os: "Ubuntu 26.04 LTS — Fly Sprite microVM (auto-sleeps when idle; the whole disk persists)",
+      os: "Ubuntu (25.10 for newly created sprites; existing sprites keep the release they were created with) — Fly Sprite microVM: the whole disk persists and idle sprites sleep; background processes are held awake while they run but do not survive a cold wake or restart",
       runtimes: ["Node 24", "Python 3"],
       get tools() {
         return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);
@@ -315,9 +483,11 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       get notInstalled() {
         return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
       },
-      diskGb: 100,
+      cpus: SPRITE_CPUS,
+      ...(opts.memoryMb !== undefined ? { memoryMb: opts.memoryMb } : {}),
+      diskGb: SPRITE_DISK_GB,
       homeDir: HOME_DIR,
-      workdir: workspaceDir,
+      workdir: base.workspaceDir,
     },
   };
 
@@ -330,35 +500,15 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   const procSessions = createExecProcessSessions(procIo);
 
   const execFileOps = createExecFileOps({
+    combineRemoveAndList: true,
     label: "sprites",
     exec: (id, script, t) => execRaw(id, script, t),
     writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),
   });
 
-  const blobSigningSecret = opts.capabilitySecret ?? opts.signingSecret;
-  const blobStaging =
-    opts.blobTransfer && blobSigningSecret && opts.apiBaseUrl
-      ? createExecBlobStaging({
-          label: "sprites",
-          exec: (id, script, t) => execRaw(id, script, t),
-          proxyPrefix: proxyExportPrefix,
-          apiBaseUrl: opts.apiBaseUrl,
-          capabilityHeader: CAPABILITY_HEADER,
-          mintToken: (grant) =>
-            mintCapabilityToken(
-              {
-                actorId: "sprites-sandbox",
-                aud: BLOB_TRANSFER_AUD,
-                scopeId: "personal:sprites-sandbox",
-                blob: grant,
-                exp: Date.now() + BLOB_TRANSFER_TTL_MS,
-              },
-              blobSigningSecret,
-            ),
-        })
-      : null;
+  const blobStaging = createBackendBlobStaging("sprites", (id, script, t) => execRaw(id, script, t), opts);
 
-  const execBackup = createExecBackup({
+  const execExport = createExecExport({
     label: "sprites",
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
@@ -366,146 +516,169 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
   });
 
-  const sandbox: Sandbox = {
+  async function startProcess(
+    handle: SandboxHandle,
+    command: string,
+    spOpts?: StartProcessOptions,
+  ): Promise<{ processId: string }> {
+    const started = await procSessions.startProcess(handle, command, spOpts);
+    try {
+      const r = await execRaw(handle.id, processKeepaliveScript(started.processId), KEEPALIVE_TIMEOUT_SEC);
+      if (r.code !== 0 || !r.stdout.includes("OK")) throw new Error(r.stderr.trim() || `exit ${r.code}`);
+    } catch (e) {
+      reportError(
+        "agent_computer",
+        "process_keepalive_failed",
+        `sprite ${handle.id}: process ${started.processId} runs without a Tasks hold and may freeze when the sprite idles: ${errMessage(e)}`,
+        base.scopeFor(handle.id),
+      );
+    }
+    return started;
+  }
+
+  return {
     profile,
-    startProcess: procSessions.startProcess,
+    startProcess,
     readProcess: procSessions.readProcess,
     writeStdin: procSessions.writeStdin,
     signalProcess: procSessions.signalProcess,
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
-    ...(blobStaging
+    ...blobStaging,
+    provision: base.provision,
+    run: base.run,
+    writeFileBytes: base.writeFileBytes,
+    writeFile: base.writeFile,
+    readFileBytes: base.readFileBytes,
+    readFile: base.readFile,
+    exportFiles: execExport.exportFiles,
+
+    async destroyScope(scopeId: string): Promise<void> {
+      const name = sandboxScopeName(prefix, scopeId);
+      return base.provisionQueue(scopeId, () =>
+        withLifecycle(name, async () => {
+          if (!(await initializationStore.get(name))?.pending) await exportHome(name, scopeId);
+          await deleteSprite(name);
+          forget(name);
+        }),
+      );
+    },
+
+    ...(homeSnapshots
       ? {
-          async stageIn(handle: SandboxHandle, destRelPath: string, blobId: string): Promise<void> {
-            await blobStaging.stageInAbs(handle, posixJoin(handle.rootDir, destRelPath), blobId);
-          },
-          async stageOut(handle: SandboxHandle, srcRelPath: string): Promise<string> {
-            return blobStaging.stageOutAbs(handle, posixJoin(handle.rootDir, srcRelPath));
+          async persistHomeSnapshot(scopeId: string): Promise<void> {
+            const name = sandboxScopeName(prefix, scopeId);
+            return base.provisionQueue(scopeId, () =>
+              withLifecycle(name, async () => {
+                await requireInitialized(name);
+                if (!(await spriteExists(name)))
+                  throw new Error(`sprites persistHomeSnapshot: no sprite for ${scopeId}`);
+                await homeSnapshots.snapshotHome(scopeId, name);
+              }),
+            );
           },
         }
       : {}),
 
-    async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
-      const scratch = provOpts?.scratch;
-      const writable = layers.find((l) => l.mode === "rw") ?? layers[0];
-      const scope = writable?.scopeId ?? "default";
-      let name: string;
-      let coldStart: boolean;
-      if (scratch) {
-        ({ name, coldStart } = await ensureScratch(scratch.key));
-      } else {
-        name = spriteScopeName(prefix, scope);
-        scopeByName.set(name, scope);
-        ({ coldStart } = await ensureSprite(scope, name, provOpts?.onStatus));
+    async computerStatus(scopeId: string): Promise<ComputerStatus> {
+      const name = sandboxScopeName(prefix, scopeId);
+      const [checked, latest] = await Promise.allSettled([
+        retrySpritesControl(() => sprite(name).check()),
+        latestCheckpoint(name),
+      ]);
+      if (checked.status === "rejected" && isMissing(checked.reason)) {
+        return { machine: "no sprite provisioned yet", provisioned: false, guestResponsive: false };
       }
-
-      const forceEgress = !!egressProxyHost && !!provOpts?.egressToken;
-      if (forceEgress) await ensureEgressPolicy(name);
-      const turnEnv = Object.fromEntries(
-        Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
-      );
-      const env = { ...turnEnv, ...(forceEgress ? spritesProxyEnv(provOpts!.egressToken!) : {}) };
-      const handle: SandboxHandle = {
-        id: name,
-        rootDir: workspaceDir,
-        homeDir: HOME_DIR,
-        coldStart,
-        ...(scratch ? { scratch: true } : {}),
-        ...(Object.keys(env).length ? { env } : {}),
+      const machine =
+        checked.status === "fulfilled"
+          ? describeCheck(checked.value)
+          : `check failed: ${spritesErrorDetail(checked.reason)}`;
+      const recovery: ComputerStatus["recovery"] = {
+        strategy: "provider_snapshot",
+        checkpointExpiresAtMs: null,
+        ...(latest.status === "fulfilled" && latest.value
+          ? { checkpointId: latest.value.id, checkpointAtMs: latest.value.createTime.getTime() }
+          : {}),
+        ...(latest.status === "rejected" ? { error: `checkpoint list failed: ${errMessage(latest.reason)}` } : {}),
       };
-
+      let guestResponsive = false;
+      let pressure: ExecPressure | undefined;
       try {
-        // Scratch boxes are credential-free and wiped at release; they don't get the links.
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
-        if (prep.code !== 0)
-          throw new Error(`sprites provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
-
-        await materializeRoLayers(
-          workspace,
-          layers,
-          handle,
-          {
-            readFile: (h, rel) => sandbox.readFile(h, rel),
-            writeFileBytes: (h, rel, data) => sandbox.writeFileBytes(h, rel, data),
-            exec: (script, t) => execRaw(name, script, t),
-          },
-          { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "sprites" },
-        );
-
-        return handle;
-      } catch (err) {
-        await sandbox.teardown(handle).catch(swallowAs("sprites-sandbox: teardown after failed provision", undefined));
-        throw err;
+        const probe = await execRaw(name, "true", GUEST_PROBE_TIMEOUT_SEC);
+        guestResponsive = probe.code === 0;
+        pressure = probe.pressure;
+      } catch (e) {
+        void e;
       }
-    },
-
-    async run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
-      const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
-      const exports = Object.entries(handle.env ?? {})
-        .map(([k, v]) => `export ${k}=${shq(v)}`)
-        .join("; ");
-      const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-      const signal = execOpts?.signal;
-      if (!signal) return execRaw(handle.id, script, timeoutSec);
-      const killUid = randomUUID();
-      const fireKill = () => {
-        execRaw(handle.id, killScript(killUid), 15).catch(swallowAs("sprites-sandbox: kill in-flight exec", undefined));
+      return {
+        machine,
+        provisioned: checked.status === "fulfilled",
+        guestResponsive,
+        recovery,
+        ...(pressure ? { pressure } : {}),
       };
-      if (signal.aborted) fireKill();
-      const onAbort = () => fireKill();
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
     },
 
-    async writeFileBytes(handle, relPath, data): Promise<void> {
-      await writeAbsBytes(handle.id, posixJoin(handle.rootDir, relPath), data);
-    },
-    async writeFile(handle, relPath, data): Promise<void> {
-      await sandbox.writeFileBytes(handle, relPath, Buffer.from(data, "utf8"));
-    },
-    async readFileBytes(handle, relPath): Promise<Uint8Array | null> {
-      return readAbsBytes(handle.id, posixJoin(handle.rootDir, relPath));
-    },
-    async readFile(handle, relPath): Promise<string | null> {
-      const bytes = await sandbox.readFileBytes(handle, relPath);
-      return bytes === null ? null : Buffer.from(bytes).toString("utf8");
-    },
-
-    backupComputer: execBackup.backupComputer,
-
-    async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
-      if (handle.scratch) {
-        const key = scratchKeyByName.get(handle.id);
-        return provisionQueue(key ? `scratch:${key}` : handle.id, async () => {
-          const remaining = (activeScratch.get(handle.id) ?? 1) - 1;
-          if (remaining > 0) {
-            activeScratch.set(handle.id, remaining);
-            return;
+    restartComputer(scopeId: string): Promise<void> {
+      const name = sandboxScopeName(prefix, scopeId);
+      return base.provisionQueue(`restart:${name}`, () =>
+        withLifecycle(name, async () => {
+          await requireInitialized(name);
+          forget(name);
+          const s = sprite(name);
+          const restartFailure = await s.restart().then(
+            () => undefined,
+            (e) => spritesErrorDetail(e),
+          );
+          if (restartFailure === undefined) return;
+          let check: SpriteCheck;
+          try {
+            check = await retrySpritesControl(() => s.check());
+          } catch (e) {
+            throw new Error(
+              `sprites restart ${name}: ${restartFailure}; check failed: ${spritesErrorDetail(e)}; no checkpoint was restored`,
+              { cause: e },
+            );
           }
-          activeScratch.delete(handle.id);
-          ensured.delete(handle.id);
-          if (tdOpts?.destroy) await client.deleteSprite(handle.id);
-          else await client.deleteSprite(handle.id).catch(swallowAs("sprites-sandbox: scratch delete", undefined));
-        });
-      }
-      if (!tdOpts?.destroy) return;
-      ensured.delete(handle.id);
-      await client.deleteSprite(handle.id).catch((e) => {
-        const scope = scopeByName.get(handle.id);
-        opts.onError?.({
-          category: "sandbox_teardown",
-          code: "sprite_delete_failed",
-          message: errMessage(e),
-          ...(scope ? { scopeLabel: scope } : {}),
-        });
+          const fault = check.status === "unhealthy" ? `check reports ${describeCheck(check)}` : undefined;
+          if (fault === undefined) {
+            throw new Error(
+              `sprites restart ${name}: ${restartFailure}; the health check reports no fault, so no checkpoint was restored`,
+            );
+          }
+          let restored: Checkpoint | undefined;
+          try {
+            restored = await restoreLatestCheckpoint(name);
+          } catch (e) {
+            throw new Error(
+              `sprites restart ${name}: ${restartFailure}; ${fault}; checkpoint restore failed: ${errMessage(e)}`,
+              {
+                cause: e,
+              },
+            );
+          }
+          if (!restored)
+            throw new Error(`sprites restart ${name}: ${restartFailure}; ${fault}; no checkpoint to restore`);
+          reportError(
+            "agent_computer",
+            "checkpoint_restored",
+            `sprite ${name}: restart failed (${restartFailure}); ${fault}; restored checkpoint ${restored.id} from ${restored.createTime.toISOString()}`,
+            base.scopeFor(name) ?? scopeId,
+          );
+        }),
+      );
+    },
+
+    async teardown(handle: SandboxHandle, tdOpts?: TeardownOptions): Promise<void> {
+      return withLifecycle(handle.id, async () => {
+        if (!handle.scratch) {
+          if (tdOpts?.destroy) {
+            if (!(await initializationStore.get(handle.id))?.pending)
+              await exportHome(handle.id, base.scopeFor(handle.id) ?? handle.id);
+          } else await checkpointIfDue(handle.id, tdOpts);
+        }
+        return base.teardown(handle, tdOpts);
       });
     },
   };
-
-  return sandbox;
 }

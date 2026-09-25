@@ -22,11 +22,12 @@ export interface DeviceFlowCutoverReset {
 }
 
 export interface DeviceFlowCutoverStore {
+  listServices(scope: ScopeId): Promise<string[]>;
   get(scope: ScopeId, service: string): Promise<DeviceFlowCutoverPolicy | null>;
   resolvePolicy(scope: ScopeId, service: string): Promise<DeviceFlowCutoverPolicy | null>;
   resolve(scope: ScopeId, service: string): Promise<DeviceFlowCutoverMode>;
-  residentResetGeneration(scope: ScopeId, service: string): Promise<string | null>;
-  markResidentReset(scope: ScopeId, service: string, generation: string): Promise<void>;
+  residentResetGeneration(scope: ScopeId, service: string, computerId?: string): Promise<string | null>;
+  markResidentReset(scope: ScopeId, service: string, generation: string, computerId?: string): Promise<void>;
   set(
     scope: ScopeId,
     service: string,
@@ -63,6 +64,8 @@ export function createDeviceFlowCutoverStore(
   const volatileResets = new Map<string, DeviceFlowCutoverReset>();
   const resetKey = (kind: "request" | "complete", scope: ScopeId, service: string): string =>
     `${kind}:${policyKey(scope, service)}`;
+  const completionKey = (scope: ScopeId, service: string, computerId?: string): string =>
+    `${resetKey("complete", scope, service)}${computerId ? `:${encodeURIComponent(computerId)}` : ""}`;
   const getReset = (key: string): Promise<DeviceFlowCutoverReset | null> =>
     resets ? resets.get(key) : Promise.resolve(volatileResets.get(key) ?? null);
   const putReset = async (key: string, value: DeviceFlowCutoverReset): Promise<void> => {
@@ -85,14 +88,31 @@ export function createDeviceFlowCutoverStore(
     (await resolvePolicy(scope, service))?.mode ?? "legacy";
 
   return {
+    async listServices(scope) {
+      const services = new Set(
+        (await backing.all())
+          .filter((record) => record.scopeId === scope || record.scopeId === orgScope)
+          .map((record) => record.service),
+      );
+      const requests = resets ? await resets.entries() : [...volatileResets.entries()];
+      for (const [key] of requests) {
+        for (const target of new Set([scope, orgScope])) {
+          const prefix = `request:${encodeURIComponent(target)}:`;
+          if (key.startsWith(prefix)) services.add(decodeURIComponent(key.slice(prefix.length)));
+        }
+      }
+      return [...services].sort();
+    },
     get,
     resolvePolicy,
     resolve,
-    async residentResetGeneration(scope, service) {
-      if ((await resolve(scope, service)) !== "legacy") return null;
+    async residentResetGeneration(scope, service, computerId) {
       const policy = await resolvePolicy(scope, service);
-      const requested = await getReset(resetKey("request", scope, service));
-      const orgRequested = scope === orgScope ? null : await getReset(resetKey("request", orgScope, service));
+      if ((policy?.mode ?? "legacy") !== "legacy") return null;
+      const [requested, orgRequested] = await Promise.all([
+        getReset(resetKey("request", scope, service)),
+        scope === orgScope ? null : getReset(resetKey("request", orgScope, service)),
+      ]);
       const generation = [
         policy?.resetResident ? policy.resetGeneration : undefined,
         orgRequested?.generation,
@@ -101,11 +121,11 @@ export function createDeviceFlowCutoverStore(
         .filter(Boolean)
         .join("|");
       if (!generation) return null;
-      const complete = await getReset(resetKey("complete", scope, service));
+      const complete = await getReset(completionKey(scope, service, computerId));
       return complete?.generation === generation ? null : generation;
     },
-    async markResidentReset(scope, service, generation) {
-      if (generation) await putReset(resetKey("complete", scope, service), { generation });
+    async markResidentReset(scope, service, generation, computerId) {
+      if (generation) await putReset(completionKey(scope, service, computerId), { generation });
     },
     async set(scope, service, mode, updatedBy) {
       assertMode(mode);

@@ -5,10 +5,42 @@ export const DEFAULT_CRON_TIMEZONE = "America/Los_Angeles";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MIN_RECURRING_CRON_MS = 60_000;
+const PAST_FIRE_GRACE_MS = 5 * 60_000;
 
 export interface NormalizedSchedule {
   schedule: CronSchedule;
   nextFireAt?: number;
+}
+
+function isObj(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+export function userScheduleFromBody(
+  value: unknown,
+  defaultTimezone: string = DEFAULT_CRON_TIMEZONE,
+): CronSchedule | null {
+  if (!isObj(value)) return null;
+  const hasCron = hasOwn(value, "cron");
+  const hasTimezone = hasOwn(value, "timezone");
+  const hasEveryMs = hasOwn(value, "everyMs");
+  const hasFirstFireAt = hasOwn(value, "firstFireAt");
+  if (hasCron) {
+    if (typeof value.cron !== "string" || hasEveryMs || hasFirstFireAt) return null;
+    const timezone = hasTimezone ? value.timezone : defaultTimezone;
+    return typeof timezone === "string" ? { cron: value.cron, timezone } : null;
+  }
+  if (hasTimezone || (!hasEveryMs && !hasFirstFireAt)) return null;
+  if (hasEveryMs && typeof value.everyMs !== "number") return null;
+  if (hasFirstFireAt && typeof value.firstFireAt !== "number") return null;
+  return {
+    ...(hasEveryMs ? { everyMs: value.everyMs as number } : {}),
+    ...(hasFirstFireAt ? { firstFireAt: value.firstFireAt as number } : {}),
+  };
 }
 
 export function isCalendarSchedule(schedule: CronSchedule): boolean {
@@ -96,9 +128,16 @@ export function normalizeSchedule(
   return { schedule, nextFireAt: firstFireAt };
 }
 
-export function validateUserSchedule(schedule: CronSchedule): void {
+export function validateUserSchedule(schedule: CronSchedule, now: number = Date.now()): void {
   if (schedule.everyMs !== undefined && schedule.everyMs < MIN_RECURRING_CRON_MS) {
     throw new Error(`schedule.everyMs must be at least ${MIN_RECURRING_CRON_MS}ms`);
+  }
+  if (schedule.firstFireAt !== undefined && schedule.firstFireAt < now - PAST_FIRE_GRACE_MS) {
+    throw new Error(
+      `schedule.firstFireAt (${schedule.firstFireAt}) is in the past — it is now ` +
+        `${new Date(now).toISOString()} (${now} epoch ms). Recompute the fire time from this clock; ` +
+        'for "send now" pass the current epoch ms.',
+    );
   }
 }
 

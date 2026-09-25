@@ -13,6 +13,7 @@ export type ProcessStatus = "running" | "exited" | "reaped";
 export interface ProcessRecord {
   processId: string;
   scopeId: string;
+  sandboxId?: string;
   kind: ProcessKind;
   command: string;
   startedAt: number;
@@ -25,6 +26,7 @@ export interface ProcessRecord {
 interface NewProcessRecord {
   processId: string;
   scopeId: string;
+  sandboxId?: string;
   kind: ProcessKind;
   command: string;
   ttlMs: number;
@@ -49,6 +51,7 @@ function newRecord(rec: NewProcessRecord, now: number): ProcessRecord {
   return {
     processId: rec.processId,
     scopeId: rec.scopeId,
+    ...(rec.sandboxId ? { sandboxId: rec.sandboxId } : {}),
     kind: rec.kind,
     command: rec.command,
     startedAt: now,
@@ -101,6 +104,7 @@ function pgRowToRecord(r: Record<string, unknown>): ProcessRecord {
   return {
     processId: r.process_id as string,
     scopeId: r.scope_id as string,
+    ...(r.sandbox_id ? { sandboxId: r.sandbox_id as string } : {}),
     kind: r.kind as ProcessKind,
     command: r.command as string,
     startedAt: Number(r.started_at),
@@ -112,7 +116,7 @@ function pgRowToRecord(r: Record<string, unknown>): ProcessRecord {
 }
 
 export function createPostgresProcessRegistry(connectionString: string): ProcessRegistry {
-  const { q } = createPgPool(connectionString, [
+  const pg = createPgPool(connectionString, "processes/registry/0001", [
     `CREATE TABLE IF NOT EXISTS process_sessions(
         process_id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, kind TEXT NOT NULL,
         command TEXT NOT NULL, started_at BIGINT NOT NULL, expires_at BIGINT NOT NULL,
@@ -123,12 +127,26 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     `CREATE INDEX IF NOT EXISTS idx_proc_scope_status ON process_sessions(scope_id, status)`,
   ]);
 
+  const migration = {
+    id: "processes/registry/0002",
+    statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS sandbox_id TEXT"],
+  };
+  pg.registerMigration(migration);
+  let ready: Promise<void> | undefined;
+  const q: typeof pg.q = async (...args) => {
+    ready ??= pg.migrate(migration).catch((error) => {
+      ready = undefined;
+      throw error;
+    });
+    await ready;
+    return pg.q(...args);
+  };
   return {
     async register(rec) {
       const row = newRecord(rec, Date.now());
       await q(
-        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id, sandbox_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
           row.processId,
           row.scopeId,
@@ -139,6 +157,7 @@ export function createPostgresProcessRegistry(connectionString: string): Process
           row.status,
           row.sessionRef ?? null,
           row.runId ?? null,
+          row.sandboxId ?? null,
         ],
       );
       return row;

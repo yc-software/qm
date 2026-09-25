@@ -123,6 +123,7 @@ function isCompressedMedia(content: Buffer): boolean {
     content.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])) ||
     content.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ||
     content.subarray(0, 4).toString("ascii") === "GIF8" ||
+    content.subarray(0, 4).toString("ascii") === "icns" ||
     (content.subarray(0, 4).toString("ascii") === "RIFF" && content.subarray(8, 12).toString("ascii") === "WEBP")
   );
 }
@@ -137,7 +138,7 @@ function readTrackedContent(path: string): Buffer | null {
   }
 }
 
-const provisionedInfrastructure = ["deploy/sandbox/fly.toml"];
+const provisionedInfrastructure = ["test/deploy-notice.test.ts"];
 
 test("tracked files use only QM branding", () => {
   const paths = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8" })
@@ -149,6 +150,11 @@ test("tracked files use only QM branding", () => {
   const legacyContent = paths.flatMap((path) => {
     const content = readTrackedContent(path);
     if (!content || isCompressedMedia(content)) return [];
+    const encodedDocumentFixture =
+      path.startsWith("test/fixtures/documents/") &&
+      (content.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) ||
+        content.subarray(0, 5).toString("ascii") === "%PDF-");
+    if (encodedDocumentFixture) return [];
     return findLegacyNames(content.toString("latin1"), {
       binary: isBinary(content),
       compressed: isCompressedMedia(content),

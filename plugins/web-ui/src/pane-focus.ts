@@ -49,3 +49,29 @@ export function preservingFocus(doc: Document, mutate: () => void): void {
   active.focus();
   applySelection(view, active, selection);
 }
+
+export function focusComposerOnPaneClick(pane: HTMLElement, isActive: () => boolean): void {
+  let switching = false;
+  pane.tabIndex = -1;
+  pane.addEventListener(
+    "pointerdown",
+    (event) => {
+      switching =
+        !isActive() && event.button === 0 && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+    },
+    true,
+  );
+  const cancel = (): void => {
+    switching = false;
+  };
+  pane.addEventListener("pointercancel", cancel);
+  pane.addEventListener("dragstart", cancel);
+  pane.addEventListener("click", (event) => {
+    const focus = switching;
+    cancel();
+    const doc = pane.ownerDocument;
+    if (!focus || event.defaultPrevented || doc.activeElement !== pane || doc.getSelection()?.isCollapsed === false)
+      return;
+    pane.querySelector<HTMLTextAreaElement>(".composer-input:not(:disabled)")?.focus({ preventScroll: true });
+  });
+}

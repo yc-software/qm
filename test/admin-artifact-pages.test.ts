@@ -184,11 +184,15 @@ test("a single skill drills in to its body, capabilities, and approvals — scop
       "the read is audited",
     );
 
-    assert.equal(
-      (await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=channel:C9`, { headers: ALICE_ADMIN })).status,
-      403,
-      "a narrower scope can't read another scope's skill",
+    const mismatched = await json(
+      await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=channel:C9`, { headers: ALICE_ADMIN }),
     );
+    assert.equal(
+      mismatched.id,
+      made.id,
+      "a skill deep link resolves by id even when the scope filter doesn't match (grants are org-wide)",
+    );
+    assert.equal(mismatched.ownerScopeId, "personal:U1", "the response reports the skill's own scope");
     const orgGot = await json(
       await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=org:default-org`, { headers: ALICE_ADMIN }),
     );
@@ -337,6 +341,48 @@ test("the skills list + detail link an imported skill to its pack; built-in/pers
       { id: pack.id, url: "https://github.com/acme/skills-pack.git" },
       "the drill-in detail carries the same pack provenance",
     );
+  } finally {
+    await s.close();
+  }
+});
+
+test("admin cron runtime edits preserve task authority and reject unavailable or out-of-scope choices", async () => {
+  const s = start();
+  try {
+    const cron = await s.built.crons.create({
+      ownerScopeId: "personal:U1",
+      owner: "U1",
+      createdBy: "U1",
+      schedule: { everyMs: 60_000 },
+      action: "run the existing script",
+      unattendedGrants: ["publish"],
+      destination: { type: "principal", target: "U1" },
+    });
+    const runtime = { harnessId: "mock", modelId: "claude-sonnet-5" };
+    const put = (body: unknown, scope = "personal:U1", actor = ALICE_ADMIN) =>
+      fetch(`${s.base}/v1/admin/crons/${cron.id}/runtime?scope=${scope}`, {
+        method: "PUT",
+        headers: { ...actor, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    assert.equal((await put({ runtime }, "personal:U1", { "x-admin-actor": "nobody@default-org" })).status, 403);
+    assert.equal((await put({ runtime }, "channel:C9")).status, 403);
+    assert.equal((await put({ runtime: { ...runtime, modelId: "unavailable" } })).status, 400);
+    assert.equal((await put({ runtime, action: "replace the task" })).status, 400);
+    assert.equal((await put({})).status, 400);
+    const result = await put({ runtime });
+    assert.equal(result.status, 200);
+    assert.deepEqual(await result.json(), { cron: { id: cron.id, runtime } });
+    const updated = await s.built.app.getCron(cron.id);
+    assert.deepEqual(updated, { ...cron, runtime });
+    const listed = await json(await fetch(`${s.base}/v1/admin/crons?scope=personal:U1`, { headers: ALICE_ADMIN }));
+    assert.deepEqual(listed.crons[0].runtime, runtime);
+    assert.deepEqual(listed.crons[0].unattendedGrants, cron.unattendedGrants);
+    assert.equal((await put({ runtime: null })).status, 200);
+    assert.deepEqual(await s.built.app.getCron(cron.id), { ...cron, runtime: null });
+    const audit = (await s.built.auditLog.events()).filter((event) => event.action === "cron.runtime.update");
+    assert.equal(audit.length, 2);
+    assert.ok(audit.every((event) => event.principalId === "admin-alice" && event.resource === cron.id));
   } finally {
     await s.close();
   }

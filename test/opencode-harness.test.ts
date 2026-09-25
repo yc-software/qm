@@ -1,10 +1,17 @@
 import test from "node:test";
+import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assistantFailure, createOpenCodeHarness, latestAssistantParts } from "../src/harness/opencode-harness.ts";
+import {
+  assistantFailure,
+  createOpenCodeHarness,
+  latestAssistantParts,
+  openCodeHarnessConfigOptions,
+} from "../src/harness/opencode-harness.ts";
 import type { OpencodeClient } from "@opencode-ai/sdk";
+import type { Config } from "../src/config.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
 
@@ -78,7 +85,7 @@ function turnInput(entries: SessionEntry[], llmRows: HarnessLlmRequestRecord[]):
   return {
     session,
     input: "hi",
-    model: "openai/gpt-5",
+    runtime: { modelId: "openai/gpt-5" },
     systemPrompt: "be concise",
     history: [],
     tools: {} as HarnessTurnInput["tools"],
@@ -139,7 +146,7 @@ test("OpenCode records real usage, cost, and timings for each captured model cal
   assert.equal(row.step, 0);
   assert.equal(row.model, "openai/gpt-5");
   assert.equal(row.truncated, false);
-  assert.deepEqual(row.request, { system: "s", messages: [{ role: "user" }] });
+  assert.deepEqual(row.promptEnvelope, { system: "s" }, "messages stay on the tape, not in the envelope");
   assert.deepEqual(row.transport, { modelId: "openai/gpt-5" });
   assert.equal(row.durationMs, 1929);
   assert.deepEqual(row.usage, {
@@ -246,6 +253,10 @@ test("OpenCode records requests without usage attribution when captures and assi
   const result = await harness.turns.runTurn(turnInput([], llmRows));
   assert.equal(result.reply, "hello from fake");
   assert.deepEqual(
+    llmRows.map((row) => row.promptEnvelope),
+    [{ system: "s" }, { system: "s" }],
+  );
+  assert.deepEqual(
     llmRows.map((row) => ({ step: row.step, usage: row.usage, durationMs: row.durationMs })),
     [
       { step: 0, usage: null, durationMs: null },
@@ -295,6 +306,56 @@ test("assistantFailure classifies provider errors and exempts aborts and output-
   assert.equal(assistantFailure(undefined), null);
 });
 
+test("OpenCode judge honors the configured judge model while oneShot keeps the default", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-test-"));
+  const echoModelHandlers = `
+  if (req.method === "POST" && message) {
+    const posted = JSON.parse(await readBody(req));
+    const text = posted.model.providerID + "/" + posted.model.modelID;
+    return json(res, {
+      info: {
+        id: "msg_1", sessionID: "ses_main", role: "assistant", time: { created: 1000, completed: 2000 },
+        parentID: "", modelID: posted.model.modelID, providerID: posted.model.providerID, mode: "qm",
+        path: { cwd: "/", root: "/" },
+        cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        finish: "stop",
+      },
+      parts: [{ id: "prt_1", sessionID: "ses_main", messageID: "msg_1", type: "text", text }],
+    });
+  }
+  if (req.method === "GET" && message) return json(res, []);
+`;
+  const harness = createOpenCodeHarness({
+    binaryPath: fakeSidecar(dir, "judge-model", echoModelHandlers),
+    defaultModelId: "openai/gpt-5",
+    judgeModelId: "anthropic/claude-haiku-4-5",
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  assert.equal(await harness.models.oneShot?.("system", "prompt"), "openai/gpt-5");
+  assert.equal(await harness.models.judge?.("system", "prompt"), "anthropic/claude-haiku-4-5");
+});
+
+test("OpenCode config options forward a judge model only when its provider has a key", () => {
+  assert.equal(
+    openCodeHarnessConfigOptions({ judgeModelId: "claude-haiku-4-5", anthropicApiKey: "sk-ant" } as Config)
+      .judgeModelId,
+    "claude-haiku-4-5",
+  );
+  assert.equal(
+    openCodeHarnessConfigOptions({ judgeModelId: "claude-haiku-4-5", openaiApiKey: "sk-oai" } as Config).judgeModelId,
+    undefined,
+    "a judge model on a keyless provider must not park every judge call on a provider error",
+  );
+  assert.equal(
+    openCodeHarnessConfigOptions({ judgeModelId: "not-a-model", anthropicApiKey: "sk-ant" } as Config).judgeModelId,
+    undefined,
+  );
+  assert.equal(openCodeHarnessConfigOptions({} as Config).judgeModelId, undefined);
+});
+
 test("custom providers materialize into the opencode config (enabled + provider map, key included)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "opencode-custom-"));
   const dump = join(dir, "config.json");
@@ -319,6 +380,16 @@ test("custom providers materialize into the opencode config (enabled + provider 
         },
         apiKey: "sk-lite",
       },
+      {
+        spec: {
+          id: "responses-proxy",
+          name: "Responses Proxy",
+          protocol: "openai-responses" as const,
+          baseUrl: "http://responses.internal/v1",
+          models: [{ id: "responses-model" }],
+        },
+        apiKey: "sk-responses",
+      },
     ],
   });
   const entries: SessionEntry[] = [];
@@ -327,13 +398,233 @@ test("custom providers materialize into the opencode config (enabled + provider 
     await harness.turns.runTurn(turnInput(entries, llmRows));
     const config = JSON.parse(readFileSync(dump, "utf8"));
     assert.ok(config.enabled_providers.includes("litellm"));
+    assert.ok(config.enabled_providers.includes("responses-proxy"));
     const litellm = config.provider.litellm;
     assert.equal(litellm.npm, "@ai-sdk/openai-compatible");
     assert.equal(litellm.options.baseURL, "http://litellm.internal:4000/v1");
     assert.equal(litellm.options.apiKey, "sk-lite");
     assert.deepEqual(litellm.models["deepseek-chat"], { name: "DeepSeek", limit: { context: 128000, output: 8192 } });
+    assert.equal(config.provider["responses-proxy"].npm, "@ai-sdk/openai");
+    assert.equal(config.provider["responses-proxy"].options.apiKey, "sk-responses");
   } finally {
     await harness.turns.close?.();
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("OpenCode advertises aliases only for tools available on the turn", async (t) => {
+  for (const sandboxResources of [false, true]) {
+    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-aliases-"));
+    const captured = join(dir, "context.json");
+    const handlers = `
+      if (req.method === "POST" && message) {
+        await readBody(req);
+        const context = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + message[1] + "/context", {
+          headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET },
+        }).then((r) => r.json());
+        require("node:fs").writeFileSync(${JSON.stringify(captured)}, JSON.stringify(context));
+        return json(res, ${okAssistant});
+      }
+      if (req.method === "GET" && message) return json(res, [${okAssistant}]);
+    `;
+    const harness = createOpenCodeHarness({ binaryPath: fakeSidecar(dir, "aliases", handlers), sandboxResources });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    await harness.turns.runTurn(turnInput([], []));
+    const { systemPrompt } = JSON.parse(readFileSync(captured, "utf8")) as { systemPrompt: string };
+    assert.doesNotMatch(systemPrompt, /workspace_read|workspace_write/);
+    if (sandboxResources) assert.doesNotMatch(systemPrompt, /workspace_execute/);
+    else assert.match(systemPrompt, /workspace_execute is execute/);
+  }
+});
+
+test("OpenCode includes steered PDF and extracted documents without copying echoed contents into tape", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-steer-doc-"));
+  const capturePath = join(dir, "steered.json");
+  const binary = fakeSidecar(
+    dir,
+    "steer-docs",
+    `
+    if (req.method === "POST" && url.pathname.endsWith("/prompt_async")) {
+      process.qaSteered = JSON.parse(await readBody(req));
+      (await import("node:fs")).writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(process.qaSteered));
+      return json(res, {});
+    }
+    if (url.pathname === "/session/status") return json(res, { ses_main: { type: "idle" } });
+    if (req.method === "POST" && message) {
+      process.qaInitial = JSON.parse(await readBody(req));
+      while (!process.qaSteered) await new Promise(resolve => setTimeout(resolve, 10));
+      return json(res, ${okAssistant});
+    }
+    if (req.method === "GET" && message) return json(res, [
+      { info: { id: "initial", role: "user" }, parts: process.qaInitial.parts },
+      { info: { id: "steered", role: "user" }, parts: process.qaSteered.parts },
+      ${okAssistant},
+    ]);
+  `,
+  );
+  const signals = createMemoryRunSignalStore();
+  const harness = createOpenCodeHarness({ binaryPath: binary, signals, turnWallClockMs: 10_000 });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const pdf = readFileSync(new URL("./fixtures/documents/sample.pdf", import.meta.url)).toString("base64");
+  const docx = readFileSync(new URL("./fixtures/documents/sample.docx", import.meta.url)).toString("base64");
+  const tape: unknown[] = [];
+  const turn = turnInput([], []);
+  turn.runId = "opencode-steer-docs";
+  turn.tape = async (row) => {
+    tape.push(row);
+  };
+  turn.documents = [
+    { name: "initial.txt", mimeType: "text/plain", dataBase64: Buffer.from("A".repeat(80_000)).toString("base64") },
+  ];
+  turn.prepareSteer = async (text) => ({
+    text,
+    documents: [
+      { name: "steered.pdf", mimeType: "application/pdf", dataBase64: pdf },
+      {
+        name: "steered.docx",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        dataBase64: docx,
+      },
+      {
+        name: "overflow.txt",
+        mimeType: "text/plain",
+        dataBase64: Buffer.from("Z".repeat(30_000) + "OUTSIDE-BUDGET-492").toString("base64"),
+      },
+    ],
+  });
+  await signals.send(turn.runId, { kind: "steer", text: "read the documents", ts: "doc.1" });
+  await harness.turns.runTurn(turn);
+  const sent = readFileSync(capturePath, "utf8");
+  assert.ok(sent.includes(pdf));
+  assert.ok(!sent.includes("OUTSIDE-BUDGET-492"));
+  assert.match(sent, /truncated to fit/);
+  assert.ok(sent.includes("DOCX-QUARTZ-731"));
+  assert.ok(!JSON.stringify(tape).includes(pdf));
+  assert.ok(!JSON.stringify(tape).includes("DOCX-QUARTZ-731"));
+});
+
+for (const [modelId, fastMode, expected] of [
+  ["claude-opus-5", true, { speed: "fast" }],
+  ["gpt-5.6-sol", true, { serviceTier: "priority" }],
+  ["claude-opus-5", false, {}],
+  ["claude-sonnet-5", true, {}],
+  ["unknown-model", true, {}],
+] as const) {
+  test(`OpenCode bridge resolves fast options for ${modelId} with fast=${fastMode}`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-fast-"));
+    const harness = createOpenCodeHarness({
+      binaryPath: fakeSidecar(
+        dir,
+        "fast-options",
+        `
+        if (req.method === "GET" && message) return json(res, []);
+        if (req.method === "POST" && message) {
+          await readBody(req);
+          const context = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + message[1] + "/context?model=${modelId}", {
+            headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET },
+          }).then(r => r.json());
+          const assistant = ${okAssistant};
+          assistant.parts[0].text = JSON.stringify(context.modelOptions);
+          return json(res, assistant);
+        }
+      `,
+      ),
+    });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const turn = turnInput([], []);
+    turn.runtime = { modelId: "claude-opus-5", fastMode };
+    const result = await harness.turns.runTurn(turn);
+    assert.deepEqual(JSON.parse(result.reply), expected);
+  });
+}
+
+test("OpenCode child requests inherit fast mode and a reused runtime honors switching it off", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-fast-child-"));
+  const harness = createOpenCodeHarness({
+    binaryPath: fakeSidecar(
+      dir,
+      "child-fast",
+      `
+      if (req.method === "GET" && url.pathname === "/session/ses_child") return json(res, { id: "ses_child", parentID: "ses_main" });
+      if (req.method === "GET" && message) return json(res, []);
+      if (req.method === "POST" && message) {
+        await readBody(req);
+        const options = [];
+        for (const model of ["gpt-5.6-sol", "claude-sonnet-5"]) {
+          const context = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/ses_child/context?model=" + model, {
+            headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET },
+          }).then(r => r.json());
+          if (context.history !== undefined || context.systemPrompt !== undefined) throw new Error("child borrowed parent prompt");
+          options.push(context.modelOptions);
+        }
+        const assistant = ${okAssistant};
+        assistant.parts[0].text = JSON.stringify(options);
+        return json(res, assistant);
+      }
+    `,
+    ),
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  for (const fastMode of [true, false]) {
+    const turn = turnInput([], []);
+    turn.runtime = { modelId: "claude-opus-5", fastMode };
+    const result = await harness.turns.runTurn(turn);
+    assert.deepEqual(JSON.parse(result.reply), [fastMode ? { serviceTier: "priority" } : {}, {}]);
+  }
+});
+
+for (const mechanism of ["signal", "cancel", "both"] as const) {
+  test(`OpenCode preserves explicit Stop provenance via ${mechanism}`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-stop-"));
+    const signals = createMemoryRunSignalStore();
+    const cancel = new AbortController();
+    const harness = createOpenCodeHarness({
+      binaryPath: fakeSidecar(
+        dir,
+        "stop",
+        `
+        if (req.method === "POST" && message) {
+          await readBody(req);
+          globalThis.pendingPrompt = res;
+          require("node:fs").writeFileSync(${JSON.stringify(join(dir, "started"))}, "1");
+          return;
+        }
+        if (req.method === "POST" && url.pathname.endsWith("/abort")) {
+          if (globalThis.pendingPrompt) { json(globalThis.pendingPrompt, { info: {}, parts: [] }); globalThis.pendingPrompt = null; }
+          return json(res, true);
+        }
+        if (req.method === "GET" && message) return json(res, []);
+      `,
+      ),
+      signals,
+      turnWallClockMs: 5_000,
+    });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const running = harness.turns.runTurn({ ...turnInput([], []), runId: "stop", cancel: cancel.signal });
+    const deadline = Date.now() + 4_000;
+    while (!existsSync(join(dir, "started"))) {
+      if (Date.now() > deadline) throw new Error("mock OpenCode never started");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (mechanism !== "cancel") await signals.send("stop", { kind: "abort" });
+    if (mechanism !== "signal") cancel.abort();
+    const result = await running;
+    assert.equal(result.stoppedByUser, mechanism === "cancel" ? undefined : true);
+    if (mechanism !== "cancel") assert.equal(result.stopped, true);
+  });
+}

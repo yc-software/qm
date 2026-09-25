@@ -58,8 +58,7 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     assert.equal(config.target, "docker");
     assert.equal(config.publicUrl, "http://localhost:8082");
     assert.equal(config.env.core?.HARNESS, "pi");
-    assert.equal(config.modelProvider, "anthropic", "init names a base model provider by default");
-    assert.deepEqual(config.sandbox, { app: "acme-sandboxes" });
+    assert.equal(config.sandbox, undefined);
 
     const env = readFileSync(join(dir, ".env.example"), "utf8");
     assert.equal(env, renderEnvExample(config), ".env.example is exactly renderEnvExample output");
@@ -157,20 +156,15 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
     assert.equal(config.env.auth?.AUTH_EMAIL_TRANSPORT, "resend");
     assert.equal(config.env.portal?.OIDC_PRINCIPAL_CLAIM, undefined, "the broker derives every OIDC_* value");
     const env = readFileSync(join(dir, ".env.example"), "utf8");
-    for (const line of [
-      "ADMIN_GRANTS=",
-      "AUTH_ALLOWED_EMAILS=",
-      "AUTH_EMAIL_FROM=",
-      "RESEND_API_KEY=",
-      "PORTAL_SESSION_SECRET=",
-      "ANTHROPIC_API_KEY=",
-    ]) {
+    for (const line of ["ADMIN_GRANTS=", "AUTH_ALLOWED_EMAILS=", "PORTAL_SESSION_SECRET=", "ANTHROPIC_API_KEY="]) {
       assert.ok(env.split("\n").includes(line), `.env.example should require ${line} for the fly scaffold`);
     }
     for (const line of [
       "# OPENROUTER_API_KEY=  # optional",
       "# SLACK_APP_TOKEN=  # optional",
       "# SLACK_BOT_TOKEN=  # optional",
+      "# AUTH_EMAIL_FROM=  # optional",
+      "# RESEND_API_KEY=  # optional",
     ]) {
       assert.ok(env.split("\n").includes(line), `.env.example should offer ${line}`);
     }
@@ -194,11 +188,15 @@ test("init --email-transport smtp scaffolds smtp keys only and a matching config
     assert.equal(config.env.auth?.AUTH_EMAIL_TRANSPORT, "smtp");
     const env = readFileSync(join(dir, ".env.example"), "utf8");
     assert.equal(env, renderEnvExample(config));
-    for (const line of ["SMTP_HOST=", "SMTP_USERNAME=", "SMTP_PASSWORD="]) {
-      assert.ok(env.split("\n").includes(line), `.env.example should require ${line}`);
+    for (const line of ["# SMTP_HOST=  # optional", "# SMTP_USERNAME=  # optional", "# SMTP_PASSWORD=  # optional"]) {
+      assert.ok(env.split("\n").includes(line), `.env.example should offer ${line}`);
     }
-    assert.ok(!env.includes("RESEND_API_KEY"), "the unselected resend transport's key stays out of .env.example");
-    assert.ok(!readFileSync(join(dir, ".env"), "utf8").includes("RESEND_API_KEY"), "and out of .env");
+    assert.ok(
+      env.split("\n").includes("# RESEND_API_KEY=  # optional"),
+      "the unselected resend transport's key stays optional: core alone uses it for external-user invitations",
+    );
+    assert.ok(!env.split("\n").includes("RESEND_API_KEY="), "and is never required");
+    assert.ok(!readFileSync(join(dir, ".env"), "utf8").split("\n").includes("RESEND_API_KEY="), "in .env either");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -219,11 +217,11 @@ test("init keeps stable qm Slack branding for long org ids", () => {
   }
 });
 
-test("init derives sandbox.app from --org", () => {
+test("init scaffolds no sandbox block — sandboxes boot stock platform images", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-init-"));
   try {
     quiet(() => runInit({ dir, org: "globex" }));
-    assert.deepEqual(loadConfigInDir(dir).config.sandbox, { app: "globex-sandboxes" });
+    assert.equal(loadConfigInDir(dir).config.sandbox, undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -250,7 +248,7 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
       cpu: 2048,
       memory: 4096,
     });
-    assert.deepEqual(Object.keys(config.aws?.services ?? {}), ["core", "web-ui", "admin", "portal", "auth"]);
+    assert.deepEqual(Object.keys(config.aws?.services ?? {}), ["core", "web-ui", "portal"]);
     for (const name of ["main.tf", "outputs.tf", "variables.tf", "versions.tf", "terraform.tfvars"]) {
       assert.ok(existsSync(join(dir, "infra", name)), `infra/${name} is scaffolded`);
     }
@@ -259,22 +257,18 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
     assert.match(tfvars, /github_repository\s*= "replace-me\/repository"/);
     assert.match(tfvars, /deploy_microvm_image\s*= "acme-qm-sandbox"/);
     assert.match(tfvars, /certificate_arn\s*= ""/);
+    assert.doesNotMatch(tfvars, /db_instance_class/);
     assert.match(readFileSync(join(dir, "infra", "main.tf"), "utf8"), /desired_count\s*= 0/);
     const env = readFileSync(join(dir, ".env.example"), "utf8").split("\n");
-    for (const name of [
-      "ADMIN_GRANTS=",
-      "PUBLIC_API_URL=",
-      "AUTH_ALLOWED_EMAILS=",
-      "AUTH_EMAIL_FROM=",
-      "RESEND_API_KEY=",
-      "ANTHROPIC_API_KEY=",
-    ]) {
+    for (const name of ["ADMIN_GRANTS=", "PUBLIC_API_URL=", "AUTH_ALLOWED_EMAILS=", "ANTHROPIC_API_KEY="]) {
       assert.ok(env.includes(name), `hosted AWS scaffold requires ${name}`);
     }
     for (const name of [
       "# OPENROUTER_API_KEY=  # optional",
       "# SLACK_BOT_TOKEN=  # optional",
       "# SLACK_APP_TOKEN=  # optional",
+      "# AUTH_EMAIL_FROM=  # optional",
+      "# RESEND_API_KEY=  # optional",
     ]) {
       assert.ok(env.includes(name), `hosted AWS scaffold offers deferred ${name}`);
     }

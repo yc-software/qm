@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import { createDrainController } from "../src/runs/drain.ts";
 import { createEcsTaskProtection } from "../src/runs/task-protection.ts";
@@ -23,7 +22,6 @@ const ok: TurnResult = { status: "ok", reply: "done" };
 
 test("a superseded worker stops claiming; in-flight turns finish; claiming resumes when the newer build dies", async () => {
   const { runs } = createMemoryRunStore();
-  const sessions = createMemorySessionStore();
   let superseded = false;
   const registry: InstanceRegistry = { beat: async () => superseded };
   const drain = createDrainController({ registry, protection: null, busy: () => false, sweepMs: 10 });
@@ -40,7 +38,6 @@ test("a superseded worker stops claiming; in-flight turns finish; claiming resum
   } as unknown as Orchestrator;
   const worker = createWorker({
     runs,
-    sessions,
     orchestrator,
     leaseTtlMs: 10_000,
     pollMs: 5,
@@ -153,4 +150,42 @@ test("a failing protection endpoint degrades silently and canClaim stays governe
   await sleep(50);
   assert.equal(drain.canClaim(), true);
   drain.stop();
+});
+
+test("admitted foreground work keeps task protection through background pause", async () => {
+  const { createAdmittedWork } = await import("../src/util/admitted-work.ts");
+  const changes: boolean[] = [];
+  let noteBusy = () => {};
+  const work = createAdmittedWork({ onAdmitted: () => noteBusy() });
+  const drain = createDrainController({
+    registry: { beat: async () => false },
+    protection: {
+      set: async (enabled) => {
+        changes.push(enabled);
+      },
+    },
+    busy: work.busy,
+    sweepMs: 5,
+  });
+  noteBusy = () => drain.noteBusy();
+  const finish = Promise.withResolvers<void>();
+  drain.start();
+  const admitted = work.run(() => finish.promise);
+  try {
+    await sleep(15);
+    work.pause();
+    assert.equal(changes.at(-1), true);
+    changes.length = 0;
+    await sleep(15);
+    assert.ok(changes.length > 0 && changes.every(Boolean));
+    finish.resolve();
+    await admitted;
+    await work.drained();
+    await sleep(15);
+    assert.equal(changes.at(-1), false);
+  } finally {
+    finish.resolve();
+    await admitted;
+    await drain.stop();
+  }
 });

@@ -10,6 +10,7 @@ export async function requireScopedResource<T>(
   load: () => Promise<T | null | undefined> | T | null | undefined,
   scopeOf: (record: T) => string,
   noun: string,
+  scopeMismatch: "forbid" | "fallback" = "forbid",
 ): Promise<{ actor: Principal; scope: string; record: T } | null> {
   const authz = await requireScopedAdmin(ctx);
   if (!authz) return null;
@@ -19,8 +20,11 @@ export async function requireScopedResource<T>(
     return null;
   }
   if (parseScopeId(authz.scope).kind !== "org" && scopeOf(record) !== authz.scope) {
-    sendJson(ctx.res, 403, { error: "forbidden", message: `${noun} is outside the requested scope` });
-    return null;
+    if (scopeMismatch === "forbid") {
+      sendJson(ctx.res, 403, { error: "forbidden", message: `${noun} is outside the requested scope` });
+      return null;
+    }
+    return { actor: authz.actor, scope: scopeOf(record), record };
   }
   return { ...authz, record };
 }
@@ -39,7 +43,7 @@ export async function discoverScopes(
     }
   }
   const people = [
-    ...((await deps.sessions?.listParticipants()) ?? []).map((w) => w.principalId),
+    ...((await deps.sessions?.distinctParticipants()) ?? []),
     ...((await deps.admin?.listGrants()) ?? []).map((g) => g.principalId),
   ];
   for (const principalId of people) {

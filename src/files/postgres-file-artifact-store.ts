@@ -1,11 +1,13 @@
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import type { DurableByteStore } from "./durable-byte-store.ts";
 import {
+  FileArtifactDeletedError,
   clampLimit,
   decodeCursor,
   encodeCursor,
   type FileArtifact,
+  type FileArtifactRef,
   type FileArtifactStore,
   type FileDirection,
   type FilePage,
@@ -64,11 +66,72 @@ export function createPostgresFileArtifactStore(
   connectionString: string,
   byteStore: DurableByteStore,
 ): FileArtifactStore {
-  const { q, query } = createPgPool(connectionString, SCHEMA);
+  const { q, query, pool } = createPgPool(connectionString, [
+    { id: "files/artifacts/0001", statements: SCHEMA },
+    {
+      id: "files/artifacts/0002",
+      statements: [
+        "CREATE TABLE IF NOT EXISTS file_artifact_deletions(id TEXT PRIMARY KEY, deleted_at BIGINT NOT NULL)",
+      ],
+    },
+  ]);
 
   async function getRow(id: string): Promise<FileArtifact | null> {
     const rows = await q("SELECT * FROM file_artifacts WHERE id = $1", [id]);
     return rows.length ? rowToArtifact(rows[0]!) : null;
+  }
+
+  async function listFiles(
+    scopes: readonly ScopeId[],
+    opts?: ListOwnedOptions,
+    sharedRefs?: readonly FileArtifactRef[],
+  ): Promise<FilePage> {
+    if (scopes.length === 0 && !sharedRefs?.length) return { files: [] };
+    const limit = clampLimit(opts?.limit);
+    const cursor = opts?.cursor ? decodeCursor(opts.cursor) : null;
+    const params: unknown[] = [scopes as string[]];
+    let access = "owner_scope_id = ANY($1::text[])";
+    if (sharedRefs !== undefined) {
+      params.push(
+        sharedRefs.map((r) => r.ownerScopeId),
+        sharedRefs.map((r) => r.path),
+      );
+      access = `(${access} OR (enabled = TRUE AND (owner_scope_id, path) IN (SELECT * FROM unnest($2::text[], $3::text[]))))`;
+    }
+    const filters = [access];
+    if (!opts?.includeDisabled) filters.push("enabled = TRUE");
+    if (opts?.createdInScope != null) {
+      params.push(opts.createdInScope);
+      filters.push(`created_in_scope = $${params.length}::text`);
+    }
+    if (opts?.nameQuery != null) {
+      params.push(`%${opts.nameQuery.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+      filters.push(`name ILIKE $${params.length}::text`);
+    }
+    const visible = `SELECT * FROM file_artifacts WHERE ${filters.join(" AND ")}`;
+    const documents =
+      sharedRefs === undefined
+        ? visible
+        : `
+      SELECT DISTINCT ON (COALESCE(created_in_scope, owner_scope_id), COALESCE(sha256, 'id:' || id)) *
+      FROM (${visible}) visible
+      ORDER BY COALESCE(created_in_scope, owner_scope_id), COALESCE(sha256, 'id:' || id),
+               (owner_scope_id = ANY($1::text[])) DESC, created_at ASC, id ASC`;
+    let pageFilter = "";
+    if (cursor) {
+      params.push(cursor.createdAt, cursor.id);
+      pageFilter = `WHERE (created_at, id) < ($${params.length - 1}::bigint, $${params.length}::text)`;
+    }
+    params.push(limit + 1);
+    const rows = await q(
+      `SELECT * FROM (${documents}) documents ${pageFilter}
+      ORDER BY created_at DESC, id DESC LIMIT $${params.length}`,
+      params,
+    );
+    const all = rows.map(rowToArtifact);
+    const files = all.slice(0, limit);
+    const nextCursor = all.length > limit && files.length > 0 ? encodeCursor(files[files.length - 1]!) : undefined;
+    return { files, ...(nextCursor ? { nextCursor } : {}) };
   }
 
   return {
@@ -80,30 +143,50 @@ export function createPostgresFileArtifactStore(
         input.data,
         input.maxBytes != null ? { maxBytes: input.maxBytes } : {},
       );
+      return this.publish({ ...input, blobKey, sizeBytes, sha256 });
+    },
+
+    async publish(input) {
+      const { blobKey, sizeBytes, sha256 } = input;
       const at = input.createdAt ?? Date.now();
-      const ins = await query(
-        `INSERT INTO file_artifacts
+      return withPgTransaction(await pool(), async (client) => {
+        if (input.reuseExistingPath) {
+          await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+            `file-path:${input.ownerScopeId}:${input.path}`,
+          ]);
+          const existing = await client.query(
+            "SELECT * FROM file_artifacts WHERE owner_scope_id=$1 AND path=$2 AND enabled=TRUE ORDER BY created_at DESC,id DESC LIMIT 1",
+            [input.ownerScopeId, input.path],
+          );
+          if (existing.rows[0]) return { artifact: rowToArtifact(existing.rows[0]), created: false };
+        }
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`file-artifact:${input.id}`]);
+        const deleted = await client.query("SELECT id FROM file_artifact_deletions WHERE id=$1", [input.id]);
+        if (deleted.rows.length) throw new FileArtifactDeletedError();
+        const ins = await client.query(
+          `INSERT INTO file_artifacts
            (id, kind, owner_scope_id, path, name, mimetype, size_bytes, blob_key, sha256,
             direction, created_by, created_in_scope, created_at, updated_at, enabled, source)
          VALUES ($1,'file',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,TRUE,'live')
          ON CONFLICT (id) DO NOTHING`,
-        [
-          input.id,
-          input.ownerScopeId,
-          input.path,
-          input.name,
-          input.mimetype,
-          sizeBytes,
-          blobKey,
-          sha256,
-          input.direction,
-          input.createdBy,
-          input.createdInScope ?? null,
-          at,
-        ],
-      );
-      const row = (await getRow(input.id))!;
-      return { artifact: row, created: ins.rowCount > 0 };
+          [
+            input.id,
+            input.ownerScopeId,
+            input.path,
+            input.name,
+            input.mimetype,
+            sizeBytes,
+            blobKey,
+            sha256,
+            input.direction,
+            input.createdBy,
+            input.createdInScope ?? null,
+            at,
+          ],
+        );
+        const result = await client.query("SELECT * FROM file_artifacts WHERE id=$1", [input.id]);
+        return { artifact: rowToArtifact(result.rows[0]), created: (ins.rowCount ?? 0) > 0 };
+      });
     },
 
     async get(id, opts) {
@@ -121,34 +204,9 @@ export function createPostgresFileArtifactStore(
       return { artifact: r, sizeBytes: bytes.sizeBytes, stream: bytes.stream };
     },
 
-    async listOwnedByScopes(scopes: readonly ScopeId[], opts?: ListOwnedOptions): Promise<FilePage> {
-      if (scopes.length === 0) return { files: [] };
-      const limit = clampLimit(opts?.limit);
-      const cursor = opts?.cursor ? decodeCursor(opts.cursor) : null;
-      const params: unknown[] = [scopes as string[]];
-      const filters = ["owner_scope_id = ANY($1::text[])"];
-      if (!opts?.includeDisabled) filters.push("enabled = TRUE");
-      if (opts?.createdInScope != null) {
-        params.push(opts.createdInScope);
-        filters.push(`created_in_scope = $${params.length}::text`);
-      }
-      if (cursor) {
-        params.push(cursor.createdAt, cursor.id);
-        filters.push(`(created_at, id) < ($${params.length - 1}::bigint, $${params.length}::text)`);
-      }
-      params.push(limit + 1);
-      const rows = await q(
-        `SELECT * FROM file_artifacts
-           WHERE ${filters.join(" AND ")}
-           ORDER BY created_at DESC, id DESC
-           LIMIT $${params.length}`,
-        params,
-      );
-      const all = rows.map(rowToArtifact);
-      const page = all.slice(0, limit);
-      const nextCursor = all.length > limit && page.length > 0 ? encodeCursor(page[page.length - 1]!) : undefined;
-      return { files: page, ...(nextCursor ? { nextCursor } : {}) };
-    },
+    listOwnedByScopes: (scopes, opts) => listFiles(scopes, opts),
+
+    listDocuments: (scopes, sharedRefs, opts) => listFiles(scopes, opts, sharedRefs),
 
     async resolveByOwnerPaths(refs) {
       if (refs.length === 0) return [];
@@ -168,7 +226,14 @@ export function createPostgresFileArtifactStore(
     },
 
     async delete(id) {
-      await query("DELETE FROM file_artifacts WHERE id = $1", [id]);
+      await withPgTransaction(await pool(), async (client) => {
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`file-artifact:${id}`]);
+        await client.query(
+          "INSERT INTO file_artifact_deletions(id,deleted_at) VALUES($1,$2) ON CONFLICT(id) DO NOTHING",
+          [id, Date.now()],
+        );
+        await client.query("DELETE FROM file_artifacts WHERE id=$1", [id]);
+      });
     },
   };
 }

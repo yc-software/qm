@@ -458,10 +458,12 @@ export function createSecretClientResolver(secrets: SecretSource = createEnvSecr
   return async (providerName) => {
     const p = PROVIDERS[providerName];
     if (!p) throw new Error(`unknown OAuth provider: ${providerName}`);
-    const id = await secrets.get(p.clientIdEnv);
-    const secret = await secrets.get(p.clientSecretEnv);
+    const [id, secret, hostedDomain] = await Promise.all([
+      secrets.get(p.clientIdEnv),
+      secrets.get(p.clientSecretEnv),
+      providerName === "google" ? secrets.get("GOOGLE_WORKSPACE_DOMAIN") : undefined,
+    ]);
     if (!id || !secret) throw new Error(`provider not configured — set ${p.clientIdEnv} and ${p.clientSecretEnv}`);
-    const hostedDomain = await secrets.get("GOOGLE_WORKSPACE_DOMAIN");
     return { id, secret, clientRef: `env:${providerName}`, ...(hostedDomain ? { hostedDomain } : {}) };
   };
 }

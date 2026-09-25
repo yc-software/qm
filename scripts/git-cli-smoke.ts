@@ -127,11 +127,11 @@ export async function main(): Promise<void> {
   } finally {
     await built.runtime.stop();
     if (process.env.GIT_CLI_SMOKE_DESTROY === "1" && process.env.SPRITES_TOKEN) {
-      const [{ SpritesClient }, { spriteScopeName }] = await Promise.all([
+      const [{ SpritesClient }, { sandboxScopeName }] = await Promise.all([
         import("@fly/sprites"),
-        import("../src/sandbox/sprites-sandbox.ts"),
+        import("../src/sandbox/exec-sandbox-base.ts"),
       ]);
-      const name = spriteScopeName(process.env.SPRITES_NAME_PREFIX ?? "qm", `personal:${actorId}`);
+      const name = sandboxScopeName(process.env.SPRITES_NAME_PREFIX ?? "qm", `personal:${actorId}`);
       await new SpritesClient(process.env.SPRITES_TOKEN).deleteSprite(name).catch(() => {});
     }
   }

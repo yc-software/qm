@@ -1,8 +1,9 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { scopeId, type Cron } from "../src/types.ts";
+import { createWebhookStore, type WebhookHistory } from "../src/webhooks/webhook-store.ts";
+import { scopeId, type Webhook, type Cron } from "../src/types.ts";
 import {
   createKeychain,
   KeychainError,
@@ -19,8 +20,9 @@ before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
+  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(
-    "DROP TABLE IF EXISTS map_widgets, map_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
+    "DROP TABLE IF EXISTS map_webhooks, map_webhook_history, map_widgets, map_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
   );
   await p.end();
 });
@@ -169,6 +171,101 @@ test("pg map: update transforms a row under a lock", { skip }, async () => {
   assert.equal(after?.tags.length, 5);
 });
 
+test("pg map: select mirrors the memory map — folded field filter, projection, id order", { skip }, async () => {
+  type Owned = Widget & { owner: string; secretEnc?: string };
+  const rows: Array<[string, Owned]> = [
+    ["sel-a", { name: "sel-a", tags: ["t"], nested: { n: 1 }, owner: "U7", secretEnc: "enc-a" }],
+    ["sel-b", { name: "sel-b", tags: [], nested: { n: 2 }, owner: "u7", secretEnc: "enc-b" }],
+    ["sel-c", { name: "sel-c", tags: [], nested: { n: 3 }, owner: "Someone@X.com", secretEnc: "enc-c" }],
+  ];
+  const factory = createPostgresMapFactory(URL!);
+  const pgMap = factory.map<Owned>("map_widgets");
+  const memMap = createMemoryMap<Owned>();
+  for (const [id, row] of rows) {
+    await pgMap.put(id, row);
+    await memMap.put(id, row);
+  }
+  try {
+    const mine = await pgMap.select({ omit: ["secretEnc"], where: { field: "owner", anyOfFold: ["U7"] } });
+    assert.deepEqual(mine, await memMap.select({ omit: ["secretEnc"], where: { field: "owner", anyOfFold: ["U7"] } }));
+    assert.deepEqual(
+      mine.map((w) => w.name),
+      ["sel-a", "sel-b"],
+    );
+    assert.ok(
+      mine.every((w) => !("secretEnc" in w)),
+      "the omitted key is gone from every row",
+    );
+    assert.deepEqual(mine[0]!.nested, { n: 1 }, "nested fields survive the projection");
+    for (const limit of [0, 1, 2]) {
+      const query = { limit, afterId: "sel-a", where: { field: "owner" as const, anyOfFold: ["u7"] } };
+      assert.deepEqual(await pgMap.select(query), await memMap.select(query));
+      assert.deepEqual(
+        (await pgMap.select(query)).map((row) => row.name),
+        limit === 0 ? [] : ["sel-b"],
+      );
+    }
+    assert.deepEqual(
+      (await pgMap.select({ limit: 1, afterId: "sel-b" })).map((row) => row.name),
+      ["sel-c"],
+    );
+
+    const email = await pgMap.select({ where: { field: "owner", anyOfFold: ["SOMEONE@x.com"] } });
+    assert.deepEqual(email, await memMap.select({ where: { field: "owner", anyOfFold: ["SOMEONE@x.com"] } }));
+    assert.equal(email[0]!.secretEnc, "enc-c", "without omit the full row comes back");
+
+    assert.deepEqual(await pgMap.select({ where: { field: "owner", anyOfFold: [] } }), []);
+
+    const turkish: Owned = { name: "sel-d", tags: [], nested: { n: 4 }, owner: "İstanbul@X.com", secretEnc: "enc-d" };
+    await pgMap.put("sel-d", turkish);
+    await memMap.put("sel-d", turkish);
+    const swept = await pgMap.select({ where: { field: "owner", anyOfFold: ["no-such-owner"] } });
+    assert.deepEqual(swept, await memMap.select({ where: { field: "owner", anyOfFold: ["no-such-owner"] } }));
+    assert.deepEqual(
+      swept.map((w) => w.name),
+      ["sel-d"],
+      "a non-ASCII field value is always a candidate — SQL lower() and JS toLowerCase() disagree there",
+    );
+  } finally {
+    for (const id of [...rows.map(([id]) => id), "sel-d"]) await pgMap.delete(id);
+    await factory.pool.close();
+  }
+});
+
+test("pg keychain: listByOwner is a per-owner projected read with no secret material", { skip }, async () => {
+  const factory = createPostgresMapFactory(URL!);
+  const keychain = createKeychain({
+    creds: factory.map<KeychainCredential>("map_keychain_creds"),
+    grants: factory.map<KeychainGrant>("map_keychain_grants"),
+    asks: factory.map<KeychainAsk>("map_keychain_asks"),
+    key: deriveConnectorKey("postgres-keychain-test-key"),
+  });
+  try {
+    await keychain.save({ ownerId: "Owner-A@X.com", service: "github", secret: "ghp_a", envKey: "GITHUB_TOKEN" });
+    await keychain.save({ ownerId: "U-other", service: "github", secret: "ghp_b", envKey: "GITHUB_TOKEN" });
+    await keychain.save({ ownerId: "İstanbul@X.com", service: "gitlab", secret: "glpat_c", envKey: "GITLAB_TOKEN" });
+
+    const turkish = await keychain.listByOwner("İstanbul@X.com");
+    assert.equal(turkish.length, 1, "an owner id where SQL and JS case folding diverge still lists its credentials");
+    assert.equal(turkish[0]!.service, "gitlab");
+
+    const listed = await keychain.listByOwner("owner-a@x.COM");
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0]!.service, "github");
+    assert.ok(!("secretEnc" in listed[0]!));
+    assert.ok(!JSON.stringify(listed).includes("ghp_a"));
+
+    const own = await keychain.materializeOwn("owner-a@x.com");
+    assert.deepEqual(
+      own.flatMap((m) => m.env),
+      [{ key: "GITHUB_TOKEN", value: "ghp_a" }],
+      "the owner's own materialization still decrypts the secret",
+    );
+  } finally {
+    await factory.pool.close();
+  }
+});
+
 test("pg map: concurrent keychain instances claim a once grant exactly once", { skip }, async () => {
   const first = createPostgresMapFactory(URL!);
   const second = createPostgresMapFactory(URL!);
@@ -212,4 +309,39 @@ test("pg map: concurrent keychain instances claim a once grant exactly once", { 
     await first.pool.close();
     await second.pool.close();
   }
+});
+
+test("pg map: webhook history retains concurrent deliveries across store instances", { skip }, async () => {
+  const factory = createPostgresMapFactory(URL!);
+  const makeStore = () =>
+    createWebhookStore(factory.map<Webhook>("map_webhooks"), factory.map<WebhookHistory>("map_webhook_history"));
+  const a = makeStore();
+  const b = makeStore();
+  const webhook = await a.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "summarize",
+    verification: { scheme: "github", secret: "test-only" },
+  });
+  await Promise.all(
+    Array.from({ length: 60 }, (_, i) =>
+      (i % 2 ? a : b).recordEvent(webhook.id, {
+        deliveryId: `event-${i}`,
+        receivedAt: i,
+        payload: "hello 🌊",
+      }),
+    ),
+  );
+  await b.recordEvent(webhook.id, {
+    deliveryId: "event-59",
+    receivedAt: 59,
+    payload: "hello 🌊",
+  });
+  const events = await makeStore().listEvents(webhook.id);
+  assert.equal(events.length, 50);
+  assert.equal(events[0]?.receivedAt, 59);
+  assert.equal(events[0]?.payload, "hello 🌊");
+  assert.equal(events.at(-1)?.receivedAt, 10);
+  assert.equal(new Set(events.map((e) => e.deliveryId)).size, 50);
 });

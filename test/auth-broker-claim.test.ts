@@ -1,3 +1,5 @@
+import type { BrokerSessionStore } from "../src/auth/broker-sessions.ts";
+import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -27,7 +29,10 @@ function durableStub(): ReplayDedupe {
   };
 }
 
-function start(replayDedupe: ReplayDedupe = durableStub()): {
+function start(
+  replayDedupe: ReplayDedupe = durableStub(),
+  brokerSessions?: BrokerSessionStore,
+): {
   base: string;
   dedupe: ReplayDedupe;
   close: () => Promise<void>;
@@ -35,7 +40,14 @@ function start(replayDedupe: ReplayDedupe = durableStub()): {
   const built: BuiltApp = buildApp(
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "auth-broker-claim-")), orgId: "acme" }),
   );
-  const server = createServer(built.app, { signingSecret: SECRET, replayDedupe });
+  const server = createServer(built.app, {
+    signingSecret: SECRET,
+    replayDedupe,
+    brokerSessions,
+    requireSignedPortalIdentity: true,
+    portalIdentitySecret: SECRET + "identity",
+    capabilitySecret: SECRET + "capability",
+  });
   server.listen(0);
   return {
     base: `http://localhost:${(server.address() as AddressInfo).port}`,
@@ -49,14 +61,15 @@ async function claim(
   body: unknown,
   sign = true,
 ): Promise<{ status: number; json: { claimed?: unknown; error?: unknown } }> {
+  const path = `${CLAIM_PATH}?nonce=${crypto.randomUUID()}`;
   const raw = JSON.stringify(body);
   const ts = Math.floor(Date.now() / 1000);
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (sign) {
     headers["x-timestamp"] = String(ts);
-    headers["x-signature"] = signRequest(SECRET, ts, `POST\n${CLAIM_PATH}\n${raw}`);
+    headers["x-signature"] = signRequest(SECRET, ts, `POST\n${path}\n${raw}`);
   }
-  const res = await fetch(`${base}${CLAIM_PATH}`, { method: "POST", headers, body: raw });
+  const res = await fetch(`${base}${path}`, { method: "POST", headers, body: raw });
   return { status: res.status, json: (await res.json()) as { claimed?: unknown; error?: unknown } };
 }
 
@@ -130,4 +143,50 @@ test("the claim route validates its input", async (t) => {
     assert.equal(response.status, 400, JSON.stringify(body).slice(0, 80));
     assert.equal(response.json.error, "bad_request");
   }
+});
+
+test("broker sessions cross the production identity gate, but revocation requires the owner", async (t) => {
+  const revoked: string[] = [];
+  const token = "a".repeat(43);
+  const sessions: BrokerSessionStore = {
+    async create(email) {
+      return { token, email, authTime: 1, expiresAtMs: Date.now() + 60000 };
+    },
+    async use(value) {
+      return value === token ? { email: "user@example.com", authTime: 1, expiresAtMs: Date.now() + 60000 } : null;
+    },
+    async revoke(email) {
+      revoked.push(email);
+    },
+  };
+  const srv = start(durableStub(), sessions);
+  t.after(() => srv.close());
+  const post = async (suffix: string, data: unknown, actor?: string, signed = true): Promise<Response> => {
+    const path = `/v1/auth/broker/sessions${suffix}?nonce=${crypto.randomUUID()}`;
+    const body = JSON.stringify(data);
+    const ts = Math.floor(Date.now() / 1000);
+    return fetch(`${srv.base}${path}`, {
+      method: "POST",
+      body,
+      headers: {
+        "content-type": "application/json",
+        ...(signed
+          ? { "x-timestamp": String(ts), "x-signature": signRequest(SECRET, ts, `POST\n${path}\n${body}`) }
+          : {}),
+        ...(actor
+          ? {
+              "x-portal-identity": await mintPortalIdentity({ p: actor, exp: Date.now() + 60000 }, SECRET + "identity"),
+            }
+          : {}),
+      },
+    });
+  };
+  assert.equal((await post("", { email: "user@example.com", idleS: 30, absoluteS: 90 })).status, 200);
+  assert.equal((await post("/use", { token })).status, 200);
+  assert.equal((await post("", { email: "user@example.com", idleS: 30, absoluteS: 90 }, undefined, false)).status, 401);
+  assert.equal((await post("", { email: "user@example.com", idleS: 91, absoluteS: 90 })).status, 400);
+  assert.equal((await post("/revoke", { email: "user@example.com" })).status, 401);
+  assert.notEqual((await post("/revoke", { email: "other@example.com" }, "user@example.com")).status, 200);
+  assert.equal((await post("/revoke", { email: "user@example.com" }, "user@example.com")).status, 200);
+  assert.deepEqual(revoked, ["user@example.com"]);
 });

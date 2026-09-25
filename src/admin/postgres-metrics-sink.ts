@@ -1,7 +1,10 @@
-import { createPostgresEventSink, type EventColumn } from "./scoped-event-sink.ts";
+import { createPostgresEventSink, scopedEventMigrationId, type EventColumn } from "./scoped-event-sink.ts";
 import type { MetricsSink, TurnMetricSample } from "./metrics-sink.ts";
+import { reportFailureAs } from "../util/errors.ts";
 
-const COLUMNS: readonly EventColumn<keyof TurnMetricSample & string>[] = [
+type MetricColumn = EventColumn<keyof TurnMetricSample & string>;
+
+const RELEASED_COLUMNS: readonly MetricColumn[] = [
   ["ts", "ts", "BIGINT", "number", true],
   ["scope_label", "scopeLabel", "TEXT", "string", true],
   ["session_id", "sessionId", "TEXT", "string"],
@@ -37,9 +40,21 @@ const COLUMNS: readonly EventColumn<keyof TurnMetricSample & string>[] = [
   ["cache_write", "cacheWrite", "BIGINT", "number"],
   ["uncached_input", "uncachedInput", "BIGINT", "number"],
 ];
+const RELEASED_0001_CHECKSUM = "d3bbf44523fb16643f38c18151c990ccbdaa2c411e01ce686b9576fcf98a6141";
+
+const LATER_COLUMNS: readonly MetricColumn[] = [["lease_wait_ms", "leaseWaitMs", "INT", "number"]];
+
+const FOLLOW_UP_MIGRATIONS = [
+  {
+    id: scopedEventMigrationId("turn_metrics", 2),
+    statements: ["ALTER TABLE turn_metrics ADD COLUMN IF NOT EXISTS lease_wait_ms INT"],
+  },
+];
+
+const COLUMNS: readonly MetricColumn[] = [...RELEASED_COLUMNS, ...LATER_COLUMNS];
 
 const EXTRA_SCHEMA_STATEMENTS = [
-  ...COLUMNS.filter(([, , , , required]) => !required).map(
+  ...RELEASED_COLUMNS.filter(([, , , , required]) => !required).map(
     ([db, , sqlType]) => `ALTER TABLE turn_metrics ADD COLUMN IF NOT EXISTS ${db} ${sqlType}`,
   ),
   "CREATE INDEX IF NOT EXISTS turn_metrics_by_ts ON turn_metrics(ts DESC)",
@@ -54,6 +69,11 @@ export function createPostgresMetricsSink(connectionString: string): MetricsSink
     table: "turn_metrics",
     columns: COLUMNS,
     extraSchemaStatements: EXTRA_SCHEMA_STATEMENTS,
+    schema: {
+      initialColumns: RELEASED_COLUMNS,
+      expectedChecksum: RELEASED_0001_CHECKSUM,
+      followUps: FOLLOW_UP_MIGRATIONS,
+    },
     defaultLimit: 5000,
     equalityFilters: { scopeId: "scope_label", sessionId: "session_id" },
     persistErrorMessage: "[metrics] failed to persist turn metric:",
@@ -76,7 +96,7 @@ export function createPostgresMetricsSink(connectionString: string): MetricsSink
       params.push(runId);
       await sink
         .q(`UPDATE turn_metrics SET ${sets.join(", ")} WHERE run_id = $${params.length}`, params)
-        .catch((err) => console.error("[metrics] failed to patch turn metric:", err));
+        .catch(reportFailureAs("metrics: patch turn metric", undefined));
     },
     list: (opts = {}) => sink.list(opts),
   };

@@ -10,15 +10,18 @@ before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
+  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS error_events CASCADE");
   await p.end();
 });
 
-test("pg error log: persists events, filters by scope, newest-first, shape-only", { skip }, async () => {
+test("pg error log: persists events, filters by scope, newest-first, shape-only", { skip }, async (t) => {
   const log = createPostgresErrorLog(URL!);
   const s1 = scopeId("channel", "C1");
   const s2 = scopeId("channel", "C2");
 
+  const now = Date.now();
+  const clock = t.mock.method(Date, "now", () => now);
   log.record({
     category: "command_policy",
     code: "denied",
@@ -26,10 +29,14 @@ test("pg error log: persists events, filters by scope, newest-first, shape-only"
     scopeLabel: s1,
     sessionId: "sess-1",
   });
+  clock.mock.mockImplementation(() => now + 1);
   log.record({ category: "turn", code: "error", message: "boom (shape-only)", scopeLabel: s2 });
 
+  clock.mock.restore();
   const all = await log.list({ limit: 100 });
   assert.equal(all.length, 2, "both events persisted");
+  assert.equal(all[0]!.ts, now + 1);
+  assert.equal(all[1]!.ts, now);
   assert.equal(all[0]!.scopeLabel, s2);
   assert.equal(all[0]!.category, "turn");
   assert.equal(all[0]!.code, "error");
@@ -69,4 +76,23 @@ test("pg error log: flush makes writes visible to another process", { skip }, as
 
   await writer.flush();
   assert.equal((await reader.list({ sessionId: "sess-cross-process" })).length, 1);
+});
+
+test("pg error log pages equal-timestamp records deterministically beyond 200", { skip }, async () => {
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: URL });
+  try {
+    await pool.query(
+      "INSERT INTO error_events(ts, scope_label, category, code, message, session_id) SELECT 123, 'personal:pagination', 'turn', n::text, 'failure', 'pagination' FROM generate_series(0,259) n",
+    );
+    const log = createPostgresErrorLog(URL!);
+    const page = await log.list({ scopeId: "personal:pagination", sessionId: "pagination", limit: 50, offset: 200 });
+    assert.equal(page.length, 50);
+    assert.equal(page[0]?.code, "59");
+    assert.equal(page.at(-1)?.code, "10");
+    assert.equal((await log.list({ scopeId: "personal:pagination", offset: 250, limit: 50 })).length, 10);
+    assert.equal(await log.count({ scopeId: "personal:pagination" }), 260);
+  } finally {
+    await pool.end();
+  }
 });

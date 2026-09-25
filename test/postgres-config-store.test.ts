@@ -6,6 +6,7 @@ import {
   type PersistedSoulRevision,
   type PersistedCommandPolicy,
   type PersistedSecurityPosture,
+  type PersistedSharingPosture,
   type PersistedApprovalGrantModes,
   type PersistedEgressPolicy,
   type PersistedBaseModel,
@@ -33,6 +34,7 @@ const TABLES = [
   "soul_history",
   "command_policies",
   "security_postures",
+  "sharing_postures",
   "egress_policies",
   "deploy_auth_split",
   "publish_member_grants",
@@ -50,6 +52,7 @@ before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
+  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   for (const t of TABLES) await p.query(`DROP TABLE IF EXISTS ${t} CASCADE`);
   await p.end();
 });
@@ -59,6 +62,7 @@ const maps = (f: PostgresArtifactMaps) => ({
   soulHistory: f.map<PersistedSoulRevision>("soul_history"),
   commandPolicies: f.map<PersistedCommandPolicy>("command_policies"),
   securityPostures: f.map<PersistedSecurityPosture>("security_postures"),
+  sharingPostures: f.map<PersistedSharingPosture>("sharing_postures"),
   approvalGrantModes: f.map<PersistedApprovalGrantModes>("approval_grant_modes"),
   egressPolicies: f.map<PersistedEgressPolicy>("egress_policies"),
   baseModels: f.map<PersistedBaseModel>("base_model_configs"),
@@ -326,6 +330,8 @@ test(
     const version = a.setSoul(ch, "a channel-specific soul");
     a.setCommandPolicy(ch, policy);
     await a.setSecurityPosture(ch, "strict");
+    await a.setSharingPosture(org, "open");
+    await a.setSharingPosture(ch, "open");
     await a.setApprovalGrantModes(ch, { session: false, always: true });
     a.setEgress(ch, { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] });
     a.setBaseModel(ch, "claude-opus-4-8");
@@ -338,6 +344,7 @@ test(
         (await m.souls.get(ch))?.version === version &&
         !!(await m.commandPolicies.get(ch)) &&
         (await m.securityPostures.get(ch))?.posture === "strict" &&
+        (await m.sharingPostures.get(ch))?.posture === "open" &&
         (await m.approvalGrantModes.get(ch))?.modes.session === false &&
         (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "api.example.com" &&
         (await m.baseModels.get(ch))?.modelId === "claude-opus-4-8" &&
@@ -356,6 +363,7 @@ test(
     assert.equal(b.soulHistory(ch)[0]?.content, "a channel-specific soul", "the revision history survives a restart");
     assert.deepEqual(b.getCommandPolicy(ch), policy, "the command policy survived");
     assert.equal(await b.getSecurityPostureDurable(ch), "strict", "the security posture survived");
+    assert.equal(await b.resolveSharingPostureDurable(scopeId("personal", "U1"), ch), "open");
     assert.deepEqual(
       b.getEgress(ch),
       { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] },

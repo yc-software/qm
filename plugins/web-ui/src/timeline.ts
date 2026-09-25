@@ -1,13 +1,25 @@
+import { postCallText, postResultOk } from "./surface-post.ts";
 import type { PendingApproval, ToolActivity, WorkBlock } from "./core-bridge.ts";
 
 export interface ToolPayload {
+  sessionId?: string;
+  title?: string;
+  task?: string;
+  target?: string;
+  delivered?: string;
+  interrupt?: boolean;
+  status?: string;
+  children?: number;
+
   tool?: string;
   command?: string;
+  purpose?: string;
   path?: string;
   bytes?: number;
   name?: string;
   url?: string;
   query?: string;
+  seq?: number;
   count?: number;
   found?: boolean;
   blocked?: string;
@@ -18,8 +30,12 @@ export interface ToolPayload {
   stderr?: string;
   code?: number;
   timedOut?: boolean;
+  isError?: boolean;
+  result?: string;
+  unscreened?: boolean;
   action?: string;
   process_id?: string;
+  sandbox_id?: string | null;
   monitor_id?: string;
   added?: number;
 }
@@ -44,18 +60,51 @@ function isTerminalWorkStatus(status: WorkBlock["status"]): boolean {
 
 export type ToolRowKind = "running" | "ok" | "failed" | "attempted" | "approval";
 
+export function toolCategory(payload: ToolPayload): string {
+  if (payload.tool === "files") {
+    if (payload.action === "read" || payload.action === "write") return payload.action;
+    return "share";
+  }
+  if (payload.tool === "skills") return payload.action === "read" ? "skill" : "share";
+  if (payload.tool === "apps") return payload.action === "publish" ? "publish" : "share";
+  if (payload.tool === "sessions") return "session";
+  if (payload.tool !== "sandbox") return payload.tool ?? "unknown";
+  if (payload.action === "exec") return "execute";
+  if (
+    [
+      "start_process",
+      "read_process",
+      "write_stdin",
+      "signal_process",
+      "list_processes",
+      "watch_process",
+      "unwatch_process",
+    ].includes(payload.action ?? "")
+  )
+    return "background";
+  return "sandbox";
+}
+
+export function toolExecutionOutput(result: ToolPayload): string | null {
+  if (result.unscreened && typeof result.result === "string") return result.result;
+  if (typeof result.stdout === "string" || typeof result.stderr === "string")
+    return [result.stdout ?? "", result.stderr ? `[stderr]\n${result.stderr}` : ""].filter(Boolean).join("\n");
+  return null;
+}
+
 export function toolRowKind(row: ToolRowModel, status: WorkBlock["status"]): ToolRowKind {
   const result = (row.result?.payload ?? {}) as ToolPayload;
-  const tool = ((row.call?.payload ?? row.result?.payload ?? {}) as ToolPayload).tool ?? "unknown";
+  const tool = toolCategory({ ...result, ...((row.call?.payload ?? {}) as ToolPayload) });
   if (result.blocked === "needs_approval") return "approval";
   if (!row.result) {
     if (!isTerminalWorkStatus(status)) return "running";
     return status === "failed" ? "failed" : "attempted";
   }
   const failed =
+    result.isError === true ||
     !!result.error ||
     result.denied === true ||
-    (tool === "execute" && typeof result.code === "number" && result.code !== 0);
+    (tool === "execute" && (result.timedOut === true || (typeof result.code === "number" && result.code !== 0)));
   return failed ? "failed" : "ok";
 }
 
@@ -64,10 +113,29 @@ function callIdOf(a: ToolActivity): string | undefined {
   return typeof id === "string" && id ? id : undefined;
 }
 
+export function postSpeechText(row: ToolRowModel, allowInFlight = false): string | null {
+  const text = postCallText(row.call?.payload);
+  if (!text?.trim()) return null;
+  if (row.result) return postResultOk(row.result.payload) ? text : null;
+  return allowInFlight && !row.approval && !row.pending ? text : null;
+}
+
 function orphanCallSignature(row: ToolRowModel): string | null {
   if (!row.call || row.result || row.approval) return null;
   const p = (row.call.payload ?? {}) as ToolPayload;
-  return [p.tool ?? "unknown", p.command ?? "", p.path ?? "", p.name ?? "", p.url ?? "", p.query ?? ""].join("");
+  return [
+    p.tool ?? "unknown",
+    p.action ?? "",
+    p.sandbox_id ?? "",
+    p.process_id ?? "",
+    p.monitor_id ?? "",
+    p.command ?? "",
+    p.path ?? "",
+    p.name ?? "",
+    p.url ?? "",
+    p.query ?? "",
+    p.seq !== undefined ? String(p.seq) : "",
+  ].join("");
 }
 
 const timelineMemo = new WeakMap<
@@ -106,11 +174,14 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
   const rowByCallId = new Map<string, ToolRowModel>();
   let open: ToolRowModel | null = null;
   for (const a of work.activity) {
+    if (a.type === "text_start") continue;
     if (a.type === "thinking") {
       items.push({ kind: "thinking", activity: a });
       open = null;
     } else if (a.type === "text") {
       items.push({ kind: "text", activity: a });
+      open = null;
+    } else if (a.type === "approval_resolved") {
       open = null;
     } else if (a.type === "tool_call") {
       const row: ToolRowModel = { call: a, result: null };
@@ -159,4 +230,92 @@ function collapseToolItems(items: TimelineItem[], status: WorkBlock["status"]): 
     out.push({ kind: "tool", row: { ...item.row, attempts: item.row.attempts ?? 1 } });
   }
   return out;
+}
+
+export function sessionToolView(
+  call: ToolPayload,
+  result: ToolPayload,
+  sessions: readonly { id: string; title?: string | null }[],
+): { action: string; chipTitle?: string; sessionId?: string; detail: string } {
+  const action = call.interrupt === true ? "interrupt" : (call.action ?? result.action ?? "");
+  const target = result.sessionId ?? call.target;
+  const session =
+    sessions.find((row) => row.id === target || row.title === target) ??
+    sessions.find((row) => result.result?.includes(`(sessionId ${row.id})`));
+  const sessionId = session?.id ?? result.sessionId;
+  let chipTitle = session?.title || result.title || call.name || "Subagent";
+  let detail = "";
+  if (action === "wait") return { action, detail: "for agent messages" };
+  if (action === "read" && !target && result.children === undefined) return { action, detail: "subagents" };
+  if (action === "read" && result.children !== undefined) {
+    return { action, detail: `${result.children} subagent${result.children === 1 ? "" : "s"}` };
+  }
+  if (action === "open" && !session?.title && !result.title && !call.name && call.task) {
+    chipTitle = call.task.split("\n")[0].slice(0, 48);
+  }
+  if (action === "write" || action === "send_message" || action === "followup_task") {
+    const verbs: Record<string, string> = {
+      steered: "steered",
+      queued_turn: "queued a turn",
+      queued_message: "",
+      interrupted: "interrupted",
+    };
+    detail = result.delivered ? (verbs[result.delivered] ?? result.delivered) : "";
+  } else if (action === "read") detail = result.status ?? "";
+  return { action, chipTitle, ...(sessionId ? { sessionId } : {}), detail };
+}
+
+export function currentTextPhase(work: WorkBlock): {
+  phase: "commentary" | "final_answer";
+  streamOffset: number;
+  startedAt: number;
+} | null {
+  const entry = work.activity.findLast((activity) => activity.type === "text_start");
+  if (!entry) return null;
+  const payload = entry.payload as { phase?: unknown; streamOffset?: unknown } | null;
+  if (
+    (payload?.phase !== "commentary" && payload?.phase !== "final_answer") ||
+    typeof payload.streamOffset !== "number" ||
+    !Number.isSafeInteger(payload.streamOffset) ||
+    payload.streamOffset < 0
+  )
+    return null;
+  return { phase: payload.phase, streamOffset: payload.streamOffset, startedAt: entry.createdAt };
+}
+
+export function streamedAnswer(text: string, work: WorkBlock): string {
+  const phase = currentTextPhase(work);
+  return phase?.phase === "final_answer" ? text.slice(phase.streamOffset) : streamingTextTail(text, work.activity);
+}
+
+export function streamingTextTail(text: string, activity: ToolActivity[]): string {
+  let tail = text;
+  for (const entry of activity) {
+    if (entry.type !== "text") continue;
+    const spoken = ((entry.payload as { text?: string } | null)?.text ?? "").trim();
+    if (!spoken) continue;
+    const candidate = tail.trimStart();
+    if (candidate.startsWith(spoken)) tail = candidate.slice(spoken.length).replace(/^\s*?\n\n/, "");
+    else if (spoken.startsWith(candidate)) return "";
+    else break;
+  }
+  return tail;
+}
+
+export function messageWorkTimeline(work: WorkBlock, finalText: string): TimelineItem[] {
+  const timeline = buildTimeline(work);
+  const lastText = finalText.trim() ? timeline.findLastIndex((item) => item.kind === "text") : -1;
+  return timeline.filter((item, index) => {
+    if (item.kind === "thinking") {
+      const payload = item.activity.payload as { thinking?: string; redacted?: boolean } | null;
+      return !payload?.redacted && Boolean(payload?.thinking?.trim());
+    }
+    if (item.kind !== "text") return true;
+    const payload = item.activity.payload as { text?: string; demoted?: boolean; phase?: string } | null;
+    return (
+      !payload?.demoted &&
+      Boolean(payload?.text?.trim()) &&
+      !(index === lastText && payload?.phase !== "commentary" && payload?.text?.trim() === finalText.trim())
+    );
+  });
 }

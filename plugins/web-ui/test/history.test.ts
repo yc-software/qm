@@ -1,9 +1,12 @@
+import { buildTimeline, messageWorkTimeline } from "../src/timeline.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   attachPendingApprovals,
+  continuableMessages,
+  messagesWithStreaming,
   currentEarlierCount,
   entriesToMessages,
   forkOriginDetails,
@@ -14,6 +17,95 @@ import {
   type PendingApproval,
   type SessionEntry,
 } from "../src/core-bridge.ts";
+
+test("approval decisions remain visible history events instead of unresolved tool rows", () => {
+  const messages = entriesToMessages([
+    { type: "user", seq: 1, createdAt: 1, payload: { text: "show help" } },
+    { type: "tool_result", seq: 2, createdAt: 2, payload: { tool: "execute", blocked: "needs_approval" } },
+    { type: "assistant", seq: 3, createdAt: 3, payload: { text: "" } },
+    { type: "approval_resolved", seq: 4, createdAt: 4, payload: { command: "rm -r --help", approved: false } },
+    {
+      type: "approval_resolved",
+      seq: 5,
+      createdAt: 5,
+      payload: { command: "rm -r --help", approved: true, scope: "once" },
+    },
+  ]);
+  assert.deepEqual(messages.slice(-2), [
+    { role: "approval-decision", command: "rm -r --help", approved: false, timestamp: 4, entrySeq: 4 },
+    { role: "approval-decision", command: "rm -r --help", approved: true, scope: "once", timestamp: 5, entrySeq: 5 },
+  ]);
+});
+
+test("steering keeps the active turn together through hydration and tool completion", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "start" }, createdAt: 1, seq: 1 },
+    { type: "text", payload: { text: "Working", phase: "commentary" }, createdAt: 2, seq: 2 },
+    { type: "tool_call", payload: { tool: "execute", callId: "one", command: "sleep 40" }, createdAt: 3, seq: 3 },
+    { type: "user", payload: { text: "change direction", steered: true }, createdAt: 4, seq: 4 },
+    { type: "user", payload: { text: "finish briefly", steered: true }, createdAt: 5, seq: 5 },
+  ];
+  const active = entriesToMessages(entries);
+  assert.deepEqual(
+    active.map((message) => message.role),
+    ["user", "user", "user", "assistant"],
+  );
+  const resumed = continuableMessages(active);
+  assert.deepEqual(
+    resumed.messages.map((message) => message.role),
+    ["user", "user", "user"],
+  );
+  assert.equal(resumed.popped.length, 1);
+  assert.deepEqual(
+    (resumed.popped[0] as AssistantWork).work?.activity.map((entry) => entry.seq),
+    [2, 3],
+  );
+  const finished = entriesToMessages([
+    ...entries,
+    { type: "tool_result", payload: { tool: "execute", callId: "one", code: 0 }, createdAt: 6, seq: 6 },
+    { type: "assistant", payload: { text: "Done" }, createdAt: 7, seq: 7 },
+  ]);
+  assert.deepEqual(
+    finished.map((message) => message.role),
+    ["user", "user", "user", "assistant"],
+  );
+  const work = (finished.at(-1) as AssistantWork).work!;
+  assert.deepEqual(
+    work.activity.map((entry) => entry.seq),
+    [2, 3, 6],
+  );
+  const tools = buildTimeline(work).filter((item) => item.kind === "tool");
+  assert.equal(tools.length, 1);
+  assert.equal(tools[0]!.row.call?.seq, 3);
+  assert.equal(tools[0]!.row.result?.seq, 6);
+});
+
+test("steering preserves an in-flight post and does not promote its closing narration", () => {
+  const messages = entriesToMessages([
+    { type: "user", payload: { text: "start" }, createdAt: 1, seq: 1 },
+    {
+      type: "tool_call",
+      payload: { tool: "web", action: "post", text: "Delivered", callId: "one" },
+      createdAt: 2,
+      seq: 2,
+    },
+    { type: "user", payload: { text: "finish briefly", steered: true }, createdAt: 3, seq: 3 },
+    { type: "tool_result", payload: { tool: "web", action: "post", ok: true, callId: "one" }, createdAt: 4, seq: 4 },
+    { type: "user", payload: { text: "no more posts", steered: true }, createdAt: 5, seq: 5 },
+    { type: "text", payload: { text: "Finished posting" }, createdAt: 6, seq: 6 },
+    { type: "assistant", payload: { text: "" }, createdAt: 7, seq: 7 },
+  ]);
+  const replies = messages.filter((message) => message.role === "assistant") as AssistantWork[];
+  assert.equal(replies.length, 2);
+  assert.deepEqual(
+    replies.map((message) => message.content),
+    [[{ type: "text", text: "Delivered" }], [{ type: "text", text: "" }]],
+  );
+  assert.deepEqual(
+    replies[1]!.work?.activity.map((entry) => entry.seq),
+    [6],
+  );
+});
 
 test("fork provenance separates inherited entries at the boundary", () => {
   const entries: SessionEntry[] = [
@@ -317,18 +409,12 @@ test("fork origin DOM navigates, reports access failure once, pages, toggles, su
   assert.match(host.textContent ?? "", /2 messages/);
   host.querySelector<HTMLButtonElement>(".fork-origin-toggle")!.click();
   assert.doesNotMatch(host.textContent ?? "", /old one/);
-  const staleGeneration = controller.beginRefresh();
-  const generation = controller.beginRefresh();
   const refresh = inheritedRefreshEntries(
     session,
     [{ type: "assistant", payload: { text: "new reply" }, createdAt: 3, seq: 3 }],
     state.inheritedLoaded,
   );
-  assert.equal(controller.applyRefresh(generation, refresh), true);
-  assert.equal(
-    controller.applyRefresh(staleGeneration, [{ type: "user", payload: { text: "stale" }, createdAt: 0, seq: 1 }]),
-    false,
-  );
+  assert.equal(refresh, null);
   host.querySelector<HTMLButtonElement>(".fork-origin-toggle")!.click();
   assert.match(host.textContent ?? "", /old one/);
   assert.equal(host.textContent?.match(/old one/g)?.length, 1);
@@ -368,6 +454,28 @@ test("tool entries are folded into the following assistant reply's work block", 
   );
 });
 
+test("a subagent mail entry carries a structured ref so the transcript can render a chip", () => {
+  const envelope = [
+    '<wake reason="subagent" name="Poet &quot;one&quot;" sessionId="child-1" kind="final_answer" at="2026-09-03T00:00:00.000Z">',
+    '  <why>Your subagent session "Poet one" finished a turn and sent back its result.</why>',
+    "  <content>the poem</content>",
+    "</wake>",
+  ].join("\n");
+  const entries: SessionEntry[] = [
+    {
+      type: "user",
+      payload: { text: envelope, display: "[subagent Poet one: final answer]" },
+      createdAt: 100,
+    },
+    { type: "assistant", payload: { text: "here it is" }, createdAt: 110 },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  const mail = (msgs[0] as { subagentMail?: { sessionId: string; title: string; kind: string } }).subagentMail;
+  assert.deepEqual(mail, { sessionId: "child-1", title: 'Poet "one"', kind: "final_answer" });
+  const plain = entriesToMessages([{ type: "user", payload: { text: "hi" }, createdAt: 100 }], MODEL);
+  assert.equal((plain[0] as { subagentMail?: unknown }).subagentMail, undefined);
+});
+
 test("a hidden proactive-opener user entry never renders, but its assistant greeting does", () => {
   const entries: SessionEntry[] = [
     { type: "user", payload: { text: "open the conversation", hidden: true }, createdAt: 100 },
@@ -376,6 +484,28 @@ test("a hidden proactive-opener user entry never renders, but its assistant gree
   const msgs = entriesToMessages(entries, MODEL);
   assert.equal(msgs.length, 1, "only the greeting, never the opener seed");
   assert.equal((msgs[0] as { role?: string }).role, "assistant");
+});
+
+test("a materialized delivery entry (cron reply written into the thread) renders as an assistant reply", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "remind me later" }, createdAt: 100 },
+    { type: "assistant", payload: { text: "will do" }, createdAt: 110 },
+    {
+      type: "assistant",
+      payload: {
+        text: "Reminder: standup in 10 minutes",
+        deliveryKey: "agent:main:cron:c1:100",
+        via: "cron",
+      },
+      createdAt: 200,
+      seq: 2,
+    },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  assert.equal(msgs.length, 3, "user + reply + delivered reminder");
+  const delivered = msgs[2] as { role?: string; content?: Array<{ text?: string }> };
+  assert.equal(delivered.role, "assistant");
+  assert.equal(delivered.content?.[0]?.text, "Reminder: standup in 10 minutes");
 });
 
 test("a durable turn_failure entry renders like the live inline error (survives reload)", () => {
@@ -393,6 +523,63 @@ test("a durable turn_failure entry renders like the live inline error (survives 
   assert.equal(err.role, "assistant");
   assert.equal(err.stopReason, "error");
   assert.equal(err.errorMessage, "API integrators: you can reduce refusals…");
+});
+
+test("user entries carry the stored speaker name and slack ts onto the rebuilt message", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "hi", name: "Alice Example", ts: "100.1" }, createdAt: 100 },
+    { type: "user", payload: { text: "anonymous web message" }, createdAt: 110 },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  const [slack, web] = msgs as Array<{ speaker?: string; ts?: string }>;
+  assert.equal(slack?.speaker, "Alice Example");
+  assert.equal(slack?.ts, "100.1");
+  assert.equal(web?.speaker, undefined);
+  assert.equal(web?.ts, undefined);
+});
+
+test("a message_revision marker renders as a system note and badges the original bubble", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "original", name: "Alice Example", ts: "100.1" }, createdAt: 100 },
+    { type: "assistant", payload: { text: "reply" }, createdAt: 110 },
+    {
+      type: "system",
+      payload: { kind: "message_revision", action: "edited", ts: "100.1", text: "fixed", name: "Alice Example" },
+      createdAt: 120,
+    },
+    {
+      type: "system",
+      payload: { kind: "message_revision", action: "deleted", ts: "100.1", name: "Alice Example" },
+      createdAt: 130,
+    },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  assert.equal(msgs.length, 4, "user + reply + edit note + delete note");
+  const original = msgs[0] as { edited?: boolean; deleted?: boolean };
+  assert.equal(original.edited, true);
+  assert.equal(original.deleted, true);
+  const note = msgs[2] as { role?: string; action?: string; content?: string; speaker?: string; timestamp?: number };
+  assert.equal(note.role, "system-note");
+  assert.equal(note.action, "edited");
+  assert.equal(note.content, "fixed");
+  assert.equal(note.speaker, "Alice Example");
+  assert.equal(note.timestamp, 120);
+  assert.equal((msgs[3] as { action?: string }).action, "deleted");
+});
+
+test("a revision marker whose original message is outside the window still renders as a note", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "later message", ts: "200.0" }, createdAt: 200 },
+    {
+      type: "system",
+      payload: { kind: "message_revision", action: "deleted", ts: "100.1" },
+      createdAt: 210,
+    },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  assert.equal(msgs.length, 2);
+  assert.equal((msgs[0] as { deleted?: boolean }).deleted, undefined, "the wrong bubble is never badged");
+  assert.equal((msgs[1] as { role?: string }).role, "system-note");
 });
 
 test("other system entries (file events, context summaries) still never render", () => {
@@ -495,6 +682,71 @@ test("delivery entries attach openable files to the preceding assistant message"
   assert.deepEqual((msgs[1] as AssistantWork).deliveredFiles, [
     { name: "rsi.gif", mimetype: "image/gif", sizeBytes: 42, artifactId: "art-1" },
   ]);
+});
+
+test("an attach tool result attaches openable files to the turn's assistant message", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "make a report" }, createdAt: 100 },
+    { type: "tool_call", payload: { tool: "attach", files: ["report.md"], callId: "c1" }, createdAt: 110, seq: 2 },
+    {
+      type: "tool_result",
+      payload: {
+        tool: "attach",
+        ok: true,
+        callId: "c1",
+        files: [{ name: "report.md", mimetype: "text/markdown", sizeBytes: 12, artifactId: "art-9" }],
+      },
+      createdAt: 111,
+      seq: 3,
+      parentSeq: 2,
+    },
+    { type: "assistant", payload: { text: "Here it is." }, createdAt: 120 },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  assert.deepEqual((msgs[1] as AssistantWork).deliveredFiles, [
+    { name: "report.md", mimetype: "text/markdown", sizeBytes: 12, artifactId: "art-9" },
+  ]);
+});
+
+test("re-attaching a path renders one chip, not two", () => {
+  const attachResult = (callId: string, artifactId: string, seq: number): SessionEntry => ({
+    type: "tool_result",
+    payload: {
+      tool: "attach",
+      ok: true,
+      callId,
+      files: [{ name: "report.md", mimetype: "text/markdown", sizeBytes: 12, artifactId }],
+    },
+    createdAt: 110 + seq,
+    seq,
+    parentSeq: seq - 1,
+  });
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "make a report" }, createdAt: 100 },
+    attachResult("c1", "art-draft", 3),
+    attachResult("c2", "art-fixed", 5),
+    { type: "assistant", payload: { text: "Here it is." }, createdAt: 120 },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  assert.deepEqual((msgs[1] as AssistantWork).deliveredFiles, [
+    { name: "report.md", mimetype: "text/markdown", sizeBytes: 12, artifactId: "art-fixed" },
+  ]);
+});
+
+test("a failed attach tool result attaches no files", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "make a report" }, createdAt: 100 },
+    {
+      type: "tool_result",
+      payload: { tool: "attach", ok: false, callId: "c1" },
+      createdAt: 111,
+      seq: 3,
+      parentSeq: 2,
+    },
+    { type: "assistant", payload: { text: "I could not find it." }, createdAt: 120 },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  assert.equal((msgs[1] as AssistantWork).deliveredFiles, undefined);
 });
 
 test("delivery-only turns still rebuild an assistant message for the file chips", () => {
@@ -719,6 +971,7 @@ test("a surface post renders as the reply bubble; the closing self-log demotes t
   );
   const trailer = msgs[2] as AssistantWork & { content: Array<{ text?: string }> };
   assert.equal(trailer.content[0]?.text ?? "", "", "the self-log is not a reply bubble");
+  assert.deepEqual(messageWorkTimeline(trailer.work!, ""), [], "the demoted-only trailer has no visible work fold");
   assert.ok(
     JSON.stringify(trailer.work?.activity ?? []).includes("Replied in thread"),
     "the self-log survives as work narration",
@@ -885,7 +1138,15 @@ test("a posted turn that closes empty is NOT promoted — the post bubble is alr
 
 test("a turn that closed empty after narrating surfaces the last narration as the reply", () => {
   const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "[background job update] fetch done", hidden: true }, createdAt: 100, seq: 1 },
+    {
+      type: "user",
+      payload: {
+        text: '<wake reason="monitor" surface="monitor" at="1970-01-01T00:00:00.000Z"><why>fetch done</why></wake>',
+        hidden: true,
+      },
+      createdAt: 100,
+      seq: 1,
+    },
     {
       type: "text",
       payload: { text: "All benign — building the replay harness." },
@@ -927,7 +1188,15 @@ test("a turn that closed empty after narrating surfaces the last narration as th
 
 test("a delivered-silence turn (finish_silently → silent:true) stays collapsed — no promotion", () => {
   const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "[background job update] still running", hidden: true }, createdAt: 100, seq: 1 },
+    {
+      type: "user",
+      payload: {
+        text: '<wake reason="monitor" surface="monitor" at="1970-01-01T00:00:00.000Z"><why>still running</why></wake>',
+        hidden: true,
+      },
+      createdAt: 100,
+      seq: 1,
+    },
     { type: "text", payload: { text: "Heartbeat check." }, createdAt: 110, seq: 2, parentSeq: 1 },
     {
       type: "tool_call",
@@ -1054,7 +1323,15 @@ test("a still-running turn (no closing entry yet) is not promoted", () => {
 
 test("a closed empty turn with no narration stays a bare work row", () => {
   const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "[background job update] tick", hidden: true }, createdAt: 100, seq: 1 },
+    {
+      type: "user",
+      payload: {
+        text: '<wake reason="monitor" surface="monitor" at="1970-01-01T00:00:00.000Z"><why>tick</why></wake>',
+        hidden: true,
+      },
+      createdAt: 100,
+      seq: 1,
+    },
     { type: "tool_call", payload: { tool: "execute", command: "tail log" }, createdAt: 110, seq: 2, parentSeq: 1 },
     { type: "tool_result", payload: { tool: "execute", code: 0 }, createdAt: 120, seq: 3, parentSeq: 2 },
     { type: "assistant", payload: { text: "" }, createdAt: 130, seq: 4 },
@@ -1069,7 +1346,15 @@ test("a closed empty turn with no narration stays a bare work row", () => {
 
 test("a mid-turn hidden entry (resume/wake note) does not split the turn; promotion still fires", () => {
   const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "[background job update] fetch done", hidden: true }, createdAt: 100, seq: 1 },
+    {
+      type: "user",
+      payload: {
+        text: '<wake reason="monitor" surface="monitor" at="1970-01-01T00:00:00.000Z"><why>fetch done</why></wake>',
+        hidden: true,
+      },
+      createdAt: 100,
+      seq: 1,
+    },
     { type: "text", payload: { text: "Applying the fixes." }, createdAt: 110, seq: 2, parentSeq: 1 },
     { type: "tool_call", payload: { tool: "execute", command: "node apply.js" }, createdAt: 120, seq: 3, parentSeq: 2 },
     { type: "tool_result", payload: { tool: "execute", code: 0 }, createdAt: 130, seq: 4, parentSeq: 3 },
@@ -1093,7 +1378,15 @@ test("a mid-turn hidden entry (resume/wake note) does not split the turn; promot
 
 test("a turn resumed past a hidden note renders as one block with the real reply", () => {
   const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "[background job update] fetch done", hidden: true }, createdAt: 100, seq: 1 },
+    {
+      type: "user",
+      payload: {
+        text: '<wake reason="monitor" surface="monitor" at="1970-01-01T00:00:00.000Z"><why>fetch done</why></wake>',
+        hidden: true,
+      },
+      createdAt: 100,
+      seq: 1,
+    },
     {
       type: "tool_call",
       payload: { tool: "execute", command: "node rebuild.js" },
@@ -1124,4 +1417,173 @@ test("a turn resumed past a hidden note renders as one block with the real reply
     ["tool_call", "tool_result"],
     "the work block is not split at the hidden note",
   );
+});
+
+test("a file-only post (empty text) still renders its delivered files", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "just send the file" }, createdAt: 100, seq: 0 },
+    {
+      type: "tool_call",
+      payload: { tool: "web", action: "post", text: "", files: ["out/report.pdf"], callId: "c2" },
+      createdAt: 110,
+      seq: 1,
+      parentSeq: 0,
+    },
+    {
+      type: "tool_result",
+      payload: {
+        tool: "web",
+        action: "post",
+        ok: true,
+        callId: "c2",
+        isError: false,
+        result: "[sent]",
+        files: [{ name: "report.pdf", mimetype: "application/pdf", sizeBytes: 512, artifactId: "art-7" }],
+      },
+      createdAt: 120,
+      seq: 2,
+      parentSeq: 1,
+    },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  const reply = msgs[1] as AssistantWork & { content: Array<{ text?: string }> };
+  assert.equal(reply.role, "assistant");
+  assert.equal(reply.content[0]?.text, "");
+  assert.deepEqual(
+    reply.deliveredFiles?.map((f) => ({ name: f.name, artifactId: f.artifactId })),
+    [{ name: "report.pdf", artifactId: "art-7" }],
+    "the file-only post's attachment still surfaces on the message",
+  );
+});
+
+test("a surface post's sent files render as delivered files on the reply bubble", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "send the drafts" }, createdAt: 100, seq: 0 },
+    {
+      type: "tool_call",
+      payload: {
+        tool: "web",
+        action: "post",
+        text: "Here they are — profiles A/B/C.",
+        files: ["qm-brand/profile_A.png", "qm-brand/profile_B.png"],
+        callId: "c1",
+      },
+      createdAt: 110,
+      seq: 1,
+      parentSeq: 0,
+    },
+    {
+      type: "tool_result",
+      payload: {
+        tool: "web",
+        action: "post",
+        ok: true,
+        callId: "c1",
+        isError: false,
+        result: "[sent]",
+        files: [
+          { name: "profile_A.png", mimetype: "image/png", sizeBytes: 28720, artifactId: "art-1" },
+          { name: "profile_B.png", mimetype: "image/png", sizeBytes: 21922, artifactId: "art-2" },
+        ],
+      },
+      createdAt: 120,
+      seq: 2,
+      parentSeq: 1,
+    },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  const reply = msgs[1] as AssistantWork & { content: Array<{ text?: string }> };
+  assert.equal(reply.role, "assistant");
+  assert.equal(reply.content[0]?.text, "Here they are — profiles A/B/C.");
+  assert.deepEqual(
+    reply.deliveredFiles?.map((f) => ({ name: f.name, artifactId: f.artifactId })),
+    [
+      { name: "profile_A.png", artifactId: "art-1" },
+      { name: "profile_B.png", artifactId: "art-2" },
+    ],
+    "the attachments the post actually sent are surfaced on the message",
+  );
+});
+
+for (const text of ["Partial answer", "", "(stopped)"]) {
+  test(`stopped history retains its state without promoting commentary: ${text || "empty"}`, () => {
+    const entries: SessionEntry[] = [
+      { seq: 1, type: "user", payload: { text: "check" }, createdAt: 1 },
+      { seq: 2, type: "text", payload: { text: "Checking.", phase: "commentary" }, createdAt: 2 },
+      { seq: 3, type: "assistant", payload: { text, stopped: true }, createdAt: 3 },
+    ];
+    const messages = entriesToMessages(entries);
+    const answer = messages.find((message) => message.role === "assistant") as AssistantWork;
+    assert.equal(answer.stopReason, "aborted");
+    assert.deepEqual(answer.content, [{ type: "text", text }]);
+    assert.equal(answer.work?.activity.length, 1);
+    assert.equal(messageWorkTimeline(answer.work!, text)[0]?.kind, "text");
+  });
+}
+
+test("live approval decisions are outside tool folds and reconcile by request identity", () => {
+  const entry = {
+    type: "approval_resolved" as const,
+    seq: 8,
+    parentSeq: null,
+    createdAt: 100,
+    payload: { requestId: "approval-1", command: "help", approved: true, scope: "once" },
+  };
+  const streaming = {
+    role: "assistant",
+    content: [{ type: "text", text: "" }],
+    work: { status: "working", activity: [entry] },
+  } as unknown as AgentMessage;
+  const live = messagesWithStreaming([], streaming);
+  assert.equal(live.length, 2);
+  assert.equal((live[0] as { role: string }).role, "approval-decision");
+  assert.equal(live[1], streaming);
+  assert.deepEqual(messagesWithStreaming([streaming]), live);
+  assert.deepEqual(buildTimeline((streaming as AssistantWork).work!), []);
+  const history = entriesToMessages([entry]);
+  assert.deepEqual(messagesWithStreaming(history, streaming), [...history, streaming]);
+  const repeated = {
+    ...streaming,
+    work: { status: "working", activity: [{ ...entry, seq: 9, createdAt: 200 }] },
+  } as unknown as AgentMessage;
+  assert.equal(messagesWithStreaming(history, repeated).length, 3);
+  const denied = { ...entry, payload: { ...entry.payload, requestId: "approval-2", approved: false } };
+  const denialStream = { ...streaming, work: { status: "complete", activity: [denied] } } as unknown as AgentMessage;
+  assert.equal(messagesWithStreaming(history, denialStream).length, 3);
+});
+
+test("a recorded decision clears stale approval labels without consuming a later request", () => {
+  const pending = { requestId: "same-command", command: "help" };
+  const blocked = (createdAt: number) =>
+    ({
+      role: "assistant",
+      content: [{ type: "text", text: "" }],
+      timestamp: createdAt,
+      work: {
+        status: "complete",
+        pendingApprovals: [pending],
+        activity: [{ seq: 1, parentSeq: null, type: "tool_result", payload: { blocked: "needs_approval" }, createdAt }],
+      },
+    }) as unknown as AgentMessage;
+  const decision = {
+    type: "approval_resolved" as const,
+    seq: 2,
+    parentSeq: null,
+    createdAt: 200,
+    payload: { requestId: pending.requestId, command: pending.command, approved: false },
+  };
+  const old = blocked(100);
+  const fresh = blocked(300);
+  const streaming = {
+    role: "assistant",
+    content: [],
+    work: { status: "working", activity: [decision] },
+  } as unknown as AgentMessage;
+  const visible = messagesWithStreaming([old, fresh], streaming);
+  assert.deepEqual((visible[0] as AssistantWork).work?.pendingApprovals, []);
+  assert.equal(visible[1], fresh);
+  assert.deepEqual((old as AssistantWork).work?.pendingApprovals, [pending]);
+  const history = messagesWithStreaming([old, ...entriesToMessages([decision]), fresh]);
+  assert.deepEqual((history[0] as AssistantWork).work?.pendingApprovals, []);
+  assert.equal(history.at(-1), fresh);
 });

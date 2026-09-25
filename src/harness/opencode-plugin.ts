@@ -34,6 +34,7 @@ type OpenCodeWithParts = {
 };
 
 type SessionContext = {
+  modelOptions?: Record<string, unknown>;
   proxyHeaders?: Record<string, string>;
   systemPrompt?: string;
   history?: OpenCodeWithParts[];
@@ -242,11 +243,13 @@ const OpenCodeBridgePlugin: Plugin = async ({ client }) => {
     ]),
   );
 
-  const sessionContext = async (sessionID: string): Promise<SessionContext> => {
+  const sessionContext = async (sessionID: string, modelID?: string): Promise<SessionContext> => {
     let error: unknown;
     for (let attempt = 0; attempt < 20; attempt++) {
       try {
-        return await request(`session/${encodeURIComponent(sessionID)}/context`);
+        return await request(
+          `session/${encodeURIComponent(sessionID)}/context${modelID ? `?model=${encodeURIComponent(modelID)}` : ""}`,
+        );
       } catch (next) {
         error = next;
         await new Promise<void>((resolveWait) => setTimeout(resolveWait, 25));
@@ -257,6 +260,10 @@ const OpenCodeBridgePlugin: Plugin = async ({ client }) => {
 
   return {
     tool: tools,
+    "chat.params": async (input, output) => {
+      const context = await sessionContext(input.sessionID, input.model.id);
+      Object.assign(output.options, context.modelOptions ?? {});
+    },
     "chat.headers": async (input: { sessionID: string }, output: { headers: Record<string, string> }) => {
       const context = await sessionContext(input.sessionID);
       Object.assign(output.headers, context.proxyHeaders ?? {});

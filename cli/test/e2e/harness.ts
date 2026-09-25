@@ -82,7 +82,6 @@ export function writeConfig(
     services: ["core"],
     sandbox: {
       app: `${config.orgId}-sandboxes`,
-      image: `registry.fly.io/${config.orgId}-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a`,
     },
     ...config,
   };

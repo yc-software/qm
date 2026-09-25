@@ -19,6 +19,8 @@ export function toEvent(raw: unknown): IngestEvent | null {
         .map((f) => ({
           fileId: f.fileId as string,
           ...(typeof f.name === "string" ? { name: f.name } : {}),
+          ...(typeof f.title === "string" ? { title: f.title } : {}),
+          ...(typeof f.size === "number" && Number.isSafeInteger(f.size) && f.size >= 0 ? { size: f.size } : {}),
           ...(typeof f.mimetype === "string" ? { mimetype: f.mimetype } : {}),
         }))
     : undefined;
@@ -28,7 +30,10 @@ export function toEvent(raw: unknown): IngestEvent | null {
   return {
     container: raw.container,
     ts: raw.ts,
-    ...(typeof raw.sub === "string" && raw.sub ? { sub: raw.sub } : {}),
+    ...(raw.sub === null || (typeof raw.sub === "string" && raw.sub) ? { sub: raw.sub } : {}),
+    ...(typeof raw.subtype === "string" ? { subtype: raw.subtype } : {}),
+    ...(typeof raw.broadcast === "boolean" ? { broadcast: raw.broadcast } : {}),
+    ...(typeof raw.botId === "string" ? { botId: raw.botId } : {}),
     ...(typeof raw.authorId === "string" ? { authorId: raw.authorId } : {}),
     ...(typeof raw.authorName === "string" ? { authorName: raw.authorName } : {}),
     ...(typeof raw.text === "string" ? { text: raw.text } : {}),

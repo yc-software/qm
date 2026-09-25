@@ -18,7 +18,7 @@ const SCHEMA = [
 const PRUNE_INTERVAL_MS = 60_000;
 
 export function createPostgresRunActivityStore(connectionString: string): RunActivityStore {
-  const pg = createPgPool(connectionString, SCHEMA);
+  const pg = createPgPool(connectionString, "runs/activity/0001", SCHEMA);
   const q = pg.query;
   let nextPruneAt = Number.NEGATIVE_INFINITY;
 

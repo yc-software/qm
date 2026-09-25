@@ -1,19 +1,22 @@
 # Deploy QM for an organization
 
 Deploying QM does not require a copy of this repository: `qm init` materializes a
-deployment directory from the published package, and the README section "Deploy it for
-your org" gives that path. An organization that wants to customize its deployment keeps
-a private fork of the QM repository and puts everything specific to itself in one
-directory, `deploy/layers/<org>/`: its config, sandbox customizations, provider
-coordinates, and generated Slack manifests. The rest of the tree stays identical to
-upstream. See [`../deploy/layers/README.md`](../deploy/layers/README.md).
-
-For a new layer, the agent first asks the operator for Fly.io or AWS (the slug
-is a local name derived from the organization, not globally unique), then runs:
+deployment directory from the published package. Start in an empty organization-owned
+private repository:
 
 ```bash
-node cli/bin/qm.ts init deploy/layers/<org> --org <slug> --target <fly-or-aws>
+npm exec --yes --package=@yc-software/qm@latest -- \
+  qm init . --org <slug> --target <fly-or-aws>
+npm install
 ```
+
+Choose Fly.io or AWS before initialization; the slug is a local name derived from the
+organization, not globally unique. Customize config, tools, skills, and services in this
+directory. To change QM itself, use a public or private source fork and explicitly
+build its source, as described in [the README](../README.md#customize-your-instance).
+A private source fork can keep its deployment at `deploy/layers/<org>/`; a public source
+checkout uses a separate private deployment directory. See
+[`../deploy/layers/README.md`](../deploy/layers/README.md).
 
 Provider choice is part of initialization because it determines the config,
 secret rules, generated files, and teardown contract. Changing providers means

@@ -39,42 +39,73 @@ async function argaFetch(apiKey: string, path: string, init: RequestInit = {}): 
 }
 
 export async function provisionSlackTwin(apiKey: string, ttlMinutes: number): Promise<TwinSession> {
-  const { run_id } = await argaFetch(apiKey, "/validate/twins/provision", {
-    method: "POST",
-    body: JSON.stringify({ twins: ["slack"], ttl_minutes: ttlMinutes }),
-  });
-  const deadline = Date.now() + 6 * 60_000;
-  for (;;) {
-    const status = await argaFetch(apiKey, `/validate/twins/provision/${run_id}/status`);
-    if (status.status === "ready") {
-      const slack = status.twins?.slack;
-      if (!slack?.base_url || !slack?.admin_url)
-        throw new Error(`twin ready but no slack urls: ${JSON.stringify(status).slice(0, 400)}`);
-      const session: TwinSession = {
-        runId: run_id,
-        baseUrl: slack.base_url,
-        adminUrl: slack.admin_url,
-        proxyToken: status.proxy_token ?? "",
-        botToken: slack.env_vars?.SLACK_BOT_TOKEN ?? "",
-        signingSecret: slack.env_vars?.SLACK_SIGNING_SECRET ?? "",
-      };
-      const admin = new TwinAdmin(session.adminUrl, session.proxyToken);
-      const config = await admin.getConfig();
-      session.signingSecret = config?.event_delivery?.signing_secret ?? session.signingSecret;
-      if (!session.botToken) session.botToken = (config?.tokens ?? []).find((t: any) => t.is_bot)?.token ?? "";
-      if (!session.botToken || !session.signingSecret)
-        throw new Error("twin config missing bot token or signing secret");
-      return session;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const { run_id } = await argaFetch(apiKey, "/validate/twins/provision", {
+      method: "POST",
+      body: JSON.stringify({ twins: ["slack"], ttl_minutes: ttlMinutes }),
+    });
+    console.log(`twin provisioning started: ${run_id}`);
+    try {
+      const deadline = Date.now() + 2 * 60_000;
+      for (;;) {
+        const status = await argaFetch(apiKey, `/validate/twins/provision/${run_id}/status`);
+        if (status.status === "ready") {
+          const slack = status.twins?.slack;
+          if (!slack?.base_url || !slack?.admin_url)
+            throw new Error(`twin ready but no slack urls: ${JSON.stringify(status).slice(0, 400)}`);
+          const session: TwinSession = {
+            runId: run_id,
+            baseUrl: slack.base_url,
+            adminUrl: slack.admin_url,
+            proxyToken: status.proxy_token ?? "",
+            botToken: slack.env_vars?.SLACK_BOT_TOKEN ?? "",
+            signingSecret: slack.env_vars?.SLACK_SIGNING_SECRET ?? "",
+          };
+          const admin = new TwinAdmin(session.adminUrl, session.proxyToken);
+          const config = await admin.getConfig();
+          session.signingSecret = config?.event_delivery?.signing_secret ?? session.signingSecret;
+          if (!session.botToken) session.botToken = (config?.tokens ?? []).find((t: any) => t.is_bot)?.token ?? "";
+          if (!session.botToken || !session.signingSecret)
+            throw new Error("twin config missing bot token or signing secret");
+          return session;
+        }
+        if (["failed", "expired", "cancelled"].includes(status.status))
+          throw new Error(`twin provisioning ${status.status}: ${JSON.stringify(status.error).slice(0, 400)}`);
+        if (Date.now() > deadline) throw new Error(`twin provisioning timed out (last status: ${status.status})`);
+        await sleep(5000);
+      }
+    } catch (err) {
+      try {
+        await teardownTwin(apiKey, run_id);
+      } catch (teardownErr) {
+        throw new Error(`twin ${run_id} cleanup could not be confirmed after ${String(err)}`, {
+          cause: teardownErr,
+        });
+      }
+      if (attempt === 2) throw err;
+      console.error(`twin ${run_id} failed; retrying once: ${String(err)}`);
     }
-    if (status.status === "failed")
-      throw new Error(`twin provisioning failed: ${JSON.stringify(status.error).slice(0, 400)}`);
-    if (Date.now() > deadline) throw new Error(`twin provisioning timed out (last status: ${status.status})`);
-    await sleep(5000);
   }
+  throw new Error("twin provisioning exhausted retries");
 }
 
 export async function teardownTwin(apiKey: string, runId: string): Promise<void> {
-  await argaFetch(apiKey, `/validate/twins/provision/${runId}/teardown`, { method: "POST" });
+  const path = `/validate/twins/provision/${runId}`;
+  const isGone = (status: string) => status === "torn_down" || status === "expired";
+  if (isGone((await argaFetch(apiKey, `${path}/status`)).status)) return;
+  try {
+    await argaFetch(apiKey, `${path}/teardown`, { method: "POST" });
+  } catch (err) {
+    if (isGone((await argaFetch(apiKey, `${path}/status`)).status)) return;
+    throw err;
+  }
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    const status = await argaFetch(apiKey, `/validate/twins/provision/${runId}/status`);
+    if (isGone(status.status)) return;
+    if (Date.now() > deadline) throw new Error(`twin teardown timed out (last status: ${status.status})`);
+    await sleep(2000);
+  }
 }
 
 export class TwinAdmin {
@@ -144,6 +175,17 @@ export async function seedTwinUsers(
     seeded.set(name, { token });
   }
   await admin.patchConfig({ users, tokens });
+  const applied = await admin.getConfig();
+  const appliedTokens = (applied.tokens ?? []) as Array<{ token: string; scopes?: string[] }>;
+  for (const [name, token, required] of [
+    ["bot", session.botToken, BOT_SCOPES],
+    ...[...seeded.entries()].map(([name, user]) => [name, user.token, USER_SCOPES] as const),
+  ] as const) {
+    const granted = new Set(appliedTokens.find((entry) => entry.token === token)?.scopes ?? []);
+    const missing = required.filter((scope) => !granted.has(scope));
+    if (missing.length)
+      throw new Error(`twin ${name} token is missing scopes after provisioning: ${missing.join(", ")}`);
+  }
   return seeded;
 }
 

@@ -1,3 +1,4 @@
+import { deriveKey, seal } from "../src/session.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
@@ -15,6 +16,10 @@ const broker = createServer((req: IncomingMessage, res) => {
       body: Buffer.concat(chunks).toString("utf8"),
     });
     if (req.url?.startsWith("/verify")) {
+      res.setHeader("set-cookie", [
+        "qm_idp_session=abc; Path=/idp; HttpOnly; Secure; SameSite=Lax",
+        "extra=1; Path=/idp",
+      ]);
       res.writeHead(302, { location: "https://portal.test/auth/callback?code=c&state=s" });
       return void res.end();
     }
@@ -35,6 +40,7 @@ const surfaceUrl = `http://127.0.0.1:${(surface.address() as AddressInfo).port}`
 const PUBLIC = "http://portal.test";
 process.env.PORTAL_PUBLIC_URL = PUBLIC;
 process.env.PORTAL_SESSION_SECRET = "broker-proxy-test-portal-secret";
+process.env.PORTAL_IDENTITY_SECRET = "broker-proxy-test-identity-secret";
 process.env.CORE_SIGNING_SECRET = "broker-proxy-test-core-secret";
 process.env.CORE_ORG_ID = "acme";
 process.env.WEB_UI_UPSTREAM = surfaceUrl;
@@ -66,6 +72,8 @@ test("the broker's sign-in pages are reachable without a session", async () => {
 test("the verify redirect is relayed back to the browser", async () => {
   const redirect = await fetch(`${base}/idp/verify?token=abc`, { redirect: "manual" });
   assert.equal(redirect.status, 302);
+  assert.equal(redirect.headers.getSetCookie().length, 2);
+  assert.match(redirect.headers.getSetCookie()[0]!, /qm_idp_session=abc/);
   assert.equal(redirect.headers.get("location"), "https://portal.test/auth/callback?code=c&state=s");
 });
 
@@ -206,4 +214,41 @@ test("isPrivateNetworkUrl admits only unroutable hosts", () => {
   ]) {
     assert.equal(isPrivateNetworkUrl(url), false, url);
   }
+});
+
+test("only broker cookies reach the broker", async () => {
+  const token = `${"a".repeat(43)}.${"b".repeat(43)}`;
+  await fetch(`${base}/idp/authorize`, {
+    headers: { cookie: `portal_session=secret; qm_idp_session=${token}; unrelated=secret` },
+  });
+  assert.equal(seen.at(-1)!.headers.cookie, `qm_idp_session=${token}`);
+});
+
+test("logout clears the remembered cookie and everywhere requires an authenticated caller", async () => {
+  const response = await fetch(`${base}/auth/logout`, { method: "POST", headers: { origin: PUBLIC } });
+  assert.equal(response.status, 200);
+  assert.ok(
+    response.headers
+      .getSetCookie()
+      .some(
+        (value) => value.startsWith("qm_idp_session=") && value.includes("Path=/idp") && value.includes("Max-Age=0"),
+      ),
+  );
+  const unsigned = await fetch(`${base}/auth/logout?everywhere=1`, { method: "POST", headers: { origin: PUBLIC } });
+  assert.equal(unsigned.status, 401);
+  const now = Date.now();
+  const cookie = seal(
+    { k: "session", sub: "user@example.com", org: "acme", iat: now, exp: now + 60000 },
+    deriveKey(process.env.PORTAL_SESSION_SECRET!, "portal.session.v1"),
+  );
+  const signed = await fetch(`${base}/auth/logout?everywhere=1`, {
+    method: "POST",
+    headers: { origin: PUBLIC, cookie: `portal_session=${cookie}` },
+  });
+  assert.equal(signed.status, 200);
+  const crossOrigin = await fetch(`${base}/auth/logout?everywhere=1`, {
+    method: "POST",
+    headers: { origin: "https://evil.test", cookie: `portal_session=${cookie}` },
+  });
+  assert.equal(crossOrigin.status, 403);
 });

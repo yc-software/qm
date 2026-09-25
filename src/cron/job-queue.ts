@@ -1,10 +1,12 @@
 import { PgBoss } from "pg-boss";
+import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
 import { createSweeper, type Sweeper } from "../util/sweeper.ts";
 import { errMessage } from "../util/errors.ts";
 
 export interface CronFireJob {
   cronId: string;
   scheduledAt: number;
+  notBefore?: number;
 }
 
 interface CronQueueHandlers {
@@ -16,6 +18,7 @@ export interface CronJobQueue {
   start(handlers: CronQueueHandlers, tickIntervalMs: number): Promise<void>;
   enqueueFire(job: CronFireJob): Promise<void>;
   healthy(): boolean;
+  stopClaims?(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -30,15 +33,35 @@ export function createPgBossCronQueue(
   schema: string = "pgboss",
   fireConcurrency: number = 1,
 ): CronJobQueue {
-  const boss = new PgBoss({ connectionString: databaseUrl, schema, max: 5 });
+  let pg: PgPool | null = null;
+  const boss = new PgBoss({
+    schema,
+    db: {
+      executeSql: async (text, values) => {
+        if (!pg) throw new Error("Cron queue database is closed");
+        return (await pg.pool()).query(text, values);
+      },
+    },
+  });
+  async function closePool() {
+    const previous = pg;
+    pg = null;
+    await previous?.close();
+  }
   boss.on("error", (e) => console.error("[cron-queue] pg-boss error:", errMessage(e)));
   let ticker: Sweeper | null = null;
   let started = false;
+  let initialized = false;
   let lastSendOkAt = 0;
   return {
     async start(handlers, tickIntervalMs) {
-      await boss.start();
+      if (started) return;
+      pg ??= createPgPool(databaseUrl, []);
       try {
+        if (!initialized) {
+          await boss.start();
+          initialized = true;
+        }
         await boss.createQueue(FIRE_QUEUE, { policy: "short", notify: true });
         await boss.createQueue(TICK_QUEUE, { policy: "short", notify: true });
         const localConcurrency = Math.min(32, Math.max(1, Math.trunc(fireConcurrency)));
@@ -51,7 +74,15 @@ export function createPgBossCronQueue(
         );
         await boss.work(TICK_QUEUE, { pollingIntervalSeconds: 1 }, () => handlers.onTick());
       } catch (e) {
-        await boss.stop({ close: true, graceful: false }).catch(() => {});
+        if (initialized) {
+          await Promise.all([
+            boss.offWork(FIRE_QUEUE, { wait: false }),
+            boss.offWork(TICK_QUEUE, { wait: false }),
+          ]).catch(() => {});
+        } else {
+          await boss.stop({ close: true, graceful: false }).catch(() => {});
+          await closePool();
+        }
         throw e;
       }
       started = true;
@@ -71,7 +102,7 @@ export function createPgBossCronQueue(
     async enqueueFire(job) {
       if (!started) return;
       await boss.send(FIRE_QUEUE, job, {
-        startAfter: new Date(job.scheduledAt),
+        startAfter: new Date(Math.max(job.scheduledAt, job.notBefore ?? 0)),
         singletonKey: `${job.cronId}:${job.scheduledAt}`,
         retryLimit: 0,
       });
@@ -79,10 +110,20 @@ export function createPgBossCronQueue(
     healthy() {
       return started && Date.now() - lastSendOkAt < HEALTHY_SEND_MAX_AGE_MS;
     },
+    async stopClaims() {
+      started = false;
+      void ticker?.stop();
+      await Promise.all([boss.offWork(FIRE_QUEUE, { wait: false }), boss.offWork(TICK_QUEUE, { wait: false })]);
+    },
     async stop() {
       started = false;
-      ticker?.stop();
-      await boss.stop({ close: true, graceful: false });
+      await ticker?.stop();
+      try {
+        await boss.stop({ close: true, graceful: false });
+      } finally {
+        initialized = false;
+        await closePool();
+      }
     },
   };
 }

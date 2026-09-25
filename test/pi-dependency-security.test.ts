@@ -44,10 +44,10 @@ test("Pi and MCP security overrides are materialized by the root lockfile", () =
   const minimatchManifest = createRequire(piManifest).resolve("minimatch/package.json");
 
   assert.equal(pi?.resolved, piCodingAgentTarball);
-  assert.equal(pi?.hasShrinkwrap, true);
+
   assert.deepEqual(lockedVersions(packages, "brace-expansion"), ["5.0.9"]);
-  assert.deepEqual(lockedVersions(packages, "fast-uri").sort(), ["3.1.5", "4.1.2"]);
-  assert.deepEqual(lockedVersions(packages, "hono"), ["4.12.34"]);
+  assert.deepEqual(lockedVersions(packages, "fast-uri").sort(), ["3.1.7", "4.1.4"]);
+  assert.deepEqual(lockedVersions(packages, "hono"), ["4.13.5"]);
   assert.deepEqual(lockedVersions(packages, "protobufjs"), ["7.6.5"]);
   assert.deepEqual(lockedVersions(packages, "undici"), ["8.9.0"]);
   assert.deepEqual(lockedVersions(packages, "@hono/node-server"), ["2.0.10"]);

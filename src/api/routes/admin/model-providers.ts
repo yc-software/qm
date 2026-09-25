@@ -1,6 +1,6 @@
-import { isModelProvider, type ModelProvider } from "../../../model/pi-models.ts";
+import { isModelProvider, type ModelProvider } from "../../../model/model-credential-store.ts";
 import { providerBaseUrl } from "../../../model/provider-endpoints.ts";
-import { selectableModelCatalog } from "../../../model/model-catalog.ts";
+import { cachedModelCatalog, selectableModelCatalog } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
@@ -36,7 +36,7 @@ async function actor(ctx: ApiCtx) {
   return authorizeAdmin(ctx, scope);
 }
 
-async function validate(ctx: ApiCtx, provider: ModelProvider, apiKey: string): Promise<boolean> {
+export async function validateProviderApiKey(ctx: ApiCtx, provider: ModelProvider, apiKey: string): Promise<boolean> {
   try {
     const response = await (ctx.deps.modelCredentialFetch ?? fetch)(validationUrl(provider), {
       headers: VALIDATION_REQUESTS[provider].headers(apiKey),
@@ -51,6 +51,7 @@ async function validate(ctx: ApiCtx, provider: ModelProvider, apiKey: string): P
 export async function getModelProviders(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
+  await ctx.deps.refreshModels?.();
   if (!ctx.deps.modelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
   audit(ctx.deps, {
     principalId: authorized.id,
@@ -58,9 +59,19 @@ export async function getModelProviders(ctx: ApiCtx): Promise<void> {
     resource: "model-providers",
     scopeLabel: orgScope(ctx.deps),
   });
+  const cached =
+    ctx.url.searchParams.get("catalog") === "cached" ? cachedModelCatalog(ctx.deps.modelCredentialFetch) : undefined;
+  const [providers, models] = await Promise.all([
+    ctx.deps.modelCredentials.statuses(),
+    cached?.models ?? selectableModelCatalog(ctx.deps.modelCredentialFetch),
+  ]);
   return sendJson(ctx.res, 200, {
-    providers: await ctx.deps.modelCredentials.statuses(),
-    models: await selectableModelCatalog(ctx.deps.modelCredentialFetch),
+    providers,
+    models,
+    ...(cached?.refreshing ? { modelCatalogRefreshing: true } : {}),
+    ...(ctx.deps.harnessCarriedModelAuth
+      ? { harnessAuth: { harnessId: ctx.deps.harnessId ?? "pi", provider: ctx.deps.harnessCarriedModelAuth } }
+      : {}),
   });
 }
 
@@ -74,7 +85,7 @@ export async function putModelProvider(ctx: ApiCtx): Promise<void> {
   if (typeof apiKey !== "string" || !apiKey.trim()) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "API key is required" });
   }
-  if (!(await validate(ctx, provider, apiKey.trim()))) {
+  if (!(await validateProviderApiKey(ctx, provider, apiKey.trim()))) {
     return sendJson(ctx.res, 400, { error: "invalid_api_key", message: `${provider} rejected this API key` });
   }
   await ctx.deps.modelCredentials.set(provider, apiKey.trim(), authorized.id);

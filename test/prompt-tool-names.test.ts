@@ -6,7 +6,7 @@ import { join } from "node:path";
 const PROTOCOLS = join(import.meta.dirname, "..", "src", "resolution", "protocols");
 const FRAME_FILES = ["shared-core.md", "mode-conversation.md", "mode-autonomous.md", "mode-fallback.md"];
 
-const toolSource = readFileSync(join(import.meta.dirname, "..", "src", "harness", "pi-tools.ts"), "utf8");
+const toolSource = readFileSync(join(import.meta.dirname, "..", "src", "harness", "agent-tools.ts"), "utf8");
 
 const KNOWN_ACTIONS = new Set(["post", "react", "edit", "delete", "read_thread", "search", "whats_new"]);
 

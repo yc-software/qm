@@ -1,13 +1,14 @@
 # Web UI plugin
 
-An end-user web surface with a custom ChatGPT/Claude-style chat shell, stitched to the
+An end-user web surface with a custom chat shell, connected to the
 platform core. It still uses Pi's `Agent` state machine and selected Pi web utilities
 for markdown, attachment loading, and model metadata, but the visible conversation UI is
 owned by this plugin. Two processes:
 
 - **A zero-dep `node:http` server** (`server/index.ts`) — holds the signed-in principal
   in an `HttpOnly` cookie, injects it as the turn's actor, and proxies a small set of
-  `/api/*` routes to the core (chat turns, unified history, cron management, and more). It never imports the core and never sends a model/API key to the browser.
+  `/api/*` routes to the core (chat turns, unified history, and **webhook management** —
+  see below). It never imports the core and never sends a model/API key to the browser.
 - **A Vite-bundled front-end** (`src/`) — a custom Lit shell + transcript + composer.
   Pi's `Agent` LLM-call boundary (`streamFn`) is swapped for a bridge to the core.
   It `POST`s the turn (`POST /v1/turns?async=1`), then watches the in-flight reply over
@@ -27,6 +28,7 @@ no run bearer is exposed to browser code or placed in a URL. The active-run resu
 (`/api/runs/active`) is per-process best-effort with a durable core fallback for personal threads.
 
 ```
+npm install --prefix ../admin
 npm install
 npm run build
 npm run serve
@@ -42,17 +44,121 @@ Env (see `.env.example`): `CORE_API_URL` (default `http://localhost:8080`),
 `WEB_UI_PRINCIPALS` (csv allowlist; empty = any id, **dev only**),
 and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
 
+## Suggested activities
+
+Suggested activity generation is **on by default** when the configured harness supports
+it. Set `SUGGESTED_ACTIVITIES_ENABLED=false` on core to disable generation. Optionally
+set `WEB_UI_SUGGESTED_ACTIVITIES` on web to a JSON array for fixed fallback starters;
+unset it as well to hide suggestions entirely. No deployment-specific activity content
+is bundled into the public application.
+
+```json
+[
+  {
+    "id": "weekly-brief",
+    "title": "Wake up to a fresh briefing",
+    "prompt": "Let's set up a recurring briefing on the topics I follow.",
+    "icon": "schedule"
+  },
+  {
+    "id": "project-app",
+    "title": "Build a home for my projects",
+    "prompt": "Let's build a private app to keep track of my projects.",
+    "icon": "app"
+  }
+]
+```
+
+The first three entries appear above the empty personal-chat composer with colored
+icons, without a heading or expansion link. Selecting an entry fills and focuses
+an editable draft; it never submits a turn. Suggestions fade and collapse while a draft
+or attachment is present and do not appear in existing chats, shared contexts,
+or compact pane views. Collapsed suggestions are inert and hidden from assistive
+technology; reduced-motion preferences disable the transition. Dark mode uses
+subdued blue-gray suggestion text. Drafts use the normal persistence path.
+
+Each entry requires a unique lowercase alphanumeric/hyphen `id` (up to 64
+characters), `title` (up to 65 characters), `prompt` (up to 1,200 characters), and
+`icon` (one emoji or `yc` for the orange YC mark; legacy `schedule`, `app`, `deck`,
+`people`, `calendar`, and `book` values also render as emoji). Configuration
+accepts up to 12 entries and 20,000 characters. Invalid configuration fails startup
+without printing its contents. Restart the web service after changing it.
+
+The authenticated `/me` response supplies the configured fallback and whether generation is enabled.
+Fixed starters are organization-wide; keep them free of personal activity or credentials.
+
+When enabled, opening a new personal chat enrolls the user in an ordinary personal
+cron named **Refresh my suggested activities**. Its first run starts immediately;
+subsequent runs happen around 2am in the browser's timezone, with the minute
+staggered by user. The cron runner uses the normal owner-scoped session, runtime
+selection, memory, history, tools, and authorized data access. It has no delivery
+destination. The standing task in `src/suggestions/activities.ts` asks it to research
+relevant context, avoid mutations or notifications, and return three validated
+activity objects. Draft prompts use a natural, collaborative voice, such as "Let's...",
+with relevant facts and uncertainties as neutral context, without attributing knowledge,
+feelings, or beliefs to the user. They preserve explicit user
+preferences and scope while leaving the approach to the responding agent. It does not
+create a separate reduced-context model call.
+
+The UI reads the latest valid result from the cron's completed personal session,
+including responses larger than the truncated fire-log preview. It displays the
+previous result while a refresh runs and briefly polls for the first/new result;
+opening another chat does not normally invoke a model. Failed initial generations
+can retry after five minutes. Existing cron queueing, run persistence, authorization,
+fire history, and failure handling apply.
+
+Cadence is reevaluated hourly. Ten or more user messages in sampled recent private
+conversations within 24 hours increases refreshes to every four hours; otherwise it
+returns to nightly. Accounts with no observed conversation activity or suggestion
+visits for 30 days are paused until activity returns. The owner can pause, delete,
+or edit the cron; custom task text and schedules are preserved. The global disable
+flag pauses managed jobs. Background work must also be enabled.
+
+Set `SUGGESTED_ACTIVITIES_CONTEXT` on core for rollout guidance (up to 8,000
+characters). Describe the organization’s workflows and available tools there;
+optionally provide fallback starters on web. Guidance updates propagate to
+unmodified managed tasks. Public QM has no organization-specific suggestion context
+by default. Suggestions are private to their owner; generated sessions use the
+same scoped access controls as other personal work.
+
+## On a phone
+
+Below 860px the same build behaves like an app rather than a shrunken desktop:
+
+- **Drawer, not rail.** The sidebar slides over the content from a floating menu button (or an
+  edge swipe); a leftward swipe or a tap on the scrim closes it. Every top bar reserves the
+  button's column so nothing renders under it.
+- **Bottom sheets.** Popover menus — composer settings, a session's ⋯, the user menu, the
+  per-session tools — render as sheets with a backdrop; tap outside or swipe down to dismiss.
+- **Compact composer.** Attach · input · settings · send on one row; model, harness, effort, and
+  Fast live in the settings sheet. Inputs are 16px so iOS never zooms on focus, and the layout
+  tracks the visual viewport so the composer stays above the on-screen keyboard.
+- **Touch targets.** Message actions, file chips, selects, drawer rows, approvals, and back
+  links are ≥44px; hover tooltips are suppressed on hoverless devices.
+- **Split canvas stays on the desk.** A phone never mounts the split layout and leaves the
+  persisted desktop layout untouched.
+- **Installable.** `manifest.webmanifest` (named after the org's brand label), home-screen
+  icons, Apple meta, and theme colors — "Add to Home Screen" opens standalone at `/`.
+
+The phone-class breakpoint is one constant (`src/viewport.ts`, `PHONE_MAX_WIDTH`), shared by
+the CSS media queries, the composer, and the split canvas.
+
 ## What you get
 
 - **Custom chat UI** — a first-party conversation surface with a left history rail, centered
   transcript, bottom composer, inline **model selector** (the models core reports as
   serviceable for the approved harnesses),
   explicit **effort selector** (`low|medium|high|xhigh|max|ultracode|auto`), **Fast mode**
-  toggle, attachments, streaming partials, and a theme toggle.
+  toggle, attachments, streaming partials, and a theme picker. Settings → Theme takes
+  light, dark, or system, or an imported palette: drop in an iTerm2 `.itermcolors` preset or
+  a VS Code color theme `.json` and the app repaints from it (background, text, sidebar,
+  buttons, links, text selection, status badges, and code highlighting, mapped from the
+  terminal's ANSI colours or the theme's token scopes). The palette is kept per browser
+  alongside the light/dark choice.
   The UI drives Pi's `Agent` with a custom `streamFn` (`src/core-bridge.ts`) instead of
   mounting Pi's stock `AgentInterface`.
-- **Slash-command skill picker** — type `/` at the start of the composer for a Codex-style
-  autofill of the **skills** available to you (B6): icon · name · description · scope, with the
+- **Slash-command skill picker** — type `/` at the start of the composer to browse the
+  **skills** available to you (B6): icon · name · description · scope, with the
   typed letters emboldened. Arrow/Tab/Enter to choose (it inserts `/<name> `), Esc/click-out to
   dismiss. The list is the signed-in principal's _visible_ skills — the same set the agent gets
   materialized into a DM turn — fetched once per session via the server's `/api/skills` proxy
@@ -94,15 +200,30 @@ and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
   (for example, `#engineering`) — the channel name is captured from the surface onto the session record
   (`Session.channelName`, plumbed `conversation.channelName` → `getOrCreateByThread`) and surfaced
   via `GET /v1/sessions`, so you recognize _where_ a conversation happened at a glance.
+- **Webhook management** (the **Webhooks** sidebar view) — register, list, and disable your
+  own incoming webhooks (spec §7). Each registration is created with `owner = createdBy = you`
+  in your `personal:<you>` scope (identity comes from the cookie, **never** the request body —
+  the same trust model as `/api/turn`). The server proxies three routes:
+  - `POST /api/webhooks` → core `POST /v1/webhooks`; relays core's response — the webhook, the
+    **absolute** public ingress URL (core builds it from its public base — the portal in prod),
+    and the signing secret **once** (auto-generated if you leave it blank; never shown again).
+  - `GET /api/webhooks` → core `GET /v1/webhooks`, then **filtered to `owner === you`** (core's
+    source-auth list is operator-wide; secrets are already elided by the core).
+  - `POST /api/webhooks/:id/disable` → ownership is **verified here first** (core's operator
+    disable has no ownership check), mirroring the run-ownership gate, then proxied.
+    The inbound ingress (`POST /v1/webhooks/incoming/:id`) is served by the **core** receiver,
+    reached in prod through the **portal**'s one unauthenticated passthrough (the core is not
+    publicly exposed); senders sign with their own per-webhook secret, which is the auth on that
+    path. Dev single-host posts to the core directly.
 - **Cron management** (the **Crons** sidebar view) — create, list, run-now, enable/disable, and
-  delete your own scheduled tasks (spec §7): created with
+  delete your own scheduled tasks (spec §7), same trust model as webhooks: created with
   `owner = createdBy = you` in your `personal:<you>` scope (identity from the cookie, never the
   body), list filtered to `owner === you`, and every per-cron route ownership-gated here first
   (core's source-auth routes are operator-wide). A cron is either a **task** (a prompt the agent
   re-runs at each fire) or a **message** (literal text relayed as-is — requires a destination,
   since a relay with nowhere to deliver is a no-op), on an `everyMs` interval and/or a one-time
-  `firstFireAt`. The server enforces a 1-minute interval floor; the scheduler itself runs in the
-  core.
+  `firstFireAt` (which may not be in the past). The server enforces a 1-minute interval floor; the
+  scheduler itself runs in the core.
 - **Files / Connectors / Deploys** (sidebar views — management lives here in one place):
   - **Files** — the doc store (spec §19 `artifacts(kind=file)`; §3 "files & sharing =
     Google Docs"): one `GET /api/files` call (→ core `GET /v1/files?viewer=`) lists files you
@@ -135,3 +256,114 @@ and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
 
 This is a **surface plugin**: it carries its own front-end deps (Vite, lit, pi-web-ui) and
 runs as a separate process. The zero-runtime-dep core is untouched.
+
+## Chat connection chips
+
+Chat authorization links share the connector service logos. Composio links use recognized
+service names in their Markdown labels; unknown or ambiguous names keep a generic icon.
+The destination URL and authorization behavior do not depend on the inferred logo.
+Gmail, Google Calendar, Google Drive, and Google Sheets artwork comes from
+[Simple Icons v16.0.0](https://github.com/simple-icons/simple-icons/tree/16.0.0)
+(CC0) and is bundled locally with the existing connector SVG artwork.
+
+## Cohort welcome and app picker
+
+Set `WEB_UI_WELCOME_COHORT=F26` on the web surface to show the cohort welcome in a new user's empty chat. It replaces the automatic first agent turn for that deployment; ordinary chat starts when the user sends a message. The greeting uses the signed-in display name. The welcome remains above the messages in the earliest personal web conversation, including when reopened. It is selected from persisted session creation times. The champagne and soft flutter sequence replays on refresh only before the first message and respects reduced motion.
+
+The picker reads Composio's live catalog in usage order, omits apps that need no authorization, and searches the complete paginated catalog. Known services use local logos; remaining catalog logos use Composio's logo host. Selecting an app submits to the authenticated web surface and opens the provider's authorization link directly. Consent remains on the provider page. Slack is excluded from this picker. A dedicated Connect Slack card in onboarding and Settings authorizes the signed-in person’s Slack tools through Composio and links their verified Slack workspace identity to their existing web account. Installing the company bot remains a separate administrator action.
+
+The core bridge accepts a verified portal identity and uses either that person's own `COMPOSIO_API_KEY` keychain entry or an enabled org service credential granted to them. Secrets never enter the browser. The agent skill reads `/v1/composio/identity` to use the same organization/person identity as the picker. A company project key retains Composio's existing project-wide access boundary; the identity selects accounts and does not isolate them from other holders of that key.
+
+### Local connection-return preview
+
+Open `http://localhost:8138/?connectionDemo=1` on the local dev instance. This loopback-only UI mode replaces app authorization with a provider simulation offering approval, cancellation, and failure. It makes a full navigation round trip with a callback URL, attempt nonce, status, and connected-account ID. The simulated verifier checks its own record rather than trusting `status=success` in the URL.
+
+Session storage retains the account-scoped attempt for twenty minutes, picker query, expanded state, scroll position, and simulated connections. Returning skips the welcome animation, verifies the simulated result, clears callback parameters, and restores the picker. Reset clears the preview's simulated connections. No provider authorization, tokens, or actual connected accounts are changed by this mode.
+
+Real authorization supplies a callback URL on the configured public origin and returns to the same conversation. A twenty-minute, user-bound session-storage attempt retains the account ID, originating widget, search, expanded state, and scroll position. The server lists only the authenticated actor’s active connected accounts; the browser verifies the expected account before showing success and removes callback parameters. Connected apps are refreshed on page load and window focus. Returning skips the welcome animation. Reply widgets become available after the reply is persisted. The loopback preview remains a separate simulation and does not connect real accounts.
+
+The welcome uses the organization's configured branding `orgName`, falling back to “your company” when it is unavailable.
+
+### Setup widgets in agent replies
+
+In web chat, an assistant reply can include `::connect-apps{}` as a standalone paragraph to render the reusable app picker. The separate `::add-to-slack{}` directive renders the Slack setup action for administrators; include both to show both. It omits the welcome and animation and uses the signed-in viewer’s authorization routes. The Composio skill teaches this response for requests to connect apps or reopen setup. Code blocks, quotations, and inline examples remain ordinary text. The directive persists in the transcript and renders again when reopened. Connected-account status retains the same limitations as the onboarding picker and local return-flow preview.
+
+## Optional product analytics
+
+Set `POSTHOG_API_KEY` to a PostHog project ingestion token to enable browser
+analytics. `POSTHOG_HOST` defaults to `https://us.i.posthog.com` and must be an
+HTTPS origin. The authenticated `/me` response supplies this public configuration;
+the portal serves the same web application, so it needs no separate SDK.
+
+Events are explicit pageviews by navigation view, accepted `message_sent` events,
+and `session_started` for the first user message in a chat. Company grouping uses
+`CORE_ORG_ID`; user identities combine company and authenticated principal. Browser
+analytics is disabled during impersonation. Autocapture, replay, exception capture,
+performance capture and feature flags are disabled. Event properties exclude chat
+content, URLs, query strings, titles and referrers. Delivery is best effort.
+
+Set the same variables on core to capture `app_published` after a successful new
+application or version deployment. Publications use the application's creator and
+company, matching browser identity. No key means no analytics requests.
+
+Core also captures `response_completed` and `response_failed` when a human turn
+reaches its final run state, including when a separate worker executes it.
+`completion_boundary=run` means processing finished, not confirmed delivery to the
+user. Successful silent or reaction-only results count as completed processing.
+`result_status` distinguishes those results; `surface` identifies web or Slack.
+Automation, automatic openers, impersonated turns, stopped turns, refusals, queued
+results and pending approvals do not emit outcomes. Retries emit only at the final
+run state. Stable insert IDs support deduplication. These best-effort events are
+not a complete reliability ledger and contain no response text or raw errors.
+
+## Optional browser error reporting
+
+Set `SENTRY_BROWSER_DSN` on the web server to enable browser error reporting.
+Use a public HTTPS DSN without a secret key, such as
+`https://public@sentry.example.com/1`. Backend `SENTRY_DSN` is never exposed or
+used as a browser fallback. The authenticated `/me` response supplies the public
+DSN and an optional `SENTRY_RELEASE` (or `GIT_SHA`). The server adds only the DSN
+origin to the web application's connection policy.
+
+Reporting starts after authentication and stops on sign-out or an authentication
+failure. It is disabled during impersonation and when the browser DSN is unset.
+Only uncaught errors and unhandled promise rejections are collected. Events retain
+standard error types, release, and same-origin compiled asset filenames with line
+and column numbers. Fingerprints use the sanitized error type, capture mechanism,
+and last retained stack position. Identical asset locations group across release
+label changes; changed asset hashes start separate groups. Without a retained
+frame, grouping falls back to the sanitized type and mechanism.
+Other stack frames and function names are omitted. Messages,
+URLs, requests, user identities, content, attachments, breadcrumbs, replay, logs,
+and tracing are excluded. A final transport gate rejects unsanitized SDK failures
+and non-event envelopes. Requests omit cookies and referrers. The ingestion
+server can still see the network source IP. Delivery is best effort.
+
+### Browser performance timing
+
+Set `SENTRY_BROWSER_TRACES_SAMPLE_RATE` (0 to 1, default 0) alongside `SENTRY_BROWSER_DSN` to sample
+browser timings; `0.1` is a reasonable start. Each timing is sampled independently at that rate
+and carries its own random trace id. A page reports one `pageload` transaction (time to first
+byte, DOM content loaded, load, first and largest contentful paint, and a `page` tag drawn from
+the fixed list of application views) and one `http.client` transaction per same-origin request
+made through the web client's shared fetch helper, measured to response headers and named by a
+fixed `/api/<resource>` allowlist (`GET /api/sessions/*`) with the HTTP status. At most 200
+timings are sent per page. URLs, query strings, identifiers, and request or response content are
+never included; timings stop with error reporting on sign-out, authentication failure, and
+impersonation.
+
+## Personal AI accounts
+
+Open **Settings → AI access**, or use the account label beside the model picker.
+Choose Company, Claude, or ChatGPT / Codex. Sign in with your subscription
+or use the secondary API-key option; connecting automatically selects that account. **Company access** switches back without disconnecting
+personal credentials. The choice is durable per person and applies to their human
+chat turns on the web and in Slack; background tasks retain company access.
+
+A submitted turn keeps its account choice, so switching affects new turns. Personal
+access failures do not retry on company credentials. Messages using a different
+account queue separately instead of steering an existing run; an explicit steer
+across accounts is refused. Organizations that already require individual accounts
+continue to require them.
+
+The standalone `::link-slack-account{}` directive offers personal Slack account linking in a web reply. It shows the account card or linked status, requires the company bot to be installed first, and does not include the app picker. `::add-to-slack{}` remains the company installation trigger.

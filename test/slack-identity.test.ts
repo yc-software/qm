@@ -240,6 +240,20 @@ test("allInternalChannelMembers: all-internal + complete → deduped ids; WITHHE
   );
 });
 
+test("bot accounts can hold shared-scope membership", () => {
+  assert.deepEqual(
+    allInternalChannelMembers(
+      [
+        { externalId: "U1", isExternalGuest: false },
+        { externalId: "B1", isExternalGuest: false, isBot: true },
+      ],
+      true,
+      { is_private: true },
+    ),
+    ["U1", "B1"],
+  );
+});
+
 function membershipDeps(overrides: Partial<Parameters<typeof resolveChannelMembership>[0]> = {}) {
   const internal = (externalId: string): ActorAssertion => ({ externalId, isExternalGuest: false });
   const byId: Record<string, ActorAssertion> = {
@@ -251,7 +265,6 @@ function membershipDeps(overrides: Partial<Parameters<typeof resolveChannelMembe
     actor: internal("alice@acme.com"),
     actorSlackId: "U1",
     info: undefined,
-    maxClassifyMembers: 200,
     classify: async (id: string) => ({
       actor: byId[id] ?? { externalId: id, isExternalGuest: true },
       ok: Boolean(byId[id]),
@@ -285,10 +298,21 @@ test("resolveChannelMembership: never matches the sender's email against raw mem
   );
 });
 
-test("resolveChannelMembership fails closed past the classify ceiling and withholds publishMembers on incomplete classify", async () => {
+test("resolveChannelMembership handles large channels and withholds publishMembers on incomplete classify", async () => {
   const big = Array.from({ length: 201 }, (_, i) => `U${i}`);
-  const capped = await resolveChannelMembership(membershipDeps({ memberIds: big, actorSlackId: "U1" }));
-  assert.ok(capped.audience.some((a) => a.isExternalGuest));
+  const large = await resolveChannelMembership(
+    membershipDeps({
+      memberIds: big,
+      actorSlackId: "U1",
+      classify: async (id: string) => ({
+        actor: { externalId: id === "U1" ? "alice@acme.com" : id, isExternalGuest: false },
+        ok: true,
+      }),
+    }),
+  );
+  assert.equal(large.audience.length, 201);
+  assert.ok(!large.audience.some((a) => a.isExternalGuest));
+  assert.equal(large.publishMembers?.length, 201);
 
   const incomplete = await resolveChannelMembership(
     membershipDeps({

@@ -1,11 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  emptyEndingNote,
-  EMPTY_ENDING_NOTE,
-  EMPTY_ENDING_NOTE_POLL,
-  EMPTY_ENDING_MIN_BUDGET_MS,
-} from "../src/harness/pi-harness.ts";
+import { emptyEndingNote, EMPTY_ENDING_NOTE, EMPTY_ENDING_MIN_BUDGET_MS } from "../src/harness/pi-harness.ts";
 
 type Opts = Parameters<typeof emptyEndingNote>[0];
 
@@ -22,7 +17,7 @@ function base(over: Partial<Opts> = {}): Opts {
     userAborted: false,
     cancelled: false,
     surfaceTools: false,
-    pollFire: true,
+    pollFire: false,
     ref: { modelCalls: 48 },
     session: session(""),
     turnWallClockMs: 1_800_000,
@@ -31,12 +26,15 @@ function base(over: Partial<Opts> = {}): Opts {
   };
 }
 
-test("the prod signature — poll fire ends empty mid-work — gets the poll note", () => {
-  assert.equal(emptyEndingNote(base()), EMPTY_ENDING_NOTE_POLL);
+test("a poll fire ending empty is the silence contract — never nudged into narration", () => {
+  assert.equal(emptyEndingNote(base({ pollFire: true })), null);
+  assert.equal(emptyEndingNote(base({ pollFire: true, ref: { modelCalls: 1 } })), null);
+  assert.equal(emptyEndingNote(base({ pollFire: true, ref: {} })), null);
+  assert.equal(emptyEndingNote(base({ pollFire: true, session: session("  \n ") })), null);
 });
 
 test("a non-poll turn ending empty mid-work gets the plain note", () => {
-  assert.equal(emptyEndingNote(base({ pollFire: false })), EMPTY_ENDING_NOTE);
+  assert.equal(emptyEndingNote(base()), EMPTY_ENDING_NOTE);
 });
 
 test("a non-empty final reply is accepted", () => {
@@ -44,7 +42,7 @@ test("a non-empty final reply is accepted", () => {
 });
 
 test("whitespace-only counts as empty", () => {
-  assert.equal(emptyEndingNote(base({ session: session("  \n ") })), EMPTY_ENDING_NOTE_POLL);
+  assert.equal(emptyEndingNote(base({ session: session("  \n ") })), EMPTY_ENDING_NOTE);
 });
 
 test("explicit finish_silently is intentional silence, never nudged", () => {
@@ -56,14 +54,9 @@ test("a paused turn (approval or input wall) ends mid-loop legitimately", () => 
   assert.equal(emptyEndingNote(base({ ref: { modelCalls: 48, pendingApprovals: [{}] } })), null);
 });
 
-test("a poll fire whose first response is empty is the silence contract, not an anomaly", () => {
-  assert.equal(emptyEndingNote(base({ ref: { modelCalls: 1 } })), null);
-  assert.equal(emptyEndingNote(base({ ref: {} })), null);
-});
-
 test("an addressed turn whose first response is empty ('(no response)') IS recovered", () => {
-  assert.equal(emptyEndingNote(base({ pollFire: false, ref: { modelCalls: 1 } })), EMPTY_ENDING_NOTE);
-  assert.equal(emptyEndingNote(base({ pollFire: false, ref: {} })), null);
+  assert.equal(emptyEndingNote(base({ ref: { modelCalls: 1 } })), EMPTY_ENDING_NOTE);
+  assert.equal(emptyEndingNote(base({ ref: {} })), null);
 });
 
 test("spine turns are excluded — the orchestrator's reply-or-decline nudge owns them", () => {
@@ -88,7 +81,7 @@ test("no re-prompt without wall-clock budget left; disabled cap always has budge
   );
   assert.equal(
     emptyEndingNote(base({ turnWallClockMs: 60_000, elapsedMs: 60_000 - EMPTY_ENDING_MIN_BUDGET_MS })),
-    EMPTY_ENDING_NOTE_POLL,
+    EMPTY_ENDING_NOTE,
   );
-  assert.equal(emptyEndingNote(base({ turnWallClockMs: 0, elapsedMs: 10_000_000 })), EMPTY_ENDING_NOTE_POLL);
+  assert.equal(emptyEndingNote(base({ turnWallClockMs: 0, elapsedMs: 10_000_000 })), EMPTY_ENDING_NOTE);
 });

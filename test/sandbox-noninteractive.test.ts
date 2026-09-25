@@ -19,8 +19,7 @@ function spritesHandle(env?: Record<string, string>) {
   const dir = mkdtempSync(join(tmpdir(), "noninteractive-"));
   const sandbox = createSpritesSandbox(createLocalWorkspaceStore(dir), {
     token: "test-token",
-    client: ff.client,
-    fetchImpl: ff.fetchImpl,
+    baseUrl: ff.baseUrl,
   });
   const layers = [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" as const }];
   return { sandbox, layers, ...(env ? { env } : {}) };

@@ -14,6 +14,7 @@ const BUILT_IN_CREDENTIAL_PATHS: readonly ToolCredentialPath[] = [
   { path: ".aws", kind: "directory" },
   { path: ".config/gh", kind: "directory" },
   { path: ".config/glab", kind: "directory" },
+  { path: ".config/glab-cli", kind: "directory" },
   { path: ".config/gcloud", kind: "directory" },
   { path: ".ssh", kind: "directory" },
   { path: ".netrc", kind: "file" },
@@ -58,7 +59,56 @@ export interface ToolDescriptor {
   egress?: string[];
   auth?: ToolAuthDescriptor;
   approvals?: ToolApproval[];
-  install?: { binary?: string };
+  install?: ToolInstall;
+}
+
+interface ToolInstallFile {
+  from: string;
+  to: string;
+  mode: string;
+}
+
+interface ToolInstall {
+  binary?: string;
+  files?: ToolInstallFile[];
+}
+
+const INSTALL_FROM_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const INSTALL_TO_RE = /^\/usr\/local\/(?:bin|lib)\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+const INSTALL_MODE_RE = /^0[0-7]{3}$/;
+
+function installFileError(
+  file: unknown,
+  sourcePath: string,
+  index: number,
+  owner: { id: string; binary: string },
+): string | undefined {
+  const at = `${sourcePath}: "install.files[${index}]"`;
+  if (!isPlainObject(file)) return `${at} must be an object`;
+  const { from, to, mode } = file;
+  if (typeof from !== "string" || !INSTALL_FROM_RE.test(from) || from === "tool.json")
+    return `${at}.from must name a file beside tool.json (letters, digits, . _ -), not tool.json itself`;
+  if (typeof to !== "string" || !INSTALL_TO_RE.test(to) || to.split("/").some((seg) => seg === ".." || seg === "."))
+    return `${at}.to must be an absolute path under /usr/local/bin/ or /usr/local/lib/ with no dot segments`;
+  if (to !== `/usr/local/bin/${owner.binary}` && !to.startsWith(`/usr/local/lib/${owner.id}/`))
+    return `${at}.to must be /usr/local/bin/${owner.binary} or a path under /usr/local/lib/${owner.id}/ — a tool may only install its own binary and its own library directory`;
+  if (mode !== undefined && (typeof mode !== "string" || !INSTALL_MODE_RE.test(mode)))
+    return `${at}.mode must be a four-digit octal string like "0755"`;
+  return undefined;
+}
+
+function parseInstallFiles(raw: unknown, sourcePath: string, owner: { id: string; binary: string }): ToolInstallFile[] {
+  if (!Array.isArray(raw)) throw new Error(`${sourcePath}: "install.files" must be an array`);
+  const out: ToolInstallFile[] = [];
+  for (const [index, file] of raw.entries()) {
+    const err = installFileError(file, sourcePath, index, owner);
+    if (err) throw new Error(err);
+    const { from, to, mode } = file as { from: string; to: string; mode?: string };
+    if (out.some((other) => other.to === to))
+      throw new Error(`${sourcePath}: "install.files" declares ${JSON.stringify(to)} twice`);
+    out.push({ from, to, mode: mode ?? (to.startsWith("/usr/local/bin/") ? "0755" : "0644") });
+  }
+  return out;
 }
 
 export function parseToolDescriptor(raw: string, sourcePath: string): ToolDescriptor {
@@ -119,7 +169,11 @@ export function parseToolDescriptor(raw: string, sourcePath: string): ToolDescri
         `${sourcePath}: "install.binary" must match ${TOOL_ID_RE.source} (lowercase alphanumerics and hyphens) — it is interpolated into generated Dockerfile lines`,
       );
     }
-    out.install = binary !== undefined ? { binary } : {};
+    const files = inst["files"];
+    out.install = {
+      ...(binary !== undefined ? { binary } : {}),
+      ...(files !== undefined ? { files: parseInstallFiles(files, sourcePath, { id, binary: binary ?? id }) } : {}),
+    };
   }
 
   const credentialPaths = out.auth?.credentialPaths ?? [];
@@ -143,6 +197,11 @@ export function parseToolDescriptor(raw: string, sourcePath: string): ToolDescri
     if (!segments[0]!.startsWith(".")) {
       throw new Error(
         `${sourcePath}: credential path ${JSON.stringify(path)} must start with a dotfile or dot-directory segment — non-hidden $HOME paths are durable agent data, not credentials`,
+      );
+    }
+    if (!/^[A-Za-z0-9._/@+-]+$/.test(path)) {
+      throw new Error(
+        `${sourcePath}: credential path ${JSON.stringify(path)} may only use letters, digits, and ._/@+- — other characters cannot ride the capture sweep`,
       );
     }
     const builtIn = BUILT_IN_CREDENTIAL_PATHS.find(
@@ -627,27 +686,6 @@ export function compileApproval(binary: string, a: ToolApproval): { pattern: str
   return { pattern, decision };
 }
 
-type SplitEnvContext = { actingSlackUserId?: string };
-
-export function interpolateSplitEnv(template: Record<string, string>, ctx: SplitEnvContext): Record<string, string> {
-  const placeholders: Record<string, string | undefined> = { actingSlackUserId: ctx.actingSlackUserId };
-  const out: Record<string, string> = {};
-  for (const [key, raw] of Object.entries(template)) {
-    let missing = false;
-    const value = raw.replace(/\{(\w+)\}/g, (_m, name: string) => {
-      const v = Object.hasOwn(placeholders, name) ? placeholders[name] : undefined;
-      if (v === undefined) {
-        missing = true;
-        return "";
-      }
-      return v;
-    });
-    if (missing) return {};
-    out[key] = value;
-  }
-  return out;
-}
-
 export interface SkillFrontmatter {
   name: string;
   description: string;
@@ -835,10 +873,19 @@ export function validateSandboxLayer(sandboxDir: string): SandboxValidation {
     const binaryName = descriptor.install?.binary ?? descriptor.id;
     const exePath = join(toolsDir, name, binaryName);
     const hasExe = isFile(exePath);
-    if (!hasExe && !out.hasDockerfile) {
+    const installed = descriptor.install?.files ?? [];
+    for (const file of installed) {
+      if (!isFile(join(toolsDir, name, file.from))) {
+        out.errors.push(
+          `tool "${descriptor.id}" declares install file "${file.from}" but tools/${name}/${file.from} is not a regular file`,
+        );
+      }
+    }
+    const deliversBinary = installed.some((file) => file.to === `/usr/local/bin/${binaryName}`);
+    if (!hasExe && !deliversBinary && !out.hasDockerfile) {
       out.errors.push(
         `tool "${descriptor.id}" (tools/${name}/) can't get its binary on PATH: ship an executable ` +
-          `"${binaryName}" in the folder, or add a sandbox/Dockerfile that installs it`,
+          `"${binaryName}" in the folder, declare it under install.files, or add a sandbox/Dockerfile that installs it`,
       );
     }
     const entry: ToolEntry = { dir: name, descriptorPath, descriptor, binary: binaryName };

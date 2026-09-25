@@ -6,7 +6,7 @@ description: Deliberately search, add to, or curate your long-term memory with t
 # memory — search, write, and curate what you remember
 
 Everything here goes through the typed `memory` tool. Memory is NOT a file: writing
-`memory/MEMORY.md` with `write` or shell commands lands on your computer's disk and is
+`memory/MEMORY.md` with `files` action `write` or shell commands lands on your computer's disk and is
 silently lost — the tool is the one real path.
 
 Every turn already auto-recalls your notebooks into "## What you remember" and

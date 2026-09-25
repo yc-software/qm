@@ -1,199 +1,155 @@
+import { applyRuntimeOptions } from "./runtime-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
-  applyPickerModelIds,
-  applyRuntimeOptions,
   defaultModelValue,
-  getHarnessOptions,
   getModelOptions,
-  getModelOptionsForHarness,
+  getHarnessOptions,
+  runtimeModelOptions,
+  transcriptModel,
   harnessSupportsEffort,
   harnessSupportsFastMode,
-  runtimeModelOptions,
 } from "../src/model-options.ts";
-import { modelSupportsFastMode, setFastModeModelIds } from "../src/pi-models.ts";
+import { metadata } from "./model-metadata.ts";
 
-test("the built-in picker includes Fable alongside Opus/Sonnet/Haiku", () => {
-  applyPickerModelIds(null);
-  const values = getModelOptions().map((o) => o.value);
-  assert.deepEqual(values, [
-    "claude-fable-5",
-    "claude-opus-5",
-    "claude-opus-4-8",
-    "claude-sonnet-5",
-    "claude-haiku-4-5",
-  ]);
-});
+const catalog = { future: metadata("future", "Future API Model"), custom: metadata("custom", "Custom", "gateway") };
 
-test("the org base model is the default selection when it's an available option", () => {
-  applyPickerModelIds(null, "claude-fable-5");
-  assert.equal(defaultModelValue(), "claude-fable-5");
-  applyPickerModelIds(["claude-opus-4-8", "claude-sonnet-5"], "claude-sonnet-5");
-  assert.equal(defaultModelValue(), "claude-sonnet-5");
-});
-
-test("without a base model (or one outside the picker) the first option is the default", () => {
-  applyPickerModelIds(null);
-  assert.equal(defaultModelValue(), "claude-fable-5");
-  applyPickerModelIds(["claude-sonnet-5", "claude-haiku-4-5"], "claude-fable-5");
-  assert.equal(defaultModelValue(), "claude-sonnet-5");
-  applyPickerModelIds(null, "not-a-real-model");
-  assert.equal(defaultModelValue(), "claude-fable-5");
-});
-
-test("an admin-configured list filters and orders the picker", () => {
-  applyPickerModelIds(["claude-fable-5", "claude-sonnet-5"]);
-  const values = getModelOptions().map((o) => o.value);
-  assert.deepEqual(values, ["claude-fable-5", "claude-sonnet-5"]);
-});
-
-test("the Codex picker can render and select the OpenAI model", () => {
-  applyPickerModelIds(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], "gpt-5.6-terra");
-  assert.deepEqual(
-    getModelOptions().map((o) => o.value),
-    ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
-  );
-  assert.equal(defaultModelValue(), "gpt-5.6-terra");
-});
-
-test("runtime options qualify harness/model pairs and select the effective pair", () => {
-  applyRuntimeOptions(
-    null,
-    ["pi", "codex"],
-    { pi: ["claude-opus-4-8"], codex: ["gpt-5.6-sol"] },
-    { harnessId: "codex", modelId: "gpt-5.6-sol" },
+test("server metadata controls picker labels, geometry, price, order and effective selection", async () => {
+  await applyRuntimeOptions(
+    "scope:a",
+    ["pi", "mock"],
+    { pi: ["custom", "future", "custom"], mock: ["future"] },
+    { harnessId: "mock", modelId: "future" },
+    catalog,
   );
   assert.deepEqual(
-    getModelOptions().map((o) => [o.value, o.harnessId]),
-    [
-      ["pi:claude-opus-4-8", "pi"],
-      ["codex:gpt-5.6-sol", "codex"],
-    ],
+    getModelOptions("scope:a").map((m) => m.value),
+    ["pi:custom", "pi:future", "mock:future"],
   );
-  assert.equal(defaultModelValue(), "codex:gpt-5.6-sol");
-  assert.deepEqual(getHarnessOptions(), [
-    { value: "pi", label: "Pi" },
-    { value: "codex", label: "Codex" },
-  ]);
+  assert.equal(defaultModelValue("scope:a"), "mock:future");
+  const model = getModelOptions("scope:a")[1]!;
+  assert.equal(model.label, "Future API Model");
+  assert.equal(model.model.contextWindow, 98765);
+  assert.deepEqual(model.model.cost, catalog.future.cost);
+  assert.equal(model.model.baseUrl, "");
+});
+
+test("empty, unknown, missing-metadata and unapproved lists stay empty", async () => {
+  for (const options of [
+    runtimeModelOptions([], { pi: ["future"] }, catalog),
+    runtimeModelOptions(["pi"], { pi: [] }, catalog),
+    runtimeModelOptions(["pi"], { pi: ["future"] }),
+    runtimeModelOptions(["pi"], { pi: ["unknown"] }, catalog),
+  ])
+    assert.deepEqual(options, []);
+  await applyRuntimeOptions("scope:empty", ["pi"], { pi: [] }, { harnessId: "pi", modelId: "future" }, catalog);
+  assert.deepEqual(getModelOptions("scope:empty"), []);
+  assert.equal(defaultModelValue("scope:empty"), "pi:future");
+  assert.equal(transcriptModel("scope:empty"), undefined);
+  assert.deepEqual(getHarnessOptions("scope:empty"), []);
+});
+
+test("scopes retain independent choices and an unloaded scope does not borrow another policy", async () => {
+  await applyRuntimeOptions("scope:a", ["pi"], { pi: ["future"] }, { harnessId: "pi", modelId: "future" }, catalog);
+  await applyRuntimeOptions(
+    "scope:b",
+    ["mock"],
+    { mock: ["custom"] },
+    { harnessId: "mock", modelId: "custom" },
+    catalog,
+  );
+  assert.equal(defaultModelValue("scope:a"), "pi:future");
+  assert.equal(defaultModelValue("scope:b"), "mock:custom");
+  assert.deepEqual(getModelOptions("scope:new"), []);
+});
+
+test("OpenRouter and custom provider metadata retains provider grouping", async () => {
+  const models = { "vendor/new": metadata("vendor/new", "Vendor: New", "openrouter"), custom: catalog.custom };
+  const options = runtimeModelOptions(["pi"], { pi: Object.keys(models) }, models);
   assert.deepEqual(
-    getModelOptionsForHarness("codex").map((o) => o.label),
-    ["GPT-5.6 Sol"],
+    options.map((m) => m.groupLabel),
+    ["Vendor", "Gateway"],
   );
 });
 
-test("runtime options preserve a fetched OpenRouter model as the selected web turn model", () => {
-  applyRuntimeOptions(
-    null,
-    ["pi"],
-    { pi: ["anthropic/claude-sonnet-4.5"] },
-    { harnessId: "pi", modelId: "anthropic/claude-sonnet-4.5" },
-    { "anthropic/claude-sonnet-4.5": { name: "Anthropic: Claude Sonnet 4.5", provider: "openrouter" } },
-  );
-  const option = getModelOptions()[0]!;
-  assert.equal(option.value, "pi:anthropic/claude-sonnet-4.5");
-  assert.equal(option.model.id, "anthropic/claude-sonnet-4.5");
-  assert.equal(option.model.provider, "openrouter");
-  assert.equal(defaultModelValue(), "pi:anthropic/claude-sonnet-4.5");
+test("picker has no model IDs, clone templates or runtime SDK model registry imports", async () => {
+  const source = ["pi-models.ts", "model-options.ts"]
+    .map((file) => readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8"))
+    .join("\n");
+  assert.doesNotMatch(source, /MODEL_CATALOG|CLONE_TEMPLATES|gpt-5|claude-opus|openrouter\/auto|import \{ getModel/);
 });
 
-test("runtime options hide retired persisted model ids", () => {
-  applyRuntimeOptions(
-    null,
-    ["claude", "codex"],
-    {
-      claude: ["claude-fable-5", "claude-sonnet-4-6", "claude-sonnet-5"],
-      codex: ["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
-    },
-    { harnessId: "claude", modelId: "claude-fable-5" },
-  );
-  assert.deepEqual(
-    getModelOptionsForHarness("claude").map((o) => o.label),
-    ["Fable 5", "Sonnet 5"],
-  );
-  assert.deepEqual(
-    getModelOptionsForHarness("codex").map((o) => o.label),
-    ["GPT-5.6 Sol", "GPT-5.6 Terra", "GPT-5.6 Luna"],
-  );
-});
-
-test("harness-only turn controls are exposed only where the adapter supports them", () => {
+test("harness controls retain their supported surfaces", async () => {
   assert.equal(harnessSupportsEffort("pi"), true);
-  assert.equal(harnessSupportsEffort("codex"), true);
-  assert.equal(harnessSupportsEffort("claude"), true);
   assert.equal(harnessSupportsEffort("opencode"), false);
-  assert.equal(harnessSupportsFastMode("pi"), true);
   assert.equal(harnessSupportsFastMode("claude"), true);
-  assert.equal(harnessSupportsFastMode("codex"), false);
-  assert.equal(harnessSupportsFastMode("opencode"), false);
+  assert.equal(harnessSupportsFastMode("codex"), true);
+  assert.equal(harnessSupportsFastMode("opencode"), true);
 });
 
-test("an all-retired list falls back within the approved harness", () => {
-  applyRuntimeOptions(null, ["codex"], { codex: ["gpt-5.5"] }, { harnessId: "codex", modelId: "gpt-5.5" });
-  assert.deepEqual(getHarnessOptions(), [{ value: "codex", label: "Codex" }]);
-  assert.deepEqual(
-    getModelOptionsForHarness("codex").map((o) => o.label),
-    ["GPT-5.6 Sol", "GPT-5.6 Terra", "GPT-5.6 Luna"],
+test("deleted selection retains identity and transcript rendering does not borrow a replacement", async () => {
+  await applyRuntimeOptions(
+    "scope:deleted",
+    ["pi"],
+    { pi: ["custom"] },
+    { harnessId: "pi", modelId: "future" },
+    catalog,
   );
-  assert.equal(defaultModelValue(), "codex:gpt-5.6-sol");
+  assert.equal(defaultModelValue("scope:deleted"), "pi:future");
+  assert.equal(transcriptModel("scope:deleted"), undefined);
+  assert.deepEqual(
+    getModelOptions("scope:deleted").map((model) => model.value),
+    ["pi:custom"],
+  );
+  await applyRuntimeOptions(
+    "scope:deleted",
+    ["pi"],
+    { pi: ["custom"] },
+    { harnessId: "pi", modelId: "custom" },
+    catalog,
+  );
+  assert.equal(defaultModelValue("scope:deleted"), "pi:custom");
+  assert.equal(transcriptModel("scope:deleted")?.id, "custom");
 });
 
-test("unknown ids are dropped; an all-unknown list falls back to the built-in set", () => {
-  applyPickerModelIds(["claude-fable-5", "not-a-real-model"]);
-  assert.deepEqual(
-    getModelOptions().map((o) => o.value),
-    ["claude-fable-5"],
-  );
-  applyPickerModelIds(["nope-1", "nope-2"]);
-  assert.deepEqual(
-    getModelOptions().map((o) => o.value),
-    ["claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"],
-  );
+test("gateway choices display model names and brands without changing serving identity", () => {
+  const cases = [
+    ["anthropic/claude-sonnet-5", "Sonnet 5", "anthropic", "Anthropic"],
+    ["anthropic/claude-fable-5-1", "Fable 5.1", "anthropic", "Anthropic"],
+    ["openai/gpt-6-astra", "GPT-6 Astra", "openai", "OpenAI"],
+    ["openai/gpt-5.6-terra", "GPT-5.6 Terra", "openai", "OpenAI"],
+    ["openai/gpt-5.6-1", "GPT-5.6 1", "openai", "OpenAI"],
+    ["gemini/gemini-3.8-flash", "Gemini 3.8 Flash", "google", "Google"],
+  ];
+  for (const [route, label, provider, group] of cases) {
+    const id = `gateway/${route}`;
+    const data = metadata(id!, route!, "qm:gateway");
+    const [option] = runtimeModelOptions(["pi"], { pi: [id] }, { [id]: data });
+    assert.equal(option?.label, label);
+    assert.equal(option?.buttonLabel, label);
+    assert.equal(option?.displayProvider, provider);
+    assert.equal(option?.groupLabel, group);
+    assert.equal(option?.value, `pi:${id}`);
+    assert.equal(option?.model.provider, "qm:gateway");
+    assert.equal(option?.model.id, id);
+    assert.deepEqual(option?.model.cost, data.cost);
+  }
 });
 
-test("duplicate ids are de-duped, preserving first occurrence order", () => {
-  applyPickerModelIds(["claude-sonnet-5", "claude-sonnet-5", "claude-opus-4-8"]);
-  assert.deepEqual(
-    getModelOptions().map((o) => o.value),
-    ["claude-sonnet-5", "claude-opus-4-8"],
+test("gateway display preserves explicit labels and leaves unknown families alone", () => {
+  const id = "gateway/anthropic/claude-sonnet-5";
+  const custom = { ...metadata(id, "Writing model", "qm:gateway"), buttonLabel: "Writer" };
+  const unknownId = "gateway/vendor/special-model";
+  const unknown = metadata(unknownId, "Special", "qm:gateway");
+  const [knownOption, unknownOption] = runtimeModelOptions(
+    ["pi"],
+    { pi: [id, unknownId] },
+    { [id]: custom, [unknownId]: unknown },
   );
-  applyPickerModelIds(null);
-});
-
-test("two panes on different scopes keep their own picker, default, and fast-mode set", () => {
-  applyRuntimeOptions("personal:me", ["pi"], { pi: ["claude-opus-5"] }, { harnessId: "pi", modelId: "claude-opus-5" });
-  setFastModeModelIds("personal:me", ["claude-opus-5"]);
-  applyRuntimeOptions(
-    "group:team",
-    ["codex"],
-    { codex: ["gpt-5.6-sol"] },
-    { harnessId: "codex", modelId: "gpt-5.6-sol" },
-  );
-  setFastModeModelIds("group:team", []);
-
-  assert.equal(
-    defaultModelValue("personal:me"),
-    "pi:claude-opus-5",
-    "the later scope must not capture the earlier one",
-  );
-  assert.equal(defaultModelValue("group:team"), "codex:gpt-5.6-sol");
-  assert.deepEqual(
-    getModelOptions("personal:me").map((o) => o.value),
-    ["pi:claude-opus-5"],
-  );
-  assert.equal(modelSupportsFastMode("personal:me", "claude-opus-5"), true);
-  assert.equal(modelSupportsFastMode("group:team", "claude-opus-5"), false);
-});
-
-test("a scope's own model list is derived without disturbing the active picker", () => {
-  applyPickerModelIds(["claude-opus-4-8"], "claude-opus-4-8");
-  const scoped = runtimeModelOptions(["pi", "codex"], { pi: ["claude-sonnet-5"], codex: ["gpt-5.6-sol"] });
-  assert.deepEqual(
-    scoped.map((o) => o.value),
-    ["pi:claude-sonnet-5", "codex:gpt-5.6-sol"],
-  );
-  assert.deepEqual(
-    getModelOptions().map((o) => o.value),
-    ["claude-opus-4-8"],
-    "reading a scope's options never re-points the composer's picker",
-  );
+  assert.equal(knownOption?.label, "Writing model");
+  assert.equal(knownOption?.buttonLabel, "Writer");
+  assert.equal(knownOption?.displayProvider, "anthropic");
+  assert.equal(unknownOption?.label, "Special");
+  assert.equal(unknownOption?.displayProvider, undefined);
 });

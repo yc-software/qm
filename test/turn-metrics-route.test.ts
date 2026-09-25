@@ -17,6 +17,7 @@ const SECRET = "core-signing-secret".repeat(3);
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "turn-metrics-")) }));
 const core = createServer(built.app, {
   signingSecret: SECRET,
+  webhookReceiver: built.webhookReceiver,
   metrics: built.metrics,
 });
 core.listen(0);

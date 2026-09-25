@@ -18,10 +18,15 @@ export function awsText(aws: AwsConfig, args: string[]): string {
 }
 
 export function deployLocksTable(aws: AwsConfig): string {
-  return `${aws.cluster}-deploy-locks`;
+  return aws.deploymentState?.table ?? `${aws.cluster}-deploy-locks`;
+}
+
+export function deploymentStateKey(aws: AwsConfig, key: string): string {
+  return aws.deploymentState ? `${aws.deploymentState.namespace}/${key}` : key;
 }
 
 export function acquireAwsLease(aws: AwsConfig, key = "deploy"): AwsLease {
+  key = deploymentStateKey(aws, key);
   const table = deployLocksTable(aws);
   const holder = randomUUID();
   const now = Math.floor(Date.now() / 1000);

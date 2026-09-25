@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createIdentityService, type DeactivationRecord } from "../src/identity/identity-service.ts";
+import type { ExternalMember } from "../src/identity/external-members.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 const id = createIdentityService();
@@ -15,6 +16,12 @@ test("classifies a flagged Slack Connect user as guest", () => {
   const p = id.classify("U2", true);
   assert.equal(p.type, "guest");
   assert.equal(id.isInternal(p), false);
+});
+
+test("resolves bot assertions as internal automation callers", () => {
+  const p = id.resolve({ externalId: "B1", isBot: true });
+  assert.equal(p.type, "internal");
+  assert.equal(id.isInternal(p), true);
 });
 
 test("audienceIsAllInternal is false if any member is non-internal (G1)", () => {
@@ -87,6 +94,36 @@ test("a running instance refreshes deactivations written by another instance", a
   assert.equal(reader.classify("U-leaver").type, "guest");
 });
 
+test("external members written by one instance reach another over the same backing", async () => {
+  const externalMembers = createMemoryMap<ExternalMember>();
+  const writer = createIdentityService(undefined, { externalMembers });
+  const reader = createIdentityService(undefined, { externalMembers });
+  await reader.hydrate();
+  const now = Date.now();
+  const member = (expiresAt: number): ExternalMember => ({
+    email: "pat@partner.example",
+    role: "member",
+    expiresAt,
+    invitedBy: "admin-alice",
+    createdAt: now,
+    updatedAt: now,
+  });
+  await writer.putExternalMember(member(now + 60_000));
+  assert.equal(reader.externalMember("pat@partner.example"), undefined);
+  await reader.refresh();
+  assert.equal(reader.externalMember("Pat@Partner.example")?.expiresAt, now + 60_000);
+  assert.equal(reader.classify("pat@partner.example").type, "internal");
+
+  await writer.putExternalMember(member(now - 1));
+  await reader.refresh();
+  assert.equal(reader.classify("pat@partner.example").type, "internal", "within the TTL the cache is served");
+  await reader.refresh(true);
+  assert.equal(reader.classify("pat@partner.example").type, "guest", "a forced refresh reads the store");
+  const late = createIdentityService(undefined, { externalMembers });
+  await late.hydrate();
+  assert.equal(late.classify("pat@partner.example").type, "guest");
+});
+
 test("a directory sync deactivates dropped members and self-heals when they reappear", async () => {
   const svc = createIdentityService();
   const out = await svc.recordDirectorySync(["U-gone"], ["U-here"]);
@@ -108,4 +145,15 @@ test("a manual deactivation survives roster churn — only reactivate() clears i
   assert.equal(svc.classify("U-fired").type, "guest");
   await svc.reactivate("U-fired");
   assert.equal(svc.classify("U-fired").type, "internal");
+});
+
+test("an overridden principal classifies internal even when flagged guest or deactivated", async () => {
+  const overrides = new Set(["u-contractor"]);
+  const svc = createIdentityService(createMemoryMap<DeactivationRecord>(), {
+    isOverridden: (externalId) => overrides.has(externalId.trim().toLowerCase()),
+  });
+  assert.equal(svc.classify("U-CONTRACTOR", true).type, "internal");
+  await svc.deactivate("U-CONTRACTOR");
+  assert.equal(svc.classify("U-CONTRACTOR").type, "internal");
+  assert.equal(svc.classify("U-OTHER", true).type, "guest");
 });

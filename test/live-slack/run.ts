@@ -6,6 +6,7 @@ import {
   Ctx,
   isLiveStatusText,
   liveRunExitCode,
+  releaseBlockers,
   slug,
   type Actor,
   type Env,
@@ -14,6 +15,7 @@ import {
 } from "./harness.ts";
 import { renderGallery } from "./gallery.ts";
 import { scenarios } from "./scenarios.ts";
+import { sandboxProviderScenarios, selectSandboxProviderScenarios } from "./scenarios-sandbox-providers.ts";
 import { startEventPump, TwinAdmin } from "./arga.ts";
 
 const OUT_DIR = path.join(import.meta.dirname, "out");
@@ -27,8 +29,17 @@ function requireEnv(name: string): string {
 async function buildEnv(): Promise<Env> {
   const qa = new SlackClient(requireEnv("SLACK_QA_USER_TOKEN"));
   const bot = new SlackClient(requireEnv("SLACK_BOT_TOKEN"));
-  const core = new CoreClient(requireEnv("CORE_API_URL"), requireEnv("CORE_SIGNING_SECRET"));
-  const [qaAuth, botAuth] = await Promise.all([qa.authTest(), bot.authTest()]);
+  const core = new CoreClient(
+    requireEnv("CORE_API_URL"),
+    requireEnv("CORE_SIGNING_SECRET"),
+    process.env.LIVE_E2E_ORG_SCOPE || undefined,
+  );
+  const [qaAuth, botAuth] = await Promise.all([
+    qa.authTest(),
+    process.env.LIVE_E2E_BOT_USER_ID ? undefined : bot.authTest(),
+  ]);
+  const botUserId = process.env.LIVE_E2E_BOT_USER_ID ?? botAuth?.userId;
+  if (!botUserId) throw new Error("SLACK_BOT_TOKEN auth.test returned no user id");
   const runId = process.env.GITHUB_RUN_ID
     ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`
     : String(Math.floor(Date.now() / 1000));
@@ -41,13 +52,16 @@ async function buildEnv(): Promise<Env> {
     qa,
     bot,
     core,
-    botUserId: botAuth.userId,
+    botUserId,
     qaUserId: qaAuth.userId,
     teamId: qaAuth.teamId,
     anthropicApiKey: requireEnv("ANTHROPIC_API_KEY"),
     judgeModel: process.env.LIVE_E2E_JUDGE_MODEL ?? "claude-haiku-4-5-20251001",
     ...(process.env.LIVE_E2E_TARGET_CHANNEL ? { targetChannel: process.env.LIVE_E2E_TARGET_CHANNEL } : {}),
-    sandbox: Boolean(process.env.SPRITES_TOKEN),
+    sandbox:
+      process.env.LIVE_E2E_SANDBOX_AVAILABLE === "1" ||
+      Boolean(process.env.SPRITES_TOKEN) ||
+      Boolean(process.env.FLY_API_TOKEN),
     actors: await resolveActors(),
     ...(twin ? { twin } : {}),
   };
@@ -56,18 +70,19 @@ async function buildEnv(): Promise<Env> {
 function maybeStartEventPump(env: Env): import("./arga.ts").EventPump | undefined {
   if (!env.twin) return undefined;
   const port = process.env.SLACK_EVENTS_PORT ?? "8182";
+  const targetUrl = process.env.SLACK_EVENTS_TARGET_URL ?? `http://127.0.0.1:${port}/slack/events`;
   const signingSecret = requireEnv("SLACK_SIGNING_SECRET");
   const pump = startEventPump({
     admin: env.twin,
     signingSecret,
-    targetUrl: `http://127.0.0.1:${port}/slack/events`,
+    targetUrl,
     botUserId: env.botUserId,
   });
-  console.log(`  🔁 twin event pump → 127.0.0.1:${port}`);
+  console.log(`  🔁 twin event pump → ${targetUrl}`);
   return pump;
 }
 
-async function warmUp(env: Env): Promise<void> {
+async function warmUp(env: Env, required = false): Promise<void> {
   const scratch = await env.qa.createChannel(`ci-${env.runId}-warmup`.toLowerCase().slice(0, 75));
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   try {
@@ -86,6 +101,7 @@ async function warmUp(env: Env): Promise<void> {
       await sleep(3000);
     }
     console.log(`  🔥 bot warm-up turn ${warmed ? "ok (instance warm)" : "no reply in 180s (proceeding anyway)"}`);
+    if (!warmed && required) throw new Error("release gate warm-up received no bot reply in 180s");
 
     for (const actor of env.actors.values())
       await actor.client.post(scratch, `warming up (${actor.name}) - ci ${env.runId}`);
@@ -147,10 +163,11 @@ function selectScenarios(env: Env): { selected: Scenario[]; skipped: ScenarioRes
   const filter = raw === "all" ? undefined : raw;
   const skipped: ScenarioResult[] = [];
   const selected: Scenario[] = [];
-  for (const s of scenarios) {
+  const providerScenarios = selectSandboxProviderScenarios(process.env.LIVE_E2E_SANDBOX_PROVIDERS);
+  for (const s of [...scenarios, ...providerScenarios]) {
     if (filter) {
       const byTag = filter.startsWith("@") && (s.tags ?? []).includes(filter.slice(1));
-      if (!byTag && !s.name.includes(filter)) continue;
+      if (!byTag && !s.name.includes(filter) && !s.tags?.includes("provider-execution")) continue;
     }
     const tags = s.tags ?? [];
     if (tags.includes("sandbox") && !env.sandbox) {
@@ -159,7 +176,7 @@ function selectScenarios(env: Env): { selected: Scenario[]; skipped: ScenarioRes
         status: "skip",
         attempts: 0,
         durationMs: 0,
-        skipReason: "SPRITES_TOKEN not set (no sandbox)",
+        skipReason: "sandbox unavailable",
       });
       continue;
     }
@@ -180,6 +197,16 @@ function selectScenarios(env: Env): { selected: Scenario[]; skipped: ScenarioRes
         attempts: 0,
         durationMs: 0,
         skipReason: "not a twin-backed run (needs ARGA_TWIN_ADMIN_URL)",
+      });
+      continue;
+    }
+    if (tags.includes("apps-gateway") && !(process.env.DEPLOY_APPS_DOMAIN && process.env.DEPLOY_APPS_SESSION_SECRET)) {
+      skipped.push({
+        name: s.name,
+        status: "skip",
+        attempts: 0,
+        durationMs: 0,
+        skipReason: "instance has no apps gateway (needs DEPLOY_APPS_DOMAIN + DEPLOY_APPS_SESSION_SECRET)",
       });
       continue;
     }
@@ -262,13 +289,15 @@ async function runScenario(env: Env, scenario: Scenario): Promise<ScenarioResult
   const started = Date.now();
   const quarantined = (scenario.tags ?? []).includes("quarantine");
   const sessionIds: string[] = [];
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  const maxAttempts = scenario.tags?.includes("provider-execution") ? 1 : 2;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const ctx = new Ctx(env, scenario, attempt);
     const timeoutMs = scenario.timeoutMs ?? 4 * 60_000;
     let timer: NodeJS.Timeout | undefined;
+    const operation = scenario.run(ctx);
     try {
       await Promise.race([
-        scenario.run(ctx),
+        operation,
         new Promise((_, reject) => {
           timer = setTimeout(() => reject(new Error(`scenario timed out after ${timeoutMs}ms`)), timeoutMs);
         }),
@@ -288,13 +317,14 @@ async function runScenario(env: Env, scenario: Scenario): Promise<ScenarioResult
         ...(quarantined ? { quarantined } : {}),
       };
     } catch (err) {
+      if (scenario.tags?.includes("provider-execution")) await operation.catch(() => {});
       const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
       console.error(`  ❌ ${scenario.name} attempt ${attempt}: ${message.split("\n")[0]}`);
       const timeline = ctx.timeline.toJSON();
       const ids = await dumpTranscript(env, scenario, ctx).catch(() => [] as string[]);
       sessionIds.push(...ids);
       await ctx.cleanup().catch(() => {});
-      if (attempt === 2) {
+      if (attempt === maxAttempts) {
         const coreErrors = await env.core
           .listErrors()
           .then((r) =>
@@ -307,7 +337,7 @@ async function runScenario(env: Env, scenario: Scenario): Promise<ScenarioResult
         return {
           name: scenario.name,
           status: "fail",
-          attempts: 2,
+          attempts: maxAttempts,
           durationMs: Date.now() - started,
           error: message,
           timeline,
@@ -374,29 +404,40 @@ async function main(): Promise<void> {
 }
 
 async function runCatalog(env: Env): Promise<void> {
-  await warmUp(env);
+  const releaseGate = process.env.LIVE_E2E_GATE === "1";
+  await warmUp(env, releaseGate);
   const picked = selectScenarios(env);
   const { selected, skipped } = applyShard(picked.selected, picked.skipped);
+  if (releaseGate) {
+    for (const provider of selectSandboxProviderScenarios(process.env.LIVE_E2E_SANDBOX_PROVIDERS)) {
+      if (!selected.some((scenario) => scenario.name === provider.name))
+        throw new Error(`required provider scenario missing from release gate: ${provider.name}`);
+    }
+  }
+  if (releaseGate && selected.length === 0) throw new Error("release gate selected no scenarios");
   for (const s of skipped) console.log(`  ⏭️  ${s.name}: skipped — ${s.skipReason}`);
   const concurrency = Number(process.env.LIVE_E2E_CONCURRENCY) || 8;
   console.log(
     `live-e2e run ${env.runId}: ${selected.length} scenarios (concurrency ${concurrency}), agent <@${env.botUserId}>, QA user <@${env.qaUserId}>`,
   );
 
-  const parallelLane = selected.filter((s) => s.lane === "parallel");
+  const providerLane = selected.filter((s) => s.tags?.includes("provider-execution"));
+  const parallelLane = selected.filter((s) => s.lane === "parallel" && !s.tags?.includes("provider-execution"));
   const dmLane = selected.filter((s) => s.lane === "dm");
   const exclusiveLane = selected.filter((s) => s.lane === "exclusive");
-  const [parallelResults, dmResults] = await Promise.all([
+  const [parallelResults, dmResults, providerResults] = await Promise.all([
     runLane(env, parallelLane, concurrency),
     runLane(env, dmLane, 1),
+    runLane(env, providerLane, sandboxProviderScenarios.length),
   ]);
   const exclusiveResults = await runLane(env, exclusiveLane, 1);
 
-  const results = [...parallelResults, ...dmResults, ...exclusiveResults, ...skipped];
+  const results = [...parallelResults, ...dmResults, ...providerResults, ...exclusiveResults, ...skipped];
   results.sort((a, b) => a.name.localeCompare(b.name));
   const failures = results.filter((r) => r.status === "fail" && !r.quarantined);
   const quarantinedFails = results.filter((r) => r.status === "fail" && r.quarantined);
   const flaky = results.filter((r) => r.status === "flaky");
+  const blockers = releaseGate ? releaseBlockers(results) : failures;
 
   const summary = renderSummary(results, env.runId);
   await writeFile(
@@ -412,16 +453,16 @@ async function runCatalog(env: Env): Promise<void> {
     `\n${results.length - failures.length - quarantinedFails.length - flaky.length - skipped.length} passed, ${flaky.length} flaky, ${failures.length} failed, ${quarantinedFails.length} quarantined-fail, ${skipped.length} skipped`,
   );
 
-  if (failures.length) {
+  if (blockers.length) {
     const runUrl =
       process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
         ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
         : "(local run)";
-    const causeLines = failures
+    const causeLines = blockers
       .filter((f) => f.coreErrors?.length)
       .map((f) => `• ${f.name}: ${f.coreErrors![0]!.slice(0, 300)}`);
     const text =
-      `:rotating_light: live-e2e failed — ${failures.map((f) => f.name).join(", ")}\n${runUrl}` +
+      `:rotating_light: live-e2e failed — ${blockers.map((f) => f.name).join(", ")}\n${runUrl}` +
       (causeLines.length ? `\n${causeLines.join("\n")}` : "");
     if (process.env.SLACK_ALERT_REQUIRED === "1") {
       const alertBot = process.env.SLACK_ALERT_BOT_TOKEN
@@ -435,7 +476,7 @@ async function runCatalog(env: Env): Promise<void> {
     }
   }
 
-  process.exitCode = liveRunExitCode(failures.length, process.env.LIVE_E2E_OBSERVATIONAL === "1");
+  process.exitCode = liveRunExitCode(blockers.length, process.env.LIVE_E2E_OBSERVATIONAL === "1");
 }
 
 main().catch((err) => {

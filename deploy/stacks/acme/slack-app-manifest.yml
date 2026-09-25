@@ -34,6 +34,8 @@ oauth_config:
       - files:write
       - reactions:write
       - reactions:read
+      - pins:read
+      - pins:write
 settings:
   event_subscriptions:
     bot_events:

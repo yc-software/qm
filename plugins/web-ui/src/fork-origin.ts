@@ -23,7 +23,6 @@ export function createForkOriginController<T>(options: {
   redraw(): void;
   setError(error: string): void;
 }) {
-  let refreshGeneration = 0;
   let toggleGeneration = 0;
   let loadingGeneration: number | null = null;
   return {
@@ -31,20 +30,6 @@ export function createForkOriginController<T>(options: {
       options.setError("");
       toggleGeneration++;
       loadingGeneration = null;
-    },
-    beginRefresh() {
-      return ++refreshGeneration;
-    },
-    invalidateRefresh() {
-      refreshGeneration++;
-    },
-    isCurrentRefresh(generation: number) {
-      return generation === refreshGeneration && options.current();
-    },
-    applyRefresh(generation: number, messages: T[] | null) {
-      if (generation !== refreshGeneration || !options.current()) return false;
-      if (messages) options.state.inheritedMessages = messages;
-      return true;
     },
     async navigate() {
       try {
@@ -85,9 +70,8 @@ export function forkOriginView(view: ForkOriginView | null): TemplateResult | ty
   if (!view) return nothing;
   return html`<div class="fork-origin-row">
     <button class="fork-origin-badge" type="button" @click=${view.navigate}>
-      ${view.icon ?? nothing}<span>Forked from ${view.title}</span>${
-        view.messageCount ? html`<span>· ${view.messageCount} messages</span>` : nothing
-      }
+      ${view.icon ?? nothing}<span>Forked from <bdi>${view.title}</bdi></span
+      >${view.messageCount ? html`<span>· ${view.messageCount} messages</span>` : nothing}
     </button>
     <button class="fork-origin-toggle" type="button" @click=${view.toggle}>${view.expanded ? "hide" : "show"}</button>
   </div>`;

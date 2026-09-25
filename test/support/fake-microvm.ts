@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import type {
   AwsMicrovmApi,
   MicrovmDescription,
@@ -24,6 +25,7 @@ export interface FakeMicrovm {
   s3store: Map<string, Uint8Array>;
   commands: string[];
   runCount: number;
+  failS3Reads: boolean;
   killBody(id: string): void;
 }
 
@@ -31,7 +33,7 @@ export function installFakeMicrovm(): FakeMicrovm {
   const bodies = new Map<string, FakeBody>();
   const s3store = new Map<string, Uint8Array>();
   let n = 0;
-  const self = { runCount: 0 } as FakeMicrovm;
+  const self = { runCount: 0, failS3Reads: false } as FakeMicrovm;
 
   const byEndpoint = (endpoint: string): FakeBody | undefined =>
     [...bodies.values()].find((b) => b.endpoint === endpoint);
@@ -95,7 +97,33 @@ export function installFakeMicrovm(): FakeMicrovm {
   function exec(body: FakeBody, cmd: string): { stdout: string; stderr: string; code: number; timedOut: boolean } {
     self.commands.push(cmd);
     const ok = { stdout: "", stderr: "", code: 0, timedOut: false };
-    if (cmd.includes("tar --null -T - -cf '/tmp/agent-home.tar'")) {
+    const sized = cmd.match(/wc -c < '([^']+)'$/);
+    if (sized) {
+      const v = body.fs.get(sized[1]!);
+      return v ? { ...ok, stdout: `${v.length}\n` } : { ...ok, code: 1, stderr: "no such file" };
+    }
+    const cut = cmd.match(/^dd if='([^']+)' of='([^']+)' bs=(\d+) skip=(\d+) count=1$/);
+    if (cut) {
+      const src = body.fs.get(cut[1]!);
+      if (!src) return { ...ok, code: 1, stderr: "dd: no such file" };
+      const bs = Number(cut[3]);
+      const skip = Number(cut[4]);
+      body.fs.set(cut[2]!, src.subarray(skip * bs, Math.min((skip + 1) * bs, src.length)));
+      return ok;
+    }
+    const appended = cmd.match(/^cat '([^']+)' >> '([^']+)' && rm -f '\1'$/);
+    if (appended) {
+      const part = body.fs.get(appended[1]!) ?? new Uint8Array(0);
+      body.fs.set(appended[2]!, Buffer.concat([body.fs.get(appended[2]!) ?? new Uint8Array(0), part]));
+      body.fs.delete(appended[1]!);
+      return ok;
+    }
+    const truncated = cmd.match(/^mkdir -p '[^']+' && : > '([^']+)'$/);
+    if (truncated) {
+      body.fs.set(truncated[1]!, new Uint8Array(0));
+      return ok;
+    }
+    if (cmd.includes("-cf '/tmp/agent-home.tar'")) {
       const dump: Record<string, string> = {};
       for (const [p, v] of body.fs)
         if (p.startsWith("/root") && p !== "/tmp/agent-home.tar") dump[p] = Buffer.from(v).toString("base64");
@@ -113,7 +141,7 @@ export function installFakeMicrovm(): FakeMicrovm {
     }
     if (cmd.includes("tar -xf '.ro-layers.tar'")) return ok;
     if (cmd.startsWith("mkdir -p") || cmd.startsWith("rm -f") || cmd.startsWith("rm -rf")) {
-      if (cmd.startsWith("rm -f '/tmp/agent-home.tar'")) body.fs.delete("/tmp/agent-home.tar");
+      if (cmd.startsWith("rm -f ")) for (const [, path] of cmd.matchAll(/'([^']+)'/g)) body.fs.delete(path!);
       return ok;
     }
     if (cmd.includes("find ") && cmd.includes("-type f")) {
@@ -150,21 +178,46 @@ export function installFakeMicrovm(): FakeMicrovm {
     return json(404, { error: "no route" });
   }) as unknown as typeof fetch;
 
+  const uploads = new Map<string, Map<number, Uint8Array>>();
   const s3 = {
     async send(cmd: unknown): Promise<unknown> {
-      const c = cmd as { constructor: { name: string }; input: { Key: string; Body?: Uint8Array } };
+      const c = cmd as {
+        constructor: { name: string };
+        input: { Key: string; Body?: Uint8Array; UploadId?: string; PartNumber?: number };
+      };
       const name = c.constructor.name;
       if (name === "PutObjectCommand") {
         s3store.set(c.input.Key, c.input.Body as Uint8Array);
         return {};
       }
       if (name === "GetObjectCommand") {
+        if (self.failS3Reads) throw Object.assign(new Error("simulated S3 outage"), { name: "ServiceUnavailable" });
         const v = s3store.get(c.input.Key);
-        if (!v) throw new AwsApiError("NoSuchKey", 404);
-        return { Body: { transformToByteArray: async () => v } };
+        if (!v) throw Object.assign(new Error("NoSuchKey"), { name: "NoSuchKey", $metadata: { httpStatusCode: 404 } });
+        return { Body: Readable.from([Buffer.from(v)]), ContentLength: v.length };
       }
       if (name === "DeleteObjectCommand") {
         s3store.delete(c.input.Key);
+        return {};
+      }
+      if (name === "CreateMultipartUploadCommand") {
+        const UploadId = `upload-${uploads.size + 1}`;
+        uploads.set(UploadId, new Map());
+        return { UploadId };
+      }
+      if (name === "UploadPartCommand") {
+        uploads.get(c.input.UploadId!)!.set(c.input.PartNumber!, c.input.Body as Uint8Array);
+        return { ETag: `etag-${c.input.PartNumber}` };
+      }
+      if (name === "CompleteMultipartUploadCommand") {
+        const parts = uploads.get(c.input.UploadId!)!;
+        uploads.delete(c.input.UploadId!);
+        const ordered = [...parts.entries()].sort(([a], [b]) => a - b).map(([, bytes]) => bytes);
+        s3store.set(c.input.Key, Buffer.concat(ordered));
+        return {};
+      }
+      if (name === "AbortMultipartUploadCommand") {
+        uploads.delete(c.input.UploadId!);
         return {};
       }
       throw new Error(`fake s3: unsupported command ${name}`);

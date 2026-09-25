@@ -16,6 +16,24 @@ export function jsonbSafeStringify(value: unknown): string {
   return JSON.stringify(value, (_k, v) => (typeof v === "string" ? v.replace(/\u0000/g, "") : v));
 }
 
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const LONE_SURROGATE_ALL = new RegExp(LONE_SURROGATE, "g");
+
 export function hasLoneSurrogate(s: string): boolean {
-  return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s);
+  return LONE_SURROGATE.test(s);
+}
+
+export function pgTextSafe(s: string): string {
+  let out = s;
+  if (out.includes("\u0000")) out = out.replaceAll("\u0000", "");
+  if (hasLoneSurrogate(out)) out = out.replace(LONE_SURROGATE_ALL, "\uFFFD");
+  return out;
+}
+
+export function absoluteAppLinks(text: string, baseUrl: string | undefined): string {
+  if (!baseUrl) return text;
+  return text.replace(
+    /(^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\2[ \t]*$|(`+)[^\n]*?\3)|\[([^\]\n]+)\]\((\/d\/[^\s)]+)\)/gm,
+    (match, code, _fence, _ticks, label, path) => (code ? match : `[${label}](${new URL(path, baseUrl).href})`),
+  );
 }

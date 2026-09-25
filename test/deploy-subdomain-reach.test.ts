@@ -7,7 +7,7 @@ import { request as httpRequest, createServer as createHttpServer } from "node:h
 import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/api/app.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import type { DeployEndpoint, DeployProvider } from "../src/deploy/deploy-provider.ts";
@@ -16,6 +16,8 @@ import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId } from "../src/types.ts";
+import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
+import { viewerIdentityKey } from "../src/deploy/access-token.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 
 const audits: Array<(e: AuditEvent) => void> = [];
@@ -341,5 +343,145 @@ test("subdomain ingress: a non-apps Host is not gated (normal routing proceeds)"
     assert.notEqual(r.status, 401, "a normal host must not hit the subdomain gate");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("subdomain ingress: the gateway vouches for the verified viewer with a per-deployment identity header", async () => {
+  const seen: Array<Record<string, string | string[] | undefined>> = [];
+  const upstream = createHttpServer((req, res) => {
+    seen.push({ ...req.headers });
+    res.end("UPSTREAM OK");
+  });
+  upstream.listen(0);
+  const upstreamPort = (upstream.address() as AddressInfo).port;
+
+  const app = appServingUpstream(upstreamPort);
+  const d = await app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    name: "idsite",
+  });
+  const signingSecret = "s".repeat(64);
+  const server = createServer(app, {
+    signingSecret,
+    deployAppsDomain: "apps.example.com",
+    deployGateSecret: "gate-secret",
+    auditLog,
+    ...SESSION_DEPS,
+  });
+  server.listen(0);
+  const port = (server.address() as AddressInfo).port;
+  const host = "idsite.apps.example.com";
+
+  try {
+    const res = await httpGet(port, "/", {
+      Host: host,
+      Cookie: `portal_session=${mintPortalSession("U1")}`,
+      [PORTAL_IDENTITY_HEADER]: "forged-by-client",
+    });
+    assert.equal(res.status, 200);
+    const tok = seen[0]![PORTAL_IDENTITY_HEADER];
+    assert.equal(typeof tok, "string", "the viewer identity header reaches the app");
+    assert.notEqual(tok, "forged-by-client", "a client-supplied copy never transits the gateway");
+    const claims = await verifyPortalIdentity(String(tok), viewerIdentityKey(signingSecret, d.id), Date.now());
+    assert.equal(claims?.p, "U1", "the token verifies with the app's own per-deployment key and names the viewer");
+    assert.equal(
+      await verifyPortalIdentity(String(tok), viewerIdentityKey(signingSecret, "other-deployment"), Date.now()),
+      null,
+      "another deployment's key rejects it — no cross-app reuse",
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  }
+});
+
+test("subdomain ingress: the SameSite=None twin is honoured only for framed requests to embeddable apps", async () => {
+  const upstream = createHttpServer((req, res) => {
+    if (req.url?.startsWith("/xfo")) res.setHeader("x-frame-options", "DENY");
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end(`cookie=${req.headers.cookie ?? ""}`);
+  });
+  upstream.listen(0);
+  const app = appServingUpstream((upstream.address() as AddressInfo).port);
+  const d = await app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    name: "framed",
+  });
+  const server = createInsecureTestServer(app, {
+    deployAppsDomain: "apps.example.com",
+    deployGateSecret: "gate-secret",
+    auditLog,
+    ...SESSION_DEPS,
+  });
+  server.listen(0);
+  const port = (server.address() as AddressInfo).port;
+  const host = "framed.apps.example.com";
+  const twin = `portal_session_x=${mintPortalSession("U1")}`;
+  const frameDoc = { "Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "cross-site" };
+
+  try {
+    const notOptedIn = await httpGet(port, "/", { Host: host, Cookie: twin, ...frameDoc });
+    assert.equal(notOptedIn.status, 401, "an app that has not opted in never honours the twin");
+    assert.ok(!String(notOptedIn.headers["content-security-policy"] ?? "").includes("frame-ancestors"));
+
+    await app.setDeploymentEmbedAncestors(d.id, ["https://internal.example.com", "https://mail.google.com"]);
+
+    const framed = await httpGet(port, "/", { Host: host, Cookie: twin, ...frameDoc });
+    assert.equal(framed.status, 200, "the frame document authenticates with the twin");
+    assert.match(
+      String(framed.headers["content-security-policy"]),
+      /frame-ancestors 'self' https:\/\/internal\.example\.com https:\/\/mail\.google\.com/,
+    );
+    assert.ok(!framed.body.includes("portal_session_x"), "the twin never reaches the app container");
+
+    const inFrame = await httpGet(port, "/api", {
+      Host: host,
+      Cookie: twin,
+      "Sec-Fetch-Dest": "empty",
+      "Sec-Fetch-Site": "same-origin",
+    });
+    assert.equal(inFrame.status, 200, "the app's own requests from inside the frame authenticate too");
+
+    const subresource = await httpGet(port, "/", {
+      Host: host,
+      Cookie: twin,
+      "Sec-Fetch-Dest": "image",
+      "Sec-Fetch-Site": "cross-site",
+    });
+    assert.equal(subresource.status, 401, "a cross-site <img> or fetch from anywhere else is nobody, as with Lax");
+
+    const noMetadata = await httpGet(port, "/", { Host: host, Cookie: twin });
+    assert.equal(noMetadata.status, 401, "without Sec-Fetch metadata the twin is ignored and the Lax cookie rules");
+
+    const lax = await httpGet(port, "/", { Host: host, Cookie: `portal_session=${mintPortalSession("U1")}` });
+    assert.equal(lax.status, 200, "the original cookie works exactly as before");
+
+    const stranger = await httpGet(port, "/", {
+      Host: host,
+      Cookie: `portal_session_x=${mintPortalSession("U9")}`,
+      ...frameDoc,
+    });
+    assert.equal(stranger.status, 403, "a signed-in stranger is still denied by the ACL");
+    assert.match(String(stranger.headers["content-security-policy"]), /frame-ancestors 'self' https:\/\/internal/);
+
+    const anonymousFrame = await httpGet(port, "/", { Host: host, ...frameDoc });
+    assert.equal(anonymousFrame.status, 401);
+    assert.match(String(anonymousFrame.headers["content-security-policy"]), /frame-ancestors 'self'/);
+
+    const deferred = await httpGet(port, "/xfo", { Host: host, Cookie: twin, ...frameDoc });
+    assert.equal(deferred.headers["x-frame-options"], "DENY");
+    assert.ok(
+      !String(deferred.headers["content-security-policy"] ?? "").includes("frame-ancestors"),
+      "an app's own framing header wins; adding frame-ancestors would make browsers ignore it",
+    );
+  } finally {
+    server.close();
+    upstream.close();
   }
 });

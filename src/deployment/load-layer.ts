@@ -3,9 +3,10 @@ import { join } from "node:path";
 import {
   compileApproval,
   parseToolDescriptor,
-  type ToolCredentialBroker,
   type ToolCredentialPath,
+  type ToolCredentialBroker,
   type ToolDescriptor,
+  type ToolInstallFile,
 } from "./deployment-layer.ts";
 import { credentialServiceForPath } from "../credentials/resident-paths.ts";
 import type { ResidentAuthConnector } from "../credentials/resident-auth.ts";
@@ -19,8 +20,10 @@ export interface DeploymentLayerRuntime {
   hints: string[];
   credentialPaths: ToolCredentialPath[];
   splitEnvTemplates: Record<string, string>[];
-  commandRules: CommandRule[];
   brokeredTools: BrokeredLayerTool[];
+  commandRules: CommandRule[];
+  credentialTools: LayerCredentialTool[];
+  installFiles: LayerInstallFile[];
 }
 
 export interface BrokeredLayerTool {
@@ -28,6 +31,17 @@ export interface BrokeredLayerTool {
   binary: string;
   roots: string[];
   broker: ToolCredentialBroker;
+}
+
+export interface LayerInstallFile {
+  to: string;
+  mode: string;
+  content: string;
+}
+
+export interface LayerCredentialTool {
+  service: string;
+  roots: string[];
 }
 
 export function emptyDeploymentLayer(): DeploymentLayerRuntime {
@@ -39,9 +53,38 @@ export function emptyDeploymentLayer(): DeploymentLayerRuntime {
     hints: [],
     credentialPaths: [],
     splitEnvTemplates: [],
-    commandRules: [],
     brokeredTools: [],
+    commandRules: [],
+    credentialTools: [],
+    installFiles: [],
   };
+}
+
+function assertDistinctInstallTargets(tools: ToolDescriptor[]): void {
+  const owners = new Map<string, string>();
+  for (const tool of tools) {
+    for (const file of tool.install?.files ?? []) {
+      const owner = owners.get(file.to);
+      if (owner !== undefined && owner !== tool.id) {
+        throw new Error(
+          `deployment layer tools "${owner}" and "${tool.id}" both install ${JSON.stringify(file.to)} — every installed path needs exactly one owner`,
+        );
+      }
+      owners.set(file.to, tool.id);
+    }
+  }
+}
+
+export function declaredInstallFiles(
+  tools: ToolDescriptor[],
+  read: (tool: ToolDescriptor, file: ToolInstallFile) => string,
+): LayerInstallFile[] {
+  assertDistinctInstallTargets(tools);
+  return tools
+    .flatMap((tool) =>
+      (tool.install?.files ?? []).map((file) => ({ to: file.to, mode: file.mode, content: read(tool, file) })),
+    )
+    .sort((a, b) => a.to.localeCompare(b.to));
 }
 
 function assertDisjointCredentialLinks(tools: ToolDescriptor[]): void {
@@ -73,8 +116,20 @@ function toolService(tool: ToolDescriptor, why: string): string {
   );
 }
 
-export function resolvedDeploymentLayer(dir: string, tools: ToolDescriptor[]): DeploymentLayerRuntime {
+function toolServices(tool: ToolDescriptor): string[] {
+  const services = new Set(
+    (tool.auth?.credentialPaths ?? []).flatMap((entry) => credentialServiceForPath(entry.path) ?? []),
+  );
+  return services.has(tool.id) || services.size === 0 ? [tool.id] : [...services];
+}
+
+export function resolvedDeploymentLayer(
+  dir: string,
+  tools: ToolDescriptor[],
+  installFiles: LayerInstallFile[] = [],
+): DeploymentLayerRuntime {
   assertDisjointCredentialLinks(tools);
+  assertDistinctInstallTargets(tools);
   const withAuth = tools.filter((t) => t.auth);
   const brokered = withAuth.filter((t) => t.auth!.broker);
   if (brokered.length > 1) {
@@ -85,24 +140,20 @@ export function resolvedDeploymentLayer(dir: string, tools: ToolDescriptor[]): D
   return {
     dir,
     tools,
-    connectors: withAuth.map((t) => ({
-      id: t.id,
-      label: t.label ?? t.id,
-      check: t.auth!.check,
-      reauth: t.auth!.reauth,
-    })),
+    connectors: withAuth
+      .filter((t) => !t.auth!.broker)
+      .map((t) => ({
+        id: t.id,
+        label: t.label ?? t.id,
+        check: t.auth!.check,
+        reauth: t.auth!.reauth,
+      })),
     advertisedTools: tools.flatMap((t) => (t.advertise ? [t.advertise] : [])),
     hints: tools.flatMap((t) => t.hints ?? []),
     credentialPaths: [
       ...new Map(withAuth.flatMap((t) => t.auth!.credentialPaths ?? []).map((entry) => [entry.path, entry])).values(),
     ],
     splitEnvTemplates: withAuth.flatMap((t) => (t.auth!.splitEnv ? [t.auth!.splitEnv] : [])),
-    commandRules: tools.flatMap((tool) =>
-      (tool.approvals ?? []).map((approval) => ({
-        ...compileApproval(tool.install?.binary ?? tool.id, approval),
-        ...(approval.reason ? { reason: approval.reason } : {}),
-      })),
-    ),
     brokeredTools: brokered.map((t) => {
       const service = toolService(t, "a credential broker");
       return {
@@ -114,6 +165,21 @@ export function resolvedDeploymentLayer(dir: string, tools: ToolDescriptor[]): D
         broker: t.auth!.broker!,
       };
     }),
+    commandRules: tools.flatMap((tool) =>
+      (tool.approvals ?? []).map((approval) => ({
+        ...compileApproval(tool.install?.binary ?? tool.id, approval),
+        ...(approval.reason ? { reason: approval.reason } : {}),
+      })),
+    ),
+    credentialTools: withAuth.flatMap((t) =>
+      toolServices(t).map((service) => ({
+        service,
+        roots: (t.auth!.credentialPaths ?? []).flatMap((entry) =>
+          credentialServiceForPath(entry.path) === service ? [entry.path] : [],
+        ),
+      })),
+    ),
+    installFiles,
   };
 }
 
@@ -126,8 +192,10 @@ export function replaceDeploymentLayer(target: DeploymentLayerRuntime, source: D
     "hints",
     "credentialPaths",
     "splitEnvTemplates",
-    "commandRules",
     "brokeredTools",
+    "commandRules",
+    "credentialTools",
+    "installFiles",
   ] as const) {
     target[key].splice(0, target[key].length, ...(source[key] as never[]));
   }
@@ -143,6 +211,7 @@ export function loadDeploymentLayer(dir: string): DeploymentLayerRuntime {
   }
   const toolsDir = join(dir, "tools");
   const tools: ToolDescriptor[] = [];
+  const toolDirs = new Map<string, string>();
   if (existsSync(toolsDir)) {
     const entries = readdirSync(toolsDir, { withFileTypes: true })
       .filter((entry) => !JUNK_FILE.test(entry.name))
@@ -164,7 +233,23 @@ export function loadDeploymentLayer(dir: string): DeploymentLayerRuntime {
       const desc = parseToolDescriptor(readFileSync(path, "utf8"), path);
       if (tools.some((t) => t.id === desc.id)) throw new Error(`${path}: duplicate tool id "${desc.id}"`);
       tools.push(desc);
+      toolDirs.set(desc.id, join(toolsDir, entry.name));
     }
   }
-  return resolvedDeploymentLayer(dir, tools);
+  const installFiles = declaredInstallFiles(tools, (tool, file) =>
+    readLayerTextFile(join(toolDirs.get(tool.id)!, file.from)),
+  );
+  return resolvedDeploymentLayer(dir, tools, installFiles);
+}
+
+function readLayerTextFile(path: string): string {
+  if (!existsSync(path)) throw new Error(`${path} is declared under install.files but does not exist`);
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`${path} must be a regular file`);
+  const bytes = readFileSync(path);
+  const text = bytes.toString("utf8");
+  if (bytes.includes(0) || !Buffer.from(text, "utf8").equals(bytes)) {
+    throw new Error(`${path} must be UTF-8 text — the deployment layer delivers text tools only`);
+  }
+  return text;
 }

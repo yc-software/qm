@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { QmConfig } from "./config.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { deploymentSecretValue } from "./util.ts";
+import { emailSecretNames, serviceSecretValue } from "./secrets.ts";
 
 const PROBE_TIMEOUT_MS = 10_000;
 
@@ -71,6 +72,7 @@ export async function flySandboxTokenPreflight(
   config: QmConfig,
   secrets: ReadonlyMap<string, string>,
   fetchImpl: typeof fetch = fetch,
+  report = true,
 ): Promise<void> {
   const app = config.sandbox?.app?.trim();
   if (!app) return;
@@ -99,7 +101,7 @@ export async function flySandboxTokenPreflight(
     warn(`the Fly API returned HTTP ${response.status} while verifying FLY_SANDBOX_API_TOKEN — continuing`);
     return;
   }
-  step(`Fly sandbox app ${app}: FLY_SANDBOX_API_TOKEN ok`);
+  if (report) step(`Fly sandbox app ${app}: FLY_SANDBOX_API_TOKEN ok`);
 }
 
 type SmtpTlsMode = "starttls" | "implicit" | "none";
@@ -263,10 +265,22 @@ export async function smtpVerify(options: SmtpVerifyOptions): Promise<void> {
   }
 }
 
-export async function emailTransportPreflight(config: QmConfig, secrets: ReadonlyMap<string, string>): Promise<void> {
+export function emailTransportConfigured(config: QmConfig, secrets: ReadonlyMap<string, string>): boolean {
+  const names = emailSecretNames(config);
+  return names.length > 0 && names.every((name) => Boolean(serviceSecretValue(config, "auth", name, secrets)?.trim()));
+}
+
+export async function emailTransportPreflight(
+  config: QmConfig,
+  secrets: ReadonlyMap<string, string>,
+  report = true,
+): Promise<void> {
   if (!config.services.includes("auth")) return;
+  const configured = emailTransportConfigured(config, secrets);
+  if (!configured) step("sign-in email: disabled; use qm admin-login for administrator access");
   const transport = config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp" ? "smtp" : "resend";
-  const value = (name: string): string | undefined => deploymentSecretValue(name, secrets.get(name))?.trim();
+  const value = (name: string): string | undefined =>
+    (serviceSecretValue(config, "auth", name, secrets) ?? deploymentSecretValue(name, secrets.get(name)))?.trim();
   if (transport === "resend") {
     const stray = ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"].filter((name) => value(name));
     if (stray.length) {
@@ -278,11 +292,12 @@ export async function emailTransportPreflight(config: QmConfig, secrets: Readonl
     return;
   }
   if (value("RESEND_API_KEY")) {
-    warn(
-      'RESEND_API_KEY is set but env.auth.AUTH_EMAIL_TRANSPORT is "smtp" — the value is unused; ' +
-        'remove it or set the transport to "resend"',
+    step(
+      'RESEND_API_KEY is set but env.auth.AUTH_EMAIL_TRANSPORT is "smtp" — the sign-in broker ignores it; ' +
+        "core still uses it to email external-user invitations",
     );
   }
+  if (!configured) return;
   const host = value("SMTP_HOST");
   const username = value("SMTP_USERNAME");
   const password = value("SMTP_PASSWORD");
@@ -302,5 +317,5 @@ export async function emailTransportPreflight(config: QmConfig, secrets: Readonl
     warn(`could not verify the SMTP credentials against ${host}:${port}: ${errMessage(e)} — continuing`);
     return;
   }
-  step(`SMTP relay ${host}:${port}: credentials accepted`);
+  if (report) step(`SMTP relay ${host}:${port}: credentials accepted`);
 }

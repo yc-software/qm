@@ -13,6 +13,9 @@
     "bot_user": {
       "display_name": "agent",
       "always_online": true
+    },
+    "agent_view": {
+      "agent_description": "A workspace agent you can pin to the Slack top bar. Ask it anything; it can also act on what you're currently viewing."
     }
   },
   "oauth_config": {
@@ -39,7 +42,10 @@
         "files:write",
         "reactions:write",
         "reactions:read",
-        "emoji:read"
+        "pins:read",
+        "pins:write",
+        "emoji:read",
+        "assistant:write"
       ]
     }
   },
@@ -53,11 +59,18 @@
         "message.mpim",
         "member_joined_channel",
         "member_left_channel",
+        "channel_created",
+        "channel_rename",
+        "channel_unarchive",
         "reaction_added",
-        "reaction_removed"
+        "reaction_removed",
+        "assistant_thread_started",
+        "assistant_thread_context_changed"
       ]
     },
-    "interactivity": { "is_enabled": true },
+    "interactivity": {
+      "is_enabled": true
+    },
     "org_deploy_enabled": false,
     "socket_mode_enabled": true,
     "token_rotation_enabled": false

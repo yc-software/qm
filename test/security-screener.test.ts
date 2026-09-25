@@ -85,6 +85,7 @@ test("the security screen proxy classifies long input in overlapping bounded win
   const result = await screener.classify({
     payload: `${"a".repeat(15_950)}tail-attack`,
     hook: "tool_response",
+    metadata: { request: { origin: "human", text: "inspect the document", truncated: false } },
   });
 
   assert.deepEqual(result.verdict, { decision: "strict", reason: "example-screen:prompt_injection" });
@@ -92,6 +93,13 @@ test("the security screen proxy classifies long input in overlapping bounded win
   assert.equal(bodies.length, 12);
   assert.equal(maxActive, 2);
   assert.ok(bodies.every((body) => body.text.length <= 1_600));
+  for (const body of bodies) {
+    assert.deepEqual((body.metadata as Record<string, unknown>).request, {
+      origin: "human",
+      text: "inspect the document",
+      truncated: false,
+    });
+  }
   const ordered = bodies.toSorted((a, b) => a.metadata.qm.chunk_index - b.metadata.qm.chunk_index);
   assert.equal(ordered[0]!.text.slice(-256), ordered[1]!.text.slice(0, 256));
   assert.ok(

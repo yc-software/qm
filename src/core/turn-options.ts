@@ -1,5 +1,6 @@
+import type { RuntimePurpose } from "../resolution/config-store.ts";
 import {
-  DEFAULT_WEBUI_MODEL_IDS,
+  defaultWebuiModelIds,
   THINKING_LEVELS,
   serviceableModelIds,
   modelServiceable,
@@ -11,6 +12,15 @@ import {
 export const NON_INTERACTIVE_THINKING_LEVEL = "xhigh";
 export const NON_INTERACTIVE_FAST_MODE = false;
 
+export function turnRuntimePurpose(
+  input: { surface?: string; triggered?: boolean },
+  subagent = false,
+): RuntimePurpose | undefined {
+  if (subagent) return "subagent";
+  if (input.triggered && (input.surface === "cron" || input.surface === "loop")) return "cron";
+  return undefined;
+}
+
 export function resolveTurnFastMode(
   requested: boolean | undefined,
   humanTurn: boolean,
@@ -20,28 +30,24 @@ export function resolveTurnFastMode(
   return humanTurn && interactiveDefault ? true : undefined;
 }
 
-export function turnModelOptions(input: { triggered?: boolean; thinkingLevel?: string; fastMode?: boolean }): {
+export function turnModelOptions(input: {
+  triggered?: boolean;
+  surface?: string;
+  thinkingLevel?: string;
+  fastMode?: boolean;
+}): {
   thinkingLevel?: string;
   fastMode?: boolean;
 } {
+  const legacyDefaults = input.triggered && input.surface !== "cron" && input.surface !== "loop";
   let thinkingLevel = input.thinkingLevel;
-  if (!thinkingLevel && input.triggered) thinkingLevel = NON_INTERACTIVE_THINKING_LEVEL;
+  if (!thinkingLevel && legacyDefaults) thinkingLevel = NON_INTERACTIVE_THINKING_LEVEL;
   let fastMode = input.fastMode;
-  if (typeof fastMode !== "boolean" && input.triggered) fastMode = NON_INTERACTIVE_FAST_MODE;
+  if (typeof fastMode !== "boolean" && legacyDefaults) fastMode = NON_INTERACTIVE_FAST_MODE;
   return {
     ...(thinkingLevel ? { thinkingLevel } : {}),
     ...(typeof fastMode === "boolean" ? { fastMode } : {}),
   };
-}
-
-export function webTurnRuntimeModelRefusal(
-  runtimeModelId: string,
-  orgModelId: string,
-  configuredWebuiModels: readonly string[] | null | undefined,
-): string | null {
-  if (!configuredWebuiModels?.length) return null;
-  if (runtimeModelId === orgModelId) return null;
-  return configuredWebuiModels.includes(runtimeModelId) ? null : "that model is not enabled for the web UI";
 }
 
 export function validateWebTurnModelOptions(
@@ -49,7 +55,7 @@ export function validateWebTurnModelOptions(
   enabledModels: readonly string[] | null,
   providers: ModelProviderAvailability = ALL_PROVIDERS_AVAILABLE,
 ): string | null {
-  const enabled = enabledModels?.length ? enabledModels : DEFAULT_WEBUI_MODEL_IDS;
+  const enabled = enabledModels ?? defaultWebuiModelIds();
   const allowedModels = serviceableModelIds(enabled, providers);
   if (input.model && !allowedModels.includes(input.model)) {
     return resolveModel(input.model) && !modelServiceable(input.model, providers)

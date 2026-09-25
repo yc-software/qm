@@ -14,6 +14,7 @@ import { createControlService } from "../src/api/control-service.ts";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { runNowSettled } from "./support/settle.ts";
 
 const SECRET = "project-trigger-secret".repeat(3);
 
@@ -90,8 +91,24 @@ test("Project trigger access follows current membership while Slack-group owner 
     action: "public task",
     schedule: { everyMs: 60_000 },
   });
+  const projectWebhook = await built.app.createWebhook({
+    ownerScopeId: project.scopeId,
+    owner: "member",
+    createdBy: "member",
+    action: "project hook",
+    verification: { scheme: "github", secret: "project-hook-secret" },
+  });
+  const slackWebhook = await built.app.createWebhook({
+    ownerScopeId: slackScope,
+    owner: "member",
+    createdBy: "member",
+    action: "slack hook",
+    verification: { scheme: "github", secret: "slack-hook-secret" },
+  });
+
   const control = createControlService(built.app, built.scheduler);
   assert.ok((await control.listCrons(claims("owner"))).crons.some((cron) => cron.id === projectCron.id));
+  assert.ok((await control.listWebhooks(claims("owner"))).some((webhook) => webhook.id === projectWebhook.id));
 
   const server = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
   const base = await listen(server);
@@ -115,7 +132,7 @@ test("Project trigger access follows current membership while Slack-group owner 
 
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
 
-  await built.scheduler.runNow(projectCron.id);
+  await runNowSettled(built.scheduler, projectCron.id);
   assert.equal(
     (await built.crons.get(projectCron.id))?.enabled,
     false,
@@ -153,6 +170,11 @@ test("Project trigger access follows current membership while Slack-group owner 
   assert.equal((await control.patchCron(projectCron.id, { title: "hijack" }, claims("member"))).ok, false);
   assert.equal((await control.getCron(slackCron.id, claims("member"))).ok, true);
 
+  const controlledWebhooks = await control.listWebhooks(claims("member"));
+  assert.ok(!controlledWebhooks.some((webhook) => webhook.id === projectWebhook.id));
+  assert.ok(controlledWebhooks.some((webhook) => webhook.id === slackWebhook.id));
+  assert.equal((await control.disableWebhook(projectWebhook.id, claims("member"))).ok, false);
+
   const cronListPath = "/v1/crons?viewer=member";
   const cronList = await fetch(`${base}${cronListPath}`, { headers: signed("GET", cronListPath) });
   const cronBody = (await cronList.json()) as { crons: Array<{ id: string }>; visible: Array<{ id: string }> };
@@ -183,4 +205,31 @@ test("Project trigger access follows current membership while Slack-group owner 
   assert.equal((await fetch(`${base}${publicGetPath}`, { headers: signed("GET", publicGetPath) })).status, 200);
   const publicRunsPath = `/v1/crons/${publicCron.id}/runs?principalId=member`;
   assert.equal((await fetch(`${base}${publicRunsPath}`, { headers: signed("GET", publicRunsPath) })).status, 404);
+
+  const webhookListPath = "/v1/webhooks?viewer=member";
+  const webhookList = await fetch(`${base}${webhookListPath}`, { headers: signed("GET", webhookListPath) });
+  const webhookBody = (await webhookList.json()) as { webhooks: Array<{ id: string }> };
+  assert.ok(!webhookBody.webhooks.some((webhook) => webhook.id === projectWebhook.id));
+  assert.ok(webhookBody.webhooks.some((webhook) => webhook.id === slackWebhook.id));
+
+  const projectDisablePath = `/v1/webhooks/${projectWebhook.id}/disable?principalId=member`;
+  assert.equal(
+    (
+      await fetch(`${base}${projectDisablePath}`, {
+        method: "POST",
+        headers: signed("POST", projectDisablePath),
+      })
+    ).status,
+    404,
+  );
+  const slackDisablePath = `/v1/webhooks/${slackWebhook.id}/disable?principalId=member`;
+  assert.equal(
+    (
+      await fetch(`${base}${slackDisablePath}`, {
+        method: "POST",
+        headers: signed("POST", slackDisablePath),
+      })
+    ).status,
+    200,
+  );
 });
