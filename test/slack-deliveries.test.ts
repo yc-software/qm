@@ -37,6 +37,7 @@ async function deliver(
   const marks: Array<{ channel: string; ts: string }> = [];
   const probes: Record<string, unknown>[] = [];
   const history = row.history ?? [];
+  const conversationsOpened: Record<string, unknown>[] = [];
   const probe = async (args: Record<string, unknown>) => {
     probes.push(args);
     return {
@@ -54,7 +55,14 @@ async function deliver(
     },
   };
   const client = {
-    conversations: { open: async () => ({ channel: { id: "C1" } }), replies: probe, history: probe },
+    conversations: {
+      open: async (args: Record<string, unknown>) => {
+        conversationsOpened.push(args);
+        return { channel: { id: "C1" } };
+      },
+      replies: probe,
+      history: probe,
+    },
     files: {
       uploadV2: async (args: Record<string, unknown>) => {
         uploads.push(args);
@@ -84,7 +92,7 @@ async function deliver(
   });
 
   await poller.pollDeliveries(client);
-  return { acknowledgements, uploads, posts, marks, probes };
+  return { acknowledgements, uploads, posts, marks, probes, conversationsOpened };
 }
 
 for (const type of ["slack", "group", "principal"]) {
@@ -341,6 +349,22 @@ test("a stale queued approval cannot render a newer request for the same command
     { approval },
   );
   assert.equal(out.posts.length, 0);
+  assert.deepEqual(out.acknowledgements, ["D1"]);
+});
+
+test("a queued system approval notification is retired without opening a Slack DM", async () => {
+  const actorId = "system:ambient:acme";
+  const approval = { requestId: "A1", command: "publish", request: { actor: { externalId: actorId } } };
+  const out = await deliver(
+    { type: "principal", target: actorId, commandApprovalId: "A1" },
+    undefined,
+    undefined,
+    "Approval needed",
+    { approval },
+  );
+  assert.deepEqual(out.conversationsOpened, []);
+  assert.deepEqual(out.posts, []);
+  assert.deepEqual(out.uploads, []);
   assert.deepEqual(out.acknowledgements, ["D1"]);
 });
 
