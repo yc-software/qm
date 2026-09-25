@@ -1,3 +1,4 @@
+import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
 import { availableRuntimeError, runtimeConfigBody } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
 import { userRuntimeConfigBody } from "./runtime-config.ts";
@@ -99,6 +100,14 @@ export function createTurnMethods(
   return {
     async turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult> {
       const startedAt = performance.now();
+      const historicalSlack = Object.keys(deps.externalSlackPolicies ?? {}).length
+        ? (await deps.sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
+        : false;
+      if (!externalSlackRequestAllowed(req, deps.externalSlackPolicies, historicalSlack))
+        return {
+          status: "refused",
+          reason: "External Slack requests require their current authenticated source context.",
+        };
       await deps.refreshModels?.();
       await deps.identity.refresh();
       const actor: Principal = deps.identity.resolve(req.actor);
@@ -190,7 +199,7 @@ export function createTurnMethods(
       const origin = resolveTurnOrigin(privateRequest ?? req);
 
       const modelAccount =
-        deps.userModelCredentials && origin.kind === "human"
+        !req.externalSlack && deps.userModelCredentials && origin.kind === "human"
           ? await deps.config.getModelAccountDurable(actor.id)
           : "company";
       const individualAuth = modelAccount !== "company";
@@ -357,6 +366,8 @@ export function createTurnMethods(
 
       const input = {
         surface: req.surface,
+        ...(req.slackSource ? { slackSource: req.slackSource } : {}),
+        ...(req.externalSlack ? { externalSlack: req.externalSlack } : {}),
         ...(sameApprovedMessage && approvedRequest?.sessionSenderId
           ? { sessionSenderId: approvedRequest.sessionSenderId }
           : {}),
@@ -555,7 +566,7 @@ export function createTurnMethods(
         }
       }
 
-      const spineRouted = !req.approval && shouldRouteToSpine(request as OrchestratorInput);
+      const spineRouted = !req.externalSlack && !req.approval && shouldRouteToSpine(request as OrchestratorInput);
       if (spineRouted) {
         request = { ...input, surfaceTools: true };
         if (origin.kind !== "ambient")

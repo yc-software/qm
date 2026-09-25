@@ -1,3 +1,4 @@
+import { companySlackActor, type ExternalSlackAccess } from "./external-access.ts";
 import {
   type ActorAssertion,
   type CachedUser,
@@ -102,6 +103,7 @@ export interface Directory {
 }
 
 export function createDirectory(deps: {
+  externalAccess?: ExternalSlackAccess;
   core: SlackCoreClient;
   ids: BotIdentity;
   userSnapshotTtlMs?: number;
@@ -115,7 +117,7 @@ export function createDirectory(deps: {
   const { core, ids } = deps;
   const CORE_SINGLETON = deps.coreSingleton !== false;
   const internalOverrides = async (): Promise<ReadonlySet<string>> =>
-    deps.internalOverrides ? await deps.internalOverrides() : NO_INTERNAL_OVERRIDES;
+    !deps.externalAccess && deps.internalOverrides ? await deps.internalOverrides() : NO_INTERNAL_OVERRIDES;
   const USER_SNAPSHOT_TTL_MS = deps.userSnapshotTtlMs ?? 5 * 60_000;
   const CHANNEL_MEMBERS_TTL_MS = deps.channelMembersTtlMs ?? 30 * 60_000;
   const SYNC_RETRY_MS = deps.syncRetryMs ?? 30_000;
@@ -147,7 +149,9 @@ export function createDirectory(deps: {
       for (const u of (res.members ?? []) as SlackUser[]) {
         if (!u?.id || u.id === ids.botUserId) continue;
         const actor = withInternalOverride(
-          classifyUser(u, ids.ownTeamId, ids.identityMode),
+          deps.externalAccess
+            ? companySlackActor(u, deps.externalAccess)
+            : classifyUser(u, ids.ownTeamId, ids.identityMode),
           u.profile?.email,
           overrides,
         );
@@ -660,7 +664,9 @@ export function createDirectory(deps: {
     try {
       const user = (await client.users.info({ user: userId })).user as SlackUser | undefined;
       const actor = withInternalOverride(
-        classifyUser(user, ids.ownTeamId, ids.identityMode),
+        deps.externalAccess
+          ? companySlackActor(user, deps.externalAccess)
+          : classifyUser(user, ids.ownTeamId, ids.identityMode),
         user?.profile?.email,
         await internalOverrides(),
       );

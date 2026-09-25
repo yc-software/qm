@@ -1,3 +1,5 @@
+import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
+import { externalTools } from "./orchestrator/external-tools.ts";
 import { isBackendCredential } from "../credentials/keychain.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
@@ -534,6 +536,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
     async handleTurn(input: OrchestratorInput): Promise<TurnResult> {
       if (
+        !externalSlackRequestAllowed(
+          { ...input, surface: input.surface ?? "" },
+          deps.externalSlackPolicies,
+          Object.keys(deps.externalSlackPolicies ?? {}).length > 0 &&
+            (await deps.sessions.getByThread(input.conversation.threadRef))?.surface === "slack",
+        )
+      )
+        return { status: "refused", reason: "Slack workspace access changed; start a fresh request in Slack." };
+      const external = input.externalSlack !== undefined;
+      if (external && input.swarm) return { status: "refused", reason: "External Slack cannot delegate to a swarm." };
+      const externalServices = new Set(input.externalSlack?.serviceCredentials ?? []);
+      const serviceAllowed = (slug: string): boolean =>
+        !external ||
+        (externalServices.has(slug) &&
+          (deps.externalSlackPolicies?.[input.externalSlack!.accountId]?.serviceCredentials.includes(slug) ?? false));
+      if (
         !deps.swarms &&
         (input.swarm || input.surface === "swarm" || input.conversation.threadRef.startsWith("swarm:"))
       )
@@ -551,16 +569,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         deps.identity.audienceIsAllInternal(conversation.audience) &&
         (conversation.kind === "dm" ||
           (!!conversation.publishMembers?.length && conversation.publishMembers.every((p) => p.type === "internal")));
-      const liveTurn = humanTurn && allInternal;
+      const liveTurn = humanTurn && allInternal && !external;
       const authoredDetection =
         input.origin.kind === "ambient" && input.origin.live === true && conversation.kind !== "dm";
       const delegationEnabled =
-        (await deps.featureFlags?.enabled("responsive_spine", `personal:${actor.id}` as ScopeId)) === true;
+        !external && (await deps.featureFlags?.enabled("responsive_spine", `personal:${actor.id}` as ScopeId)) === true;
       const delegatedOrigin =
         delegationEnabled && deps.runs
           ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
           : undefined;
-      const liveAuthorTurn = (humanTurn || authoredDetection || delegatedOrigin !== undefined) && allInternal;
+      const liveAuthorTurn =
+        !external && (humanTurn || authoredDetection || delegatedOrigin !== undefined) && allInternal;
       const messageTs = input.origin.kind === "human" ? input.origin.messageTs : undefined;
       const entryTs =
         input.origin.kind === "human" || input.origin.kind === "ambient" ? input.origin.entryTs : undefined;
@@ -653,8 +672,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       if (conversation.kind !== "dm" && !deps.identity.audienceIsAllInternal(conversation.audience)) {
         const externalAllowed =
-          input.surface === "slack" &&
-          (deps.config ? await deps.config.getExternalSlackParticipantsDurable(toScopeId("org", orgId())) : false);
+          external ||
+          (input.surface === "slack" &&
+            (deps.config ? await deps.config.getExternalSlackParticipantsDurable(toScopeId("org", orgId())) : false));
         if (!externalAllowed) {
           return {
             status: "refused",
@@ -681,7 +701,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       }
 
-      const resolution = await deps.resolution.resolve(conversation, actor);
+      const resolution = await deps.resolution.resolve(conversation, actor, external);
       const scopeId = deps.resolution.scopeFor(conversation, actor);
       const isCurrentSharedScopeMember = withLiveTurnMembership(deps.isCurrentSharedScopeMember, {
         actorId: actor.id,
@@ -1038,13 +1058,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
-      const useMemory = input.skipMemory !== true;
-      const environmentId = await resolveEnvironmentId(deps.environments, scopeId);
+      const useMemory = !external && input.skipMemory !== true;
+      const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       const rwLayer = resolution.layers.find((l) => l.mode === "rw");
       if (rwLayer && environmentId !== rwLayer.scopeId) rwLayer.scopeId = environmentId;
       for (const layer of resolution.layers) await deps.workspace.ensureScope(layer.scopeId);
 
       const context = await resolveTurnContext({
+        external,
         actor,
         audience: conversation.audience,
         acl: deps.acl,
@@ -1104,6 +1125,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const sharedCore = applyPromptVars(SHARED_CORE_MD, { botName, botHandle, orgName });
       let systemPrompt = `${modeFrame}\n\n${resolution.systemPrompt}\n\n${sharedCore}\n\n${renderSecurityPolicyPrompt(securityPolicy)}`;
+      if (external)
+        systemPrompt +=
+          "\n\nThis conversation has an external Slack audience. Answer and run code here using only the explicitly provided shared service credentials. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable. When personal access is needed, say briefly that you are continuing privately, and include [[continue-private: task]] in your final answer. The continuation goes only to the authenticated requester; never put private results in this channel.";
       const turnContextBlocks: string[] = [];
       if (input.privateSessionMessage)
         systemPrompt +=
@@ -1121,12 +1145,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
 
       const delivery = deliveryCandidatesFor(input.surface, input.deliveryTarget, input.deliveryCandidates, scopeId);
+      if (input.slackSource)
+        for (const candidate of delivery.candidates) {
+          candidate.slackAccountId = input.slackSource.accountId;
+          candidate.slackTeamId = input.slackSource.teamId;
+        }
       const defaultCandidate = delivery.candidates.find((c) => c.key === delivery.defaultKey);
       let defaultDestination: Destination | undefined;
       if (defaultCandidate) {
         defaultDestination = {
           type: defaultCandidate.type,
           target: defaultCandidate.target,
+          ...(defaultCandidate.slackAccountId ? { slackAccountId: defaultCandidate.slackAccountId } : {}),
+          ...(defaultCandidate.slackTeamId ? { slackTeamId: defaultCandidate.slackTeamId } : {}),
           ...(defaultCandidate.audienceScopeId ? { audienceScopeId: defaultCandidate.audienceScopeId } : {}),
         };
       } else if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination) {
@@ -1138,11 +1169,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : "";
 
       await deps.skillsReady;
-      const configuredProviders = deps.resolveConnectorClient
-        ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
-            swallowAs("orchestrator: configured connector providers", []),
-          )
-        : [];
+      const configuredProviders =
+        !external && deps.resolveConnectorClient
+          ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
+              swallowAs("orchestrator: configured connector providers", []),
+            )
+          : [];
       const carriedSkillScreens = new Map<string, Promise<boolean>>();
       const visibleSkillsForTurn = async (): Promise<SkillResolution[]> => {
         const resolved = filterConnectorSkills(await context.listSkills(), configuredProviders);
@@ -1214,11 +1246,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         teamCount: resolution.layers.filter((l) => l.mountPath.startsWith("team-")).length,
       });
       turnContextBlocks.push(computerBlock);
-      if (deps.scratchExec) {
+      if (!external && deps.scratchExec) {
         systemPrompt +=
           '\n\nSelect a sandbox explicitly or use a stored default. The opt-in scratch box (scope:"scratch") is separate: same OS and tooling, org-global files only, no logins or tokens, wiped after the turn — prefer it for heavy self-contained runs that need no logins, workspace files, or follow-up; it keeps this computer responsive.';
       }
-      if (deps.deploymentLayer?.hints.length) {
+      if (!external && deps.deploymentLayer?.hints.length) {
         systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;
       }
       if (visibleSkills.length) systemPrompt += `\n\n${skillsIndex(visibleSkills, sharingSources)}`;
@@ -1352,13 +1384,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const cleaned = payload.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ").trim();
         return cleaned.length > 16_000 ? `${cleaned.slice(0, 16_000)}…` : cleaned;
       };
-      const brokeredTools = deps.brokeredTools ?? [];
-      const credentialTools = deps.credentialTools ?? brokeredTools;
+      const brokeredTools = external ? [] : (deps.brokeredTools ?? []);
+      const credentialTools = external ? [] : (deps.credentialTools ?? brokeredTools);
       const credentialServices = [
         ...new Set([
           ...credentialTools.map((tool) => tool.service),
           ...brokeredTools.map((tool) => tool.service),
-          ...((await deps.deviceFlowCutover?.listServices(memoryScopeId)) ?? []),
+          ...(!external ? ((await deps.deviceFlowCutover?.listServices(memoryScopeId)) ?? []) : []),
         ]),
       ];
       const cutoverModes = new Map<string, DeviceFlowCutoverMode>();
@@ -1374,6 +1406,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const openSpeakerKeychain =
         liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
       const openAutomationKeychain =
+        !external &&
         input.origin.kind === "automation" &&
         input.origin.useOwnerKeychain === true &&
         conversation.kind !== "dm" &&
@@ -1394,8 +1427,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       )
         return { status: "refused", reason: "owner-authorized automation requires current Open membership" };
       const isolateOwnerKeychain =
-        openSpeakerKeychain ||
-        (conversation.kind !== "dm" && input.origin.kind === "automation" && input.origin.useOwnerKeychain === true);
+        !external &&
+        (openSpeakerKeychain ||
+          (conversation.kind !== "dm" && input.origin.kind === "automation" && input.origin.useOwnerKeychain === true));
       let ownerAuthAvailable = isolateOwnerKeychain;
       if (brokeredTools.some((tool) => cutoverModeOf(tool.service) !== "legacy" && deps.layerBrokerFor?.(tool))) {
         ownerAuthAvailable = true;
@@ -1436,7 +1470,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
       };
       const registerKeychainCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
-        if (strictReadOnly || !deps.keychain) return;
+        if (external || strictReadOnly || !deps.keychain) return;
         const keychain = deps.keychain;
         for (const { grant, credential } of await keychain.grantsForScope(scopeId)) {
           if (credential.kind !== "env" || isBackendCredential(credential)) continue;
@@ -1483,6 +1517,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       await registerKeychainCredentials(addCredentialToCatalog);
       const registerConnectorCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
         if (
+          !external &&
           !strictReadOnly &&
           deps.connectorTokens &&
           (scopeId === personalScope(actor.id) || openSpeakerKeychain || openAutomationKeychain)
@@ -1531,7 +1566,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let serviceCredRecords: PublicServiceCredential[] = [];
       let grantedCredSlugs = new Set<string>();
       if (!strictReadOnly && deps.serviceCreds) {
-        serviceCredRecords = await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId);
+        serviceCredRecords = (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
+          serviceAllowed(record.slug),
+        );
         if (serviceCredRecords.length > 0) {
           grantedCredSlugs = new Set(
             (
@@ -1547,6 +1584,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       }
       const authorizeServiceCredential = async (slug: string): Promise<void> => {
+        if (!serviceAllowed(slug)) throw new Error("Service is not approved for external Slack.");
         const grants = await deps.acl.grantsOfKind(
           "service-cred",
           conversation.audience,
@@ -1577,6 +1615,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let orgMemoryWrite: ScopeId | undefined;
       let controlClaims: CapabilityClaims | undefined;
       const scopeAttestation = {
+        ...(external ? { externalSlack: true as const } : {}),
         actorId: actor.id,
         scopeId,
         ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
@@ -1608,7 +1647,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         controlClaims = {
           ...scopeAttestation,
           aud: CONTROL_PLANE_AUD,
-          ...(allInternal &&
+          ...(!external &&
+          allInternal &&
           (scopeId === personalScope(actor.id) ||
             openSpeakerKeychain ||
             (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true))
@@ -1619,7 +1659,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(destination ? { destination } : {}),
           ...(delivery.candidates.length > 0 ? { destinations: delivery.candidates } : {}),
           ...(delivery.defaultKey ? { defaultDestinationKey: delivery.defaultKey } : {}),
-          ...(conversation.kind !== "dm"
+          ...(!external && conversation.kind !== "dm"
             ? { keychainMembers: conversation.audience.filter((p) => p.type === "internal") }
             : {}),
           ...(conversation.kind === "dm" ||
@@ -1717,7 +1757,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         requestedHandles: readonly string[],
       ): Promise<void> => {
         if (strictReadOnly || !deps.serviceCreds) return;
-        const records = await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId);
+        const records = (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
+          serviceAllowed(record.slug),
+        );
         const grants = await deps.acl.grantsOfKind(
           "service-cred",
           conversation.audience,
@@ -1748,6 +1790,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               {
                 ...scopeAttestation,
                 aud: CREDENTIAL_BROKER_AUD,
+                ...(external
+                  ? {
+                      runId: input.runId,
+                      runAttempt: input.attempt,
+                      runLeaseToken: input.runLeaseToken,
+                      threadRef: conversation.threadRef,
+                    }
+                  : {}),
                 credentials: brokerSlugs,
                 exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
               },
@@ -1757,7 +1807,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           })());
         for (const credential of available) {
           if (credential.delivery === "env") {
-            if (!allInternal || !credential.envKey) continue;
+            if ((!allInternal && !external) || !credential.envKey) continue;
             addCredential(
               {
                 handle: `service_${credential.slug}`,
@@ -1868,6 +1918,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         : resolution.commandPolicy;
       const layerCommandRules = [...(deps.deploymentLayer?.commandRules ?? [])];
       const reachAvailable = !!deps.reachExec && !!deps.directory && conversation.kind === "dm";
+      const turnSandboxResources = external
+        ? deps.sandboxResources?.forTurn({
+            actorId: actor.id,
+            scopeId,
+            isCurrent: async () =>
+              !!(await currentExternalSlackRun(
+                {
+                  actorId: actor.id,
+                  scopeId,
+                  runId: input.runId,
+                  runLeaseToken: input.runLeaseToken,
+                  runAttempt: input.attempt,
+                  threadRef: conversation.threadRef,
+                },
+                deps,
+              )),
+          })
+        : deps.sandboxResources;
+
       const {
         box,
         scratchBox,
@@ -1885,7 +1954,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         provisionPending,
         invalidateProvision,
       } = createTurnSandboxes({
-        deps: { ...deps, isCurrentSharedScopeMember },
+        deps: { ...deps, sandboxResources: turnSandboxResources, isCurrentSharedScopeMember },
         input,
         actor,
         session,
@@ -1901,7 +1970,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         isolateOwnerKeychain,
         openSpeakerKeychain: openSpeakerKeychain || openAutomationKeychain,
         openResourceAccess:
-          liveAuthorTurn || (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true),
+          !external &&
+          (liveAuthorTurn || (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true)),
         ownerAuthAvailable,
         credentialTools,
         credentialServices,
@@ -2229,7 +2299,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
           if (roster) systemPrompt += `\n\n${roster}`;
         }
-        if (deps.directory) {
+        if (!external && deps.directory) {
           const rosterBlock = await (async () => {
             const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
             const participants = [
@@ -2251,7 +2321,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           })().catch(swallowAs("orchestrator: conversation roster", null));
           if (rosterBlock) systemPrompt += `\n\n${rosterBlock}`;
         }
-        if (!strictReadOnly && deps.keychain && deps.signingSecret && deps.apiBaseUrl) {
+        if (!external && !strictReadOnly && deps.keychain && deps.signingSecret && deps.apiBaseUrl) {
           const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
           const members = [
             ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
@@ -2425,21 +2495,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let spineFirstBlock = "";
         let spineFirstBlockOpen = true;
         let spineAckText: string | undefined;
-        const fileAudience = resolution.orgScopeId
-          ? defaultPublishAudience({
-              kind: conversation.kind,
-              ...(conversation.isPrivate !== undefined ? { isPrivate: conversation.isPrivate } : {}),
-              ...(conversation.isMpim !== undefined ? { isMpim: conversation.isMpim } : {}),
-              ...(conversation.publishMembers ? { members: conversation.publishMembers } : {}),
-              orgScopeId: resolution.orgScopeId,
-              ownerId: actor.id,
-            }).grantees
-          : [];
+        const fileAudience =
+          !external && resolution.orgScopeId
+            ? defaultPublishAudience({
+                kind: conversation.kind,
+                ...(conversation.isPrivate !== undefined ? { isPrivate: conversation.isPrivate } : {}),
+                ...(conversation.isMpim !== undefined ? { isMpim: conversation.isMpim } : {}),
+                ...(conversation.publishMembers ? { members: conversation.publishMembers } : {}),
+                orgScopeId: resolution.orgScopeId,
+                ownerId: actor.id,
+              }).grantees
+            : [];
         // Files posted into a group/DM conversation (e.g. a project web session) get no
         // per-member grants from defaultPublishAudience ("auto-share deferred"), which left
         // other members unable to load them. Grant the conversation scope itself read access
         // so everyone party to the conversation can fetch what was posted into it.
-        const fileOwnerScopeId = toScopeId("personal", actor.id);
+        const fileOwnerScopeId = external ? scopeId : toScopeId("personal", actor.id);
         const fileGrantees = [...fileAudience];
         if ((conversation.kind === "group" || conversation.kind === "dm") && scopeId !== fileOwnerScopeId) {
           fileGrantees.push(scopeId);
@@ -2539,9 +2610,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             `[orchestrator] trigger delivery has no surface tools (missing deliveries store?) — reply would be lost session=${session.id}`,
           );
 
-        const tools = createToolContext({
+        const baseTools = createToolContext({
           sandbox: deps.sandbox,
-          sandboxResources: deps.sandboxResources,
+          sandboxResources: turnSandboxResources,
           ...(deps.sandboxMigration ? { sandboxMigration: deps.sandboxMigration, invalidateProvision } : {}),
           provision,
           provisionScratch,
@@ -2614,7 +2685,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
-          ...(deps.sessionSyscalls &&
+          ...(!external &&
+          deps.sessionSyscalls &&
           (delegationEnabled ||
             (await deps.featureFlags?.enabled("persistent_subagents", `personal:${actor.id}` as ScopeId)) === true)
             ? {
@@ -2627,7 +2699,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
-          ...(strictReadOnly || !deps.keychain
+          ...(external || strictReadOnly || !deps.keychain
             ? {}
             : {
                 registerLogin: async (service: string, paths: readonly CredentialPathSpec[]) =>
@@ -2651,7 +2723,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memory: deps.memory,
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
-          ...(deps.mcp ? { mcp: deps.mcp } : {}),
+          ...(!external && deps.mcp ? { mcp: deps.mcp } : {}),
           ...(input.surface === "slack" ? { actingSlackUserId: actor.id } : {}),
           ...(deps.deploymentLayer
             ? {
@@ -2691,6 +2763,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             }
           },
         });
+
+        const tools = external ? externalTools(baseTools, accessResource) : baseTools;
 
         if (input.attachments?.some((attachment) => attachment.sourceId)) {
           input.attachments = withoutAlreadyIngested(
@@ -3117,8 +3191,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let userHarnessOverride: string | undefined;
           let claudeOauthToken: string | undefined;
           let codexTurnAuth: CodexTurnAuth | undefined;
-          const userCredStore = deps.userModelCredentials;
-          const account = input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company";
+          const userCredStore = external ? undefined : deps.userModelCredentials;
+          const account = external
+            ? "company"
+            : (input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company");
           if (userCredStore && humanTurn && account !== "company") {
             const [anthCred, oaiCred] = await Promise.all([
               account === "openai" ? null : userCredStore.get(actor.id, "anthropic"),
@@ -4036,7 +4112,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const writable = resolution.layers.find((l) => l.mode === "rw");
             const writtenHandle = box.used ? box.handle : null;
             if (writable && writtenHandle) {
-              if (deps.keychain) {
+              if (!external && deps.keychain) {
                 try {
                   await captureDeviceFlowLogins({
                     sandbox: deps.sandbox,

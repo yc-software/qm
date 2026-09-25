@@ -1,3 +1,4 @@
+import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { BackgroundOwnershipStore } from "../runs/background-ownership.ts";
 import type { LoopIngressService } from "../loops/ingress.ts";
@@ -78,6 +79,7 @@ import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 
 export interface ServerDeps {
+  externalSlackPolicies?: ExternalSlackPolicies;
   slackAccounts?: DurableMap<SlackAccountLink>;
   composioReturns?: DurableMap<ComposioReturn>;
   composioFetch?: typeof fetch;

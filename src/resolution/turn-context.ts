@@ -14,6 +14,7 @@ import { carriedFileHandles, sharingSourcesForTurn } from "./sharing-access.ts";
 
 type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture"> & {
   resolution: Resolution;
+  external?: boolean;
   audience: Principal[];
   acl: Pick<AclStore, "sharedOfKindForAudience">;
   memoryPolicy: MemoryPolicy;
@@ -59,7 +60,9 @@ export function contextMemory({ memory, scopes, actorId, onRead }: MemoryReaderI
 // A turn-local view, never a reusable capability or a cross-turn cache.
 export async function resolveTurnContext(input: ContextInput) {
   const { resolution, memoryPolicy, useMemory } = input;
-  const sharingSources = await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
+  const sharingSources = input.external
+    ? []
+    : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
   const memoryScopeId = writableMemoryScope(resolution.layers, input.targetScope);
   const baseRecallScopes = useMemory ? recallMemoryScopes(memoryPolicy, resolution.layers, memoryScopeId) : [];
   const read = [
@@ -76,7 +79,7 @@ export async function resolveTurnContext(input: ContextInput) {
         .filter((layer) => layer.mode === "ro" && layer.scopeId !== resolution.orgScopeId)
         .map((layer) => layer.scopeId),
       ...sharingSources,
-      resolution.orgScopeId,
+      ...(!input.external ? [resolution.orgScopeId] : []),
     ]),
   ];
   const recordRead = (scope: ScopeId, resource: string) => {
@@ -100,17 +103,19 @@ export async function resolveTurnContext(input: ContextInput) {
     ...resolution.grantedHandles,
     ...(await carriedFileHandles(sharingSources, input.workspace, input.files)),
   ];
-  const grantedSkills: GrantedSkillRef[] = (
-    await input.acl
-      .sharedOfKindForAudience(
-        "skill",
-        input.audience,
-        input.targetScope,
-        resolution.orgScopeId,
-        principalEntitledToScope,
-      )
-      .catch(swallowAs("context: skill grants for audience", []))
-  ).map((grant) => ({ id: parseRef(grant.ref).id, ownerScopeId: grant.ownerScopeId }));
+  const grantedSkills: GrantedSkillRef[] = input.external
+    ? []
+    : (
+        await input.acl
+          .sharedOfKindForAudience(
+            "skill",
+            input.audience,
+            input.targetScope,
+            resolution.orgScopeId,
+            principalEntitledToScope,
+          )
+          .catch(swallowAs("context: skill grants for audience", []))
+      ).map((grant) => ({ id: parseRef(grant.ref).id, ownerScopeId: grant.ownerScopeId }));
   return {
     sharingSources,
     memoryScopeId,

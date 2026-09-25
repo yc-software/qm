@@ -1,3 +1,4 @@
+import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { reportBackendError, startTiming } from "../../plugins/chassis/src/error-reporting.ts";
 import { traceStatus } from "../../plugins/chassis/src/timing.ts";
 import {
@@ -201,6 +202,17 @@ async function gate(
       sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
       return null;
     }
+    if (
+      capability.externalSlack &&
+      !(
+        capability.aud === "credential-broker" &&
+        ((method === "POST" && pathname === "/v1/credentials/broker") ||
+          ((method === "GET" || method === "POST") && pathname.startsWith("/v1/credentials/git/")))
+      )
+    ) {
+      sendJson(res, 403, { error: "forbidden", message: "This operation requires a private conversation." });
+      return null;
+    }
     if (deps.identity) {
       await deps.identity.refresh();
       if (deps.identity.classify(capability.actorId).type !== "internal") {
@@ -221,14 +233,16 @@ async function gate(
       }
     }
     if (
-      !(await app.authorizesCapabilityScope({
-        actorId: capability.actorId,
-        scopeId: capability.scopeId,
-        ...(capability.scopeVersion ? { scopeVersion: capability.scopeVersion } : {}),
-        ...(capability.botActor ? { botActor: true } : {}),
-        ...(capability.liveActor ? { liveActor: true } : {}),
-        ...(capability.members ? { members: capability.members } : {}),
-      }))
+      !(capability.externalSlack
+        ? await externalSlackCapabilityAllowed(capability, deps)
+        : await app.authorizesCapabilityScope({
+            actorId: capability.actorId,
+            scopeId: capability.scopeId,
+            ...(capability.scopeVersion ? { scopeVersion: capability.scopeVersion } : {}),
+            ...(capability.botActor ? { botActor: true } : {}),
+            ...(capability.liveActor ? { liveActor: true } : {}),
+            ...(capability.members ? { members: capability.members } : {}),
+          }))
     ) {
       sendJson(res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });
       return null;

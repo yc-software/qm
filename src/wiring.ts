@@ -1869,6 +1869,7 @@ export function buildApp(
     },
   });
   const orchestratorDeps: OrchestratorDeps = {
+    externalSlackPolicies: config.externalSlackPolicies,
     sessionSyscalls,
     refreshModels,
     identity,
@@ -2065,6 +2066,7 @@ export function buildApp(
         })
     : undefined;
   const app = createApp({
+    externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
     ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
@@ -2840,6 +2842,7 @@ export function serverDeps(
   const configuredModel = configuredModelForHarness(config, config.harness);
   const carriedModelAuth = harnessCarriedModelAuth(config);
   return {
+    externalSlackPolicies: config.externalSlackPolicies,
     production: config.production,
     ...(built.backgroundOwnership
       ? {

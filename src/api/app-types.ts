@@ -1,3 +1,4 @@
+import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { InviteMailer } from "../admin/invite-email.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
@@ -608,6 +609,7 @@ export interface App {
 }
 
 export interface AppDeps {
+  externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
   resourceSearch?: ResourceSearchStore;
   swarms?: SwarmService;

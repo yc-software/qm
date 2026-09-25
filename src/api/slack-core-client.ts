@@ -1,3 +1,4 @@
+import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import { decideDeploymentAccess } from "../slack/deploy-access.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { ActorAssertion } from "../types.ts";
@@ -90,6 +91,7 @@ interface DirectoryPush {
 }
 
 export interface SlackCoreClient {
+  privateContinuationSource?(runId: string): Promise<TurnRequest | null>;
   decideDeploymentAccess(value: string, actor: ActorAssertion, approve: boolean): Promise<string>;
   keychainApprovals?: KeychainApprovals;
   taskAcknowledgements?: TaskAcknowledgements;
@@ -313,6 +315,13 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     async ingestSurfaceEvents(events, self) {
       if (!events.length) return;
       await deps.app.ingestSurfaceEvents(events, "slack", self);
+    },
+
+    async privateContinuationSource(runId) {
+      const run = await deps.runs.get(runId);
+      if (!run?.request.externalSlack || run.request.origin.kind !== "human" || run.request.actor.type !== "internal")
+        return null;
+      return replayableRequest(run.request);
     },
 
     submitTurn(body) {

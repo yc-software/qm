@@ -22,7 +22,13 @@ export function createApprovalStore(
     const actorId = approvalDeliveryRecipient(record.request.actor);
     if (!actorId) return;
     await deliveries.enqueue({
-      destination: { ...principalDestination(actorId, actorId), commandApprovalId: id },
+      destination: {
+        ...principalDestination(actorId, actorId),
+        commandApprovalId: id,
+        ...(record.request.slackSource
+          ? { slackAccountId: record.request.slackSource.accountId, slackTeamId: record.request.slackSource.teamId }
+          : {}),
+      },
       text: `Approval needed: ${record.summary ?? record.command}`,
       idempotencyKey: approvalDeliveryKey(id, record),
     });

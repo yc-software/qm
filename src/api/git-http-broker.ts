@@ -1,3 +1,4 @@
+import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { Readable } from "node:stream";
 import { CREDENTIAL_BROKER_AUD, verifyCapabilityToken, type CapabilityClaims } from "../auth/capability-token.ts";
@@ -144,14 +145,16 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
     });
   }
   if (
-    !(await ctx.app.authorizesCapabilityScope({
-      actorId: claims.actorId,
-      scopeId: claims.scopeId,
-      ...(claims.scopeVersion ? { scopeVersion: claims.scopeVersion } : {}),
-      ...(claims.botActor ? { botActor: true } : {}),
-      ...(claims.liveActor ? { liveActor: true } : {}),
-      ...(claims.members ? { members: claims.members } : {}),
-    }))
+    !(claims.externalSlack
+      ? await externalSlackCapabilityAllowed(claims, ctx.deps)
+      : await ctx.app.authorizesCapabilityScope({
+          actorId: claims.actorId,
+          scopeId: claims.scopeId,
+          ...(claims.scopeVersion ? { scopeVersion: claims.scopeVersion } : {}),
+          ...(claims.botActor ? { botActor: true } : {}),
+          ...(claims.liveActor ? { liveActor: true } : {}),
+          ...(claims.members ? { members: claims.members } : {}),
+        }))
   ) {
     return sendJson(ctx.res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });
   }

@@ -192,7 +192,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     emit: typeof emitGapWork,
     credentialScopeId = memoryScopeId,
   ): Promise<void> => {
-    if (deps.keychain) {
+    if (!input.externalSlack && deps.keychain) {
       const deviceFlowStart = Date.now();
       const crossScope = credentialScopeId !== memoryScopeId;
       const services = crossScope
@@ -293,6 +293,10 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
   const doProvision = async (emit: typeof emitGapWork): Promise<SandboxHandle> => {
     const provisionStart = Date.now();
+    if (input.externalSlack) {
+      const resource = await deps.sandboxResources?.resolve(memoryScopeId);
+      if (resource && resource.ownerScopeId !== scopeId) throw new Error("External Slack requires its own sandbox.");
+    }
     const swarmBinding = await deps.swarms?.binding(input);
     const handle = await deps.sandbox.provision(resolution.layers, {
       ...(swarmBinding?.sandboxId ? { sandboxId: swarmBinding.sandboxId } : {}),

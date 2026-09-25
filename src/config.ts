@@ -1,3 +1,4 @@
+import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseScopeId } from "./types.ts";
 import type { SandboxScopeDefaults } from "./sandbox/sandbox-routing.ts";
@@ -27,6 +28,7 @@ import {
   parseSlackContextSource,
   type SlackContextSource,
   slackPluginConfigFromEnv,
+  slackAccountConfigsFromEnv,
   type SlackPluginConfig,
 } from "./slack/config.ts";
 import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "./harness/codex-auth-file.ts";
@@ -140,6 +142,7 @@ export interface Config {
   publicWebUrl?: string;
   flyAppName?: string;
   slack?: SlackPluginConfig;
+  externalSlackPolicies?: ExternalSlackPolicies;
   runStore: "memory" | "postgres";
   skillSigningSecret?: string;
   seedSkills: boolean;
@@ -1406,6 +1409,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     numEnvStrict("RUN_MAX_AGE_MS", env.RUN_MAX_AGE_MS) ??
     (turnWallClockMs > 0 ? 2 * turnWallClockMs : CONFIG_DEFAULTS.runMaxAgeMs);
   const slack = slackPluginConfigFromEnv(env);
+  const externalSlackPolicies = Object.fromEntries(
+    [...(slack ? [slack] : []), ...slackAccountConfigsFromEnv(env)]
+      .filter((account) => account.externalAccess)
+      .map((account) => [account.accountId ?? "default", account.externalAccess!]),
+  );
   const slackEventsPort =
     env.SLACK_EVENTS_MODE?.trim() === "http" ? numEnvStrict("SLACK_EVENTS_PORT", env.SLACK_EVENTS_PORT) : undefined;
   if (
@@ -1577,6 +1585,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.PUBLIC_WEB_URL ? { publicWebUrl: env.PUBLIC_WEB_URL } : {}),
     ...(env.FLY_APP_NAME ? { flyAppName: env.FLY_APP_NAME } : {}),
     ...(slack ? { slack } : {}),
+    externalSlackPolicies,
     slackContextSource: parseSlackContextSource(env.SLACK_CONTEXT_SOURCE),
     runStore,
     ...(env.SKILL_SIGNING_SECRET ? { skillSigningSecret: env.SKILL_SIGNING_SECRET } : {}),

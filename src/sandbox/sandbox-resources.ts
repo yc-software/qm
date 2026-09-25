@@ -1,3 +1,4 @@
+import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { randomUUID, createHash } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -51,6 +52,7 @@ export interface LegacySandboxBinding {
 }
 
 export interface SandboxResources {
+  forTurn(turn: { actorId: string; scopeId: ScopeId; isCurrent: () => Promise<boolean> }): SandboxResources;
   initialize(): Promise<void>;
   list(
     actorId: string,
@@ -220,6 +222,12 @@ export function createSandboxResources(opts: {
     return id;
   };
   return {
+    forTurn: (turn) =>
+      createSandboxResources({
+        ...opts,
+        canUseScope: async (actorId, scopeId) =>
+          withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
+      }),
     defaultBackend: (scopeId) => sandboxDefaultForScope(scopeId, opts.defaultBackend, opts.scopeDefaults),
     initialize,
     get,

@@ -88,6 +88,8 @@ function publicTurnOrigin(body: TurnRequest): { origin?: TurnOrigin; error?: str
 
 function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
   const {
+    slackSource: _slackSource,
+    externalSlack: _externalSlack,
     ownerKeychainUnion: _ownerKeychainUnion,
     ownerResourcesRequireOpen: _ownerResourcesRequireOpen,
     spawned: _spawned,
