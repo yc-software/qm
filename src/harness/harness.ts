@@ -1,5 +1,5 @@
 import type { DocumentInput } from "../core/document-inputs.ts";
-import type { RuntimeControl, RuntimeHandoff } from "./runtime-types.ts";
+import type { RuntimeControl, HarnessHandoff } from "./runtime-types.ts";
 import type {
   AttachmentMeta,
   ClientToolDeclaration,
@@ -154,7 +154,7 @@ export interface HarnessTurnInput {
 }
 
 export interface HarnessTurnResult {
-  runtimeHandoff?: RuntimeHandoff;
+  runtimeHandoff?: HarnessHandoff;
   reply: string;
   silent?: boolean;
   stopped?: true;

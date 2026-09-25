@@ -2,7 +2,7 @@ import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { createGrindMeter, grindState } from "./grind.ts";
-import type { RuntimeHandoff, RuntimeRequest } from "./runtime-types.ts";
+import type { HarnessHandoff, RuntimeRequest } from "./runtime-types.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 import { Check, Clone } from "typebox/value";
@@ -49,7 +49,7 @@ function describePublishAudience(a: PublishAudienceDescriptor | undefined): stri
 
 export interface ToolContextRef {
   documents?: DocumentInput[];
-  runtimeHandoff?: RuntimeHandoff;
+  runtimeHandoff?: HarnessHandoff;
   runtimeRunId?: string;
   runtimeActorId?: string;
   runtimeMutationPending?: boolean;
@@ -4074,6 +4074,27 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }),
     );
 
+  const context = defineTool({
+    name: "context",
+    label: "context",
+    description:
+      "Reduce this conversation's model context without calling a summarizer. compact with mode recent keeps bounded recent entries, a saved summary if it fits, and structured goal state. Stored history is not deleted. This stops the current segment and resumes the unfinished request; do not repeat completed actions. Call this by itself after other tools finish.",
+    parameters: Type.Object({ action: Type.Literal("compact"), mode: Type.Literal("recent") }),
+    async execute(callId, params) {
+      await recordCall(callId, { tool: "context", ...params });
+      const result = await recordCoreAuthoredResult(
+        callId,
+        { tool: "context", ...params, ok: true },
+        {
+          ...text("Recent-context recovery requested. Continue from recorded results after the context is reduced."),
+          terminate: true,
+        },
+      );
+      ref.runtimeHandoff = { context: "recent" };
+      return result;
+    },
+  });
+
   const runtime = defineTool({
     name: "runtime",
     label: "runtime",
@@ -4167,6 +4188,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ...(surfaceTools ? [surface, staySilent] : [attach, finishSilently]),
     resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }),
     runtime,
+    context,
     ...mcpTools,
     ...clientTools,
   ];
@@ -4285,7 +4307,8 @@ function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
           details: {},
           terminate: !!ref.runtimeHandoff,
         };
-      const mutation = tool.name === "runtime" && (!isObj(params) || params.action !== "get");
+      const mutation =
+        tool.name === "context" || (tool.name === "runtime" && (!isObj(params) || params.action !== "get"));
       if (mutation) {
         ref.runtimeMutationPending = true;
         try {

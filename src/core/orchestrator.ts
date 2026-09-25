@@ -43,6 +43,7 @@ import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.t
 import { CONFIG_DEFAULTS } from "../config.ts";
 import {
   acquireLeaseWithin,
+  entrySecurityTainted,
   isOverheardEntry,
   TAPE_IMPORT_MAX_ENTRIES,
   tapeCheckpointPayload,
@@ -299,7 +300,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   }
 
   const securitySteersInFlight = new Set<string>();
-  const { compactContextIfNeeded, scheduleBackgroundCompaction } = createCompaction(deps);
+  const { compactContextIfNeeded, compactRecent, scheduleBackgroundCompaction } = createCompaction(deps);
 
   async function approvalSummary(
     scopeId: ScopeId,
@@ -1940,6 +1941,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
       let tailOwnsCleanup = false;
       let leaseReleased = false;
+      let contextRecovered = false;
       let turnProgress = 0;
       const turnAbort = new AbortController();
       if (input.cancel?.aborted) turnAbort.abort();
@@ -2874,6 +2876,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               covered &&
               sameHarness &&
               eventsEntitled &&
+              !rows.some(
+                (row) => row.kind === "context_event" && isObj(row.payload) && row.payload.mode === "recent",
+              ) &&
               participantHistorySeqs === undefined;
             let fold = eligible ? await rehydrateTape(foldTape(rows)) : undefined;
             if (eligible && rows.length && fold && tapeNeedsInterruptHeal(rows, fold)) {
@@ -2893,15 +2898,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         })();
         const compactStart = Date.now();
-        const history = await compactContextIfNeeded({
-          session,
-          lease,
-          visibleHistory,
-          scopeId,
-          orgScopeId: resolution.orgScopeId,
-          actorId: actor.id,
-          ...(input.model ? { model: input.model } : {}),
-        });
+        const history = await withManagedRosterVersion(() =>
+          compactContextIfNeeded({
+            cancel: turnAbort.signal,
+            session,
+            lease,
+            visibleHistory,
+            scopeId,
+            orgScopeId: resolution.orgScopeId,
+            actorId: actor.id,
+            ...(input.model ? { model: input.model } : {}),
+          }),
+        );
+        contextRecovered =
+          history !== visibleHistory &&
+          history.some((entry) => isObj(entry.payload) && entry.payload.mode === "recent");
         compactMs = Date.now() - compactStart;
         const documentInputs = strictReadOnly
           ? { documents: [], notices: [] }
@@ -2994,7 +3005,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           String((pausedTurnUserEntry.payload as { text?: string } | null)?.text ?? "").trim() === input.text.trim();
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.text)) : null;
         const resume = partial && partial.workEntries > 0 ? partial : null;
-        if (partial) postKeys.seed(completedSurfaceEnqueues(visibleHistory, partial.userSeq, surfaceName));
+        if (partial)
+          postKeys.seed(
+            completedSurfaceEnqueues(
+              filterHistory(
+                (await deps.sessions.getEntries(session.id, { sinceSeq: partial.userSeq })).filter(
+                  (entry) => !entrySecurityTainted(entry),
+                ),
+              ),
+              partial.userSeq,
+              surfaceName,
+            ),
+          );
         if (partial) {
           deps.auditLog.record({
             at: Date.now(),
@@ -3011,6 +3033,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
         }
         let turnInput = partial ? resumeNote({ backgroundJobs: !!backgroundBroker, workRecorded: !!resume }) : baseText;
+        if (partial && !history.some((entry) => entry.seq === partial.userSeq))
+          turnInput += `\nCurrent request (continue from recorded work; do not restart):\n${baseText}`;
         if (releasedToolOutput) {
           turnInput = `The human released quarantined tool output recorded in the conversation. Continue the original task using that output. The tool action already ran; do not repeat it. Original task: ${baseText}`;
         }
@@ -3673,13 +3697,31 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             if (++runtimeHandoffs > 8) throw new NonRetryableTurnError("Too many runtime changes in one task");
             if (effectiveTurnWallClockMs && Date.now() - turnStart >= effectiveTurnWallClockMs)
               throw new NonRetryableTurnError("The task reached its wall-clock limit during runtime handoff");
-            await adoptRuntime(segment.runtimeHandoff.choice);
-            await deps.harness.turns.resetSession?.(session.id);
-            const resumedHistory = filterHistory(
+            const recovery = "context" in segment.runtimeHandoff;
+            if ("choice" in segment.runtimeHandoff) {
+              await adoptRuntime(segment.runtimeHandoff.choice);
+              await deps.harness.turns.resetSession?.(session.id);
+            }
+            let resumedHistory = filterHistory(
               forModelContext((await deps.sessions.getContextWindow(session.id)).entries, {
                 includeSecurityTainted: false,
               }),
             );
+            if (recovery)
+              resumedHistory = await withManagedRosterVersion(() =>
+                compactRecent({
+                  session,
+                  lease,
+                  visibleHistory: resumedHistory,
+                  scopeId,
+                  orgScopeId: resolution.orgScopeId,
+                  actorId: actor.id,
+                  ...(requestedRuntime.modelId ? { model: requestedRuntime.modelId } : {}),
+                  cancel: turnAbort.signal,
+                }),
+              );
+            contextRecovered ||= recovery;
+            turnAbort.signal.throwIfAborted();
             const resumedTape = tapeRows
               ? {
                   rows: filterTapeForAudience(
@@ -3693,7 +3735,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : undefined;
             segment = await runHarnessSegment(
               resumeNote() +
-                "\nRuntime handoff completed. Continue the user's unfinished request using the saved conversation and tool results. Do not repeat completed actions or ask the user to repeat the request.",
+                (recovery ? "\nContext reduced without a new summary." : "\nRuntime handoff completed.") +
+                " Continue the user's unfinished request using the saved conversation and tool results. Do not repeat completed actions or ask the user to repeat the request." +
+                (recovery &&
+                !resumedHistory.some(
+                  (entry) =>
+                    entry.type === "user" &&
+                    isObj(entry.payload) &&
+                    typeof entry.payload.text === "string" &&
+                    entry.payload.text.startsWith(baseText),
+                )
+                  ? `\nCurrent request (continue from recorded work; do not restart):\n${baseText}`
+                  : ""),
               inbound.images.length ? { images: inbound.images } : {},
               { history: resumedHistory, ...(resumedTape ? { tape: resumedTape } : {}) },
             );
@@ -3806,7 +3859,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                           row.entrySeq === primarySubturnEndSeq &&
                           (row.payload as { subturnEnd?: unknown } | null)?.subturnEnd === true,
                       );
-                    if (primaryServedTape && sameHarness && eventsEntitled && primarySubturnComplete) {
+                    if (
+                      primaryServedTape &&
+                      sameHarness &&
+                      eventsEntitled &&
+                      primarySubturnComplete &&
+                      !rows.some(
+                        (row) => row.kind === "context_event" && isObj(row.payload) && row.payload.mode === "recent",
+                      )
+                    ) {
                       const fold = await rehydrateTape(foldTape(rows));
                       if (fold.length && lintFold(fold).ok) return { rows, mode: "serve" as const, fold };
                     }
@@ -4256,13 +4317,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);
         }
-        scheduleBackgroundCompaction({
-          sessionId: session.id,
-          scopeId,
-          orgScopeId: resolution.orgScopeId,
-          actorId: actor.id,
-          ...(input.model ? { model: input.model } : {}),
-        });
+        if (!contextRecovered && !turnAbort.signal.aborted)
+          scheduleBackgroundCompaction({
+            sessionId: session.id,
+            scopeId,
+            orgScopeId: resolution.orgScopeId,
+            actorId: actor.id,
+            ...(input.model ? { model: input.model } : {}),
+          });
       }
     },
   };

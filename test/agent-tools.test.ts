@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { createGoalRecord } from "../src/harness/goal.ts";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
@@ -3714,4 +3715,81 @@ test("a client tool stops waiting when the turn is cancelled", async () => {
   const ret = await pending;
   assert.match(ret.content[0]?.text ?? "", /cancelled/);
   assert.equal(emitted.find((e) => e.type === "tool_result")!.payload.cancelled, true);
+});
+
+test("context recovery drains in-flight effects, preserves an active goal, and blocks subsequent calls", async () => {
+  const gate = Promise.withResolvers<void>();
+  const events: Emitted[] = [];
+  let effects = 0;
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      execute: async () => {
+        effects++;
+        await gate.promise;
+        return { stdout: "done", stderr: "", code: 0, timedOut: false };
+      },
+    },
+    scopeLabel: "personal:U1",
+    goal: createGoalRecord({ objective: "finish verification", source: "tool" }),
+    emit: async (entry) => {
+      events.push(entry as Emitted);
+    },
+  };
+  const goal = structuredClone(ref.goal);
+  const tools = createAgentTools(ref);
+  const first = call(
+    tools.find((t) => t.name === "execute"),
+    { command: "echo done", purpose: "Test effect" },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  const recovery = call(
+    tools.find((t) => t.name === "context"),
+    { action: "compact", mode: "recent" },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    events.some((e) => e.payload.tool === "context"),
+    false,
+  );
+  await call(
+    tools.find((t) => t.name === "execute"),
+    { command: "echo duplicate", purpose: "Test barrier" },
+  );
+  assert.equal(effects, 1);
+  gate.resolve();
+  await first;
+  assert.equal(((await recovery) as { terminate: boolean }).terminate, true);
+  assert.deepEqual(ref.runtimeHandoff, { context: "recent" });
+  assert.deepEqual(ref.goal, goal);
+  assert.equal(events.at(-1)!.payload.tool, "context");
+  assert.equal(events.filter((e) => e.type === "tool_result" && e.payload.tool === "execute").length, 1);
+});
+
+for (const cancel of [false, true]) {
+  test(`context recovery cannot latch after ${cancel ? "cancellation" : "persistence failure"}`, async () => {
+    const gate = Promise.withResolvers<void>();
+    const abort = new AbortController();
+    const ref: ToolContextRef = {
+      current: fakeToolContext(),
+      scopeLabel: "personal:U1",
+      abortSignal: abort.signal,
+      runtimeInFlight: new Set([gate.promise]),
+      emit: async (entry) => {
+        if (!cancel && entry.type === "tool_result") throw new Error("write failed");
+      },
+    };
+    const tool = createAgentTools(ref).find((t) => t.name === "context");
+    const recovery = call(tool, { action: "compact", mode: "recent" });
+    if (cancel) abort.abort();
+    gate.resolve();
+    if (cancel) await recovery;
+    else await assert.rejects(recovery, /write failed/);
+    assert.equal(ref.runtimeHandoff, undefined);
+    assert.equal(ref.runtimeMutationPending, false);
+  });
+}
+
+test("context recovery is not available in read-only mode", () => {
+  assert.ok(!createAgentTools({ current: fakeToolContext() }, { readOnly: true }).some((t) => t.name === "context"));
 });
