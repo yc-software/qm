@@ -1,5 +1,7 @@
 import { generateSummary } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { COMPACTION_REFUSED_TEXT } from "../../plugins/chassis/src/failure-copy.ts";
 import { contextSummaryPayload } from "../sessions/session-store.ts";
 import type { SessionEntry } from "../types.ts";
 import { compactTranscript, validateCompactSummary } from "./context-compaction.ts";
@@ -49,6 +51,14 @@ export async function summarizeHistory(
       }
       return stream;
     },
-  );
+  ).catch((error: unknown) => {
+    if (
+      error instanceof Error &&
+      /(?:blocked under|violate) Anthropic(?:'|’)?s (?:Usage Policy|Terms of Service)/i.test(error.message)
+    ) {
+      throw new NonRetryableTurnError(COMPACTION_REFUSED_TEXT, { cause: error });
+    }
+    throw error;
+  });
   return validateCompactSummary(text);
 }
