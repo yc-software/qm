@@ -68,6 +68,10 @@ export interface Conversation {
 export type SessionType = "dm" | "channel" | "group";
 
 export interface SpawnMeta {
+  surfaceTools?: boolean;
+  deliveryCandidates?: TurnRequest["deliveryCandidates"];
+  origin?: TurnOrigin;
+  unattendedGrants?: string[];
   openFingerprint?: string;
   scopeVersion?: string;
   sessionParticipantIds?: readonly string[];
@@ -80,6 +84,12 @@ export interface SpawnMeta {
   model?: string;
   harness?: string;
   thinkingLevel?: string;
+  fastMode?: boolean;
+}
+
+export interface SessionStatus {
+  emoji: string;
+  text: string;
 }
 
 export interface Session {
@@ -94,6 +104,7 @@ export interface Session {
   archived?: boolean;
   pinned?: boolean;
   color?: string;
+  status?: SessionStatus | null;
   forkedFrom?: { sessionId: string; title?: string | null };
   forkBoundarySeq?: number;
   parentSessionId?: string;
@@ -189,6 +200,9 @@ export interface TriggerBase {
 }
 
 export interface Destination {
+  keychainAskId?: string;
+  deploymentAccess?: { deploymentId: string; requesterId: string };
+  commandApprovalId?: string;
   type: string;
   target: string;
   audienceScopeId?: ScopeId;
@@ -255,6 +269,7 @@ export interface CronFireNote {
 }
 
 export interface Cron extends TriggerBase {
+  runtime?: import("./harness/harness.ts").RuntimeChoice | null;
   schedule: CronSchedule;
   nextFireAt?: number;
   lastAttemptAt?: number;
@@ -266,6 +281,7 @@ export interface Cron extends TriggerBase {
   loopId?: string;
   createdAt: number;
   runAs?: "owner" | "scopeFloor" | "scopeShared";
+  ownerResourcesRequireOpen?: boolean;
   members?: Principal[];
   unattendedGrants?: string[];
 
@@ -338,6 +354,7 @@ interface LoopPlaybookRevision {
 
 export interface Loop extends TriggerBase {
   name: string;
+  icon?: string;
   purpose?: string;
   surface?: string;
   sources?: string[];
@@ -382,6 +399,8 @@ export interface LoopThreadMessage {
 }
 
 export interface LoopItem {
+  previousLoopId?: string;
+  inboxPreview?: LoopSourcePayload;
   id: string;
   loopId: string;
   sourceKey: string;
@@ -584,8 +603,27 @@ export interface OverheardMessage {
 export type TurnOrigin =
   | { kind: "human"; messageTs?: string; entryTs?: string }
   | { kind: "ambient"; entryTs?: string; live?: boolean }
-  | { kind: "automation"; screenData?: string; destination?: Destination; useOwnerKeychain?: boolean }
+  | {
+      kind: "automation";
+      screenData?: string;
+      destination?: Destination;
+      useOwnerKeychain?: boolean;
+      ownerResourcesRequireOpen?: boolean;
+    }
   | { kind: "direct" };
+
+export interface ClientToolDeclaration {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  timeoutMs?: number;
+}
+
+export interface ClientToolResult {
+  content: string;
+  structured?: unknown;
+  isError?: boolean;
+}
 
 export interface TurnRequest {
   sessionSenderId?: string;
@@ -616,6 +654,7 @@ export interface TurnRequest {
   securityScreenData?: string;
   triggerDestination?: Destination;
   ownerKeychainUnion?: boolean;
+  ownerResourcesRequireOpen?: boolean;
   unprompted?: boolean;
   liveActor?: boolean;
   botActor?: boolean;
@@ -647,6 +686,7 @@ export interface TurnRequest {
   idempotencyKey?: string;
   redeliveryKey?: string;
   async?: boolean;
+  clientTools?: ClientToolDeclaration[];
 }
 
 export interface ActorAssertion {
@@ -672,6 +712,7 @@ export interface PendingApproval {
 }
 
 export interface PendingApprovalRecord {
+  screenedOutput?: { tool: string; text: string; sourceScopeId?: ScopeId };
   sessionId: string;
   command: string;
   createdAt?: number;

@@ -399,7 +399,11 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   if (!portalDevPrincipal && adminGrantsSeed) portalDevPrincipal = adminGrantsSeed.split(":")[0] ?? "";
   if (!portalDevPrincipal && durableAdminPrincipal) portalDevPrincipal = durableAdminPrincipal;
   if (!portalDevPrincipal) portalDevPrincipal = assembled.env.USER || "dev-admin";
-  log(`portal auth: localhost bypass signs in as ${portalDevPrincipal}`);
+  log(
+    assembled.env.PORTAL_LOCAL_AUTH_BYPASS === "0"
+      ? "portal auth: localhost bypass disabled"
+      : `portal auth: localhost bypass signs in as ${portalDevPrincipal}`,
+  );
 
   const tokens = slackOn(spec) ? slotTokens(slot, store) : null;
 
@@ -517,6 +521,12 @@ function finishBoot(): void {
 
 function startLoops(): void {
   const heartbeat = setInterval(() => {
+    if (shuttingDown) return;
+    if (!existsSync(worktree)) {
+      log("worktree vanished -- shutting down and releasing the lease");
+      void shutdownSelf(true);
+      return;
+    }
     if (!existsSync(lock)) {
       log("lease directory vanished (external teardown) -- exiting");
       void shutdownSelf(false);
@@ -596,6 +606,7 @@ async function teardown(reason: string): Promise<void> {
 }
 
 async function shutdownSelf(removeLock: boolean): Promise<void> {
+  if (shuttingDown) return;
   await teardown("shutdown requested");
   if (removeLock) rmSync(lock, { recursive: true, force: true });
   process.exit(EXIT.ok);

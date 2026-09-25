@@ -133,3 +133,60 @@ test("pause never infers unacknowledged owners dead and refuses concurrent gener
     /changed while awaiting/,
   );
 });
+
+for (const mode of ["late-commit", "unavailable-read", "never-commits", "competitor", "rejected"] as const) {
+  test(`mutation confirmation handles ${mode} without changing its request`, async () => {
+    const mutation = { expectedGeneration: 1, desiredDeploymentId: "new-cohort", requestId: "our-request" };
+    let posts = 0;
+    let reads = 0;
+    const old = {
+      ...state(),
+      generation: 1,
+      desiredDeploymentId: "old-cohort",
+      lastRequestId: "previous",
+      members: state().members.map((member) => ({ ...member, generation: 1 })),
+    };
+    const transport: BackgroundWorkTransport = async (method, body) => {
+      if (method === "POST") {
+        posts++;
+        assert.equal(body, JSON.stringify(mutation));
+        if (mode === "rejected") return { status: 403, body: "denied" };
+        if (posts > 1 && (mode === "late-commit" || mode === "unavailable-read")) return response(state());
+        throw new Error("response timed out before commit");
+      }
+      reads++;
+      if (mode === "unavailable-read") throw new Error("temporarily unavailable");
+      if (mode === "competitor") return response({ ...state(), lastRequestId: "competitor" });
+      return response(old);
+    };
+    if (mode === "late-commit" || mode === "unavailable-read") {
+      assert.equal((await mutateBackgroundWork(transport, "new-cohort", mutation)).generation, 2);
+      assert.equal(posts, 2);
+      assert.equal(reads, 1);
+    } else {
+      await assert.rejects(
+        mutateBackgroundWork(transport, "new-cohort", mutation),
+        mode === "competitor" ? /changed concurrently/ : /unconfirmed.*automatic compensation is unsafe/,
+      );
+      assert.equal(posts, mode === "never-commits" ? 3 : 1);
+    }
+  });
+}
+
+test("readiness cannot replace the confirmed mutation identity with a same-generation retirement", async () => {
+  const observed = { ...state(), lastRequestId: "operator-retirement" };
+  await assert.rejects(
+    awaitBackgroundWork(
+      async () => response(observed),
+      "new-cohort",
+      {
+        generation: 2,
+        desiredDeploymentId: "new-cohort",
+        taskArns: ["new-task"],
+        lastRequestId: "our-request",
+      },
+      { timeoutMs: 0, pollMs: 1 },
+    ),
+    /changed while awaiting/,
+  );
+});

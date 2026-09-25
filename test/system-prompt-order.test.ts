@@ -80,6 +80,7 @@ const connectorStatusCache: ConnectorStatusCache = {
   put: async () => {},
 };
 const connectorTokens = {
+  listConnectorsByOwners: async () => new Map(),
   connectorAccessToken: async () => null,
   connectorTokenStatus: () => {
     throw new Error("connector tokens must not be swept when the status cache is fresh");
@@ -96,6 +97,7 @@ function buildOrchestrator(
     harness?: Harness;
     memoryPolicy?: import("../src/memory/policy.ts").MemoryPolicy;
     crons?: CronStore;
+    connectorStatusCache?: ConnectorStatusCache;
     sandbox?: Sandbox;
     skills?: SkillStore;
     skillBundles?: SkillBundleStore;
@@ -189,11 +191,11 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
   };
 
   const ordered = [
-    "Sandbox environment profile",
     "Skills",
     "Where you are",
     "Where scheduled tasks post",
     "Connected apps",
+    "Sandbox environment profile",
     "What you remember",
   ];
   assert.doesNotMatch(prompt, /\n## Your logins\n/);
@@ -468,16 +470,10 @@ test("the system prompt is byte-identical across two turns a minute apart; the c
   assert.equal(first.status, "ok");
   assert.equal(second.status, "ok");
 
-  for (const title of [
-    "Sandbox environment profile",
-    "Skills",
-    "Where you are",
-    "Where scheduled tasks post",
-    "Connected apps",
-  ]) {
+  for (const title of ["Skills", "Where you are", "Where scheduled tasks post", "Connected apps"]) {
     assert.ok(systemOf(first.reply ?? "").includes(`\n## ${title}\n`), `expected "## ${title}" in the system prompt`);
   }
-  for (const title of ["The user's local time", "What you remember", "Your logins"]) {
+  for (const title of ["Sandbox environment profile", "The user's local time", "What you remember", "Your logins"]) {
     assert.ok(
       !systemOf(first.reply ?? "").includes(`\n## ${title}\n`),
       `"## ${title}" must not be in the system prompt`,
@@ -793,7 +789,7 @@ for (const location of [
         audience: [actor],
         publishMembers: [actor],
       },
-      text: "!read skills/carried-method/SKILL.md",
+      text: "!skill carried-method",
     });
     assert.equal(read.status, "ok", read.reason);
     assert.doesNotMatch(read.reply ?? "", /!security-risk|!security-screen-unavailable/);
@@ -810,11 +806,10 @@ for (const location of [
         audience: [actor],
         publishMembers: [actor],
       },
-      text: "!read skills/local-method/SKILL.md",
+      text: "!skill local-method",
     });
     assert.equal(localRead.status, "ok", localRead.reason);
     assert.match(localRead.reply ?? "", /Do useful work/);
-    assert.ok(disk.has("skills/local-method/SKILL.md"));
     assert.equal(disk.has("skills/carried-method/SKILL.md"), false);
   });
 }
@@ -1116,4 +1111,115 @@ test("documents uploaded during a turn survive a runtime handoff without aliasin
   const result = await orchestrator.handleTurn(dm("steer-handoff", "hello"));
   assert.equal(result.status, "ok", result.reason);
   assert.equal(segments, 2);
+});
+
+for (const surfaceTools of [false, true]) {
+  test(`automatic memory is injected once, then only updates (${surfaceTools ? "spine" : "DM"})`, async () => {
+    const base = createMockHarness();
+    const seen: HarnessTurnInput[] = [];
+    const harness: Harness = {
+      ...base,
+      turns: {
+        ...base.turns,
+        runTurn: async (turn) => {
+          seen.push(turn);
+          await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+          await turn.emit({ type: "assistant", payload: { text: "ok" }, scopeLabel: turn.scopeLabel });
+          return { reply: "ok" };
+        },
+      },
+    };
+    const { orchestrator, memory, sessions } = buildOrchestrator({ harness });
+    const personal = scopeId("personal", actor.id);
+    await memory.replace(personal, "# Memory\n- ALPHA_MARKER\n- BETA_MARKER");
+    const input = slackDm("memory-once", "hello", { surfaceTools });
+    const first = await orchestrator.handleTurn(input);
+    assert.equal(first.status, "ok");
+    assert.match(seen[0]!.environment!, /ALPHA_MARKER/);
+    await orchestrator.handleTurn({ ...input, text: "next" });
+    assert.doesNotMatch(seen[1]!.environment ?? "", /ALPHA_MARKER|BETA_MARKER|What you remember/);
+    await memory.replace(personal, "# Memory\n- ALPHA_MARKER\n- GAMMA_MARKER");
+    await orchestrator.handleTurn({ ...input, text: "third" });
+    assert.doesNotMatch(seen[2]!.environment!, /ALPHA_MARKER/);
+    assert.match(seen[2]!.environment!, /GAMMA_MARKER/);
+    assert.match(seen[2]!.environment!, /withdrawn[\s\S]*BETA_MARKER/);
+    const entries = await sessions.getEntries(first.sessionId!);
+    const users = entries.filter((entry) => entry.type === "user");
+    assert.match(JSON.stringify(users[0]!.payload), /memoryRecall/);
+    assert.doesNotMatch(JSON.stringify(users[1]!.payload), /ALPHA_MARKER|BETA_MARKER/);
+  });
+}
+
+test("profile and scheduled-work changes append fresh snapshots without rewriting the cached prefix or history", async () => {
+  const crons = createCronStore();
+  const sandbox = fakeSandbox();
+  const seen: HarnessTurnInput[] = [];
+  const harness = createMockHarness();
+  const runTurn = harness.turns.runTurn;
+  harness.turns.runTurn = async (turn) => {
+    seen.push(turn);
+    return runTurn(turn);
+  };
+  const { orchestrator, sessions } = buildOrchestrator({ crons, sandbox, harness });
+  const input = dm("dm:U1:snapshot-cache", "hello");
+  const first = await orchestrator.handleTurn(input);
+  assert.equal(first.status, "ok");
+  const originalHistory = await sessions.getEntries(first.sessionId!);
+  const cron = await crons.create({
+    owner: actor.id,
+    createdBy: actor.id,
+    ownerScopeId: scopeId("personal", actor.id),
+    schedule: { everyMs: 300_000 },
+    action: "check the synthetic status page",
+  });
+  sandbox.profile.spec = { os: "Other Linux", cpus: 8, workdir: "/new/workspace", homeDir: "/new/home" };
+  assert.equal((await orchestrator.handleTurn({ ...input, text: "next" })).status, "ok");
+  await crons.setEnabled(cron.id, false);
+  assert.equal((await orchestrator.handleTurn({ ...input, text: "third" })).status, "ok");
+  delete sandbox.profile.spec;
+  crons.list = async () => {
+    throw new Error("inventory unavailable");
+  };
+  assert.equal((await orchestrator.handleTurn({ ...input, text: "fourth" })).status, "ok");
+  for (const turn of seen) {
+    assert.equal(turn.systemPrompt, seen[0]!.systemPrompt);
+    assert.doesNotMatch(turn.systemPrompt, /Sandbox environment profile|Already scheduled here|synthetic status/);
+    assert.match(turn.systemPrompt, /only workspace files ship/);
+    assert.match(turn.systemPrompt, /don't re-create it/);
+    assert.match(turn.systemPrompt, /historical/);
+    assert.match(turn.systemPrompt, /A missing profile means unknown capabilities/);
+  }
+  assert.match(seen[0]!.environment!, /Debian 12/);
+  assert.match(seen[0]!.environment!, /No active scheduled work/);
+  assert.match(seen[1]!.environment!, /Other Linux|8 vCPU/);
+  assert.match(seen[1]!.environment!, /check the synthetic status page/);
+  assert.doesNotMatch(seen[2]!.environment!, /check the synthetic status page/);
+  assert.match(seen[2]!.environment!, /No active scheduled work/);
+  assert.doesNotMatch(seen[3]!.environment!, /Sandbox environment profile/);
+  assert.match(seen[3]!.environment!, /Scheduled-work status is unavailable/);
+  assert.doesNotMatch(seen[3]!.environment!, /Other Linux|synthetic status|No active scheduled work/);
+  assert.deepEqual(seen[1]!.history, originalHistory);
+  assert.deepEqual((await sessions.getEntries(first.sessionId!)).slice(0, originalHistory.length), originalHistory);
+});
+
+test("connector revocation still refreshes system-authority permissions", async () => {
+  let revoked = false;
+  const { orchestrator } = buildOrchestrator({
+    connectorStatusCache: {
+      get: async () => ({
+        principalId: actor.id,
+        checkedAt: Date.now(),
+        providers: { google: { connected: true, needsReconnect: revoked } },
+      }),
+      put: async () => {},
+    },
+  });
+  const first = await orchestrator.handleTurn(dm("dm:U1:revoked-cache", "!sysprompt"));
+  revoked = true;
+  const second = await orchestrator.handleTurn(dm("dm:U1:revoked-cache", "!sysprompt"));
+  const prefix = (reply: string) => reply.split("\n\n<environment>")[0]!;
+  assert.match(prefix(first.reply!), /Connected: Google/);
+  assert.match(prefix(second.reply!), /Needs reconnect: Google.*Do not use these apps/);
+  assert.doesNotMatch(prefix(second.reply!), /Connected: Google/);
+  assert.notEqual(prefix(first.reply!), prefix(second.reply!));
 });

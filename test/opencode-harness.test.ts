@@ -1,7 +1,7 @@
 import test from "node:test";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -434,7 +434,7 @@ test("OpenCode advertises aliases only for tools available on the turn", async (
     });
     await harness.turns.runTurn(turnInput([], []));
     const { systemPrompt } = JSON.parse(readFileSync(captured, "utf8")) as { systemPrompt: string };
-    assert.match(systemPrompt, /workspace_read is read/);
+    assert.doesNotMatch(systemPrompt, /workspace_read|workspace_write/);
     if (sandboxResources) assert.doesNotMatch(systemPrompt, /workspace_execute/);
     else assert.match(systemPrompt, /workspace_execute is execute/);
   }
@@ -508,3 +508,123 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
   assert.ok(!JSON.stringify(tape).includes(pdf));
   assert.ok(!JSON.stringify(tape).includes("DOCX-QUARTZ-731"));
 });
+
+for (const [modelId, fastMode, expected] of [
+  ["claude-opus-5", true, { speed: "fast" }],
+  ["gpt-5.6-sol", true, { serviceTier: "priority" }],
+  ["claude-opus-5", false, {}],
+  ["claude-sonnet-5", true, {}],
+  ["unknown-model", true, {}],
+] as const) {
+  test(`OpenCode bridge resolves fast options for ${modelId} with fast=${fastMode}`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-fast-"));
+    const harness = createOpenCodeHarness({
+      binaryPath: fakeSidecar(
+        dir,
+        "fast-options",
+        `
+        if (req.method === "GET" && message) return json(res, []);
+        if (req.method === "POST" && message) {
+          await readBody(req);
+          const context = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + message[1] + "/context?model=${modelId}", {
+            headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET },
+          }).then(r => r.json());
+          const assistant = ${okAssistant};
+          assistant.parts[0].text = JSON.stringify(context.modelOptions);
+          return json(res, assistant);
+        }
+      `,
+      ),
+    });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const turn = turnInput([], []);
+    turn.runtime = { modelId: "claude-opus-5", fastMode };
+    const result = await harness.turns.runTurn(turn);
+    assert.deepEqual(JSON.parse(result.reply), expected);
+  });
+}
+
+test("OpenCode child requests inherit fast mode and a reused runtime honors switching it off", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-fast-child-"));
+  const harness = createOpenCodeHarness({
+    binaryPath: fakeSidecar(
+      dir,
+      "child-fast",
+      `
+      if (req.method === "GET" && url.pathname === "/session/ses_child") return json(res, { id: "ses_child", parentID: "ses_main" });
+      if (req.method === "GET" && message) return json(res, []);
+      if (req.method === "POST" && message) {
+        await readBody(req);
+        const options = [];
+        for (const model of ["gpt-5.6-sol", "claude-sonnet-5"]) {
+          const context = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/ses_child/context?model=" + model, {
+            headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET },
+          }).then(r => r.json());
+          if (context.history !== undefined || context.systemPrompt !== undefined) throw new Error("child borrowed parent prompt");
+          options.push(context.modelOptions);
+        }
+        const assistant = ${okAssistant};
+        assistant.parts[0].text = JSON.stringify(options);
+        return json(res, assistant);
+      }
+    `,
+    ),
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  for (const fastMode of [true, false]) {
+    const turn = turnInput([], []);
+    turn.runtime = { modelId: "claude-opus-5", fastMode };
+    const result = await harness.turns.runTurn(turn);
+    assert.deepEqual(JSON.parse(result.reply), [fastMode ? { serviceTier: "priority" } : {}, {}]);
+  }
+});
+
+for (const mechanism of ["signal", "cancel", "both"] as const) {
+  test(`OpenCode preserves explicit Stop provenance via ${mechanism}`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-stop-"));
+    const signals = createMemoryRunSignalStore();
+    const cancel = new AbortController();
+    const harness = createOpenCodeHarness({
+      binaryPath: fakeSidecar(
+        dir,
+        "stop",
+        `
+        if (req.method === "POST" && message) {
+          await readBody(req);
+          globalThis.pendingPrompt = res;
+          require("node:fs").writeFileSync(${JSON.stringify(join(dir, "started"))}, "1");
+          return;
+        }
+        if (req.method === "POST" && url.pathname.endsWith("/abort")) {
+          if (globalThis.pendingPrompt) { json(globalThis.pendingPrompt, { info: {}, parts: [] }); globalThis.pendingPrompt = null; }
+          return json(res, true);
+        }
+        if (req.method === "GET" && message) return json(res, []);
+      `,
+      ),
+      signals,
+      turnWallClockMs: 5_000,
+    });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const running = harness.turns.runTurn({ ...turnInput([], []), runId: "stop", cancel: cancel.signal });
+    const deadline = Date.now() + 4_000;
+    while (!existsSync(join(dir, "started"))) {
+      if (Date.now() > deadline) throw new Error("mock OpenCode never started");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (mechanism !== "cancel") await signals.send("stop", { kind: "abort" });
+    if (mechanism !== "signal") cancel.abort();
+    const result = await running;
+    assert.equal(result.stoppedByUser, mechanism === "cancel" ? undefined : true);
+    if (mechanism !== "cancel") assert.equal(result.stopped, true);
+  });
+}

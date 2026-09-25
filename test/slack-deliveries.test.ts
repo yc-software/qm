@@ -17,10 +17,11 @@ async function deliver(
   sourceThreadRef?: string,
   webUiPublicUrl?: string,
   text = "two screenshots and the notes",
-  row: { createdAt?: number; history?: Record<string, unknown>[]; loseAck?: boolean } = {},
+  row: { createdAt?: number; history?: Record<string, unknown>[]; loseAck?: boolean; approval?: unknown } = {},
 ) {
   const delivery = {
     id: "D1",
+    idempotencyKey: destination.commandApprovalId ? `command-approval:${destination.commandApprovalId}:0` : "D1",
     text,
     ...(sourceThreadRef
       ? { provenance: { trigger: "cron", sourceThreadRef, sourceTitle: "Weekly <project> & check-in" } }
@@ -44,6 +45,7 @@ async function deliver(
   };
   const core = {
     holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
+    getApproval: async () => row.approval ?? null,
     readBlob: async (id: string) => Buffer.from(id),
     claimDeliveries: async (type: string) => queues.get(type)?.splice(0) ?? [],
     ackDelivery: async (id: string) => {
@@ -274,5 +276,88 @@ for (const type of ["group", "principal"]) {
       elements: [{ type: "plain_text", text: "Sent for @josh", emoji: false }],
     });
     assert.equal(blocks.filter((block) => block.type === "context").length, 1);
+  });
+}
+
+test("principal delivery metadata renders an actionable deployment card", async () => {
+  const request = { deploymentId: "00000000-0000-4000-8000-000000000001", requesterId: "bob@example.com" };
+  const { posts } = await deliver(
+    JSON.parse(JSON.stringify({ type: "principal", target: "U1", deploymentAccess: request })),
+  );
+  const blocks = posts[0]!.blocks as Array<{ type: string; elements?: Array<{ value: string }> }>;
+  const actions = blocks.find((b) => b.type === "actions")!;
+  assert.equal(actions.elements!.length, 2);
+  assert.deepEqual(JSON.parse(actions.elements![0]!.value), request);
+});
+test("delegated approvals recover native buttons from durable records", async () => {
+  const approval = {
+    requestId: "A1",
+    command: "publish",
+    reason: "approval",
+    grantModes: { session: false, always: false },
+    request: { actor: { externalId: "U1" } },
+  };
+  const history: Record<string, unknown>[] = [];
+  const destination = { type: "principal", target: "U1", commandApprovalId: "A1" };
+  const first = await deliver(destination, undefined, undefined, "Approval needed", {
+    approval,
+    history,
+    loseAck: true,
+  });
+  assert.equal(first.posts.length, 1);
+  const rendered = JSON.stringify(first.posts[0]!.blocks);
+  assert.match(rendered, /hilo_allow_once/);
+  assert.doesNotMatch(rendered, /hilo_allow_always/);
+  const second = await deliver(destination, undefined, undefined, "Approval needed", {
+    approval,
+    history,
+    createdAt: Date.now() - 60_000,
+  });
+  assert.equal(second.posts.length, 0);
+  assert.deepEqual(second.acknowledgements, ["D1"]);
+});
+
+for (const approval of [null, { requestId: "A1", command: "publish", request: { actor: { externalId: "U2" } } }]) {
+  test(`delegated approvals discard ${approval ? "mismatched" : "expired"} records`, async () => {
+    const out = await deliver(
+      { type: "principal", target: "U1", commandApprovalId: "A1" },
+      undefined,
+      undefined,
+      "Approval needed",
+      { approval },
+    );
+    assert.equal(out.posts.length, 0);
+    assert.deepEqual(out.acknowledgements, ["D1"]);
+  });
+}
+
+test("a stale queued approval cannot render a newer request for the same command", async () => {
+  const approval = { requestId: "A1", createdAt: 99, command: "publish", request: { actor: { externalId: "U1" } } };
+  const out = await deliver(
+    { type: "principal", target: "U1", commandApprovalId: "A1" },
+    undefined,
+    undefined,
+    "approval",
+    { approval },
+  );
+  assert.equal(out.posts.length, 0);
+  assert.deepEqual(out.acknowledgements, ["D1"]);
+});
+
+for (const type of ["slack", "group", "principal"]) {
+  test(`${type} file-only deliveries survive a restart after a lost acknowledgement`, async () => {
+    const history: Record<string, unknown>[] = [];
+    const first = await deliver({ type }, undefined, undefined, "", { history, loseAck: true });
+    assert.equal(first.posts.length, 1);
+    assert.equal(first.posts[0]!.text, "Files attached.");
+    assert.equal(first.uploads.length, 1);
+    assert.deepEqual(first.acknowledgements, []);
+    const recovered = await deliver({ type }, undefined, undefined, "", {
+      history,
+      createdAt: Date.now() - 60_000,
+    });
+    assert.equal(recovered.posts.length, 0);
+    assert.equal(recovered.uploads.length, 0);
+    assert.deepEqual(recovered.acknowledgements, ["D1"]);
   });
 }

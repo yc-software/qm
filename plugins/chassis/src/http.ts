@@ -87,9 +87,20 @@ export function escapeHtml(s: string): string {
   );
 }
 
-export function serveEmojiFavicon(res: ServerResponse, emoji: string, cacheControl: string): void {
-  res.writeHead(200, { "content-type": "image/svg+xml; charset=utf-8", "cache-control": cacheControl });
-  res.end(
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90" text-anchor="middle" x="50">${emoji}</text></svg>`,
-  );
+const SVG_DOCUMENT = /^<svg[\s>][\s\S]*<\/svg>$/i;
+
+function faviconSvg(icon: { svg?: string; emoji: string }): string {
+  const custom = icon.svg?.trim() ?? "";
+  if (SVG_DOCUMENT.test(custom)) return custom;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90" text-anchor="middle" x="50">${icon.emoji}</text></svg>`;
+}
+
+export function serveFavicon(res: ServerResponse, icon: { svg?: string; emoji: string }, cacheControl: string): void {
+  res.writeHead(200, {
+    "content-type": "image/svg+xml; charset=utf-8",
+    "cache-control": cacheControl,
+    "x-content-type-options": "nosniff",
+    "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'",
+  });
+  res.end(faviconSvg(icon));
 }

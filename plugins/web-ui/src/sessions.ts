@@ -1,3 +1,4 @@
+import { sessionStatusMark } from "./session-status.ts";
 import { openSessionShare } from "./session-share";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
@@ -80,14 +81,7 @@ import {
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
 import { transcriptModel } from "./model-options";
-import {
-  appState,
-  closeSidebarOnNarrowView,
-  renderSidebarTop,
-  showMainEmpty,
-  syncDocumentTitle,
-  syncUrlFromState,
-} from "./shell";
+import { appState, closeSidebarOnNarrowView, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
 import { allConversations, isLiveConversation, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {
@@ -733,7 +727,7 @@ function chatPageRow(s: CoreSession): TemplateResult {
       >
         <span class="list-row-title">${statusMarks(s)}<span dir="auto">${groupDmTitle(s)}</span></span>
         <span class="list-row-meta">
-          ${scopeChip(s.scopeId, s.channelName ?? null)}
+          ${sessionStatusMark(s.status)} ${scopeChip(s.scopeId, s.channelName ?? null)}
           ${surfaceOf(s) === "slack" ? html`<span class="surface surface-slack">${slackLogo(13)}</span>` : nothing}
           ${readOnly ? html`<span class="ro-lock" ${tip("Read-only")}>${icon(Lock, 12)}</span>` : nothing}
           <span class="list-row-date">${listWhen(activityOf(s))}</span>
@@ -991,7 +985,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
               >
                 ${icon(EllipsisVertical, 15)}
               </button>
-              ${menuOpen ? sessionMenuPopover(s) : nothing}
+              ${sessionStatusMark(s.status)} ${menuOpen ? sessionMenuPopover(s) : nothing}
             </div>`
           : nothing
       }
@@ -1638,7 +1632,7 @@ export async function openSessionInto(
     }
     return;
   }
-  if (s.id === conv.state.sessionId) return;
+  if (s.id === conv.state.sessionId && !entriesPrefetch) return;
 
   refreshSessionsOnOpen();
 
@@ -1647,7 +1641,8 @@ export async function openSessionInto(
     sessionsState.openingKey = opening;
     renderList();
   }
-  if (isLiveConversation(conv) && (!tracked || sessionsState.openingKey === opening)) conv.mountLoadingPane();
+  if (!isLiveConversation(conv)) return;
+  const isCurrent = conv.mountLoadingPane();
 
   const fetchEntries = (): Promise<TranscriptPage | null> =>
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(() => null);
@@ -1656,15 +1651,19 @@ export async function openSessionInto(
     entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries(),
     continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : Promise.resolve(null),
   ]);
-  if (!isLiveConversation(conv)) return;
+  if (!isLiveConversation(conv) || !isCurrent()) return;
 
   if (tracked) {
     if (sessionsState.openingKey !== opening) return;
     sessionsState.openingKey = null;
   }
+  if (!entriesPrefetch && conv.state.sessionId === s.id) {
+    renderList();
+    return;
+  }
 
   if (!entriesRes) {
-    if (tracked) showMainEmpty("Couldn't load this conversation. Check your connection and click it again.");
+    conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
     return;
   }

@@ -97,6 +97,15 @@ export function createIsCurrentSharedScopeMember(deps: ScopeMembershipDeps): IsC
   };
 }
 
+export function withLiveTurnMembership(
+  stored: IsCurrentSharedScopeMember | undefined,
+  turn: { actorId: string; scopeId: ScopeId; verified: boolean },
+): IsCurrentSharedScopeMember {
+  return async (principalId, scope) =>
+    (turn.verified && scope === turn.scopeId && samePerson(principalId, turn.actorId)) ||
+    (await stored?.(principalId, scope)) === true;
+}
+
 export type CurrentScopeMembers = (scope: ScopeId) => Promise<Principal[] | undefined>;
 
 export function createCurrentScopeMembers(deps: ScopeMembershipDeps): CurrentScopeMembers {

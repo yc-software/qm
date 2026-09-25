@@ -1,3 +1,4 @@
+import { buildGovernanceUI } from "./governance-bundle.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -10,6 +11,7 @@ import { json, readBody, cookie, gzipAccepted } from "../../chassis/src/http.ts"
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
+import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 import {
   CORE_API_URL as CORE,
   CORE_ORG_ID as ORG,
@@ -32,6 +34,7 @@ function signedHeaders(method: string, corePath: string, rawBody: string): Recor
 
 const BASE_HTML = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8")
   .replaceAll("__ADMIN_BASE__", () => ADMIN_BASE_PATH)
+  .replace('"__GOVERNANCE_UI__";', () => buildGovernanceUI())
   .replace(
     "<style data-admin-components></style>",
     () =>
@@ -93,6 +96,9 @@ const cookiePrincipal = (req: IncomingMessage): string | null => {
     token && PORTAL_IDENTITY_SECRET ? verifyPortalIdentity(token, PORTAL_IDENTITY_SECRET, Date.now())?.p : null;
   return principal ?? (!CORE_SIGNING_SECRET || ALLOW_UNSIGNED_TEST_IDENTITY ? cookie(req, "admin") : null);
 };
+
+const inboxPermissions = (principal: string): string[] =>
+  principalInAllowlist(principal, process.env.INBOX_USERS) ? ["inbox"] : [];
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
 function portalIdentityHeader(): Record<string, string> {
@@ -292,6 +298,7 @@ async function coreWhoami(principal: string): Promise<{ isAdmin: boolean; role?:
 
 const WRITES = new Map<string, string[]>([
   ["grants", ["POST", "DELETE"]],
+  ["principal-links", ["POST", "DELETE"]],
   ["external-users", ["POST", "DELETE"]],
   ["memory", ["PUT"]],
   ["crons", ["PUT"]],
@@ -306,6 +313,7 @@ const WRITES = new Map<string, string[]>([
 
 const READS = [
   "metrics",
+  "spend",
   "egress",
   "errors",
   "audit",
@@ -329,6 +337,7 @@ const READS = [
   "model-providers",
   "model-registry",
   "custom-providers",
+  "principal-links",
 ];
 
 export async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -389,7 +398,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!p) return json(res, 401, { error: "signed_out" });
     const who = await coreWhoami(p);
     if (!who) return json(res, 502, { error: "core_unreachable", message: "could not verify admin status" });
-    return json(res, 200, { principal: p, org: ORG, ...who });
+    return json(res, 200, { principal: p, org: ORG, ...who, permissions: inboxPermissions(p) });
   }
   if (method === "POST" && pathname === "/api/logout") {
     res.writeHead(200, {
@@ -474,6 +483,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return forwardDownload(res, principal, `/v1/admin/files/download${url.search}`);
   }
 
+  if (method === "GET" && pathname === "/api/spend" && url.searchParams.get("format") === "csv") {
+    if (!principal) return json(res, 401, { error: "signed_out" });
+    return forwardDownload(res, principal, `/v1/admin/spend${url.search}`);
+  }
+
   if (method === "POST" && pathname === "/api/files/upload") {
     if (!principal) {
       req.resume();
@@ -494,6 +508,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (method === "GET" && READS.includes(first)) {
     if (!principal) return json(res, 401, { error: "signed_out" });
     return forward(req, res, principal, "GET", `/v1/admin/${rest}${url.search}`);
+  }
+
+  if (method === "GET" && ["/design-system", "/design-system/", "/design", "/design/"].includes(pathname)) {
+    const viewer = cookiePrincipal(req);
+    if (!viewer || !principalInAllowlist(viewer, process.env.INBOX_USERS)) {
+      return json(res, 404, { error: "not_found" });
+    }
+    return serveShell();
   }
 
   if (method === "GET" && !pathname.startsWith("/api/") && !pathname.startsWith("/deployments/")) {

@@ -32,8 +32,8 @@ const trace: SessionEntry[] = [
   entry("user", { text: "Fix the failing order tests in osprey" }, 1),
   entry("tool_call", { tool: "execute", callId: "a", command: "TOKEN=sk-e2e-secret-value-123456 ./test.sh" }, 2),
   entry("tool_result", { tool: "execute", callId: "a", isError: true, code: 1 }, 3),
-  entry("tool_call", { tool: "write", callId: "b", path: "osprey/orders/validate.js" }, 4),
-  entry("tool_result", { tool: "write", callId: "b" }, 5),
+  entry("tool_call", { tool: "files", action: "write", callId: "b", path: "osprey/orders/validate.js" }, 4),
+  entry("tool_result", { tool: "files", action: "write", callId: "b" }, 5),
   entry("tool_call", { tool: "execute", callId: "c", command: "./test.sh" }, 6),
   entry("tool_result", { tool: "execute", callId: "c", code: 0 }, 7),
 ];

@@ -436,7 +436,7 @@ test("goalViewFromEntry extracts goal snapshots from tool results and system ent
     createdAt: 10,
     updatedAt: 20,
   };
-  const fromTool = goalViewFromEntry("tool_result", { tool: "create_goal", goal: record });
+  const fromTool = goalViewFromEntry("tool_result", { tool: "goal", action: "create", goal: record });
   assert.equal(fromTool?.objective, "work for a while");
   assert.equal(fromTool?.status, "active");
   assert.equal(fromTool?.floor, "30m, 3 turns");

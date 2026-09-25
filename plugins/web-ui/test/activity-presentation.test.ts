@@ -5,7 +5,6 @@ import {
   activityGroupSummary,
   activityGroups,
   activityLabel,
-  compactPath,
   thinkingPresentation,
   sessionPresentation,
 } from "../src/activity-presentation.ts";
@@ -42,7 +41,18 @@ test("simple shell reads and searches get semantic labels, compound commands sta
   );
   assert.equal(activityLabel(row("sed -n '1,120p' src/main.ts"), "complete"), "main.ts");
   assert.equal(activityLabel(row("rg --files src"), "complete"), "Searched for files in src");
-  assert.equal(compactPath("skill://publish/SKILL.md"), "publish/SKILL.md");
+  assert.deepEqual(activityDescription({ tool: "skill", name: "publish" }), {
+    category: "read",
+    target: "publish",
+  });
+  assert.deepEqual(activityDescription({ tool: "skills", action: "read", name: "admin", path: "SKILL.md" }), {
+    category: "read",
+    target: "admin",
+  });
+  assert.deepEqual(activityDescription({ tool: "skill", name: "publish", path: "templates/x.md" }), {
+    category: "read",
+    target: "publish/x.md",
+  });
 });
 
 test("status labels never report missing or failed results as successful", () => {
@@ -101,6 +111,8 @@ test("session actions identify their recipient and retain failure state", () => 
   tool.call!.payload = { tool: "session", action: "open", name: "worker" };
   tool.result!.payload = { title: "Named worker", sessionId: "id" };
   assert.equal(sessionPresentation(tool, "complete")?.target, "Named worker");
+  tool.call!.payload = { tool: "sessions", action: "open", name: "worker" };
+  assert.equal(sessionPresentation(tool, "complete")?.target, "Named worker");
 });
 
 test("activity grouping preserves speech boundaries and chronological item identity", () => {
@@ -120,4 +132,22 @@ test("activity grouping preserves speech boundaries and chronological item ident
 test("resolved approval history does not mark a group as needing action", () => {
   const blocked = row("npm test", { blocked: "needs_approval" });
   assert.equal(activityGroupSummary([{ kind: "tool", row: blocked }], "complete").attention, false);
+});
+
+test("purpose takes precedence over commands while retaining failure and incomplete states", () => {
+  const tool = row("cat /workspace/report.csv");
+  tool.call!.payload = { ...(tool.call!.payload as ToolPayload), purpose: "  Check the sales totals  " };
+  assert.equal(activityLabel(tool, "complete"), "Check the sales totals");
+  tool.result = null;
+  assert.equal(activityLabel(tool, "working"), "Check the sales totals");
+  assert.equal(activityLabel(tool, "complete"), "Check the sales totals · Unconfirmed");
+  tool.result = row("", { code: 1 }).result;
+  assert.equal(activityLabel(tool, "complete"), "Check the sales totals · Failed");
+  tool.result = row("", { blocked: "needs_approval" }).result;
+  assert.equal(activityLabel(tool, "working"), null);
+  tool.call!.payload = { tool: "sandbox", action: "start_process", purpose: "Start the preview server" };
+  tool.result = null;
+  assert.equal(activityLabel(tool, "working"), "Start the preview server");
+  tool.call!.payload = { tool: "execute", command: "cat report.csv", purpose: "  " };
+  assert.equal(activityLabel(tool, "working"), "Reading report.csv");
 });

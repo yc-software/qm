@@ -1,7 +1,9 @@
+import "./onboarding-welcome";
+import "./slack-account";
 import { openModelConnectManager, type StatusResponse } from "./model-connect";
-import { api } from "./core-bridge";
+import { api, withBase } from "./core-bridge";
 import { html, nothing, render, type TemplateResult } from "lit";
-import { BookOpen, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type IconNode } from "lucide";
+import { Download, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type IconNode } from "lucide";
 import { icon } from "./ui";
 import { ADMIN_HOME_URL, appState, can, signOut } from "./shell";
 import { sessionsState, setWebOnly } from "./sessions";
@@ -15,7 +17,7 @@ const CUSTOM_THEME_KEY = "theme:custom";
 const CUSTOM_THEME_STYLE_ID = "custom-theme";
 const THEME_FILE_ACCEPT = ".itermcolors,.plist,.json,.jsonc,application/json,text/xml,application/xml";
 
-const QM_ABOUT_URL = "https://github.com/yc-software/qm";
+const QM_MAC_DOWNLOAD_URL = "https://github.com/yc-software/qm/releases/download/desktop-v0.1.0/QM-mac-arm64.zip";
 
 const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string; glyph: IconNode }> = [
   { value: "light", label: "Light", glyph: Sun },
@@ -55,6 +57,21 @@ function storeCustomTheme(palette: Palette | null): void {
   }
 }
 
+let themeParentOrigin: string | null = null;
+
+function publishTheme(): void {
+  if (!themeParentOrigin) return;
+  const root = document.documentElement;
+  const style = getComputedStyle(root);
+  const colors = Object.fromEntries(
+    ["--background", "--foreground", "--secondary", "--muted-foreground", "--border", "--brand-accent"].map((key) => [
+      key,
+      style.getPropertyValue(key).trim(),
+    ]),
+  );
+  window.parent.postMessage({ type: "qm:theme", dark: root.classList.contains("dark"), colors }, themeParentOrigin);
+}
+
 export function applyTheme(): void {
   const choice = storedTheme();
   const custom = choice === "custom" ? storedCustomTheme() : null;
@@ -69,11 +86,13 @@ export function applyTheme(): void {
     }
     styleEl.textContent = themeCss(tokens);
     root.classList.toggle("dark", tokens.dark);
+    publishTheme();
     return;
   }
   styleEl?.remove();
   const dark = choice === "system" ? window.matchMedia("(prefers-color-scheme: dark)").matches : choice === "dark";
   root.classList.toggle("dark", dark);
+  publishTheme();
 }
 
 export function setTheme(choice: ThemeChoice): void {
@@ -113,6 +132,15 @@ async function onThemeFileChosen(e: Event): Promise<void> {
 }
 
 export function watchSystemTheme(): void {
+  window.addEventListener("message", (event) => {
+    if (window.parent === window || event.source !== window.parent || event.origin === "null") return;
+    if (event.data?.type !== "qm:theme-request") return;
+    themeParentOrigin = event.origin;
+    publishTheme();
+  });
+  window.addEventListener("storage", (event) => {
+    if (event.key === null || event.key === THEME_KEY || event.key === CUSTOM_THEME_KEY) applyTheme();
+  });
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (storedTheme() === "system") applyTheme();
   });
@@ -360,17 +388,15 @@ function adminRow(): TemplateResult {
   `;
 }
 
-function aboutRow(): TemplateResult {
+function desktopRow(): TemplateResult {
   return html`
     <div class="settings-row">
       <div class="settings-row-copy">
-        <div class="settings-row-title">Learn more about QM</div>
-        <div class="settings-row-note">
-          Why Y Combinator built this open-source agent harness, and how to run your own.
-        </div>
+        <div class="settings-row-title">Desktop app</div>
+        <div class="settings-row-note">QM for Mac. Requires Apple Silicon and macOS 13 or later.</div>
       </div>
-      <a class="btn settings-row-action" href=${QM_ABOUT_URL} target="_blank" rel="noreferrer noopener">
-        ${icon(BookOpen, 15)}<span>Read the announcement</span>${icon(ExternalLink, 14)}
+      <a class="btn settings-row-action" href=${QM_MAC_DOWNLOAD_URL} target="_blank" rel="noreferrer noopener">
+        ${icon(Download, 15)}<span>Download for Mac</span>
       </a>
     </div>
   `;
@@ -399,8 +425,20 @@ function settingsPane(): TemplateResult {
       <h1 class="pane-title">Settings</h1>
     </div>
     <div class="settings-group">
-      ${aiAccountsRow()} ${themeRow()} ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${aboutRow()}
+      ${aiAccountsRow()} ${themeRow()} ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${desktopRow()}
       ${accountRow()}
+      <div class="settings-row settings-slack-account">
+        <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
+      </div>
+      <div class="settings-row">
+        <qm-onboarding-welcome
+          .me=${appState.me}
+          .setupOnly=${true}
+          .widget=${"apps"}
+          .returnKey=${"settings"}
+          .base=${withBase("")}
+        ></qm-onboarding-welcome>
+      </div>
     </div>
   `;
 }

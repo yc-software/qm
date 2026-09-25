@@ -25,6 +25,10 @@ jobs:
         run: |
           npm ci
           npm run typecheck
+      - name: Desktop sign-in tests
+        run: |
+          npm ci --prefix desktop --ignore-scripts
+          npm test --prefix desktop
 
   core-tests:
     name: Core tests (${{ matrix.shard }}/5)
@@ -74,8 +78,15 @@ jobs:
           cache-dependency-path: |
             cli/package-lock.json
             package-lock.json
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
       - name: Install, typecheck, unit + packaged-artifact + e2e tests
         working-directory: cli
+        env:
+          QM_TERRAFORM_BIN: terraform
+          QM_TEST_TERRAFORM: terraform
         run: |
           npm ci
           npm run typecheck
@@ -141,6 +152,7 @@ jobs:
         run: |
           npm ci
           npm ci --prefix plugins/web-ui
+          npm ci --prefix desktop --ignore-scripts
       - name: Formatting
         run: npm run format:check
       - name: Lint whole repo, incl. plugins
@@ -229,8 +241,11 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             plugins/web-ui/package-lock.json
-      - name: Install core dependencies
-        run: npm ci
+            plugins/admin/package-lock.json
+      - name: Install core and mounted admin dependencies
+        run: |
+          npm ci
+          npm ci --prefix plugins/admin
       - name: Install, typecheck, test, build
         working-directory: plugins/web-ui
         run: |

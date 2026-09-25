@@ -6,16 +6,48 @@ import { dirname, join } from "node:path";
 export interface SmolCall {
   method: string;
   path: string;
+  query?: string;
+  body?: unknown;
   script?: string;
+}
+
+export interface FakeMachineView {
+  state: string;
+  ready: boolean;
+  error?: string;
+  ephemeral: boolean;
+  resources?: Record<string, number>;
+  network: unknown;
+  ttlSeconds?: number;
+  autoStopSeconds?: number;
 }
 
 interface FakeMachine {
   id: string;
   name: string | null;
   state: string;
+  error?: string;
+  notReadyGets: number;
   ephemeral: boolean;
   resources?: Record<string, number>;
+  network: unknown;
+  ttlSeconds?: number;
+  autoStopSeconds?: number;
   home: string;
+}
+
+export interface InjectedFailure {
+  headers?: Record<string, string>;
+  match?: (call: { method: string; path: string }) => boolean;
+}
+
+interface CreateBody {
+  name?: string | null;
+  ephemeral?: boolean;
+  resources?: Record<string, number>;
+  network?: unknown;
+  ttlSeconds?: number;
+  autoStopSeconds?: number;
 }
 
 export interface FakeSmolmachines {
@@ -23,8 +55,12 @@ export interface FakeSmolmachines {
   calls: SmolCall[];
   homeDir(name: string): string;
   names(): string[];
-  machine(name: string): { state: string; ephemeral: boolean; resources?: Record<string, number> } | null;
+  machine(name: string): FakeMachineView | null;
   stop(name: string): void;
+  failNext(status: number, opts?: InjectedFailure): void;
+  fail(name: string, reason: string): void;
+  notReadyFor(name: string, gets: number): void;
+  deleteBehindCore(name: string): void;
   execScripts(): string[];
   reset(): void;
   cleanup(): void;
@@ -38,17 +74,22 @@ export function installFakeSmolmachines(): FakeSmolmachines {
   const execScripts: string[] = [];
   const calls: SmolCall[] = [];
   let nextId = 1;
+  const injected: Array<InjectedFailure & { status: number }> = [];
 
   const byName = (name: string): FakeMachine | undefined => [...machines.values()].find((m) => m.name === name);
 
-  const create = (name: string | null, ephemeral: boolean, resources?: Record<string, number>): FakeMachine => {
+  const create = (body: CreateBody): FakeMachine => {
     const id = `m-${nextId++}`;
     const m: FakeMachine = {
       id,
-      name,
+      name: body.name ?? null,
       state: "stopped",
-      ephemeral,
-      ...(resources ? { resources } : {}),
+      notReadyGets: 0,
+      ephemeral: body.ephemeral ?? false,
+      ...(body.resources ? { resources: body.resources } : {}),
+      network: body.network ?? { mode: "open" },
+      ...(body.ttlSeconds !== undefined ? { ttlSeconds: body.ttlSeconds } : {}),
+      ...(body.autoStopSeconds !== undefined ? { autoStopSeconds: body.autoStopSeconds } : {}),
       home: join(root, id),
     };
     mkdirSync(m.home, { recursive: true });
@@ -68,38 +109,46 @@ export function installFakeSmolmachines(): FakeSmolmachines {
     );
   };
 
-  const runExec = (m: FakeMachine, script: string, stdinB64?: string): Response => {
+  const runExec = (m: FakeMachine, script: string, output: string | null): Response => {
     execScripts.push(script);
     mkdirSync(join(m.home, "tmp"), { recursive: true });
     const r = spawnSync("sh", ["-c", remap(m, script)], {
       encoding: "buffer",
       maxBuffer: 128 * 1024 * 1024,
       env: { ...process.env, COPYFILE_DISABLE: "1" },
-      ...(stdinB64 !== undefined ? { input: Buffer.from(stdinB64, "utf8") } : {}),
     });
     const code = r.status ?? (r.signal ? 137 : -1);
     const cap = 1024 * 1024;
-    const stdout = (r.stdout ?? Buffer.alloc(0)).toString("utf8");
-    const stderr = (r.stderr ?? Buffer.alloc(0)).toString("utf8");
+    const stdout = r.stdout ?? Buffer.alloc(0);
+    const stderr = r.stderr ?? Buffer.alloc(0);
+    const text = output !== "b64";
+    const bytes = output !== "text";
     return Response.json({
-      stdout: stdout.slice(0, cap),
-      stderr: stderr.slice(0, cap),
+      stdout: text ? stdout.toString("utf8").slice(0, cap) : "",
+      stderr: text ? stderr.toString("utf8").slice(0, cap) : "",
       exitCode: code,
       durationMs: 1,
       machineId: m.id,
-      stdoutTruncated: stdout.length > cap,
-      stderrTruncated: stderr.length > cap,
+      stdoutTruncated: text && stdout.length > cap,
+      stderrTruncated: text && stderr.length > cap,
+      ...(bytes ? { stdoutB64: stdout.toString("base64"), stderrB64: stderr.toString("base64") } : {}),
     });
   };
+
+  const ready = (m: FakeMachine): boolean => m.state.toLowerCase() === "running" && m.notReadyGets <= 0;
 
   const info = (m: FakeMachine) => ({
     id: m.id,
     name: m.name,
     state: m.state,
+    ready: ready(m),
+    error: m.error ?? null,
     ephemeral: m.ephemeral,
     source: { type: "image", reference: "ubuntu:24.04" },
     resources: m.resources ?? {},
-    network: { mode: "open" },
+    network: m.network,
+    ttlSeconds: m.ttlSeconds ?? null,
+    autoStopSeconds: m.autoStopSeconds ?? null,
     env: {},
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
@@ -114,18 +163,21 @@ export function installFakeSmolmachines(): FakeSmolmachines {
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = new URL(typeof input === "string" ? input : input.toString());
     const method = init?.method ?? "GET";
-    calls.push({ method, path: url.pathname });
+    const call: SmolCall = { method, path: url.pathname, ...(url.search ? { query: url.search.slice(1) } : {}) };
+    calls.push(call);
+    const at = injected.findIndex((f) => !f.match || f.match({ method, path: url.pathname }));
+    if (at >= 0) {
+      const [next] = injected.splice(at, 1);
+      return new Response(`injected ${next!.status}`, { status: next!.status, headers: next!.headers ?? {} });
+    }
     if (url.pathname === "/v1/machines" && method === "GET") {
       return Response.json([...machines.values()].map(info));
     }
     if (url.pathname === "/v1/machines" && method === "POST") {
-      const body = JSON.parse(toBuf(init?.body).toString() || "{}") as {
-        name?: string | null;
-        ephemeral?: boolean;
-        resources?: Record<string, number>;
-      };
+      const body = JSON.parse(toBuf(init?.body).toString() || "{}") as CreateBody;
+      call.body = body;
       if (body.name && byName(body.name)) return new Response("machine name conflict", { status: 409 });
-      return Response.json(info(create(body.name ?? null, body.ephemeral ?? false, body.resources)), { status: 201 });
+      return Response.json(info(create(body)), { status: 201 });
     }
     const files = /^\/v1\/machines\/([^/]+)\/files(\/.+)$/.exec(url.pathname);
     if (files) {
@@ -151,16 +203,15 @@ export function installFakeSmolmachines(): FakeSmolmachines {
       if (!m) return new Response("machine not found", { status: 404 });
       if (sub[2] === "exec") {
         if (m.state.toLowerCase() !== "running") return new Response("machine is stopped", { status: 409 });
-        const body = JSON.parse(toBuf(init?.body).toString() || "{}") as {
-          command?: string[] | string;
-          stdin?: string;
-        };
+        const body = JSON.parse(toBuf(init?.body).toString() || "{}") as { command?: string[] | string };
+        call.body = body;
         const argv = Array.isArray(body.command) ? body.command : ["sh", "-c", body.command ?? ""];
         const script = argv[argv.length - 1] ?? "";
-        calls[calls.length - 1]!.script = script;
-        return runExec(m, script, body.stdin);
+        call.script = script;
+        return runExec(m, script, url.searchParams.get("output"));
       }
       if (sub[2] === "start") {
+        if (m.error) return new Response(`machine failed: ${m.error}`, { status: 409 });
         m.state = "Running";
         return Response.json(info(m));
       }
@@ -168,7 +219,11 @@ export function installFakeSmolmachines(): FakeSmolmachines {
         m.state = "stopped";
         return Response.json(info(m));
       }
-      if (method === "GET") return Response.json(info(m));
+      if (method === "GET") {
+        const body = info(m);
+        m.notReadyGets--;
+        return Response.json(body);
+      }
       if (method === "DELETE") {
         rmSync(m.home, { recursive: true, force: true });
         machines.delete(m.id);
@@ -181,15 +236,44 @@ export function installFakeSmolmachines(): FakeSmolmachines {
   return {
     fetchImpl,
     calls,
-    homeDir: (name) => (byName(name) ?? create(name, false)).home,
+    homeDir: (name) => (byName(name) ?? create({ name })).home,
     names: () => [...machines.values()].map((m) => m.name ?? m.id),
     machine: (name) => {
       const m = byName(name);
-      return m ? { state: m.state, ephemeral: m.ephemeral, ...(m.resources ? { resources: m.resources } : {}) } : null;
+      if (!m) return null;
+      return {
+        state: m.state,
+        ready: ready(m),
+        ...(m.error ? { error: m.error } : {}),
+        ephemeral: m.ephemeral,
+        ...(m.resources ? { resources: m.resources } : {}),
+        network: m.network,
+        ...(m.ttlSeconds !== undefined ? { ttlSeconds: m.ttlSeconds } : {}),
+        ...(m.autoStopSeconds !== undefined ? { autoStopSeconds: m.autoStopSeconds } : {}),
+      };
     },
     stop: (name) => {
       const m = byName(name);
       if (m) m.state = "stopped";
+    },
+    failNext: (status, opts = {}) => {
+      injected.push({ status, ...opts });
+    },
+    fail: (name, reason) => {
+      const m = byName(name);
+      if (!m) return;
+      m.state = "error";
+      m.error = reason;
+    },
+    notReadyFor: (name, gets) => {
+      const m = byName(name);
+      if (m) m.notReadyGets = gets;
+    },
+    deleteBehindCore: (name) => {
+      const m = byName(name);
+      if (!m) return;
+      rmSync(m.home, { recursive: true, force: true });
+      machines.delete(m.id);
     },
     execScripts: () => [...execScripts],
     reset: () => {
@@ -197,6 +281,7 @@ export function installFakeSmolmachines(): FakeSmolmachines {
       machines.clear();
       execScripts.length = 0;
       calls.length = 0;
+      injected.length = 0;
     },
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };

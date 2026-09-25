@@ -19,8 +19,8 @@ test("settled and streaming transcript blocks select direction from their conten
     messageMarkdown,
     /<qm-markdown\s+dir="auto"[^>]*?\.content=\$\{escapeLoneDollars\(normalizePlainTextFences\(text\)\)\}/,
   );
-  assert.match(chat, /\$\{markdown\(body, isStreaming, /);
-  assert.match(chat, /class="streaming-text \$\{isStreaming \? "live-stream" : ""\}" dir="auto"/);
+  assert.match(chat, /\$\{markdown\(body, animating, /);
+  assert.match(chat, /class="streaming-text \$\{animating \? "live-stream" : ""\}" dir="auto"/);
 });
 
 test("search group headers select direction from the authored session title", async () => {

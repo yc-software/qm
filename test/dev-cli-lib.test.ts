@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { spawnSync } from "node:child_process";
 import { ensureDeps } from "../scripts/dev/lib/deps.ts";
 import { tmpdir } from "node:os";
@@ -10,6 +11,7 @@ import {
   clearSlotFlag,
   ensureStore,
   listSlots,
+  portSlotCount,
   readSlotFlag,
   slotFlagged,
   slotPorts,
@@ -18,6 +20,8 @@ import {
   writeSlotFlag,
 } from "../scripts/dev/lib/pool.ts";
 import {
+  claimPortSlot,
+  claimSlotPorts,
   claimSlotLock,
   heartbeatFresh,
   leaseOrgId,
@@ -66,6 +70,107 @@ test("slotPorts derive the full port block from the slot number", () => {
     slackHealth: 8163,
     supervisor: 8179,
   });
+});
+
+test("port blocks preserve legacy slots and stay disjoint through the port ceiling", () => {
+  for (const base of [0, 8080, 20000, 65423, 65424, 65535]) {
+    const used = new Set<number>();
+    const count = portSlotCount(base);
+    for (let num = 1; num <= count; num++) {
+      const ports = Object.values(slotPorts(`pool${num}`, base));
+      for (const [index, port] of ports.entries()) {
+        assert.ok(port > base && port <= 65535);
+        assert.ok(!used.has(port), `port ${port} overlaps at slot ${num}`);
+        used.add(port);
+        if (num <= 16) assert.equal(port, base + num + index * 16);
+      }
+    }
+    assert.throws(() => slotPorts(`pool${count + 1}`, base), /No valid port block/);
+  }
+  assert.equal(portSlotCount(8080), 8207);
+  assert.equal(slotPorts("pool17", 8080).core, 8193);
+});
+
+test("port allocation rejects malformed slots and invalid base ports", () => {
+  for (const slot of ["pool0", "pool-1", "pool1.5", "pool01", "17", "poolNaN", "pool9999999999999999999"]) {
+    assert.throws(() => slotPorts(slot, 8080), /No valid port block/);
+  }
+  for (const base of [-1, 65536, 8080.5, NaN, Infinity]) {
+    assert.throws(() => portSlotCount(base), /DEV_INSTANCE_BASE_PORT/);
+    assert.throws(() => slotPorts("pool1", base), /DEV_INSTANCE_BASE_PORT/);
+  }
+});
+
+test("web leases grow beyond sixteen, preserve Slack capacity, and reuse released slots", async () => {
+  const store = tmpStore();
+  try {
+    addSlot(store, 1);
+    const excluded = new Set(["pool2"]);
+    const claimed: string[] = [];
+    for (let num = 3; num <= 40; num++) {
+      const slot = await claimPortSlot(excluded, store);
+      assert.ok(slot);
+      assert.ok(Number(slot.slice(4)) >= num);
+      claimed.push(slot);
+    }
+    assert.equal(new Set(claimed).size, 38);
+    assert.equal(claimSlotLock("pool1", store), true);
+    const released = claimed[16]!;
+    releaseSlotLock(released, store);
+    assert.equal(await claimPortSlot(excluded, store), released);
+    const exhausted = new Set(Array.from({ length: portSlotCount() }, (_, i) => `pool${i + 1}`));
+    assert.equal(await claimPortSlot(exhausted, store), null);
+    exhausted.delete(released);
+    releaseSlotLock(released, store);
+    addSlot(store, Number(released.slice(4)));
+    assert.equal(await claimPortSlot(exhausted, store), released);
+  } finally {
+    rmSync(store, { recursive: true, force: true });
+  }
+});
+
+test("occupied port blocks are skipped without killing listeners or retaining leases", async () => {
+  const store = tmpStore();
+  const server = createServer();
+  const previousBase = process.env.DEV_INSTANCE_BASE_PORT;
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  process.env.DEV_INSTANCE_BASE_PORT = String(port - 97);
+  try {
+    assert.equal(await claimSlotPorts("pool1", store), false);
+    assert.equal(existsSync(lockDir("pool1", store)), false);
+    const claimed = await claimPortSlot(new Set(), store);
+    assert.notEqual(claimed, "pool1");
+    assert.equal(server.listening, true);
+    await assert.rejects(claimSlotPorts("pool999999", store), /No valid port block/);
+    assert.equal(existsSync(lockDir("pool999999", store)), false);
+  } finally {
+    if (previousBase === undefined) delete process.env.DEV_INSTANCE_BASE_PORT;
+    else process.env.DEV_INSTANCE_BASE_PORT = previousBase;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(store, { recursive: true, force: true });
+  }
+});
+
+test("status and doctor report invalid configured slots and continue", () => {
+  const store = tmpStore();
+  try {
+    addSlot(store, 1);
+    addSlot(store, 999999);
+    const env = { ...process.env, QM_POOL_STORE: store, DEV_INSTANCE_BASE_PORT: "8080" };
+    const status = spawnSync(process.execPath, ["scripts/dev/cli.ts", "status", "--json"], { encoding: "utf8", env });
+    assert.equal(status.status, 0, status.stderr);
+    const rows = JSON.parse(status.stdout);
+    assert.equal(rows.find((row: { slot: string }) => row.slot === "pool1").state, "free");
+    assert.equal(rows.find((row: { slot: string }) => row.slot === "pool999999").state, "invalid");
+    const doctor = spawnSync(process.execPath, ["scripts/dev/cli.ts", "doctor", "--json"], { encoding: "utf8", env });
+    assert.equal(doctor.status, 0, doctor.stderr);
+    const report = JSON.parse(doctor.stdout);
+    assert.ok(report.checks.some((check: { id: string }) => check.id === "slot-config:pool999999"));
+    assert.ok(report.checks.some((check: { id: string }) => check.id === "docker-daemon"));
+  } finally {
+    rmSync(store, { recursive: true, force: true });
+  }
 });
 
 test("pool listing, token parsing, and validity", () => {
@@ -340,7 +445,7 @@ test("dev security secrets are stable, complete, and distinct", () => {
 });
 
 test("OpenCode config is strict, pinned, and inherits the Pi model", () => {
-  assert.equal(OPENCODE_RUNTIME_VERSION, "1.17.18");
+  assert.equal(OPENCODE_RUNTIME_VERSION, "1.18.31");
   assert.equal(loadConfig({ HARNESS: "opencode", PI_MODEL: "pi-model" }).opencodeModel, "pi-model");
   assert.equal(
     loadConfig({ HARNESS: "opencode", PI_MODEL: "pi-model", OPENCODE_MODEL: "open-model" }).opencodeModel,
@@ -440,6 +545,9 @@ test("supervised children share the selected dev org", () => {
     assert.equal(spec.env.CODEX_HOME, undefined);
   }
   for (const spec of specs) assert.equal(spec.env.CORE_ORG_ID, "beta");
+  assert.equal(specs.find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "1");
+  inputs.baseEnv.PORTAL_LOCAL_AUTH_BYPASS = "0";
+  assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "0");
   inputs.baseEnv = {};
   assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "core")!.env.ORG_ID, "acme");
 });

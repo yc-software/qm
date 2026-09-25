@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
-import { deepLinkPath } from "../src/deep-link.ts";
+import { deepLinkPath, parseDeepLink } from "../src/deep-link.ts";
+
+import { messageLinkSeq } from "../src/message-link.ts";
 
 const split = readFileSync(new URL("../src/split.ts", import.meta.url), "utf8");
 const shell = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
@@ -36,11 +38,15 @@ test("single-pane navigation follows the pane identity without depending on the 
       contextsState: { selected: null },
       UI_BASE: "",
       deepLinkPath,
+      parseDeepLink,
+      messageLinkSeq,
       location: {
         get pathname() {
-          return url;
+          return new URL(url, "https://qm.example").pathname;
         },
-        search: "",
+        get search() {
+          return new URL(url, "https://qm.example").search;
+        },
       },
       history: {
         replaceState: (_state: unknown, _title: string, next: string) => {
@@ -52,6 +58,9 @@ test("single-pane navigation follows the pane identity without depending on the 
   dockApi.panels = [{ params: { sessionId: "first" } }];
   sync();
   assert.equal(url, "/s/first");
+  url = "/s/first?seq=120";
+  sync();
+  assert.equal(url, "/s/first?seq=120");
   dockApi.panels = [{ params: { sessionId: "second" } }];
   sync("stale-override");
   assert.equal(url, "/s/second");
@@ -126,6 +135,7 @@ test("single and multiview headers render mutually exclusive tools and pane cont
   const actions = runInNewContext(compile(`${source}\nnew GroupActions();`), {
     document: { createElement: () => ({}), addEventListener: () => {} },
     groupActions: new Set(),
+    tabMenu: null,
     dockApi,
     html,
     nothing: "",

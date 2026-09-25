@@ -4,33 +4,16 @@ import {
   skillRecordPaths,
   persistedSkillRecordPaths,
   detectPathCollisions,
-  materializationControlPathCollisions,
   SkillPackCollisionError,
 } from "../src/skills/skill-collision.ts";
 
 test("skillRecordPaths mirrors materialize's validated skills/<name>/ layout", () => {
   assert.deepEqual(
     skillRecordPaths("My-Skill", [{ path: "scripts/x.py", content: "" }]).sort(),
-    ["skills/My-Skill/.tree", "skills/My-Skill/SKILL.md", "skills/My-Skill/scripts/x.py"],
+    ["skills/My-Skill/SKILL.md", "skills/My-Skill/scripts/x.py"],
     "files land under the validated name (same as materialize)",
   );
   assert.throws(() => skillRecordPaths("My Skill", []), /skill name must/);
-});
-
-test("materialization marker paths are reserved from shared bundles", () => {
-  assert.deepEqual(
-    materializationControlPathCollisions([
-      "lib/ok.mjs",
-      "skills/.index",
-      "skills/alpha/.tree",
-      "skills/alpha/.tree/child",
-    ]),
-    [
-      { path: "skills/.index", owner: "core skill materialization metadata" },
-      { path: "skills/alpha/.tree", owner: "core skill materialization metadata" },
-      { path: "skills/alpha/.tree/child", owner: "core skill materialization metadata" },
-    ],
-  );
 });
 
 test("persistedSkillRecordPaths quarantines a legacy unsafe name without inventing a path", () => {

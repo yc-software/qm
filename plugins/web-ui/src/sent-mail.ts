@@ -258,10 +258,6 @@ function isSentThreadMessage(message: unknown): message is SentThreadMessage {
   );
 }
 
-export function isSentMailEmpty(): boolean {
-  return loaded && !loading && !error && messages.length === 0;
-}
-
 export function isSentMailLoading(): boolean {
   return loading;
 }
@@ -418,8 +414,8 @@ export function sentEmailPageTpl(
             ${icon(ArrowUpRight, 12)}<span>Open in Gmail</span>
           </a>
         </div>
+        ${aside ?? nothing}
       </div>
     </div>
-    ${aside ? html`<aside class="inbox-item-aside">${aside}</aside>` : nothing}
   `;
 }

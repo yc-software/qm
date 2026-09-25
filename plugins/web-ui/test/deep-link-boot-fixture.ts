@@ -1,8 +1,11 @@
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
+import type { CoreSession, TranscriptPage } from "../src/core-bridge.ts";
 
 export interface Harness {
   requests: string[];
+  setTranscriptStatus: (status: number) => void;
+  openSession: (session: CoreSession, prefetch?: Promise<TranscriptPage | null>) => Promise<void>;
   setConnections: (items: unknown[], status?: number) => void;
   releaseSessions: () => void;
   releaseTranscript: () => void;
@@ -18,14 +21,18 @@ export interface Harness {
 
 interface HarnessOptions {
   path: string;
+  session?: CoreSession;
+  messageLink?: boolean;
   transcriptStatus?: number;
   transcriptFailures?: number;
   holdTranscript?: boolean;
   holdApprovals?: boolean;
   listSessions?: unknown[];
+  entries?: unknown[];
   savedCanvas?: boolean;
   welcome?: boolean;
   connectionReturn?: boolean;
+  slackReturn?: "success" | "expired" | "cancelled" | "wrong-account";
   returnWidget?: string;
 }
 
@@ -37,6 +44,8 @@ export const SESSION = {
 };
 
 export async function harness(opts: HarnessOptions): Promise<Harness> {
+  const session = opts.session ?? SESSION;
+  let transcriptStatus = opts.transcriptStatus;
   const dom = new JSDOM('<!doctype html><div id="app"></div>', {
     url: `http://localhost${opts.path}`,
     pretendToBeVisual: true,
@@ -52,6 +61,16 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
           a: { kind: "leaf", threadRef: "web:tester:old-a" },
           b: { kind: "leaf", threadRef: "web:tester:old-b" },
         },
+      }),
+    );
+  if (opts.slackReturn)
+    dom.window.sessionStorage.setItem(
+      "qm-slack-account",
+      JSON.stringify({
+        user: opts.slackReturn === "wrong-account" ? "test:other" : "test:tester",
+        state: "qa-slack-nonce",
+        ticket: "signed-test-ticket",
+        expiresAt: Date.now() + (opts.slackReturn === "expired" ? -60000 : 60000),
       }),
     );
   let connectedItems: unknown[] = opts.connectionReturn ? [{ id: "ca_test", toolkit: "gmail" }] : [];
@@ -71,6 +90,10 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         scrollTop: 0,
       }),
     );
+  dom.window.HTMLElement.prototype.scrollIntoView = function () {
+    this.setAttribute("data-scrolled", "true");
+  };
+  dom.window.HTMLElement.prototype.getAnimations = () => [];
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const realSetTimeout = globalThis.setTimeout;
   const realSetInterval = globalThis.setInterval;
@@ -93,6 +116,9 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         permissions: [],
         ...(opts.welcome ? { welcomeCohort: "F26" } : {}),
       });
+    if (path === "/api/composio/slack/complete")
+      return Response.json({ connected: true, user: "Alice", workspace: "Acme" });
+    if (path === "/api/composio/slack") return Response.json({ connected: false, workspaceInstalled: true });
     if (path.startsWith("/api/composio/connections"))
       return Response.json({ items: connectedItems, nextCursor: null }, { status: connectedStatus });
     if (path.startsWith("/api/composio/toolkits"))
@@ -114,13 +140,27 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       if (opts.holdApprovals) await approvalsHeld;
       return Response.json({ approvals: [] });
     }
-    if (path.startsWith(`/api/sessions/${SESSION.id}`)) {
+    if (path.startsWith(`/api/sessions/${session.id}`)) {
       if (opts.holdTranscript) await transcriptHeld;
       if (failuresLeft > 0) {
         failuresLeft--;
-        return Response.json({ error: "not_found" }, { status: opts.transcriptStatus ?? 500 });
+        return Response.json({ error: "not_found" }, { status: transcriptStatus ?? 500 });
       }
-      return Response.json({ session: SESSION, entries: [] });
+      if (opts.messageLink) {
+        const older = path.includes("beforeSeq=");
+        const seqs = older ? [10, 11] : [80, 81];
+        return Response.json({
+          session,
+          entries: seqs.map((seq) => ({
+            seq,
+            type: seq % 2 ? "assistant" : "user",
+            createdAt: Date.now(),
+            payload: { text: `Linked QA message ${seq}` },
+          })),
+          earlierEntries: older ? 0 : 80,
+        });
+      }
+      return Response.json({ session, entries: opts.entries ?? [] });
     }
     if (path === "/api/sessions") {
       await sessionsHeld;
@@ -190,6 +230,11 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   const split = await vite.ssrLoadModule("/src/split.ts");
   return {
     requests,
+    setTranscriptStatus: (status) => {
+      transcriptStatus = status;
+      failuresLeft = status === 200 ? 0 : Number.POSITIVE_INFINITY;
+    },
+    openSession: sessions.openSession as Harness["openSession"],
     setConnections: (items, status = 200) => {
       connectedItems = items;
       connectedStatus = status;

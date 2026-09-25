@@ -30,6 +30,7 @@ interface DecideOutputInput {
 }
 
 export interface LoopOutputStore {
+  rebindItem(itemId: string, from: string, to: string): Promise<void>;
   capture(input: CaptureOutputInput): Promise<LoopOutput>;
   get(id: string): Promise<LoopOutput | null>;
   byLoop(loopId: string): Promise<LoopOutput[]>;
@@ -87,6 +88,7 @@ export function unresolvedOutput(output: LoopOutput): boolean {
 
 export function createLoopOutputStore(
   backing: DurableMap<LoopOutput> = createMemoryMap<LoopOutput>(),
+  onEvent?: (output: LoopOutput) => void,
 ): LoopOutputStore {
   const forLoop = async (loopId: string): Promise<LoopOutput[]> =>
     (await backing.all()).filter((output) => output.loopId === loopId);
@@ -95,7 +97,12 @@ export function createLoopOutputStore(
     (await backing.all()).filter((output) => output.itemId === itemId && output.attemptId === attemptId);
 
   if (!backing.update) throw new Error("loop outputs need atomic durable updates");
-  const update = backing.update.bind(backing);
+  const atomicUpdate = backing.update.bind(backing);
+  const update = async (id: string, change: (output: LoopOutput) => LoopOutput): Promise<LoopOutput | null> => {
+    const output = await atomicUpdate(id, change);
+    if (output) onEvent?.(output);
+    return output;
+  };
   const applyIf = async (
     id: string,
     when: (output: LoopOutput) => boolean,
@@ -111,6 +118,12 @@ export function createLoopOutputStore(
   };
 
   return {
+    async rebindItem(itemId, from, to) {
+      for (const output of await backing.select({ where: { field: "itemId", anyOfFold: [itemId] } })) {
+        if (output.itemId !== itemId) continue;
+        await update(output.id, (current) => (current.loopId === from ? { ...current, loopId: to } : current));
+      }
+    },
     async capture(input) {
       const id = loopOutputId(
         input.loopId,
@@ -152,6 +165,7 @@ export function createLoopOutputStore(
           updatedAt: Date.now(),
         }));
       }
+      onEvent?.(captured);
       return captured;
     },
     get: (id) => backing.get(id),

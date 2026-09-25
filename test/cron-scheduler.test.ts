@@ -961,12 +961,12 @@ test("a failing cron fire is logged, not swallowed", async (t) => {
   });
   scheduler.start(1000);
   t.mock.timers.tick(1000);
-  for (let i = 0; i < 50 && !logged.some((l) => l.includes("[scheduler] fire failed")); i++) {
+  for (let i = 0; i < 50 && !logged.some((l) => l.includes("[failed] scheduler: fire:")); i++) {
     await new Promise((r) => setImmediate(r));
   }
   scheduler.stop();
   assert.ok(
-    logged.some((l) => l.includes("[scheduler] fire failed") && l.includes("boom")),
+    logged.some((l) => l.includes("[failed] scheduler: fire:") && l.includes("boom")),
     "the fire error must reach the log",
   );
   const { runs: after } = await crons.listFires(cron.id);
@@ -1705,4 +1705,66 @@ test("manual cron preparation and detached fire retain admission across pause", 
   assert.equal(resumed.started, true);
   if (resumed.started) await resumed.settled;
   await scheduler.stop();
+});
+
+test("scheduler rechecks durable Open authorization on each marked shared fire", async () => {
+  const crons = createCronStore();
+  const calls: TurnRequest[] = [];
+  let open = true;
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    isOpenScopeMember: async () => open,
+    run: async (request) => {
+      calls.push(request);
+      return { status: "ok", reply: "done" };
+    },
+  });
+  const cron = await crons.create({
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("group", "G1"),
+    runAs: "scopeShared",
+    ownerResourcesRequireOpen: true,
+    members: [member("U1")],
+    action: "digest",
+    schedule: { everyMs: 60_000 },
+  });
+  await runNowSettled(scheduler, cron.id);
+  assert.equal(calls[0]?.ownerResourcesRequireOpen, true);
+  open = false;
+  await runNowSettled(scheduler, cron.id);
+  assert.equal(calls.length, 1);
+  assert.equal((await crons.get(cron.id))?.enabled, false);
+});
+
+test("scheduled and manual fires use the saved runtime; clearing it restores inherited behavior", async () => {
+  const { crons, calls, scheduler } = harness();
+  const runtime = { harnessId: "pi" as const, modelId: "gpt-6-luna", effortLevel: "low", fastMode: false };
+  const cron = await crons.create({
+    schedule: { everyMs: 60_000 },
+    action: "check status",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: "personal:U1",
+    runtime,
+  });
+  await scheduler.tick(cron.nextFireAt!);
+  await runNowSettled(scheduler, cron.id);
+  assert.equal(calls.length, 2);
+  for (const call of calls) {
+    assert.equal(call.model, runtime.modelId);
+    assert.equal(call.harness, runtime.harnessId);
+    assert.equal(call.thinkingLevel, "low");
+    assert.equal(call.fastMode, false);
+  }
+  await crons.update(cron.id, { runtime: null });
+  await scheduler.tick(cron.nextFireAt! + 60_000);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2]?.model, undefined);
+  assert.equal(calls[2]?.harness, undefined);
+  assert.equal(calls[2]?.thinkingLevel, undefined);
+  assert.equal(calls[2]?.fastMode, undefined);
 });

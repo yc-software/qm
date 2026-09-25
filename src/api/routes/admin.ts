@@ -13,13 +13,20 @@ import { testAutoFlagger } from "./admin/auto-flagger-test.ts";
 import { egress, listAdminAudit, listAdminErrors, listAdminRuns, metrics } from "./admin/observability.ts";
 import { getAdminSession, getAdminSessionLlm, listAdminSessions, listAdminShadowDeliveries } from "./admin/sessions.ts";
 import { downloadAdminFile, listAdminFiles, readAdminFile, uploadAdminFile } from "./admin/files.ts";
-import { archiveAdminSkill, getAdminSkill, listAdminArtifacts, putAdminCronDestination } from "./admin/artifacts.ts";
+import {
+  archiveAdminSkill,
+  getAdminSkill,
+  listAdminArtifacts,
+  putAdminCronDestination,
+  putAdminCronRuntime,
+} from "./admin/artifacts.ts";
 import { getAdminMemory, listMemoryScopes, putAdminMemory } from "./admin/memory.ts";
 import { listSandboxRoutes, migrateSandboxScope, manageSandboxResources } from "./admin/sandbox.ts";
 import {
   createAdminGrant,
   getUserDetail,
   inviteExternalUser,
+  inviteTeammate,
   listKeychainStatus,
   listUsers,
   resetUserToBrandNew,
@@ -48,6 +55,8 @@ import { deleteModelProvider, getModelProviders, putModelProvider } from "./admi
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
 import { listSecurityFlags, releaseSecurityTaint } from "./admin/security.ts";
+import { spend } from "./admin/spend.ts";
+import { createPrincipalLink, deletePrincipalLink, listPrincipalLinks } from "./admin/principal-links.ts";
 
 const timed =
   (handle: (ctx: ApiCtx) => void | Promise<void>) =>
@@ -108,6 +117,7 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/admin/resources", auth: "either", handle: getAdminResources },
   { method: "GET", path: "/v1/admin/retention", auth: "either", handle: retention },
   { method: "GET", path: "/v1/admin/metrics", auth: "either", handle: metrics },
+  { method: "GET", path: "/v1/admin/spend", auth: "either", handle: spend },
   { method: "GET", path: "/v1/admin/egress", auth: "either", handle: egress },
   { method: "GET", path: "/v1/admin/sessions", auth: "either", handle: listAdminSessions },
   { method: "GET", path: "/v1/admin/sessions/:id/llm", auth: "either", handle: getAdminSessionLlm },
@@ -132,6 +142,7 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "either",
     handle: listAdminArtifacts,
   },
+  { method: "PUT", path: "/v1/admin/crons/:id/runtime", auth: "either", handle: putAdminCronRuntime },
   { method: "PUT", path: "/v1/admin/crons/:id/destination", auth: "either", handle: putAdminCronDestination },
   { method: "GET", path: "/v1/admin/skills/:id", auth: "either", handle: getAdminSkill },
   { method: "DELETE", path: "/v1/admin/skills/:id", auth: "either", handle: archiveAdminSkill },
@@ -148,8 +159,12 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/admin/users/:principalId", auth: "either", handle: getUserDetail },
   { method: "PUT", path: "/v1/admin/users/:principalId/onboarding", auth: "either", handle: setUserOnboarding },
   { method: "POST", path: "/v1/admin/users/:principalId/reset", auth: "either", handle: resetUserToBrandNew },
+  { method: "GET", path: "/v1/admin/principal-links", auth: "either", handle: listPrincipalLinks },
+  { method: "POST", path: "/v1/admin/principal-links", auth: "either", handle: createPrincipalLink },
+  { method: "DELETE", path: "/v1/admin/principal-links/:principalId", auth: "either", handle: deletePrincipalLink },
   { method: "POST", path: "/v1/admin/grants", auth: "either", handle: createAdminGrant },
   { method: "DELETE", path: "/v1/admin/grants/:principalId", auth: "either", handle: revokeAdminGrant },
+  { method: "POST", path: "/v1/admin/users/invite", auth: "either", handle: inviteTeammate },
   { method: "POST", path: "/v1/admin/external-users", auth: "either", handle: inviteExternalUser },
   { method: "DELETE", path: "/v1/admin/external-users/:email", auth: "either", handle: revokeExternalUser },
   { method: "POST", path: "/v1/admin/impersonate/stop", auth: "either", handle: stopImpersonation },

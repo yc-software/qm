@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>Mermaid QA</title
+  ><style>
+    body {
+      background: #22272e;
+      color: #b5bec9;
+      font: 16px system-ui;
+      margin: 24px;
+    }
+    main {
+      max-width: 900px;
+      margin: auto;
+    }
+    select,
+    button {
+      font: inherit;
+      margin: 8px;
+    }
+    qm-markdown {
+      min-width: 0;
+    }
+    h2 {
+      margin-top: 40px;
+    }
+  </style>
+  <main>
+    <h1>Native Mermaid QA</h1>
+    <label
+      >Chart width
+      <select id="width">
+        <option value="900px">Desktop</option>
+        <option value="360px">Mobile</option>
+      </select></label
+    ><button id="theme">Toggle theme</button><button id="stream">Stream a diagram</button>
+    <div id="charts"></div>
+  </main>
+  <script type="module">
+    import "../../src/stable-markdown.ts";
+    import { installMarkdownSanitizer } from "../../src/markdown-sanitize.ts";
+    installMarkdownSanitizer();
+    const fixtures = [
+      ["Small", "flowchart LR\nA[Request] --> B[Response]"],
+      [
+        "Permission flow",
+        "flowchart LR\nA[Fleet app] --> B{Permission allowed?}\nB -->|Yes| C[Add authentication]\nC --> D[Provider API]\nB -->|No| E[Reject request]",
+      ],
+      [
+        "Wide",
+        "flowchart LR\n" +
+          Array.from({ length: 12 }, (_, i) => `N${i}[Stage ${i + 1}] --> N${i + 1}[Stage ${i + 2}]`).join("\n"),
+      ],
+      [
+        "Tall",
+        "flowchart TD\n" +
+          Array.from({ length: 15 }, (_, i) => `N${i}[Step ${i + 1}] --> N${i + 1}[Step ${i + 2}]`).join("\n"),
+      ],
+      [
+        "Complex",
+        "flowchart TD\nsubgraph Clients\nA[Browser] & B[Mobile] --> C[Gateway]\nend\nC --> D{Authorized?}\nD -->|Yes| E[Queue]\nD -->|No| F[Reject]\nsubgraph Workers\nE --> G[Worker A] & H[Worker B]\nG & H --> I[(Database)]\nend\nI --> J[Result]\nJ --> A & B",
+      ],
+      [
+        "Sequence",
+        "sequenceDiagram\nparticipant A as Fleet app\nparticipant B as QM broker\nparticipant C as Provider API\nA->>B: Collect metrics\nB->>B: Check permission\nB->>C: Authenticated request\nC-->>B: Metrics\nB-->>A: Response",
+      ],
+      [
+        "Unicode and long labels",
+        'flowchart LR\nA["こんにちは — Équipe 🚀"] --> B["A long descriptive label that should remain fully readable without clipping"]',
+      ],
+      ["Invalid", "flowchart LR\nA[broken --> B"],
+    ];
+    for (const [name, code] of fixtures) {
+      const title = document.createElement("h2");
+      title.textContent = name;
+      const block = document.createElement("qm-markdown");
+      block.content = "```mermaid\n" + code + "\n```";
+      document.querySelector("#charts").append(title, block);
+    }
+    document.querySelector("#width").onchange = (e) => (document.querySelector("main").style.maxWidth = e.target.value);
+    document.querySelector("#theme").onclick = () => document.documentElement.classList.toggle("dark");
+    document.querySelector("#stream").onclick = () => {
+      const block = document.querySelector("qm-markdown");
+      block.isStreaming = true;
+      block.content = "```mermaid\nflowchart LR\nA-->";
+      setTimeout(() => {
+        block.content = "```mermaid\nflowchart LR\nA-->B\n```";
+        block.isStreaming = false;
+      }, 1200);
+    };
+  </script>
+</html>

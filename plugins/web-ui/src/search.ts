@@ -27,7 +27,7 @@ interface ChatSearchHit {
 
 const MIN_QUERY_LEN = 2;
 const DEBOUNCE_MS = 150;
-export const isMac = /Mac|iP(hone|ad|od)/.test(navigator.platform);
+const isMac = /Mac|iP(hone|ad|od)/.test(navigator.platform);
 
 const searchState = {
   open: false,

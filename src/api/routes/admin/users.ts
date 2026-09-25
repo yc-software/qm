@@ -1,11 +1,11 @@
+import { randomUUID } from "node:crypto";
+import { mintSignedPayload } from "../../../auth/signed-token.ts";
 import { scopeId as makeScopeId } from "../../../types.ts";
-import { publicUrlOf } from "../../../deploy/deploy-store.ts";
 import { adminStatusFromGrants, AdminError } from "../../../admin/admin-service.ts";
 import { personKey, samePerson } from "../../../directory/person.ts";
 import type { AdminRole } from "../../../admin/admin-grant-store.ts";
 import type { DirectoryMember } from "../../../directory/directory-store.ts";
 import { computeUsers } from "../../../admin/users.ts";
-import { forEachAttributedTurn } from "../../../admin/attribution.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../../../admin/invite-email.ts";
 import { externalMemberActive, validEmail, type ExternalMember } from "../../../identity/external-members.ts";
 import { resolveBranding } from "../../../resolution/branding.ts";
@@ -15,14 +15,11 @@ import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } fr
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
-import { FILES_PAGE_SIZE } from "./common.ts";
 
-const USER_CONVERSATIONS_MAX = 100;
-const USER_FILES_MAX = 200;
 const EXTERNAL_ORG_ADMIN_PORTAL_ONLY =
   "granting or removing org admin for an external user is portal-only — the agent cannot manage who governs the org";
 const ALREADY_A_MEMBER =
-  "that address already belongs to a member of the org and does not need an external invite. To make them an admin, use Grant org admin in the admin dashboard and enter their email as the principal ID.";
+  "that address already belongs to a member of the org and does not need an external invite. To make them an admin, use Make admin on their row in the admin Users page.";
 const HOLDS_OWN_GRANT =
   "that address holds an org admin grant of its own — revoke it under Admins first, or re-invite with role org_admin";
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -41,14 +38,38 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
   const now = Date.now();
   const externalUsers = ((await deps.identity?.listExternalMembers()) ?? [])
     .map((m) => ({ ...m, status: externalMemberActive(m, now) ? ("active" as const) : ("expired" as const) }))
-    .sort((a, b) => Number(b.status === "active") - Number(a.status === "active") || a.expiresAt - b.expiresAt);
+    .sort(
+      (a, b) =>
+        Number(b.status === "active") - Number(a.status === "active") ||
+        (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity),
+    );
+  for (const member of externalUsers.filter((m) => m.kind === "teammate" && m.status === "active")) {
+    if (!users.some((u) => samePerson(u.principalId, member.email)))
+      users.push({
+        principalId: member.email,
+        sessionCount: 0,
+        turnCount: 0,
+        lastSeenAt: null,
+        admin: adminStatusFromGrants(grants, member.email),
+      });
+  }
   const signInUrl = signInUrlOf(deps);
   const inviteEmail = {
     configured: deps.inviteMailer !== undefined,
     ...(deps.inviteMailer ? {} : { problem: INVITE_EMAIL_NOT_CONFIGURED }),
     ...(signInUrl ? { signInUrl } : {}),
   };
-  return sendJson(res, 200, { scopeId: scope, users, grants, externalUsers, inviteEmail });
+  return sendJson(res, 200, {
+    scopeId: scope,
+    users,
+    grants,
+    externalUsers,
+    inviteEmail,
+    access: {
+      emailDomain: deps.emailAuthDomain ?? null,
+      slackAllowFrom: deps.slackAllowFrom ?? null,
+    },
+  });
 }
 
 function signInUrlOf(deps: ApiCtx["deps"]): string | undefined {
@@ -75,11 +96,21 @@ async function orgMember(ctx: ApiCtx, email: string, includeSessions: boolean): 
 }
 
 export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
+  return inviteUser(ctx, false);
+}
+
+export async function inviteTeammate(ctx: ApiCtx): Promise<void> {
+  return inviteUser(ctx, true);
+}
+
+async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   const { res, deps, body } = ctx;
   const scope = orgScope(deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
+  if (teammate && ctx.capability)
+    return sendJson(res, 403, { error: "forbidden", message: "Teammate invitations must be made in Admin." });
   const bad = (message: string) => sendJson(res, 400, { error: "bad_request", message });
   const b = isObj(body) ? body : {};
   const email = String(b.email ?? "")
@@ -90,22 +121,34 @@ export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
   if (role !== "member" && role !== "org_admin") return bad("role must be member or org_admin");
   const expiry = normalizeInboundExpiresAt(endOfDayUtc(b.expiresAt));
   if (!expiry.ok) return bad(expiry.message);
+  if (teammate && (!deps.portalUrl || !deps.portalIdentitySecret || !deps.replayDedupe?.durable))
+    return sendJson(res, 503, {
+      error: "not_configured",
+      message: "Invitation sign-in requires a portal and durable token storage.",
+    });
   const now = Date.now();
-  if (expiry.value === undefined || expiry.value <= now) return bad("expiresAt is required and must be in the future");
+  if ((!teammate && expiry.value === undefined) || (expiry.value !== undefined && expiry.value <= now))
+    return bad("expiresAt is required and must be in the future");
   await deps.identity.refresh(true);
+  if (teammate && deps.identity.deactivationSource(email) === "manual")
+    return sendJson(res, 409, {
+      error: "conflict",
+      message: "This account is manually deactivated. Reactivate it before inviting them.",
+    });
   const existing = deps.identity.externalMember(email);
+  if (!teammate && existing?.kind === "teammate") return bad("Manage this teammate in Users.");
   const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), email).isAdmin;
   const ownsGrant = existing?.role === "org_admin";
-  if ((!existing && holdsGrant) || (await orgMember(ctx, email, !existing)))
+  if (!teammate && ((!existing && holdsGrant) || (await orgMember(ctx, email, !existing))))
     return sendJson(res, 409, { error: "conflict", message: ALREADY_A_MEMBER });
   if (ctx.capability && (role === "org_admin" || ownsGrant || holdsGrant)) {
     return sendJson(res, 403, { error: "forbidden", message: EXTERNAL_ORG_ADMIN_PORTAL_ONLY });
   }
-  if (role === "member" && holdsGrant && !ownsGrant)
+  if (!teammate && role === "member" && holdsGrant && !ownsGrant)
     return sendJson(res, 409, { error: "conflict", message: HOLDS_OWN_GRANT });
   let grantChange: "grant.create" | "grant.revoke" | null = null;
   if (role === "org_admin" && !holdsGrant) grantChange = "grant.create";
-  else if (role === "member" && holdsGrant) grantChange = "grant.revoke";
+  else if (!teammate && role === "member" && holdsGrant) grantChange = "grant.revoke";
   try {
     if (grantChange === "grant.create")
       await deps.admin!.createGrant(actor, { principalId: email, role: "org_admin", scopeId: scope });
@@ -119,23 +162,41 @@ export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
   const readmitted = existing !== undefined && !externalMemberActive(existing, now);
   const member: ExternalMember = {
     email,
-    role,
-    expiresAt: expiry.value,
+    role: teammate && holdsGrant ? "org_admin" : role,
+    expiresAt: expiry.value ?? null,
+    ...(teammate ? { kind: "teammate" as const, inviteId: randomUUID() } : {}),
     invitedBy: existing?.invitedBy ?? actor.id,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
   await deps.identity.putExternalMember(member);
+  const action = created || readmitted ? "external_user.invite" : "external_user.update";
   audit(deps, {
     principalId: actor.id,
-    action: created || readmitted ? "external_user.invite" : "external_user.update",
+    action: teammate ? "user.invite" : action,
     resource: email,
     scopeLabel: scope,
   });
-  const signInUrl = signInUrlOf(deps);
+  const signInUrl = teammate
+    ? `${deps.portalUrl!.replace(/\/+$/, "")}/auth/invite#token=${encodeURIComponent(
+        await mintSignedPayload(
+          {
+            purpose: "teammate-invite",
+            inviteId: member.inviteId,
+            email,
+            org: scope,
+            aud: deps.portalUrl!.replace(/\/+$/, ""),
+            iat: now,
+            exp: now + 24 * 60 * 60 * 1000,
+            jti: randomUUID(),
+          },
+          deps.portalIdentitySecret!,
+        ),
+      )}`
+    : signInUrlOf(deps);
   let emailSent = false;
   let emailProblem: string | undefined;
-  if (created || readmitted || b.resendInvite === true) {
+  if (teammate || created || readmitted || b.resendInvite === true) {
     if (!deps.inviteMailer) emailProblem = INVITE_EMAIL_NOT_CONFIGURED;
     else if (!signInUrl)
       emailProblem = "no sign-in URL is configured on core (set PUBLIC_WEB_URL) — share the portal address by hand";
@@ -150,6 +211,7 @@ export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
             invitedBy: actor.id,
             signInUrl,
             expiresAt: member.expiresAt,
+            magicLink: teammate,
           }),
         });
         emailSent = true;
@@ -164,7 +226,7 @@ export async function inviteExternalUser(ctx: ApiCtx): Promise<void> {
     created,
     emailSent,
     ...(emailProblem ? { emailProblem } : {}),
-    ...(signInUrl ? { signInUrl } : {}),
+    ...(!emailSent && signInUrl ? { signInUrl } : {}),
   });
 }
 
@@ -179,7 +241,7 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   if (!existing) return sendJson(res, 404, { error: "not_found", message: "external user not found" });
   const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), existing.email).isAdmin;
   const ownsGrant = existing.role === "org_admin";
-  if (ctx.capability && (ownsGrant || holdsGrant)) {
+  if (ctx.capability && (existing.kind === "teammate" || ownsGrant || holdsGrant)) {
     return sendJson(res, 403, { error: "forbidden", message: EXTERNAL_ORG_ADMIN_PORTAL_ONLY });
   }
   if (holdsGrant && !ownsGrant) return sendJson(res, 409, { error: "conflict", message: HOLDS_OWN_GRANT });
@@ -200,14 +262,15 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   const tombstone: ExternalMember = {
     ...existing,
     role: "member",
-    expiresAt: Math.min(existing.expiresAt, now),
+    expiresAt: Math.min(existing.expiresAt ?? now, now),
     updatedAt: now,
   };
   if (externalMemberActive(existing, now) || existing.role !== "member") {
     await deps.identity.putExternalMember(tombstone);
     audit(deps, { principalId: actor.id, action: "external_user.revoke", resource: existing.email, scopeLabel: scope });
   }
-  if (now - tombstone.expiresAt < FORGET_AFTER_MS) return sendJson(res, 200, { ok: true, removed: false });
+  if (existing.kind === "teammate" || now - tombstone.expiresAt! < FORGET_AFTER_MS)
+    return sendJson(res, 200, { ok: true, removed: false });
   await deps.identity.removeExternalMember(existing.email);
   audit(deps, { principalId: actor.id, action: "external_user.forget", resource: existing.email, scopeLabel: scope });
   return sendJson(res, 200, { ok: true, removed: true });
@@ -237,6 +300,15 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
 
   if (!deps.keychain)
     return sendJson(res, 200, { scopeId: scope, people: [], credentials: [], grants: [], asks: [], enabled: false });
+
+  const principalId = ctx.url.searchParams.get("principal")?.trim();
+  if (principalId) {
+    const [credentials, grants] = await Promise.all([
+      deps.keychain.listByOwner(principalId),
+      deps.keychain.listGrants({ ownerId: principalId }),
+    ]);
+    return sendJson(res, 200, { scopeId: scope, credentials, grants, enabled: true });
+  }
 
   if (ctx.url.searchParams.get("summary") === "1") {
     const [credentials, grants] = await Promise.all([deps.keychain.listAllMetadata(), deps.keychain.listGrants({})]);
@@ -298,124 +370,25 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { scopeId: scope, people, credentials, grants: grantsWithUse, asks, enabled: true });
 }
 
+async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string) {
+  const member = await deps.directory?.get(requestedPrincipal);
+  return { member, principalId: member?.principalId ?? personKey(requestedPrincipal) };
+}
+
 export async function getUserDetail(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, params } = ctx;
+  const { res, deps, params } = ctx;
   const org = orgScope(deps);
   const actor = await authorizeAdmin(ctx, org);
   if (!actor) return;
-  const principalId = params.principalId!;
+  const { member, principalId } = await resolveAdminUser(deps, params.principalId!);
   const personal = makeScopeId("personal", principalId);
   audit(deps, { principalId: actor.id, action: "user.read", resource: principalId, scopeLabel: org });
 
-  const grants = (await deps.admin?.listGrants()) ?? [];
-  const member = await app.directoryMember(principalId);
-
-  const participants = (await deps.sessions?.listParticipants()) ?? [];
-  const attributed = (await deps.sessions?.attributedTurns()) ?? [];
-  const mySessionIds = new Set<string>();
-  const turnsBySession = new Map<string, number>();
-  let firstSeenAt: number | null = null;
-  let lastSeenAt: number | null = null;
-  const mark = (t: number) => {
-    if (firstSeenAt == null || t < firstSeenAt) firstSeenAt = t;
-    if (lastSeenAt == null || t > lastSeenAt) lastSeenAt = t;
-  };
-  forEachAttributedTurn(
-    { participants, turns: attributed },
-    {
-      onWindow(sessionId, w) {
-        if (!samePerson(w.principalId, principalId)) return;
-        mySessionIds.add(sessionId);
-        mark(w.validFrom);
-      },
-      onTurn(w, turn) {
-        if (!samePerson(w.principalId, principalId)) return;
-        turnsBySession.set(w.sessionId, (turnsBySession.get(w.sessionId) ?? 0) + turn.turns);
-        mark(turn.firstAt);
-        mark(turn.lastAt);
-      },
-    },
-  );
-  const turns = [...turnsBySession.values()].reduce((a, b) => a + b, 0);
-
-  const summaries = mySessionIds.size
-    ? ((await deps.sessions?.scopeSessionSummaries(org, true, undefined, [...mySessionIds])) ?? [])
-    : [];
-  const conversations = summaries
-    .sort((a, b) => b.lastActivity - a.lastActivity)
-    .slice(0, USER_CONVERSATIONS_MAX)
-    .map((s) => ({
-      id: s.id,
-      type: s.type,
-      scopeId: s.scopeId,
-      turns: s.turns,
-      messages: s.messages,
-      userTurns: turnsBySession.get(s.id) ?? 0,
-      lastActivity: s.lastActivity,
-      createdAt: s.createdAt,
-      firstMessage: s.firstMessage,
-      lastMessage: s.lastMessage,
-    }));
-
-  const files: Array<{
-    id: string;
-    name: string;
-    path: string;
-    mimetype: string;
-    size: number;
-    direction: string;
-    createdAt: number;
-    openable: boolean;
-  }> = [];
-  if (deps.files) {
-    let cursor: string | undefined;
-    do {
-      const page = await deps.files.listOwnedByScopes([personal], {
-        limit: FILES_PAGE_SIZE,
-        ...(cursor ? { cursor } : {}),
-      });
-      for (const a of page.files) {
-        files.push({
-          id: a.id,
-          name: a.name,
-          path: a.path,
-          mimetype: a.mimetype,
-          size: a.sizeBytes,
-          direction: a.direction,
-          createdAt: a.createdAt,
-          openable: a.blobKey != null,
-        });
-      }
-      cursor = page.nextCursor;
-    } while (cursor && files.length < USER_FILES_MAX);
-  }
-  const crons = (await app.listCrons())
-    .filter((c) => c.ownerScopeId === personal)
-    .map((c) => ({
-      id: c.id,
-      title: c.title,
-      action: c.action,
-      message: c.message,
-      owner: c.owner,
-      createdBy: c.createdBy,
-      enabled: c.enabled,
-      archived: c.archived,
-      schedule: c.schedule,
-      createdAt: c.createdAt,
-      lastFiredAt: c.lastFiredAt,
-    }));
-  const deployments = (await app.listDeployments())
-    .filter((d) => d.ownerScopeId === personal)
-    .map((d) => ({
-      id: d.id,
-      name: d.displayName || d.name,
-      status: d.status,
-      currentVersion: d.currentVersion,
-      versions: d.versions.length,
-      createdBy: d.createdBy,
-      lastAccessAt: d.lastAccessAt,
-      publicUrl: publicUrlOf(d.endpoint),
-    }));
+  const [grants, stats, onboarding] = await Promise.all([
+    deps.admin?.listGrants() ?? [],
+    deps.sessions?.scopeSessionStats(personal, false, "conversation"),
+    deps.memory ? deps.memory.read(personal).then(detectOnboardingStatus) : null,
+  ]);
   const config = deps.config
     ? {
         hasSoul: !!deps.config.getSoul(personal),
@@ -427,18 +400,13 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
         connectors: await deps.config.listConnectorClients(personal),
       }
     : null;
-  const onboarding = deps.memory ? detectOnboardingStatus(await deps.memory.read(personal)) : null;
 
   return sendJson(res, 200, {
     principalId,
     scopeId: personal,
     ...(member?.displayName ? { displayName: member.displayName } : {}),
     admin: adminStatusFromGrants(grants, principalId),
-    stats: { sessions: mySessionIds.size, turns, firstSeenAt, lastSeenAt },
-    conversations,
-    files,
-    deployments,
-    crons,
+    stats: { sessions: stats?.total ?? 0 },
     config,
     onboarding,
   });
@@ -474,7 +442,7 @@ export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
   if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
-  const principalId = params.principalId!;
+  const { principalId } = await resolveAdminUser(deps, params.principalId!);
   const status = (body as { status?: unknown }).status;
   if (typeof status !== "string" || !ONBOARDING_STATUSES.has(status as OnboardingStatus)) {
     return sendJson(res, 400, {
@@ -500,7 +468,7 @@ export async function resetUserToBrandNew(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
   if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
-  const principalId = params.principalId!;
+  const { principalId } = await resolveAdminUser(deps, params.principalId!);
   const personal = makeScopeId("personal", principalId);
   const today = new Date().toISOString().slice(0, 10);
   await deps.memory.replace(

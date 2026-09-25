@@ -91,8 +91,10 @@ export interface ChatSurface {
     anchorSeq?: number | null,
     inheritedMessages?: ReturnType<typeof entriesToMessages>,
   ): void;
-  mountLoadingPane(): void;
+  mountLoadingPane(): () => boolean;
+  mountLoadError(retry: () => void): void;
   scrollToBottom(): void;
+  revealEntry(seq: number): boolean;
   drawActiveChat(agent?: Agent | null, opts?: { forceScroll?: boolean }): void;
   setTranscriptWindow(anchorSeq: number | null, earlierCount: number, hasEarlier?: boolean): void;
   setPins(pins: import("./core-bridge").SessionPin[]): void;
@@ -124,6 +126,7 @@ interface ComposerState {
 
 export interface ComposerSurface {
   composerApprovalPanel(approvals: PendingApproval[]): TemplateResult;
+  submit(instruction?: string): Promise<void>;
   restageAttachments(attachments: Attachment[], note: string): void;
   state: ComposerState;
   composerForm(agent: Agent, header?: TemplateResult | typeof nothing): TemplateResult;

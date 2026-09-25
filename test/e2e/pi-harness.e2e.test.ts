@@ -48,8 +48,8 @@ test("the agent writes then reads a file through the workspace primitives", opts
   const { app } = freshApp();
   const r = await app.turn(
     dm(
-      "Use the write tool to create fact.txt containing exactly: the sky is blue. " +
-        "Then use the read tool to read it back and tell me the contents.",
+      "Use files action write to create fact.txt containing exactly: the sky is blue. " +
+        "Then use files action read to read it back and tell me the contents.",
     ),
   );
   assert.equal(r.status, "ok");

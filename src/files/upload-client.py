@@ -9,6 +9,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import zlib
 from pathlib import Path
 
 PART_SIZE = 64 * 1024 * 1024
@@ -70,6 +71,14 @@ def main():
         checksums.append(base64.b64encode(hashlib.sha256(b"").digest()).decode())
     token_parts = os.environ["AGENT_API_TOKEN"].split(".")
     claims = json.loads(base64.urlsafe_b64decode(token_parts[1 if len(token_parts) == 3 else 0] + "==="))
+    if "encoding" in claims:
+        if claims["encoding"] != "deflate-raw":
+            raise RuntimeError("unsupported capability encoding")
+        inflater = zlib.decompressobj(-zlib.MAX_WBITS)
+        decoded = inflater.decompress(base64.urlsafe_b64decode(claims["claims"] + "==="), 1024 * 1024 + 1)
+        if len(decoded) > 1024 * 1024 or not inflater.eof:
+            raise RuntimeError("invalid or oversized capability claims")
+        claims = json.loads(decoded)
     destination = {"origin": os.environ["AGENT_API_URL"].rstrip("/"), "actor": claims["actorId"], "scope": args.scope or claims["scopeId"]}
     manifest = {"name": args.name or args.file.name, "mimetype": mimetypes.guess_type(args.file.name)[0] or "application/octet-stream", "sizeBytes": size, "checksums": checksums}
     if args.scope:

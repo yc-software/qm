@@ -1,3 +1,5 @@
+import { openDesktopBrowser } from "../../chassis/src/desktop-browser";
+import "./slack-account.css";
 import { LitElement, html, nothing } from "lit";
 import { ArrowUpRight, Check } from "lucide";
 import { icon, slackMark } from "./ui";
@@ -63,11 +65,14 @@ export class OnboardingSlack extends LitElement {
     } catch {
       if (this.isConnected) {
         this.connected = false;
-        this.error = "Could not check Slack connection. Try again.";
+        this.error = "Could not check the Slack installation. Try again.";
       }
     } finally {
       clearTimeout(timeout);
       this.request = undefined;
+      this.dispatchEvent(
+        new window.CustomEvent("slack-installation-status", { detail: { connected: this.connected } }),
+      );
       if (this.isConnected && !this.connected && Date.now() < this.pollUntil)
         this.timer = setTimeout(this.refreshVisible, 5000);
     }
@@ -75,14 +80,24 @@ export class OnboardingSlack extends LitElement {
 
   private async install(): Promise<void> {
     if (this.busy || this.installAvailable === undefined) return;
+    try {
+      if (await openDesktopBrowser(`${this.adminBase}/slack-settings?slack=install`)) {
+        this.pollUntil = Date.now() + 10 * 60_000;
+        void this.refresh();
+        return;
+      }
+    } catch {
+      this.error = "Could not open your browser. Please try again.";
+      return;
+    }
     const popup = window.open("", "_blank");
     if (!popup) {
-      this.error = "Allow a new tab to connect Slack, then try again.";
+      this.error = "Allow a new tab to install QM, then try again.";
       return;
     }
     popup.opener = null;
     if (this.installAvailable === false) {
-      popup.location.href = `${this.adminBase}/connectors?setup=slack`;
+      popup.location.href = `${this.adminBase}/slack-settings?setup=slack`;
       return;
     }
     popup.document.title = "Connecting Slack";
@@ -122,10 +137,7 @@ export class OnboardingSlack extends LitElement {
     if (this.installAvailable === undefined) label = "Checking Slack…";
     return html`${
       this.connected
-        ? html`<div class="welcome-slack" role="status">
-            ${slackMark(24)}<span><strong>Connected to Slack</strong><small>QM is ready in your workspace.</small></span
-            >${icon(Check, 16)}
-          </div>`
+        ? html`<div class="slack-connected" role="status">${icon(Check, 14)} QM added to Slack</div>`
         : html`<button
             class="welcome-slack"
             type="button"

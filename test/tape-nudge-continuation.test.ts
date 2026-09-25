@@ -57,6 +57,7 @@ async function runScenario(
     failDirectDelivery?: boolean;
     failPrimaryTapeMessage?: boolean;
     nudgeCrash?: boolean;
+    nudgeStopped?: boolean;
     omitPrimaryCheckpoint?: boolean;
     staleNudgeRead?: boolean;
     stoppedPartial?: boolean;
@@ -91,6 +92,15 @@ async function runScenario(
           meta: { bareText: turn.input },
         });
         if (turn.input.startsWith("[system] You were addressed")) {
+          if (options.nudgeStopped) {
+            const reply = "Interrupted nudge partial";
+            await turn.emit({
+              type: "assistant",
+              payload: { text: reply, stopped: true },
+              scopeLabel: turn.scopeLabel,
+            });
+            return { reply, stopped: true, modelCalls: 1 };
+          }
           await turn.tape?.({
             kind: "message",
             harness: "pi",
@@ -427,11 +437,13 @@ test("consecutive stopped turns heal one import each and converge once a turn co
   assert.equal(await countImports(), 3, "no further imports once coverage is restored");
 });
 
-test("a stopped partial keeps withholding coverage when the direct delivery fails and the nudge replaces the result", async () => {
-  const { sessions, session, entries, orchestrator, input } = await runScenario({
+test("a user-stopped turn skips direct delivery and the reply nudge while preserving replay coverage", async () => {
+  const { modes, deliveries, sessions, session, entries, orchestrator, input } = await runScenario({
     stoppedPartial: true,
     failDirectDelivery: true,
   });
+  assert.deepEqual(modes, ["shadow", "serve"], "Stop must not invoke the harness again");
+  assert.deepEqual(await deliveries.pending("slack"), [], "Stop must not enqueue a reply");
   const partial = entries.find(
     (entry) =>
       entry.type === "assistant" && (entry.payload as { text?: unknown } | null)?.text === "worklog without a post",
@@ -439,7 +451,7 @@ test("a stopped partial keeps withholding coverage when the direct delivery fail
   assert.ok(partial);
   assert.ok(
     (await sessions.tapeCoverage(session.id)) < partial.seq,
-    "the nudge result must not launder the stopped primary into an advanced watermark",
+    "the stopped primary must not advance the watermark",
   );
 
   await orchestrator.handleTurn(input("continue after stop"));
@@ -644,4 +656,11 @@ test("a cancel-stopped turn delivers nothing anywhere and returns silent", async
   );
   assert.equal(result.status, "silent", "the losing side of a cancellation never completes as deliverable");
   assert.deepEqual(posted, [], "no direct reply, no nudge, no fallback delivery from the cancelled turn");
+});
+
+test("Stop during the reply nudge suppresses its fallback delivery", async () => {
+  const { modes, deliveries, entries } = await runScenario({ nudgeStopped: true });
+  assert.deepEqual(modes, ["shadow", "serve", "serve"]);
+  assert.deepEqual(await deliveries.pending("slack"), []);
+  assert.ok(entries.some((entry) => entry.type === "assistant" && (entry.payload as { stopped?: boolean }).stopped));
 });

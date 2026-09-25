@@ -1,3 +1,7 @@
+import { decideDeploymentAccess } from "../slack/deploy-access.ts";
+import type { IdentityService } from "../identity/identity-service.ts";
+import type { ActorAssertion } from "../types.ts";
+import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
 import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgements } from "../slack/task-ack.ts";
 import { orgId as configOrgId } from "../config.ts";
 import type { StagedEnvelope } from "../slack/envelope-staging.ts";
@@ -10,6 +14,7 @@ import type { ErrorLog } from "../admin/error-log.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import type {
   Delivery,
+  PendingApproval,
   ScopeId,
   SurfaceContextRequest,
   SurfaceContextResult,
@@ -63,12 +68,9 @@ export interface SlackAgentRequestContext {
   approvalRequestIds?: string[];
 }
 
-interface StoredApprovalView {
-  requestId: string;
-  command: string;
+interface StoredApprovalView extends Omit<PendingApproval, "reason"> {
+  createdAt?: number;
   reason?: string;
-  purpose?: string;
-  summary?: string;
   request?: Record<string, unknown>;
 }
 
@@ -88,6 +90,8 @@ interface DirectoryPush {
 }
 
 export interface SlackCoreClient {
+  decideDeploymentAccess(value: string, actor: ActorAssertion, approve: boolean): Promise<string>;
+  keychainApprovals?: KeychainApprovals;
   taskAcknowledgements?: TaskAcknowledgements;
   externalSlackParticipants(): Promise<boolean>;
   internalMemberOverrides(): Promise<string[]>;
@@ -107,6 +111,7 @@ export interface SlackCoreClient {
   waitRun(runId: string, hooks?: SlackRunHooks): Promise<TurnResult | null>;
   activeRunForThread(threadRef: string): Promise<string | undefined>;
   signalRunAbort(runId: string): Promise<void>;
+  stopConversation(threadRef: string): Promise<boolean>;
   ackRunDelivery(runId: string): Promise<void>;
   reportTurnMetrics(runId: string, patch: { deliverMs?: number; slackInflightMs?: number }): Promise<void>;
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
@@ -137,6 +142,7 @@ export interface SlackCoreClient {
     threadTs?: string;
     text?: string;
     senderEmail?: string;
+    isDirectMessage?: boolean;
   }): Promise<void>;
 }
 
@@ -154,6 +160,8 @@ type AckPickInput = {
 export type { SurfaceContextRequest };
 
 export interface SlackCoreClientDeps {
+  identity: IdentityService;
+  keychainApprovals?: KeychainApprovals;
   taskAcknowledgements?: DurableMap<TaskAckState>;
   app: App;
   config: ScopedConfigStore;
@@ -228,6 +236,9 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
   });
 
   return {
+    decideDeploymentAccess: (value, actor, approve) =>
+      decideDeploymentAccess(deps.app, deps.identity, value, actor, approve),
+    ...(deps.keychainApprovals ? { keychainApprovals: deps.keychainApprovals } : {}),
     ...(deps.taskAcknowledgements
       ? { taskAcknowledgements: createTaskAcknowledgements(deps.taskAcknowledgements, lease, deps) }
       : {}),
@@ -408,6 +419,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       return (await deps.app.activeRunForThread(threadRef))?.runId;
     },
 
+    stopConversation(threadRef) {
+      return deps.app.stopConversation(threadRef);
+    },
+
     async signalRunAbort(runId) {
       const outcome = await deps.app.signalRun(runId, { kind: "abort" });
       if (!outcome.accepted) throw new Error(`signal abort not accepted: ${outcome.reason ?? "unknown"}`);
@@ -431,10 +446,14 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       if (!record) return null;
       return {
         requestId: record.requestId,
+        ...(record.createdAt !== undefined ? { createdAt: record.createdAt } : {}),
         command: record.command,
         ...(record.reason !== undefined ? { reason: record.reason } : {}),
         ...(record.purpose !== undefined ? { purpose: record.purpose } : {}),
         ...(record.summary !== undefined ? { summary: record.summary } : {}),
+        ...(record.summaryDetail !== undefined ? { summaryDetail: record.summaryDetail } : {}),
+        ...(record.grantModes !== undefined ? { grantModes: record.grantModes } : {}),
+        ...(record.kind !== undefined ? { kind: record.kind } : {}),
         ...(record.request !== undefined ? { request: record.request as unknown as Record<string, unknown> } : {}),
       };
     },
@@ -523,7 +542,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       if (!Number.isFinite(at)) return;
       await deps.inboxEvent?.({
         source: "slack",
-        conversationRef: slackConversationRef(msg.channel, msg.ts, msg.threadTs),
+        conversationRef: slackConversationRef(msg.channel, msg.ts, msg.threadTs, msg.isDirectMessage),
         at,
         ...(msg.text ? { text: msg.text } : {}),
         ...(msg.senderEmail ? { senderEmail: msg.senderEmail } : {}),

@@ -29,7 +29,7 @@ export function createInboxRealtime(deps: InboxRealtimeDeps): {
     if (now - cacheAt > LOOP_CACHE_TTL_MS) {
       const all = await deps.loops.list();
       cachedInboxLoops = all
-        .filter((loop) => loop.surface === "inbox")
+        .filter((loop) => (loop.surface === "inbox" || loop.surface?.startsWith("inbox:")) && loop.state !== "archived")
         .map((loop) => ({ id: loop.id, owner: loop.owner }));
       cacheAt = now;
     }
@@ -62,6 +62,7 @@ export function createInboxRealtime(deps: InboxRealtimeDeps): {
             if (ownerReplied) {
               await deps.items.recordAction(item.id, {
                 kind: "replied",
+                sourceAt: event.at,
                 outcome: "dismissed",
                 ...(event.text ? { result: event.text.slice(0, MAX_REPLY_CHARS) } : {}),
               });

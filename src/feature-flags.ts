@@ -2,7 +2,7 @@ import type { DurableMap } from "./persistence/durable-map.ts";
 import { orgId as configOrgId } from "./config.ts";
 import { scopeId, type ScopeId } from "./types.ts";
 
-export const FEATURE_NAMES = ["command_scoped_credentials", "persistent_subagents"] as const;
+export const FEATURE_NAMES = ["persistent_subagents", "responsive_spine", "inbox_loops"] as const;
 export type FeatureName = (typeof FEATURE_NAMES)[number];
 
 export interface FeatureFlagRecord {
@@ -27,7 +27,7 @@ export function createFeatureFlagStore(
   const now = opts.now ?? Date.now;
   const key = (featureName: FeatureName) => featureName;
   return {
-    list: () => backing.all(),
+    list: async () => (await backing.all()).filter((row) => FEATURE_NAMES.includes(row.featureName)),
     get: (featureName) => backing.get(key(featureName)),
     async enabled(featureName, scope) {
       const row = await backing.get(key(featureName));

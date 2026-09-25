@@ -16,7 +16,49 @@ import { swallow } from "../../util/errors.ts";
 
 const TRIGGERED = "secret-drop links can only be minted on a turn a person sent — this turn was fired by a trigger";
 
-const PAGE_STYLE = 'style="font-family:system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem"';
+function dropPage(title: string, content: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>${escapeHtml(title)}</title>
+<style>
+  :root{color-scheme:light dark;--bg:#fff;--surface:#fff;--text:#0a0a0a;--muted:#737373;--border:#e5e5e5;--secondary:#f5f5f5;--input:#e5e5e5;--cta:oklch(0.27 0.062 250);--cta-hover:oklch(0.33 0.07 250);--cta-foreground:oklch(0.99 0 0)}
+  @media(prefers-color-scheme:dark){:root{--bg:oklch(0.165 0.022 250);--surface:oklch(0.205 0.024 250);--text:oklch(0.975 0.005 250);--muted:oklch(0.72 0.021 250);--border:oklch(0.275 0.024 250);--secondary:oklch(0.245 0.024 250);--input:oklch(0.325 0.026 250);--cta:oklch(0.42 0.085 250);--cta-hover:oklch(0.48 0.09 250)}}
+  *{box-sizing:border-box}
+  html,body{min-height:100%}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  main{min-height:100svh;padding:32px 20px;display:grid;place-items:center}
+  .card{width:100%;max-width:460px;min-width:0;background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:32px;text-align:left;overflow-wrap:anywhere}
+  .icon{width:40px;height:40px;margin:0 0 20px;border-radius:10px;background:var(--secondary);display:grid;place-items:center}
+  .icon svg{width:22px;height:22px;stroke:var(--text);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  h1{font-size:20px;font-weight:600;letter-spacing:-.02em;line-height:1.35;margin:0 0 8px}
+  h1 code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:.85em;font-weight:500;letter-spacing:0;background:color-mix(in srgb,var(--cta) 18%,var(--surface));border:1px solid color-mix(in srgb,var(--cta) 35%,var(--border));border-radius:6px;padding:2px 6px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+  p{color:var(--muted);margin:0}
+  .request{margin:22px 0;text-align:left;background:var(--secondary);border:1px solid var(--border);border-radius:10px;padding:12px 14px}
+  .request strong{display:block;color:var(--text);font-weight:500;margin-top:4px}
+  .requested{display:block;color:var(--muted);font-size:12px;margin-top:8px}
+  form{display:grid;gap:16px;text-align:left}
+  .field{display:grid;gap:6px;min-width:0}
+  label{font-size:12.5px;font-weight:600;color:var(--muted)}
+  input{width:100%;min-width:0;min-height:44px;padding:0 14px;font:inherit;font-size:16px;color:var(--text);background:var(--bg);border:1px solid var(--input);border-radius:8px}
+  input:focus-visible,button:focus-visible{outline:2px solid var(--muted);outline-offset:2px}
+  button{min-height:44px;padding:10px 18px;width:100%;font:inherit;font-size:13px;font-weight:500;border-radius:8px;cursor:pointer;background:var(--cta);color:var(--cta-foreground);border:1px solid var(--cta)}
+  button:hover{background:var(--cta-hover);border-color:var(--cta-hover)}
+  button:disabled{opacity:.5;cursor:wait}
+  #done:not(:empty){margin-top:20px;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--secondary);color:var(--text)}
+  .help{font-size:12.5px;margin-top:22px;padding-top:20px;border-top:1px solid var(--border)}
+  @media(max-width:380px){.card{padding:28px 20px}}
+</style>
+</head>
+<body><main><section class="card" aria-labelledby="title">
+<div class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></div>
+${content}
+</section></main></body>
+</html>`;
+}
 
 const MAX_DROP_FIELDS = 8;
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -44,8 +86,10 @@ function formFields(fields?: SecretDropField[]): Array<{ key: string | null; lab
 }
 
 function dropNotYoursHtml(): string {
-  return `<!doctype html><meta charset=utf-8><title>Not your link</title><body ${PAGE_STYLE}>
-<h2>This link is for someone else</h2><p>This credential request was created for a different teammate. If it was meant for you, sign in as yourself and open it again.</p></body>`;
+  return dropPage(
+    "Not your link",
+    `<h1 id="title">This link is for someone else</h1><p>This credential request was created for a different teammate. If it was meant for you, sign in as yourself and open it again.</p>`,
+  );
 }
 
 function dropScopeAuthorized(ctx: ApiCtx, rec: SecretDropRecord, claims?: CapabilityClaims): Promise<boolean> {
@@ -89,33 +133,39 @@ function dropFormHtml(
   rec: { service: string; purpose: string; fields?: SecretDropField[]; createdAt?: number } | null,
 ): string {
   if (!rec) {
-    return `<!doctype html><meta charset=utf-8><title>Secret drop</title><body ${PAGE_STYLE}>
-<h2>This link has expired</h2><p>Secret-drop links are single-use. Ask the agent for a fresh one.</p></body>`;
+    return dropPage(
+      "Secret drop",
+      `<h1 id="title">This link has expired</h1><p>Secret-drop links are single-use. Ask the agent for a fresh one.</p>`,
+    );
   }
   const service_ = escapeHtml(rec.service);
   const purpose_ = escapeHtml(rec.purpose);
-  const requested_ = rec.createdAt ? escapeHtml(new Date(rec.createdAt).toISOString().slice(0, 10)) : "";
+  const requested_ = rec.createdAt
+    ? escapeHtml(new Date(rec.createdAt).toISOString().slice(0, 19).replace("T", " ") + " UTC")
+    : "";
   const id_ = JSON.stringify(dropId);
   const fields = formFields(rec.fields);
   const multi = fields.length > 1 || fields[0]!.key !== null;
   const inputs = fields
     .map(
-      (f) =>
-        `<input type=${f.secret ? "password" : "text"} autocomplete=off autocapitalize=off spellcheck=false placeholder="${escapeHtml(f.label)}" style="width:100%;font-size:1rem;padding:.5rem;box-sizing:border-box;margin-bottom:.6rem">`,
+      (f, i) =>
+        `<div class="field"><label for="field-${i}">${escapeHtml(f.key === null ? "Credential" : f.label)}</label><input id="field-${i}" type=${f.secret ? "password" : "text"} autocomplete=off autocapitalize=off spellcheck=false placeholder="${escapeHtml(f.label)}"></div>`,
     )
     .join("\n");
   const keys = JSON.stringify(fields.map((f) => f.key));
-  return `<!doctype html><meta charset=utf-8><title>Provide a credential</title><body ${PAGE_STYLE}>
-<h2>Provide your ${service_} ${multi ? "login" : "credential"}</h2>
-<p style="color:#555">The agent asked for this so it can: <b>${purpose_}</b>${requested_ ? ` <span style="color:#999">(requested ${requested_})</span>` : ""}</p>
+  return dropPage(
+    "Provide a credential",
+    `<h1 id="title">Provide your <code>${service_}</code> ${multi ? "login" : "credential"}</h1>
+<div class="request"><p>The agent asked for this so it can:</p><strong>${purpose_}</strong>${requested_ ? `<span class="requested">Requested ${requested_}</span>` : ""}</div>
 <form id=f>
 ${inputs}
-<button id=go style="font-size:1rem;padding:.6rem 1.2rem;margin-top:.2rem">Submit securely</button>
+<button id=go type="submit">Submit securely</button>
 </form>
-<p id=done></p>
-<p style="color:#888;font-size:.85rem">What you enter goes straight to the keychain over TLS and is encrypted at rest. It is never shown in chat. This link works once.</p>
+<p id=done role="status" aria-live="polite"></p>
+<p class="help">What you enter goes straight to the keychain over TLS and is encrypted at rest. It is never shown in chat. This link works once.</p>
 <script>const f=document.getElementById('f'),keys=${keys};f.onsubmit=async(e)=>{e.preventDefault();const inputs=[...f.querySelectorAll('input')];const go=document.getElementById('go');go.disabled=true;let body;if(keys.length===1&&keys[0]===null){body={secret:inputs[0].value};}else{const values={};inputs.forEach((el,i)=>{values[keys[i]]=el.value;});body={values};}const r=await fetch('/drop/'+encodeURIComponent(${id_})+location.search,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});inputs.forEach(el=>el.value='');if(r.ok){f.remove();document.getElementById('done').textContent='Received — you can close this tab and return to the conversation.';}else{document.getElementById('done').textContent='Could not save (the link may have expired, been used, or was missing a field).';go.disabled=false;}};</script>
-</body>`;
+`,
+  );
 }
 
 async function mintDrop(ctx: ApiCtx): Promise<void> {
@@ -198,6 +248,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
       exp: Date.now() + SECRET_DROP_TTL_MS,
     },
     capSecret,
+    deps.capabilityTokenCompression,
   );
   const formPath = `/drop/${dropId}/form?t=${encodeURIComponent(linkToken)}`;
   const base = (deps.portalUrl ?? deps.publicUrl)?.replace(/\/$/, "");

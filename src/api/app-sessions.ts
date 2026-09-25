@@ -1,4 +1,7 @@
+import { notifyDeploymentShared } from "../deploy/share-notice.ts";
+import { deploymentShareScope } from "../deploy/email-access.ts";
 import { sessionTreeRoot, sessionTreeRunCount, SUBAGENT_TREE_RUN_CAP } from "../sessions/session-syscalls.ts";
+import { isSessionStatus } from "../sessions/session-status.ts";
 import type { PendingApprovalRecord } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
@@ -10,11 +13,12 @@ import { swallowAs } from "../util/errors.ts";
 import { SEARCH_HIT_LIMIT, entrySearchText, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { processIsGone } from "../sandbox/process-poll.ts";
-import { cronRef, deployRef, encodeRef, fileRef, skillRef } from "../acl/resource-ref.ts";
+import { cronRef, deployRef, encodeRef, fileRef, parseRef, skillRef } from "../acl/resource-ref.ts";
 import { samePerson } from "../directory/person.ts";
 import { AdminError } from "../admin/admin-service.ts";
 import { type ArtifactHome } from "./artifact-share.ts";
 import { randomUUID } from "node:crypto";
+import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/attachments.ts";
 import { projectIdFromGroupRef, projectScopeId } from "../projects/project-store.ts";
 
@@ -71,6 +75,8 @@ export function createSessionMethods(
   | "setProjectSlackChannel"
   | "listScopeResources"
   | "managesScope"
+  | "isOpenScopeMember"
+  | "isCurrentSharedScopeMember"
   | "membershipControlsScope"
   | "authorizesCapabilityScope"
   | "updateSession"
@@ -726,6 +732,22 @@ export function createSessionMethods(
       return principalCanManageScope(principalId, scope);
     },
 
+    isCurrentSharedScopeMember(principalId, scope) {
+      const { kind } = parseScopeId(scope);
+      return kind === "channel" || kind === "group"
+        ? principalCanWriteScope(principalId, scope)
+        : Promise.resolve(false);
+    },
+
+    isOpenScopeMember(principalId, scope) {
+      return isOpenScopeMember({
+        actorId: principalId,
+        scope,
+        config: deps.config,
+        isCurrentSharedScopeMember: principalCanWriteScope,
+      });
+    },
+
     membershipControlsScope(scope) {
       return membershipControlsScope(scope);
     },
@@ -735,8 +757,25 @@ export function createSessionMethods(
     },
 
     async updateSession(sessionId, principalId, patch) {
-      if (!(await sessionForViewer(sessionId, principalId))) return null;
-      await deps.sessions.updateParticipantView(sessionId, principalId, patch);
+      const session = await sessionForViewer(sessionId, principalId);
+      if (!session) return null;
+      const { status, ...view } = patch;
+      if (status !== undefined) {
+        const participants = await deps.sessions.participantWindowsOf(sessionId);
+        if (!participants.some((p) => p.principalId === principalId && p.validTo === null)) return null;
+        if (!isSessionStatus(status)) throw new Error("invalid session status");
+        await deps.sessions.updateStatus(sessionId, status ? { emoji: status.emoji, text: status.text.trim() } : null);
+      }
+      await deps.sessions.updateParticipantView(sessionId, principalId, view);
+      if (status !== undefined) {
+        deps.sessionStateBus?.emit({
+          threadRef: session.threadRef,
+          sessionId,
+          participants: await deps.sessions.participantsOf(sessionId),
+          state: "metadata",
+          at: Date.now(),
+        });
+      }
       return sessionForViewer(sessionId, principalId);
     },
 
@@ -937,6 +976,18 @@ export function createSessionMethods(
     },
 
     async grant(g) {
+      if (parseRef(g.ref).kind === "deploy") {
+        g = {
+          ...g,
+          granteeScopeId: await deploymentShareScope(
+            g.granteeScopeId,
+            g.permission,
+            async (email) =>
+              deps.identity.isInternal(deps.identity.classify(email)) &&
+              (await h.directoryMember(email))?.type === "internal",
+          ),
+        };
+      }
       await deps.acl.grant(g, await artifactAuthor(g.ownerScopeId, g.ref));
       deps.auditLog.record({
         at: Date.now(),
@@ -945,6 +996,15 @@ export function createSessionMethods(
         resource: g.ref,
         scopeLabel: g.granteeScopeId,
       });
+      const ref = parseRef(g.ref);
+      if (ref.kind === "deploy")
+        await notifyDeploymentShared(
+          deps,
+          deps.deploy.getDeployment(ref.id),
+          g.granteeScopeId,
+          g.permission,
+          g.grantedBy,
+        );
     },
     async revokeGrant(ownerScopeId, ref, granteeScopeId, revokedBy) {
       await deps.acl.revoke(ownerScopeId, ref, granteeScopeId, revokedBy, await artifactAuthor(ownerScopeId, ref));

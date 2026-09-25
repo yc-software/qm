@@ -8,9 +8,20 @@ const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 test("live and completed work share one chronological duration fold", () => {
   assert.match(chat, /class=\$\{stopped \? "stopped-work" : `work work-fold work-\$\{work.status\}`\}/);
   assert.match(chat, /messageWorkTimeline\(work, active \? "" : text\)/);
-  assert.match(chat, /let label = stopping \? "Stopping…" : workLabel\(work\)/);
+  assert.match(chat, /let label = stopping \? "Stop requested" : workLabel\(work\)/);
+  assert.match(chat, /const animating = active && !stopping;/);
+  assert.match(chat, /sheenLabel\(label, animating\)/);
   assert.match(chat, /\?open=\$\{active \|\| !!work.pendingApprovals\?\.length\}/);
   assert.doesNotMatch(chat, /function segmentSummaryLabel/);
+});
+
+test("the reply text is hidden only while the work fold is active, never for a finished-but-streaming turn", () => {
+  assert.match(
+    chat,
+    /const workActive =\s*hasWork && isStreaming && !streamingFinal && \(work\?\.status === "working" \|\| work\?\.status === "thinking"\);/,
+  );
+  assert.match(chat, /assistantDisplayText\(workActive \? "" : text, message\.stopReason\)/);
+  assert.doesNotMatch(chat, /isStreaming && hasWork && !streamingFinal \? ""/);
 });
 
 test("promoted speech keeps full reply styling", () => {
@@ -31,7 +42,10 @@ test("the fold chevron rotates when a work-fold is open", () => {
 test("expanded tool activity uses a compact log rhythm", () => {
   assert.match(css, /\.work-divider \{[\s\S]{0,120}?margin: 8px 0 10px;/);
   assert.match(css, /\.work-rows \{[\s\S]{0,120}?gap: 2px;/);
-  assert.match(css, /\.tool-row,[\s\S]{0,220}?font-size: 14px;[\s\S]{0,80}?line-height: 1\.35;/);
+  assert.match(
+    css,
+    /\.tool-row,[\s\S]{0,220}?font-size: calc\(var\(--chat-font-size\) - 1px\);[\s\S]{0,80}?line-height: 1\.35;/,
+  );
   assert.match(css, /\.tool-row \.tool-summary \{[\s\S]{0,80}?min-height: 26px;/);
   assert.match(chat, /icon\(rowIcon, 15\)/);
   assert.match(chat, /icon\(Wrench, 13\)/);

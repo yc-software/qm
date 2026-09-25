@@ -14,6 +14,19 @@ type Entry = {
 const FRESH_MS = 30_000;
 const entries = new Map<string, Entry>();
 let bootScope: string | null = null;
+let accountRevision = 0;
+
+export function invalidateRuntimeConfigs(): void {
+  accountRevision++;
+  for (const entry of entries.values()) {
+    entry.generation++;
+    entry.config = null;
+    entry.fetchedAt = 0;
+    entry.load = null;
+  }
+}
+
+if (typeof window !== "undefined") window.addEventListener("model-account-changed", invalidateRuntimeConfigs);
 
 function entryFor(scopeId: string): Entry {
   let entry = entries.get(scopeId);
@@ -58,14 +71,22 @@ export function subscribeRuntimeConfig(scopeId: string, listener: () => void): (
   };
 }
 
-export async function loadRuntimeConfig(scopeId: string, refresh = false): Promise<RuntimeConfig | null> {
-  const entry = entryFor(scopeId);
+export function runtimeConfigKey(scopeId: string | null, account?: "company"): string | null {
+  return scopeId && account ? `${account}/${scopeId}` : scopeId;
+}
+
+export async function loadRuntimeConfig(
+  scopeId: string,
+  refresh = false,
+  account?: "company",
+): Promise<RuntimeConfig | null> {
+  const entry = entryFor(runtimeConfigKey(scopeId, account)!);
   // Reads started during a save must not race ahead of that save on the server.
   while (entry.write) await entry.write;
   if (!refresh && entry.config && Date.now() - entry.fetchedAt < FRESH_MS) return entry.config;
   if (entry.load) return entry.load;
   const generation = entry.generation;
-  const load = fetchRuntimeConfig(scopeId).then(async (config) => {
+  const load = fetchRuntimeConfig(scopeId, account).then(async (config) => {
     if (generation !== entry.generation) {
       while (entry.write) await entry.write;
       return entry.config;
@@ -87,9 +108,10 @@ export async function saveRuntimeConfig(scopeId: string, change: Change): Promis
   // Invalidate old reads at enqueue time, including when the save ultimately fails.
   ++entry.generation;
   entry.load = null;
+  const revision = accountRevision;
   const save = (entry.write ?? Promise.resolve()).then(async () => {
     const config = await updateRuntimeConfig(scopeId, change);
-    publish(scopeId, entry, config);
+    if (revision === accountRevision) publish(scopeId, entry, config);
     return config;
   });
   const settled = save.then(

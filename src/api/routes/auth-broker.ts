@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { AdminError } from "../../admin/admin-service.ts";
 import { sendJson } from "../http.ts";
-import { externalMemberActive } from "../../identity/external-members.ts";
+import { deployRef, encodeRef } from "../../acl/resource-ref.ts";
+import { externalMemberActive, validEmail } from "../../identity/external-members.ts";
 import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
@@ -52,15 +53,33 @@ async function claimBrokerNonce(ctx: ApiCtx): Promise<void> {
 }
 
 async function emailAllowed(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url } = ctx;
-  const email = (url.searchParams.get("email") ?? "").trim();
-  if (!email) return sendJson(res, 400, { error: "bad_request", message: "email required" });
+  const { res, deps, app, url } = ctx;
+  const email = (url.searchParams.get("email") ?? "").trim().toLowerCase();
+  if (!validEmail(email)) return sendJson(res, 400, { error: "bad_request", message: "email required" });
   if (!deps.identity) return sendJson(res, 200, { allowed: false });
   await deps.identity.refresh();
+  if (deps.identity.deactivationSource(email) === "manual") return sendJson(res, 200, { allowed: false });
   const member = deps.identity.externalMember(email);
+  const configured =
+    deps.emailAuthPrincipals?.includes(email) ||
+    Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`));
   const allowed =
-    member !== undefined && externalMemberActive(member) && deps.identity.classify(email).type === "internal";
-  return sendJson(res, 200, { allowed, ...(allowed ? { expiresAt: member.expiresAt } : {}) });
+    deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
+  if (allowed) return sendJson(res, 200, { allowed: true, expiresAt: member?.expiresAt });
+  const grants = (await deps.acl?.list()) ?? [];
+  const deployments = await app.listDeployments();
+  const appOnly = deployments.some(
+    (d) =>
+      d.status !== "archived" &&
+      grants.some(
+        (g) =>
+          g.ownerScopeId === d.ownerScopeId &&
+          g.ref === encodeRef(deployRef(d.id)) &&
+          g.granteeScopeId === `personal:${email}` &&
+          g.permission === "read",
+      ),
+  );
+  return sendJson(res, 200, appOnly ? { allowed: true, appOnly: true } : { allowed: false });
 }
 
 async function brokerSession(ctx: ApiCtx): Promise<void> {
@@ -147,7 +166,55 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
   }
 }
 
+async function redeemInvitation(ctx: ApiCtx): Promise<void> {
+  const { deps, res, body } = ctx;
+  if (!deps.portalIdentitySecret || !deps.replayDedupe?.durable || !deps.identity || !deps.portalUrl)
+    return sendJson(res, 503, { error: "not_configured" });
+  const token = isObj(body) && typeof body.token === "string" ? body.token : "";
+  const claims = token.length <= 4096 ? await verifySignedPayload(token, deps.portalIdentitySecret) : null;
+  const now = Date.now();
+  if (
+    !isObj(claims) ||
+    claims.purpose !== "teammate-invite" ||
+    claims.org !== orgScope(deps) ||
+    claims.aud !== deps.portalUrl.replace(/\/+$/, "") ||
+    typeof claims.email !== "string" ||
+    typeof claims.iat !== "number" ||
+    typeof claims.exp !== "number" ||
+    !Number.isSafeInteger(claims.iat) ||
+    !Number.isSafeInteger(claims.exp) ||
+    claims.iat > now + 5000 ||
+    claims.exp <= now ||
+    claims.exp <= claims.iat ||
+    claims.exp - claims.iat > 86400000 ||
+    typeof claims.jti !== "string" ||
+    !/^[a-f0-9-]{36}$/.test(claims.jti)
+  )
+    return sendJson(res, 400, { error: "invalid_invitation" });
+  await deps.identity.refresh(true);
+  const member = deps.identity.externalMember(claims.email);
+  if (
+    !member ||
+    member.kind !== "teammate" ||
+    !member.inviteId ||
+    member.inviteId !== claims.inviteId ||
+    !externalMemberActive(member) ||
+    deps.identity.classify(claims.email).type !== "internal"
+  )
+    return sendJson(res, 403, { error: "invitation_revoked" });
+  if (!(await deps.replayDedupe.claim(`teammate-invite:${claims.jti}`, claims.exp)))
+    return sendJson(res, 400, { error: "invitation_used" });
+  audit(deps, {
+    principalId: claims.email,
+    action: "user.invite.redeem",
+    resource: claims.email,
+    scopeLabel: orgScope(deps),
+  });
+  return sendJson(res, 200, { email: claims.email });
+}
+
 export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "POST", path: "/v1/auth/invitations/redeem", auth: "source", handle: redeemInvitation },
   { method: "POST", path: "/v1/auth/trusted/admin", auth: "source", handle: trustedAdmin },
   { method: "POST", path: "/v1/auth/broker/sessions", auth: "source", handle: brokerSession },
   { method: "POST", path: "/v1/auth/broker/sessions/use", auth: "source", handle: brokerSession },

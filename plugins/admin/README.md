@@ -15,15 +15,14 @@ The **Users** tab (org-wide, org_admin-only) lists everyone who has
 used the agent (from session metadata — no content) with admin status joined, plus the
 authoritative grant list, and lets an org_admin **promote** a principal to org_admin
 or **revoke** — every mutation attributed and audited, the last org_admin protected.
-The **+** on the Users card invites an **external user** (an address outside the org's
-Slack / email domain) with a role and an expiry; they get an invitation email and sign in
-at the portal with that address until it expires. Invitation emails go out through Resend
-when core has `RESEND_API_KEY` and `AUTH_EMAIL_FROM`; without them the user is still added
-and the dashboard shows the sign-in link for you to share. External users are listed in
-their own card, where **Revoke** ends access immediately and leaves the row listed as
-expired; a day after expiry, **Remove** drops the row. An address that already belongs to an
-org member (the org's email domain, the Slack directory, the sign-in allow-list, or anyone who
-has used the agent) cannot be invited.
+**Invite teammate** adds someone by email with Member or Org admin access. The invite form grants access without an
+expiration date. Teammates appear in Users before their
+first session. Addresses already admitted through the domain or allow-list may receive a
+sign-in invitation too. Re-inviting an admin never removes their admin role.
+Invitations are durable and listed with their access status. Revoke ends access immediately.
+Invitation email uses Resend when configured. Teammate invitations contain a single-use sign-in link valid for 24 hours. If delivery is unavailable or fails, Admin shows the same link with a copy control after the invitation is created. Redemption checks current membership and claims the token through durable storage; revocation or a new invitation invalidates earlier links. Company access displays the web email domain and the local Slack allow-list; these are deployment settings, not editable Admin policy.
+The existing external-user API still requires an expiry and rejects org members.
+Teammate invitations and revocations are restricted to the Admin surface.
 (`org_admin` is the only supported role for now; `team_admin` was removed — team-scoped admin
 observability is future work. See `src/admin/admin-service.ts`.) History (conversation listing with a
 by-type usage rollup, drilling into transcripts with per-turn model-context breakdowns), Files
@@ -43,10 +42,15 @@ CORE_API_URL=http://localhost:8080 CORE_ORG_ID=acme PORT=8090 npm start
 
 ```
 
-No build step, an optional Sentry backend error reporter (pure `node:http` + native TS). Node 24+.
+No separate build command is needed. The Node 24+ server bundles the admin Lit modules once at startup and embeds them in the existing CSP-hashed script. The backend uses `node:http` and native TypeScript, with optional Sentry error reporting.
+
+The admin tabs render through the Lit modules in `ui/`, with `ui/admin.ts` as their shared entry point. They use the existing light-DOM elements, classes, and styles without layout wrappers. Settings drafts, validation, dirty state, and save feedback render from state; list views own filtering, pagination, and editor state. Stable row keys preserve focus. Shared table, card, and list templates live in `ui/shared.ts`. Specialized safe Markdown, XML, and tool-output formatters remain shared adapters in the shell.
+
+The shared admin controller retains routing, API calls, and change-review dialogs. Successful saves commit the submitted snapshot, preserving newer edits made while a request was in flight. Scope and render generations prevent stale requests from replacing a newer page. Related settings refresh independently so changing one section cannot discard neighboring drafts. Run `npm test` and `npm run typecheck` from this directory after changing the UI.
 
 Env: `CORE_API_URL` (default `http://localhost:8080`), `CORE_ORG_ID` (default `acme`),
-`PORT` (default `8090`) and `CORE_SIGNING_SECRET` (required outside isolated development). The
+`PORT` (default `8090`), `CORE_SIGNING_SECRET` (required outside isolated development), and
+`INBOX_USERS` (the same comma-separated principal allowlist used by Inbox and Calendar). The
 portal also supplies a short-lived `x-portal-identity` token, which this surface forwards to core.
 There is **no** `ADMIN_PRINCIPALS` — admin identity + role + scope live solely in the core's
 durable, mutable `admin_grants` store, and this surface derives admin status from it via

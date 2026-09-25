@@ -14,7 +14,7 @@ interface MessageLike {
   work?: { activity?: ActivityLike[] };
 }
 
-const GOAL_TOOLS = new Set(["create_goal", "update_goal", "get_goal"]);
+const GOAL_TOOLS = new Set(["goal", "create_goal", "update_goal", "get_goal"]);
 
 function snapshotFrom(payload: unknown): GoalStripState | null | undefined {
   const p = payload as { tool?: unknown; goal?: unknown } | null;

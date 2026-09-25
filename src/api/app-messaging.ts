@@ -3,7 +3,7 @@ import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
 import type { Destination, SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
-import { errMessage } from "../util/errors.ts";
+import { reportFailureAs } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { randomUUID } from "node:crypto";
@@ -20,6 +20,10 @@ import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts
 import { externalMemberActive } from "../identity/external-members.ts";
 import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
+import { isOpenScopeMember } from "../resolution/sharing-access.ts";
+import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
+import { assertCronRuntime } from "../cron/runtime.ts";
+import type { Cron } from "../types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 
 import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
@@ -71,6 +75,7 @@ export function createMessagingMethods(
   | "cronFiresByThreadRefs"
   | "latestCronFireForThread"
   | "setCronDestination"
+  | "setCronRuntime"
   | "setCronRecipientConsent"
   | "createWebhook"
   | "getWebhook"
@@ -119,6 +124,8 @@ export function createMessagingMethods(
   | "resolveReachTarget"
 > {
   const { adminBase, resolveReachTargetFor } = h;
+  const openMember = (actorId: string, scope: ScopeId) =>
+    isOpenScopeMember({ actorId, scope, config: deps.config, isCurrentSharedScopeMember: h.principalCanWriteScope });
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests ?? createMemoryMap<SurfaceContextRequest>();
   const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
@@ -153,13 +160,26 @@ export function createMessagingMethods(
     return [...stored, ...viaEmail.filter((member) => !seen.has(personKey(member.principalId)))];
   };
 
+  const validateRuntime = async (cron: Pick<Cron, "runtime" | "ownerScopeId" | "loopId" | "action" | "message">) => {
+    assertCronRuntime(cron);
+    if (!cron.runtime) return;
+    const error =
+      validateRuntimeChoice(cron.runtime) ??
+      (await availableRuntimeError({ deps }, cron.ownerScopeId, cron.runtime, "cron"));
+    if (error) throw new Error(error);
+  };
+
   return {
     async createCron(input) {
+      await validateRuntime(input);
       validateUserSchedule(input.schedule);
       if (input.runAs === "scopeShared") {
         if (input.ownerScopeId.startsWith("personal:"))
           throw new Error("scopeShared requires a shared (channel/group) scope, not a personal one");
-        if (!input.members?.length) throw new Error("scopeShared requires a member snapshot");
+        const open = await openMember(input.owner, input.ownerScopeId);
+        if (!input.members?.length && !open)
+          throw new Error("scopeShared requires a member snapshot or current Open scope membership");
+        if (open) input = { ...input, ownerResourcesRequireOpen: true };
       }
       const cron = await deps.crons.create(input);
       deps.auditLog.record({
@@ -202,12 +222,16 @@ export function createMessagingMethods(
     async updateCron(id, patch) {
       const before = await deps.crons.get(id);
       if (!before) return null;
+      if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
       if (patch.schedule) validateUserSchedule(patch.schedule);
       if (patch.runAs === "scopeShared") {
         if (before.ownerScopeId.startsWith("personal:"))
           throw new Error("scopeShared requires a shared (channel/group) scope, not a personal one");
         const members = patch.members ?? before.members;
-        if (!members?.length) throw new Error("scopeShared requires a member snapshot");
+        const open = await openMember(before.owner, before.ownerScopeId);
+        if (!members?.length && !open)
+          throw new Error("scopeShared requires a member snapshot or current Open scope membership");
+        if (open) patch = { ...patch, ownerResourcesRequireOpen: true };
       }
       const grantsReaffirmed = patch.unattendedGrants !== undefined;
       const guardedPatch =
@@ -251,6 +275,12 @@ export function createMessagingMethods(
         });
       }
       return outcome;
+    },
+    async setCronRuntime(id, runtime) {
+      const before = await deps.crons.get(id);
+      if (!before) return null;
+      await validateRuntime({ ...before, runtime });
+      return deps.crons.update(id, { runtime });
     },
     async setCronDestination(id, destination) {
       const before = await deps.crons.get(id);
@@ -312,14 +342,12 @@ export function createMessagingMethods(
       if (self && (self.name || self.mentionId)) ambientSelf.set(`${orgIdOf()}:${surface}`, self);
       const out = await deps.surfaceCache.ingest(events);
       if (surface === "slack" && hasRevisionEvents(events)) {
-        void recordMessageRevisions(deps.sessions, events).catch((e) =>
-          console.error("[revisions] surface revision record failed:", errMessage(e)),
+        void recordMessageRevisions(deps.sessions, events).catch(
+          reportFailureAs("revisions: surface revision record", undefined),
         );
       }
       for (const container of new Set(events.filter((e) => !e.self).map((e) => e.container))) {
-        void judgeAmbientContainer(surface, container).catch((e) =>
-          console.error("[ambient] judge failed:", errMessage(e)),
-        );
+        void judgeAmbientContainer(surface, container).catch(reportFailureAs("ambient: judge", undefined));
       }
       return out;
     },

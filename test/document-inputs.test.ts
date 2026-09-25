@@ -214,6 +214,19 @@ test("restores stopped/restarted turns from durable document metadata and dedupl
   assert.match(await documentFallbackText(inputs.documents[0]!), /QUARTZ-731/);
 });
 
+test("document replay follows compaction boundaries and excludes security-tainted uploads", () => {
+  const { meta } = storeFor();
+  const recent = { ...meta, artifactId: "recent" };
+  const history = [
+    { seq: 0, type: "user", payload: { attachments: [meta] } },
+    { seq: 1, type: "user", payload: { attachments: [recent] } },
+    { seq: 2, type: "system", payload: { kind: "context_summary", text: "Prior upload", throughSeq: 0 } },
+    { seq: 3, type: "user", payload: { attachments: [meta], securityTainted: true } },
+  ] as SessionEntry[];
+  assert.deepEqual(historicalDocumentMetas(history), [recent]);
+  assert.deepEqual((history[0]!.payload as { attachments: AttachmentMeta[] }).attachments, [meta]);
+});
+
 test("document restoration checks current access and budgets before opening bytes", async () => {
   const { store, meta, opens } = storeFor();
   assert.equal((await loadDocumentInputs(store, [meta], () => false)).documents.length, 0);

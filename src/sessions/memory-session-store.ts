@@ -22,6 +22,7 @@ import type {
   SessionStore,
   SessionSummary,
   SessionPin,
+  SpendRow,
   StoreOptions,
   TapeRecord,
 } from "./session-store.ts";
@@ -158,6 +159,11 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     async updateTitle(sessionId, title) {
       const s = sessions.get(sessionId);
       if (s) s.title = title;
+    },
+
+    async updateStatus(sessionId, status) {
+      const s = sessions.get(sessionId);
+      if (s) s.status = status ? { ...status } : null;
     },
 
     async updateForkProvenance(sessionId, provenance) {
@@ -874,6 +880,55 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         }
       }
       return out;
+    },
+
+    async spendRollup(range): Promise<SpendRow[]> {
+      const DAY = 86_400_000;
+      const buckets = new Map<string, SpendRow>();
+      for (const [sessionId, records] of llmRequests) {
+        const session = sessions.get(sessionId);
+        if (!session) continue;
+        let origin = sessionOrigin(session.threadRef);
+        let ancestor = session;
+        const visited = new Set([sessionId]);
+        while (origin === "conversation" && ancestor.parentSessionId && visited.size < 64) {
+          const parent = sessions.get(ancestor.parentSessionId);
+          if (!parent || visited.has(parent.id)) break;
+          visited.add(parent.id);
+          ancestor = parent;
+          origin = sessionOrigin(parent.threadRef);
+        }
+        for (const r of records) {
+          if (!r.usage) continue;
+          if (r.createdAt < range.from || r.createdAt >= range.to) continue;
+          const day = Math.floor(r.createdAt / DAY);
+          const model = r.model ?? null;
+          const key = JSON.stringify([day, session.scopeId, origin, model]);
+          let row = buckets.get(key);
+          if (!row) {
+            row = {
+              day,
+              model,
+              scopeId: session.scopeId,
+              origin,
+              calls: 0,
+              costUsd: 0,
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+            };
+            buckets.set(key, row);
+          }
+          row.calls += 1;
+          row.costUsd += r.usage.costUsd;
+          row.input += r.usage.input;
+          row.output += r.usage.output;
+          row.cacheRead += r.usage.cacheRead;
+          row.cacheWrite += r.usage.cacheWrite;
+        }
+      }
+      return [...buckets.values()];
     },
 
     async listParticipants() {

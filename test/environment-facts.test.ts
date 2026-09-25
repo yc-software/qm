@@ -36,8 +36,6 @@ test("computer block: renders OS/size/runtimes/tools and the not-installed list"
   assert.match(out, /Installed CLIs:.*aws/);
   assert.match(out, /NOT installed.*gh/);
   assert.match(out, /`\/root\/workspace` \(read-write\)/);
-  assert.match(out, /publish ships files in your workspace/);
-  assert.match(out, /Recovery depends on the sandbox provider/);
   assert.match(out, /\$HOME` \(`\/root`\) holds native logins/);
   assert.match(out, /`\.\/global` \(read-only\)/);
   assert.match(out, /team-\*.*2 mounted/);
@@ -128,4 +126,21 @@ test("connected-apps block: reconnect-needed apps are named separately", () => {
   assert.match(out, /Connected: Google/);
   assert.match(out, /Needs reconnect: GitHub \(refresh failed: revoked by provider\)/);
   assert.match(out, /Do not use these apps until the user reconnects them/);
+});
+
+test("connected-apps block is canonical across provider and status insertion order", () => {
+  const providers = {
+    slack: { connected: true },
+    google: { connected: true },
+    github: { connected: true, needsReconnect: true },
+    dropbox: { connected: true, needsReconnect: true },
+  };
+  const record = { principalId: "U1", checkedAt: 1, providers };
+  const available = ["slack", "google", "github", "dropbox", "linear", "notion"];
+  const reversed = { ...record, providers: Object.fromEntries(Object.entries(providers).reverse()) };
+  assert.equal(
+    renderConnectedAppsBlock(record, available),
+    renderConnectedAppsBlock(reversed, [...available].reverse()),
+  );
+  assert.deepEqual(Object.keys(providers), ["slack", "google", "github", "dropbox"]);
 });

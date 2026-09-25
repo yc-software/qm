@@ -194,7 +194,8 @@ test("someone else's gmail reply bumps the card for a redraft", async () => {
 
 test("slack conversation refs key DMs by channel and channel asks by thread root", () => {
   assert.equal(slackConversationRef("D123", "100.1"), "D123");
-  assert.equal(slackConversationRef("G77", "100.1", "100.1"), "G77");
+  assert.equal(slackConversationRef("G77", "100.1", "100.1"), "G77:100.1");
+  assert.equal(slackConversationRef("C77", "100.1", undefined, true), "C77");
   assert.equal(slackConversationRef("C9", "200.2"), "C9:200.2");
   assert.equal(slackConversationRef("C9", "200.2", "100.1"), "C9:100.1");
 });
@@ -211,4 +212,47 @@ test("ledger mutations emit change events", async () => {
     ["ingest", "proposal", "action"],
   );
   assert.ok(events.every((e) => e.loopId === LOOP.id && e.itemId === item!.id));
+});
+
+test("private-channel mentions stay anchored to their thread, not the channel tail", () => {
+  assert.equal(slackConversationRef("GPRIVATE", "200.2", "100.1"), "GPRIVATE:100.1");
+});
+
+test("an old own reply cannot close a newer unanswered message", async () => {
+  const items = createLoopItemLedger();
+  await items.ingest([gmailEntry({ sourceAt: 3_000_000 })]);
+  await realtime(items).onConversationEvent({
+    source: "gmail",
+    conversationRef: "t-1",
+    at: 2_000_000,
+    senderEmail: LOOP.owner,
+  });
+  assert.notEqual((await items.byLoop(LOOP.id))[0]!.status, "skipped");
+});
+
+test("reply closure advances the source watermark so an older scan cannot resurrect it", async () => {
+  const items = createLoopItemLedger();
+  await items.ingest([gmailEntry()]);
+  await realtime(items).onConversationEvent({
+    source: "gmail",
+    conversationRef: "t-1",
+    at: 3_000_000,
+    senderEmail: LOOP.owner,
+  });
+  await items.ingest([gmailEntry({ sourceAt: 2_000_000 })]);
+  assert.equal((await items.byLoop(LOOP.id))[0]!.status, "skipped");
+});
+
+test("replying in an unrelated DM thread cannot dismiss an unthreaded ask", async () => {
+  const items = createLoopItemLedger();
+  await items.ingest([
+    slackEntry({ sourcePayload: { slack: { channelId: "D123", ts: "2.0", isDirectMessage: true } } }),
+  ]);
+  await realtime(items).onConversationEvent({
+    source: "slack",
+    conversationRef: "D123:1.0",
+    at: 3_000_000,
+    senderEmail: LOOP.owner,
+  });
+  assert.notEqual((await items.byLoop(LOOP.id))[0]!.status, "skipped");
 });

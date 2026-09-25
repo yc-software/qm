@@ -36,9 +36,9 @@ function cronSchedulePromptLabel(c: Cron): string {
     : `once at ${new Date(schedule.firstFireAt ?? c.createdAt).toISOString()}`;
 }
 
-export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], monitors: Monitor[]): string | null {
+export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], monitors: Monitor[]): string {
   const total = crons.length + webhooks.length + monitors.length;
-  if (total === 0) return null;
+  if (total === 0) return "## Already scheduled here\nNo active scheduled work was found for this conversation.";
   const snippet = (s: string) => (s.length > 100 ? `${s.slice(0, 97)}…` : s).replace(/\s+/g, " ");
   const lines = [
     ...crons
@@ -52,7 +52,6 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
   ];
   return [
     "## Already scheduled here",
-    "Standing work set up for this conversation — it exists, don't re-create it. Pause one of **yours** that's stale or done with `cron` action=disable (webhooks: `webhook` action=disable).",
     ...lines,
     ...(total > lines.length
       ? [

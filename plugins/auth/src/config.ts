@@ -22,6 +22,7 @@ export interface AuthConfig {
   allowedEmailDomain: string | undefined;
   emailFrom: string;
   brandName: string;
+  faviconSvg: string | undefined;
   transport: EmailTransportKind;
   resendApiKey: string;
   smtp: SmtpSettings;
@@ -98,6 +99,7 @@ export function readConfig(env: NodeJS.ProcessEnv): AuthConfig {
     allowedEmailDomain: env.AUTH_ALLOWED_EMAIL_DOMAIN?.trim().toLowerCase() || undefined,
     emailFrom: env.AUTH_EMAIL_FROM?.trim() ?? "",
     brandName: env.AUTH_BRAND_NAME?.trim() || "qm",
+    faviconSvg: env.AUTH_FAVICON_SVG?.trim() || undefined,
     transport,
     resendApiKey: env.RESEND_API_KEY ?? "",
     smtp: {

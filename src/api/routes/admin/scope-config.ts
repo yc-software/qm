@@ -46,7 +46,17 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const actor = await authorizeAdmin(ctx, targetScope);
   if (!actor) return;
-  if (["base-model", "runtime", "webui-models", "browse-model", "auto-flagger"].includes(resource))
+  if (
+    [
+      "base-model",
+      "runtime",
+      "cron-runtime",
+      "subagent-runtime",
+      "webui-models",
+      "browse-model",
+      "auto-flagger",
+    ].includes(resource)
+  )
     await deps.refreshModels?.();
   const withScopeMutationLock = async <T>(fn: () => Promise<T>): Promise<T> =>
     deps.advisoryLock ? deps.advisoryLock.withLock(`admin-governance:${targetScope}`, fn) : fn();
@@ -250,23 +260,15 @@ const SETTINGS_RESOURCES = {
     "commandPolicy",
     "ambientPolicy",
     "egress",
-    "externalSlackParticipants",
-    "internalMemberOverrides",
     "orgAmbient",
   ],
-  customize: [
-    "soul",
-    "branding",
-    "peopleDirectoryUrl",
-    "ackEmoji",
-    "turnWallClockSec",
-    "featureFlags",
-    "orgAmbient",
-    "channelHeaderPinDefault",
-  ],
+  customize: ["soul", "branding", "featureFlags"],
+  "slack-settings": ["externalSlackParticipants", "internalMemberOverrides", "channelHeaderPinDefault", "ackEmoji"],
   models: [
     "baseModel",
     "runtime",
+    "cronRuntime",
+    "subagentRuntime",
     "approvedHarnesses",
     "webuiModels",
     "interactiveFastMode",
@@ -367,14 +369,30 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     name: resolvedCurrent?.name ?? currentId + " (configured)",
     provider: resolvedCurrent?.provider ?? (currentId.includes("/") ? "openrouter" : ""),
   };
+  const purposeRuntimes = [values.cronRuntime, values.subagentRuntime].filter(
+    (value): value is { harnessId: string; modelId: string } =>
+      !!value &&
+      typeof (value as { harnessId?: unknown }).harnessId === "string" &&
+      typeof (value as { modelId?: unknown }).modelId === "string",
+  );
   const modelsFor = (harnessId: string) => {
     const models = selectableCatalogForHarness(catalog, harnessId);
     if (preserveCurrent && currentHarness === harnessId && !models.some((model) => model.id === currentModel.id))
       models.push(currentModel);
+    const configured = purposeRuntimes.filter((runtime) => runtime.harnessId === harnessId);
+    for (const runtime of configured) {
+      if (!models.some((model) => model.id === runtime.modelId))
+        models.push({
+          id: runtime.modelId,
+          name: resolveModel(runtime.modelId)?.name ?? `${runtime.modelId} (configured)`,
+          provider: resolveModel(runtime.modelId)?.provider ?? "",
+        });
+    }
     return models.filter(
       (model) =>
         modelServiceable(model.id, providersFor(harnessId)) ||
-        (preserveCurrent && currentHarness === harnessId && currentModel.id === model.id),
+        (preserveCurrent && currentHarness === harnessId && currentModel.id === model.id) ||
+        configured.some((runtime) => runtime.modelId === model.id),
     );
   };
   return {
@@ -383,9 +401,18 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     baseModelOptions: modelsFor(deps.harnessId ?? "pi"),
     harnessDefault: deps.harnessId ?? "pi",
     harnessOptions: HARNESS_IDS.filter(
-      (id) => id !== "mock" && (approvedHarnesses.includes(id) || runtime?.harnessId === id),
+      (id) =>
+        id !== "mock" &&
+        (approvedHarnesses.includes(id) ||
+          runtime?.harnessId === id ||
+          purposeRuntimes.some((runtime) => runtime.harnessId === id)),
     ),
-    modelsByHarness: Object.fromEntries(HARNESS_IDS.map((id) => [id, modelsFor(id)])),
+    modelsByHarness: Object.fromEntries(
+      HARNESS_IDS.map((id) => [
+        id,
+        modelsFor(id).map((model) => ({ ...model, effortLevels: thinkingLevelsForHarness(id, model.id) })),
+      ]),
+    ),
     thinkingLevelsByHarness: Object.fromEntries(
       HARNESS_IDS.filter((id) => id !== "mock").map((id) => [id, thinkingLevelsForHarness(id)]),
     ),

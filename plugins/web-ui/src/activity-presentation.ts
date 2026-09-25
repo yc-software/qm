@@ -3,7 +3,7 @@ import type { WorkBlock } from "./core-bridge.ts";
 
 export type ActivityCategory = "read" | "search" | "execute" | "other";
 
-export function compactPath(path: string): string {
+function compactPath(path: string): string {
   const parts = path.replace(/\/$/, "").split("/");
   return parts.at(-1) === "SKILL.md" ? parts.slice(-2).join("/") : parts.at(-1) || path;
 }
@@ -31,6 +31,11 @@ export function activityDescription(
 } {
   const tool = toolCategory({ ...result, ...call });
   if (tool === "read") return { category: "read", target: compactPath(call.path ?? result.path ?? "") };
+  if (tool === "skill") {
+    const name = call.name ?? result.name ?? "";
+    const path = call.path ?? result.path ?? "SKILL.md";
+    return { category: "read", target: path === "SKILL.md" ? name : `${name}/${compactPath(path)}` };
+  }
   if (tool !== "execute") return { category: "other", target: "" };
   const command = call.command ?? "";
   const words = shellWords(command);
@@ -77,7 +82,14 @@ export function activityLabel(row: ToolRowModel, status: WorkBlock["status"]): s
   const result = (row.result?.payload ?? {}) as ToolPayload;
   const { category, target } = activityDescription(call, result);
   const state = toolRowKind(row, status);
-  if (category === "other" || state === "approval") return null;
+  if (state === "approval") return null;
+  const purpose = typeof call.purpose === "string" ? call.purpose.trim() : "";
+  if (purpose) {
+    if (state === "failed") return `${purpose} · Failed`;
+    if (state === "attempted") return `${purpose} · Unconfirmed`;
+    return purpose;
+  }
+  if (category === "other") return null;
   const verbs = {
     read: { ok: "Read", running: "Reading", failed: "Failed to read", attempted: "Tried reading" },
     search: {
@@ -159,7 +171,7 @@ export function sessionPresentation(
     interrupt?: boolean;
   };
   const result = (row.result?.payload ?? {}) as ToolPayload & { title?: string; sessionId?: string };
-  if ((call.tool ?? result.tool) !== "session") return null;
+  if (toolCategory({ ...result, ...call }) !== "session") return null;
   const action = call.interrupt === true ? "interrupt" : (call.action ?? result.action ?? "");
   const actions: Record<string, [string, string, string]> = {
     open: ["Created", "Creating", "create"],

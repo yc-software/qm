@@ -23,9 +23,9 @@ const NODE_SHA256_X64 = "55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c4
 const AGENT_VENV = "/opt/agent-venv";
 const BASE_IMAGE = "ubuntu:24.04";
 
-const DEFAULT_VCPU = 2;
-const DEFAULT_MEMORY_MIB = 2048;
-const DEFAULT_DISK_MIB = 8192;
+const DEFAULT_VCPU = 8;
+const DEFAULT_MEMORY_MIB = 16384;
+const DEFAULT_DISK_MIB = 32768;
 
 const APT_PACKAGES = [
   "bash",

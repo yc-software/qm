@@ -42,6 +42,10 @@ surfaces, and it does **not** import the core.
    **exact first path segment**, strips the prefix, and proxies to the private upstream,
    synthesizing the surface cookie for compatibility and attaching a short-lived signed portal
    identity. Surfaces pass that identity to core, which verifies it before any user-scoped action.
+   Before proxying, the portal asks core for the session subject's canonical principal
+   (`GET /v1/principals/:id/canonical`, cached for a minute). A sign-in that an org admin has
+   linked to another identity therefore acts as that person's canonical principal; see
+   [`docs/principal-links.md`](../../docs/principal-links.md).
 
 ## Additional trusted entry (PoC)
 
@@ -277,3 +281,13 @@ The label is the provider display name. Without it, the email page and primary
 login routing retain their existing behavior. Switching keeps the destination
 from the signed email login transaction.
 The link is available without a remembered browser preference.
+
+The proxy also signs the original authenticated subject as `authenticatedAs`. Core verifies that it still belongs to the canonical person, rejecting stale claims after unlinking. Trusted-entry failures offer retry of that provider without an alternate email sign-in link; invitation authentication remains unchanged.
+
+The portal always issues `portal_session_x`, a `SameSite=None` twin of the
+session cookie that lets opted-in apps be framed by named origins. The cores
+serving the portal must include `f75cfd1c` (#1503), which strips
+`portal_session_x` before forwarding requests to deployed apps. Once this portal
+is deployed, do not roll core back below `f75cfd1c` on its own: an older core
+forwards that cookie's session bearer to app code, and cookies already issued
+stay in browsers until they expire (`PORTAL_SESSION_TTL_S`, 7 days by default).

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunSignalStore, startSignalPoll } from "../src/runs/run-signal-store.ts";
+import { createMemoryRunSignalStore, startSignalPoll, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -572,4 +572,134 @@ test("failed attachment preparation does not block Stop", async () => {
     await stop();
   }
   assert.equal((await store.pending("stop-after-failure"))[0]?.signal.text, "file");
+});
+
+test("waitForClientResult resolves with the matching client_result and consumes it", async () => {
+  const store = createMemoryRunSignalStore();
+  await store.send("r1", { kind: "client_result", callId: "other", result: { content: "not mine" } });
+  const waiting = waitForClientResult(store, "r1", "call-1", { timeoutMs: 5_000 });
+  await sleep(10);
+  await store.send("r1", {
+    kind: "client_result",
+    callId: "call-1",
+    result: { content: "3 rows selected", structured: { rows: [1, 2, 3] } },
+  });
+  assert.deepEqual(await waiting, { content: "3 rows selected", structured: { rows: [1, 2, 3] } });
+  assert.deepEqual(
+    (await store.pending("r1")).map(({ signal }) => signal.callId),
+    ["other"],
+    "only the matched answer is acknowledged",
+  );
+});
+
+test("waitForClientResult finds an answer that landed before it subscribed", async () => {
+  const store = createMemoryRunSignalStore();
+  await store.send("r1", { kind: "client_result", callId: "call-1", result: { content: "early", isError: true } });
+  assert.deepEqual(await waitForClientResult(store, "r1", "call-1", { timeoutMs: 5_000 }), {
+    content: "early",
+    isError: true,
+  });
+  assert.deepEqual(await store.pending("r1"), []);
+});
+
+test("waitForClientResult keeps a result whose acknowledge is still in flight when the timeout fires", async () => {
+  const store = createMemoryRunSignalStore();
+  let acknowledged = false;
+  const slowAck = {
+    ...store,
+    acknowledge: async (runId: string, id: string) => {
+      await sleep(100);
+      await store.acknowledge(runId, id);
+      acknowledged = true;
+    },
+  };
+  await store.send("r1", { kind: "client_result", callId: "call-1", result: { content: "just in time" } });
+  assert.deepEqual(await waitForClientResult(slowAck, "r1", "call-1", { timeoutMs: 20 }), {
+    content: "just in time",
+  });
+  assert.equal(acknowledged, true, "the waiter resolves only once the answer is acknowledged");
+  assert.deepEqual(await store.pending("r1"), []);
+});
+
+test("waitForClientResult times out when the page never answers", async () => {
+  const store = createMemoryRunSignalStore();
+  const started = Date.now();
+  assert.equal(await waitForClientResult(store, "r1", "call-1", { timeoutMs: 50 }), "timeout");
+  assert.ok(Date.now() - started >= 45);
+});
+
+test("waitForClientResult stops waiting as soon as the turn is cancelled", async () => {
+  const store = createMemoryRunSignalStore();
+  const cancel = new AbortController();
+  const waiting = waitForClientResult(store, "r1", "call-1", { timeoutMs: 60_000, signal: cancel.signal });
+  cancel.abort();
+  assert.equal(await waiting, "cancelled");
+  const already = new AbortController();
+  already.abort();
+  assert.equal(
+    await waitForClientResult(store, "r1", "call-1", { timeoutMs: 60_000, signal: already.signal }),
+    "cancelled",
+  );
+});
+
+test("a client_result dedupe key lets each call be answered at most once", async () => {
+  const store = createMemoryRunSignalStore();
+  const answer = (content: string) =>
+    store.send("r1", { kind: "client_result", callId: "c1", result: { content }, dedupeKey: "client:r1:c1" });
+  assert.equal(await answer("first"), true);
+  assert.equal(await answer("second"), false);
+  assert.deepEqual(await waitForClientResult(store, "r1", "c1", { timeoutMs: 1_000 }), { content: "first" });
+});
+
+test("startSignalPoll leaves client_result signals pending for the waiting tool", async () => {
+  const store = createMemoryRunSignalStore();
+  const steers: string[] = [];
+  const stop = startSignalPoll(
+    store,
+    "r1",
+    {
+      onSteer: async (text) => {
+        steers.push(text);
+      },
+      onAbort: async () => {},
+    },
+    { intervalMs: 60_000 },
+  );
+  await store.send("r1", { kind: "client_result", callId: "c1", result: { content: "done" } });
+  await store.send("r1", { kind: "steer", text: "next" });
+  await until(() => steers.length === 1);
+  await stop();
+  assert.deepEqual(
+    (await store.pending("r1")).map(({ signal }) => signal.kind),
+    ["client_result"],
+    "the poll acknowledged the steer but not the client result",
+  );
+});
+
+test("memory store: a client_result round-trips callId and result intact", async () => {
+  const store = createMemoryRunSignalStore();
+  const result = { content: "ok", structured: { ids: ["a"] }, isError: false };
+  await store.send("r1", { kind: "client_result", callId: "c1", result, dedupeKey: "client:r1:c1" });
+  const [taken] = await store.takePending("r1");
+  assert.equal(taken!.kind, "client_result");
+  assert.equal(taken!.callId, "c1");
+  assert.deepEqual(taken!.result, result);
+});
+
+test("pg store: a client_result round-trips, dedupes, and wakes a waiter", { skip }, async () => {
+  const store = createPostgresRunSignalStore(URL!);
+  const runId = `test-run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const result = { content: "ok", structured: { ids: ["a"] }, isError: true };
+  try {
+    const waiting = waitForClientResult(store, runId, "c1", { timeoutMs: 5_000 });
+    await sleep(200);
+    const send = () =>
+      store.send(runId, { kind: "client_result", callId: "c1", result, dedupeKey: `client:${runId}:c1` });
+    assert.equal(await send(), true);
+    assert.equal(await send(), false, "the second answer to the same call is dropped");
+    assert.deepEqual(await waiting, result);
+    assert.deepEqual(await store.pending(runId), [], "the waiter acknowledged the answer");
+  } finally {
+    await store.close?.();
+  }
 });

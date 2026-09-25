@@ -2,7 +2,7 @@ import type { Cron, CronSchedule, Destination } from "../types.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { personKeys } from "../directory/person.ts";
 import { errMessage } from "../util/errors.ts";
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 export interface CronEditDetail {
   schedule?: CronSchedule;
@@ -83,7 +83,7 @@ export interface CronEditNoticeSink {
 
 export async function notifyOwnerOfCronEdit(
   sink: CronEditNoticeSink,
-  args: { cron: Cron; editorId: string; changeSummary: string[]; editFingerprint: string; detail?: CronEditDetail },
+  args: { cron: Cron; editorId: string; changeSummary: string[]; detail?: CronEditDetail },
   onError?: (message: string) => void,
 ): Promise<void> {
   const { cron } = args;
@@ -95,10 +95,6 @@ export async function notifyOwnerOfCronEdit(
     ]);
     const ownerKeys = personKeys(owner, cron.owner);
     if ([...personKeys(editor, args.editorId)].some((k) => ownerKeys.has(k))) return;
-    const editKey = createHash("sha256")
-      .update(`${cron.id}:${args.editorId}:${args.editFingerprint}`)
-      .digest("hex")
-      .slice(0, 16);
     const url = sink.cronAdminUrl(cron);
     const label = cron.title ?? "shared";
     let ref = "shared";
@@ -118,7 +114,7 @@ export async function notifyOwnerOfCronEdit(
         changes: args.changeSummary,
         ...(args.detail ? { detail: args.detail } : {}),
       }),
-      idempotencyKey: `cron-edit-notice:${cron.id}:${editKey}`,
+      idempotencyKey: `cron-edit-notice:${cron.id}:${randomUUID()}`,
     });
   } catch (e) {
     (onError ?? ((m) => console.warn("[cron-edit-notice]", m)))(errMessage(e));

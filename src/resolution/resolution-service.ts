@@ -27,6 +27,7 @@ export function createResolutionService(
   config: ScopedConfigStore,
   acl: AclStore,
   screeningEnabled = true,
+  screenAllPostures = false,
 ): ResolutionService {
   const orgScope = scopeId("org", orgId);
 
@@ -83,7 +84,9 @@ export function createResolutionService(
       const scopePolicy = config.getCommandPolicy(scope) ?? undefined;
       const commandPolicy = composePolicy(orgPolicy, scopePolicy);
       let securityPolicy = resolveSecurityPolicy(await config.getSecurityPostureDurable(scope));
-      if (!screeningEnabled) securityPolicy = { ...securityPolicy, inboundScreening: "off" };
+      if (!screeningEnabled || screenAllPostures) {
+        securityPolicy = { ...securityPolicy, inboundScreening: screeningEnabled ? "external" : "off" };
+      }
       const sharingPosture = await config.resolveSharingPostureDurable(scopeId("personal", actor.id), scope);
       const approvalGrantModes = await config.getApprovalGrantModesDurable(scope);
 

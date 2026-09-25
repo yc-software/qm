@@ -8,5 +8,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/* \
   && node --version && npm --version
 
-RUN usermod -l user -d /home/user -m node && groupmod -n user node
+RUN id -u user >/dev/null 2>&1 || useradd --create-home --user-group --shell /bin/bash user
 RUN mkdir -p /home/user/workspace && chown -R user:user /home/user

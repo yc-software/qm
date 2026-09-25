@@ -57,7 +57,14 @@ export function registerSlackEvents(
     ) => void;
     inboxMessage?: (
       client: unknown,
-      msg: { channel: string; ts: string; threadTs?: string; text?: string; senderSlackId?: string },
+      msg: {
+        channel: string;
+        ts: string;
+        threadTs?: string;
+        text?: string;
+        senderSlackId?: string;
+        isDirectMessage?: boolean;
+      },
     ) => void;
   },
 ): void {

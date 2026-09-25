@@ -16,6 +16,10 @@ export function withOperatorTokenFallback(
   secrets: SecretSource = createEnvSecretSource(),
 ): ConnectorTokenStore {
   return {
+    operatorFallbackHosts: serviceHosts,
+    ...(store.listConnectorsByOwners
+      ? { listConnectorsByOwners: (ownerIds: string[]) => store.listConnectorsByOwners!(ownerIds) }
+      : {}),
     setConnectorToken: (host, principalId, token, accountType) =>
       store.setConnectorToken(host, principalId, token, accountType),
     deleteConnectorToken: (host, principalId, accountType) =>

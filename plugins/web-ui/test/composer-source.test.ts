@@ -2,14 +2,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+const picker = readFileSync(new URL("../src/model-picker.ts", import.meta.url), "utf8");
+
 const composer = readFileSync(new URL("../src/composer.ts", import.meta.url), "utf8");
 
 test("preset default actions live on the row while inheritance remains in the footer", () => {
-  const row = composer.slice(composer.indexOf("function loadoutRow"), composer.indexOf("function cancelLoadoutClose"));
-  const loadout = composer.slice(
-    composer.indexOf("function loadoutControl"),
-    composer.indexOf("function menuArrowKeys"),
-  );
+  const row = picker.slice(picker.indexOf("function loadoutRow"), picker.indexOf("function cancelLoadoutClose"));
+  const loadout = picker.slice(picker.indexOf("function render"), picker.indexOf("function menuArrowKeys"));
   assert.ok(row.includes('class="loadout-make-default"'));
   assert.ok(row.includes("effortLevel: settings.effort"));
   assert.ok(row.includes("fastMode: settings.fast"));
@@ -19,20 +18,17 @@ test("preset default actions live on the row while inheritance remains in the fo
 
 test("compact and full composers share one left-side picker with Fast inside its menu", () => {
   assert.ok(
-    /const runtimeControls = loadoutControl\(agent, selectedModel, inputBlocked\)/.test(composer),
+    /const runtimeControls = modelPicker.render\(agent, selectedModel, inputBlocked\)/.test(composer),
     "compact surfaces must retain the full model and effort picker",
   );
   const leftStart = composer.indexOf('class="composer-left"');
   const rightStart = composer.indexOf('class="composer-right"');
   assert.ok(leftStart >= 0 && rightStart > leftStart);
-  assert.ok(composer.slice(leftStart, rightStart).includes("showRuntimeControls ? runtimeControls : nothing"));
+  assert.ok(composer.slice(leftStart, rightStart).includes("${runtimeControls}"));
   assert.ok(/class="composer-right">\$\{sendControls\(agent\)\}<\/div>/.test(composer));
-  const loadout = composer.slice(
-    composer.indexOf("function loadoutControl"),
-    composer.indexOf("function menuArrowKeys"),
-  );
+  const loadout = picker.slice(picker.indexOf("function render"), picker.indexOf("function menuArrowKeys"));
   assert.ok(/role="menuitemcheckbox"\s+aria-label="Fast"/.test(loadout));
-  assert.equal((composer.match(/@click=\$\{\(\) => toggleFastMode\(agent\)\}/g) ?? []).length, 1);
+  assert.equal((picker.match(/@click=\$\{\(\) => toggleFastMode\(agent\)\}/g) ?? []).length, 1);
 });
 
 test("switching setups preserves prior tweaks and validates effort and Fast for the selected model", () => {
@@ -47,7 +43,7 @@ test("switching setups preserves prior tweaks and validates effort and Fast for 
     composer.indexOf("function normalizeLoadoutEntry"),
     composer.indexOf("function seededLoadout"),
   );
-  assert.ok(normalize.includes("effortLevelsForHarness(option.harnessId)"));
+  assert.ok(normalize.includes("effortLevelsForHarness(option.harnessId, option.model, entry.effort)"));
   assert.ok(/levels.some\([\s\S]*?\? entry.effort/.test(normalize));
   assert.ok(apply.includes("normalizeLoadoutEntry(entry, option)"));
   assert.ok(
@@ -56,7 +52,7 @@ test("switching setups preserves prior tweaks and validates effort and Fast for 
     ),
     "a stored Fast preference cannot enable an unsupported model",
   );
-  assert.ok(apply.includes("saveLoadout(loadout)"));
+  assert.ok(apply.includes("saveLoadout(loadout, loadoutKey)"));
 });
 
 test("attaching files is allowed while a turn is streaming", () => {
@@ -82,8 +78,8 @@ test("a mid-turn submit queues — attachments cannot ride a queued message and 
 });
 
 test("scope runtime defaults include effort and fast mode", () => {
-  assert.match(composer, /effortLevel: settings\.effort/);
-  assert.match(composer, /fastMode: settings\.fast/);
+  assert.match(picker, /effortLevel: settings\.effort/);
+  assert.match(picker, /fastMode: settings\.fast/);
   assert.match(composer, /getRuntimeConfig\(scopeKey\(\)\)\?\.effective\.effortLevel/);
   assert.match(composer, /getRuntimeConfig\(scopeKey\(\)\)\?\.effective\.fastMode === true/);
 });

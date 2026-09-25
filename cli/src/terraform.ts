@@ -23,6 +23,7 @@ const DERIVED_VARS = new Set([
   "transfer_lifecycle_prefix",
   "deploy_microvm_image",
   "deploy_microvm_execution_role_arn",
+  "db_instance_class",
   "services",
   "secret_names",
 ]);
@@ -202,6 +203,9 @@ function derivedValues(
       deploy_microvm_image: config.env.core?.AWS_DEPLOY_IMAGE?.trim() || config.orgId,
       deploy_microvm_execution_role_arn:
         config.env.core?.AWS_DEPLOY_EXEC_ROLE_ARN ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-microvm-exec`,
+      ...(declared.includes("db_instance_class") && aws.dbInstanceClass
+        ? { db_instance_class: aws.dbInstanceClass }
+        : {}),
     },
     json: {
       ...(declared.includes("core_public_hosts") ? { core_public_hosts: [...new Set(corePublicHosts)].sort() } : {}),
@@ -232,6 +236,10 @@ export function terraformVars(
   const { strings, json } = derivedValues(config, declared, managedTaskRoles(existing));
   const line = (name: string, value: string): string => `${name.padEnd(19)} = ${value}`;
   const lines = Object.entries(strings).map(([name, value]) => line(name, JSON.stringify(value)));
+  if (!config.aws?.dbInstanceClass && declared.includes("db_instance_class")) {
+    const preserved = hclAssignment(existing, "db_instance_class");
+    if (preserved !== undefined) lines.push(preserved);
+  }
   for (const name of new Set([...Object.keys(OPERATOR_DEFAULTS), ...declared])) {
     if (DERIVED_VARS.has(name)) continue;
     const preserved = hclAssignment(existing, name);
@@ -271,13 +279,22 @@ export function assertTerraformScaffoldSupportsConfig(config: QmConfig, configDi
   const services = Object.values(config.aws?.services ?? {});
   const hasPublicPaths = services.some((service) => service?.publicPaths?.length);
   const hasAssumeRoles = services.some((service) => service?.assumeRoleArns !== undefined);
-  if (!hasPublicPaths && !hasAssumeRoles) return;
+  const hasDatabaseOverrides = config.aws?.dbInstanceClass !== undefined;
+  if (!hasPublicPaths && !hasAssumeRoles && !hasDatabaseOverrides) return;
   const tfvarsPath = join(configDir, "infra", "terraform.tfvars");
   if (!existsSync(tfvarsPath)) return;
   const variablesPath = join(configDir, "infra", "variables.tf");
   const mainPath = join(configDir, "infra", "main.tf");
   const variables = existsSync(variablesPath) ? readFileSync(variablesPath, "utf8") : "";
   const main = existsSync(mainPath) ? readFileSync(mainPath, "utf8") : "";
+  if (
+    hasDatabaseOverrides &&
+    (!/variable\s+"db_instance_class"/.test(variables) || !/instance_class\s*=\s*var\.db_instance_class/.test(main))
+  ) {
+    throw new CliError(
+      "the vendored AWS scaffold predates aws.dbInstanceClass; update infra/variables.tf and infra/main.tf from the current scaffold before configuring it",
+    );
+  }
   if (hasPublicPaths && (!/public_paths\s*=\s*optional/.test(variables) || !/public_path_services\s*=/.test(main))) {
     throw new CliError(
       "the vendored AWS scaffold predates aws.services.*.publicPaths; update infra/variables.tf and infra/main.tf before exposing plugins",

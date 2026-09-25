@@ -12,8 +12,8 @@ system, shadows, responsive behavior, and practical agent prompts with exact CSS
 ## Default look comes first
 
 This skill is for when the user wants a page styled after **a specific known brand**. If they
-have not named one, use your deployment's house-style skill (a `*-design` skill under
-`skills/`, when installed) instead of picking from this catalog.
+have not named one, use your deployment's house-style skill (a `*-design` skill in the
+Skills index, when installed) instead of picking from this catalog.
 
 ## Related design skills
 
@@ -28,15 +28,15 @@ have not named one, use your deployment's house-style skill (a `*-design` skill 
 ## How to Use
 
 1. Pick a design from the catalog below
-2. Read it: `read skills/popular-web-designs/templates/<site>.md`
+2. Read it: `skills({ action: "read", name: "popular-web-designs", path: "templates/<site>.md" })`
 3. Use the design tokens and component specs when generating HTML
-4. Build with `write`, then serve the result with the `publish` skill (`skill://publish/SKILL.md`)
+4. Build with `files` action `write`, then serve the result with the `publish` skill
 
 Each template includes an **Implementation Notes** block at the top with:
 
 - CDN font substitute and Google Fonts `<link>` tag (ready to paste)
 - CSS font-family stacks for primary and monospace
-- Reminders to use `write` for HTML creation and local headless Chromium for verification
+- Reminders to use `files` action `write` for HTML creation and local headless Chromium for verification
 
 ## HTML Generation Pattern
 
@@ -67,7 +67,7 @@ Each template includes an **Implementation Notes** block at the top with:
 </html>
 ```
 
-Write the file with `write`, verify the result locally (`curl -fsS http://localhost:<port>`,
+Write the file with `files` action `write`, verify the result locally (`curl -fsS http://localhost:<port>`,
 then `chromium --headless --no-sandbox --disable-gpu --screenshot=/tmp/page.png http://localhost:<port>`
 when a render check matters), and serve it with the `publish` skill to confirm visual
 accuracy and hand over a stable link.

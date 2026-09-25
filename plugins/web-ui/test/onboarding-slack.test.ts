@@ -37,7 +37,20 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     releaseStatus();
     await settle();
     assert.match(element.textContent ?? "", /Add to Slack/);
-    assert.doesNotMatch(element.textContent ?? "", /Connected to Slack/);
+    assert.doesNotMatch(element.textContent ?? "", /QM added to Slack/);
+    const browserUrls: string[] = [];
+    Object.assign(window, {
+      qmDesktop: {
+        openBrowser: async (url: string) => {
+          browserUrls.push(url);
+        },
+      },
+    });
+    element.querySelector<HTMLButtonElement>("button")!.click();
+    await settle();
+    assert.deepEqual(browserUrls, ["/admin/slack-settings?slack=install"]);
+    assert.equal(launches.length, 0);
+    Reflect.deleteProperty(window, "qmDesktop");
     let submitted: HTMLFormElement | undefined;
     const popupDocument = document.implementation.createHTMLDocument();
     const createElement = popupDocument.createElement.bind(popupDocument);
@@ -67,12 +80,14 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     assert.equal(submitted?.method, "post");
     assert.equal(submitted?.action, "https://slack-service.example/install/launch?ticket=test");
     assert.equal(popup.opener, null);
-    assert.doesNotMatch(element.textContent ?? "", /Connected to Slack/);
+    assert.doesNotMatch(element.textContent ?? "", /QM added to Slack/);
     status = { configured: true, setup: { connected: true } };
     window.dispatchEvent(new window.Event("focus"));
     await settle();
-    assert.match(element.textContent ?? "", /Connected to Slack/);
+    assert.match(element.textContent ?? "", /QM added to Slack/);
     assert.equal(element.querySelector("button"), null);
+    assert.ok(element.querySelector(".slack-connected"));
+    assert.equal(element.querySelector(".welcome-slack"), null);
     for (const next of [
       { configured: true, setup: { connected: false } },
       { configured: true, setupUnavailable: true },
@@ -80,12 +95,12 @@ test("Slack onboarding launches directly and verifies connection on return", asy
       status = { ...next, installAvailable: true };
       window.dispatchEvent(new window.Event("focus"));
       await settle();
-      assert.doesNotMatch(element.textContent ?? "", /Connected to Slack/);
+      assert.doesNotMatch(element.textContent ?? "", /QM added to Slack/);
     }
     statusCode = 503;
     window.dispatchEvent(new window.Event("focus"));
     await settle();
-    assert.match(element.textContent ?? "", /Could not check Slack connection/);
+    assert.match(element.textContent ?? "", /Could not check the Slack installation/);
     window.open = () => null;
     element.querySelector<HTMLButtonElement>(".welcome-slack")!.click();
     await settle();
@@ -106,7 +121,7 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     const count = launches.length;
     element.querySelector<HTMLButtonElement>(".welcome-slack")!.click();
     await settle();
-    assert.equal(fallback.location.href, "/admin/connectors?setup=slack");
+    assert.equal(fallback.location.href, "/admin/slack-settings?setup=slack");
     assert.equal(launches.length, count);
   } finally {
     releaseStatus();

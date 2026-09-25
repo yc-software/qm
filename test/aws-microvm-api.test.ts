@@ -15,7 +15,9 @@ interface Recorded {
   headers: Record<string, string>;
 }
 
-function fakeFetch(reply: (rec: Recorded, n: number) => { status: number; body?: unknown }): {
+function fakeFetch(
+  reply: (rec: Recorded, n: number) => { status: number; body?: unknown; headers?: Record<string, string> },
+): {
   fetchImpl: typeof fetch;
   calls: Recorded[];
 } {
@@ -32,7 +34,7 @@ function fakeFetch(reply: (rec: Recorded, n: number) => { status: number; body?:
     calls.push(rec);
     const r = reply(rec, calls.length - 1);
     const text = r.body === undefined ? "" : JSON.stringify(r.body);
-    return new Response(text, { status: r.status, headers: { "content-type": "application/json" } });
+    return new Response(text, { status: r.status, headers: { "content-type": "application/json", ...r.headers } });
   }) as unknown as typeof fetch;
   return { fetchImpl, calls };
 }
@@ -182,4 +184,47 @@ test("readiness reuses only the supplied observation and checks again on the nex
   await assert.rejects(client.ensureRunning("one", "endpoint"), /TERMINATED/);
   assert.equal(reads, 1);
   await assert.rejects(client.ensureRunning("one", "endpoint", { microvmId: "two", state: "RUNNING" }), /another body/);
+});
+
+test("control-plane reads retry throttling and outages, and failures carry the AWS request id", async () => {
+  const replies = [
+    { status: 429, body: { message: "Rate exceeded" }, headers: { "retry-after": "0" } },
+    { status: 503, body: { message: "unavailable" }, headers: { "retry-after": "0" } },
+    { status: 200, body: { microvmId: "mvm-1", endpoint: "e", state: "RUNNING" } },
+  ];
+  const { fetchImpl, calls } = fakeFetch((_rec, n) => replies[n]!);
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl });
+  assert.equal((await api.getMicrovm("mvm-1")).state, "RUNNING");
+  assert.equal(calls.length, 3);
+
+  const failing = fakeFetch(() => ({
+    status: 500,
+    body: { message: "boom" },
+    headers: { "x-amzn-requestid": "aws-req-1" },
+  }));
+  const api2 = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl: failing.fetchImpl });
+  await assert.rejects(api2.getMicrovm("mvm-1"), (e: unknown) => {
+    assert.ok(e instanceof AwsApiError);
+    assert.equal(e.status, 500);
+    assert.match(e.message, /-> 500: boom \[request id aws-req-1\]$/);
+    return true;
+  });
+  assert.equal(failing.calls.length, 4, "an idempotent read is retried until attempts run out");
+});
+
+test("runMicrovm retries a throttled create but never an ambiguous server error", async () => {
+  const throttled = fakeFetch((_rec, n) =>
+    n === 0
+      ? { status: 429, body: { message: "Rate exceeded" }, headers: { "retry-after": "0" } }
+      : { status: 200, body: { microvmId: "mvm-2", endpoint: "e", state: "PENDING" } },
+  );
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl: throttled.fetchImpl });
+  const run = { imageIdentifier: "img", ingressNetworkConnectors: [], egressNetworkConnectors: [] };
+  assert.equal((await api.runMicrovm(run)).microvmId, "mvm-2");
+  assert.equal(throttled.calls.length, 2);
+
+  const broken = fakeFetch(() => ({ status: 502, body: { message: "bad gateway" } }));
+  const api2 = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl: broken.fetchImpl });
+  await assert.rejects(api2.runMicrovm(run), /-> 502: bad gateway/);
+  assert.equal(broken.calls.length, 1);
 });

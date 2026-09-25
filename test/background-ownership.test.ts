@@ -97,3 +97,26 @@ test("pause has no successor and failed admissions never mutate ownership", asyn
   }
   assert.ok((await store.get()).members.every((member) => member.state === "drained"));
 });
+
+test("compensation fences a same-generation retirement and replays only the exact precondition", async () => {
+  const { store, bootstrap } = await fixture();
+  await store.transition(bootstrap);
+  const observed = await store.get();
+  const compensation = {
+    expectedGeneration: observed.generation,
+    expectedLastRequestId: observed.lastRequestId,
+    requestId: "compensation",
+    desiredDeploymentId: "b",
+  };
+  await store.retire({
+    expectedGeneration: observed.generation,
+    requestId: "operator-retirement",
+    terminatedMembers: [{ instanceId: "a2", taskArn: "task:a2", generation: 0 }],
+  });
+  await assert.rejects(store.transition(compensation), /request changed/);
+  assert.equal((await store.get()).generation, 1);
+  const current = { ...compensation, expectedLastRequestId: "operator-retirement" };
+  assert.equal((await store.transition(current)).generation, 2);
+  assert.equal((await store.transition(current)).generation, 2);
+  await assert.rejects(store.transition(compensation), /identity reused/);
+});

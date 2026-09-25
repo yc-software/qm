@@ -115,6 +115,102 @@ describe("runTrigger: scopeShared unions the owner's keychain into the scope run
     assert.equal(seen.length, 0);
   });
 
+  it("a public scopeShared fire re-checks owner membership even without a private roster", async () => {
+    const { deps, seen } = captureDeps();
+    let member = true;
+    deps.currentScopeMembers = async () => undefined;
+    deps.directory = {
+      get: async () => ({ displayName: "Owner" }),
+      channelPrivacy: async () => false,
+      channelMember: async (_channel, principalId) => member && principalId === "U-carol",
+      groupMember: async () => false,
+    };
+    const spec = {
+      owner: "U-carol",
+      ownerScopeId: scopeId("channel", "C-eng"),
+      input: "digest",
+      fireKey: "public-active",
+      surface: "cron",
+      runAs: "scopeShared" as const,
+      members,
+    };
+    assert.equal((await runTrigger(deps, spec)).ran, true);
+    assert.equal(seen[0]!.actor.externalId, "U-carol");
+    assert.equal(seen[0]!.ownerKeychainUnion, true);
+    member = false;
+    const revoked = await runTrigger(deps, { ...spec, fireKey: "public-revoked" });
+    assert.equal(revoked.authzFailed, true);
+    assert.equal(revoked.ran, false);
+    assert.equal(seen.length, 1);
+  });
+
+  it("shared cron channel privacy comes from the current directory, not a saved roster", async () => {
+    for (const isPrivate of [true, false, undefined]) {
+      const { deps, seen } = captureDeps();
+      deps.currentScopeMembers = async () => members;
+      deps.directory = {
+        get: async () => ({ displayName: "Owner" }),
+        channelPrivacy: async () => isPrivate,
+        channelMember: async () => true,
+        groupMember: async () => false,
+      };
+      await runTrigger(deps, {
+        owner: "U-carol",
+        ownerScopeId: scopeId("channel", "C-eng"),
+        input: "digest",
+        fireKey: `privacy-${isPrivate}`,
+        surface: "cron",
+        runAs: "scopeShared",
+        members,
+      });
+      assert.equal(seen[0]!.conversation.isPrivate, isPrivate);
+      assert.equal(seen[0]!.ownerKeychainUnion, true);
+    }
+  });
+
+  it("a no-roster scopeShared fire fails closed without an authoritative membership source", async () => {
+    const { deps, seen } = captureDeps();
+    const out = await runTrigger(deps, {
+      owner: "U-carol",
+      ownerScopeId: scopeId("channel", "C-eng"),
+      input: "digest",
+      fireKey: "no-membership-source",
+      surface: "cron",
+      runAs: "scopeShared",
+    });
+    assert.equal(out.authzFailed, true);
+    assert.equal(seen.length, 0);
+  });
+
+  it("Open-origin shared fires require fresh authorization in public, private, and group scopes", async () => {
+    for (const scope of [scopeId("channel", "public"), scopeId("channel", "private"), scopeId("group", "g1")]) {
+      const { deps, seen } = captureDeps();
+      let open = true;
+      deps.isOpenScopeMember = async (owner, target) => {
+        assert.equal(owner, "U-carol");
+        assert.equal(target, scope);
+        return open;
+      };
+      const spec = {
+        owner: "U-carol",
+        ownerScopeId: scope,
+        input: "digest",
+        fireKey: `${scope}:open`,
+        surface: "cron",
+        runAs: "scopeShared" as const,
+        ownerResourcesRequireOpen: true,
+        members,
+      };
+      assert.equal((await runTrigger(deps, spec)).ran, true);
+      assert.equal(seen[0]?.ownerResourcesRequireOpen, true);
+      open = false;
+      assert.equal((await runTrigger(deps, { ...spec, fireKey: `${scope}:revoked` })).authzFailed, true);
+      assert.equal(seen.length, 1);
+      delete deps.isOpenScopeMember;
+      assert.equal((await runTrigger(deps, { ...spec, fireKey: `${scope}:missing` })).authzFailed, true);
+    }
+  });
+
   it("scopeFloor refreshes its audience and re-actors to a current member", async () => {
     const { deps, seen } = captureDeps();
     const current = [{ id: "U3", type: "internal" as const }];
@@ -249,7 +345,6 @@ describe("notifyOwnerOfCronEdit: the one chokepoint both edit paths share", () =
       cron: cron(),
       editorId: "U-mate",
       changeSummary: ["title"],
-      editFingerprint: "f1",
     });
     assert.equal(enqueued.length, 1);
     assert.equal(enqueued[0]!.destination.target, "U-owner");
@@ -267,7 +362,6 @@ describe("notifyOwnerOfCronEdit: the one chokepoint both edit paths share", () =
       cron: cron({ owner: "alice@acme.com" }),
       editorId: "U-alice",
       changeSummary: ["task"],
-      editFingerprint: "f1",
     });
     assert.equal(enqueued.length, 0, "same person via directory bridge → no notice");
   });
@@ -278,7 +372,6 @@ describe("notifyOwnerOfCronEdit: the one chokepoint both edit paths share", () =
       cron: cron({ owner: "Alice@acme.com" }),
       editorId: "alice@acme.com",
       changeSummary: ["task"],
-      editFingerprint: "f1",
     });
     assert.equal(enqueued.length, 0, "case-only difference → no notice");
   });
@@ -289,7 +382,6 @@ describe("notifyOwnerOfCronEdit: the one chokepoint both edit paths share", () =
       cron: cron(),
       editorId: "U-owner",
       changeSummary: ["title"],
-      editFingerprint: "f1",
     });
     assert.equal(a.enqueued.length, 0, "owner editing own cron → no notice");
     const b = fakeSink();
@@ -297,7 +389,6 @@ describe("notifyOwnerOfCronEdit: the one chokepoint both edit paths share", () =
       cron: cron({ runAs: "scopeFloor" }),
       editorId: "U-mate",
       changeSummary: ["title"],
-      editFingerprint: "f1",
     });
     assert.equal(b.enqueued.length, 0, "scopeFloor edit → no notice");
     const c = fakeSink();
@@ -305,32 +396,28 @@ describe("notifyOwnerOfCronEdit: the one chokepoint both edit paths share", () =
       cron: cron({ runAs: "owner" }),
       editorId: "U-mate",
       changeSummary: ["title"],
-      editFingerprint: "f1",
     });
     assert.equal(c.enqueued.length, 0, "owner-mode edit → no notice");
   });
 
-  it("keys idempotency on edit content: same fingerprint repeats one key, a different edit gets a new one", async () => {
+  it("gives each successful edit its own delivery key, including a repeated earlier change", async () => {
     const { sink, enqueued } = fakeSink();
     await notifyOwnerOfCronEdit(sink, {
       cron: cron(),
       editorId: "U-mate",
       changeSummary: ["title"],
-      editFingerprint: "same",
     });
     await notifyOwnerOfCronEdit(sink, {
       cron: cron(),
       editorId: "U-mate",
       changeSummary: ["title"],
-      editFingerprint: "same",
     });
     await notifyOwnerOfCronEdit(sink, {
       cron: cron(),
       editorId: "U-mate",
       changeSummary: ["task"],
-      editFingerprint: "different",
     });
-    assert.equal(enqueued[0]!.idempotencyKey, enqueued[1]!.idempotencyKey, "identical retry → same idempotency key");
+    assert.notEqual(enqueued[0]!.idempotencyKey, enqueued[1]!.idempotencyKey, "repeated edit → new delivery key");
     assert.notEqual(enqueued[0]!.idempotencyKey, enqueued[2]!.idempotencyKey, "distinct edit → new idempotency key");
   });
 });

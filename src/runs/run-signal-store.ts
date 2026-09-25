@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
-import type { TurnRequest } from "../types.ts";
+import type { ClientToolResult, TurnRequest } from "../types.ts";
+import { swallowAs } from "../util/errors.ts";
 
-export type RunSignalKind = "abort" | "steer";
+export type RunSignalKind = "abort" | "steer" | "client_result";
 
 export interface RunSignal {
   kind: RunSignalKind;
@@ -12,6 +13,8 @@ export interface RunSignal {
   dedupeKey?: string;
   sessionRequest?: OrchestratorInput;
   queuedRunId?: string;
+  callId?: string;
+  result?: ClientToolResult;
 }
 
 export interface RunSignalStore {
@@ -94,6 +97,62 @@ export function createMemoryRunSignalStore(): RunSignalStore {
   };
 }
 
+export function waitForClientResult(
+  signals: RunSignalStore,
+  runId: string,
+  callId: string,
+  opts: { timeoutMs: number; signal?: AbortSignal },
+): Promise<ClientToolResult | "timeout" | "cancelled"> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let checking = false;
+    let recheck = false;
+    const claim = (): boolean => {
+      if (settled) return false;
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe();
+      opts.signal?.removeEventListener("abort", onAbort);
+      return true;
+    };
+    const finish = (outcome: ClientToolResult | "timeout" | "cancelled" | Error): void => {
+      if (!claim()) return;
+      if (outcome instanceof Error) reject(outcome);
+      else resolve(outcome);
+    };
+    const onAbort = (): void => finish("cancelled");
+    const check = async (): Promise<void> => {
+      if (settled) return;
+      if (checking) {
+        recheck = true;
+        return;
+      }
+      checking = true;
+      try {
+        do {
+          recheck = false;
+          const match = (await signals.pending(runId)).find(
+            ({ signal }) => signal.kind === "client_result" && signal.callId === callId && signal.result,
+          );
+          if (match && claim()) {
+            await signals.acknowledge(runId, match.id).catch(swallowAs("client result acknowledge", undefined));
+            resolve(match.signal.result!);
+          }
+        } while (recheck && !settled);
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      } finally {
+        checking = false;
+      }
+    };
+    const timer = setTimeout(() => finish("timeout"), opts.timeoutMs);
+    const unsubscribe = signals.onSignal(runId, () => void check());
+    if (opts.signal?.aborted) return finish("cancelled");
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
+    void check();
+  });
+}
+
 const SIGNAL_POLL_MS = 5_000;
 
 export interface SignalPollHandlers {
@@ -122,6 +181,7 @@ export function startSignalPoll(
     inFlight = (async () => {
       let abortDelivered = false;
       for (const { id, signal: s } of await signals.pending(runId)) {
+        if (s.kind === "client_result") continue;
         try {
           if (s.kind === "abort") {
             if (!abortDelivered) {

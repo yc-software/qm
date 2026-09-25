@@ -336,6 +336,19 @@ export interface ScopeSessionStats {
   crons: number;
 }
 
+export interface SpendRow {
+  day: number;
+  model: string | null;
+  scopeId: ScopeId;
+  origin: SessionOrigin;
+  calls: number;
+  costUsd: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
 export interface LlmCallUsage {
   input: number;
   output: number;
@@ -699,6 +712,7 @@ export interface SessionStore {
   setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
   setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
   childrenOf(parentSessionId: string): Promise<Session[]>;
+  updateStatus(sessionId: string, status: Session["status"]): Promise<void>;
   updateForkProvenance(
     sessionId: string,
     provenance: { forkedFrom: { sessionId: string; title?: string | null }; forkBoundarySeq: number },
@@ -787,6 +801,8 @@ export interface SessionStore {
   ): Promise<ScopeSessionStats>;
 
   attributedTurns(): Promise<AttributedTurn[]>;
+
+  spendRollup(range: { from: number; to: number }): Promise<SpendRow[]>;
 
   listParticipants(): Promise<ParticipantWindow[]>;
 

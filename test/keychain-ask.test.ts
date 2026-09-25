@@ -273,7 +273,7 @@ test("expiry: lazy flip on read, sweep returns each expired ask exactly once", a
     [ask.id],
     "still returned until the resolution actually fired",
   );
-  await k.markAskNotified(ask.id);
+  await k.markAskNotified(ask.id, "expired");
   assert.deepEqual(await k.unnotifiedResolvedAsks(t), []);
 });
 
@@ -426,8 +426,8 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
   );
   assert.equal(outcome.ran, true);
   assert.equal(seen?.triggered, true);
-  assert.equal(seen?.thinkingLevel, "xhigh");
-  assert.equal(seen?.fastMode, false);
+  assert.equal(seen?.thinkingLevel, undefined);
+  assert.equal(seen?.fastMode, undefined);
   assert.equal(seen?.conversation.threadRef, "ch:C1-t1", "an explicit threadRef overrides the per-fire fireKey thread");
 });
 
@@ -568,7 +568,11 @@ test("manifest: requester-side ask ledger + ladder protocol, owner-side asks-wai
     scopeAsks: [pending, declined],
   });
   assert.match(channel, /Asks sent from this conversation:/);
-  assert.match(channel, /ask `a1b2c3d4e5f6` to U_ALICE — PENDING, sent 2h ago, expires in 22h/);
+  assert.ok(
+    channel.includes(
+      `ask \`a1b2c3d4e5f6\` to U_ALICE — PENDING, sent ${new Date(pending.createdAt).toISOString()}, expires at ${new Date(pending.expiresAt).toISOString()}`,
+    ),
+  );
   assert.match(channel, /ask `b2c3d4e5f6a1` to U_ALICE — DECLINED \("not for prod"\)/);
   assert.match(channel, /v1\/keychain\/asks/, "the ladder names the ask route");
   assert.match(channel, /A relayed approval never mints anything/);

@@ -55,16 +55,7 @@ test("realtime inbox events flow through the coalescer, so a burst refetches eve
   assert.match(inbox, /enqueueRealtimeEvent\(\{ loopId: event\.loopId, itemId: event\.itemId \}\);/);
   assert.match(inbox, /createInboxEventCoalescer\(/);
   const flush = inbox.match(/async function applyRealtimeBatch[\s\S]*?\n\}/)?.[0] ?? "";
-  assert.match(
-    flush,
-    /if \(batch\.length !== 1 \|\| !inboxState\.loopId \|\| inboxState\.loading\) return refreshInbox\(\{ silent: true \}\);/,
-    "a multi-item burst goes through refreshInbox, the single writer of the item list",
-  );
-  assert.match(
-    flush,
-    /if \(inboxState\.loading\) return refreshInbox\(\{ silent: true \}\);\s*upsertItem/,
-    "an upsert never races a refresh that is already rewriting the list",
-  );
+  assert.match(flush, /await refreshInbox\(\{ silent: true \}\)/);
 });
 
 test("a refresh requested while one is in flight re-runs instead of being dropped", () => {

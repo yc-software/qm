@@ -11,6 +11,7 @@ interface Call {
 }
 
 const calls: Call[] = [];
+let composioReturnTo: string | null = null;
 const core = createServer((req: IncomingMessage, res) => {
   let raw = "";
   req.on("data", (chunk) => (raw += chunk));
@@ -25,6 +26,10 @@ const core = createServer((req: IncomingMessage, res) => {
       res.end(JSON.stringify({ deployments: [{ id: "d1", permission: "write" }] }));
       return;
     }
+    if ((req.url ?? "").split("?")[0] === "/v1/composio/complete-auth") {
+      res.end(JSON.stringify({ returnTo: composioReturnTo }));
+      return;
+    }
     res.end(JSON.stringify({ ok: true }));
   });
 });
@@ -33,6 +38,7 @@ await new Promise<void>((resolve) => core.listen(0, resolve));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "body-parsing-test";
 process.env.WEB_UI_PRINCIPALS = "alice";
+process.env.WEB_UI_PUBLIC_URL = "http://localhost:8790";
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
@@ -163,4 +169,22 @@ test("app authorization accepts existing browser payloads and validates new retu
     assert.equal((await response.json()).error, "invalid_return_url");
   }
   assert.equal(calls.length, before);
+});
+
+test("Composio verifier forwards only the opaque session and redirects safely", async () => {
+  composioReturnTo = "http://localhost:8790//evil.example/path";
+  const response = await fetch(`${base}/api/composio/callback?session_uri=opaque&user_id=bob`, {
+    headers,
+    redirect: "manual",
+  });
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("location"), composioReturnTo);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.deepEqual(calls.at(-1)?.body, { sessionUri: "opaque" });
+  composioReturnTo = "https://evil.example/path";
+  assert.equal(
+    (await fetch(`${base}/api/composio/callback?session_uri=opaque`, { headers, redirect: "manual" })).status,
+    400,
+  );
+  composioReturnTo = null;
 });

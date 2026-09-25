@@ -1,4 +1,4 @@
-import { stopBrowserErrors } from "./browser-errors.ts";
+import { reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
 import { EventType } from "@tanstack/ai/client";
@@ -125,6 +125,7 @@ export interface DeliveredFile {
 }
 
 export interface CoreSession {
+  status?: { emoji: string; text: string } | null;
   id: string;
   type: "dm" | "channel" | "group";
   scopeId: string;
@@ -674,7 +675,18 @@ export function reportSigninRequired(detail: SigninRequired): void {
 }
 
 export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const response = await fetch(input, init);
+  const startMs = Date.now();
+  const request = input instanceof Request ? input : null;
+  const url = request?.url ?? String(input);
+  const method = init?.method ?? request?.method ?? "GET";
+  let response: Response;
+  try {
+    response = await fetch(input, init);
+  } catch (error) {
+    reportRequestTiming(url, method, startMs, null);
+    throw error;
+  }
+  reportRequestTiming(url, method, startMs, response.status);
   if (response.status !== 401) return response;
   stopBrowserErrors();
   stopAnalytics();
@@ -743,9 +755,12 @@ export interface RuntimeConfig {
   fastModeModelIds?: string[];
 }
 
-export async function fetchRuntimeConfig(scopeId?: string | null): Promise<RuntimeConfig | null> {
+export async function fetchRuntimeConfig(scopeId?: string | null, account?: "company"): Promise<RuntimeConfig | null> {
   try {
-    const query = scopeId ? `?scopeId=${encodeURIComponent(scopeId)}` : "";
+    const params = new URLSearchParams();
+    if (scopeId) params.set("scopeId", scopeId);
+    if (account) params.set("account", account);
+    const query = params.size ? `?${params}` : "";
     return await api<RuntimeConfig>(`/api/runtime-config${query}`);
   } catch (e) {
     swallow("web-ui: fetch runtime config", e);
@@ -1411,7 +1426,7 @@ export async function pollRun(
 export interface SessionStateEvent {
   threadRef: string;
   sessionId?: string;
-  state: "working" | "awaiting_approval" | "idle";
+  state: "working" | "awaiting_approval" | "idle" | "metadata";
   at: number;
 }
 
@@ -1694,7 +1709,7 @@ export interface HistoryApprovalDecision {
 }
 
 function approvalDecisionMessage(
-  entry: Pick<SessionEntry, "type" | "payload" | "createdAt">,
+  entry: Pick<SessionEntry, "type" | "payload" | "createdAt" | "seq">,
 ): HistoryApprovalDecision | null {
   if (entry.type !== "approval_resolved") return null;
   const decision = entry.payload as {
@@ -1706,6 +1721,7 @@ function approvalDecisionMessage(
   if (typeof decision?.approved !== "boolean" || typeof decision.command !== "string") return null;
   return {
     role: "approval-decision",
+    ...(entry.seq !== undefined ? { entrySeq: entry.seq } : {}),
     approved: decision.approved,
     command: decision.command,
     ...(typeof decision.requestId === "string" ? { requestId: decision.requestId } : {}),
@@ -1823,8 +1839,10 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     closed = false,
     timing?: { startedAt?: number; finishedAt?: number },
     stopped = false,
+    entrySeqs: number[] = [],
   ): void => {
     if (!text && !pending.length && !deliveryFiles.length && !stopped) return;
+    entrySeqs = [...entrySeqs, ...pending.map((entry) => entry.seq)];
     const deliveredSilence = (a: ToolActivity): boolean => {
       if (a.type !== "tool_result") return false;
       const p = a.payload as { tool?: string; silent?: boolean; ok?: boolean } | null;
@@ -1846,6 +1864,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     }
     const msg: AssistantWork = {
       persisted: true,
+      ...(entrySeqs.length ? { entrySeqs } : {}),
       role: "assistant",
       content: [{ type: "text", text }],
       api: model?.api ?? "unknown",
@@ -1918,7 +1937,10 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
         heldPosts.delete(payload.callId);
         if (postResultOk(e.payload)) {
           appendPostFiles(e.payload);
-          flushWork(held.text, e.createdAt);
+          flushWork(held.text, e.createdAt, false, undefined, false, [
+            held.activity.seq,
+            ...(e.seq === undefined ? [] : [e.seq]),
+          ]);
           posted = true;
         } else {
           pending.push(held.activity, activity);
@@ -1988,9 +2010,9 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
             payload: { text, demoted: true },
             createdAt: e.createdAt,
           });
-          flushWork("", e.createdAt, false, timing, stopped);
+          flushWork("", e.createdAt, false, timing, stopped, e.seq === undefined ? [] : [e.seq]);
         } else {
-          flushWork(text, e.createdAt, !posted, timing, stopped);
+          flushWork(text, e.createdAt, !posted, timing, stopped, e.seq === undefined ? [] : [e.seq]);
         }
       }
       posted = false;

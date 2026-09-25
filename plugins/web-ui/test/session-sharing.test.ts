@@ -77,6 +77,7 @@ test("sharing proxy binds identity and shared page loads only the filtered endpo
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(response.headers.get("referrer-policy"), "no-referrer");
   assert.ok(response.headers.get("content-security-policy")!.includes("default-src 'none'"));
+  assert.ok(response.headers.get("content-security-policy")!.includes("img-src 'self' data:"));
 });
 
 test("anonymous shared page requests never reach core", async () => {

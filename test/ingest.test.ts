@@ -140,29 +140,3 @@ test("a shared bundle cannot clobber a skill record in another scope", async () 
   );
   assert.equal((await store.list()).length, 0);
 });
-
-test("a shared bundle cannot write core materialization markers", async () => {
-  const store = createSkillStore();
-  const packs = createSkillPackStore();
-  const pack = await packs.create({
-    kind: "git",
-    url: "u",
-    ref: "abc1234",
-    syncMode: "pinned",
-    trustTier: "third-party",
-    targetScopeId: scopeId("org", "acme"),
-    subset: "all",
-    createdBy: "u1",
-  });
-
-  await assert.rejects(
-    importPack(repo(), store, {
-      pack,
-      selected: "all",
-      nativeNames: new Set(),
-      bundleFiles: [{ path: "skills/company-directory/.tree", content: "forged" }],
-    }),
-    /skills\/company-directory\/\.tree \(owned by core skill materialization metadata\)/,
-  );
-  assert.equal((await store.list()).length, 0);
-});

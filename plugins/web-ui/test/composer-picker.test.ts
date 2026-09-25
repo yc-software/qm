@@ -25,7 +25,7 @@ function model(id: string, label: string, provider = "anthropic"): ModelMetadata
   };
 }
 
-test("the model picker remembers compatible harnesses without duplicating or changing models", async () => {
+test("the personal-account picker preserves composer choices and saves context defaults", async () => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><div id="composer"></div>', {
     url: "http://localhost/web-ui/",
     pretendToBeVisual: true,
@@ -48,6 +48,7 @@ test("the model picker remembers compatible harnesses without duplicating or cha
   };
   const updates: Record<string, unknown>[] = [];
   let failNextGet = true;
+  let runtimeReads = 0;
   let failNextPut = false;
   let deferNextPut = false;
   let pendingPut: Promise<void> | undefined;
@@ -78,6 +79,7 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     },
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input).startsWith("/api/runtime-config") && init?.method !== "PUT") {
+        runtimeReads++;
         if (failNextGet) {
           failNextGet = false;
           return Response.json({ error: "initial load failed" }, { status: 500 });
@@ -96,15 +98,24 @@ test("the model picker remembers compatible harnesses without duplicating or cha
         deferNextPut = false;
         await pendingPut;
       }
+      if (change.inherit) return Response.json({ ...config, effective: config.orgDefault, scopeOverride: null });
       const effective = {
         harnessId: change.harnessId,
         modelId: change.modelId,
         effortLevel: change.effortLevel,
         fastMode: change.fastMode,
       };
-      return new Response(JSON.stringify({ ...config, effective, scopeOverride: { ...effective, orgRevision: 1 } }), {
-        headers: { "content-type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({
+          ...config,
+          scopeId: change.scopeId,
+          effective,
+          scopeOverride: { ...effective, orgRevision: 1 },
+        }),
+        {
+          headers: { "content-type": "application/json" },
+        },
+      );
     },
   };
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
@@ -146,11 +157,12 @@ test("the model picker remembers compatible harnesses without duplicating or cha
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   let composer: ComposerSurface | undefined;
   let siblingComposer: ComposerSurface | undefined;
+  let resetContext: (() => void) | undefined;
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { createComposerSurface } = await vite.ssrLoadModule("/src/composer.ts");
     const { render } = await vite.ssrLoadModule("lit");
-    appState.me = { user: "tester", org: "test" };
+    appState.me = { user: "tester", org: "test", individualModelAuth: true, modelAuthConnected: true };
     const host = document.querySelector<HTMLElement>("#composer")!;
     const agent = { state: { isStreaming: false, messages: [] } } as unknown as Agent;
     const draw = (): void => render(composer!.composerForm(agent), host);
@@ -181,11 +193,14 @@ test("the model picker remembers compatible harnesses without duplicating or cha
       await new Promise<void>((resolve) => dom.window.requestAnimationFrame(() => resolve()));
     };
     const button = (selector: string): HTMLButtonElement => {
+      if (selector !== ".loadout-button" && !host.querySelector(".loadout-popover"))
+        host.querySelector<HTMLButtonElement>(".loadout-button")!.click();
       const target = host.querySelector<HTMLButtonElement>(selector);
       assert.ok(target, `button exists: ${selector}`);
       return target;
     };
     const pick = (label: string): HTMLButtonElement => {
+      if (!host.querySelector(".loadout-popover")) button(".loadout-button").click();
       const target = [...host.querySelectorAll<HTMLButtonElement>(".loadout-pick")].find(
         (row) => row.querySelector(".loadout-name")?.textContent === label,
       );
@@ -204,6 +219,14 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     await composer!.refreshRuntimeSelection(null, agent, true);
     assert.equal(composer!.state.effortLevel, "high", "identical refresh preserves restored effort");
     assert.equal(composer!.state.fastMode, true, "identical refresh preserves restored Fast");
+    const readsBeforeAccountChange = runtimeReads;
+    appState.me.individualModelAuth = false;
+    window.dispatchEvent(new dom.window.CustomEvent("model-account-changed"));
+    await tick();
+    assert.equal(runtimeReads, readsBeforeAccountChange + 1);
+    assert.ok(host.querySelector(".loadout-button"));
+    appState.me.individualModelAuth = true;
+    draw();
     const siblingHost = document.createElement("section");
     document.body.append(siblingHost);
     const siblingAgent = { state: { isStreaming: false, messages: [] } } as unknown as Agent;
@@ -339,14 +362,13 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     assert.equal(composer!.currentModelOption()?.value, "opencode:alpha");
     assert.equal(agent.state.model.id, "alpha");
     assert.equal(composer!.state.effortLevel, "auto");
-    assert.equal(composer!.state.fastMode, false);
-    assert.deepEqual(saved()[1], { value: "opencode:alpha", effort: "auto", fast: false });
+    assert.equal(composer!.state.fastMode, true);
+    assert.deepEqual(saved()[1], { value: "opencode:alpha", effort: "auto", fast: true });
     assert.equal(host.querySelector('[data-loadout-section="effort"]'), null);
-    const unavailableFast = button('[aria-label="Fast"][role="menuitemcheckbox"]');
-    assert.equal(unavailableFast.disabled, true);
-    assert.equal(unavailableFast.querySelector(".loadout-shortcut")?.textContent, "Not supported by this harness");
-    assert.equal(unavailableFast.getAttribute("aria-checked"), "false");
-    unavailableFast.click();
+    const openCodeFast = button('[aria-label="Fast"][role="menuitemcheckbox"]');
+    assert.equal(openCodeFast.disabled, false);
+    assert.equal(openCodeFast.getAttribute("aria-checked"), "true");
+    openCodeFast.click();
     assert.equal(composer!.state.fastMode, false);
 
     button('[data-loadout-section="harness"]').click();
@@ -361,6 +383,7 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     assert.deepEqual(names(), ["Beta", "Alpha", "Gamma"]);
     assert.equal(button('[aria-label="Fast"][role="menuitemcheckbox"]').disabled, false);
     pick("Gamma").click();
+    button(".loadout-button").click();
     assert.equal(
       button('[aria-label="Fast"][role="menuitemcheckbox"]').querySelector(".loadout-shortcut")?.textContent,
       "Not supported by this model",
@@ -368,6 +391,7 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     assert.equal(button('[aria-label="Fast"][role="menuitemcheckbox"]').disabled, true);
     assert.equal(button('[aria-label="Fast"][role="menuitemcheckbox"]').getAttribute("aria-checked"), "false");
     pick("Alpha").click();
+    button(".loadout-button").click();
     assert.equal(button('[aria-label="Fast"][role="menuitemcheckbox"]').disabled, false);
     await tick();
 
@@ -489,7 +513,177 @@ test("the model picker remembers compatible harnesses without duplicating or cha
       assert.equal(pendingComposer.state.fastMode, field === "fastMode" ? !fastBefore : fastBefore);
       pendingComposer.dispose();
     }
+
+    const context = await vite.ssrLoadModule("/src/context-model.ts");
+    resetContext = context.resetContextModel;
+    const contextHost = document.createElement("section");
+    document.body.append(contextHost);
+    const { replaceChildrenPreservingFocus } = await vite.ssrLoadModule("/src/pane-focus.ts");
+    const drawContext = () => {
+      const next = document.createElement("div");
+      render(context.contextModelSection(config.scopeId), next);
+      replaceChildrenPreservingFocus(contextHost, next);
+    };
+    await context.loadContextModel(config.scopeId, drawContext);
+    const contextButton = (selector: string): HTMLButtonElement => {
+      const result = contextHost.querySelector<HTMLButtonElement>(selector);
+      assert.ok(result, `context button exists: ${selector}`);
+      return result;
+    };
+    contextButton(".loadout-button").click();
+    assert.ok(contextHost.querySelector('[role="menu"][aria-label="Model settings"]'));
+    assert.equal(contextHost.querySelector("select"), null);
+    assert.equal(contextHost.querySelector(".loadout-make-default"), null);
+    const betaPreset = [...contextHost.querySelectorAll<HTMLButtonElement>(".loadout-pick")].find((item) =>
+      item.textContent?.includes("Beta"),
+    );
+    assert.ok(betaPreset);
+    betaPreset.click();
+    await tick();
+    assert.equal(context.contextModelState.config.effective.modelId, "beta");
+    assert.equal(contextHost.querySelector(".loadout-popover"), null);
+    contextButton(".loadout-button").click();
+    contextButton('[data-loadout-section="effort"]').click();
+    const high = [...contextHost.querySelectorAll<HTMLButtonElement>(".loadout-effort")].find(
+      (item) => item.textContent?.trim() === "High",
+    );
+    assert.ok(high);
+    const gate = Promise.withResolvers<void>();
+    pendingPut = gate.promise;
+    deferNextPut = true;
+    high.click();
+    assert.equal(contextButton(".loadout-button").disabled, true);
+    assert.match(contextButton(".loadout-button").getAttribute("aria-label") ?? "", /High effort/);
+    await tick();
+    gate.resolve();
+    await tick();
+    assert.equal(context.contextModelState.config.effective.effortLevel, "high");
+    assert.equal(contextButton(".loadout-button").disabled, false);
+    contextButton('[aria-label="Fast"][role="menuitemcheckbox"]').click();
+    await tick();
+    assert.equal(context.contextModelState.config.effective.fastMode, true);
+    assert.equal(updates.at(-1)?.effortLevel, "high");
+    failNextPut = true;
+    contextButton('[aria-label="Fast"][role="menuitemcheckbox"]').click();
+    await tick();
+    assert.match(contextHost.textContent ?? "", /default save failed/);
+    assert.equal(context.contextModelState.config.effective.fastMode, true);
+    assert.equal(contextButton('[aria-label="Fast"][role="menuitemcheckbox"]').getAttribute("aria-checked"), "true");
+    contextButton(".loadout-button").dispatchEvent(
+      new KeyboardEvent("keydown", { code: "KeyE", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }),
+    );
+    await tick();
+    assert.equal(context.contextModelState.config.effective.fastMode, false);
+    contextButton(".loadout-foot-btn").click();
+    await tick();
+    assert.equal(context.contextModelState.config.scopeOverride, null);
+    assert.doesNotMatch(contextHost.textContent ?? "", /Following the org default/);
+    assert.equal(contextHost.querySelector(".loadout-foot-btn"), null);
+    contextButton(".loadout-popover").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await tick();
+    assert.equal(contextHost.querySelector(".loadout-popover"), null);
+    assert.equal(document.activeElement, contextButton(".loadout-button"));
+    contextButton(".loadout-button").click();
+    document.body.click();
+    assert.equal(contextHost.querySelector(".loadout-popover"), null);
+    contextButton(".loadout-button").click();
+    contextButton('[data-loadout-section="add"]').click();
+    for (const query of ["D", "De", "Del"]) {
+      const input = contextHost.querySelector<HTMLInputElement>(".loadout-search input")!;
+      input.focus();
+      input.value = query;
+      input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+      assert.equal(document.activeElement, contextHost.querySelector(".loadout-search input"));
+      assert.equal((document.activeElement as HTMLInputElement).value, query);
+    }
+    contextButton('[aria-label="Add Delta to presets"]').click();
+    await tick();
+    assert.equal(contextHost.querySelector(".loadout-popover"), null);
+    assert.equal(context.contextModelState.config.effective.modelId, "delta");
+    contextButton(".loadout-button").click();
+    contextButton('[data-loadout-section="harness"]').click();
+    const harness = [...contextHost.querySelectorAll<HTMLButtonElement>(".loadout-effort")].find(
+      (item) => item.textContent?.trim() === "Claude Code",
+    )!;
+    harness.focus();
+    harness.click();
+    await tick();
+    assert.equal(context.contextModelState.config.effective.harnessId, "claude");
+    assert.equal(document.activeElement, contextButton('[data-loadout-section="harness"]'));
+    context.resetContextModel();
+    drawContext();
+    assert.equal(contextHost.querySelector(".context-model"), null);
+    const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
+    const staleScope = "personal:stale-default";
+    seedRuntimeConfig(staleScope, {
+      ...config,
+      scopeId: staleScope,
+      effective: { harnessId: "removed", modelId: "retired" },
+      orgDefault: { harnessId: "removed", modelId: "retired", revision: 1 },
+      scopeOverride: null,
+    });
+    localStorage.removeItem("web-ui:loadout");
+    const drawStale = () => {
+      const next = document.createElement("div");
+      render(context.contextModelSection(staleScope), next);
+      replaceChildrenPreservingFocus(contextHost, next);
+    };
+    await context.loadContextModel(staleScope, drawStale);
+    assert.match(contextHost.textContent ?? "", /retired.*no longer offered/);
+    contextButton(".loadout-button").click();
+    contextButton('[data-loadout-section="add"]').click();
+    contextButton('[aria-label="Add Beta to presets"]').click();
+    await tick();
+    assert.deepEqual(updates.at(-1), {
+      scopeId: staleScope,
+      harnessId: "codex",
+      modelId: "beta",
+      effortLevel: "auto",
+      fastMode: false,
+    });
+    assert.equal(context.contextModelState.config.effective.modelId, "beta");
+    config.modelCatalog!.alpha!.effortLevelsByHarness = {
+      pi: ["auto", "adaptive", "default", "low", "high"],
+      claude: ["auto", "low", "high"],
+    };
+    config.effective = { harnessId: "pi", modelId: "alpha", effortLevel: "auto" };
+    ctx.chat.state.threadRef = "web:tester:native-auto";
+    localStorage.removeItem("web-ui:loadout");
+    await composer!.refreshRuntimeSelection(null, agent, true);
+    await mount();
+    button('[data-loadout-section="effort"]').click();
+    const effortChoices = () => [...host.querySelectorAll<HTMLButtonElement>(".loadout-effort")];
+    assert.deepEqual(
+      effortChoices().map((item) => item.textContent?.trim()),
+      ["Legacy default", "Auto", "Provider default", "Low", "High"],
+    );
+    effortChoices()
+      .find((item) => item.textContent?.trim() === "Auto")!
+      .click();
+    assert.equal(composer!.state.effortLevel, "adaptive");
+    assert.equal(saved().find(({ value }) => value === "pi:alpha")?.effort, "adaptive");
+    button('[data-loadout-section="effort"]').click();
+    assert.equal(
+      effortChoices().some((item) => item.textContent?.trim() === "Legacy default"),
+      false,
+    );
+    effortChoices()
+      .find((item) => item.textContent?.trim() === "Provider default")!
+      .click();
+    assert.equal(composer!.state.effortLevel, "default");
+    context.resetContextModel();
+    seedRuntimeConfig(config.scopeId, { ...config });
+    await context.loadContextModel(config.scopeId, drawContext);
+    contextButton(".loadout-button").click();
+    contextButton('[data-loadout-section="effort"]').click();
+    [...contextHost.querySelectorAll<HTMLButtonElement>(".loadout-effort")]
+      .find((item) => item.textContent?.trim() === "Auto")!
+      .click();
+    await tick();
+    assert.equal(updates.at(-1)?.effortLevel, "adaptive");
+    assert.equal(context.contextModelState.config.effective.effortLevel, "adaptive");
   } finally {
+    resetContext?.();
     composer?.dispose();
     siblingComposer?.dispose();
     for (const extra of extraComposers) extra.dispose();

@@ -49,6 +49,18 @@ const upstream = createServer((req: IncomingMessage, res) => {
       JSON.stringify({ status: "authorize", authorizeUrl: "https://accounts.google.test/o/oauth2?x=1" }),
     );
   }
+  if (req.url?.startsWith("/v1/principals/U-admin-alias/canonical")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ canonicalId: "U-admin" }));
+  }
+  if (req.url?.startsWith("/v1/principals/U-alias/canonical")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ principalId: "U-alias", canonicalId: "U1" }));
+  }
+  if (req.url?.startsWith("/v1/principals/U-unresolved/canonical")) {
+    res.writeHead(500, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ error: "boom" }));
+  }
   if (req.url === "/api/whoami") {
     whoamiProbes++;
     const m = (req.headers.cookie ?? "").match(/admin=([^;]+)/);
@@ -133,6 +145,24 @@ test("favicon: served unauthenticated as an SVG of the pirate-flag emoji", async
   }
 });
 
+test("favicon: PORTAL_FAVICON_SVG replaces the emoji with operator-supplied markup, anything else falls back", async () => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8"/></svg>';
+  process.env.PORTAL_FAVICON_SVG = svg;
+  try {
+    for (const path of ["/favicon.ico", "/favicon.svg"]) {
+      const r = await fetch(`${base}${path}`);
+      assert.equal(r.status, 200);
+      assert.equal(r.headers.get("content-type"), "image/svg+xml; charset=utf-8");
+      assert.equal(r.headers.get("x-content-type-options"), "nosniff");
+      assert.equal(await r.text(), svg);
+    }
+    process.env.PORTAL_FAVICON_SVG = "not an svg document";
+    assert.match(await (await fetch(`${base}/favicon.svg`)).text(), /\u{1F3F4}\u{200D}☠️/u);
+  } finally {
+    delete process.env.PORTAL_FAVICON_SVG;
+  }
+});
+
 test("no session: JSON request is 401, HTML navigation is 302 to login", async () => {
   const j = await fetch(`${base}/api/sessions`, { redirect: "manual" });
   assert.equal(j.status, 401);
@@ -165,6 +195,27 @@ test("valid session: upstream receives ONLY the synthesized cookie, prefix strip
   assert.equal(body.cookie, "webuiuser=U1");
   assert.equal(body.headers["x-as-principal"], undefined);
   assert.equal(body.headers["x-admin-actor"], undefined);
+});
+
+test("a session whose subject core links to another principal is proxied as that canonical principal", async () => {
+  const r = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-alias") } });
+  assert.equal(r.status, 200);
+  const body = (await r.json()) as { cookie: string };
+  assert.equal(body.cookie, "webuiuser=U1");
+  const unlinked = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-solo") } });
+  assert.equal(((await unlinked.json()) as { cookie: string }).cookie, "webuiuser=U-solo");
+});
+
+test("when core cannot resolve the session subject the portal refuses to proxy instead of guessing", async () => {
+  const r = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-unresolved") } });
+  assert.equal(r.status, 503);
+  assert.equal(((await r.json()) as { error: string }).error, "identity_unavailable");
+  const logout = await fetch(`${base}/auth/logout`, {
+    method: "POST",
+    headers: { cookie: sessionCookie("U-unresolved"), origin: PUBLIC },
+    redirect: "manual",
+  });
+  assert.notEqual(logout.status, 503, "auth routes still work without core");
 });
 
 test("web-ui /app-edit drops x-frame-options so its own frame-ancestors CSP can allow the app origin", async () => {
@@ -570,6 +621,10 @@ test("sliding renewal: a fresh session is NOT re-stamped, an aged one is re-issu
   assert.match(setCookie, new RegExp(`Max-Age=${SESSION_TTL_S}\\b`), "the renewed cookie carries a full TTL");
   const claims = open(decodeURIComponent(m![1] ?? ""), sessionKey) as { sub: string; exp: number } | null;
   assert.equal(claims?.sub, "U1", "the renewed cookie is valid and preserves the sub");
+  const twin = aged.headers.getSetCookie().find((cookie) => cookie.startsWith("portal_session_x="));
+  assert.ok(twin?.startsWith(`portal_session_x=${m![1]};`), "renewal re-issues the framed twin with the same session");
+  assert.match(twin!, /SameSite=Lax/, "the twin falls back to Lax on a non-https origin");
+  assert.match(twin!, new RegExp(`Max-Age=${SESSION_TTL_S}\\b`));
   assert.ok(
     (claims?.exp ?? 0) > Math.floor(Date.now() / 1000) + SESSION_TTL_S - 800,
     "exp is pushed out to ~now + full TTL",
@@ -676,4 +731,39 @@ test("background ownership forwards both credentials only on its exact control r
     });
     assert.equal(response.status, 404);
   }
+});
+
+test("Loop ingress forwards signed events and Google identity without a portal session", async () => {
+  const response = await fetch(`${base}/v1/loop-ingress/gmail`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: "Bearer google-id-token",
+      "x-slack-signature": "v0=signature",
+      "x-slack-request-timestamp": "123",
+    },
+    body: JSON.stringify({ message: { data: "test" } }),
+  });
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as { cookie: string | null; headers: Record<string, string> };
+  assert.equal(body.cookie, null);
+  assert.equal(body.headers.authorization, "Bearer google-id-token");
+  assert.equal(body.headers["x-slack-signature"], "v0=signature");
+  assert.equal((await fetch(`${base}/v1/loop-ingress/gmail`)).status, 404);
+  assert.equal((await fetch(`${base}/v1/loop-ingress/gmail/extra`, { method: "POST" })).status, 404);
+});
+
+test("linked administrator impersonation follows the target", async () => {
+  const start = await fetch(`${base}/auth/impersonate?target=alice@acme`, {
+    method: "POST",
+    headers: { cookie: sessionCookie("U-admin-alias"), origin: PUBLIC },
+  });
+  assert.equal(start.status, 200);
+  const imp = (start.headers.get("set-cookie") ?? "").match(/portal_impersonate=([^;]+)/);
+  assert.ok(imp);
+  const web = await fetch(`${base}/api/x`, {
+    headers: { cookie: `${sessionCookie("U-admin-alias")}; portal_impersonate=${imp[1]}` },
+  });
+  const body = (await web.json()) as { cookie: string };
+  assert.match(body.cookie, /webuiuser=alice%40acme/);
 });

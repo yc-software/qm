@@ -46,6 +46,7 @@ import type { AdminService } from "../../admin/admin-service.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
 import type { MetricsSink } from "../../admin/metrics-sink.ts";
 import type { ToolLedger } from "../../runs/tool-ledger.ts";
+import type { RunSignalStore } from "../../runs/run-signal-store.ts";
 import type { TurnStream } from "../../runs/turn-stream.ts";
 import type { RunActivityStore } from "../../runs/run-activity-store.ts";
 import type { RunStore } from "../../runs/run-store.ts";
@@ -82,12 +83,14 @@ export interface OrchestratorInput extends Omit<
   | "securityScreenData"
   | "triggerDestination"
   | "ownerKeychainUnion"
+  | "ownerResourcesRequireOpen"
   | "unprompted"
   | "liveActor"
 > {
   modelAccount?: ModelAccount;
   surface?: string;
   privateSessionMessage?: true;
+  delegatingRunId?: string;
   sessionMessageDepth?: number;
   actor: Principal;
   conversation: Conversation;
@@ -142,6 +145,7 @@ export interface OrchestratorDeps {
   harness: Harness;
   signingSecret?: string;
   capabilitySecret?: string;
+  capabilityTokenCompression?: boolean;
   apiBaseUrl?: string;
   publicWebUrl?: string;
   /** The public base for an inbound webhook URL (PUBLIC_WEB_URL ?? api url) — what the webhook
@@ -163,6 +167,7 @@ export interface OrchestratorDeps {
   errors?: ErrorLog;
   metrics?: MetricsSink;
   ledger?: ToolLedger;
+  signals?: RunSignalStore;
   turnStream?: TurnStream;
   runActivity?: RunActivityStore;
   runs?: RunStore;
@@ -174,12 +179,16 @@ export interface OrchestratorDeps {
   webhooks?: WebhookStore;
   control?: ControlService;
   runtime?: RuntimeService;
+  validateScheduledRuntime?: (
+    scope: import("../../types.ts").ScopeId,
+    choice: import("../../harness/harness.ts").RuntimeChoice,
+    purpose?: import("../../resolution/config-store.ts").RuntimePurpose,
+  ) => Promise<string | null>;
   livenessCache?: LivenessCache;
   connectorTokens?: ConnectorTokenStore;
   connectorStatusCache?: ConnectorStatusCache;
   resolveConnectorClient?: OAuthClientResolver;
   scratchExec?: boolean;
-  sharedOwnerAuthIsolation?: boolean;
   deviceFlowCutover?: DeviceFlowCutoverStore;
   featureFlags?: FeatureFlagStore;
   credentialUsage?: CredentialUsageSink;

@@ -1,3 +1,4 @@
+import { unsafeSVG } from "lit/directives/unsafe-svg.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { Check, ChevronDown, Download, createElement, type IconNode } from "lucide";
@@ -20,20 +21,28 @@ export function waveLoader(
   o: { width?: number; height?: number; viewBox?: string; label?: string; cls?: string } = {},
 ): TemplateResult {
   const width = o.width ?? 24.5;
-  return html`<svg
+  const height = o.height ?? width * 1.25;
+  const viewBox = o.viewBox ?? SWELL_VIEWBOX;
+  const [, , viewWidth, viewHeight] = viewBox.split(/\s+/).map(Number);
+  const shift = -24 * Math.min(width / viewWidth!, height / viewHeight!);
+  return html`<span
     class="wl wl-swell ${o.cls ?? ""}"
-    width=${width}
-    height=${o.height ?? width * 1.25}
-    viewBox=${o.viewBox ?? SWELL_VIEWBOX}
-    fill="none"
+    style=${`width:${width}px;height:${height}px;--wl-shift:${shift}px`}
     role="img"
     aria-label=${o.label ?? "Loading"}
-    xmlns="http://www.w3.org/2000/svg"
   >
-    <g class="wl-row">
+    <svg
+      class="wl-row"
+      width=${width}
+      height=${height}
+      viewBox=${viewBox}
+      fill="none"
+      aria-hidden="true"
+      xmlns="http://www.w3.org/2000/svg"
+    >
       <path d=${SWELL_PATH} fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2.6" />
-    </g>
-  </svg>`;
+    </svg>
+  </span>`;
 }
 
 export function workingWave(): TemplateResult {
@@ -196,8 +205,20 @@ export function modelMark(key: string, size = 16): TemplateResult | null {
   </svg>`;
 }
 
-export function icon(node: IconNode, size = 18): SVGElement {
-  const el = createElement(node, {
+const iconTemplates = new WeakMap<IconNode, Map<number, TemplateResult>>();
+
+export function icon(node: IconNode, size = 18): TemplateResult {
+  let sizes = iconTemplates.get(node);
+  if (!sizes) iconTemplates.set(node, (sizes = new Map()));
+  const cached = sizes.get(size);
+  if (cached) return cached;
+  const template = html`${unsafeSVG(iconElement(node, size).outerHTML)}`;
+  sizes.set(size, template);
+  return template;
+}
+
+function iconElement(node: IconNode, size: number): SVGElement {
+  return createElement(node, {
     class: "icon",
     width: size,
     height: size,
@@ -205,7 +226,6 @@ export function icon(node: IconNode, size = 18): SVGElement {
     focusable: "false",
     "stroke-width": 1.9,
   });
-  return el;
 }
 
 export function fieldSelect(props: {
@@ -331,6 +351,20 @@ const RENDERABLE_IMAGE_TYPES = new Set([
   "image/x-ms-bmp",
 ]);
 
+export function attachmentGallery<T>(
+  attachments: readonly T[],
+  isImage: (attachment: T) => boolean,
+  renderAttachment: (attachment: T) => TemplateResult,
+): TemplateResult | typeof nothing {
+  if (!attachments.length) return nothing;
+  const images = attachments.filter(isImage);
+  const documents = attachments.filter((attachment) => !isImage(attachment));
+  return html`<div class="message-files attachment-gallery">
+    ${images.length ? html`<div class="attachment-images">${images.map(renderAttachment)}</div>` : nothing}
+    ${documents.length ? html`<div class="attachment-documents">${documents.map(renderAttachment)}</div>` : nothing}
+  </div>`;
+}
+
 export function browserRenderableImage(mimeType?: string): boolean {
   return RENDERABLE_IMAGE_TYPES.has((mimeType ?? "").split(";")[0]!.trim().toLowerCase());
 }
@@ -422,7 +456,7 @@ export function setFormMenuValue(control: HTMLElement | null, value: string, lab
   const activeOption = Array.from(control.querySelectorAll<HTMLButtonElement>(".menu-option")).find((option) =>
     option.classList.contains("active"),
   );
-  if (activeOption) activeOption.append(icon(Check, 15));
+  if (activeOption) activeOption.append(iconElement(Check, 15));
 }
 
 export function chipBadge(

@@ -1,4 +1,5 @@
-import type { TurnOrigin, TurnRequest } from "../../types.ts";
+import { fromJSONSchema, z, ZodObject } from "zod";
+import type { ClientToolDeclaration, TurnOrigin, TurnRequest } from "../../types.ts";
 import { resolveTurnOrigin } from "../../core/turn-origin.ts";
 import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
@@ -16,9 +17,58 @@ function isTurnRequest(body: unknown): body is TurnRequest {
   );
 }
 
+const MAX_CLIENT_TOOL_SCHEMA_CHARS = 16_000;
+
+function convertsToObjectSchema(schema: Record<string, unknown>): boolean {
+  try {
+    return fromJSONSchema(schema as Parameters<typeof fromJSONSchema>[0]) instanceof ZodObject;
+  } catch {
+    return false;
+  }
+}
+
+const clientToolInputSchema = z
+  .looseObject({
+    type: z.literal("object"),
+    properties: z.record(z.string(), z.unknown()).optional(),
+    required: z.array(z.string()).optional(),
+  })
+  .refine((schema) => JSON.stringify(schema).length <= MAX_CLIENT_TOOL_SCHEMA_CHARS, {
+    message: `must be at most ${MAX_CLIENT_TOOL_SCHEMA_CHARS} characters of JSON`,
+    abort: true,
+  })
+  .refine(convertsToObjectSchema, { message: "must convert to a plain object schema" });
+
+const clientToolsSchema = z
+  .array(
+    z.object({
+      name: z.string().regex(/^ui__[a-z0-9_]{1,60}$/),
+      description: z
+        .string()
+        .max(2_000)
+        .refine((description) => description.trim() !== "", { message: "must not be blank" }),
+      inputSchema: clientToolInputSchema,
+      timeoutMs: z.int().min(1_000).max(60_000).optional(),
+    }),
+  )
+  .max(32)
+  .refine((tools) => new Set(tools.map((tool) => tool.name)).size === tools.length, {
+    message: "names must be unique",
+  });
+
+const clientResultSchema = z.object({
+  callId: z.string().min(1).max(256),
+  result: z.object({ content: z.string(), structured: z.unknown().optional(), isError: z.boolean().optional() }),
+});
+
+function zodMessage(field: string, error: z.ZodError): string {
+  const issue = error.issues[0]!;
+  return `${[field, ...issue.path.map(String)].join(".")}: ${issue.message}`;
+}
+
 function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
   if (origin?.kind !== "automation") return origin;
-  const { useOwnerKeychain: _internalOnly, ...safe } = origin;
+  const { useOwnerKeychain: _internalOnly, ownerResourcesRequireOpen: _requireOpen, ...safe } = origin;
   return safe;
 }
 
@@ -39,6 +89,7 @@ function publicTurnOrigin(body: TurnRequest): { origin?: TurnOrigin; error?: str
 function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
   const {
     ownerKeychainUnion: _ownerKeychainUnion,
+    ownerResourcesRequireOpen: _ownerResourcesRequireOpen,
     spawned: _spawned,
     unattendedGrants: _unattendedGrants,
     redeliveryKey: _redeliveryKey,
@@ -49,7 +100,14 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   const resolvedOrigin = publicTurnOrigin(safeBody);
   if (resolvedOrigin.error) return { error: resolvedOrigin.error };
   const origin = resolvedOrigin.origin;
-  return { request: { ...safeBody, ...(origin ? { origin } : {}) } };
+  const { clientTools: rawClientTools, ...rest } = safeBody;
+  let clientTools: ClientToolDeclaration[] | undefined;
+  if (rawClientTools !== undefined) {
+    const parsed = clientToolsSchema.safeParse(rawClientTools);
+    if (!parsed.success) return { error: zodMessage("clientTools", parsed.error) };
+    clientTools = parsed.data;
+  }
+  return { request: { ...rest, ...(origin ? { origin } : {}), ...(clientTools?.length ? { clientTools } : {}) } };
 }
 
 async function postTurn(ctx: ApiCtx): Promise<void> {
@@ -95,8 +153,17 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
   const { res, app, body, actor } = ctx;
   const id = ctx.params.id!;
   const kind = isObj(body) && typeof body.kind === "string" ? body.kind : "";
-  if (kind !== "abort" && kind !== "steer") {
-    return sendJson(res, 400, { error: "bad_request", message: "kind must be abort or steer" });
+  if (kind !== "abort" && kind !== "steer" && kind !== "client_result") {
+    return sendJson(res, 400, { error: "bad_request", message: "kind must be abort, steer or client_result" });
+  }
+  if (kind === "client_result") {
+    const parsed = clientResultSchema.safeParse(body);
+    if (!parsed.success)
+      return sendJson(res, 400, { error: "bad_request", message: zodMessage("client_result", parsed.error) });
+    const outcome = await app.signalRun(id, { kind, ...parsed.data }, actor?.p);
+    if (outcome.accepted) return sendJson(res, 200, outcome);
+    if (outcome.reason === "not_found") return sendJson(res, 404, { error: "not_found" });
+    return sendJson(res, 409, outcome);
   }
   const text = isObj(body) && typeof body.text === "string" ? body.text : undefined;
   const queuedRunId = isObj(body) && typeof body.queuedRunId === "string" ? body.queuedRunId : undefined;

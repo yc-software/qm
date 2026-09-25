@@ -62,7 +62,10 @@ test("a pane is an element in this document — never a second copy of the app",
     "a pane loads its transcript once, and never after it closes",
   );
   assert.match(load, /if \(this\.disposed\) return;/, "and drops the continuation if the pane closed mid-load");
-  assert.match(split, /onDidVisibilityChange\(\(e\) => \{\s*\n\s*if \(!e\.isVisible\) return;/);
+  assert.match(
+    split,
+    /onDidVisibilityChange\(\(e\) => \{\s*this\.visible = e\.isVisible;\s*if \(!e\.isVisible\) return;/,
+  );
 });
 
 test("a conversation dropped on a pane's tab strip joins that pane — and only there", () => {
@@ -175,5 +178,22 @@ test("adopting a remote layout normalizes the mirrored timestamp to the server r
     adopt,
     /JSON\.stringify\(\{ \.\.\.rec\.value, updatedAt: at \}\)/,
     "the local mirror must carry the server-clamped timestamp, not the value's inner claim",
+  );
+});
+
+test("hidden panes retain agent state without rendering, and repaint when activated", () => {
+  const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
+  const draw = chat.slice(chat.indexOf("  function drawActiveChat("), chat.indexOf("  function sessionTopbar("));
+  assert.match(draw, /if \(!ctx\.visible\(\)\) \{\s*postCurrentPaneState\(\);\s*return;/);
+  assert.ok(draw.indexOf("if (!ctx.visible())") < draw.indexOf("transcriptViewport.beforeRender()"));
+  assert.match(split, /this\.visible = p\.api\.isVisible;/);
+  assert.match(split, /visible: \(\) => splitState\.active && appState\.currentView === "chats" && this\.visible/);
+  assert.match(
+    split,
+    /this\.syncDensity\(\);\s*this\.conversation\?\.redraw\(\);\s*this\.conversation\?\.scrollToBottom\(\)/,
+  );
+  assert.match(
+    split,
+    /notePaneSession\(this\.panelId, paneState\.sessionId, paneState\.threadRef\);\s*notifyPanesChanged\(\);/,
   );
 });

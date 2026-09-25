@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import { createDrainController } from "../src/runs/drain.ts";
 import { createEcsTaskProtection } from "../src/runs/task-protection.ts";
@@ -23,7 +22,6 @@ const ok: TurnResult = { status: "ok", reply: "done" };
 
 test("a superseded worker stops claiming; in-flight turns finish; claiming resumes when the newer build dies", async () => {
   const { runs } = createMemoryRunStore();
-  const sessions = createMemorySessionStore();
   let superseded = false;
   const registry: InstanceRegistry = { beat: async () => superseded };
   const drain = createDrainController({ registry, protection: null, busy: () => false, sweepMs: 10 });
@@ -40,7 +38,6 @@ test("a superseded worker stops claiming; in-flight turns finish; claiming resum
   } as unknown as Orchestrator;
   const worker = createWorker({
     runs,
-    sessions,
     orchestrator,
     leaseTtlMs: 10_000,
     pollMs: 5,

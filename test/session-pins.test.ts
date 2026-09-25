@@ -47,7 +47,7 @@ describe("conversation pins self-API", async () => {
 
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
-    server = createServer(built.app, { signingSecret: SECRET });
+    server = createServer(built.app, { signingSecret: SECRET, sessions: built.sessions });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
     sessionId = (await built.app.turn(dm("U1", "remember the launch date is Sept 4", THREAD))).sessionId!;
@@ -98,6 +98,29 @@ describe("conversation pins self-API", async () => {
     const res = await call("POST", "/v1/pins", { seq: 99_999 }, token);
     assert.equal(res.status, 404);
     assert.equal(((await res.json()) as { error: string }).error, "entry_not_found");
+  });
+
+  it("nested children pin, list, and remove notes in the human conversation", async () => {
+    const child = await built.sessions.getOrCreateByThread(
+      "agent:main:subagent:pins-child",
+      "dm",
+      scopeId("personal", "U1"),
+    );
+    const nested = await built.sessions.getOrCreateByThread(
+      "agent:main:subagent:pins-nested",
+      "dm",
+      scopeId("personal", "U1"),
+    );
+    await built.sessions.setParentSession(child.id, sessionId);
+    await built.sessions.setParentSession(nested.id, child.id);
+    const token = await capFor("U1", nested.threadRef);
+    const added = await call("POST", "/v1/pins", { text: "delegated note" }, token);
+    assert.equal(added.status, 200);
+    const { pin } = (await added.json()) as { pin: { id: string } };
+    const listing = await call("GET", "/v1/pins", undefined, await capFor("U1", THREAD));
+    assert.ok(((await listing.json()) as { pins: { id: string }[] }).pins.some((p) => p.id === pin.id));
+    assert.equal((await call("GET", "/v1/pins", undefined, await capFor("U2", nested.threadRef))).status, 403);
+    assert.equal((await call("DELETE", `/v1/pins/${pin.id}`, undefined, token)).status, 200);
   });
 
   it("rejects an empty pin", async () => {

@@ -13,9 +13,11 @@ import {
 } from "../src/sessions/postgres-session-store.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { scopeId, type Principal, type TurnResult } from "../src/types.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { scopeId, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
+import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
 import { byScopeId, rollupsFromSummaries } from "./support/scope-rollup-oracle.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -69,6 +71,10 @@ test("pg session store: fork provenance survives a store restart", { skip }, asy
 
 test("pg session store: getForParticipant returns exactly the row listByParticipant returns", { skip }, async () => {
   await assertParticipantSessionParity(createPostgresSessionStore(URL!), `pg-parity-${randomUUID()}`);
+});
+
+test("pg session store: spendRollup matches the memory rollup row for row", { skip }, async () => {
+  await assertSpendRollupParity((now) => createPostgresSessionStore(URL!, { now }), `pg-spend-${randomUUID()}`);
 });
 
 test("pg session store: a bare failed acquire means the session is gone, not a lease race", { skip }, async () => {
@@ -1273,6 +1279,71 @@ test("pg session counters: boot backfill fills pre-column rows", { skip }, async
   const stats = await s3.scopeSessionStats(scope, false);
   assert.equal(stats.total, 2, "stats count sessions in scope");
   assert.equal(stats.turns, 3 + 7, "stats sum the stored turns counters, never the entries");
+});
+
+test("pg run store: Unicode stays jsonb-safe through enqueue, edit and both steering paths", { skip }, async () => {
+  const { runs, close } = createPostgresRunStore(URL!);
+  const signals = createPostgresRunSignalStore(URL!);
+  const thread = `unicode-${randomUUID()}`;
+  const unsafe = "nul\u0000 lone\ud800 low\udfff emoji😀 literal\\u0000";
+  const safe = "nul lone� low� emoji😀 literal\\u0000";
+  const inbound: TurnRequest = {
+    surface: "web",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: thread },
+    text: unsafe,
+  };
+  const request = {
+    ...turn(unsafe),
+    attachments: [{ name: unsafe, mimetype: "text/plain", sizeBytes: 5, blobId: "notes-blob" }],
+  };
+  try {
+    const first = (await runs.enqueue({ sessionId: thread, request })).run;
+    assert.equal(first.request.text, safe);
+    assert.equal(first.request.attachments?.[0]?.name, safe);
+    assert.equal(request.text, unsafe);
+    const privateRun = (
+      await runs.enqueue({ sessionId: thread, request: { ...turn(unsafe), privateSessionMessage: true } })
+    ).run;
+    assert.equal((await runs.latestForThread(thread))?.id, privateRun.id);
+    assert.equal((await runs.latestForThread(thread, { excludePrivateMessages: true }))?.id, first.id);
+    assert.equal(await runs.editPendingText(first.id, `edit ${unsafe}`, unsafe), true);
+    assert.equal(await runs.editPendingText(first.id, "stale", unsafe), false);
+    assert.equal((await runs.get(first.id))?.request.displayText, `edit ${safe}`);
+    assert.equal(
+      await runs.steerQueued(
+        first.id,
+        privateRun.id,
+        {
+          kind: "steer",
+          text: `edit ${unsafe}`,
+          request: { ...inbound, text: `edit ${unsafe}` },
+          dedupeKey: `${thread}-queued`,
+        },
+        signals,
+      ),
+      true,
+    );
+    assert.equal(await runs.get(first.id), null);
+    const queued = await signals.takePending(privateRun.id);
+    assert.equal(queued[0]?.text, `edit ${safe}`);
+    assert.equal(queued[0]?.request?.text, `edit ${safe}`);
+    assert.equal(
+      await signals.send(privateRun.id, {
+        kind: "steer",
+        text: unsafe,
+        request: inbound,
+      }),
+      true,
+    );
+    const direct = await signals.takePending(privateRun.id);
+    assert.equal(direct[0]?.text, safe);
+    assert.equal(direct[0]?.request?.text, safe);
+  } finally {
+    for (const run of await runs.inFlightForThread(thread)) await runs.withdraw(run.id);
+    await signals.close?.();
+    await close();
+  }
 });
 
 test("pg run store: a session_busy completion frees the dedup key so the same key runs again", { skip }, async () => {
@@ -2551,5 +2622,69 @@ test("pg personal conversation counts tolerate legacy null characters", { skip }
     assert.equal(await store.countPersonalConversations(scope), 0);
   } finally {
     await raw.end();
+  }
+});
+
+test("pg session status survives restart, is shared, and clears", { skip }, async () => {
+  const first = createPostgresSessionStore(URL!);
+  const session = await first.getOrCreateByThread("session-status", "dm", scopeId("personal", "U1"));
+  await first.addParticipant(session.id, "U1");
+  await first.addParticipant(session.id, "U2");
+  const status = { emoji: "🚀", text: "Live in production" };
+  await first.updateStatus(session.id, status);
+  const restarted = createPostgresSessionStore(URL!);
+  assert.deepEqual((await restarted.get(session.id))?.status, status);
+  assert.deepEqual((await restarted.getForParticipant(session.id, "U2"))?.status, status);
+  await restarted.updateStatus(session.id, null);
+  assert.equal((await first.get(session.id))?.status ?? null, null);
+});
+
+test(
+  "pg legacy completion wakeups remain discoverable after return and restart until withdrawn",
+  { skip },
+  async () => {
+    const first = createPostgresRunStore(URL!);
+    const { run } = await first.runs.enqueue({
+      sessionId: `agent:main:subagent:${randomUUID()}`,
+      request: turn("child"),
+    });
+    const claimed = await first.runs.claimById(run.id, "child", 30_000);
+    await first.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+    const { run: wake } = await first.runs.enqueue({
+      sessionId: `parent-${randomUUID()}`,
+      dedupKey: `subagent-return:${run.id}`,
+      request: turn("completion"),
+    });
+    await first.runs.markReturned(run.id);
+    await first.close();
+    const second = createPostgresRunStore(URL!);
+    try {
+      assert.ok((await second.runs.pendingReturns(1000)).some((pending) => pending.id === run.id));
+      assert.ok(!(await second.runs.pendingReturns(1000, run.id)).some((pending) => pending.id === run.id));
+      assert.equal(await second.runs.withdraw(wake.id), true);
+      assert.ok(!(await second.runs.pendingReturns(1000)).some((pending) => pending.id === run.id));
+    } finally {
+      await second.close();
+    }
+  },
+);
+
+test("pg unstarted withdrawal preserves claimed and released turns atomically", { skip }, async () => {
+  const store = createPostgresRunStore(URL!);
+  try {
+    const { run } = await store.runs.enqueue({ sessionId: `wake-retry-${randomUUID()}`, request: turn("completion") });
+    const claimed = await store.runs.claimById(run.id, "worker", 30_000);
+    assert.equal(await store.runs.withdraw(run.id, { unstartedOnly: true }), false);
+    await store.runs.releaseLease(run.id, claimed!.leaseToken!);
+    assert.equal(await store.runs.withdraw(run.id, { unstartedOnly: true }), false);
+    assert.equal((await store.runs.get(run.id))!.status, "pending");
+    const { run: fresh } = await store.runs.enqueue({
+      sessionId: `wake-fresh-${randomUUID()}`,
+      request: turn("completion"),
+    });
+    assert.equal(await store.runs.withdraw(fresh.id, { unstartedOnly: true }), true);
+    assert.equal(await store.runs.get(fresh.id), null);
+  } finally {
+    await store.close();
   }
 });

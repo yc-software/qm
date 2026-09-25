@@ -21,6 +21,13 @@ const productionEnv = {
   SANDBOX_BACKEND: "local",
 } as const;
 
+test("capability compression is explicitly enabled after verifier rollout", () => {
+  assert.equal(loadConfig({}).capabilityTokenCompression, false);
+  assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "0" }).capabilityTokenCompression, false);
+  assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "1" }).capabilityTokenCompression, true);
+  assert.throws(() => loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "invalid" }), /CAPABILITY_TOKEN_COMPRESSION/);
+});
+
 test("ORG_BRAND_* parses into a validated branding default", () => {
   assert.equal(loadConfig({}).brandingDefault, undefined);
   assert.deepEqual(
@@ -192,6 +199,19 @@ test("production names a mock harness rather than letting it pass as a real depl
   assert.match(mock[1]!, /HARNESS is "mock"/);
 });
 
+test("Modal without an egress proxy warns that sandboxes run fail-open", () => {
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (msg: unknown) => void warnings.push(String(msg));
+  try {
+    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret" });
+    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret", MODAL_EGRESS_PROXY_URL: "https://egress.test" });
+  } finally {
+    console.warn = original;
+  }
+  assert.equal(warnings.filter((w) => w.includes("MODAL_EGRESS_PROXY_URL")).length, 1);
+});
+
 test("a leftover *=sqlite env throws (no silent downgrade to ephemeral memory)", () => {
   assert.throws(() => loadConfig({ SESSION_STORE: "sqlite" }), /SESSION_STORE=sqlite is no longer supported/);
   assert.throws(() => loadConfig({ RUN_STORE: "sqlite" }), /RUN_STORE=sqlite is no longer supported/);
@@ -213,7 +233,6 @@ test("every boolean knob accepts the shared vocabulary (off means off)", () => {
     SEED_SKILLS: "off",
     EXECUTE_SCRATCH: "off",
     REACH_EXEC: "off",
-    COMMAND_SCOPED_CREDENTIALS: "off",
     PI_CAPTURE_REQUESTS: "off",
     EAGER_PROVISION: "off",
   });
@@ -221,20 +240,17 @@ test("every boolean knob accepts the shared vocabulary (off means off)", () => {
   assert.equal(off.eagerProvisionEnabled, false);
   assert.equal(off.scratchExecEnabled, false);
   assert.equal(off.reachExecEnabled, false);
-  assert.equal(off.sharedOwnerAuthIsolation, false);
   assert.equal(off.piCaptureRequests, false);
 
   const on = loadConfig({
     SEED_SKILLS: "yes",
     EXECUTE_SCRATCH: "on",
     REACH_EXEC: "1",
-    SHARED_OWNER_AUTH_ISOLATION: "yes",
     PI_SYSTEM_CACHE_SPLIT: "on",
   });
   assert.equal(on.seedSkills, true);
   assert.equal(on.scratchExecEnabled, true);
   assert.equal(on.reachExecEnabled, true);
-  assert.equal(on.sharedOwnerAuthIsolation, true);
   assert.equal(on.piSystemCacheSplit, true);
 
   const unset = loadConfig({});
@@ -824,6 +840,24 @@ test("Modal native retention and interval configuration are independent of legac
   assert.equal(config.modalSandbox.snapshotIntervalSec, 315360000);
 });
 
+test("Smolmachines lifecycle, egress, and snapshot knobs are parsed into Config", () => {
+  const config = loadConfig({
+    SMOLMACHINES_TOKEN: "smk_test",
+    SMOLMACHINES_AUTOSTOP_SEC: "900",
+    SMOLMACHINES_EGRESS_PROXY_URL: "https://proxy.example.com",
+    SMOLMACHINES_SNAPSHOT_S3_BUCKET: "qm-home-snapshots",
+    SMOLMACHINES_SNAPSHOT_INTERVAL_SEC: "300",
+  });
+  assert.equal(config.smolmachinesSandbox.autoStopSec, 900);
+  assert.equal(config.smolmachinesSandbox.egressProxyUrl, "https://proxy.example.com");
+  assert.equal(config.smolmachinesSandbox.snapshotS3Bucket, "qm-home-snapshots");
+  assert.equal(config.smolmachinesSandbox.snapshotIntervalSec, 300);
+  const bare = loadConfig({ SMOLMACHINES_TOKEN: "smk_test" });
+  assert.equal(bare.smolmachinesSandbox.autoStopSec, undefined);
+  assert.equal(bare.smolmachinesSandbox.snapshotS3Bucket, undefined);
+  assert.throws(() => loadConfig({ SMOLMACHINES_AUTOSTOP_SEC: "soon" }), /SMOLMACHINES_AUTOSTOP_SEC/);
+});
+
 test("Modal native activation is default-off and uses strict boolean configuration", () => {
   assert.equal(loadConfig({}).modalSandbox.nativeSnapshotsEnabled, false);
   for (const value of ["true", "on", "1"])
@@ -910,4 +944,14 @@ test("background ownership requires durable storage and an independent deploymen
   assert.throws(() => loadConfig({ ...env, BACKGROUND_DEPLOYMENT_ID: " " }), /BACKGROUND_DEPLOYMENT_ID/);
   assert.throws(() => loadConfig({ ...env, CORE_SIGNING_SECRET: "short" }), /CORE_SIGNING_SECRET/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
+});
+
+test("screening across postures is explicit and requires an enabled backend", () => {
+  assert.equal(loadConfig({}).securityScreenAllPostures, false);
+  assert.equal(
+    loadConfig({ SECURITY_SCREEN_BACKEND: "model", SECURITY_SCREEN_ALL_POSTURES: "true" }).securityScreenAllPostures,
+    true,
+  );
+  assert.throws(() => loadConfig({ SECURITY_SCREEN_ALL_POSTURES: "true" }), /requires an enabled/);
+  assert.throws(() => loadConfig({ SECURITY_SCREEN_ALL_POSTURES: "typo" }), /SECURITY_SCREEN_ALL_POSTURES/);
 });

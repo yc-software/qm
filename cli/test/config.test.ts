@@ -675,6 +675,14 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
       assert.throws(() => loadConfigAt(path), /aws\.rdsInstance/);
     });
   }
+  withConfig({ target: "aws", aws: { ...aws, dbInstanceClass: "db.t4g.micro" } }, ({ path }) => {
+    assert.equal(loadConfigAt(path).config.aws!.dbInstanceClass, "db.t4g.micro");
+  });
+  for (const dbInstanceClass of ["", "t4g.micro", "db.T4g.micro", "db.t4g", "db..micro", "db.t4g.nano.micro"]) {
+    withConfig({ target: "aws", aws: { ...aws, dbInstanceClass } }, ({ path }) => {
+      assert.throws(() => loadConfigAt(path), /aws\.dbInstanceClass/);
+    });
+  }
   for (const objectStoreBucket of ["legacy-bucket", "assets.acme.example", "192.168.5.bucket"]) {
     withConfig({ target: "aws", aws: { ...aws, objectStoreBucket } }, ({ path }) => {
       assert.equal(loadConfigAt(path).config.aws!.objectStoreBucket, objectStoreBucket);
@@ -1462,5 +1470,50 @@ test("AWS ownership control is opt-in and reserves deployment identity allocatio
   );
   withConfig({ target: "aws", aws, env: { core: { BACKGROUND_DEPLOYMENT_ID: "reused" } } }, ({ path }) =>
     assert.throws(() => loadConfigAt(path), /allocated/),
+  );
+});
+
+test("deployment screening across postures is validated and rendered", () => {
+  for (const allPostures of [true, false]) {
+    withConfig({ securityScreen: { backend: "model", allPostures } }, ({ path }) => {
+      assert.deepEqual(securityScreenEnv(loadConfigAt(path).config), {
+        SECURITY_SCREEN_BACKEND: "model",
+        SECURITY_SCREEN_ALL_POSTURES: String(allPostures),
+      });
+    });
+  }
+  for (const securityScreen of [
+    { backend: "off", allPostures: true },
+    { backend: "model", allPostures: "true" },
+  ]) {
+    withConfig({ securityScreen }, ({ path }) => assert.throws(() => loadConfigAt(path), /allPostures/));
+  }
+  withConfig({ env: { core: { SECURITY_SCREEN_ALL_POSTURES: "true" } } }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /managed by securityScreen/),
+  );
+});
+
+test("proxy deployment rendering retains the independent posture requirement", () => {
+  withConfig(
+    {
+      securityScreen: {
+        backend: "proxy",
+        provider: "fixture",
+        endpoint: "https://screen.example.test/classify",
+        rollout: "enforce",
+        allPostures: true,
+      },
+      secretEnv: { core: { SECURITY_SCREEN_PROXY_TOKEN: "SCREEN_TOKEN" } },
+    },
+    ({ path }) => {
+      const { config } = loadConfigAt(path);
+      assert.deepEqual(securityScreenEnv(config), {
+        SECURITY_SCREEN_BACKEND: "proxy",
+        SECURITY_SCREEN_ALL_POSTURES: "true",
+        SECURITY_SCREEN_PROXY_PROVIDER: "fixture",
+        SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
+        SECURITY_SCREEN_PROXY_ROLLOUT: "enforce",
+      });
+    },
   );
 });

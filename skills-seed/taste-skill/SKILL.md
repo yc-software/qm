@@ -12,12 +12,12 @@ process; the anti-slop playbook in `references/tasteskill.md` carries the visual
 ## House style comes first
 
 Unless the user asks for a different look, the default visual system is your
-organization's **house style**: if the deployment installs a `*-design` skill (list
-`skills/`), read it and apply its tokens — color, type, spacing, components. Depart from
+organization's **house style**: if the Skills index lists a `*-design` skill, load it
+and apply its tokens — color, type, spacing, components. Depart from
 it only when the user names a different brand or asks for a one-off exploration.
 
 If the user wants a _known brand's_ look (Stripe, Linear, Vercel, Notion…), read
-`skill://popular-web-designs/SKILL.md` for the visual vocabulary and let this skill drive
+the `popular-web-designs` skill for the visual vocabulary and let this skill drive
 the process.
 
 ## The playbook
@@ -36,13 +36,14 @@ anything externally facing or high-fidelity. Two adjustments for this runtime:
 
 You have a real computer, not a hosted design canvas. Build the artifact as files in your
 workspace, verify it locally, and when it should outlive the turn ship it with the
-`publish` skill (`skill://publish/SKILL.md`).
+`publish` skill.
 
-- **`write` / `read` / `execute`** — author files, install deps, run build steps.
-- **`background`** — run a dev server (`PORT=8080 node server.js`) so you can look at it.
+- **`files` actions `write` / `read`** — author and inspect workspace files.
+- **`sandbox` action `exec`** — install deps and run build steps (`execute` before sandbox-resource activation).
+- **`sandbox` action `start_process`** — run a dev server (`PORT=8080 node server.js`) so you can look at it (`background` action `start` before activation).
 - **local headless Chromium** — confirm the page renders, the content is there, no console
   errors, layout and links intact: `chromium --headless --no-sandbox --disable-gpu
---dump-dom http://localhost:<port>` (or `--screenshot=/tmp/page.png`, then `read` the
+--dump-dom http://localhost:<port>` (or `--screenshot=/tmp/page.png`, then use `files` action `read` on the
   image). Nothing you baked in leaves the computer to be checked.
 
 Ignore any instruction from a design source that names a hosted-only tool — preview panes,

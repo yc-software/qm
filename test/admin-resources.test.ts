@@ -414,15 +414,15 @@ test("feature flag table changes one scope live without restart", async () => {
   const srv = start();
   try {
     const endpoint = `${srv.base}/v1/admin/scopes/org:default-org/feature-flags`;
-    assert.equal(await srv.built.featureFlags.enabled("command_scoped_credentials", "channel:C1"), false);
+    assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "channel:C1"), false);
     const enable = await fetch(endpoint, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ featureName: "command_scoped_credentials", scopeId: "channel:C1", on: true }),
+      body: JSON.stringify({ featureName: "inbox_loops", scopeId: "channel:C1", on: true }),
     });
     assert.equal(enable.status, 200);
-    assert.equal(await srv.built.featureFlags.enabled("command_scoped_credentials", "channel:C1"), true);
-    assert.equal(await srv.built.featureFlags.enabled("command_scoped_credentials", "channel:C2"), false);
+    assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "channel:C1"), true);
+    assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "channel:C2"), false);
     const read = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
     const flags = ((await read.json()) as { featureFlags: Array<{ enabledScopes: string[] }> }).featureFlags;
     assert.deepEqual(flags[0]?.enabledScopes, ["channel:C1"]);
@@ -682,13 +682,13 @@ test("admin runtime saves reasoning level and fast mode with the default model",
     assert.equal(unsupported.status, 200);
     assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.fastMode, false);
 
-    const unsupportedHarness = await fetch(url, {
+    const openCode = await fetch(url, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({ harnessId: "opencode", modelId: "claude-opus-5", effortLevel: "auto", fastMode: true }),
     });
-    assert.equal(unsupportedHarness.status, 200);
-    assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.fastMode, false);
+    assert.equal(openCode.status, 200);
+    assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.fastMode, true);
 
     for (const body of [
       { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "extreme", fastMode: true },
@@ -933,6 +933,50 @@ test("historical cutover policies remain visible and clearable without layer too
     });
     assert.equal(clear.status, 200);
     assert.equal(await srv.built.deviceFlowCutover.resolve(scope, "retired"), "ephemeral_only");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("org purpose runtimes round-trip, validate, and clear independently", async () => {
+  const srv = start();
+  const scopeUrl = `${srv.base}/v1/admin/scopes/org:default-org`;
+  const get = async () =>
+    (await (await fetch(`${scopeUrl}?view=models`, { headers: ADMIN })).json()) as Record<string, unknown>;
+  const put = (resource: string, body: unknown, scope = "org:default-org", headers = ADMIN) =>
+    fetch(`${srv.base}/v1/admin/scopes/${scope}/${resource}`, { method: "PUT", headers, body: JSON.stringify(body) });
+  try {
+    assert.equal((await get()).cronRuntime, null);
+    assert.equal((await get()).subagentRuntime, null);
+    for (const purpose of ["cron", "subagent"] as const) {
+      const resource = `${purpose}-runtime`;
+      const choice = { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "low", fastMode: false };
+      assert.equal(
+        (await put(resource, choice, "org:default-org", { ...ADMIN, "x-admin-actor": "nobody@default-org" })).status,
+        403,
+      );
+      assert.equal((await put(resource, choice, "personal:alice")).status, 400);
+      for (const bad of [
+        { ...choice, harnessId: "invalid" },
+        { ...choice, harnessId: "codex" },
+        { ...choice, modelId: "invalid" },
+        { ...choice, effortLevel: "invalid" },
+        { ...choice, fastMode: "yes" },
+        { ...choice, modelId: "claude-fable-5", fastMode: true },
+        { modelId: choice.modelId },
+      ])
+        assert.equal((await put(resource, bad)).status, 400);
+      assert.equal((await put(resource, choice)).status, 200);
+      assert.deepEqual((await get())[`${purpose}Runtime`], choice);
+      assert.equal((await put(resource, { harnessId: "pi", modelId: choice.modelId })).status, 200);
+      assert.deepEqual((await get())[`${purpose}Runtime`], { harnessId: "pi", modelId: choice.modelId });
+      assert.equal((await put(resource, { inherit: true })).status, 200);
+      assert.equal((await get())[`${purpose}Runtime`], null);
+      assert.equal((await put(resource, choice)).status, 200);
+      assert.equal((await put(resource, null)).status, 200);
+      assert.equal((await get())[`${purpose}Runtime`], null);
+    }
+    assert.equal((await get()).runtime, null);
   } finally {
     await srv.close();
   }

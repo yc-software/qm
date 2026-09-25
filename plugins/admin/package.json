@@ -13,10 +13,14 @@
     "test": "NODE_ENV=test ALLOW_UNSIGNED_TEST_IDENTITY=1 node --test"
   },
   "devDependencies": {
+    "@types/jsdom": "^28.0.3",
     "@types/node": "^24.0.0",
+    "jsdom": "^29.1.1",
     "typescript": "^5.8.2"
   },
   "dependencies": {
-    "@sentry/node": "10.75.0"
+    "@sentry/node": "10.75.0",
+    "esbuild": "^0.28.1",
+    "lit": "^3.3.3"
   }
 }

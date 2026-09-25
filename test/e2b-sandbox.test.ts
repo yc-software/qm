@@ -36,6 +36,16 @@ beforeEach(() => {
   fake = installFakeE2b();
   sandbox = make();
 });
+
+const nativeClient = (): typeof fake.client => ({
+  ...fake.client,
+  nativePause: true,
+  async info() {
+    const current = fake.current(scopeName());
+    if (!current) throw new E2bSandboxGoneError("unknown", "sandbox was not found");
+    return { state: current.state, expiresAtMs: Date.now() + 60_000, onTimeout: "pause" };
+  },
+});
 after(() => fake?.cleanup());
 
 test("provision runs commands with env and cwd", async () => {
@@ -440,16 +450,159 @@ test("pause failures are durable and visible and leave the source available for 
   assert.equal((await store.get(scope))?.preservationError, undefined);
 });
 
-test("a lost native E2B sandbox requires explicit recovery instead of a blank replacement", async () => {
+test("a lost native E2B sandbox without a recovery snapshot requires explicit recovery instead of a blank replacement", async () => {
   const store = createMemoryMap<StoredE2bSandbox>();
-  const client = { ...fake.client, nativePause: true };
-  const first = make({ client, store });
+  const errors: string[] = [];
+  const client = {
+    ...nativeClient(),
+    async create(options: Parameters<typeof fake.client.create>[0]) {
+      const session = await fake.client.create(options);
+      return {
+        ...session,
+        async createSnapshot(): Promise<{ snapshotId: string }> {
+          throw new Error("snapshot quota exhausted");
+        },
+      };
+    },
+  };
+  const first = make({ client, store, onError: (e: { code: string }) => errors.push(e.code) });
   const handle = await first.provision(layers);
   await first.teardown(handle);
+  assert.equal(fake.current(scopeName())?.state, "paused", "a failed snapshot still lets the pause proceed");
+  assert.equal((await store.get(scope))?.recoveryError, "snapshot quota exhausted");
+  assert.deepEqual(errors, ["recovery_snapshot_failed"]);
+  const status = await first.computerStatus!(scope);
+  assert.equal(status.recovery?.error, "snapshot quota exhausted");
   fake.expirePaused();
   const restarted = make({ client, store });
   await assert.rejects(restarted.provision(layers), /explicitly import a recovery snapshot/);
   assert.equal(fake.createdCount(scopeName()), 1);
+});
+
+test("a lost native E2B sandbox is replaced from its persistent recovery snapshot", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const client = nativeClient();
+  const first = make({ client, store });
+  const handle = await first.provision(layers);
+  await first.writeFile(handle, "work.txt", "captured before the pause\n");
+  await first.teardown(handle);
+  const captured = (await store.get(scope))!;
+  assert.ok(captured.recoverySnapshotId, "used-turn teardown captures a provider snapshot");
+  assert.deepEqual(fake.snapshots(), [captured.recoverySnapshotId]);
+  const paused = await first.computerStatus!(scope);
+  assert.equal(paused.recovery?.checkpointId, captured.recoverySnapshotId);
+  assert.equal(paused.recovery?.checkpointExpiresAtMs, null);
+  fake.expirePaused();
+  const restarted = make({ client, store });
+  const revived = await restarted.provision(layers);
+  assert.equal(revived.coldStart, false);
+  assert.equal(fake.createdCount(scopeName()), 2);
+  assert.equal(fake.restoredFrom(scopeName()), captured.recoverySnapshotId);
+  assert.equal(await restarted.readFile(revived, "work.txt"), "captured before the pause\n");
+  assert.equal((await store.get(scope))?.sandboxId, fake.current(scopeName())?.sandboxId);
+  assert.equal((await store.get(scope))?.preservationState, "running");
+});
+
+test("recovery snapshots follow the native interval and supersede the previous capture", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const client = { ...fake.client, nativePause: true };
+  const throttled = make({ client, store, nativeSnapshotIntervalMs: 60 * 60_000 });
+  const a = await throttled.provision(layers);
+  await throttled.teardown(a);
+  const b = await throttled.provision(layers);
+  await throttled.teardown(b);
+  assert.equal(fake.snapshots().length, 1, "second teardown inside the interval skips the capture");
+  const firstId = (await store.get(scope))!.recoverySnapshotId!;
+
+  const eager = make({ client, store, nativeSnapshotIntervalMs: 0 });
+  const c = await eager.provision(layers);
+  await eager.teardown(c);
+  const secondId = (await store.get(scope))!.recoverySnapshotId!;
+  assert.notEqual(secondId, firstId);
+  assert.deepEqual(fake.snapshots(), [secondId], "only the newest snapshot is retained");
+
+  await eager.destroyScope!(scope);
+  assert.deepEqual(fake.snapshots(), [], "destroying the scope deletes its snapshot");
+});
+
+test("legacy keepWarm teardown still takes its portable checkpoint", async () => {
+  const counting = instrumentedSnapshotStore();
+  const s = make({ snapshots: counting.store });
+  const h = await s.provision(layers);
+  await s.teardown(h, { keepWarm: true });
+  assert.equal(counting.puts(), 1);
+  assert.equal(fake.current(h.id)?.state, "running");
+});
+
+test("a failing snapshot delete never wedges destroy", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const client = {
+    ...nativeClient(),
+    async deleteSnapshot(): Promise<void> {
+      throw new Error("snapshot API unavailable");
+    },
+  };
+  const s = make({ client, store });
+  const h = await s.provision(layers);
+  await s.teardown(h);
+  assert.ok((await store.get(scope))?.recoverySnapshotId);
+  await s.destroyScope!(scope);
+  assert.equal(await store.get(scope), null);
+  assert.equal(fake.current(scopeName()), null);
+});
+
+test("keepWarm teardown extends the sandbox timeout to the keep-warm horizon", async () => {
+  const s = make({ keepWarmSec: 7200 });
+  const h = await s.provision(layers);
+  await s.teardown(h, { keepWarm: true });
+  assert.equal(fake.current(h.id)?.state, "running");
+  assert.ok(fake.timeouts(h.id).includes(7200_000), `timeouts: ${fake.timeouts(h.id).join(",")}`);
+});
+
+test("a command whose sandbox is lost mid-flight fails loudly instead of running twice", async () => {
+  const h = await sandbox.provision(layers);
+  fake.loseNextCommand(h.id);
+  const before = fake.execScripts().length;
+  await assert.rejects(sandbox.run(h, "echo must-not-repeat"), /was lost while a command was running/);
+  assert.equal(fake.execScripts().length, before, "the lost command was not re-run");
+  const r = await sandbox.run(h, "echo back");
+  assert.equal(r.stdout.trim(), "back", "the next command reconnects");
+  assert.equal(fake.createdCount(scopeName()), 1);
+});
+
+test("an egress proxy is advertised as domain enforcement", () => {
+  assert.equal(make({ egressProxyUrl: "https://proxy.example.com" }).profile.egressEnforcement, "domain");
+  assert.equal(make().profile.egressEnforcement, "none");
+});
+
+test("computerStatus reports provider metrics and the profile learns the sandbox shape", async () => {
+  const client = {
+    ...fake.client,
+    async info() {
+      return { state: "running", expiresAtMs: Date.now() + 60_000, onTimeout: "pause", cpuCount: 2, memoryMb: 512 };
+    },
+  };
+  const s = make({ client });
+  fake.metrics = {
+    cpuUsedPct: 12.5,
+    cpuCount: 2,
+    memUsedBytes: 256 * 2 ** 20,
+    memTotalBytes: 512 * 2 ** 20,
+    diskUsedBytes: 1.5 * 2 ** 30,
+    diskTotalBytes: 20 * 2 ** 30,
+  };
+  await s.provision(layers);
+  const status = await s.computerStatus!(scope);
+  assert.deepEqual(status.resources, {
+    cpuUsedPct: 12.5,
+    memUsedMb: 256,
+    memTotalMb: 512,
+    diskUsedGb: 1.5,
+    diskTotalGb: 20,
+  });
+  assert.equal(s.profile.spec?.cpus, 2);
+  assert.equal(s.profile.spec?.memoryMb, 512);
+  assert.equal(s.profile.spec?.diskGb, 20);
 });
 
 test("legacy pause preserves dirty home after failed portable checkpoint and retries on an unused turn", async () => {
