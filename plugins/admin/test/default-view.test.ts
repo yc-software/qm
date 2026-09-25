@@ -428,7 +428,7 @@ test("admin parity views expose the requested card groups and real navigation ac
     "Ambient reply policy",
     "Egress policy",
     "External Slack audience",
-    "Default runtime",
+    "Conversation runtime",
     "Custom providers",
     "Enabled models",
     "Organization SOUL",
