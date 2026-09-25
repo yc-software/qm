@@ -4,7 +4,7 @@ import { migrateTranscriptPage } from "../scripts/lib/transcript-tape-migration.
 import { test, before } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
-import { migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { applyPgMigrations, migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
 import {
   backfillSessionOriginBatch,
@@ -125,7 +125,9 @@ test("pg spend indexes preserve legacy and unusual requests through migration an
   const range = { from: at, to: at + 1 };
   try {
     await raw.query("DROP INDEX session_llm_requests_spend, session_llm_requests_spend_wide");
-    await raw.query("DELETE FROM qm_schema_migrations WHERE id = 'sessions/store/0021-spend-covering-index'");
+    await raw.query(
+      "DELETE FROM qm_schema_migrations WHERE id IN ('sessions/store/0020-spend-usage-json', 'sessions/store/0020-spend-usage-json-size', 'sessions/store/0021-spend-covering-index')",
+    );
     await insert("spend-index-normal", "normal", JSON.stringify(usage));
     await insert("spend-index-wide", wideModel, JSON.stringify(wideUsage));
     await insert("spend-index-null", "null", null);
@@ -197,6 +199,55 @@ test("pg spend indexes preserve legacy and unusual requests through migration an
     await raw.query("DELETE FROM session_llm_requests WHERE session_id IN ($1, 'missing-spend-session')", [session.id]);
     await store.deleteSession(session.id);
     await raw.end();
+  }
+});
+
+test("pg spend usage guard upgrades the original migration without rewriting indexes or ledger", { skip }, async () => {
+  const pg = (await import("pg")).default;
+  const admin = new pg.Pool({ connectionString: URL });
+  const schema = `spend_upgrade_${randomUUID().replaceAll("-", "")}`;
+  await admin.query(`CREATE SCHEMA ${schema}`);
+  const url = new globalThis.URL(URL!);
+  url.searchParams.set("options", `-c search_path=${schema}`);
+  const raw = new pg.Pool({ connectionString: url.toString() });
+  const store = createPostgresSessionStore(url.toString());
+  const migrations = registeredPgMigrations(url.toString());
+  const original = migrations.find((migration) => migration.id === "sessions/store/0020-spend-usage-json")!;
+  try {
+    assert.equal(original.checksum, "febf07cde8b9ffe09a497d44a0e524a5c994f7708a0fab6d245315e4ab1e717a");
+    await applyPgMigrations(
+      raw,
+      migrations.filter((migration) => migration.id !== "sessions/store/0020-spend-usage-json-size"),
+    );
+    const ledger = (await raw.query("SELECT * FROM qm_schema_migrations ORDER BY id")).rows;
+    const indexes = (
+      await raw.query(
+        "SELECT indexrelid FROM pg_index WHERE indexrelid IN ('session_llm_requests_spend'::regclass, 'session_llm_requests_spend_wide'::regclass) ORDER BY indexrelid",
+      )
+    ).rows;
+    await store.countSessions();
+    assert.deepEqual(
+      (
+        await raw.query(
+          "SELECT * FROM qm_schema_migrations WHERE id <> 'sessions/store/0020-spend-usage-json-size' ORDER BY id",
+        )
+      ).rows,
+      ledger,
+    );
+    assert.deepEqual(
+      (
+        await raw.query(
+          "SELECT indexrelid FROM pg_index WHERE indexrelid IN ('session_llm_requests_spend'::regclass, 'session_llm_requests_spend_wide'::regclass) ORDER BY indexrelid",
+        )
+      ).rows,
+      indexes,
+    );
+    const deep = "[".repeat(20_000) + "0" + "]".repeat(20_000);
+    assert.equal((await raw.query("SELECT spend_usage_json($1) AS usage", [deep])).rows[0].usage, null);
+  } finally {
+    await raw.end();
+    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+    await admin.end();
   }
 });
 

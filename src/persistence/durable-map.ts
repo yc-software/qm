@@ -173,17 +173,30 @@ export function createPostgresMap<T>(
   };
   const migrations = [
     migration,
-    ...indexedFields.map((field) => {
+    ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
-      return {
-        id: `durable-map/${table}/select-${field.toLowerCase()}`,
-        statements: [
-          `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_${field.toLowerCase()}_fold
+      return [
+        {
+          id: `durable-map/${table}/lookup-${field.toLowerCase()}-drop`,
+          statements: [`SET LOCAL lock_timeout = '3s'`, `DROP INDEX IF EXISTS ${table}_${field.toLowerCase()}_fold`],
+        },
+        {
+          id: `durable-map/${table}/lookup-${field.toLowerCase()}-hash`,
+          statements: [
+            `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_${field.toLowerCase()}_fold
            ON ${table} USING hash (lower(json->>'${field}'))`,
-          `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_${field.toLowerCase()}_unicode
+          ],
+        },
+        {
+          id: `durable-map/${table}/select-${field.toLowerCase()}`,
+          statements: [
+            `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_${field.toLowerCase()}_fold
+           ON ${table} (lower(json->>'${field}'))`,
+            `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_${field.toLowerCase()}_unicode
            ON ${table} (id) WHERE json->>'${field}' ~ '[^\\x01-\\x7f]'`,
-        ],
-      };
+          ],
+        },
+      ];
     }),
   ];
   for (const definition of migrations) pg.registerMigration(definition);

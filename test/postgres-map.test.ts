@@ -13,6 +13,7 @@ import {
   type KeychainGrant,
 } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
+import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
@@ -269,6 +270,38 @@ test("pg map: indexed fields accept wide values through migration and later writ
   } finally {
     await unindexed.delete("existing");
     await unindexed.delete("later");
+    await factory.pool.close();
+  }
+});
+
+test("pg map: original folded-index migration upgrades without changing its ledger", { skip }, async () => {
+  const factory = createPostgresMapFactory(URL!);
+  const unindexed = factory.map<{ owner: string }>("map_wide_widgets");
+  await unindexed.put("legacy", { owner: "short" });
+  const legacy = definePgMigration("durable-map/map_wide_widgets/select-owner", [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS map_wide_widgets_owner_fold
+           ON map_wide_widgets (lower(json->>'owner'))`,
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS map_wide_widgets_owner_unicode
+           ON map_wide_widgets (id) WHERE json->>'owner' ~ '[^\\x01-\\x7f]'`,
+  ]);
+  try {
+    await factory.pool.q("DROP INDEX IF EXISTS map_wide_widgets_owner_fold, map_wide_widgets_owner_unicode");
+    await factory.pool.q(
+      "DELETE FROM qm_schema_migrations WHERE id LIKE 'durable-map/map_wide_widgets/%' AND id <> 'durable-map/map_wide_widgets/0001'",
+    );
+    await applyPgMigrations(await factory.pool.pool(), [legacy]);
+    const ledger = await factory.pool.q("SELECT * FROM qm_schema_migrations WHERE id = $1", [legacy.id]);
+    const indexed = factory.map<{ owner: string }>("map_wide_widgets", ["owner"]);
+    const owner = randomBytes(3000).toString("hex");
+    await indexed.put("legacy", { owner });
+    assert.deepEqual(await indexed.select({ where: { field: "owner", anyOfFold: [owner] } }), [{ owner }]);
+    assert.deepEqual(await factory.pool.q("SELECT * FROM qm_schema_migrations WHERE id = $1", [legacy.id]), ledger);
+    const [index] = await factory.pool.q(
+      "SELECT am.amname FROM pg_class c JOIN pg_am am ON am.oid = c.relam WHERE c.oid = 'map_wide_widgets_owner_fold'::regclass",
+    );
+    assert.equal(index!.amname, "hash");
+  } finally {
+    await unindexed.delete("legacy");
     await factory.pool.close();
   }
 });

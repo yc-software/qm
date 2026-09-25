@@ -615,6 +615,20 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                           AND pg_input_is_valid(j ->> 'output', 'bigint') IS NOT FALSE
                           AND pg_input_is_valid(j ->> 'cacheRead', 'bigint') IS NOT FALSE
                           AND pg_input_is_valid(j ->> 'cacheWrite', 'bigint') IS NOT FALSE THEN j END
+               FROM (SELECT CASE WHEN pg_input_is_valid(t, 'jsonb') THEN t::jsonb END AS j OFFSET 0) parsed
+             $spend_usage_json$`,
+        ],
+      },
+      {
+        id: "sessions/store/0020-spend-usage-json-size",
+        statements: [
+          `CREATE OR REPLACE FUNCTION spend_usage_json(t text) RETURNS jsonb
+             LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $spend_usage_json$
+             SELECT CASE WHEN pg_input_is_valid(j ->> 'costUsd', 'double precision') IS NOT FALSE
+                          AND pg_input_is_valid(j ->> 'input', 'bigint') IS NOT FALSE
+                          AND pg_input_is_valid(j ->> 'output', 'bigint') IS NOT FALSE
+                          AND pg_input_is_valid(j ->> 'cacheRead', 'bigint') IS NOT FALSE
+                          AND pg_input_is_valid(j ->> 'cacheWrite', 'bigint') IS NOT FALSE THEN j END
                FROM (SELECT CASE WHEN octet_length(t) > 2000 THEN NULL
                                  WHEN pg_input_is_valid(t, 'jsonb') THEN t::jsonb END AS j OFFSET 0) parsed
              $spend_usage_json$`,
