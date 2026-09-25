@@ -1173,7 +1173,7 @@ export function chatTpl(item: InboxItem, compact = false): TemplateResult {
                   ${(empty ? suggestions : []).map(
                     (prompt) =>
                       html`<button
-                        class="inbox-chat-suggestion"
+                        class="inbox-suggest-chip inbox-chat-suggestion"
                         type="button"
                         ?disabled=${busy}
                         @click=${(e: MouseEvent) => submit(e, prompt)}
@@ -1201,10 +1201,6 @@ export function chatTpl(item: InboxItem, compact = false): TemplateResult {
                 if (!(await askAgent(item, text, options, snapshot)))
                   throw new Error("Could not complete the request. Your message has been kept.");
               };
-            },
-            submit: async (text, options) => {
-              if (!(await askAgent(item, text, options)))
-                throw new Error("Could not complete the request. Your message has been kept.");
             },
           },
           compact,

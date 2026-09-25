@@ -188,8 +188,7 @@ export interface ComposerSubmission {
 }
 
 export interface ComposerOptions {
-  submit?: (text: string, options: ComposerSubmission) => Promise<void>;
-  prepareSubmit?: () => NonNullable<ComposerOptions["submit"]>;
+  prepareSubmit?: () => (text: string, options: ComposerSubmission) => Promise<void>;
   placeholder?: string;
   preferenceKey?: string;
   runtimeAccount?: "company";
@@ -216,7 +215,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function isUnsentNewChat(): boolean {
     return (
-      !options.submit &&
+      !options.prepareSubmit &&
       ctx.chat.state.sessionId === null &&
       !(ctx.chat.state.agent?.state.messages ?? []).some((m) => !(m as { opener?: boolean }).opener)
     );
@@ -230,7 +229,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function clearActiveDraft(): void {
     if (ctx.chat.state.threadRef) clearDraft(ctx.chat.state.threadRef);
-    if (!options.submit && ctx.chat.state.sessionId === null) clearDraft(newChatDraftKey(appState.me?.user));
+    if (!options.prepareSubmit && ctx.chat.state.sessionId === null) clearDraft(newChatDraftKey(appState.me?.user));
   }
 
   const composerState = {
@@ -414,7 +413,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     agent: Agent,
     preserveSelection = false,
   ): Promise<void> {
-    if (options.submit) {
+    if (options.prepareSubmit) {
       if (change.harnessId && change.modelId) selectModel(`${change.harnessId}:${change.modelId}`, agent);
       return;
     }
@@ -529,7 +528,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       >
         ${header} ${slashMenu(agent)}
         ${
-          !options.submit && activeRuntimeConfig?.upgradeAvailable
+          !options.prepareSubmit && activeRuntimeConfig?.upgradeAvailable
             ? html`<div class="runtime-upgrade">
                 <span
                   >The org now recommends
@@ -964,8 +963,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     toggleFastMode,
     effectiveFastMode,
     changeDefault: changeScopeRuntime,
-    showDefaultAction: !options.submit,
-    showInheritAction: !options.submit,
+    showDefaultAction: !options.prepareSubmit,
+    showInheritAction: !options.prepareSubmit,
   });
   const placeLoadout = modelPicker.place;
 
@@ -1454,7 +1453,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     if (agent.state.isStreaming) return queueDraft(agent);
     const text = composerState.draft.trim();
     if (!text && composerState.attachments.length === 0) return;
-    const submit = options.prepareSubmit?.() ?? options.submit;
+    const submit = options.prepareSubmit?.();
     if (submit) {
       const selected = currentModelOption()!;
       const attachments = [...composerState.attachments];

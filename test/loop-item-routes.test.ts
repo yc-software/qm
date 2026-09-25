@@ -995,11 +995,33 @@ test("followup accepts only typed runtime and staged attachment fields", async (
     fastMode: true,
     attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: 20, blobId: "opaque-upload" }],
   };
-  const out = await call(w, { method: "POST", path, body: { message: "", ...options, scopeId: "personal:other" } });
+  const out = await call(w, {
+    method: "POST",
+    path,
+    body: {
+      message: "",
+      ...options,
+      model: ` ${options.model} `,
+      harness: " pi ",
+      thinkingLevel: " high ",
+      attachments: [{ ...options.attachments[0], path: "/ignored" }],
+      scopeId: "personal:other",
+    },
+  });
   assert.equal(out.status, 200);
   assert.deepEqual(received, options);
   for (const invalid of [
     { model: 5 },
+    { model: " " },
+    { harness: " " },
+    { thinkingLevel: " " },
+    { fastMode: null },
+    { attachments: null },
+    { attachments: [null] },
+    { attachments: [{ ...options.attachments[0], name: "" }] },
+    { attachments: [{ ...options.attachments[0], blobId: "" }] },
+    { attachments: [{ ...options.attachments[0], sizeBytes: 1.5 }] },
+    { attachments: [{ ...options.attachments[0], sizeBytes: 1_000_000_001 }] },
     { harness: "unknown" },
     { thinkingLevel: "unsupported" },
     { fastMode: "true" },

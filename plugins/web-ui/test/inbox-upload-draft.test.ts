@@ -1,42 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JSDOM } from "jsdom";
-import { createServer } from "vite";
 import type { ComposerSurface } from "../src/conv-types.ts";
-import { inboxRuntime, until } from "./inbox-composer-fixture.ts";
+import { createInboxFixture, inboxRuntime, until } from "./inbox-composer-fixture.ts";
 
 test("a submission freezes the edited draft before upload and never retries a conflicting blur save", async () => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
-    url: "http://localhost/",
-    pretendToBeVisual: true,
-  });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  for (const key of [
-    "window",
-    "document",
-    "location",
-    "history",
-    "localStorage",
-    "navigator",
-    "HTMLElement",
-    "Node",
-    "Event",
-    "CustomEvent",
-    "customElements",
-  ])
-    Object.defineProperty(globalThis, key, {
-      configurable: true,
-      value: key === "window" ? dom.window : dom.window[key as keyof typeof dom.window],
-    });
-  for (const key of ["getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"] as const)
-    Object.defineProperty(globalThis, key, { configurable: true, value: dom.window[key].bind(dom.window) });
-  const originalFetch = globalThis.fetch;
   const state = globalThis as typeof globalThis & { inboxTestComposer?: ComposerSurface };
-  const vite = await createServer({
-    server: { middlewareMode: true, hmr: false },
-    appType: "custom",
+  const { vite, host, close } = await createInboxFixture({
+    dom: { pretendToBeVisual: true },
     plugins: [
       {
         name: "capture-inbox-composer",
@@ -56,7 +26,6 @@ test("a submission freezes the edited draft before upload and never retries a co
     appState.me = { user: "taylor@example.com" };
     const inbox = await vite.ssrLoadModule("/src/inbox.ts");
     const { render } = await vite.ssrLoadModule("lit");
-    const host = document.getElementById("main")!;
     for (const conflict of [true, false]) {
       render(null, host);
       inbox.resetInboxState();
@@ -133,9 +102,7 @@ test("a submission freezes the edited draft before upload and never retries a co
     }
     render(null, host);
   } finally {
-    globalThis.fetch = originalFetch;
     delete state.inboxTestComposer;
-    await vite.close();
-    dom.window.close();
+    await close();
   }
 });

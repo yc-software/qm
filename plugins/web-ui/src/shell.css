@@ -9938,24 +9938,6 @@ h3.ambient-field-label {
   gap: 6px;
   justify-content: center;
 }
-.inbox-chat-suggestion {
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted-foreground);
-  font: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
-}
-.inbox-chat-suggestion:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--foreground) 30%, transparent);
-  color: var(--foreground);
-}
-.inbox-chat-suggestion:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
 .inbox-dismiss {
   flex: none;
   align-self: flex-start;
@@ -9981,14 +9963,12 @@ h3.ambient-field-label {
   justify-content: flex-end;
 }
 .inbox-dismiss:focus-visible,
-.inbox-chat-suggestion:focus-visible,
 .inbox-suggest-chip:focus-visible {
   outline: 2px solid var(--cta);
   outline-offset: 2px;
 }
 @media (pointer: coarse) {
   .inbox-dismiss,
-  .inbox-chat-suggestion,
   .inbox-suggest-chip {
     min-height: 44px;
   }

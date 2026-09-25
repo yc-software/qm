@@ -1,49 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JSDOM } from "jsdom";
-import { createServer } from "vite";
-import { inboxRuntime, until } from "./inbox-composer-fixture.ts";
+import { createInboxFixture, inboxRuntime, until } from "./inbox-composer-fixture.ts";
 
 test("draft is the first editable chat message and Send it submits the combined instruction", async () => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', { url: "http://localhost/" });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  for (const key of [
-    "window",
-    "document",
-    "location",
-    "history",
-    "localStorage",
-    "navigator",
-    "HTMLElement",
-    "Node",
-    "CustomEvent",
-    "Event",
-    "customElements",
-  ])
-    Object.defineProperty(globalThis, key, {
-      configurable: true,
-      value: key === "window" ? dom.window : dom.window[key as keyof typeof dom.window],
-    });
-  Object.defineProperty(globalThis, "getComputedStyle", {
-    configurable: true,
-    value: dom.window.getComputedStyle.bind(dom.window),
-  });
-  Object.defineProperty(globalThis, "requestAnimationFrame", {
-    configurable: true,
-    value: (fn: FrameRequestCallback) => setTimeout(() => fn(Date.now()), 0),
-  });
-  Object.defineProperty(globalThis, "cancelAnimationFrame", { configurable: true, value: clearTimeout });
-  const originalFetch = globalThis.fetch;
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const { dom, vite, host, close } = await createInboxFixture();
   try {
     await vite.ssrLoadModule("/src/shell.ts");
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     appState.me = { user: "taylor@example.com" };
     const { chatTpl, toInboxItem, inboxState, resetInboxState } = await vite.ssrLoadModule("/src/inbox.ts");
     const { render } = await vite.ssrLoadModule("lit");
-    const host = dom.window.document.getElementById("main")!;
     for (const source of ["gmail", "slack"]) {
       for (const instruction of ["", "Make it shorter"]) {
         render(null, host);
@@ -181,7 +147,7 @@ test("draft is the first editable chat message and Send it submits the combined 
     };
     const embedded = (key: string) =>
       html`${embeddedComposer(key, {
-        submit: async (text: string, options: { model: string; fastMode: boolean }) =>
+        prepareSubmit: () => async (text: string, options: { model: string; fastMode: boolean }) =>
           submissions.push({ text, ...options }),
       })}`;
     render(embedded("test-inbox-first"), host);
@@ -235,7 +201,7 @@ test("draft is the first editable chat message and Send it submits the combined 
       const called: string[] = [];
       const pending = (key: string, label: string) =>
         html`${embeddedComposer(key, {
-          submit: async () => {
+          prepareSubmit: () => async () => {
             called.push(label);
           },
         })}`;
@@ -252,7 +218,7 @@ test("draft is the first editable chat message and Send it submits the combined 
     let rejectAfterNavigation: (error: Error) => void;
     render(
       html`${embeddedComposer("navigation-failure", {
-        submit: () =>
+        prepareSubmit: () => () =>
           new Promise<void>((_resolve, reject) => {
             rejectAfterNavigation = reject;
           }),
@@ -315,10 +281,6 @@ test("draft is the first editable chat message and Send it submits the combined 
       assert.equal(host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.disabled, false);
     }
   } finally {
-    const { render } = await vite.ssrLoadModule("lit");
-    render(null, dom.window.document.getElementById("main")!);
-    globalThis.fetch = originalFetch;
-    await vite.close();
-    dom.window.close();
+    await close();
   }
 });

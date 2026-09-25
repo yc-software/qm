@@ -1,55 +1,21 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JSDOM, VirtualConsole } from "jsdom";
-import { createServer } from "vite";
-import { inboxRuntime, until } from "./inbox-composer-fixture.ts";
+import { VirtualConsole } from "jsdom";
+import { createInboxFixture, inboxRuntime, until } from "./inbox-composer-fixture.ts";
 
 test("a failed inbox followup preserves edits made while the request was pending", async () => {
   const domErrors: Error[] = [];
   const virtualConsole = new VirtualConsole();
   virtualConsole.on("jsdomError", (error) => domErrors.push(error));
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
-    url: "http://localhost/web-ui/",
-    virtualConsole,
+  const { dom, vite, host, close } = await createInboxFixture({
+    dom: { url: "http://localhost/web-ui/", virtualConsole },
   });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  for (const key of [
-    "window",
-    "document",
-    "location",
-    "history",
-    "localStorage",
-    "navigator",
-    "HTMLElement",
-    "Node",
-    "CustomEvent",
-    "Event",
-    "customElements",
-  ])
-    Object.defineProperty(globalThis, key, {
-      configurable: true,
-      value: key === "window" ? dom.window : dom.window[key as keyof typeof dom.window],
-    });
-  Object.defineProperty(globalThis, "getComputedStyle", {
-    configurable: true,
-    value: dom.window.getComputedStyle.bind(dom.window),
-  });
-  Object.defineProperty(globalThis, "requestAnimationFrame", {
-    configurable: true,
-    value: (fn: FrameRequestCallback) => setTimeout(() => fn(Date.now()), 0),
-  });
-  Object.defineProperty(globalThis, "cancelAnimationFrame", { configurable: true, value: clearTimeout });
-  const originalFetch = globalThis.fetch;
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
     await vite.ssrLoadModule("/src/shell.ts");
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     appState.me = { user: "taylor@example.com" };
     const { chatTpl, toInboxItem } = await vite.ssrLoadModule("/src/inbox.ts");
     const { render } = await vite.ssrLoadModule("lit");
-    const host = dom.window.document.getElementById("main")!;
     for (const edited of [undefined, "New instruction", ""]) {
       const item = toInboxItem({
         id: `item-${String(edited)}`,
@@ -89,10 +55,6 @@ test("a failed inbox followup preserves edits made while the request was pending
     }
     assert.deepEqual(domErrors, []);
   } finally {
-    const { render } = await vite.ssrLoadModule("lit");
-    render(null, dom.window.document.getElementById("main")!);
-    globalThis.fetch = originalFetch;
-    await vite.close();
-    dom.window.close();
+    await close();
   }
 });

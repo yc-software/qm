@@ -26,7 +26,7 @@ class EmbeddedComposer extends AsyncDirective {
 
   render(
     key: string,
-    options: ComposerOptions & { submit: NonNullable<ComposerOptions["submit"]> },
+    options: ComposerOptions & { prepareSubmit: NonNullable<ComposerOptions["prepareSubmit"]> },
     compact = false,
   ): TemplateResult {
     if (!this.ctx || this.key !== key) {
@@ -68,7 +68,6 @@ class EmbeddedComposer extends AsyncDirective {
       });
     }
     this.ctx.pane = compact;
-    this.options!.submit = options.submit;
     this.options!.prepareSubmit = options.prepareSubmit;
     return this.template();
   }
