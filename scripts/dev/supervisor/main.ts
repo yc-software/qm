@@ -521,6 +521,12 @@ function finishBoot(): void {
 
 function startLoops(): void {
   const heartbeat = setInterval(() => {
+    if (shuttingDown) return;
+    if (!existsSync(worktree)) {
+      log("worktree vanished -- shutting down and releasing the lease");
+      void shutdownSelf(true);
+      return;
+    }
     if (!existsSync(lock)) {
       log("lease directory vanished (external teardown) -- exiting");
       void shutdownSelf(false);
@@ -600,6 +606,7 @@ async function teardown(reason: string): Promise<void> {
 }
 
 async function shutdownSelf(removeLock: boolean): Promise<void> {
+  if (shuttingDown) return;
   await teardown("shutdown requested");
   if (removeLock) rmSync(lock, { recursive: true, force: true });
   process.exit(EXIT.ok);

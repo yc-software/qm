@@ -1,3 +1,4 @@
+import { isComposioHost } from "../credentials/keychain.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
@@ -152,6 +153,8 @@ export async function brokerCredentialCall(opts: {
   } catch {
     return deny(400, "bad_url", "url is not a valid absolute URL", rec.host);
   }
+  if (isComposioHost(parsed.hostname))
+    return deny(403, "backend_only", "Composio calls must use the identity-bound /v1/composio API", rec.host);
   if (parsed.protocol !== "https:") return deny(403, "scheme_not_allowed", "only https targets are allowed", rec.host);
   if (
     rec.injection?.actor

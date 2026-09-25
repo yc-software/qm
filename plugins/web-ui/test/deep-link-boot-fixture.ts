@@ -1,8 +1,11 @@
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
+import type { CoreSession, TranscriptPage } from "../src/core-bridge.ts";
 
 export interface Harness {
   requests: string[];
+  setTranscriptStatus: (status: number) => void;
+  openSession: (session: CoreSession, prefetch?: Promise<TranscriptPage | null>) => Promise<void>;
   setConnections: (items: unknown[], status?: number) => void;
   releaseSessions: () => void;
   releaseTranscript: () => void;
@@ -18,12 +21,14 @@ export interface Harness {
 
 interface HarnessOptions {
   path: string;
+  session?: CoreSession;
   messageLink?: boolean;
   transcriptStatus?: number;
   transcriptFailures?: number;
   holdTranscript?: boolean;
   holdApprovals?: boolean;
   listSessions?: unknown[];
+  entries?: unknown[];
   savedCanvas?: boolean;
   welcome?: boolean;
   connectionReturn?: boolean;
@@ -39,6 +44,8 @@ export const SESSION = {
 };
 
 export async function harness(opts: HarnessOptions): Promise<Harness> {
+  const session = opts.session ?? SESSION;
+  let transcriptStatus = opts.transcriptStatus;
   const dom = new JSDOM('<!doctype html><div id="app"></div>', {
     url: `http://localhost${opts.path}`,
     pretendToBeVisual: true,
@@ -86,6 +93,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   dom.window.HTMLElement.prototype.scrollIntoView = function () {
     this.setAttribute("data-scrolled", "true");
   };
+  dom.window.HTMLElement.prototype.getAnimations = () => [];
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const realSetTimeout = globalThis.setTimeout;
   const realSetInterval = globalThis.setInterval;
@@ -132,17 +140,17 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       if (opts.holdApprovals) await approvalsHeld;
       return Response.json({ approvals: [] });
     }
-    if (path.startsWith(`/api/sessions/${SESSION.id}`)) {
+    if (path.startsWith(`/api/sessions/${session.id}`)) {
       if (opts.holdTranscript) await transcriptHeld;
       if (failuresLeft > 0) {
         failuresLeft--;
-        return Response.json({ error: "not_found" }, { status: opts.transcriptStatus ?? 500 });
+        return Response.json({ error: "not_found" }, { status: transcriptStatus ?? 500 });
       }
       if (opts.messageLink) {
         const older = path.includes("beforeSeq=");
         const seqs = older ? [10, 11] : [80, 81];
         return Response.json({
-          session: SESSION,
+          session,
           entries: seqs.map((seq) => ({
             seq,
             type: seq % 2 ? "assistant" : "user",
@@ -152,7 +160,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
           earlierEntries: older ? 0 : 80,
         });
       }
-      return Response.json({ session: SESSION, entries: [] });
+      return Response.json({ session, entries: opts.entries ?? [] });
     }
     if (path === "/api/sessions") {
       await sessionsHeld;
@@ -222,6 +230,11 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   const split = await vite.ssrLoadModule("/src/split.ts");
   return {
     requests,
+    setTranscriptStatus: (status) => {
+      transcriptStatus = status;
+      failuresLeft = status === 200 ? 0 : Number.POSITIVE_INFINITY;
+    },
+    openSession: sessions.openSession as Harness["openSession"],
     setConnections: (items, status = 200) => {
       connectedItems = items;
       connectedStatus = status;

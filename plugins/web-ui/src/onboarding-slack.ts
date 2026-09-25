@@ -1,3 +1,4 @@
+import { openDesktopBrowser } from "../../chassis/src/desktop-browser";
 import "./slack-account.css";
 import { LitElement, html, nothing } from "lit";
 import { ArrowUpRight, Check } from "lucide";
@@ -79,6 +80,16 @@ export class OnboardingSlack extends LitElement {
 
   private async install(): Promise<void> {
     if (this.busy || this.installAvailable === undefined) return;
+    try {
+      if (await openDesktopBrowser(`${this.adminBase}/slack-settings?slack=install`)) {
+        this.pollUntil = Date.now() + 10 * 60_000;
+        void this.refresh();
+        return;
+      }
+    } catch {
+      this.error = "Could not open your browser. Please try again.";
+      return;
+    }
     const popup = window.open("", "_blank");
     if (!popup) {
       this.error = "Allow a new tab to install QM, then try again.";

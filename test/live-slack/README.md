@@ -75,6 +75,24 @@ can't: event redelivery (dedupe/idempotency), mid-session scope revocation, and 
 rate limiting. Scenarios that mutate workspace-global twin config use the `exclusive` lane
 (run alone, after the other lanes) and restore what they touched.
 
+### App access requests (`@deploy-access`)
+
+`scenarios-deploy-access.ts` drives the published-app access flow end to end on a twin:
+a stranger hits an app's subdomain, clicks _Request access_, the owner gets a DM card with
+Approve/Decline, a click (a signed `block_actions` POST to the receiver, as Slack would
+send) grants view access and DMs the requester, and the requester then reaches the app
+through the gateway. They carry the `apps-gateway` capability tag and skip unless the
+instance has the gateway configured:
+
+```sh
+export DEPLOY_APPS_DOMAIN=apps.e2e.test AWS_DEPLOY_GATE_SECRET=$(openssl rand -hex 16) \
+  DEPLOY_APPS_SESSION_SECRET=$(openssl rand -hex 16) DEPLOY_APPS_LOGIN_URL=http://localhost:8181
+```
+
+The default `docker` deploy provider needs a `docker` on PATH; a shim that runs each
+published entrypoint as a host process is enough (the scenarios publish a one-file
+`node server.mjs`).
+
 ## Tiers, triggers, quarantine
 
 - **Tiers via tags.** `@core` is the fast high-signal subset run on every push to main;

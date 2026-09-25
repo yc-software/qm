@@ -25,7 +25,7 @@ function model(id: string, label: string, provider = "anthropic"): ModelMetadata
   };
 }
 
-test("the shared picker preserves composer choices and saves context defaults", async () => {
+test("the personal-account picker preserves composer choices and saves context defaults", async () => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><div id="composer"></div>', {
     url: "http://localhost/web-ui/",
     pretendToBeVisual: true,
@@ -48,6 +48,7 @@ test("the shared picker preserves composer choices and saves context defaults", 
   };
   const updates: Record<string, unknown>[] = [];
   let failNextGet = true;
+  let runtimeReads = 0;
   let failNextPut = false;
   let deferNextPut = false;
   let pendingPut: Promise<void> | undefined;
@@ -78,6 +79,7 @@ test("the shared picker preserves composer choices and saves context defaults", 
     },
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input).startsWith("/api/runtime-config") && init?.method !== "PUT") {
+        runtimeReads++;
         if (failNextGet) {
           failNextGet = false;
           return Response.json({ error: "initial load failed" }, { status: 500 });
@@ -160,7 +162,7 @@ test("the shared picker preserves composer choices and saves context defaults", 
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { createComposerSurface } = await vite.ssrLoadModule("/src/composer.ts");
     const { render } = await vite.ssrLoadModule("lit");
-    appState.me = { user: "tester", org: "test" };
+    appState.me = { user: "tester", org: "test", individualModelAuth: true, modelAuthConnected: true };
     const host = document.querySelector<HTMLElement>("#composer")!;
     const agent = { state: { isStreaming: false, messages: [] } } as unknown as Agent;
     const draw = (): void => render(composer!.composerForm(agent), host);
@@ -217,6 +219,14 @@ test("the shared picker preserves composer choices and saves context defaults", 
     await composer!.refreshRuntimeSelection(null, agent, true);
     assert.equal(composer!.state.effortLevel, "high", "identical refresh preserves restored effort");
     assert.equal(composer!.state.fastMode, true, "identical refresh preserves restored Fast");
+    const readsBeforeAccountChange = runtimeReads;
+    appState.me.individualModelAuth = false;
+    window.dispatchEvent(new dom.window.CustomEvent("model-account-changed"));
+    await tick();
+    assert.equal(runtimeReads, readsBeforeAccountChange + 1);
+    assert.ok(host.querySelector(".loadout-button"));
+    appState.me.individualModelAuth = true;
+    draw();
     const siblingHost = document.createElement("section");
     document.body.append(siblingHost);
     const siblingAgent = { state: { isStreaming: false, messages: [] } } as unknown as Agent;
@@ -352,14 +362,13 @@ test("the shared picker preserves composer choices and saves context defaults", 
     assert.equal(composer!.currentModelOption()?.value, "opencode:alpha");
     assert.equal(agent.state.model.id, "alpha");
     assert.equal(composer!.state.effortLevel, "auto");
-    assert.equal(composer!.state.fastMode, false);
-    assert.deepEqual(saved()[1], { value: "opencode:alpha", effort: "auto", fast: false });
+    assert.equal(composer!.state.fastMode, true);
+    assert.deepEqual(saved()[1], { value: "opencode:alpha", effort: "auto", fast: true });
     assert.equal(host.querySelector('[data-loadout-section="effort"]'), null);
-    const unavailableFast = button('[aria-label="Fast"][role="menuitemcheckbox"]');
-    assert.equal(unavailableFast.disabled, true);
-    assert.equal(unavailableFast.querySelector(".loadout-shortcut")?.textContent, "Not supported by this harness");
-    assert.equal(unavailableFast.getAttribute("aria-checked"), "false");
-    unavailableFast.click();
+    const openCodeFast = button('[aria-label="Fast"][role="menuitemcheckbox"]');
+    assert.equal(openCodeFast.disabled, false);
+    assert.equal(openCodeFast.getAttribute("aria-checked"), "true");
+    openCodeFast.click();
     assert.equal(composer!.state.fastMode, false);
 
     button('[data-loadout-section="harness"]').click();
@@ -633,6 +642,46 @@ test("the shared picker preserves composer choices and saves context defaults", 
       fastMode: false,
     });
     assert.equal(context.contextModelState.config.effective.modelId, "beta");
+    config.modelCatalog!.alpha!.effortLevelsByHarness = {
+      pi: ["auto", "adaptive", "default", "low", "high"],
+      claude: ["auto", "low", "high"],
+    };
+    config.effective = { harnessId: "pi", modelId: "alpha", effortLevel: "auto" };
+    ctx.chat.state.threadRef = "web:tester:native-auto";
+    localStorage.removeItem("web-ui:loadout");
+    await composer!.refreshRuntimeSelection(null, agent, true);
+    await mount();
+    button('[data-loadout-section="effort"]').click();
+    const effortChoices = () => [...host.querySelectorAll<HTMLButtonElement>(".loadout-effort")];
+    assert.deepEqual(
+      effortChoices().map((item) => item.textContent?.trim()),
+      ["Legacy default", "Auto", "Provider default", "Low", "High"],
+    );
+    effortChoices()
+      .find((item) => item.textContent?.trim() === "Auto")!
+      .click();
+    assert.equal(composer!.state.effortLevel, "adaptive");
+    assert.equal(saved().find(({ value }) => value === "pi:alpha")?.effort, "adaptive");
+    button('[data-loadout-section="effort"]').click();
+    assert.equal(
+      effortChoices().some((item) => item.textContent?.trim() === "Legacy default"),
+      false,
+    );
+    effortChoices()
+      .find((item) => item.textContent?.trim() === "Provider default")!
+      .click();
+    assert.equal(composer!.state.effortLevel, "default");
+    context.resetContextModel();
+    seedRuntimeConfig(config.scopeId, { ...config });
+    await context.loadContextModel(config.scopeId, drawContext);
+    contextButton(".loadout-button").click();
+    contextButton('[data-loadout-section="effort"]').click();
+    [...contextHost.querySelectorAll<HTMLButtonElement>(".loadout-effort")]
+      .find((item) => item.textContent?.trim() === "Auto")!
+      .click();
+    await tick();
+    assert.equal(updates.at(-1)?.effortLevel, "adaptive");
+    assert.equal(context.contextModelState.config.effective.effortLevel, "adaptive");
   } finally {
     resetContext?.();
     composer?.dispose();

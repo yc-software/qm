@@ -13,7 +13,13 @@ import { testAutoFlagger } from "./admin/auto-flagger-test.ts";
 import { egress, listAdminAudit, listAdminErrors, listAdminRuns, metrics } from "./admin/observability.ts";
 import { getAdminSession, getAdminSessionLlm, listAdminSessions, listAdminShadowDeliveries } from "./admin/sessions.ts";
 import { downloadAdminFile, listAdminFiles, readAdminFile, uploadAdminFile } from "./admin/files.ts";
-import { archiveAdminSkill, getAdminSkill, listAdminArtifacts, putAdminCronDestination } from "./admin/artifacts.ts";
+import {
+  archiveAdminSkill,
+  getAdminSkill,
+  listAdminArtifacts,
+  putAdminCronDestination,
+  putAdminCronRuntime,
+} from "./admin/artifacts.ts";
 import { getAdminMemory, listMemoryScopes, putAdminMemory } from "./admin/memory.ts";
 import { listSandboxRoutes, migrateSandboxScope, manageSandboxResources } from "./admin/sandbox.ts";
 import {
@@ -49,6 +55,7 @@ import { deleteModelProvider, getModelProviders, putModelProvider } from "./admi
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
 import { listSecurityFlags, releaseSecurityTaint } from "./admin/security.ts";
+import { spend } from "./admin/spend.ts";
 import { createPrincipalLink, deletePrincipalLink, listPrincipalLinks } from "./admin/principal-links.ts";
 
 const timed =
@@ -110,6 +117,7 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/admin/resources", auth: "either", handle: getAdminResources },
   { method: "GET", path: "/v1/admin/retention", auth: "either", handle: retention },
   { method: "GET", path: "/v1/admin/metrics", auth: "either", handle: metrics },
+  { method: "GET", path: "/v1/admin/spend", auth: "either", handle: spend },
   { method: "GET", path: "/v1/admin/egress", auth: "either", handle: egress },
   { method: "GET", path: "/v1/admin/sessions", auth: "either", handle: listAdminSessions },
   { method: "GET", path: "/v1/admin/sessions/:id/llm", auth: "either", handle: getAdminSessionLlm },
@@ -134,6 +142,7 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "either",
     handle: listAdminArtifacts,
   },
+  { method: "PUT", path: "/v1/admin/crons/:id/runtime", auth: "either", handle: putAdminCronRuntime },
   { method: "PUT", path: "/v1/admin/crons/:id/destination", auth: "either", handle: putAdminCronDestination },
   { method: "GET", path: "/v1/admin/skills/:id", auth: "either", handle: getAdminSkill },
   { method: "DELETE", path: "/v1/admin/skills/:id", auth: "either", handle: archiveAdminSkill },

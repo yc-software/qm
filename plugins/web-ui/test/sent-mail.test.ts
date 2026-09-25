@@ -120,8 +120,8 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
     assert.equal(host.querySelector(".inbox-context-text")!.textContent, "Full sent body");
     assert.ok(host.querySelector(".pane-head.inbox-item-head"));
     assert.ok(host.querySelector(".inbox-surface.inbox-item-surface"));
-    assert.equal(host.querySelector(".inbox-item-aside")!.textContent, "Assistant");
-    assert.ok(host.querySelector(".inbox-item-thread > :last-child")!.classList.contains("inbox-sent-actions"));
+    assert.equal(host.querySelector(".inbox-item-thread > .inbox-chat")!.textContent, "Assistant");
+    assert.ok(host.querySelector(".inbox-item-thread > .inbox-sent-actions")!.classList.contains("inbox-sent-actions"));
     assert.match(host.querySelector("a")!.href, /authuser=sam%40example.com/);
     (host.querySelector(".context-back") as HTMLButtonElement).click();
     render(sentMailTpl(draw), host);
@@ -166,7 +166,7 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
       ),
       host,
     );
-    assert.equal(host.querySelector(".inbox-item-aside .verified-chat")!.textContent, "Chat chat");
+    assert.equal(host.querySelector(".inbox-item-thread .verified-chat")!.textContent, "Chat chat");
     resetSentMail();
     const seeded = {
       accountEmail: "sam@example.com",

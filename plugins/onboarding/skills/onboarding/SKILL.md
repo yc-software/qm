@@ -74,7 +74,7 @@ form, never into chat.
 
 ### Personal connections
 
-Check the live credential inventory first. When an authorized Composio credential is available,
+Check Composio availability through `GET /v1/composio/toolkits` on the authenticated QM API. When available,
 load the composio skill with the skills tool, discover available apps, and use its consent flow for the
 user's choices. Reuse their connected accounts after checking identity and permissions;
 a project key is not proof that a personal account is connected. Do not ask them to

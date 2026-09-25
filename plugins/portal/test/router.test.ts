@@ -145,6 +145,24 @@ test("favicon: served unauthenticated as an SVG of the pirate-flag emoji", async
   }
 });
 
+test("favicon: PORTAL_FAVICON_SVG replaces the emoji with operator-supplied markup, anything else falls back", async () => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8"/></svg>';
+  process.env.PORTAL_FAVICON_SVG = svg;
+  try {
+    for (const path of ["/favicon.ico", "/favicon.svg"]) {
+      const r = await fetch(`${base}${path}`);
+      assert.equal(r.status, 200);
+      assert.equal(r.headers.get("content-type"), "image/svg+xml; charset=utf-8");
+      assert.equal(r.headers.get("x-content-type-options"), "nosniff");
+      assert.equal(await r.text(), svg);
+    }
+    process.env.PORTAL_FAVICON_SVG = "not an svg document";
+    assert.match(await (await fetch(`${base}/favicon.svg`)).text(), /\u{1F3F4}\u{200D}☠️/u);
+  } finally {
+    delete process.env.PORTAL_FAVICON_SVG;
+  }
+});
+
 test("no session: JSON request is 401, HTML navigation is 302 to login", async () => {
   const j = await fetch(`${base}/api/sessions`, { redirect: "manual" });
   assert.equal(j.status, 401);
@@ -603,6 +621,10 @@ test("sliding renewal: a fresh session is NOT re-stamped, an aged one is re-issu
   assert.match(setCookie, new RegExp(`Max-Age=${SESSION_TTL_S}\\b`), "the renewed cookie carries a full TTL");
   const claims = open(decodeURIComponent(m![1] ?? ""), sessionKey) as { sub: string; exp: number } | null;
   assert.equal(claims?.sub, "U1", "the renewed cookie is valid and preserves the sub");
+  const twin = aged.headers.getSetCookie().find((cookie) => cookie.startsWith("portal_session_x="));
+  assert.ok(twin?.startsWith(`portal_session_x=${m![1]};`), "renewal re-issues the framed twin with the same session");
+  assert.match(twin!, /SameSite=Lax/, "the twin falls back to Lax on a non-https origin");
+  assert.match(twin!, new RegExp(`Max-Age=${SESSION_TTL_S}\\b`));
   assert.ok(
     (claims?.exp ?? 0) > Math.floor(Date.now() / 1000) + SESSION_TTL_S - 800,
     "exp is pushed out to ~now + full TTL",

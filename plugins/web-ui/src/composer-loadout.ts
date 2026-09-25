@@ -1,3 +1,5 @@
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ModelMetadata } from "./pi-models.ts";
 import { EFFORT_LEVELS, type EffortLevel, type ModelOption } from "./model-options.ts";
 
 export interface LoadoutEntry {
@@ -6,7 +8,7 @@ export interface LoadoutEntry {
   fast: boolean;
 }
 
-export const LOADOUT_CAP = 4;
+export const LOADOUT_CAP = 8;
 
 export function loadoutModelId(value: string): string {
   const separator = value.indexOf(":");
@@ -68,23 +70,24 @@ export function reconcileLoadout(
   return available.has(active.value) ? upsertLoadout(next, active) : next.slice(0, LOADOUT_CAP);
 }
 
-export function reorderLoadout(entries: readonly LoadoutEntry[], value: string, targetValue: string): LoadoutEntry[] {
-  const next = [...entries];
-  const source = next.findIndex((entry) => entry.value === value);
-  const target = next.findIndex((entry) => entry.value === targetValue);
-  if (source < 0 || target < 0 || source === target) return next;
-  const [entry] = next.splice(source, 1);
-  next.splice(target, 0, entry!);
-  return next;
-}
-
-export function effortLevelsForHarness(harnessId: string): Array<{ value: EffortLevel; label: string }> {
-  return EFFORT_LEVELS.filter(({ value }) => {
+export function effortLevelsForHarness(
+  harnessId: string,
+  model?: Model<Api>,
+  selectedEffort?: string,
+): Array<{ value: EffortLevel; label: string }> {
+  const advertised = (model as ModelMetadata | undefined)?.effortLevelsByHarness?.[harnessId];
+  const levels = EFFORT_LEVELS.filter(({ value }) => {
+    if (value === "auto") return false;
+    if (advertised) return advertised.includes(value);
+    if (value === "adaptive" || value === "default") return false;
     if (harnessId === "pi") return true;
     if (harnessId === "claude") return value !== "ultracode";
     if (harnessId === "codex") return value !== "max" && value !== "ultracode";
-    return value === "auto";
-  }).map((option) => ({ ...option, label: option.value === "xhigh" ? "Extra high" : option.label }));
+    return false;
+  });
+  return selectedEffort === "auto" || !levels.length
+    ? [EFFORT_LEVELS.find(({ value }) => value === "auto")!, ...levels]
+    : levels;
 }
 
 export function compatibleHarnessOptions<T extends { harnessId: string; model: { id: string } }>(
@@ -117,17 +120,17 @@ export function modelLoadoutOptions(
 
 const LOADOUT_STORAGE_KEY = "web-ui:loadout";
 
-export function loadLoadout(): LoadoutEntry[] {
+export function loadLoadout(key = LOADOUT_STORAGE_KEY): LoadoutEntry[] {
   try {
-    return parseLoadout(localStorage.getItem(LOADOUT_STORAGE_KEY));
+    return parseLoadout(localStorage.getItem(key));
   } catch {
     return [];
   }
 }
 
-export function saveLoadout(entries: LoadoutEntry[]): void {
+export function saveLoadout(entries: LoadoutEntry[], key = LOADOUT_STORAGE_KEY): void {
   try {
-    localStorage.setItem(LOADOUT_STORAGE_KEY, JSON.stringify(entries.slice(0, LOADOUT_CAP)));
+    localStorage.setItem(key, JSON.stringify(entries.slice(0, LOADOUT_CAP)));
   } catch {
     return;
   }

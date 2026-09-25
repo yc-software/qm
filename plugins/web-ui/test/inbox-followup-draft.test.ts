@@ -1,35 +1,21 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JSDOM, VirtualConsole } from "jsdom";
-import { createServer } from "vite";
+import { VirtualConsole } from "jsdom";
+import { createInboxFixture, inboxRuntime, until } from "./inbox-composer-fixture.ts";
 
 test("a failed inbox followup preserves edits made while the request was pending", async () => {
   const domErrors: Error[] = [];
   const virtualConsole = new VirtualConsole();
   virtualConsole.on("jsdomError", (error) => domErrors.push(error));
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
-    url: "http://localhost/web-ui/",
-    virtualConsole,
+  const { dom, vite, host, close } = await createInboxFixture({
+    dom: { url: "http://localhost/web-ui/", virtualConsole },
   });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  for (const key of ["window", "document", "location", "history", "localStorage", "navigator", "HTMLElement", "Node"])
-    Object.defineProperty(globalThis, key, {
-      configurable: true,
-      value: key === "window" ? dom.window : dom.window[key as keyof typeof dom.window],
-    });
-  Object.defineProperty(globalThis, "getComputedStyle", {
-    configurable: true,
-    value: dom.window.getComputedStyle.bind(dom.window),
-  });
-  const originalFetch = globalThis.fetch;
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
     await vite.ssrLoadModule("/src/shell.ts");
-    const { askAgent, chatTpl, toInboxItem } = await vite.ssrLoadModule("/src/inbox.ts");
+    const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
+    appState.me = { user: "taylor@example.com" };
+    const { chatTpl, toInboxItem } = await vite.ssrLoadModule("/src/inbox.ts");
     const { render } = await vite.ssrLoadModule("lit");
-    const host = dom.window.document.getElementById("main")!;
     for (const edited of [undefined, "New instruction", ""]) {
       const item = toInboxItem({
         id: `item-${String(edited)}`,
@@ -40,30 +26,35 @@ test("a failed inbox followup preserves edits made while the request was pending
         thread: [],
       });
       let rejectRequest!: (error: Error) => void;
-      globalThis.fetch = () =>
-        new Promise<Response>((_, reject) => {
-          rejectRequest = reject;
-        });
-      const request = askAgent(item, "Original instruction");
+      globalThis.fetch = (url) =>
+        String(url).includes("runtime-config")
+          ? Promise.resolve(Response.json(inboxRuntime))
+          : new Promise<Response>((_, reject) => {
+              rejectRequest = reject;
+            });
       render(chatTpl(item), host);
-      const box = host.querySelector<HTMLTextAreaElement>(".inbox-chat-input")!;
+      await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
+      let box = host.querySelector<HTMLTextAreaElement>(".composer-input")!;
+      box.value = "Original instruction";
+      box.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+      host.querySelector<HTMLButtonElement>(".send-btn")!.click();
+      await until(() => Boolean(rejectRequest));
+      box = host.querySelector<HTMLTextAreaElement>(".composer-input")!;
       assert.equal(box.disabled, false);
       if (edited !== undefined) {
         box.value = edited;
         box.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
       }
       rejectRequest(new Error("Request failed"));
-      await request;
+      await until(() => Boolean(host.querySelector(".composer-error")));
       render(chatTpl(item), host);
       assert.equal(
-        host.querySelector<HTMLTextAreaElement>(".inbox-chat-input")!.value,
-        edited ?? "Original instruction",
+        host.querySelector<HTMLTextAreaElement>(".composer-input")!.value,
+        edited ? `Original instruction\n${edited}` : "Original instruction",
       );
     }
     assert.deepEqual(domErrors, []);
   } finally {
-    globalThis.fetch = originalFetch;
-    await vite.close();
-    dom.window.close();
+    await close();
   }
 });

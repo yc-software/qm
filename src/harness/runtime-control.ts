@@ -9,17 +9,20 @@ import {
 } from "../api/runtime-config.ts";
 import { livePersonCapability } from "../api/artifact-share.ts";
 import { parseScopeId } from "../types.ts";
-import {
-  ALL_PROVIDERS_AVAILABLE,
-  isHarnessId,
-  thinkingLevelsForHarness,
-  safeModelMetadata,
-  modelSupportedByHarness,
-  codexSubscriptionModelId,
-} from "../model/pi-models.ts";
+import { isHarnessId, thinkingLevelsForHarness } from "../model/pi-models.ts";
 
 export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authorizesCapabilityScope">): RuntimeService {
-  return async (claims, active, request, authorizeChoice, individualAuth, signal) => {
+  return async (
+    claims,
+    active,
+    request,
+    authorizeChoice,
+    individualAuth,
+    signal,
+    cronFire = false,
+    purpose,
+    defaults,
+  ) => {
     if (!deps.config) return { ok: false, error: "runtime_unavailable" };
     const scope = parseScopeId(claims.scopeId);
     if (
@@ -29,31 +32,14 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
     )
       return { ok: false, error: "forbidden" };
     await deps.refreshModels?.();
+    purpose ??= cronFire ? "cron" : undefined;
     const snapshot = await runtimeConfigBody(
-      { deps: individualAuth ? { ...deps, providerKeys: ALL_PROVIDERS_AVAILABLE, modelCredentials: undefined } : deps },
+      { deps },
       claims.scopeId,
+      individualAuth ? authorizeChoice : undefined,
+      purpose,
+      defaults,
     );
-    if (individualAuth && authorizeChoice) {
-      if (snapshot.approvedHarnesses.includes("pi")) {
-        const piModels = snapshot.modelsByHarness.pi ?? [];
-        for (const id of piModels) {
-          const subscriptionId = codexSubscriptionModelId(id);
-          if (subscriptionId === id) continue;
-          if (modelSupportedByHarness(subscriptionId, "pi") && !piModels.includes(subscriptionId)) {
-            piModels.push(subscriptionId);
-            const metadata = safeModelMetadata(subscriptionId);
-            if (metadata) snapshot.modelCatalog[subscriptionId] = metadata;
-          }
-        }
-      }
-      for (const harnessId of snapshot.approvedHarnesses) {
-        const candidates = snapshot.modelsByHarness[harnessId] ?? [];
-        const allowed = await Promise.all(
-          candidates.map((modelId) => authorizeChoice({ harnessId, modelId, effortLevel: "auto", fastMode: false })),
-        );
-        snapshot.modelsByHarness[harnessId] = candidates.filter((_, index) => !allowed[index]);
-      }
-    }
     if (request.action === "get")
       return {
         ok: true,
@@ -63,13 +49,15 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
           snapshot.approvedHarnesses.map((id) => [id, thinkingLevelsForHarness(id)]),
         ),
         taskLifetime:
-          "The current user request, including retries and runtime handoffs. Future requests use the scope default.",
+          "The current request or cron fire, including retries and runtime handoffs. Future requests and fires use their configured defaults.",
       };
-    if (!livePersonCapability(claims) || claims.triggered || claims.botActor)
-      return { ok: false, error: "live_actor_required" };
     const lifetime = request.lifetime ?? "task";
+    const cronTask = cronFire && claims.triggered === true && !claims.botActor && lifetime === "task";
+    if (!cronTask && (!livePersonCapability(claims) || claims.triggered || claims.botActor))
+      return { ok: false, error: "live_actor_required" };
     if (request.action === "inherit") {
-      const choice = lifetime === "scope" ? snapshot.orgDefault : snapshot.effective;
+      const purposeConfigured = purpose && (await deps.config.getPurposeRuntimeDurable(purpose));
+      const choice = lifetime === "scope" && !purposeConfigured ? snapshot.orgDefault : snapshot.effective;
       const error = validateRuntimeChoice(choice);
       if (error) return { ok: false, error };
       if (
@@ -77,6 +65,8 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
         !snapshot.modelsByHarness[choice.harnessId]?.includes(choice.modelId)
       )
         return { ok: false, error: "runtime_unavailable" };
+      if (!(await webuiModelEnabled({ deps }, choice.modelId, purpose)))
+        return { ok: false, error: "model_not_enabled" };
       const authError = await authorizeChoice?.(choice);
       if (authError) return { ok: false, error: "account_runtime_unavailable", message: authError };
       if (signal?.aborted) return { ok: false, error: "cancelled" };
@@ -103,7 +93,7 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
         };
       modelId = matches[0]!;
     }
-    if (!(await webuiModelEnabled({ deps }, modelId))) return { ok: false, error: "model_not_enabled" };
+    if (!(await webuiModelEnabled({ deps }, modelId, purpose))) return { ok: false, error: "model_not_enabled" };
     const choice: RuntimeChoice = {
       harnessId,
       modelId,

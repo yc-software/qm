@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { AdminError } from "../../admin/admin-service.ts";
 import { sendJson } from "../http.ts";
-import { externalMemberActive } from "../../identity/external-members.ts";
+import { deployRef, encodeRef } from "../../acl/resource-ref.ts";
+import { externalMemberActive, validEmail } from "../../identity/external-members.ts";
 import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
@@ -52,15 +53,33 @@ async function claimBrokerNonce(ctx: ApiCtx): Promise<void> {
 }
 
 async function emailAllowed(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url } = ctx;
-  const email = (url.searchParams.get("email") ?? "").trim();
-  if (!email) return sendJson(res, 400, { error: "bad_request", message: "email required" });
+  const { res, deps, app, url } = ctx;
+  const email = (url.searchParams.get("email") ?? "").trim().toLowerCase();
+  if (!validEmail(email)) return sendJson(res, 400, { error: "bad_request", message: "email required" });
   if (!deps.identity) return sendJson(res, 200, { allowed: false });
   await deps.identity.refresh();
+  if (deps.identity.deactivationSource(email) === "manual") return sendJson(res, 200, { allowed: false });
   const member = deps.identity.externalMember(email);
+  const configured =
+    deps.emailAuthPrincipals?.includes(email) ||
+    Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`));
   const allowed =
-    member !== undefined && externalMemberActive(member) && deps.identity.classify(email).type === "internal";
-  return sendJson(res, 200, { allowed, ...(allowed ? { expiresAt: member.expiresAt } : {}) });
+    deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
+  if (allowed) return sendJson(res, 200, { allowed: true, expiresAt: member?.expiresAt });
+  const grants = (await deps.acl?.list()) ?? [];
+  const deployments = await app.listDeployments();
+  const appOnly = deployments.some(
+    (d) =>
+      d.status !== "archived" &&
+      grants.some(
+        (g) =>
+          g.ownerScopeId === d.ownerScopeId &&
+          g.ref === encodeRef(deployRef(d.id)) &&
+          g.granteeScopeId === `personal:${email}` &&
+          g.permission === "read",
+      ),
+  );
+  return sendJson(res, 200, appOnly ? { allowed: true, appOnly: true } : { allowed: false });
 }
 
 async function brokerSession(ctx: ApiCtx): Promise<void> {

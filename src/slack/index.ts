@@ -1,4 +1,5 @@
 import { registerKeychainApprovalActions } from "./keychain-approvals.ts";
+import { registerDeployAccessActions } from "./deploy-access.ts";
 import { SlackPluginStartCleanupError } from "../surfaces/slack-runtime.ts";
 import { createSlackRateLimitNotice } from "./rate-limit-notice.ts";
 import { createSlackHistoryReader } from "./history.ts";
@@ -254,6 +255,7 @@ export async function startSlackPlugin(
   });
   const approvals = createApprovals({ core, flow, directory, threads, ids });
   registerKeychainApprovalActions(app, { core, directory, webUiPublicUrl: cfg.webUiPublicUrl });
+  registerDeployAccessActions(app, { core, directory });
   const ensureHeader = createSurfaceHeaderEnsurer({
     headerFacts: (scope) => core.surfaceHeaderFacts(scope as Parameters<typeof core.surfaceHeaderFacts>[0]),
     channelPinEnabled: (scope) =>
@@ -320,7 +322,14 @@ export async function startSlackPlugin(
   approvals.registerActions(app);
   const inboxMessage = (
     client: unknown,
-    msg: { channel: string; ts: string; threadTs?: string; text?: string; senderSlackId?: string },
+    msg: {
+      channel: string;
+      ts: string;
+      threadTs?: string;
+      text?: string;
+      senderSlackId?: string;
+      isDirectMessage?: boolean;
+    },
   ): void => {
     void (async () => {
       let senderEmail: string | undefined;
@@ -335,6 +344,7 @@ export async function startSlackPlugin(
       await core.inboxSlackMessage({
         channel: msg.channel,
         ts: msg.ts,
+        ...(msg.isDirectMessage !== undefined ? { isDirectMessage: msg.isDirectMessage } : {}),
         ...(msg.threadTs ? { threadTs: msg.threadTs } : {}),
         ...(msg.text ? { text: msg.text } : {}),
         ...(senderEmail ? { senderEmail } : {}),

@@ -5,8 +5,10 @@ ENV WEB_UI_BASE=$WEB_UI_BASE
 COPY plugins/web-ui/package.json plugins/web-ui/package-lock.json ./
 RUN npm ci
 COPY plugins/web-ui/index.html plugins/web-ui/shared.html plugins/web-ui/vite.config.ts plugins/web-ui/tsconfig.json ./
+COPY plugins/web-ui/public ./public
 COPY plugins/web-ui/src ./src
 COPY plugins/chassis/src /chassis/src
+COPY docs/images/slack-app-config-token-setup.gif /docs/images/slack-app-config-token-setup.gif
 RUN npm run build
 
 FROM node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd

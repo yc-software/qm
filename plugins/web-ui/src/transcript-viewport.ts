@@ -26,6 +26,8 @@ export function preserveTranscriptScroll(root: HTMLElement): () => void {
   };
 }
 
+const CONDENSED_LINES = 2;
+
 export function createTranscriptViewport() {
   let scroller: HTMLElement | null = null;
   let pins: HTMLElement | null = null;
@@ -35,13 +37,18 @@ export function createTranscriptViewport() {
   let promptKey: string | undefined;
   let expanded = false;
   let lastTop = 0;
-  let lastBottom = 0;
-  let previousBottom = 0;
-  let bottomChangedAt = 0;
-  let inputBottom: number | null = null;
   let observer: ResizeObserver | null = null;
   let following = false;
   let frame: number | null = null;
+  let remeasure = true;
+  let restContent = 0;
+  let condensedContent = 0;
+  let contentHeight = 0;
+  let condensedHeight = 0;
+  let gap: number | null = null;
+  let contentMax = "";
+  let collapseDistance = 0;
+  let geometryDistance: number | null = null;
   const contentUpdates = new Set<Promise<void>>();
 
   function setFollowing(value: boolean): void {
@@ -49,12 +56,7 @@ export function createTranscriptViewport() {
     if (scroller) scroller.style.overflowAnchor = value ? "none" : "";
   }
 
-  function clearInput(): void {
-    inputBottom = null;
-  }
-
   function cancelFollow(): void {
-    clearInput();
     setFollowing(false);
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
@@ -62,8 +64,16 @@ export function createTranscriptViewport() {
 
   function clearPrompt(): void {
     if (content) content.scrollTop = 0;
-    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded");
+    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded", "pin-condensed", "latest-prompt");
     prompt?.style.removeProperty("--pin-expanded-max");
+    prompt?.style.removeProperty("--pin-rest-height");
+    prompt?.style.removeProperty("--pin-content-max");
+    restContent = condensedContent = contentHeight = condensedHeight = 0;
+    gap = null;
+    contentMax = "";
+    collapseDistance = 0;
+    geometryDistance = null;
+    remeasure = true;
     const toggle = prompt?.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) toggle.hidden = true;
     expanded = false;
@@ -78,7 +88,8 @@ export function createTranscriptViewport() {
     if (toggle) {
       toggle.hidden = !clipped && !expanded;
       const label = expanded ? "Show less" : "Show more";
-      if (toggle.textContent !== label) toggle.textContent = label;
+      const text = toggle.querySelector<HTMLElement>(".pin-toggle-label") ?? toggle;
+      if (text.textContent !== label) text.textContent = label;
       toggle.setAttribute("aria-expanded", String(expanded));
     }
   }
@@ -102,7 +113,9 @@ export function createTranscriptViewport() {
     const style = getComputedStyle(scroller);
     const paddingTop = parseFloat(style.paddingTop) || 0;
     const paddingBottom = parseFloat(style.paddingBottom) || 0;
-    const promptMargin = prompt ? parseFloat(getComputedStyle(prompt).marginBottom) || 0 : 0;
+    const promptStyle = prompt ? getComputedStyle(prompt) : null;
+    const promptMargin = promptStyle ? parseFloat(promptStyle.marginBottom) || 0 : 0;
+    if (prompt && content && promptStyle && remeasure && !expanded) measureRest(promptStyle);
     if (prompt && content) {
       const chrome = prompt.getBoundingClientRect().height - content.getBoundingClientRect().height;
       const available = scroller.clientHeight - top - paddingTop - paddingBottom - promptMargin - chrome;
@@ -112,29 +125,90 @@ export function createTranscriptViewport() {
       !!prompt &&
       prompt.getBoundingClientRect().height + promptMargin + top + paddingTop + paddingBottom <= scroller.clientHeight;
     prompt?.classList.toggle("sticky-disabled", !canStick);
-    prompt?.classList.toggle(
-      "stuck",
-      canStick &&
-        scroller.scrollTop > 0 &&
-        prompt.getBoundingClientRect().top <=
-          scroller.getBoundingClientRect().top + scroller.clientTop + paddingTop + top + 0.5,
-    );
+    const line = scroller.getBoundingClientRect().top + scroller.clientTop + paddingTop + top;
+    const stuck = !!prompt && canStick && scroller.scrollTop > 0 && prompt.getBoundingClientRect().top <= line + 0.5;
+    prompt?.classList.toggle("stuck", stuck);
+    if (!prompt || !content || !promptStyle) return;
+    const edge = anchorEdge();
+    if (!stuck) gap = prompt.getBoundingClientRect().top - edge;
+    condense(stuck && !expanded, line - edge - (gap ?? restingGap(promptStyle)));
+    syncPrompt();
+  }
+
+  function anchorEdge(): number {
+    const previous = prompt?.previousElementSibling;
+    if (previous) return previous.getBoundingClientRect().bottom;
+    return stack?.getBoundingClientRect().top ?? 0;
+  }
+
+  function restingGap(promptStyle: CSSStyleDeclaration): number {
+    const previous = prompt?.previousElementSibling;
+    let before = 0;
+    if (previous) before = parseFloat(getComputedStyle(previous).marginBottom) || 0;
+    else if (stack) before = parseFloat(getComputedStyle(stack).paddingTop) || 0;
+    return before + (parseFloat(promptStyle.marginTop) || 0);
+  }
+
+  function measureRest(promptStyle: CSSStyleDeclaration): void {
+    if (!prompt || !content) return;
+    remeasure = false;
+    prompt.classList.remove("pin-condensed");
+    prompt.style.removeProperty("--pin-content-max");
+    prompt.style.setProperty("--pin-rest-height", "0px");
+    contentMax = "";
+    restContent = content.getBoundingClientRect().height;
+    contentHeight = content.scrollHeight;
+    const inner =
+      prompt.getBoundingClientRect().height -
+      (promptStyle.boxSizing === "border-box"
+        ? 0
+        : (parseFloat(promptStyle.paddingTop) || 0) + (parseFloat(promptStyle.paddingBottom) || 0));
+    prompt.style.setProperty("--pin-rest-height", `${Math.max(0, inner)}px`);
+    const contentStyle = getComputedStyle(content);
+    const lineHeight = parseFloat(contentStyle.lineHeight) || (parseFloat(contentStyle.fontSize) || 0) * 1.5;
+    condensedContent = CONDENSED_LINES * lineHeight;
+  }
+
+  function contentChanged(): boolean {
+    if (!content) return false;
+    return content.scrollHeight !== (prompt?.classList.contains("pin-condensed") ? condensedHeight : contentHeight);
+  }
+
+  function condense(active: boolean, distance: number): void {
+    if (!prompt || !content) return;
+    if (!active) {
+      collapseDistance = 0;
+      geometryDistance = null;
+    } else {
+      if (geometryDistance === null) collapseDistance = Math.max(0, distance);
+      else if (following) collapseDistance = Math.max(collapseDistance, distance);
+      else collapseDistance = Math.max(0, collapseDistance + distance - geometryDistance);
+      geometryDistance = distance;
+    }
+    distance = collapseDistance;
+    const span = restContent - condensedContent;
+    const settled = span <= 0.5 || span - distance < 0.5;
+    if (active && settled && !prompt.classList.contains("pin-condensed")) {
+      prompt.classList.add("pin-condensed");
+      condensedHeight = content.scrollHeight;
+    } else if (!(active && settled)) prompt.classList.remove("pin-condensed");
+    let max = "";
+    if (active) max = `${settled ? condensedContent : restContent - Math.max(0, distance)}px`;
+    if (max === contentMax) return;
+    contentMax = max;
+    if (max) prompt.style.setProperty("--pin-content-max", max);
+    else prompt.style.removeProperty("--pin-content-max");
   }
 
   function onScroll(): void {
     if (!scroller || contentUpdates.size > 0) return;
     const movingUp = scroller.scrollTop < lastTop;
     const atBottom = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 1;
-    const reachedPreviousBottom =
-      scroller.scrollTop > lastTop &&
-      (Math.abs(scroller.scrollTop - lastBottom) <= 1 ||
-        (inputBottom !== null && Math.abs(scroller.scrollTop - inputBottom) <= 1));
-    if (atBottom || reachedPreviousBottom) setFollowing(true);
-    else if (scroller.scrollTop < lastTop) cancelFollow();
-    if (scroller.scrollTop !== lastTop) clearInput();
+    const resumeFollowing = atBottom && (following || !movingUp);
+    if (!resumeFollowing && movingUp) cancelFollow();
     lastTop = scroller.scrollTop;
-    measureBottom();
     syncSticky();
+    if (resumeFollowing) setFollowing(true);
     if (movingUp) loadEarlier();
   }
 
@@ -146,19 +220,9 @@ export function createTranscriptViewport() {
     button.click();
   }
 
-  function measureBottom(): void {
-    if (!scroller) return;
-    const bottom = scroller.scrollHeight - scroller.clientHeight;
-    if (bottom === lastBottom) return;
-    previousBottom = lastBottom;
-    lastBottom = bottom;
-    bottomChangedAt = performance.now();
-  }
-
   function beforeRender(): void {
     if (!scroller || contentUpdates.size > 0) return;
     if (scroller.scrollTop !== lastTop) onScroll();
-    measureBottom();
   }
 
   function onContentUpdating(event: Event): void {
@@ -174,7 +238,6 @@ export function createTranscriptViewport() {
   function afterRender(): void {
     if (!scroller || !following || contentUpdates.size > 0) return;
     lastTop = scroller.scrollTop;
-    measureBottom();
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
     follow();
@@ -184,28 +247,15 @@ export function createTranscriptViewport() {
     if (!scroller) return;
     if (event.deltaY < 0) loadEarlier();
     if (event.deltaY < 0 && scroller.scrollTop > 0) cancelFollow();
-    if (event.deltaY > 0) {
-      clearInput();
-      inputBottom = scroller.scrollHeight - scroller.clientHeight;
-    }
-    if (
-      event.deltaY > 0 &&
-      event.timeStamp < bottomChangedAt &&
-      scroller.scrollTop > lastTop &&
-      Math.abs(scroller.scrollTop - previousBottom) <= 1
-    )
-      setFollowing(true);
   }
 
   function onKeyDown(event: KeyboardEvent): void {
-    clearInput();
     if (event.target !== scroller || event.key !== "End" || event.shiftKey || event.altKey) return;
     event.preventDefault();
     follow(true);
   }
 
   function dispose(): void {
-    clearInput();
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
     observer?.disconnect();
@@ -214,13 +264,12 @@ export function createTranscriptViewport() {
     scroller?.removeEventListener("scroll", onScroll);
     scroller?.removeEventListener("wheel", onWheel);
     scroller?.removeEventListener("click", onClick);
-    scroller?.removeEventListener("pointerdown", clearInput);
     scroller?.removeEventListener("keydown", onKeyDown);
     scroller?.style.removeProperty("--chat-sticky-top");
     scroller?.style.removeProperty("overflow-anchor");
     clearPrompt();
     scroller = pins = prompt = stack = content = null;
-    lastTop = lastBottom = previousBottom = bottomChangedAt = 0;
+    lastTop = 0;
     following = false;
     contentUpdates.clear();
   }
@@ -232,16 +281,15 @@ export function createTranscriptViewport() {
       dispose();
       scroller = element;
       lastTop = scroller?.scrollTop ?? 0;
-      lastBottom = previousBottom = scroller ? scroller.scrollHeight - scroller.clientHeight : 0;
       setFollowing(false);
       scroller?.addEventListener("qm-content-updating", onContentUpdating);
       scroller?.addEventListener("scroll", onScroll, { passive: true });
       scroller?.addEventListener("wheel", onWheel, { passive: true });
       scroller?.addEventListener("click", onClick);
-      scroller?.addEventListener("pointerdown", clearInput);
       scroller?.addEventListener("keydown", onKeyDown);
       if (typeof ResizeObserver !== "undefined") {
-        observer = new ResizeObserver(() => {
+        observer = new ResizeObserver((entries = []) => {
+          if (entries.some((entry) => entry.target === scroller) || contentChanged()) remeasure = true;
           beforeRender();
           syncSticky();
           follow();
@@ -257,7 +305,8 @@ export function createTranscriptViewport() {
       if (stack) observer?.observe(stack);
     }
     const nextPins = scroller?.querySelector<HTMLElement>(".pinned-strip") ?? null;
-    const nextPrompt = scroller?.querySelector<HTMLElement>(".message-stack .user-row:not(:has(~ .user-row))") ?? null;
+    const prompts = stack?.querySelectorAll<HTMLElement>(".user-row");
+    const nextPrompt = prompts?.item(prompts.length - 1) ?? null;
     if (pins !== nextPins) {
       changed = true;
       if (pins) observer?.unobserve(pins);
@@ -272,9 +321,11 @@ export function createTranscriptViewport() {
       promptKey = prompt?.dataset.index;
       if (prompt) observer?.observe(prompt);
     }
+    prompt?.classList.add("latest-prompt");
     const nextContent = prompt?.querySelector<HTMLElement>(".pin-content") ?? null;
     if (content !== nextContent) {
       changed = true;
+      remeasure = true;
       if (content) observer?.unobserve(content);
       content = nextContent;
       if (content) observer?.observe(content);

@@ -108,8 +108,18 @@ test("every drop zone the canvas renders has a positioning rule in shell.css", (
   assert.deepEqual(missing, [], "drop zones rendered with no .zone-<edge> rule (they collapse to 0×0)");
 });
 
+test("expanded pins wrap their full text instead of truncating to one line", () => {
+  const item = shellCss.match(/\.pinned-item \{[^}]+\}/)?.[0] ?? "";
+  assert.match(item, /flex-direction:\s*column;/);
+  const text = shellCss.match(/\.pinned-item-text \{[^}]+\}/)?.[0] ?? "";
+  assert.match(text, /white-space:\s*pre-wrap;/);
+  assert.match(text, /overflow-wrap:\s*anywhere;/);
+  assert.doesNotMatch(text, /text-overflow|nowrap/);
+  assert.doesNotMatch(tsSource, /class="pinned-item" title=/);
+});
+
 test("chat shadows stay limited to elevated surfaces and subtle activity hover glow", () => {
-  const elevated = [".pinned-strip", ".message-stack .user-row.stuck > .user-bubble"];
+  const elevated = [".pinned-strip", ".message-stack .user-row.stuck > .user-bubble", ".attachment-peek"];
   const rules = shellCss.replace(/\/\*[\s\S]*?\*\//g, "");
   const painted = [...rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap((rule) =>
     [...rule[2].matchAll(/(box|text)-shadow\s*:\s*([^;}]+)/g)]
@@ -126,8 +136,9 @@ test("chat shadows stay limited to elevated surfaces and subtle activity hover g
         "0 0 12px color-mix(in srgb, var(--foreground) 12%, transparent)",
       ],
       [".composer-wrap", "box", "0 2px 5px rgb(0 0 0 / 0.05), 0 8px 24px rgb(0 0 0 / 0.06)"],
+      [".qm-tooltip", "box", "var(--chat-surface-shadow)"],
     ],
-    "pinned surfaces and the composer retain their shadows; activity glow appears only on hover",
+    "pinned surfaces, the composer, and tooltips retain their shadows; activity glow appears only on hover",
   );
   const inlineShadows = [...tsSource.matchAll(/(?:box|text)-shadow\s*:\s*([^;}]+)/g)]
     .map((m) => m[1].trim())

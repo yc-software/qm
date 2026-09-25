@@ -21,6 +21,13 @@ const productionEnv = {
   SANDBOX_BACKEND: "local",
 } as const;
 
+test("capability compression is explicitly enabled after verifier rollout", () => {
+  assert.equal(loadConfig({}).capabilityTokenCompression, false);
+  assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "0" }).capabilityTokenCompression, false);
+  assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "1" }).capabilityTokenCompression, true);
+  assert.throws(() => loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "invalid" }), /CAPABILITY_TOKEN_COMPRESSION/);
+});
+
 test("ORG_BRAND_* parses into a validated branding default", () => {
   assert.equal(loadConfig({}).brandingDefault, undefined);
   assert.deepEqual(
@@ -226,7 +233,6 @@ test("every boolean knob accepts the shared vocabulary (off means off)", () => {
     SEED_SKILLS: "off",
     EXECUTE_SCRATCH: "off",
     REACH_EXEC: "off",
-    COMMAND_SCOPED_CREDENTIALS: "off",
     PI_CAPTURE_REQUESTS: "off",
     EAGER_PROVISION: "off",
   });
@@ -234,20 +240,17 @@ test("every boolean knob accepts the shared vocabulary (off means off)", () => {
   assert.equal(off.eagerProvisionEnabled, false);
   assert.equal(off.scratchExecEnabled, false);
   assert.equal(off.reachExecEnabled, false);
-  assert.equal(off.sharedOwnerAuthIsolation, false);
   assert.equal(off.piCaptureRequests, false);
 
   const on = loadConfig({
     SEED_SKILLS: "yes",
     EXECUTE_SCRATCH: "on",
     REACH_EXEC: "1",
-    SHARED_OWNER_AUTH_ISOLATION: "yes",
     PI_SYSTEM_CACHE_SPLIT: "on",
   });
   assert.equal(on.seedSkills, true);
   assert.equal(on.scratchExecEnabled, true);
   assert.equal(on.reachExecEnabled, true);
-  assert.equal(on.sharedOwnerAuthIsolation, true);
   assert.equal(on.piSystemCacheSplit, true);
 
   const unset = loadConfig({});
@@ -941,4 +944,14 @@ test("background ownership requires durable storage and an independent deploymen
   assert.throws(() => loadConfig({ ...env, BACKGROUND_DEPLOYMENT_ID: " " }), /BACKGROUND_DEPLOYMENT_ID/);
   assert.throws(() => loadConfig({ ...env, CORE_SIGNING_SECRET: "short" }), /CORE_SIGNING_SECRET/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
+});
+
+test("screening across postures is explicit and requires an enabled backend", () => {
+  assert.equal(loadConfig({}).securityScreenAllPostures, false);
+  assert.equal(
+    loadConfig({ SECURITY_SCREEN_BACKEND: "model", SECURITY_SCREEN_ALL_POSTURES: "true" }).securityScreenAllPostures,
+    true,
+  );
+  assert.throws(() => loadConfig({ SECURITY_SCREEN_ALL_POSTURES: "true" }), /requires an enabled/);
+  assert.throws(() => loadConfig({ SECURITY_SCREEN_ALL_POSTURES: "typo" }), /SECURITY_SCREEN_ALL_POSTURES/);
 });

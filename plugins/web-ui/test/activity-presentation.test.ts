@@ -43,7 +43,11 @@ test("simple shell reads and searches get semantic labels, compound commands sta
   assert.equal(activityLabel(row("rg --files src"), "complete"), "Searched for files in src");
   assert.deepEqual(activityDescription({ tool: "skill", name: "publish" }), {
     category: "read",
-    target: "publish/SKILL.md",
+    target: "publish",
+  });
+  assert.deepEqual(activityDescription({ tool: "skills", action: "read", name: "admin", path: "SKILL.md" }), {
+    category: "read",
+    target: "admin",
   });
   assert.deepEqual(activityDescription({ tool: "skill", name: "publish", path: "templates/x.md" }), {
     category: "read",
@@ -128,4 +132,22 @@ test("activity grouping preserves speech boundaries and chronological item ident
 test("resolved approval history does not mark a group as needing action", () => {
   const blocked = row("npm test", { blocked: "needs_approval" });
   assert.equal(activityGroupSummary([{ kind: "tool", row: blocked }], "complete").attention, false);
+});
+
+test("purpose takes precedence over commands while retaining failure and incomplete states", () => {
+  const tool = row("cat /workspace/report.csv");
+  tool.call!.payload = { ...(tool.call!.payload as ToolPayload), purpose: "  Check the sales totals  " };
+  assert.equal(activityLabel(tool, "complete"), "Check the sales totals");
+  tool.result = null;
+  assert.equal(activityLabel(tool, "working"), "Check the sales totals");
+  assert.equal(activityLabel(tool, "complete"), "Check the sales totals · Unconfirmed");
+  tool.result = row("", { code: 1 }).result;
+  assert.equal(activityLabel(tool, "complete"), "Check the sales totals · Failed");
+  tool.result = row("", { blocked: "needs_approval" }).result;
+  assert.equal(activityLabel(tool, "working"), null);
+  tool.call!.payload = { tool: "sandbox", action: "start_process", purpose: "Start the preview server" };
+  tool.result = null;
+  assert.equal(activityLabel(tool, "working"), "Start the preview server");
+  tool.call!.payload = { tool: "execute", command: "cat report.csv", purpose: "  " };
+  assert.equal(activityLabel(tool, "working"), "Reading report.csv");
 });

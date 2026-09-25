@@ -24,7 +24,7 @@ test("compact and full composers share one left-side picker with Fast inside its
   const leftStart = composer.indexOf('class="composer-left"');
   const rightStart = composer.indexOf('class="composer-right"');
   assert.ok(leftStart >= 0 && rightStart > leftStart);
-  assert.ok(composer.slice(leftStart, rightStart).includes("showRuntimeControls ? runtimeControls : nothing"));
+  assert.ok(composer.slice(leftStart, rightStart).includes("${runtimeControls}"));
   assert.ok(/class="composer-right">\$\{sendControls\(agent\)\}<\/div>/.test(composer));
   const loadout = picker.slice(picker.indexOf("function render"), picker.indexOf("function menuArrowKeys"));
   assert.ok(/role="menuitemcheckbox"\s+aria-label="Fast"/.test(loadout));
@@ -43,7 +43,7 @@ test("switching setups preserves prior tweaks and validates effort and Fast for 
     composer.indexOf("function normalizeLoadoutEntry"),
     composer.indexOf("function seededLoadout"),
   );
-  assert.ok(normalize.includes("effortLevelsForHarness(option.harnessId)"));
+  assert.ok(normalize.includes("effortLevelsForHarness(option.harnessId, option.model, entry.effort)"));
   assert.ok(/levels.some\([\s\S]*?\? entry.effort/.test(normalize));
   assert.ok(apply.includes("normalizeLoadoutEntry(entry, option)"));
   assert.ok(
@@ -52,7 +52,7 @@ test("switching setups preserves prior tweaks and validates effort and Fast for 
     ),
     "a stored Fast preference cannot enable an unsupported model",
   );
-  assert.ok(apply.includes("saveLoadout(loadout)"));
+  assert.ok(apply.includes("saveLoadout(loadout, loadoutKey)"));
 });
 
 test("attaching files is allowed while a turn is streaming", () => {

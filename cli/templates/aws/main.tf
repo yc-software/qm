@@ -610,7 +610,7 @@ resource "aws_db_instance" "this" {
   identifier                = "${var.cluster_name}-core"
   engine                    = "postgres"
   engine_version            = "16"
-  instance_class            = "db.t4g.small"
+  instance_class            = var.db_instance_class
   allocated_storage         = 20
   db_name                   = var.db_name
   username                  = var.db_username

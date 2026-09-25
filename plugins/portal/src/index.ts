@@ -1,4 +1,10 @@
-import { desktopChallenge, mintDesktopLogin, openDesktopLogin } from "./desktop-login.ts";
+import {
+  DESKTOP_LAUNCH_SCRIPT,
+  DESKTOP_LAUNCH_SCRIPT_HASH,
+  desktopChallenge,
+  mintDesktopLogin,
+  openDesktopLogin,
+} from "./desktop-login.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
@@ -16,6 +22,7 @@ import {
   openImpersonation,
   openTmp,
   setCookie,
+  sessionCookieHeaders,
   clearCookie,
   readCookie,
   randomToken,
@@ -49,14 +56,14 @@ import {
 } from "./proxy.ts";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { coreClaimStore, claimOnce, withinRateLimit, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
-import { coreEmailAllowed } from "../../chassis/src/external-members.ts";
+import { coreEmailAdmission } from "../../chassis/src/external-members.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
 import {
   json,
   escapeHtml,
   sendBuffered,
-  serveEmojiFavicon,
+  serveFavicon,
   readBody,
   PayloadTooLargeError,
 } from "../../chassis/src/http.ts";
@@ -200,6 +207,7 @@ export function clientIpOf(req: IncomingMessage): string {
 }
 
 const PRINCIPAL_RULE: PrincipalRule = {
+  requireCoreAdmission: Boolean(AUTH_BROKER_UPSTREAM),
   claim: (process.env.OIDC_PRINCIPAL_CLAIM ?? "email") as PrincipalRule["claim"],
   allowedEmailDomain: process.env.OIDC_ALLOWED_EMAIL_DOMAIN || undefined,
   allowedEmails: process.env.OIDC_ALLOWED_EMAILS?.split(",")
@@ -843,17 +851,16 @@ function loginProviderCookie(sub: string): string[] {
   ];
 }
 
+const FRAME_SESSION_COOKIE = "portal_session_x";
+
 function sessionCookieSet(value: string, sub: string): string[] {
-  const set = setCookie("portal_session", value, {
+  const attrs = {
     path: "/",
     maxAge: SESSION_TTL_S,
     secure: SECURE_COOKIES,
     ...(COOKIE_DOMAIN ? { domain: COOKIE_DOMAIN } : {}),
-  });
-  return [
-    ...(COOKIE_DOMAIN ? [set, clearCookie("portal_session", "/", SECURE_COOKIES)] : [set]),
-    ...loginProviderCookie(sub),
-  ];
+  };
+  return [...sessionCookieHeaders(value, attrs), ...loginProviderCookie(sub)];
 }
 
 function setSession(res: ServerResponse, headers: string[]): void {
@@ -938,6 +945,7 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
     SESSION_MAX_TTL_S,
   );
   if (!session) return null;
+  if (session.appOnly) return session;
   const now = Math.floor(Date.now() / 1000);
   if (now - session.iat < SESSION_RENEW_AFTER_S) return session;
   const authenticatedAt = session.auth ?? session.iat;
@@ -979,12 +987,29 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return proxyToAppHost(req, res, CORE);
   }
 
+  const brokerPath = brokerRouteFor(method, pathname);
+  const reauthentication =
+    (method === "GET" &&
+      ["/auth/login", "/auth/callback", "/auth/trusted/login", "/auth/trusted/callback"].includes(pathname)) ||
+    (method === "POST" && pathname === "/auth/logout") ||
+    brokerPath !== null;
+  if (currentSession(req)?.appOnly && !reauthentication) {
+    return json(res, 403, { error: "app_only_session", message: "this sign-in only permits access to shared apps" });
+  }
+
   void refreshSurfaceConfig();
 
   if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
 
   if (method === "GET" && (pathname === "/favicon.ico" || pathname === "/favicon.svg")) {
-    return serveEmojiFavicon(res, process.env.PORTAL_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F", "max-age=86400");
+    return serveFavicon(
+      res,
+      {
+        svg: process.env.PORTAL_FAVICON_SVG,
+        emoji: process.env.PORTAL_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F",
+      },
+      "max-age=86400",
+    );
   }
 
   if (pathname === "/auth/login" && method === "GET") return authLogin(req, res, url);
@@ -1023,7 +1048,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     setSession(res, [
       ...(signedOutSession ? loginProviderCookie(signedOutSession.sub) : []),
       clearCookie("portal_session", "/", SECURE_COOKIES, COOKIE_DOMAIN),
-      ...(COOKIE_DOMAIN ? [clearCookie("portal_session", "/", SECURE_COOKIES)] : []),
+      clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES, COOKIE_DOMAIN),
+      ...(COOKIE_DOMAIN
+        ? [clearCookie("portal_session", "/", SECURE_COOKIES), clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES)]
+        : []),
       clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
       ...(AUTH_BROKER_UPSTREAM ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
       ...(LOCAL_AUTH_BYPASS && isLoopbackAddress(req.socket.remoteAddress)
@@ -1037,7 +1065,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return json(res, 200, { ok: true });
   }
 
-  const brokerPath = brokerRouteFor(method, pathname);
   if (brokerPath) {
     if (method !== "GET" && !sameOriginRequest(req))
       return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
@@ -1406,12 +1433,13 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
     200,
     cardPage({
       title: "Ready to open QM",
-      heading: "Your desktop sign-in is ready",
+      heading: "Opening QM Desktop…",
       icon: LOCK_ICON,
-      msg: "Return to the app to finish signing in.",
-      actions: `<a class="btn primary" href="${escapeHtml(callback.href)}">Open QM Desktop</a>`,
+      msg: "If QM doesn’t open automatically, use the button below.",
+      actions: `<a id="desktop-launch" class="btn primary" href="${escapeHtml(callback.href)}">Open QM Desktop</a><script>${DESKTOP_LAUNCH_SCRIPT}</script>`,
       help: "This link expires in two minutes and works only for the app that requested it.",
     }),
+    `${PAGE_CSP}; script-src '${DESKTOP_LAUNCH_SCRIPT_HASH}'`,
   );
 }
 
@@ -1571,7 +1599,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
   }
 }
 
-function setAuthenticatedSession(res: ServerResponse, sub: string, name = ""): void {
+function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", appOnly = false): void {
   const now = Math.floor(Date.now() / 1000);
   const session: SessionClaims = {
     k: "session",
@@ -1581,6 +1609,7 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = ""): v
     iat: now,
     exp: now + SESSION_TTL_S,
     ...(name ? { name } : {}),
+    ...(appOnly ? { appOnly: true } : {}),
   };
   setSession(res, [
     ...sessionCookieSet(seal(session, sessionKey), session.sub),
@@ -1644,7 +1673,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   if (!code || !stateParam || !safeEqual(stateParam, tmp.state)) return fail("invalid login state");
   if (!consumeState(tmp.state)) return fail("login already used, please try again");
 
-  let sub: string;
+  let principal: { sub: string; appOnly?: true };
   let name = "";
   try {
     const { accessToken, idToken } = await exchangeCode(OIDC, { code, codeVerifier: tmp.pkceVerifier });
@@ -1657,8 +1686,8 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
     const infoSub = typeof info.sub === "string" ? info.sub : "";
     if (!infoSub) throw new Error("userinfo missing sub");
     if (typeof claims.sub === "string" && claims.sub !== infoSub) throw new Error("subject mismatch");
-    sub = await resolvePrincipal(PRINCIPAL_RULE, { sub: infoSub, claims, userinfo: info }, (email) =>
-      coreEmailAllowed(CORE, CORE_SIGNING_SECRET, email, "portal"),
+    principal = await resolvePrincipal(PRINCIPAL_RULE, { sub: infoSub, claims, userinfo: info }, (email) =>
+      coreEmailAdmission(CORE, CORE_SIGNING_SECRET, email, "portal"),
     );
     const rawName = info.name ?? claims.name;
     if (typeof rawName === "string") name = rawName.trim().slice(0, 200);
@@ -1666,7 +1695,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
     return fail(errMessage(e, "sign-in failed"));
   }
 
-  setAuthenticatedSession(res, sub, name);
+  setAuthenticatedSession(res, principal.sub, name, principal.appOnly);
   res.writeHead(302, {
     location: sanitizeReturnTo(tmp.returnTo, PUBLIC_URL, APPS_DOMAIN),
     "cache-control": "no-store",

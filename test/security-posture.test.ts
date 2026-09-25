@@ -55,7 +55,7 @@ test("each posture resolves to exactly one mechanism", () => {
 test("the posture prompt names the active mechanism", () => {
   assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("dangerous")), /Dangerous/);
   assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("dangerous")), /Predeclared command approvals/);
-  assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("auto")), /Auto/);
+  assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("auto")), /External-content screening/);
   assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("strict")), /Strict/);
   assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("strict")), /Every harness tool except the no-effect/);
   assert.match(
@@ -244,7 +244,7 @@ test("tool results carry a provenance class and only external content reaches th
     assert.equal(toolResultProvenance(tool), "internal", `${tool} echoes the agent's own state`);
   }
   assert.equal(toolResultProvenance("read"), "workspace", "read serves the agent's own workspace");
-  for (const tool of ["slack", "credential_exec", "some_mcp_tool", "execute", "memory", "history"]) {
+  for (const tool of ["slack", "some_mcp_tool", "execute", "memory", "history"]) {
     assert.equal(toolResultProvenance(tool), "external", `${tool} can carry content from outside`);
   }
 });

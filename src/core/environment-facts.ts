@@ -25,9 +25,7 @@ export function renderComputerBlock(spec: AgentComputerSpec | undefined, layout:
 
   const cwd = spec.workdir ?? ".";
   const home = spec.homeDir ?? "~";
-  const ws = [
-    `The workspace path is \`${cwd}\` (read-write). Recovery depends on the sandbox provider; save durable outputs to git or Files. Keep workspace outputs here, including apps you publish with \`apps\` (only workspace files ship, not files elsewhere under \`$HOME\`). \`$HOME\` (\`${home}\`) holds native logins and config; its recovery has the same provider limits.`,
-  ];
+  const ws = [`The workspace path is \`${cwd}\` (read-write). \`$HOME\` (\`${home}\`) holds native logins and config.`];
   if (layout.hasGlobal) ws.push("Shared org files are at `./global` (read-only).");
   if (layout.teamCount > 0) {
     ws.push(`Team files are at \`./team-*\` (read-only; ${layout.teamCount} mounted).`);
@@ -69,7 +67,9 @@ export function renderConnectedAppsBlock(
   connectionsUrl?: string,
 ): string {
   const allowed = new Set(availableProviders);
-  const entries = Object.entries(record?.providers ?? {}).filter(([name]) => allowed.has(name));
+  const entries = Object.entries(record?.providers ?? {})
+    .filter(([name]) => allowed.has(name))
+    .sort(([a], [b]) => a.localeCompare(b));
   const connected = entries.filter(([, e]) => e.connected && !e.needsReconnect).map(([name]) => connectorLabel(name));
   const reconnect = entries
     .filter(([, e]) => e.needsReconnect)
@@ -83,7 +83,7 @@ export function renderConnectedAppsBlock(
     return lines.join("\n");
   }
   const connectedNames = new Set(entries.filter(([, e]) => e.connected).map(([name]) => name));
-  const available = availableProviders.filter((name) => !connectedNames.has(name));
+  const available = availableProviders.filter((name) => !connectedNames.has(name)).sort();
   if (available.length) {
     lines.push(
       `Available to connect: ${available.map(connectorLabel).join(", ")}. Only offer direct OAuth consent links for this admin-configured list.`,

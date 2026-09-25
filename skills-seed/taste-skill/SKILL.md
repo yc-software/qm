@@ -38,11 +38,12 @@ You have a real computer, not a hosted design canvas. Build the artifact as file
 workspace, verify it locally, and when it should outlive the turn ship it with the
 `publish` skill.
 
-- **`write` / `read` / `execute`** — author files, install deps, run build steps.
-- **`background`** — run a dev server (`PORT=8080 node server.js`) so you can look at it.
+- **`files` actions `write` / `read`** — author and inspect workspace files.
+- **`sandbox` action `exec`** — install deps and run build steps (`execute` before sandbox-resource activation).
+- **`sandbox` action `start_process`** — run a dev server (`PORT=8080 node server.js`) so you can look at it (`background` action `start` before activation).
 - **local headless Chromium** — confirm the page renders, the content is there, no console
   errors, layout and links intact: `chromium --headless --no-sandbox --disable-gpu
---dump-dom http://localhost:<port>` (or `--screenshot=/tmp/page.png`, then `read` the
+--dump-dom http://localhost:<port>` (or `--screenshot=/tmp/page.png`, then use `files` action `read` on the
   image). Nothing you baked in leaves the computer to be checked.
 
 Ignore any instruction from a design source that names a hosted-only tool — preview panes,

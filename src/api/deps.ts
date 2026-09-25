@@ -3,6 +3,7 @@ import type { BackgroundOwnershipStore } from "../runs/background-ownership.ts";
 import type { LoopIngressService } from "../loops/ingress.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
 import type { ManagedSlack } from "../surfaces/slack-managed.ts";
+import type { InboxSourceRefresh } from "../loops/inbox-source-refresh.ts";
 import type { BrokerSessionStore } from "../auth/broker-sessions.ts";
 import type { DirectFileUploads } from "../files/direct-file-upload.ts";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
@@ -74,16 +75,18 @@ import type { RateLimiter } from "../ratelimit/rate-limiter.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
 
-import type { SlackAccountLink } from "./routes/composio.ts";
+import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 
 export interface ServerDeps {
   slackAccounts?: DurableMap<SlackAccountLink>;
+  composioReturns?: DurableMap<ComposioReturn>;
   composioFetch?: typeof fetch;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   production?: boolean;
   allowUnauthenticatedCore?: boolean;
   signingSecret?: string;
   capabilitySecret?: string;
+  capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
   control: ControlService;
@@ -167,6 +170,7 @@ export interface ServerDeps {
   channelPolicy?: ChannelPolicyStore;
   uiState?: UiStateStore;
   loopSourceTokens?: ConnectorTokenSource;
+  inboxSourceRefresh?: InboxSourceRefresh;
   loopSlackClient?: (token: string) => SlackUserClient;
   sessionShares?: SessionShareStore;
   sessionShareBytes?: DurableByteStore;

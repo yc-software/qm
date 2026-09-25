@@ -767,6 +767,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         return {
           reply,
           ...(!ref.runtimeHandoff || stopped ? { stopped: true as const } : {}),
+          ...(stopped ? { stoppedByUser: true as const } : {}),
           ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
           ...(ref.silentRequested ? { silent: true } : {}),
           ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
@@ -802,7 +803,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       );
       return {
         reply,
-        ...(stopped ? { stopped: true as const } : {}),
+        ...(stopped ? { stopped: true as const, stoppedByUser: true as const } : {}),
         ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
         ...(ref.silentRequested ? { silent: true } : {}),
         ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),

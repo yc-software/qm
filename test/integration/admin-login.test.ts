@@ -44,7 +44,16 @@ test(
       assert.ok(cookie);
       assert.match(cookie, /HttpOnly/);
       assert.match(cookie, /SameSite=Lax/);
-      if (publicUrl.startsWith("https:")) assert.match(cookie, /Secure/);
+      const twin = res.headers.getSetCookie().find((value) => value.startsWith("portal_session_x="));
+      assert.ok(twin);
+      assert.equal(twin.split(";")[0], cookie.split(";")[0]!.replace("portal_session=", "portal_session_x="));
+      if (publicUrl.startsWith("https:")) {
+        assert.match(cookie, /Secure/);
+        assert.match(twin, /SameSite=None/);
+        assert.match(twin, /Secure/);
+      } else {
+        assert.match(twin, /SameSite=Lax/);
+      }
       return cookie.split(";")[0]!;
     };
 

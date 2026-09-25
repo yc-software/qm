@@ -64,6 +64,11 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   Slack Mac app, and don't ask permission first — do it on your own; don't wait to be
   asked. Skip it for trivial refactors, docs, config, or pure-logic changes already
   covered by tests.
+  Leave review instances running until the PR merges, unless the user asks to stop
+  earlier. After merge, tear down that worktree's instance and verify its processes
+  and lease are gone before removing the worktree. Preserve shared Postgres and
+  persistent data. If the user asks to keep an instance beyond merge, keep its
+  worktree too.
 - **Keep screenshots out of Git and app assets.** Never commit screenshots or create
   a tracked screenshots directory, including under docs or QA. Capture review images
   in a temporary directory outside the checkout or an ignored local output directory,

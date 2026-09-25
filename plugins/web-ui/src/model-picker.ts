@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { Check, ChevronDown, ChevronRight, GripVertical, Plus, Sparkles, Star, X, Zap } from "lucide";
+import { Check, ChevronDown, ChevronRight, Plus, Sparkles, Star, X, Zap } from "lucide";
 import { icon, modelMark } from "./ui";
 import { getRuntimeConfig, saveRuntimeConfig } from "./runtime-config-store";
 import {
@@ -18,7 +18,6 @@ import {
 import { modelSupportsFastMode } from "./pi-models";
 import {
   LOADOUT_CAP,
-  reorderLoadout,
   effortLevelsForHarness,
   compatibleHarnessOptions,
   loadoutModelId,
@@ -53,6 +52,7 @@ interface ModelPickerBindings<T> {
   effectiveFastMode(): boolean;
   changeDefault(change: Parameters<typeof saveRuntimeConfig>[1], target: T, keepOpen?: boolean): Promise<unknown>;
   showDefaultAction?: boolean;
+  showInheritAction?: boolean;
 }
 
 export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
@@ -73,7 +73,6 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
   let loadoutSection: "effort" | "add" | "harness" | null = null;
   let loadoutSectionHovered = false;
   let loadoutCloseTimer: ReturnType<typeof setTimeout> | null = null;
-  let draggedModel: string | null = null;
   let disposed = false;
 
   function removeLoadoutEntry(value: string, selected: ModelOption): void {
@@ -90,21 +89,6 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     });
   }
 
-  function clearLoadoutDropTargets(): void {
-    bindings
-      .host()
-      ?.querySelectorAll(".loadout-row.drop-target")
-      .forEach((row) => {
-        row.classList.remove("drop-target", "drop-after");
-      });
-  }
-
-  function moveLoadout(value: string, targetValue: string, selected: ModelOption): void {
-    bindings.saveEntries(reorderLoadout(seededLoadout(selected), value, targetValue));
-    bindings.redraw();
-    placeLoadout();
-  }
-
   function modelGlyph(option: ModelOption): TemplateResult {
     const provider = option.displayProvider ?? String(option.model.provider);
     const mark =
@@ -116,12 +100,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     >`;
   }
 
-  function loadoutRow(
-    entry: LoadoutEntry,
-    at: number,
-    selected: ModelOption,
-    agent: T,
-  ): TemplateResult | typeof nothing {
+  function loadoutRow(entry: LoadoutEntry, selected: ModelOption, agent: T): TemplateResult | typeof nothing {
     const option = getModelOptions(scopeKey()).find((option) => option.value === entry.value);
     if (!option) return nothing;
     const active = entry.value === activeLoadoutEntry(selected).value;
@@ -136,67 +115,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
         settings.fast !== (activeRuntimeConfig.effective.fastMode === true));
     return html` <div
       class="loadout-row ${active ? "active" : ""} ${canMakeDefault || isDefault ? "has-default-action" : ""}"
-      @dragover=${(e: DragEvent) => {
-        if (!draggedModel || draggedModel === entry.value) return;
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-        clearLoadoutDropTargets();
-        const row = e.currentTarget as HTMLElement;
-        row.classList.add("drop-target");
-        row.classList.toggle(
-          "drop-after",
-          seededLoadout(selected).findIndex((item) => item.value === draggedModel) < at,
-        );
-      }}
-      @dragleave=${(e: DragEvent) => {
-        const row = e.currentTarget as HTMLElement;
-        if (!(e.relatedTarget instanceof Node) || !row.contains(e.relatedTarget)) {
-          row.classList.remove("drop-target", "drop-after");
-        }
-      }}
-      @drop=${(e: DragEvent) => {
-        if (!draggedModel) return;
-        e.preventDefault();
-        e.stopPropagation();
-        clearLoadoutDropTargets();
-        moveLoadout(draggedModel, entry.value, selected);
-        draggedModel = null;
-      }}
     >
-      <button
-        type="button"
-        class="loadout-drag"
-        draggable="true"
-        aria-label=${`Reorder ${option.label}; use Up or Down`}
-        @dragstart=${(e: DragEvent) => {
-          e.stopPropagation();
-          draggedModel = entry.value;
-          e.dataTransfer?.setData("text/plain", entry.value);
-          if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-          (e.currentTarget as HTMLElement).closest(".loadout-row")?.classList.add("dragging");
-        }}
-        @dragend=${(e: DragEvent) => {
-          draggedModel = null;
-          clearLoadoutDropTargets();
-          (e.currentTarget as HTMLElement).closest(".loadout-row")?.classList.remove("dragging");
-        }}
-        @keydown=${(e: KeyboardEvent) => {
-          if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-          e.preventDefault();
-          e.stopPropagation();
-          const next = seededLoadout(selected)[at + (e.key === "ArrowUp" ? -1 : 1)];
-          if (next) {
-            moveLoadout(entry.value, next.value, selected);
-            requestAnimationFrame(() => {
-              const handles = bindings.host()?.querySelectorAll<HTMLButtonElement>(".loadout-drag");
-              handles?.[at + (e.key === "ArrowUp" ? -1 : 1)]?.focus();
-            });
-          }
-        }}
-      >
-        ${icon(GripVertical, 13)}
-      </button>
       <button
         class="loadout-pick"
         type="button"
@@ -220,7 +139,6 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
             ${settings.fast ? html`<span class="loadout-bolt" aria-label="Fast">${icon(Zap, 10)}</span>` : nothing}
           </span>
         </span>
-        <span class="loadout-end">${active ? icon(Check, 15) : nothing}</span>
       </button>
       ${
         canMakeDefault
@@ -356,7 +274,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       </button>
       ${
         effort
-          ? effortLevelsForHarness(selected.harnessId).map(
+          ? effortLevelsForHarness(selected.harnessId, selected.model, composerState.effortLevel).map(
               (level) =>
                 html` <button
                   class="loadout-effort"
@@ -575,7 +493,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
             >
               <div class="loadout-panel">
                 <div class="loadout-head">Presets</div>
-                <div class="loadout-list">${entries.map((entry, at) => loadoutRow(entry, at, selected, agent))}</div>
+                <div class="loadout-list">${entries.map((entry) => loadoutRow(entry, selected, agent))}</div>
                 <div
                   class="loadout-submenu-anchor"
                   ${tip(entries.length >= LOADOUT_CAP ? "Remove a preset to add another." : "")}
@@ -605,7 +523,8 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                       openLoadoutSection("add", e.detail === 0);
                     }}
                   >
-                    ${icon(Plus, 16)}<span>Add models</span><span class="loadout-end">${icon(ChevronRight, 14)}</span>
+                    <span class="loadout-icon" aria-hidden="true">${icon(Plus, 16)}</span><span>Add models</span
+                    ><span class="loadout-end">${icon(ChevronRight, 14)}</span>
                   </button>
                 </div>
                 ${
@@ -669,7 +588,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                     : nothing
                 }
               </div>
-              ${getRuntimeConfig(scopeKey())?.scopeOverride ? html`<div class="loadout-foot"><button class="loadout-foot-btn" type="button" @click=${() => changeScopeRuntime({ inherit: true }, agent)}>Use org default</button></div>` : nothing}
+              ${bindings.showInheritAction !== false && getRuntimeConfig(scopeKey())?.scopeOverride ? html`<div class="loadout-foot"><button class="loadout-foot-btn" type="button" @click=${() => changeScopeRuntime({ inherit: true }, agent)}>Use org default</button></div>` : nothing}
               ${loadoutSubmenu(agent, selected)}
             </div>`
           : nothing
@@ -684,10 +603,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     const menu = target.closest<HTMLElement>('[role="menu"]');
     if (!menu) return;
     const buttons = [...menu.querySelectorAll<HTMLElement>("button:not(:disabled)")].filter(
-      (button) =>
-        button.closest('[role="menu"]') === menu &&
-        button.offsetParent !== null &&
-        !button.classList.contains("loadout-drag"),
+      (button) => button.closest('[role="menu"]') === menu && button.offsetParent !== null,
     );
     if (!buttons.length) return;
     e.preventDefault();

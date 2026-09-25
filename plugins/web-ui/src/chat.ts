@@ -969,15 +969,31 @@ export function createChatSurface(
     }
   }
 
-  function mountLoadingPane(): void {
+  function mountLoadingPane(): () => boolean {
+    dropAbandonedNewChat(null);
+    teardownActiveChat();
     const container = ctx.container();
-    if (!container || !ctx.visible()) return;
+    if (!container || !ctx.visible()) return () => false;
     const host = document.createElement("div");
     host.className = "custom-chat";
     render(
       html`<div class="custom-chat-shell">
         <div class="chat-loading">${waveLoader()}</div>
       </div>`,
+      host,
+    );
+    container.replaceChildren(host);
+    return () => container.contains(host);
+  }
+
+  function mountLoadError(retry: () => void): void {
+    const container = ctx.container();
+    if (!container) return;
+    const host = document.createElement("div");
+    host.className = "empty compact";
+    render(
+      html`<p role="alert">Couldn't load this conversation.</p>
+        <button class="btn" @click=${retry}>Retry</button>`,
       host,
     );
     container.replaceChildren(host);
@@ -1248,7 +1264,7 @@ export function createChatSurface(
         expanded
           ? pins.map(
               (p) =>
-                html`<div class="pinned-item" title=${p.text ?? p.preview ?? ""}>
+                html`<div class="pinned-item">
                   <span class="pinned-item-text">${linkifiedText(p.text ?? p.preview ?? `entry #${p.entrySeq}`)}</span>
                   ${p.text && p.preview ? html`<span class="pinned-item-preview">${linkifiedText(p.preview)}</span>` : nothing}
                 </div>`,
@@ -1379,6 +1395,10 @@ export function createChatSurface(
 
   function drawActiveChat(agent = chatState.agent, opts: { forceScroll?: boolean } = {}): void {
     if (!agent || agent !== chatState.agent || !chatState.host || appState.currentView !== "chats") return;
+    if (!ctx.visible()) {
+      postCurrentPaneState();
+      return;
+    }
     transcriptViewport.beforeRender();
     const currentMessages = visibleMessages(agent);
     if (preserveConnectionScroll) {
@@ -1406,6 +1426,24 @@ export function createChatSurface(
     const tier = ctx.density();
     const glanceTier = tier === "card" || tier === "strip" ? tier : null;
     const emptyChat = !messages.length && (showWelcome || !chatState.forkSession);
+    const showSuggestions =
+      emptyChat &&
+      !editingApp &&
+      !(isNewUser && appState.me?.welcomeCohort) &&
+      !glanceTier &&
+      (!ctx.pane || tier === "full") &&
+      !chatState.sessionId &&
+      (chatState.scopeId === null || chatState.scopeId === `personal:${appState.me?.user}`) &&
+      !agent.state.isStreaming;
+    const suggestions = showSuggestions
+      ? suggestedActivities(
+          appState.me?.suggestedActivities,
+          (activity) => ctx.composer.fillSuggestedPrompt(activity.prompt, agent),
+          Boolean(
+            ctx.composer.state.draft || ctx.composer.state.attachments.length || ctx.composer.state.processingFiles,
+          ),
+        )
+      : nothing;
     render(
       html`
         <div
@@ -1433,32 +1471,13 @@ export function createChatSurface(
               ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
               ${glanceTier ? nothing : liveWorkStatus(agent)}
               ${emptyChat && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
+              ${ctx.pane ? suggestions : nothing}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>
           </section>
           <div class="chat-bottom-dock">
             ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${backgroundActivityStrip()}
-            ${ctx.composer.composerForm(agent)}
-            ${
-              emptyChat &&
-              !editingApp &&
-              !(isNewUser && appState.me?.welcomeCohort) &&
-              !glanceTier &&
-              (!ctx.pane || tier === "full") &&
-              !chatState.sessionId &&
-              (chatState.scopeId === null || chatState.scopeId === `personal:${appState.me?.user}`) &&
-              !agent.state.isStreaming
-                ? suggestedActivities(
-                    appState.me?.suggestedActivities,
-                    (activity) => ctx.composer.fillSuggestedPrompt(activity.prompt, agent),
-                    Boolean(
-                      ctx.composer.state.draft ||
-                      ctx.composer.state.attachments.length ||
-                      ctx.composer.state.processingFiles,
-                    ),
-                  )
-                : nothing
-            }
+            ${ctx.composer.composerForm(agent)} ${ctx.pane ? nothing : suggestions}
           </div>
         </div>
       `,
@@ -1661,7 +1680,9 @@ export function createChatSurface(
               ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
               ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
             </div>
-            <button class="pin-toggle" type="button" hidden aria-expanded="false">Show more</button>
+            <button class="pin-toggle" type="button" hidden aria-expanded="false">
+              <span class="pin-toggle-label">Show more</span>${icon(ChevronDown, 14)}
+            </button>
           </div>
           ${
             sendFailure
@@ -1924,9 +1945,11 @@ export function createChatSurface(
         const work = (message as AssistantWork).work;
         const phase = work ? currentTextPhase(work) : null;
         const streamingFinal = isStreaming && phase?.phase === "final_answer";
+        const workActive =
+          hasWork && isStreaming && !streamingFinal && (work?.status === "working" || work?.status === "thinking");
         const text = streamingFinal ? chunk.text.slice(phase.streamOffset) : chunk.text;
         for (const [partIndex, part] of setupContent(
-          assistantDisplayText(isStreaming && hasWork && !streamingFinal ? "" : text, message.stopReason),
+          assistantDisplayText(workActive ? "" : text, message.stopReason),
         ).entries()) {
           if (part.type !== "text") {
             if (!(message as AssistantWork).persisted) continue;
@@ -2431,6 +2454,8 @@ export function createChatSurface(
     const animating = active && !stopping;
     let label = stopping ? "Stop requested" : workLabel(work);
     if (stopped) label = `You stopped after ${goalElapsedLabel(0, workSeconds(work) * 1000)}`;
+    if (timeline.length === 1 && !tail.trim() && !stopped && !stopping && !work.stale && !work.pendingApprovals?.length)
+      return html`${renderTimelineItem(timeline[0]!, work)}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
     let fold =
       timeline.length || tail.trim() || work.pendingApprovals?.length
         ? html`<details
@@ -2446,7 +2471,7 @@ export function createChatSurface(
                 activityGroups(timeline),
                 (items) => timelineKey(items[0]!),
                 (items) => {
-                  if (items[0]?.kind === "text") return renderTimelineItem(items[0], work);
+                  if (items.length === 1 || items[0]?.kind === "text") return renderTimelineItem(items[0]!, work);
                   const summary = activityGroupSummary(items, work.status);
                   const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
                     summary.category
@@ -2609,13 +2634,17 @@ export function createChatSurface(
   }
 
   function toolDetail(tool: string, call: ToolPayload, result: ToolPayload): string {
+    if (typeof call.purpose === "string" && call.purpose.trim()) return call.purpose.trim();
     switch (toolCategory({ ...result, ...call, tool })) {
       case "execute":
         return call.command ? firstLine(call.command) : "";
       case "read":
         return call.path ?? result.path ?? "";
-      case "skill":
-        return `${call.name ?? result.name ?? ""}/${call.path ?? result.path ?? "SKILL.md"}`;
+      case "skill": {
+        const name = call.name ?? result.name ?? "";
+        const path = call.path ?? result.path ?? "SKILL.md";
+        return path === "SKILL.md" ? name : `${name}/${path}`;
+      }
       case "write": {
         const path = call.path ?? result.path ?? "";
         const bytes = result.bytes ?? call.bytes;
@@ -2869,6 +2898,49 @@ export function createChatSurface(
     }
   }
 
+  let attachmentPeek: HTMLElement | null = null;
+
+  function unpeekAttachment(): void {
+    attachmentPeek?.remove();
+    attachmentPeek = null;
+    document.removeEventListener("scroll", unpeekAttachment, true);
+  }
+
+  function peekAttachment(e: Event): void {
+    const link = e.currentTarget as HTMLElement | null;
+    const img = link?.querySelector("img");
+    if (!link || !img || getComputedStyle(link).getPropertyValue("--attachment-compact").trim() !== "1") return;
+    unpeekAttachment();
+    const bounds = (link.closest(".split-pane-content") ?? document.documentElement).getBoundingClientRect();
+    const anchor = link.getBoundingClientRect();
+    const pad = 12;
+    const chrome = 12;
+    const maxW = Math.max(80, Math.min(360, bounds.width - pad * 2 - chrome));
+    const maxH = Math.max(60, Math.min(320, bounds.height - anchor.height - pad * 3 - chrome));
+    const natural = { w: img.naturalWidth || maxW, h: img.naturalHeight || maxH };
+    const scale = Math.min(maxW / natural.w, maxH / natural.h, 1);
+    const w = Math.round(natural.w * scale);
+    const h = Math.round(natural.h * scale);
+    const peek = document.createElement("div");
+    peek.className = "attachment-peek";
+    peek.setAttribute("aria-hidden", "true");
+    const copy = document.createElement("img");
+    copy.src = img.currentSrc || img.src;
+    copy.alt = "";
+    copy.style.width = `${w}px`;
+    copy.style.height = `${h}px`;
+    peek.append(copy);
+    const below = anchor.bottom + 8;
+    const top =
+      below + h + chrome <= bounds.bottom - pad ? below : Math.max(bounds.top + pad, anchor.top - 8 - h - chrome);
+    const left = Math.max(bounds.left + pad, Math.min(anchor.right - w - chrome, bounds.right - pad - w - chrome));
+    peek.style.top = `${top}px`;
+    peek.style.left = `${left}px`;
+    document.body.append(peek);
+    attachmentPeek = peek;
+    document.addEventListener("scroll", unpeekAttachment, true);
+  }
+
   function userAttachmentBadge(a: UserAttachmentView): TemplateResult {
     const artifactHref = a.artifactId ? fileContentUrl(a.artifactId, a.fileName) : undefined;
     if (a.mimeType?.startsWith("image/")) {
@@ -2876,9 +2948,20 @@ export function createChatSurface(
         a.content && (a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`);
       const href = artifactHref ?? localContentUrl(a) ?? dataUrl;
       if (href && browserRenderableImage(a.mimeType)) {
-        return html`<a class="file-image" href=${href} target="_blank" rel="noreferrer" ${tip(a.fileName)}
-          ><img src=${href} alt=${a.fileName} loading="lazy"
-        /></a>`;
+        return html`<a
+          class="file-image"
+          href=${href}
+          target="_blank"
+          rel="noreferrer"
+          ${tip(a.fileName)}
+          @mouseenter=${peekAttachment}
+          @mouseleave=${unpeekAttachment}
+          @focus=${peekAttachment}
+          @blur=${unpeekAttachment}
+          ><img src=${href} alt=${a.fileName} loading="lazy" /><span class="file-image-name" dir="auto"
+            >${a.fileName}</span
+          >${typeof a.size === "number" ? html`<small class="file-image-size">${formatBytes(a.size)}</small>` : nothing}</a
+        >`;
       }
       return chipBadge(FileImage, a.fileName, a.size, href || undefined, true);
     }
@@ -2944,6 +3027,7 @@ export function createChatSurface(
     mountContinuable,
     mountReadOnly,
     mountLoadingPane,
+    mountLoadError,
     scrollToBottom,
     revealEntry: (seq: number) => {
       if (chatState.inheritedMessages.some((message) => messageEntrySeqs(message).includes(seq))) {

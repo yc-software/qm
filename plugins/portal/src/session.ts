@@ -33,6 +33,7 @@ export interface SessionClaims {
   name?: string;
   auth?: number;
   anon?: boolean;
+  appOnly?: boolean;
   iat: number;
   exp: number;
 }
@@ -74,6 +75,7 @@ export function openSession(
     typeof p.exp !== "number"
   )
     return null;
+  if (p.appOnly !== undefined && typeof p.appOnly !== "boolean") return null;
   if (expectedOrg !== undefined && p.org !== expectedOrg) return null;
   if (now >= p.exp * 1000) return null;
   const authenticatedAt = typeof p.auth === "number" ? p.auth : p.iat;
@@ -110,10 +112,17 @@ export interface CookieOpts {
   maxAge?: number;
   secure: boolean;
   domain?: string;
+  sameSite?: "Lax" | "None";
 }
 
 export function setCookie(name: string, value: string, opts: CookieOpts): string {
-  const parts = [`${name}=${encodeURIComponent(value)}`, "HttpOnly", "SameSite=Lax", `Path=${opts.path ?? "/"}`];
+  const sameSite = opts.sameSite === "None" && opts.secure ? "None" : "Lax";
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    "HttpOnly",
+    `SameSite=${sameSite}`,
+    `Path=${opts.path ?? "/"}`,
+  ];
   if (opts.domain) parts.push(`Domain=${opts.domain}`);
   if (opts.secure) parts.push("Secure");
   if (opts.maxAge !== undefined) parts.push(`Max-Age=${opts.maxAge}`);
@@ -125,6 +134,19 @@ export function clearCookie(name: string, path: string, secure: boolean, domain?
   if (domain) parts.push(`Domain=${domain}`);
   if (secure) parts.push("Secure");
   return parts.join("; ");
+}
+
+export function sessionCookieHeaders(value: string, attrs: CookieOpts): string[] {
+  return [
+    setCookie("portal_session", value, attrs),
+    setCookie("portal_session_x", value, { ...attrs, sameSite: "None" }),
+    ...(attrs.domain
+      ? [
+          clearCookie("portal_session", attrs.path ?? "/", attrs.secure),
+          clearCookie("portal_session_x", attrs.path ?? "/", attrs.secure),
+        ]
+      : []),
+  ];
 }
 
 export function readCookie(header: string | undefined, name: string): string | null {
@@ -172,11 +194,11 @@ export function sanitizeReturnTo(value: string | null | undefined, publicOrigin:
   if (!value || value[0] !== "/") return "/";
   if (value.startsWith("//")) return "/";
   if (/[\\\x00-\x1f]/.test(value)) return "/";
-  if (/%2f%2f|%5c/i.test(value)) return "/";
+  if (/%2f%2f|%5c/i.test(value.split(/[?#]/, 1)[0]!)) return "/";
   try {
     const base = new URL(publicOrigin).origin;
     const u = new URL(value, base);
-    if (u.origin !== base) return "/";
+    if (u.origin !== base || u.pathname.startsWith("//")) return "/";
     return `${u.pathname}${u.search}${u.hash}`;
   } catch {
     return "/";

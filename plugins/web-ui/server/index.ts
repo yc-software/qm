@@ -27,7 +27,7 @@ import {
   cookie,
   PayloadTooLargeError,
   sendBuffered,
-  serveEmojiFavicon,
+  serveFavicon,
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
@@ -107,7 +107,14 @@ async function serveWebManifest(res: ServerResponse): Promise<void> {
     orientation: "any",
     background_color: "#ffffff",
     theme_color: "#ffffff",
-    icons: [{ src: "/brand-mark.svg", sizes: "any", type: "image/svg+xml", purpose: "any maskable" }],
+    icons: [
+      {
+        src: process.env.WEB_UI_FAVICON_SVG ? "/favicon.svg" : "/brand-mark.svg",
+        sizes: "any",
+        type: "image/svg+xml",
+        purpose: "any maskable",
+      },
+    ],
   };
   res.writeHead(200, { "content-type": "application/manifest+json; charset=utf-8", "cache-control": "no-cache" });
   res.end(JSON.stringify(manifest));
@@ -1196,6 +1203,28 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
 
+  {
+    method: "GET",
+    path: "/api/composio/callback",
+    handle: async (c) => {
+      c.res.setHeader("Cache-Control", "no-store");
+      c.res.setHeader("Referrer-Policy", "no-referrer");
+      const result = await coreFetch(
+        "POST",
+        "/v1/composio/complete-auth",
+        JSON.stringify({ sessionUri: c.url.searchParams.get("session_uri") }),
+      );
+      if (result.status !== 200) return relay(c.res, result);
+      const data = JSON.parse(result.text) as { returnTo?: string | null };
+      const base = new URL(PUBLIC_URL);
+      const target = data.returnTo
+        ? new URL(data.returnTo, base)
+        : new URL("./?view=settings", `${PUBLIC_URL.replace(/\/$/, "")}/`);
+      if (target.origin !== base.origin) return json(c.res, 400, { error: "invalid_return_url" });
+      c.res.writeHead(303, { location: target.href });
+      c.res.end();
+    },
+  },
   { method: "GET", path: "/api/composio/slack", handle: (c) => relayCore(c.res, "GET", "/v1/composio/slack") },
   {
     method: "POST",
@@ -1624,11 +1653,13 @@ const apiRoutes: readonly WebRoute[] = [
     method: "GET",
     path: "/api/loops/:id/items/:itemId",
     handle: async (c) => {
-      const { res, user, params } = c;
+      const { res, user, params, url } = c;
+      const qs = new URLSearchParams({ principalId: user });
+      if (url.searchParams.get("refreshSource") === "1") qs.set("refreshSource", "1");
       return relayCore(
         res,
         "GET",
-        `/v1/loops/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}?principalId=${encodeURIComponent(user)}`,
+        `/v1/loops/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}?${qs.toString()}`,
       );
     },
   },
@@ -1657,6 +1688,7 @@ const apiRoutes: readonly WebRoute[] = [
       const { res, url, user } = c;
       const scopeId = url.searchParams.get("scopeId") || `personal:${user}`;
       const qs = new URLSearchParams({ principalId: user, scopeId });
+      if (url.searchParams.get("account") === "company") qs.set("account", "company");
       return relayCore(res, "GET", `/v1/runtime-config?${qs.toString()}`);
     },
   },
@@ -2198,13 +2230,25 @@ const apiRoutes: readonly WebRoute[] = [
     method: "POST",
     path: "/api/deployments/:id/share",
     handle: async ({ req, res, params }) => {
-      const body = await readJson<{ scope?: unknown; recipient?: unknown; access?: unknown }>(req, res, false);
+      const body = await readJson<{
+        scope?: unknown;
+        recipient?: unknown;
+        email?: unknown;
+        access?: unknown;
+        public?: unknown;
+      }>(req, res, false);
       if (!body) return;
       return relayCap(
         res,
         "POST",
         `/v1/deployments/${encodeURIComponent(params.id!)}/share`,
-        JSON.stringify({ scope: body.scope, recipient: body.recipient, access: body.access }),
+        JSON.stringify({
+          scope: body.scope,
+          recipient: body.recipient,
+          email: body.email,
+          access: body.access,
+          public: body.public,
+        }),
       );
     },
   },
@@ -2237,6 +2281,24 @@ const apiRoutes: readonly WebRoute[] = [
       if (!p) return;
       const name = String(p.name ?? "");
       return relayCore(res, "POST", `/v1/deployments/${encodeURIComponent(id)}/name`, JSON.stringify({ name }));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/deployments/:id/embed-ancestors",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const id = c.params.id!;
+      if (!(await gateManageDeployment(res, user, id))) return;
+      const p = await readJson<{ embedAncestors?: unknown }>(req, res, false);
+      if (!p) return;
+      const embedAncestors = Array.isArray(p.embedAncestors) ? p.embedAncestors : [];
+      return relayCore(
+        res,
+        "POST",
+        `/v1/deployments/${encodeURIComponent(id)}/embed-ancestors`,
+        JSON.stringify({ embedAncestors }),
+      );
     },
   },
   {
@@ -2933,7 +2995,14 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { req, res, user } = c;
       const id = c.params.id!;
-      let patch: { title?: string; task?: string; schedule?: unknown; enabled?: boolean; archived?: boolean } = {};
+      let patch: {
+        title?: string;
+        task?: string;
+        schedule?: unknown;
+        enabled?: boolean;
+        archived?: boolean;
+        runtime?: unknown;
+      } = {};
       try {
         const p = JSON.parse(await readBody(req)) as {
           title?: unknown;
@@ -2941,7 +3010,9 @@ const apiRoutes: readonly WebRoute[] = [
           schedule?: unknown;
           enabled?: unknown;
           archived?: unknown;
+          runtime?: unknown;
         };
+        if ("runtime" in p) patch = { ...patch, runtime: p.runtime };
         if ("title" in p) {
           if (typeof p.title !== "string")
             return json(res, 400, { error: "bad_request", message: "title must be a string" });
@@ -2970,7 +3041,7 @@ const apiRoutes: readonly WebRoute[] = [
       if (Object.keys(patch).length === 0)
         return json(res, 400, {
           error: "bad_request",
-          message: "expected title, task, schedule, enabled, or archived",
+          message: "expected title, task, schedule, enabled, archived, or runtime",
         });
       if (patch.archived === true) patch = { ...patch, enabled: false };
       return relayCore(
@@ -3035,7 +3106,14 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
   if (method === "GET" && path === "/healthz") return json(res, 200, { ok: true });
   if (method === "GET" && path === "/favicon.svg") {
-    return serveEmojiFavicon(res, process.env.WEB_UI_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F", "no-cache");
+    return serveFavicon(
+      res,
+      {
+        svg: process.env.WEB_UI_FAVICON_SVG,
+        emoji: process.env.WEB_UI_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F",
+      },
+      "no-cache",
+    );
   }
   if (method === "GET" && path === "/manifest.webmanifest") return serveWebManifest(res);
 

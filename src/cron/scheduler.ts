@@ -76,6 +76,7 @@ export interface SchedulerDeps {
   identity: IdentityService;
   run: (req: TurnRequest) => Promise<TurnResult>;
   currentScopeMembers?: CurrentScopeMembers;
+  isOpenScopeMember?: TriggerDeps["isOpenScopeMember"];
   now?: () => number;
   maxFiresPerTick?: number;
   leaderLease?: LeaderLease;
@@ -262,6 +263,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           run: deps.run,
           ...(deps.directory ? { directory: deps.directory } : {}),
           ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
+          ...(deps.isOpenScopeMember ? { isOpenScopeMember: deps.isOpenScopeMember } : {}),
           ...(deps.sessions ? { sessions: deps.sessions } : {}),
         },
         {
@@ -270,6 +272,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           fireKey,
           threadRef,
           surface: "cron",
+          ...(cron.runtime ? { runtime: cron.runtime } : {}),
           ...(cron.title ? { title: cron.title } : {}),
           onClaimed: async () => {
             await deps.crons.beginFire(cron.id, runningEntry);

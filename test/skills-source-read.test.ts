@@ -136,7 +136,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
   const turn = createTurnSandboxes({
     deps: {
       skills: { recordUse: async () => {} },
-      sandboxResources: { get: async () => ({ ownerScopeId: "personal:U1" }) },
+      sandboxResources: { access: async () => ({ id: "resource-1", ownerScopeId: "personal:U1" }) },
       sandbox: {
         provision: async (_layers: unknown, options?: { sandboxId?: string }) => {
           sandboxIds.push(options?.sandboxId);
@@ -160,7 +160,6 @@ test("a body read avoids sandbox work and a file request materializes that skill
     turnSessionDir: "turn/s",
     turnFilesDir: "turn/s/t",
     connectorEnv: {},
-    ownerEnvCredentialIds: [],
     credentialCutoverServices: [],
     visibleSkillsForTurn: async () => visible,
     emitGapWork: () => {},

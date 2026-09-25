@@ -1,6 +1,6 @@
 import { html, render, nothing } from "lit";
 import { live } from "lit/directives/live.js";
-import { Search, X } from "lucide";
+import { Globe, Lock, Search, X } from "lucide";
 import { api } from "./core-bridge";
 import { closeFormMenus, icon, initials, menuSelect } from "./ui";
 import { scopeChip } from "./contexts";
@@ -20,10 +20,11 @@ export async function openDeploymentPermissions(id: string, title: string, owner
   dialog.setAttribute("aria-labelledby", "deployment-permissions-heading");
   document.body.append(dialog);
   let grantees: Grant[] = [];
+  let publicAccess = false;
   let matches: DirectoryMatch[] = [];
   let query = "";
   let access = "view";
-  let selected: DirectoryMatch | null = null;
+  let selected: (DirectoryMatch & { email?: string }) | null = null;
   let searchSequence = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let searching = false;
@@ -46,18 +47,24 @@ export async function openDeploymentPermissions(id: string, title: string, owner
     if (closeFormMenus()) return;
     close();
   });
-  const change = async (scope: string, value: string) => {
+  const change = async (scope: string, value: string, email?: string) => {
     if (busy) return;
     closeFormMenus();
     busy = true;
     error = "";
     draw();
     try {
-      const response = await api<{ grantees: Grant[] }>(endpoint, {
-        method: "POST",
-        body: JSON.stringify({ scope, access: value }),
-      });
+      const response = await api<{ public: boolean; grantees: Grant[]; invitation?: { emailProblem?: string } }>(
+        endpoint,
+        {
+          method: "POST",
+          body: JSON.stringify({ ...(email ? { email } : { scope }), access: value }),
+        },
+      );
+      publicAccess = response.public;
       grantees = response.grantees;
+      if (response.invitation?.emailProblem)
+        error = `Access granted, but no invitation email was sent: ${response.invitation.emailProblem}`;
       selected = null;
       query = "";
       searched = false;
@@ -65,6 +72,26 @@ export async function openDeploymentPermissions(id: string, title: string, owner
       matches = [];
     } catch (e) {
       error = errMessage(e, "Could not update permissions.");
+    } finally {
+      busy = false;
+      if (dialog.isConnected) draw();
+    }
+  };
+  const changePublic = async (value: string) => {
+    if (busy) return;
+    closeFormMenus();
+    busy = true;
+    error = "";
+    draw();
+    try {
+      const response = await api<{ public: boolean; grantees: Grant[] }>(endpoint, {
+        method: "POST",
+        body: JSON.stringify({ public: value === "public" }),
+      });
+      publicAccess = response.public;
+      grantees = response.grantees;
+    } catch (e) {
+      error = errMessage(e, "Could not update public access.");
     } finally {
       busy = false;
       if (dialog.isConnected) draw();
@@ -104,6 +131,17 @@ export async function openDeploymentPermissions(id: string, title: string, owner
         draw();
       }
     }
+  };
+  const emailCandidate = (): string | null => {
+    const email = query.trim().toLowerCase();
+    if (email.length > 254 || !/^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(email)) return null;
+    if (
+      owner.toLowerCase() === `personal:${email}` ||
+      grantees.some((g) => g.scope.toLowerCase() === `personal:${email}`)
+    )
+      return null;
+    if (matches.some((m) => m.principalId.toLowerCase() === email)) return null;
+    return email;
   };
   const permissionMenu = (value: string, label: string, update: (value: string) => void, removable = false) =>
     html`<fieldset class="permission-control" ?disabled=${busy}>
@@ -154,16 +192,24 @@ export async function openDeploymentPermissions(id: string, title: string, owner
                           ${icon(X, 14)}
                         </button>
                         <div class="permission-invite-actions">
-                          ${permissionMenu(access, "New person's access", (value) => {
-                            access = value;
-                            draw();
-                          })}<button
+                          ${
+                            selected.email
+                              ? html`<span class="permission-note">Can view</span>`
+                              : permissionMenu(access, "New person's access", (value) => {
+                                  access = value;
+                                  draw();
+                                })
+                          }<button
                             class="btn primary"
                             ?disabled=${busy}
                             @click=${() => {
                               if (selected) {
                                 names.set(`personal:${selected.principalId}`, selected.displayName);
-                                void change(`personal:${selected.principalId}`, access);
+                                void change(
+                                  `personal:${selected.principalId}`,
+                                  selected.email ? "view" : access,
+                                  selected.email,
+                                );
                               }
                             }}
                           >
@@ -182,10 +228,10 @@ export async function openDeploymentPermissions(id: string, title: string, owner
                           ${icon(Search, 16)}<input
                             id="app-people-query"
                             aria-label="Add people"
-                            placeholder="Add people by name or handle"
+                            placeholder="Add people by name or email"
                             type="search"
                             autocomplete="off"
-                            maxlength="80"
+                            maxlength="254"
                             .value=${live(query)}
                             ?disabled=${busy}
                             @input=${(event: Event) => {
@@ -203,8 +249,33 @@ export async function openDeploymentPermissions(id: string, title: string, owner
                           closeFormMenus();
                           draw();
                         })}
+                        ${
+                          !searching && searched && emailCandidate()
+                            ? html`
+                                <button
+                                  class="project-member-result"
+                                  type="button"
+                                  ?disabled=${busy}
+                                  @click=${() => {
+                                    const email = emailCandidate();
+                                    if (!email) return;
+                                    selected = { principalId: email, displayName: email, type: "guest", email };
+                                    access = "view";
+                                    closeFormMenus();
+                                    draw();
+                                  }}
+                                >
+                                  Add ${emailCandidate()} with view access
+                                </button>
+                                <p class="permission-note">
+                                  They receive an app link by email and sign in with this address. This does not add
+                                  them to your organization.
+                                </p>
+                              `
+                            : nothing
+                        }
                         ${searching ? html`<p class="permission-note" role="status">Searching…</p>` : nothing}
-                        ${!searching && searched && !matches.length ? html`<p class="permission-note">No additional people found.</p>` : nothing}
+                        ${!searching && searched && !matches.length && !emailCandidate() ? html`<p class="permission-note">No additional people found.</p>` : nothing}
                       </form>`
                 }
               </div>`
@@ -220,6 +291,34 @@ export async function openDeploymentPermissions(id: string, title: string, owner
           </div>
           ${grantees.map((grant) => html`<div class="permission-row"><span class="project-member-avatar" aria-hidden="true">${initials(grant.scope.replace("personal:", ""))}</span><span class="permission-person-label">${names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
         </div>
+        <div class="permission-section-label permission-general-label">General access</div>
+        <div class="project-member-list">
+          <div class="permission-row">
+            <span class="project-member-avatar" aria-hidden="true">${icon(publicAccess ? Globe : Lock, 16)}</span>
+            <span class="permission-person-label"
+              >${publicAccess ? "Anyone with the link" : "Restricted"}<small
+                >${publicAccess ? "No sign-in required" : "Only people with access can open"}</small
+              ></span
+            <fieldset class="permission-control" ?disabled=${busy}>
+              ${menuSelect({
+                value: publicAccess ? "public" : "restricted",
+                ariaLabel: "General access",
+                options: [
+                  { value: "restricted", label: "Restricted" },
+                  { value: "public", label: "Anyone with the link" },
+                ],
+                onSelect: (next) => {
+                  if (next) void changePublic(next);
+                },
+              })}
+            </fieldset>
+          </div>
+        </div>
+        ${
+          publicAccess
+            ? html`<p class="share-external-warning" role="status">⚠️ Public. Anyone can open this app.</p>`
+            : nothing
+        }
         ${busy ? html`<p role="status">Loading…</p>` : nothing}
         ${error ? html`<p class="composer-error" role="alert">${error}</p>` : nothing}
         <div class="project-dialog-actions actions"><button class="btn" @click=${close}>Done</button></div>
@@ -229,7 +328,9 @@ export async function openDeploymentPermissions(id: string, title: string, owner
   draw();
   dialog.showModal();
   try {
-    grantees = (await api<{ grantees: Grant[] }>(endpoint)).grantees;
+    const response = await api<{ public: boolean; grantees: Grant[] }>(endpoint);
+    publicAccess = response.public;
+    grantees = response.grantees;
     loaded = true;
   } catch (e) {
     error = errMessage(e, "Could not load permissions.");

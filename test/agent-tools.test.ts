@@ -2,9 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
-import type { EntryType, SessionEntry } from "../src/types.ts";
+import type { ClientToolDeclaration, EntryType, SessionEntry } from "../src/types.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
@@ -50,6 +51,9 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         version: 1,
         url: `/d/${input.name ?? "dep-1"}/`,
       };
+    },
+    async setDeploymentPublic(id, isPublic) {
+      return { id, name: id, public: isPublic };
     },
     async createPlayground(input) {
       return { kind: "playground", artifactId: "playground-1", title: input.title };
@@ -354,6 +358,9 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async callMcpTool() {
       return "";
     },
+    async awaitClientResult() {
+      return "timeout" as const;
+    },
   };
 }
 
@@ -494,6 +501,14 @@ test("sandbox advertises available management actions and retires migrate", asyn
   ]);
   assert.match(textOut(await call(sandbox, { action: "migrate", purpose: "p" })), /unsupported sandbox action/);
   await assert.rejects(() => call(execute, { command: "", computer: "migrate" }), /migrate has been retired/);
+});
+
+test("sandbox tells the agent to provision a missing default before reporting a blocker", () => {
+  const ref: ToolContextRef = { current: fakeToolContext(), emit: () => {}, scopeLabel: "group:C1" };
+  const sandbox = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
+  assert.match(sandbox.description, /needs a computer and this scope has no default/i);
+  assert.match(sandbox.description, /list.*create.*set_default.*retry/is);
+  assert.match(sandbox.description, /report.*blocked.*creation fails/is);
 });
 
 test("sandbox creation and default routing remain independent", async () => {
@@ -747,9 +762,9 @@ test("Auto can quarantine a tool result before the model or durable replay sees 
   const result = (await call(execute, { command: "curl https://example.invalid" })) as {
     content: Array<{ text?: string }>;
   };
-  assert.equal(result.content[0]?.text, "[tool output quarantined by Auto security posture]");
+  assert.equal(result.content[0]?.text, "[tool output quarantined by the security screen]");
   const persisted = emitted.find((entry) => entry.type === "tool_result")!.payload;
-  assert.equal(persisted.result, "[tool output quarantined by Auto security posture]");
+  assert.equal(persisted.result, "[tool output quarantined by the security screen]");
   assert.equal(persisted.quarantined, true);
   assert.equal(persisted.quarantineReason, "screen_verdict");
   assert.equal(persisted.securityReason, "instruction in untrusted data", "the verdict reason is persisted");
@@ -783,7 +798,7 @@ test("a strict tool-result verdict routes through HiLo approval instead of silen
   };
   assert.equal(
     result.content[0]?.text,
-    "[tool output quarantined by Auto security posture — release requested, awaiting human approval]",
+    "[tool output quarantined by the security screen — release requested, awaiting human approval]",
   );
   assert.equal(result.terminate, true, "the turn pauses so a human can decide the disposition");
   assert.equal(ref.pausedOnApproval, true);
@@ -792,7 +807,8 @@ test("a strict tool-result verdict routes through HiLo approval instead of silen
       command: "execute",
       reason: "Security screen quarantined this tool's output — release it to the agent?",
       kind: "approval",
-      approvalKey: "quarantine:execute",
+      approvalKey: "security-screen-release:execute",
+      grantModes: { session: false, always: false },
     },
   ]);
   const persisted = emitted.find((entry) => entry.type === "tool_result")!.payload;
@@ -819,7 +835,7 @@ test("quarantine_pending with no approvals sink falls back to the legacy silent 
     content: Array<{ text?: string }>;
     terminate?: boolean;
   };
-  assert.equal(result.content[0]?.text, "[tool output quarantined by Auto security posture]");
+  assert.equal(result.content[0]?.text, "[tool output quarantined by the security screen]");
   assert.equal(result.terminate, undefined);
   assert.equal(ref.pausedOnApproval, undefined);
   const persisted = emitted.find((entry) => entry.type === "tool_result")!.payload;
@@ -1039,7 +1055,7 @@ test("surface reads fail closed without persisting blocked content", async () =>
     content: Array<{ text: string }>;
     details?: unknown;
   };
-  assert.equal(output.content[0]!.text, "[tool output quarantined by Auto security posture (surface thread)]");
+  assert.equal(output.content[0]!.text, "[tool output quarantined by the security screen (surface thread)]");
   assert.deepEqual(output.details, {});
   const stored = emitted.find((entry) => entry.type === "tool_result")!.payload;
   assert.equal(stored.quarantined, true);
@@ -1073,7 +1089,7 @@ test("a strict external-content verdict routes through HiLo approval instead of 
     content: Array<{ text: string }>;
     terminate?: boolean;
   };
-  assert.match(output.content[0]!.text, /quarantined by Auto security posture/);
+  assert.match(output.content[0]!.text, /quarantined by the security screen/);
   assert.match(output.content[0]!.text, /release requested, awaiting human approval/);
   assert.equal(output.terminate, true, "the turn pauses so a human can decide the disposition");
   assert.equal(ref.pausedOnApproval, true);
@@ -1082,7 +1098,8 @@ test("a strict external-content verdict routes through HiLo approval instead of 
       command: "slack",
       reason: "Security screen quarantined this tool's output — release it to the agent?",
       kind: "approval",
-      approvalKey: "quarantine:slack",
+      approvalKey: "security-screen-release:slack",
+      grantModes: { session: false, always: false },
     },
   ]);
   const stored = emitted.find((entry) => entry.type === "tool_result")!.payload;
@@ -1812,73 +1829,6 @@ test("execute forwards the agent's timeout_seconds into tc.execute; omitting it 
   assert.equal(sink.lastExecOpts, undefined);
 });
 
-test("credential_exec is turn-scoped, typed, and forwards only service plus literal argv", async () => {
-  const calls: unknown[] = [];
-  const tc: ToolContext = {
-    ...fakeToolContext(),
-    credentialExecServices: [{ service: "acme", binary: "acmecli" }],
-    async credentialExec(service, args, opts) {
-      calls.push({ service, args, opts });
-      return { stdout: "authenticated", stderr: "", code: 0, timedOut: false };
-    },
-  };
-  const absent = createAgentTools({ current: fakeToolContext() });
-  assert.equal(
-    absent.some((tool) => tool.name === "credential_exec"),
-    false,
-  );
-  const tools = createAgentTools(
-    { current: tc },
-    { credentialExecServices: tc.credentialExecServices, execTimeoutCeilingMs: 10_000 },
-  );
-  const tool = tools.find((candidate) => candidate.name === "credential_exec")!;
-  assert.match(tool.description, /acme \(acmecli\)/);
-  assert.match(tool.description, /Shell operators and pipelines are not supported/);
-  const args = ["; env", "$(env)", "a|b", "> out", "two words"];
-  const result = await call(tool, { service: "acme", args, timeout_seconds: 7 });
-  assert.deepEqual(calls, [{ service: "acme", args, opts: { timeoutSeconds: 7 } }]);
-  assert.match((result as { content: Array<{ text: string }> }).content[0]!.text, /authenticated/);
-});
-
-test("credential_exec surfaces NeedsApproval and CommandDenied like execute", async () => {
-  const gated: ToolContext = {
-    ...fakeToolContext(),
-    credentialExecServices: [{ service: "acme", binary: "acmecli" }],
-    async credentialExec() {
-      throw new NeedsApproval("'acmecli' 'tool'", "mutating subcommand", "approval", "tool", "\\bacmecli\\s+tool\\b");
-    },
-  };
-  const ref = { current: gated, pendingApprovals: [] as NonNullable<ToolContextRef["pendingApprovals"]> };
-  const tool = createAgentTools(ref, { credentialExecServices: gated.credentialExecServices }).find(
-    (candidate) => candidate.name === "credential_exec",
-  )!;
-  const blocked = (await call(tool, { service: "acme", args: ["tool"] })) as {
-    content: Array<{ text: string }>;
-    terminate?: boolean;
-  };
-  assert.match(blocked.content[0]!.text, /needs human approval/);
-  assert.equal(blocked.terminate, true);
-  assert.equal(ref.pendingApprovals.length, 1);
-  assert.equal(ref.pendingApprovals[0]!.approvalKey, "\\bacmecli\\s+tool\\b");
-  assert.equal((ref as { pausedOnApproval?: boolean }).pausedOnApproval, true);
-
-  const denied: ToolContext = {
-    ...fakeToolContext(),
-    credentialExecServices: [{ service: "acme", binary: "acmecli" }],
-    async credentialExec() {
-      throw new CommandDenied("'acmecli'", "must be run with credential_exec");
-    },
-  };
-  const deniedTool = createAgentTools(
-    { current: denied },
-    { credentialExecServices: denied.credentialExecServices },
-  ).find((candidate) => candidate.name === "credential_exec")!;
-  const deniedResult = (await call(deniedTool, { service: "acme", args: [] })) as {
-    content: Array<{ text: string }>;
-  };
-  assert.match(deniedResult.content[0]!.text, /denied by policy/);
-});
-
 test('execute scope:"owner" routes only when the owner-auth surface is enabled', async () => {
   const sink: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] } = {};
   const execute = createAgentTools({ current: fakeToolContext(sink) }, { ownerAuthExec: true })[0]!;
@@ -1891,6 +1841,15 @@ test('execute scope:"owner" routes only when the owner-auth surface is enabled',
     (result as { content: Array<{ text: string }> }).content[0]?.text ?? "",
     /owner-auth box is not available/,
   );
+});
+
+test("publish instructions prevent malformed app configs", () => {
+  const apps = createAgentTools({ current: fakeToolContext() }).find((tool) => tool.name === "apps");
+  assert.ok(apps);
+  assert.match(apps.description, /always pass `entrypoint`/);
+  assert.match(apps.description, /workspace-relative/);
+  assert.match(apps.description, /verify.*directory.*contains files/i);
+  assert.match(apps.description, /`renameFrom`.*deployment name.*not.*ID/i);
 });
 
 test("publish reply states owner + resolved audience in human terms (ADR 0003 D7)", async () => {
@@ -1996,7 +1955,7 @@ test("background dispatches each action and emits tool_call/tool_result", async 
   assert.ok(background);
   assert.match(background.description, /same environment a foreground `execute` does/);
   assert.match(background.description, /\$AGENT_CREDENTIAL_TOKEN all work/);
-  assert.match(background.description, /expire 60 minutes after the turn/);
+  assert.match(background.description, /expire 48 hours after the turn/);
 
   const started = textOf(await call(background, { action: "start", command: "npm run build" }));
   assert.match(started, /started bg-1/);
@@ -2882,7 +2841,10 @@ test("unified exec and process approvals preserve intent and action identity", a
     const entries: Array<Record<string, unknown>> = [];
     const tc = fakeToolContext();
     tc.execute = tc.backgroundStart = async () => {
-      throw new NeedsApproval("danger", "Review this", "approval");
+      throw new NeedsApproval("danger", "Review this", "approval", undefined, "sandbox:synthetic", {
+        session: false,
+        always: false,
+      });
     };
     const ref: ToolContextRef = {
       current: tc,
@@ -2901,6 +2863,7 @@ test("unified exec and process approvals preserve intent and action identity", a
     assert.equal(ref.pendingApprovals?.[0]?.command, "danger");
     assert.ok(entries.every((e) => e.tool === "sandbox" && e.action === action));
     assert.equal(ref.pendingApprovals?.[0]?.purpose, "Verify protected operation");
+    assert.deepEqual(ref.pendingApprovals?.[0]?.grantModes, { session: false, always: false });
   }
 });
 
@@ -3383,10 +3346,8 @@ test("conversation coordinators cannot execute commands through any command tool
       const tools = createAgentTools(ref, {
         ...options,
         sandboxResources,
-        credentialExecServices: [{ service: "aws", binary: "aws" }],
       });
-      for (const name of ["execute", "background", "credential_exec"])
-        assert.ok(!tools.some((tool) => tool.name === name));
+      for (const name of ["execute", "background"]) assert.ok(!tools.some((tool) => tool.name === name));
       const sandbox = tools.find((tool) => tool.name === "sandbox")!;
       assert.match(
         textOut(await call(sandbox, { action: "exec", command: "echo forbidden" })),
@@ -3402,6 +3363,22 @@ test("conversation coordinators cannot execute commands through any command tool
   assert.ok(
     createAgentTools({ current: fakeToolContext() }, { delegateWork: false }).some((tool) => tool.name === "execute"),
   );
+});
+
+test("sessions open schema and dispatch preserve an explicit false fast mode", async () => {
+  const tc = fakeToolContext();
+  tc.sessionSyscalls = {
+    open: async (input) => {
+      assert.equal(input.fastMode, false);
+      return { ok: true, sessionId: "child", title: "child", liveRunsRemaining: 9 };
+    },
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async () => ({ ok: false, message: "unused" }),
+  };
+  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "sessions")!;
+  assert.ok(Check(session.parameters, { action: "open", task: "test", fastMode: false }));
+  assert.ok(!Check(session.parameters, { action: "open", task: "test", fastMode: "false" }));
+  assert.match(textOut(await call(session, { action: "open", task: "test", fastMode: false })), /child/);
 });
 
 test("conversation coordinator mailbox checks never block on children", async () => {
@@ -3464,7 +3441,7 @@ test("resource catalog exposes one home per operation and leaves MCP tools intac
     ],
     [
       "apps",
-      { action: "publish", name: "demo" },
+      { action: "publish", name: "demo", public: true },
       { action: "publish", name: "demo", share: [{ scope: "org", permission: "read" }] },
     ],
     [
@@ -3485,11 +3462,16 @@ test("resource catalog exposes one home per operation and leaves MCP tools intac
 test("resource actions preserve sharing targets, transfer semantics and file contents", async () => {
   const writes: unknown[] = [];
   const shares: unknown[] = [];
+  const publicChanges: unknown[] = [];
   const tc = {
     ...fakeToolContext(),
     async write(...args: Parameters<ToolContext["write"]>) {
       writes.push(args);
       return { shared: [{ scope: "org:test", permission: "read" as const }] };
+    },
+    async setDeploymentPublic(id: string, isPublic: boolean) {
+      publicChanges.push({ id, isPublic });
+      return { id, name: id, public: isPublic };
     },
     async shareArtifact(req: Parameters<ToolContext["shareArtifact"]>[0]) {
       shares.push(req);
@@ -3523,6 +3505,26 @@ test("resource actions preserve sharing targets, transfer semantics and file con
       ...(action === "move" ? { move: true } : {}),
     });
   }
+  const publicResult = await call(
+    tools.find((tool) => tool.name === "apps"),
+    {
+      action: "share",
+      id: "artifact",
+      public: true,
+    },
+  );
+  assert.match(textOut(publicResult), /anyone with the link/);
+  assert.deepEqual(publicChanges, [{ id: "artifact", isPublic: true }]);
+  await call(
+    tools.find((tool) => tool.name === "apps"),
+    {
+      action: "share",
+      id: "artifact",
+      email: "guest@example.com",
+    },
+  );
+  assert.deepEqual(shares.at(-1), { type: "deploy", id: "artifact", email: "guest@example.com" });
+
   const before = writes.length;
   await call(files, { action: "read", path: "notes", data: "unexpected" });
   await call(files, { action: "write", path: "notes" });
@@ -3584,4 +3586,132 @@ test("files share preserves artifact IDs, recipient resolution and authorization
   ])
     assert.match(textOut(await call(files, params)), /Invalid arguments/);
   assert.equal(requests.length, 1);
+});
+
+test("the retired credential tool is absent and execute accepts credential handles", () => {
+  const tools = createAgentTools({ current: fakeToolContext() }, { commandCredentialHandles: ["kc_test123456"] });
+  assert.equal(
+    tools.some((tool) => tool.name === "credential_exec"),
+    false,
+  );
+  assert.ok(tools.some((tool) => tool.name === "execute"));
+});
+
+test("sandbox call traces preserve purpose across execution, management, processes, and invalid routes", async () => {
+  const calls: Record<string, unknown>[] = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    scopeLabel: "personal:U1",
+    emit: (event) => {
+      if (event.type === "tool_call") calls.push(event.payload as Record<string, unknown>);
+    },
+  };
+  const sandbox = createAgentTools(ref, { sandboxResources: true }).find((tool) => tool.name === "sandbox")!;
+  for (const params of [
+    { action: "exec", command: "pwd" },
+    { action: "status" },
+    { action: "start_process", command: "echo ready" },
+    { action: "exec", command: "pwd", scope: "scratch" },
+    { action: "exec" },
+  ]) {
+    await call(sandbox, { ...params, purpose: "Inspect the demo workspace" });
+  }
+  assert.equal(calls.length, 5);
+  assert.ok(calls.every((entry) => entry.purpose === "Inspect the demo workspace"));
+});
+
+const clientTool = (name: string, timeoutMs?: number): ClientToolDeclaration => ({
+  name,
+  description: `Page tool ${name}`,
+  inputSchema: { type: "object", properties: { note: { type: "string" } } },
+  ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+});
+
+test("declared client tools follow qm's own tools, in name order whatever the declaration order", () => {
+  const core = createAgentTools({ current: fakeToolContext() }).map((t) => t.name);
+  const names = (declared: ClientToolDeclaration[]) =>
+    createAgentTools({ current: fakeToolContext() }, { clientTools: declared }).map((t) => t.name);
+  const forward = names([clientTool("ui__get_selection"), clientTool("ui__highlight_rows")]);
+  const reversed = names([clientTool("ui__highlight_rows"), clientTool("ui__get_selection")]);
+  assert.deepEqual(forward, [...core, "ui__get_selection", "ui__highlight_rows"]);
+  assert.deepEqual(reversed, forward, "the tools array is stable from one turn to the next");
+});
+
+function clientToolRef(store = createMemoryRunSignalStore()) {
+  const emitted: Emitted[] = [];
+  const cancel = new AbortController();
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      awaitClientResult: (callId, timeoutMs, signal) =>
+        waitForClientResult(store, "run-1", callId, { timeoutMs, ...(signal ? { signal } : {}) }),
+    },
+    abortSignal: cancel.signal,
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  return { store, emitted, cancel, ref };
+}
+
+test("a client tool records the call, waits for the page, and returns its answer as screened external data", async () => {
+  const { store, emitted, ref } = clientToolRef();
+  const screened: Array<{ tool: string; provenance: string; source?: string }> = [];
+  ref.screenToolResult = async ({ tool, provenance, source }) => {
+    screened.push({ tool, provenance, ...(source ? { source } : {}) });
+    return { outcome: "allow" };
+  };
+  const tool = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection")] }).find(
+    (t) => t.name === "ui__get_selection",
+  );
+  const pending = call(tool, { note: "hi" }) as Promise<{ content: Array<{ text: string }>; details: unknown }>;
+  await new Promise((r) => setTimeout(r, 10));
+  await store.send("run-1", {
+    kind: "client_result",
+    callId: "t",
+    result: { content: "rows 3-5 selected", structured: { rows: [3, 4, 5] } },
+  });
+  const ret = await pending;
+  assert.equal(ret.content[0]?.text, "rows 3-5 selected");
+  assert.deepEqual(ret.details, { structured: { rows: [3, 4, 5] } });
+  const toolCall = emitted.find((e) => e.type === "tool_call")!.payload;
+  assert.deepEqual(toolCall, { tool: "ui__get_selection", client: true, args: { note: "hi" }, callId: "t" });
+  const toolResult = emitted.find((e) => e.type === "tool_result")!.payload;
+  assert.equal(toolResult.isError, false);
+  assert.equal(toolResult.result, "rows 3-5 selected");
+  assert.deepEqual(screened, [{ tool: "ui__get_selection", provenance: "external", source: "client page" }]);
+});
+
+test("a client tool passes the page's isError through to the model", async () => {
+  const { store, emitted, ref } = clientToolRef();
+  await store.send("run-1", {
+    kind: "client_result",
+    callId: "t",
+    result: { content: "no rows match", isError: true },
+  });
+  const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__highlight_rows")] }).slice(-1);
+  const ret = (await call(tool, {})) as { content: Array<{ text: string }> };
+  assert.equal(ret.content[0]?.text, "no rows match");
+  assert.equal(emitted.find((e) => e.type === "tool_result")!.payload.isError, true);
+});
+
+test("a client tool times out with an error the model can act on", async () => {
+  const { emitted, ref } = clientToolRef();
+  const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection", 30)] }).slice(-1);
+  const ret = (await call(tool, {})) as { content: Array<{ text: string }> };
+  assert.equal(ret.content[0]?.text, "The page didn't respond in time. It may have been closed or navigated away.");
+  const toolResult = emitted.find((e) => e.type === "tool_result")!.payload;
+  assert.equal(toolResult.isError, true);
+  assert.equal(toolResult.timedOut, true);
+});
+
+test("a client tool stops waiting when the turn is cancelled", async () => {
+  const { emitted, cancel, ref } = clientToolRef();
+  const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection", 60_000)] }).slice(-1);
+  const pending = call(tool, {}) as Promise<{ content: Array<{ text: string }> }>;
+  cancel.abort();
+  const ret = await pending;
+  assert.match(ret.content[0]?.text ?? "", /cancelled/);
+  assert.equal(emitted.find((e) => e.type === "tool_result")!.payload.cancelled, true);
 });

@@ -64,6 +64,31 @@ test("model chips add and remove with stable keyed rendering", () => {
     dom.window.close();
   }
 });
+test("feature flag entries use a compact row that cannot inherit the card grid", async () => {
+  const dom = setup();
+  try {
+    dom.window.eval(`settingsUI.configureFlags({
+      loadChoices: async () => [],
+      buildSelector: () => document.createElement("button"),
+      save: async () => ({ ok: true }),
+    })`);
+    await dom.window.eval(`settingsUI.loadFlags(
+      { featureFlags: [{ featureName: "persistent_subagents", enabledScopes: ["personal:person-with-a-long-name@example.com"] }] },
+      "org:test",
+    )`);
+    await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
+    const list = dom.window.document.getElementById("feature-flag-list")!;
+    assert.equal(list.querySelectorAll(".feature-flag-row").length, 1);
+    assert.equal(list.querySelector(".setting-row"), null);
+    assert.equal(dom.window.getComputedStyle(list.querySelector(".feature-flag-row")!).display, "grid");
+    const editor = dom.window.document.querySelector("#card-feature-flags .feature-flag-editor")!;
+    assert.ok(editor);
+    assert.equal(editor.classList.contains("editor-grid"), false);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("SOUL conflict keeps draft while replacing saved revision and version", () => {
   const dom = setup();
   try {
@@ -132,6 +157,86 @@ test("credential save acknowledges its submitted snapshot and retains newer edit
     assert.equal(dom.window.eval("settingsUI.credentialState.collect().name"), "Newer draft");
     assert.equal(dom.window.eval("settingsUI.credentialState.collect().expectedUpdatedAt"), 2);
     assert.equal(dom.window.eval("settingsUI.credentialState.dirty"), true);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("runtime reasoning choices follow the selected model and preserve legacy defaults", () => {
+  const dom = setup();
+  try {
+    const data = {
+      ...models,
+      modelsByHarness: {
+        pi: [
+          { id: "a", effortLevels: ["auto", "adaptive", "default", "high"] },
+          { id: "b", effortLevels: ["auto", "high"] },
+        ],
+      },
+      thinkingLevelsByHarness: { pi: ["auto", "adaptive", "default", "high"] },
+      runtime: { harnessId: "pi", modelId: "a", effortLevel: "auto" },
+    };
+    dom.window.eval("settingsUI.load(" + JSON.stringify(data) + ',"org:test","runtime")');
+    const select = () => dom.window.document.getElementById("base-effort") as HTMLSelectElement;
+    const choices = () => [...select().options].map((option) => [option.value, option.textContent]);
+    assert.deepEqual(choices(), [
+      ["auto", "Legacy default"],
+      ["adaptive", "Auto"],
+      ["default", "Provider default"],
+      ["high", "High"],
+    ]);
+    select().value = "adaptive";
+    select().dispatchEvent(new dom.window.Event("change"));
+    assert.equal(dom.window.eval('settingsUI.collect("runtime").effortLevel'), "adaptive");
+    assert.equal(
+      choices().some(([value]) => value === "auto"),
+      false,
+    );
+    dom.window.eval('settingsUI.states.get("runtime").change("modelId", "b")');
+    assert.deepEqual(choices(), [["high", "High"]]);
+    assert.equal(dom.window.eval('settingsUI.collect("runtime").effortLevel'), "high");
+    dom.window.eval(
+      'settingsUI.states.get("runtime").context.modelsByHarness.pi = [{id:"b"}]; settingsUI.states.get("runtime").changed()',
+    );
+    assert.deepEqual(choices(), [["high", "High"]]);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("purpose runtime cards independently set and clear overrides using the runtime editor", () => {
+  const dom = setup();
+  try {
+    dom.window.eval(
+      "settingsUI.load(" + JSON.stringify({ ...models, cronRuntime: null, subagentRuntime: null }) + ',"org:test")',
+    );
+    const doc = dom.window.document;
+    for (const key of ["cron-runtime", "subagent-runtime"]) {
+      const collect = () => JSON.parse(String(dom.window.eval(`JSON.stringify(settingsUI.collect("${key}"))`)));
+      assert.deepEqual(collect(), { inherit: true });
+      assert.equal(doc.querySelectorAll(`#card-${key}`).length, 1);
+      assert.equal((doc.getElementById(`${key}-harness`) as HTMLSelectElement).disabled, true);
+      (doc.getElementById(`${key}-inherit`) as HTMLInputElement).click();
+      const harness = doc.getElementById(`${key}-harness`) as HTMLSelectElement;
+      harness.value = "codex";
+      harness.dispatchEvent(new dom.window.Event("change"));
+      assert.deepEqual(collect(), { harnessId: "codex", modelId: "b", effortLevel: "auto", fastMode: false });
+      (doc.getElementById(`${key}-inherit`) as HTMLInputElement).click();
+      assert.deepEqual(collect(), { inherit: true });
+      assert.equal(dom.window.eval(`settingsUI.states.get("${key}").dirty`), false);
+    }
+    assert.equal(dom.window.eval('settingsUI.collect("runtime").fastMode'), true);
+    dom.window.eval(
+      "settingsUI.load(" +
+        JSON.stringify({
+          ...models,
+          cronRuntime: { harnessId: "codex", modelId: "b", effortLevel: "low", fastMode: false },
+          subagentRuntime: null,
+        }) +
+        ',"org:test")',
+    );
+    assert.equal((doc.getElementById("cron-runtime-inherit") as HTMLInputElement).checked, false);
+    assert.equal((doc.getElementById("cron-runtime-model") as HTMLSelectElement).value, "b");
   } finally {
     dom.window.close();
   }

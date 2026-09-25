@@ -5603,6 +5603,25 @@
       #view-governance .sv-customize > .head {
         row-gap: 0;
       }
+      #feature-flag-list {
+        display: grid;
+        gap: 10px;
+      }
+      #feature-flag-list .feature-flag-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+      }
+      #feature-flag-list .feature-flag-row code {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      #card-feature-flags .feature-flag-editor {
+        display: grid;
+        gap: 12px;
+        margin-top: 16px;
+      }
       #view-governance .sv-customize .body label:not(.setting-toggle) {
         margin-bottom: 4px;
         font-size: 13px;
@@ -6604,7 +6623,7 @@
       const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
       const SECTIONS = [
         {
-          views: ["governance", "models", "credentials", "connectors", "slack-settings", "customize", "users"],
+          views: ["governance", "models", "credentials", "connectors", "slack-settings", "customize", "users", "spend"],
         },
         {
           label: "Logs",
@@ -6643,6 +6662,8 @@
 
         [
           $("card-base-model"),
+          $("card-cron-runtime"),
+          $("card-subagent-runtime"),
           providers,
           $("card-webui-models"),
           $("card-soul"),
@@ -6761,6 +6782,7 @@
         keychain: "Keychain",
         user: "User",
         metrics: "Metrics",
+        spend: "Spend",
         egress: "Egress",
         history: "Sessions",
         files: "Files",
@@ -6795,6 +6817,7 @@
       const ORG_WIDE = new Set([
         "retention",
         "users",
+        "spend",
         "keychain",
         "connectors",
         "judgments",
@@ -7310,6 +7333,7 @@
         if (st.own && SCOPED.has(st.view)) p.set("own", st.own);
         if (st.view === "memory" && st.mem) p.set("mem", st.mem);
         if (st.view === "metrics" && st.phase) p.set("phase", st.phase);
+        if (st.view === "spend" && st.range) p.set("range", st.range);
         if (st.view === "slack" && st.container) p.set("container", st.container);
         if (st.view === "slack" && st.container && st.ts) p.set("ts", st.ts);
         if (st.view === "judgments" && st.container) p.set("container", st.container);
@@ -7374,6 +7398,7 @@
           own: p.get("own") || null,
           mem: p.get("mem") || null,
           phase: p.get("phase") || null,
+          range: p.get("range") || null,
           historyKind: normalizedHistoryKind,
           page: Math.max(1, parseInt(p.get("page"), 10) || 1),
           container: p.get("container") || null,
@@ -7424,6 +7449,7 @@
           "customize",
           "slack-settings",
           "users",
+          "spend",
           "design-system",
         ].includes(view)
           ? "true"
@@ -7905,6 +7931,10 @@
       const FOCUS_REFRESH_EXEMPT = new Set(["governance", "connectors", "slack-settings", "user"]);
       window.addEventListener("focus", () => {
         if ($("app-view").classList.contains("hidden")) return;
+        if (view === "slack-settings") {
+          void loadSlackInstallation();
+          return;
+        }
         if (isGovLike(view) || FOCUS_REFRESH_EXEMPT.has(view)) return;
         if (Date.now() - (viewLoadedAt[view] || 0) < FOCUS_STALE_MS) return;
         if (view === "memory" && !(orgWideView() && urlToState().mem !== "edit")) return;
@@ -8130,6 +8160,8 @@
         const modelsByHarness = r.data.modelsByHarness || {};
         if (requestedView === "models") {
           governanceUI.settings.load(r.data, scope, "runtime");
+          governanceUI.settings.load(r.data, scope, "cron-runtime");
+          governanceUI.settings.load(r.data, scope, "subagent-runtime");
           governanceUI.settings.load(r.data, scope, "webui-models");
         }
         refreshModelChoices.push(() => governanceUI.settings.updateCatalog(r.data));
@@ -8632,6 +8664,8 @@
         "org-ambient": "st-governance-org-ambient",
         "channel-header-pin-default": "st-channel-header-pin-default",
         runtime: "st-runtime",
+        "cron-runtime": "st-cron-runtime",
+        "subagent-runtime": "st-subagent-runtime",
         "webui-models": "st-webui-models",
         "ack-emoji": "st-ack-emoji",
         branding: "st-branding",
@@ -8642,6 +8676,8 @@
         "soul",
         "external-slack-participants",
         "runtime",
+        "cron-runtime",
+        "subagent-runtime",
         "webui-models",
         "ack-emoji",
         "branding",
@@ -8725,7 +8761,7 @@
               ["Proposed", titleCase(body.posture)],
             ],
             warning: dangerous
-              ? "Dangerous removes content screening; nothing pauses between tool calls. Predeclared command approvals, hard denials, identity, authorization, credential scope, revocation, and audit remain enforced."
+              ? "Dangerous disables posture-based content screening and tool approval gates. Deployment-required screening still applies. Predeclared command approvals, hard denials, identity, authorization, credential scope, revocation, and audit remain enforced."
               : "This changes the effective tools and approval behavior for future turns in this scope.",
             confirmLabel: dangerous ? "Enable Dangerous" : "Apply posture",
             danger: dangerous,
@@ -9239,6 +9275,7 @@
         root.textContent = "";
         ({
           metrics: renderMetrics,
+          spend: renderSpend,
           egress: renderEgress,
           history: renderHistory,
           files: renderFiles,
@@ -9272,6 +9309,7 @@
           if (historyKind === "background") path += "&origin=other_background";
         }
         if (view === "errors") path += `&limit=${ERRORS_PAGE_SIZE}&offset=${(page - 1) * ERRORS_PAGE_SIZE}`;
+        if (view === "spend") path += `?${spendQuery(urlToState())}`;
         const cacheable = view !== "memory";
         const cached = cacheable ? dataCache.get(path) : undefined;
         if (cached !== undefined) {
@@ -9353,10 +9391,10 @@
         if (s.provisioned === false) return "no machine";
         return "";
       }
-      function sparkline(daily) {
+      function sparkline(daily, valueOf = (r) => r.p50) {
         const vals = (daily || [])
           .slice(-14)
-          .map((r) => r.p50)
+          .map(valueOf)
           .filter((v) => v != null);
         if (vals.length < 2) {
           const s = document.createElement("span");
@@ -9400,6 +9438,44 @@
           relTime,
           turnKindWords,
           sparkline,
+        });
+      }
+      const SPEND_RANGES = { "7d": 7, "30d": 30, "90d": 90 };
+      function spendQuery(st) {
+        const DAY = 86400000;
+        const range = SPEND_RANGES[st.range] ? st.range : "30d";
+        const to = Math.floor(Date.now() / DAY) * DAY + DAY;
+        const iso = (t) => new Date(t).toISOString().slice(0, 10);
+        const params = new URLSearchParams({
+          from: iso(to - SPEND_RANGES[range] * DAY),
+          to: iso(to),
+          bucket: range === "90d" ? "week" : "day",
+        });
+        return params.toString();
+      }
+      function renderSpend(root, d) {
+        governanceUI.spend.spend(root, d, {
+          defaultShell,
+          fmtPct,
+          fmtTokens,
+          shortName,
+          plural,
+          range: urlToState().range || "30d",
+          openUser: (principal) => go({ view: "user", scope, session: null, principal }),
+          setRange: (range) => go({ ...urlToState(), view: "spend", range }),
+          downloadCsv: (breakdown = "entity") => {
+            const a = document.createElement("a");
+            a.href =
+              API_BASE +
+              "/api/spend?format=csv&breakdown=" +
+              encodeURIComponent(breakdown) +
+              "&" +
+              spendQuery(urlToState());
+            a.rel = "noreferrer";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          },
         });
       }
       function renderErrors(root, d) {
@@ -10105,7 +10181,7 @@
           fmtTime,
           relTime,
           labelRole,
-          confirm,
+          confirm: (message) => window.confirm(message),
           openWebUiAs,
           orgScope: "org:" + orgId,
           clearCache: () => dataCache.clear(),
@@ -10694,7 +10770,7 @@
           plural,
           stateToUrl,
           go,
-          confirm,
+          confirm: (message) => window.confirm(message),
           orgId,
           webUiAsButton,
           current: (principal) =>

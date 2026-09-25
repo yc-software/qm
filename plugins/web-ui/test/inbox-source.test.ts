@@ -53,10 +53,9 @@ test("an inbox drag paints drop zones on every existing pane", () => {
 test("email items edit like an email; slack items like slack", () => {
   assert.match(inbox, /<span>To<\/span>/);
   assert.match(inbox, /<span>Subject<\/span>/);
-  assert.match(inbox, /Send it/, "send lives in the composer as a suggested action");
-  assert.match(inbox, /inbox-chat-suggest/, "suggested actions render inside the ask composer");
-  assert.match(inbox, /Send the drafted reply in Gmail/);
-  assert.match(inbox, /Send the drafted reply to Slack/);
+  assert.match(inbox, /Send it/, "send is a suggested action");
+  assert.match(inbox, /inbox-chat-suggest/, "suggested actions render beside edit prompts");
+  assert.match(inbox, /submit\(e, "Send it"\)/);
   assert.match(inbox, /rows=\$\{gmail \? 7 : 3\}/, "email drafts get a taller editor than slack replies");
 });
 
@@ -106,11 +105,8 @@ test("drafts persist on blur and send uses the current edit", () => {
     "every item mutation addresses the ledger item under its own loop",
   );
   assert.match(inbox, /postAction\(item, "edit", \{\s*proposal,/, "a blurred edit revises the proposal");
-  assert.match(
-    inbox,
-    /postAction\(item, "send", \{\s*proposal: draft,\s*\.\.\.\(basedOnAt !== undefined \? \{ expectedProposalAt: basedOnAt \} : \{\}\),\s*\}\)/,
-    "send carries the current edit and the draft version it was based on",
-  );
+  assert.doesNotMatch(inbox, /postAction\(item, "send"/);
+  assert.match(inbox, /await persistDraftNow\(item.id\);/);
   assert.match(inbox, /postAction\(item, status === "dismissed" \? "dismiss" : "reopen"\)/);
 });
 
@@ -133,10 +129,10 @@ test("localhost can overlay private inbox seed data without checking it into sou
 });
 
 test("each item carries a follow-up chat with the agent", () => {
-  assert.match(inbox, /export function chatTpl\(item: InboxItem\): TemplateResult/);
+  assert.match(inbox, /export function chatTpl\(item: InboxItem, compact = false\): TemplateResult/);
   assert.match(inbox, /actionPath\(item, "followup"\)/);
-  assert.match(inbox, /body: JSON\.stringify\(\{ message: text \}\)/);
-  assert.match(inbox, /\$\{chatTpl\(item\)\}/, "the chat pane hangs off the draft editor");
+  assert.match(inbox, /message: text,/);
+  assert.match(inbox, /\$\{draftMessageTpl\(item\)\}/, "the draft is a message in the conversation");
   assert.match(inbox, /item\.thread\.map\(/, "the thread transcript renders");
   assert.match(inbox, /draftEdits\.delete\(item\.id\);/, "a revised proposal supersedes the local edit");
   assert.match(css, /\.inbox-chat-log \{/);
@@ -205,12 +201,9 @@ test("the inbox list spans the same desktop content width as the item detail", (
   assert.match(css, /\.inbox-page \.inbox-surface \{\s*width: min\(var\(--content-wide-width\), 100%\);/);
   assert.match(
     css,
-    /\.content-wide-page:not\(:has\(\.inbox-item-aside\)\) > \.pane-head \{\s*width: min\(var\(--content-wide-width\), 100%\);\s*max-width: none;/,
+    /\.content-wide-page > \.pane-head \{\s*width: min\(var\(--content-wide-width\), 100%\);\s*max-width: none;/,
   );
-  assert.match(
-    css,
-    /grid-template-columns: minmax\(0, var\(--content-primary-width\)\) minmax\(0, var\(--content-aside-width\)\);/,
-  );
+  assert.doesNotMatch(css, /inbox-item-aside/);
 });
 
 test("inbox item hover behaves like a sidebar conversation hover", () => {
@@ -252,7 +245,7 @@ test("an edit remembers the draft version it started from, and both edit and sen
     inbox,
     /postAction\(item, "edit", \{\s*proposal,\s*\.\.\.\(basedOnAt !== undefined \? \{ expectedProposalAt: basedOnAt \} : \{\}\),/,
   );
-  assert.match(inbox, /const basedOnAt = edited\?\.basedOnAt \?\? item\.draftAt;/);
+  assert.match(inbox, /expectedProposalAt: current.draftAt/);
   assert.match(inbox, /if \(isDraftConflict\(e\)\) return explainDraftConflict\(item, true\);/);
 });
 
@@ -267,11 +260,10 @@ test("draft header links share one text size", () => {
   assert.doesNotMatch(css, /\.inbox-session-link \{[^}]*font-size:/);
 });
 
-test("suggested draft actions yield to typed instructions without reflow", () => {
-  assert.match(inbox, /inbox-chat-composer \$\{pending\.trim\(\) \? "has-text" : ""\}/);
-  assert.match(inbox, /if \(had !== Boolean\(box\.value\.trim\(\)\)\) drawAll\(\);/);
-  assert.match(css, /\.inbox-chat-composer\.has-text \.inbox-chat-suggest \{\s*visibility: hidden;/);
-  assert.doesNotMatch(inbox, /inbox-draft-actions|function sendLabel/);
+test("send stays available alongside typed instructions", () => {
+  assert.match(inbox, /embeddedComposer\(/);
+  assert.doesNotMatch(css, /\.inbox-chat-composer\.has-text \.inbox-chat-suggest/);
+  assert.match(inbox, /new CustomEvent\("composer-submit", \{ detail: instruction \}\)/);
 });
 
 test("conversation messages use the containing view's scroll instead of clipping the latest message", () => {
@@ -283,4 +275,15 @@ test("conversation messages use the containing view's scroll instead of clipping
 test("single email pages keep bottom breathing room", () => {
   const surface = css.match(/\.inbox-item-surface \.inbox-scroll \{[^}]*\}/)?.[0] ?? "";
   assert.match(surface, /padding-bottom: calc\(64px \+ env\(safe-area-inset-bottom\)\);/);
+});
+
+test("phone inbox composer gives instructions a full row without shrinking touch controls", () => {
+  const start = css.indexOf("  .inbox-chat-composer .composer-wrap .composer-input,");
+  assert.ok(start >= 0);
+  const phone = css.slice(css.lastIndexOf("@media", start), start + 180);
+  assert.match(phone, /^@media \(max-width: 860px\)/);
+  assert.match(
+    phone,
+    /\.inbox-chat-composer \.composer-wrap \.composer-input,\s*\.inbox-chat-composer \.composer-wrap \.composer-toolbar\s*\{\s*grid-column: 1 \/ -1;/,
+  );
 });

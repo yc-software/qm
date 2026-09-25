@@ -45,7 +45,7 @@ test("an in-flight pick wins the saving re-render — no snap-back while the sav
 });
 
 test("context effort and Fast use the shared harness and model capabilities", () => {
-  assert.match(panel, /return effortLevelsForHarness\(harnessId\)/);
+  assert.match(panel, /return effortLevelsForHarness\(harnessId, model, effort\)/);
   assert.match(panel, /harnessSupportsFastMode\(harnessId\)/);
   assert.match(panel, /modelSupportsFastMode\(scope, value.slice\(sep \+ 1\)\)/);
 });

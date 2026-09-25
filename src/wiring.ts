@@ -1,3 +1,5 @@
+import { availableRuntimeError } from "./api/runtime-config.ts";
+import { createApprovalStore } from "./core/approval-store.ts";
 import { createKeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
 import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
@@ -70,7 +72,7 @@ import {
   type PrincipalLink,
   type PrincipalLinkService,
 } from "./identity/principal-links.ts";
-import type { SlackAccountLink } from "./api/routes/composio.ts";
+import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { createResendMailer } from "./admin/invite-email.ts";
@@ -147,6 +149,7 @@ import {
   createPostgresLedgerEventBus,
   type LedgerEventBus,
 } from "./loops/ledger-events.ts";
+import { createInboxSourceRefresh } from "./loops/inbox-source-refresh.ts";
 import { createInboxRealtime } from "./loops/inbox-realtime.ts";
 import { createLoopOutputStore } from "./loops/output-store.ts";
 import { createShipGrantStore } from "./loops/ship-grant-store.ts";
@@ -165,6 +168,7 @@ import {
   type EnvironmentStore,
 } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
+import { isOpenScopeMember } from "./resolution/sharing-access.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
@@ -511,6 +515,7 @@ export interface BuiltApp {
   identity: IdentityService;
   principalLinks: PrincipalLinkService;
   slackAccounts: DurableMap<SlackAccountLink>;
+  composioReturns: DurableMap<ComposioReturn>;
   keychain?: Keychain;
   serviceCreds: ServiceCredentialStore;
   deliveries: DeliveryStore;
@@ -780,6 +785,7 @@ export function buildApp(
     configStore,
     acl,
     config.securityScreenBackend !== "off" || Boolean(overrides.securityScreener),
+    config.securityScreenAllPostures,
   );
 
   const workspace = createLocalWorkspaceStore(config.dataDir);
@@ -1133,6 +1139,7 @@ export function buildApp(
           exp: Date.now() + CAPABILITY_TTL_MS,
         },
         secret,
+        config.capabilityTokenCompression,
       );
       return { egressToken };
     },
@@ -1165,6 +1172,7 @@ export function buildApp(
           exp: Date.now() + CAPABILITY_TTL_MS,
         },
         egressSecret,
+        config.capabilityTokenCompression,
       );
       return { egressToken };
     },
@@ -1431,6 +1439,7 @@ export function buildApp(
       fallback,
       input.runtime,
       hydrateModelCatalog,
+      input.runtimePurpose,
     );
   });
 
@@ -1627,7 +1636,6 @@ export function buildApp(
       "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset, sandbox is not aws) — deployed apps have NO durable /data",
     );
   }
-  const approvals = artifactMap<PendingApprovalRecord>("approvals");
   const adminGrantPersist = config.databaseUrl
     ? createPostgresAdminGrantStore(config.databaseUrl)
     : createMapAdminGrantPersistence(createMemoryMap<AdminGrant>());
@@ -1656,6 +1664,8 @@ export function buildApp(
   const managesArtifactHome = createManagesArtifactHome({ managedGroups: projects, directory }, canManageScope);
   const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
   const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({ managedGroups: projects, directory, identity });
+  const openScopeMember = (actorId: string, scope: ScopeId) =>
+    isOpenScopeMember({ actorId, scope, config: configStore, isCurrentSharedScopeMember });
   membership.canReadScope = canReadScope;
   membership.canManageScope = canManageScope;
   membership.canUseSandboxScope = async (actorId, scopeId) =>
@@ -1664,7 +1674,14 @@ export function buildApp(
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
+  const deliveries = withWebTranscriptDeliveries(
+    config.databaseUrl ? createPostgresDeliveryStore(config.databaseUrl) : createDeliveryStore(),
+    sessions,
+  );
   const deployService = createDeployService({
+    deliveries,
+    deployAppsDomain: config.awsDeploy.appsDomain,
+    publicWebUrl: config.publicWebUrl,
     appPublished: productAnalytics.appPublished,
     deployStore,
     provider: deployProvider,
@@ -1675,6 +1692,15 @@ export function buildApp(
     advisoryLock,
     canReadScope,
     canWriteScope,
+    canManageEmail: async (email) => {
+      await identity.refresh();
+      return (
+        identity.isInternal(identity.classify(email)) &&
+        ((await directory.get(email))?.type === "internal" ||
+          config.emailAuthPrincipals?.includes(email) ||
+          identity.externalMember(email) !== undefined)
+      );
+    },
     managesArtifactHome,
     ...(deployGitSecret && deployGitBase
       ? {
@@ -1700,6 +1726,7 @@ export function buildApp(
                   exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
                 },
                 config.capabilitySecret ?? deployGitSecret,
+                config.capabilityTokenCompression,
               );
             }
             return env;
@@ -1767,10 +1794,7 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const deliveries = withWebTranscriptDeliveries(
-    config.databaseUrl ? createPostgresDeliveryStore(config.databaseUrl) : createDeliveryStore(),
-    sessions,
-  );
+  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals"), deliveries);
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreenBackend === "proxy") {
     securityScreener = createSecurityScreenProxy({
@@ -1828,11 +1852,20 @@ export function buildApp(
     prepareRequest: prepareSessionRequest,
     authorize: (session, actorId) => canWriteScope(actorId, session.scopeId),
     async validateRuntime(input, scope) {
-      await resolveRuntimeChoiceDurable(configStore, runtimeOrgScope, scope, fallback, {
-        ...(input.harness ? { harnessId: input.harness as HarnessId } : {}),
-        ...(input.model ? { modelId: input.model } : {}),
-        ...(input.thinkingLevel ? { effortLevel: input.thinkingLevel } : {}),
-      });
+      await resolveRuntimeChoiceDurable(
+        configStore,
+        runtimeOrgScope,
+        scope,
+        fallback,
+        {
+          ...(input.harness ? { harnessId: input.harness as HarnessId } : {}),
+          ...(input.model ? { modelId: input.model } : {}),
+          ...(input.thinkingLevel ? { effortLevel: input.thinkingLevel } : {}),
+          ...(typeof input.fastMode === "boolean" ? { fastMode: input.fastMode } : {}),
+        },
+        hydrateModelCatalog,
+        "subagent",
+      );
     },
   });
   const orchestratorDeps: OrchestratorDeps = {
@@ -1875,8 +1908,13 @@ export function buildApp(
     backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+    capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
+    ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
+    ...(config.resendApiKey && config.emailFrom
+      ? { inviteMailer: createResendMailer(config.resendApiKey, config.emailFrom) }
+      : {}),
     ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
     memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture },
     memoryStrategy,
@@ -1887,6 +1925,7 @@ export function buildApp(
     errors,
     metrics,
     ledger,
+    signals: runSignals,
     turnStream,
     runActivity,
     runs,
@@ -1909,7 +1948,6 @@ export function buildApp(
     webhooks,
     resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
     ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
-    ...(config.sharedOwnerAuthIsolation ? { sharedOwnerAuthIsolation: true } : {}),
     directory,
     isCurrentSharedScopeMember,
     managedGroups: projects,
@@ -2077,6 +2115,7 @@ export function buildApp(
     projects,
     environments,
     deploy: deployService,
+    deployAppsDomain: config.awsDeploy.appsDomain,
     deploymentLayer,
     ...(processes ? { processes } : {}),
     monitors,
@@ -2110,6 +2149,7 @@ export function buildApp(
     requestFire: (loopId) => void loopFire.fire(loopId, `loop:${loopId}:slack-event:${Date.now()}`).catch(() => {}),
   });
   const slackCore = createSlackCoreClient({
+    identity,
     ...(keychain
       ? {
           keychainApprovals: createKeychainApprovals({
@@ -2183,6 +2223,8 @@ export function buildApp(
           mailbox: sessionMailbox,
           prepareRequest: prepareSessionRequest,
           delegationEnabled: (actorId) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId)),
+          deliveries,
+          signals: runSignals,
         },
         run,
       );
@@ -2201,6 +2243,14 @@ export function buildApp(
       afterId = batch.at(-1)!.id;
     }
   };
+  const approvalDeliverySweeper = createSweeper(
+    () => advisoryLock.withLock("approval-deliveries", () => approvals.deliverPending()),
+    30_000,
+    {
+      label: "approval-deliveries",
+      immediate: true,
+    },
+  );
   const sessionReturnSweeper = createSweeper(
     () =>
       advisoryLock.tryWithLock
@@ -2267,6 +2317,7 @@ export function buildApp(
             run: (req) => app.turn(req),
             directory,
             currentScopeMembers,
+            isOpenScopeMember: openScopeMember,
             sessions,
             getCron: (id) => crons.get(id),
             getAsk: (id) => keychain.getAsk(id),
@@ -2296,6 +2347,7 @@ export function buildApp(
       run: (req) => app.turn(req),
       directory,
       currentScopeMembers,
+      isOpenScopeMember: openScopeMember,
       sessions,
     },
   });
@@ -2337,6 +2389,7 @@ export function buildApp(
     leaderLease,
     directory,
     currentScopeMembers,
+    isOpenScopeMember: openScopeMember,
     sessions,
     fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
     ...(config.databaseUrl
@@ -2368,6 +2421,23 @@ export function buildApp(
   );
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
   orchestratorDeps.control = createControlService(app, scheduler, admin);
+  orchestratorDeps.validateScheduledRuntime = (scope, choice, purpose) =>
+    availableRuntimeError(
+      {
+        deps: {
+          config: configStore,
+          harnessId: fallbackHarness,
+          baseModelDefault: fallback.modelId,
+          providerKeys: providerKeysPresent(config),
+          modelCredentials,
+          modelCredentialFetch: overrides.modelCredentialFetch,
+          refreshModels,
+        },
+      },
+      scope,
+      choice,
+      purpose,
+    );
   orchestratorDeps.runtime = createRuntimeService(
     {
       config: configStore,
@@ -2458,7 +2528,6 @@ export function buildApp(
     createWorker({
       admittedWork,
       runs,
-      sessions,
       orchestrator,
       leaseTtlMs,
       heartbeatIntervalMs: config.heartbeatIntervalMs,
@@ -2483,6 +2552,15 @@ export function buildApp(
   );
   const deployIdleTtlMs = deployProvider.profile.managedScaleToZero ? undefined : config.deployIdleTtlMs;
   const BLOB_TTL_MS = 6 * 60 * 60_000;
+  const composioReturns = artifactMap<ComposioReturn>("composio_returns");
+  const composioReturnSweeper = createSweeper(
+    async () => {
+      for (const [id, entry] of await composioReturns.entries())
+        if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
+    },
+    30 * 60_000,
+    { label: "Composio consent returns", immediate: true },
+  );
   const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
   const BLOB_TRANSFER_EXPIRY_DAYS = 1;
   void blobTransfer
@@ -2543,6 +2621,7 @@ export function buildApp(
       monitorRetentionSweeper.start();
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
+      composioReturnSweeper.start();
       fileUploads?.start();
       idleSweeper?.start();
       keepWarmSweeper.start();
@@ -2551,6 +2630,7 @@ export function buildApp(
       swarms?.start();
       orphanedSignalSweeper.start();
       sessionReturnSweeper.start();
+      approvalDeliverySweeper.start();
     };
     if (backgroundStopping)
       void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
@@ -2572,11 +2652,13 @@ export function buildApp(
       keepWarmSweeper.stop(),
       deepIdleSweeper?.stop(),
       blobSweeper.stop(),
+      composioReturnSweeper.stop(),
       fileUploads?.stop(),
       wakeSweep.stop(),
       swarms?.stop(),
       orphanedSignalSweeper.stop(),
       sessionReturnSweeper.stop(),
+      approvalDeliverySweeper.stop(),
       ...workers.map((worker) => worker.stopClaims()),
     ];
     backgroundClaimsStopping = Promise.all(stopping).then(() => {});
@@ -2686,6 +2768,7 @@ export function buildApp(
     identity,
     principalLinks,
     slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
+    composioReturns,
     workspace,
     memory,
     ...(keychain ? { keychain } : {}),
@@ -2755,6 +2838,7 @@ export function serverDeps(
     allowUnauthenticatedCore: config.allowUnauthenticatedCore,
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+    capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
     ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
     ...(built.replayDedupe ? { replayDedupe: built.replayDedupe } : {}),
@@ -2822,6 +2906,7 @@ export function serverDeps(
     identity: built.identity,
     principalLinks: built.principalLinks,
     slackAccounts: built.slackAccounts,
+    composioReturns: built.composioReturns,
     ...(built.keychain ? { keychain: built.keychain } : {}),
     serviceCreds: built.serviceCreds,
     deliveries: built.deliveries,
@@ -2851,7 +2936,16 @@ export function serverDeps(
     channelPolicy: built.channelPolicy,
     ...(built.suggestedActivities ? { suggestedActivities: built.suggestedActivities } : {}),
     uiState: built.uiState,
-    ...(built.keychain ? { loopSourceTokens: built.keychain } : {}),
+    ...(built.keychain
+      ? {
+          loopSourceTokens: built.keychain,
+          inboxSourceRefresh: createInboxSourceRefresh({
+            items: built.loops.items,
+            tokens: built.keychain,
+            ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
+          }),
+        }
+      : {}),
     loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
     sessionShares: built.sessionShares,
     sessionShareBytes: built.sessionShareBytes,

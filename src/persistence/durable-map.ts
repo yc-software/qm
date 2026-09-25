@@ -36,7 +36,7 @@ function jsonbSafe(value: unknown): unknown {
   if (typeof value === "string") return pgTextSafe(value);
   if (Array.isArray(value)) return value.map(jsonbSafe);
   if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
+    const out: Record<string, unknown> = Object.create(null);
     for (const [k, v] of Object.entries(value)) out[pgTextSafe(k)] = jsonbSafe(v);
     return out;
   }

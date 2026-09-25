@@ -397,3 +397,91 @@ test("subdomain ingress: the gateway vouches for the verified viewer with a per-
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
   }
 });
+
+test("subdomain ingress: the SameSite=None twin is honoured only for framed requests to embeddable apps", async () => {
+  const upstream = createHttpServer((req, res) => {
+    if (req.url?.startsWith("/xfo")) res.setHeader("x-frame-options", "DENY");
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end(`cookie=${req.headers.cookie ?? ""}`);
+  });
+  upstream.listen(0);
+  const app = appServingUpstream((upstream.address() as AddressInfo).port);
+  const d = await app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    name: "framed",
+  });
+  const server = createInsecureTestServer(app, {
+    deployAppsDomain: "apps.example.com",
+    deployGateSecret: "gate-secret",
+    auditLog,
+    ...SESSION_DEPS,
+  });
+  server.listen(0);
+  const port = (server.address() as AddressInfo).port;
+  const host = "framed.apps.example.com";
+  const twin = `portal_session_x=${mintPortalSession("U1")}`;
+  const frameDoc = { "Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "cross-site" };
+
+  try {
+    const notOptedIn = await httpGet(port, "/", { Host: host, Cookie: twin, ...frameDoc });
+    assert.equal(notOptedIn.status, 401, "an app that has not opted in never honours the twin");
+    assert.ok(!String(notOptedIn.headers["content-security-policy"] ?? "").includes("frame-ancestors"));
+
+    await app.setDeploymentEmbedAncestors(d.id, ["https://internal.example.com", "https://mail.google.com"]);
+
+    const framed = await httpGet(port, "/", { Host: host, Cookie: twin, ...frameDoc });
+    assert.equal(framed.status, 200, "the frame document authenticates with the twin");
+    assert.match(
+      String(framed.headers["content-security-policy"]),
+      /frame-ancestors 'self' https:\/\/internal\.example\.com https:\/\/mail\.google\.com/,
+    );
+    assert.ok(!framed.body.includes("portal_session_x"), "the twin never reaches the app container");
+
+    const inFrame = await httpGet(port, "/api", {
+      Host: host,
+      Cookie: twin,
+      "Sec-Fetch-Dest": "empty",
+      "Sec-Fetch-Site": "same-origin",
+    });
+    assert.equal(inFrame.status, 200, "the app's own requests from inside the frame authenticate too");
+
+    const subresource = await httpGet(port, "/", {
+      Host: host,
+      Cookie: twin,
+      "Sec-Fetch-Dest": "image",
+      "Sec-Fetch-Site": "cross-site",
+    });
+    assert.equal(subresource.status, 401, "a cross-site <img> or fetch from anywhere else is nobody, as with Lax");
+
+    const noMetadata = await httpGet(port, "/", { Host: host, Cookie: twin });
+    assert.equal(noMetadata.status, 401, "without Sec-Fetch metadata the twin is ignored and the Lax cookie rules");
+
+    const lax = await httpGet(port, "/", { Host: host, Cookie: `portal_session=${mintPortalSession("U1")}` });
+    assert.equal(lax.status, 200, "the original cookie works exactly as before");
+
+    const stranger = await httpGet(port, "/", {
+      Host: host,
+      Cookie: `portal_session_x=${mintPortalSession("U9")}`,
+      ...frameDoc,
+    });
+    assert.equal(stranger.status, 403, "a signed-in stranger is still denied by the ACL");
+    assert.match(String(stranger.headers["content-security-policy"]), /frame-ancestors 'self' https:\/\/internal/);
+
+    const anonymousFrame = await httpGet(port, "/", { Host: host, ...frameDoc });
+    assert.equal(anonymousFrame.status, 401);
+    assert.match(String(anonymousFrame.headers["content-security-policy"]), /frame-ancestors 'self'/);
+
+    const deferred = await httpGet(port, "/xfo", { Host: host, Cookie: twin, ...frameDoc });
+    assert.equal(deferred.headers["x-frame-options"], "DENY");
+    assert.ok(
+      !String(deferred.headers["content-security-policy"] ?? "").includes("frame-ancestors"),
+      "an app's own framing header wins; adding frame-ancestors would make browsers ignore it",
+    );
+  } finally {
+    server.close();
+    upstream.close();
+  }
+});

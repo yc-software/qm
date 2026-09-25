@@ -2,6 +2,8 @@ import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { jsonbStringify } from "../persistence/durable-map.ts";
+import { pgTextSafe } from "../util/text.ts";
 import { isObj } from "../util/objects.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
@@ -285,7 +287,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
            VALUES ($1,$2,'pending',$3,$4,0,$5,$6)
            ON CONFLICT (idempotency_key) DO NOTHING
            RETURNING *, pg_notify('qm_run_available', 'null')`,
-          [id, sessionId, JSON.stringify(request), dedupKey ?? null, maxAttempts, Date.now()],
+          [id, sessionId, jsonbStringify(request), dedupKey ?? null, maxAttempts, Date.now()],
         );
         if (rows[0]) return { run: rowToRun(rows[0]), deduped: false };
         const existing = await runs.getByDedupKey(dedupKey!);
@@ -417,7 +419,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         `UPDATE runs SET request = (request::jsonb || jsonb_build_object('text', $2::text, 'displayText', $2::text))::text
          WHERE id = $1 AND status = 'pending' AND attempts = 0 AND turn_user_seq IS NULL
          AND COALESCE(request::jsonb ->> 'displayText', request::jsonb ->> 'text') = $3`,
-        [runId, text, expectedText],
+        [runId, pgTextSafe(text), pgTextSafe(expectedText)],
       );
       return (rowCount ?? 0) > 0;
     },
@@ -447,8 +449,8 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           queuedRunId,
           targetRunId,
           signal.kind,
-          signal.text ?? null,
-          JSON.stringify(signal),
+          signal.text === undefined ? null : pgTextSafe(signal.text),
+          jsonbStringify(signal),
           Date.now(),
           signal.dedupeKey ?? null,
         ],

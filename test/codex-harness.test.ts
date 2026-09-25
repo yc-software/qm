@@ -88,7 +88,7 @@ rl.on("line", (line) => {
         !process.env.CODEX_HOME?.startsWith(msg.params.cwd)) {
       return send({ id: msg.id, error: { code: -1, message: "unsafe or missing adapter settings" } });
     }
-    if (${coordinator} && (msg.params.config?.features?.multi_agent !== false || msg.params.dynamicTools.some(tool => ["execute", "background", "credential_exec"].includes(tool.name)))) {
+    if (${coordinator} && (msg.params.config?.features?.multi_agent !== false || msg.params.dynamicTools.some(tool => ["execute", "background"].includes(tool.name)))) {
       return send({ id: msg.id, error: { code: -1, message: "coordinator exposes command or native delegation tools" } });
     }
     return send({ id: msg.id, result: { thread: { id: "thread-1" }, model: "fake-model" } });
@@ -482,7 +482,7 @@ rl.on("line", (line) => {
 
 test("Codex forwards tool-result screening into its native tool bridge", () => {
   const screenToolResult: NonNullable<HarnessTurnInput["screenToolResult"]> = async () => ({ outcome: "allow" });
-  const ref = harnessToolContext({ screenToolResult } as HarnessTurnInput);
+  const ref = harnessToolContext({ screenToolResult, history: [] } as unknown as HarnessTurnInput);
   assert.equal(ref.screenToolResult, screenToolResult);
 });
 
@@ -1900,7 +1900,7 @@ test("Codex persists repeated public commentary in order with distinct streaming
 });
 
 for (const final of [true, false]) {
-  for (const mechanism of ["signal", "cancel"] as const) {
+  for (const mechanism of ["signal", "cancel", "both"] as const) {
     test(`Codex saves only pre-stop ${final ? "final" : "commentary"} text via ${mechanism}`, async (t) => {
       const dir = mkdtempSync(join(tmpdir(), "qm-codex-partial-stop-"));
       const signals = createMemoryRunSignalStore();
@@ -1947,9 +1947,13 @@ for (const final of [true, false]) {
       });
       await received.promise;
       if (mechanism === "cancel") cancel.abort();
-      else await signals.send("partial-stop-run", { kind: "abort" });
+      else {
+        await signals.send("partial-stop-run", { kind: "abort" });
+        if (mechanism === "both") cancel.abort();
+      }
       const result = await running;
       assert.equal(result.stopped, true);
+      assert.equal(result.stoppedByUser, mechanism === "cancel" ? undefined : true);
       assert.deepEqual(
         entries.filter((entry) => entry.type === "text").map((entry) => entry.payload),
         [{ text: "Checking.", phase: "commentary" }],

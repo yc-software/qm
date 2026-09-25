@@ -127,6 +127,7 @@ export interface Config {
   monitorHeartbeatMs: number;
   signingSecret?: string;
   capabilitySecret?: string;
+  capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
@@ -180,6 +181,7 @@ export interface Config {
   turnLeaseWaitMs: number;
   securityScreenTimeoutMs: number;
   securityScreenBackend: "off" | "model" | "proxy";
+  securityScreenAllPostures: boolean;
   securityScreenProxy?: {
     provider: string;
     endpoint: string;
@@ -188,7 +190,6 @@ export interface Config {
   };
   scratchExecEnabled: boolean;
   reachExecEnabled: boolean;
-  sharedOwnerAuthIsolation: boolean;
   surfaceDebugFooter: boolean;
   eagerProvisionEnabled: boolean;
   awsSandbox: AwsSandboxEnv;
@@ -884,7 +885,7 @@ export function orgScope(): string {
   return `org:${orgId()}`;
 }
 
-export const OPENCODE_RUNTIME_VERSION = "1.17.18";
+export const OPENCODE_RUNTIME_VERSION = "1.18.31";
 
 export const CONFIG_DEFAULTS = {
   port: 8080,
@@ -1283,6 +1284,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const securityScreenBackend = securityScreenBackendEnvStrict(env.SECURITY_SCREEN_BACKEND);
+  const securityScreenAllPostures =
+    boolEnvStrict("SECURITY_SCREEN_ALL_POSTURES", env.SECURITY_SCREEN_ALL_POSTURES) ?? false;
+  if (securityScreenAllPostures && securityScreenBackend === "off") {
+    throw new Error("SECURITY_SCREEN_ALL_POSTURES requires an enabled SECURITY_SCREEN_BACKEND");
+  }
   const proxyProvider = env.SECURITY_SCREEN_PROXY_PROVIDER?.trim();
   const proxyEndpoint = env.SECURITY_SCREEN_PROXY_ENDPOINT?.trim();
   const proxyToken = env.SECURITY_SCREEN_PROXY_TOKEN?.trim();
@@ -1428,6 +1434,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     securityPosture: securityPostureEnvStrict(env.HARNESS_SECURITY_POSTURE),
     sharingPosture: sharingPostureEnvStrict(env.HARNESS_SHARING_POSTURE),
     securityScreenBackend,
+    securityScreenAllPostures,
     ...(securityScreenBackend === "proxy"
       ? {
           securityScreenProxy: {
@@ -1540,6 +1547,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...((env.PORTAL_IDENTITY_SECRET ?? env.CORE_SIGNING_SECRET)
       ? { portalIdentitySecret: env.PORTAL_IDENTITY_SECRET ?? env.CORE_SIGNING_SECRET }
       : {}),
+    capabilityTokenCompression:
+      boolEnvStrict("CAPABILITY_TOKEN_COMPRESSION", env.CAPABILITY_TOKEN_COMPRESSION) ?? false,
     requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
     ...(slackEventsPort !== undefined ? { slackEventsPort } : {}),
@@ -1616,7 +1625,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     securityScreenTimeoutMs,
     scratchExecEnabled: boolEnvStrict("EXECUTE_SCRATCH", env.EXECUTE_SCRATCH) ?? false,
     reachExecEnabled: boolEnvStrict("REACH_EXEC", env.REACH_EXEC) ?? false,
-    sharedOwnerAuthIsolation: boolEnvStrict("SHARED_OWNER_AUTH_ISOLATION", env.SHARED_OWNER_AUTH_ISOLATION) ?? false,
     surfaceDebugFooter: boolEnvStrict("SURFACE_DEBUG_FOOTER", env.SURFACE_DEBUG_FOOTER) ?? false,
     eagerProvisionEnabled: boolEnvStrict("EAGER_PROVISION", env.EAGER_PROVISION) ?? true,
     awsSandbox: awsSandboxEnv(env),

@@ -1127,6 +1127,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       }
     };
     let turnId = "";
+    let stoppedByUser = false;
     const interrupt = async (stopped: boolean) => {
       if (stopped && !state.stopped) {
         state.stoppedReply = textFromTurn({
@@ -1173,7 +1174,10 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             opts.signals,
             turn.runId,
             {
-              onAbort: async () => interrupt(true),
+              onAbort: async () => {
+                stoppedByUser = true;
+                await interrupt(true);
+              },
               onSteer: async (text, ts, request) => {
                 const prepared = await turn.prepareSteer?.(text, request);
                 const prompt = prepared?.text ?? text;
@@ -1351,7 +1355,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     }
     if (cleanupErrors.length) throw cleanupErrors[0];
     if (!turnResult) throw new Error("Codex turn did not produce a result");
-    return turnResult;
+    return { ...turnResult, ...(stoppedByUser ? { stoppedByUser: true as const } : {}) };
   };
 
   const single = oneShotRunner((turn) => runPrompt(turn, false));

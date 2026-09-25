@@ -15,9 +15,9 @@ import {
   sentMailTpl,
 } from "./sent-mail";
 import { html, nothing, render, type TemplateResult } from "lit";
+import { live } from "lit/directives/live.js";
 import {
   Archive,
-  ArrowUp,
   ArrowUpRight,
   CheckCheck,
   ChevronDown,
@@ -30,6 +30,8 @@ import {
   Undo2,
   X,
 } from "lucide";
+import { embeddedComposer } from "./embedded-composer";
+import type { ComposerSubmission } from "./composer";
 import { api, ApiError } from "./core-bridge";
 import { onInboxItemEvent, onInboxResync } from "./conversations";
 import { createInboxEventCoalescer, type InboxItemRef } from "./inbox-coalesce";
@@ -62,6 +64,8 @@ export interface InboxContextMessage {
   at?: number;
   text: string;
   images?: string[];
+  reply?: boolean;
+  nearby?: boolean;
 }
 
 export interface LedgerThreadMessage {
@@ -123,6 +127,9 @@ export interface InboxItem {
   probablyResolved?: boolean;
   images?: string[];
   updatedAt: number;
+  sourceContextFetched?: boolean;
+  sourceContextPartial?: boolean;
+  sourceRefreshError?: string;
 }
 
 export interface InboxView {
@@ -199,11 +206,8 @@ export const inboxState = {
 };
 
 const DRAFT_SUGGESTIONS = ["Make it shorter", "Make it more friendly", "Remove the salutations"];
-const ASIDE_MIN_HEIGHT = 320;
-const ASIDE_MAX_HEIGHT = 1100;
-const CHAT_INPUT_MAX_HEIGHT = 200;
+const draftConflicts = new Map<string, number>();
 const draftEdits = new Map<string, InboxDraft & { basedOnAt?: number }>();
-const sending = new Set<string>();
 const acting = new Set<string>();
 const chatting = new Set<string>();
 const chatDrafts = new Map<string, string>();
@@ -311,10 +315,9 @@ export function resetInboxState(): void {
   inboxState.notice = null;
   inboxState.syncBusy = false;
   draftEdits.clear();
-  sending.clear();
+  draftConflicts.clear();
   acting.clear();
   chatting.clear();
-  chatDrafts.clear();
 }
 
 export function inboxViews(): InboxView[] {
@@ -388,6 +391,9 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     thread: entry.thread,
     updatedAt: entry.updatedAt,
     ...(str(payload.fromDetail) ? { fromDetail: payload.fromDetail as string } : {}),
+    sourceContextFetched: payload.sourceContextFetched === true,
+    sourceContextPartial: payload.sourceContextPartial === true,
+    ...(typeof payload.sourceRefreshError === "string" ? { sourceRefreshError: payload.sourceRefreshError } : {}),
     ...(Array.isArray(payload.context) ? { context: payload.context as InboxContextMessage[] } : {}),
     ...(str(payload.externalUrl) ? { externalUrl: payload.externalUrl as string } : {}),
     ...(draft ? { draft } : {}),
@@ -765,6 +771,16 @@ function effectiveDraft(item: InboxItem): InboxDraft {
   };
 }
 
+function sameDraft(a: InboxDraft | undefined, b: InboxDraft): boolean {
+  return Boolean(
+    a &&
+    a.body === b.body &&
+    (a.subject ?? "") === (b.subject ?? "") &&
+    (a.to ?? []).join(",") === (b.to ?? []).join(",") &&
+    (a.cc ?? []).join(",") === (b.cc ?? []).join(","),
+  );
+}
+
 function editDraft(item: InboxItem, patch: Partial<InboxDraft>): void {
   const basedOnAt = draftEdits.get(item.id)?.basedOnAt ?? item.draftAt;
   draftEdits.set(item.id, { ...effectiveDraft(item), ...patch, ...(basedOnAt !== undefined ? { basedOnAt } : {}) });
@@ -775,6 +791,7 @@ function isDraftConflict(e: unknown): boolean {
 }
 
 async function explainDraftConflict(item: InboxItem, edited: boolean): Promise<void> {
+  draftConflicts.set(item.id, (draftConflicts.get(item.id) ?? 0) + 1);
   await refetchItem(item);
   const fresh = inboxItemById(item.id);
   const overlay = draftEdits.get(item.id);
@@ -795,10 +812,18 @@ function actionPath(item: InboxItem, leaf: "action" | "followup"): string {
   return `/api/loops/${encodeURIComponent(item.loopId)}/items/${encodeURIComponent(item.id)}/${leaf}`;
 }
 
-async function refetchItem(item: InboxItem): Promise<void> {
+const sourceRefreshAt = new Map<string, number>();
+function ensureItemSource(item: InboxItem): void {
+  if (!item.slack || Date.now() - (sourceRefreshAt.get(item.id) ?? 0) < 60_000) return;
+  for (const [id, at] of sourceRefreshAt) if (Date.now() - at >= 60_000) sourceRefreshAt.delete(id);
+  sourceRefreshAt.set(item.id, Date.now());
+  void refetchItem(item, true);
+}
+
+async function refetchItem(item: InboxItem, refreshSource = false): Promise<void> {
   try {
     const { item: fresh } = await api<{ item: LedgerItem }>(
-      `/api/loops/${encodeURIComponent(item.loopId)}/items/${encodeURIComponent(item.id)}`,
+      `/api/loops/${encodeURIComponent(item.loopId)}/items/${encodeURIComponent(item.id)}${refreshSource ? "?refreshSource=1" : ""}`,
     );
     updateSentChat(fresh);
     replaceItem({ ...toInboxItem(fresh), detailLoaded: true });
@@ -823,9 +848,10 @@ const persistWaiting = new Set<string>();
 function enqueueForItem(itemId: string, task: () => Promise<void>): Promise<void> {
   const queued = (persistQueue.get(itemId) ?? Promise.resolve()).then(task);
   persistQueue.set(itemId, queued);
-  void queued.finally(() => {
+  const clear = (): void => {
     if (persistQueue.get(itemId) === queued) persistQueue.delete(itemId);
-  });
+  };
+  void queued.then(clear, clear);
   return queued;
 }
 
@@ -844,13 +870,7 @@ async function persistDraftNow(itemId: string): Promise<void> {
   const edited = draftEdits.get(item.id);
   if (!edited) return;
   const saved = item.draft;
-  if (
-    saved &&
-    saved.body === edited.body &&
-    (saved.subject ?? "") === (edited.subject ?? "") &&
-    (saved.to ?? []).join(",") === (edited.to ?? []).join(",") &&
-    (saved.cc ?? []).join(",") === (edited.cc ?? []).join(",")
-  ) {
+  if (sameDraft(saved, edited)) {
     draftEdits.delete(item.id);
     return;
   }
@@ -864,51 +884,10 @@ async function persistDraftNow(itemId: string): Promise<void> {
     if (newer === edited) draftEdits.delete(item.id);
     else if (newer && next.draftAt !== undefined) draftEdits.set(item.id, { ...newer, basedOnAt: next.draftAt });
     replaceItem(next);
+    drawAll();
   } catch (e) {
     if (isDraftConflict(e)) return explainDraftConflict(item, true);
     notify(`Couldn't save the draft: ${e instanceof Error ? e.message : e}`);
-  }
-}
-
-async function sendItem(item: InboxItem): Promise<void> {
-  if (item.source === "generic" || !item.detailLoaded || sending.has(item.id)) return;
-  if (!effectiveDraft(item).body.trim()) {
-    notify("Nothing to send. The draft is empty.");
-    return;
-  }
-  sending.add(item.id);
-  drawAll();
-  try {
-    await enqueueForItem(item.id, () => sendItemNow(item.id));
-  } finally {
-    sending.delete(item.id);
-    drawAll();
-  }
-}
-
-async function sendItemNow(itemId: string): Promise<void> {
-  const item = inboxItemById(itemId);
-  if (!item) return;
-  const edited = draftEdits.get(item.id);
-  const draft = effectiveDraft(item);
-  if (!draft.body.trim()) {
-    notify("Nothing to send. The draft is empty.");
-    return;
-  }
-  try {
-    const basedOnAt = edited?.basedOnAt ?? item.draftAt;
-    const next = await postAction(item, "send", {
-      proposal: draft,
-      ...(basedOnAt !== undefined ? { expectedProposalAt: basedOnAt } : {}),
-    });
-    if (draftEdits.get(item.id) === edited) draftEdits.delete(item.id);
-    replaceItem(next);
-    notify(item.source === "gmail" ? "Reply sent by email." : "Reply posted to Slack.");
-  } catch (e) {
-    if (isDraftConflict(e)) return explainDraftConflict(item, Boolean(edited));
-    const hint =
-      e instanceof ApiError && e.status === 409 && /connect/i.test(e.message) ? ". Reconnect it under Keychain" : "";
-    notify(`Send failed: ${e instanceof Error ? e.message : e}${hint}`);
   }
 }
 
@@ -929,24 +908,43 @@ export async function setItemStatus(item: InboxItem, status: "open" | "dismissed
   }
 }
 
-export async function askAgent(item: InboxItem, message: string): Promise<void> {
+export async function askAgent(
+  item: InboxItem,
+  message: string,
+  options?: ComposerSubmission,
+  snapshot = { draft: effectiveDraft(item), conflictRevision: draftConflicts.get(item.id) ?? 0 },
+): Promise<boolean> {
   const text = message.trim();
-  if (!text || chatting.has(item.id)) return;
+  if ((!text && !options?.attachments?.length) || chatting.has(item.id)) return false;
+  const { draft, conflictRevision } = snapshot;
   chatting.add(item.id);
-  chatDrafts.delete(item.id);
   drawAll();
   try {
-    const { item: next } = await api<{ item: LedgerItem }>(actionPath(item, "followup"), {
-      method: "POST",
-      body: JSON.stringify({ message: text }),
+    await enqueueForItem(item.id, async () => {
+      if ((draftConflicts.get(item.id) ?? 0) !== conflictRevision)
+        throw new Error("The draft changed. Review it before sending again.");
+      await persistDraftNow(item.id);
+      if (draftEdits.has(item.id)) throw new Error("Save the draft before continuing. Your edits have been kept.");
+      const current = inboxItemById(item.id) ?? item;
+      if (!sameDraft(effectiveDraft(current), draft)) {
+        throw new Error("The draft changed. Review it before continuing.");
+      }
+      const { item: next } = await api<{ item: LedgerItem }>(actionPath(item, "followup"), {
+        method: "POST",
+        body: JSON.stringify({
+          message: text,
+          ...options,
+          ...(current.draftAt !== undefined ? { expectedProposalAt: current.draftAt } : {}),
+        }),
+      });
+      updateSentChat(next);
+      replaceItem({ ...toInboxItem(next), outputs: item.outputs, detailLoaded: true });
     });
-    updateSentChat(next);
-    const mapped = { ...toInboxItem(next), outputs: item.outputs, detailLoaded: true };
-    draftEdits.delete(item.id);
-    replaceItem(mapped);
+    return true;
   } catch (e) {
+    if (isDraftConflict(e)) await refetchItem(item);
     notify(`The agent couldn't answer: ${e instanceof Error ? e.message : e}`);
-    if (!chatDrafts.has(item.id)) chatDrafts.set(item.id, text);
+    return false;
   } finally {
     chatting.delete(item.id);
     drawAll();
@@ -1098,21 +1096,35 @@ function itemImagesTpl(item: InboxItem, urls: string[] | undefined, ctxIndex: nu
 }
 
 export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
-  const rows = [
-    ...(item.context ?? []).map((message, index) => ({ ...message, imageIndex: index })),
-    { author: item.from, at: item.receivedAt, text: item.snippet, images: item.images, imageIndex: -1 },
-  ];
+  const context = (item.context ?? []).map((message, index) => ({ ...message, imageIndex: index }));
+  const rows = item.sourceContextFetched
+    ? context
+    : [
+        ...context.filter((m) => !item.slack || m.nearby === true),
+        {
+          author: item.from,
+          at: item.receivedAt,
+          text: item.snippet,
+          images: item.images,
+          imageIndex: -1,
+          reply: false,
+          nearby: false,
+        },
+      ];
   return html`<div class="inbox-context">
+    ${item.sourceRefreshError ? html`<div class="inbox-source-notice" role="status">${item.sourceRefreshError}</div>` : nothing}
+    ${item.sourceContextPartial ? html`<div class="inbox-source-notice">Showing part of this conversation. Open in Slack for the full history.</div>` : nothing}
     ${rows.map((m) => {
       const name = participantName(m.author) || m.author;
       return html`
-        <div class="inbox-context-msg">
+        <div class="inbox-context-msg ${m.reply ? "inbox-thread-reply" : ""} ${m.nearby ? "inbox-nearby-context" : ""}">
           <span class="inbox-avatar" style=${`--avatar-hue:${avatarHue(participantKey(m.author))}`} aria-hidden="true"
             >${initials(name)}</span
           >
           <div class="inbox-context-body">
             <div class="inbox-context-head">
               <span class="inbox-context-author">${name}</span>
+              ${m.nearby ? html`<span class="inbox-context-at">Nearby in channel</span>` : nothing}
               ${m.at ? html`<span class="inbox-context-at">${relTime(m.at)}</span>` : nothing}
             </div>
             <div class="inbox-context-text">${slackTextTpl(item, m.text)}</div>
@@ -1124,117 +1136,82 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
   </div>`;
 }
 
-export function chatTpl(item: InboxItem): TemplateResult {
+export function chatTpl(item: InboxItem, compact = false): TemplateResult {
   const busy = chatting.has(item.id);
   let suggestions = DRAFT_SUGGESTIONS;
   if (item.sentChat) suggestions = ["Summarize this email", "What should I follow up on?"];
   else if (item.source === "generic") suggestions = ["Explain the proposal", "What needs my input?"];
-  const pending = chatDrafts.get(item.id) ?? "";
-  const submit = (el: HTMLTextAreaElement): void => {
-    if (busy) return;
-    const text = el.value;
-    el.value = "";
-    autosizeChatInput(el);
-    void askAgent(item, text);
+  const submit = (event: MouseEvent, instruction: string): void => {
+    const composer = (event.currentTarget as HTMLElement).closest(".inbox-chat")?.querySelector(".embedded-composer");
+    composer?.dispatchEvent(new CustomEvent("composer-submit", { detail: instruction }));
   };
   const empty = item.thread.length === 0;
   return html`
     <div class="inbox-chat">
-      ${
-        empty
-          ? html`<div class="inbox-chat-empty">
-              <h2 class="inbox-chat-cta">${item.sentChat ? "Ask about this email" : "What should I change?"}</h2>
-              <div class="inbox-chat-suggestions">
-                ${suggestions.map(
-                  (prompt) =>
-                    html`<button
-                      class="inbox-chat-suggestion"
-                      type="button"
-                      ?disabled=${busy}
-                      @click=${() => void askAgent(item, prompt)}
-                    >
-                      ${prompt}
-                    </button>`,
-                )}
-              </div>
-            </div>`
-          : html`<div class="inbox-chat-log">
-              ${item.thread.map(
-                (m) =>
-                  html`<div class="inbox-chat-msg ${m.role}">
-                    <span class="inbox-chat-text">${m.text}</span>
-                  </div>`,
-              )}
-            </div>`
-      }
+      <div class="inbox-chat-log">
+        ${item.status === "open" && !usesOutputReview(item) && (!item.sentChat || item.draft) ? html`<div class="inbox-chat-msg agent">${draftMessageTpl(item)}</div>` : nothing}
+        ${item.thread.map(
+          (m) => html`<div class="inbox-chat-msg ${m.role}"><span class="inbox-chat-text">${m.text}</span></div>`,
+        )}
+        ${
+          item.status === "open"
+            ? html`<div class="inbox-chat-suggestions">
+                ${
+                  !usesOutputReview(item) && (!item.sentChat || item.draft)
+                    ? html`<button
+                        class="inbox-suggest-chip primary"
+                        type="button"
+                        ?disabled=${busy || acting.has(item.id)}
+                        ${tip("Send the draft with your instructions")}
+                        @click=${(e: MouseEvent) => submit(e, "Send it")}
+                      >
+                        ${icon(Send, 12)}<span>Send it</span>
+                      </button>`
+                    : nothing
+                }
+                <div class="inbox-edit-suggestions">
+                  ${(empty ? suggestions : []).map(
+                    (prompt) =>
+                      html`<button
+                        class="inbox-suggest-chip inbox-chat-suggestion"
+                        type="button"
+                        ?disabled=${busy}
+                        @click=${(e: MouseEvent) => submit(e, prompt)}
+                      >
+                        ${prompt}
+                      </button>`,
+                  )}
+                </div>
+              </div>`
+            : nothing
+        }
+      </div>
       ${busy ? html`<div class="inbox-chat-working">${workingWave()}<span>Thinking…</span></div>` : nothing}
-      <div class="inbox-chat-composer ${pending.trim() ? "has-text" : ""}">
-        <textarea
-          class="inbox-chat-input"
-          rows="1"
-          placeholder=${`Ask ${brandName()} for something`}
-          .value=${pending}
-          @input=${(e: Event) => {
-            const box = e.currentTarget as HTMLTextAreaElement;
-            const had = Boolean((chatDrafts.get(item.id) ?? "").trim());
-            chatDrafts.set(item.id, box.value);
-            autosizeChatInput(box);
-            if (had !== Boolean(box.value.trim())) drawAll();
-          }}
-          @keydown=${(e: KeyboardEvent) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              submit(e.currentTarget as HTMLTextAreaElement);
-            }
-          }}
-        ></textarea>
-        <div class="inbox-chat-actions">
-          <div class="inbox-chat-suggest">
-            ${
-              item.status === "open" && !item.sentChat && !usesOutputReview(item)
-                ? html`
-                    <button
-                      class="inbox-suggest-chip primary"
-                      type="button"
-                      ?disabled=${sending.has(item.id)}
-                      ${tip(item.source === "gmail" ? "Send the drafted reply in Gmail" : "Send the drafted reply to Slack")}
-                      @click=${() => void sendItem(item)}
-                    >
-                      ${icon(Send, 12)}<span>${sending.has(item.id) ? "Sending…" : "Send it"}</span>
-                    </button>
-                    <button
-                      class="inbox-suggest-chip"
-                      type="button"
-                      @click=${() => void setItemStatus(item, "dismissed")}
-                    >
-                      ${icon(X, 12)}<span>Dismiss</span>
-                    </button>
-                  `
-                : nothing
-            }
-          </div>
-          <button
-            class="btn inbox-chat-send"
-            type="button"
-            aria-label="Ask"
-            ${tip("Ask. Enter to send, Shift+Enter for a new line")}
-            ?disabled=${busy || !pending.trim()}
-            @click=${(e: MouseEvent) => {
-              const box = (e.currentTarget as HTMLElement)
-                .closest(".inbox-chat-composer")
-                ?.querySelector<HTMLTextAreaElement>(".inbox-chat-input");
-              if (box) submit(box);
-            }}
-          >
-            ${icon(ArrowUp, 14)}
-          </button>
-        </div>
+      <div class="inbox-chat-composer">
+        ${embeddedComposer(
+          `inbox:${appState.me?.user ?? "anon"}:${item.loopId}:${item.id}`,
+          {
+            placeholder: `Ask ${brandName()} for something`,
+            prepareSubmit: () => {
+              const snapshot = {
+                draft: effectiveDraft(inboxItemById(item.id) ?? item),
+                conflictRevision: draftConflicts.get(item.id) ?? 0,
+              };
+              return async (text, options) => {
+                if (!(await askAgent(item, text, options, snapshot)))
+                  throw new Error("Could not complete the request. Your message has been kept.");
+              };
+            },
+          },
+          compact,
+        )}
       </div>
     </div>
   `;
 }
 
-export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): TemplateResult {
+function draftMessageTpl(item: InboxItem): TemplateResult {
+  const busy = chatting.has(item.id);
   const draft = effectiveDraft(item);
   const gmail = item.source === "gmail";
   const showCc = gmail && ((draft.cc?.length ?? 0) > 0 || (item.gmail?.cc?.length ?? 0) > 0);
@@ -1272,7 +1249,8 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
                     <span>To</span>
                     <input
                       type="text"
-                      .value=${(draft.to ?? []).join(", ")}
+                      ?disabled=${busy}
+                      .value=${live((draft.to ?? []).join(", "))}
                       placeholder="who@example.com"
                       @input=${(e: Event) => editDraft(item, { to: addressHeaderList((e.currentTarget as HTMLInputElement).value) })}
                       @blur=${() => void persistDraft(item)}
@@ -1284,7 +1262,8 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
                           <span>Cc</span>
                           <input
                             type="text"
-                            .value=${(draft.cc ?? []).join(", ")}
+                            ?disabled=${busy}
+                            .value=${live((draft.cc ?? []).join(", "))}
                             @input=${(e: Event) => editDraft(item, { cc: addressHeaderList((e.currentTarget as HTMLInputElement).value) })}
                             @blur=${() => void persistDraft(item)}
                           />
@@ -1295,7 +1274,8 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
                     <span>Subject</span>
                     <input
                       type="text"
-                      .value=${draftSubject(item, draft)}
+                      ?disabled=${busy}
+                      .value=${live(draftSubject(item, draft))}
                       @input=${(e: Event) => editDraft(item, { subject: (e.currentTarget as HTMLInputElement).value })}
                       @blur=${() => void persistDraft(item)}
                     />
@@ -1308,9 +1288,11 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
       <div class="inbox-draft-body-wrap">
         <textarea
           class="inbox-draft-body"
+          aria-label="Draft reply"
+          ?disabled=${busy}
           rows=${gmail ? 7 : 3}
-          placeholder=${item.draft ? "Write a reply…" : "No draft yet. The next sync writes one, or write your own."}
-          .value=${draft.body}
+          placeholder=${item.draft ? "" : "No draft yet. The next sync writes one, or write your own."}
+          .value=${live(draft.body)}
           @input=${(e: Event) => editDraft(item, { body: (e.currentTarget as HTMLTextAreaElement).value })}
           @blur=${() => void persistDraft(item)}
         ></textarea>
@@ -1320,7 +1302,6 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
           ? html`<div class="inbox-reactions">${item.reactions.map((name) => reactionChipTpl(name))}</div>`
           : nothing
       }
-      ${opts.chat === false ? nothing : chatTpl(item)}
     </div>
   `;
 }
@@ -1370,6 +1351,18 @@ export function handledNoteTpl(item: InboxItem): TemplateResult {
     ${icon(X, 13)}<span>Dismissed ${item.dismissedAt ? relTime(item.dismissedAt) : ""}</span>
     ${reopenButtonTpl(item)}
   </div>`;
+}
+
+function dismissItemTpl(item: InboxItem): TemplateResult | typeof nothing {
+  if (item.status !== "open") return nothing;
+  return html`<button
+    class="inbox-dismiss"
+    type="button"
+    ?disabled=${chatting.has(item.id) || acting.has(item.id)}
+    @click=${() => void setItemStatus(item, "dismissed")}
+  >
+    Dismiss
+  </button>`;
 }
 
 function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
@@ -1432,7 +1425,12 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
       ${
         expanded
           ? html`<div class="inbox-item-detail">
-              ${usesOutputReview(item) ? reviewTpl(item) : html`${contextTpl(item)} ${handled ? handledNoteTpl(item) : draftEditorTpl(item)}`}
+              ${
+                usesOutputReview(item)
+                  ? reviewTpl(item)
+                  : html`${handled ? nothing : html`<div class="inbox-item-detail-actions">${dismissItemTpl(item)}</div>`}
+                    ${contextTpl(item)} ${handled ? handledNoteTpl(item) : chatTpl(item, true)}`
+              }
             </div>`
           : nothing
       }
@@ -1721,17 +1719,15 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
   `;
 }
 
-function itemDetailTpl(item: InboxItem, handled: boolean): TemplateResult {
-  if (usesOutputReview(item)) return reviewTpl(item);
-  if (!item.detailLoaded) return html`<div class="empty compact">Loading message…</div>`;
-  return html`${contextTpl(item)} ${handled ? handledNoteTpl(item) : draftEditorTpl(item, { chat: false })}`;
-}
-
 function itemPageTpl(item: InboxItem): TemplateResult {
   const handled = item.status !== "open";
   const gmail = item.source === "gmail";
   const heading = gmail ? item.from || item.title : (item.slack?.channelLabel ?? item.title);
   const sub = gmail ? item.title : "";
+  let detail: TemplateResult;
+  if (!item.detailLoaded) detail = html`<div class="empty compact">Loading message…</div>`;
+  else if (usesOutputReview(item)) detail = reviewTpl(item);
+  else detail = html`${contextTpl(item)} ${handled ? handledNoteTpl(item) : nothing} ${chatTpl(item)}`;
   return html`
     <div class="pane-head inbox-item-head src-${item.source}">
       <div class="inbox-item-head-copy">
@@ -1745,14 +1741,14 @@ function itemPageTpl(item: InboxItem): TemplateResult {
         </h1>
         ${sub ? html`<div class="pane-subtitle">${sub}</div>` : nothing}
       </div>
+      ${dismissItemTpl(item)}
     </div>
     <div class="inbox-surface inbox-item-surface">
       <div class="inbox-scroll inbox-item-thread">
         ${inboxState.notice ? html`<div class="inbox-notice" role="status">${inboxState.notice}</div>` : nothing}
-        ${itemDetailTpl(item, handled)}
+        ${detail}
       </div>
     </div>
-    ${!usesOutputReview(item) ? html`<aside class="inbox-item-aside">${chatTpl(item)}</aside>` : nothing}
   `;
 }
 
@@ -1765,13 +1761,7 @@ function sentDraftTpl(): TemplateResult | undefined {
       <p>Reply sent.</p>
       <button class="btn" @click=${() => void continueSentReply(item)}>Write another reply</button>
     </div>`;
-  return html`${inboxState.notice ? html`<div class="inbox-notice" role="status">${inboxState.notice}</div>` : nothing}${draftEditorTpl(item, { chat: false })}<button
-      class="btn primary"
-      ?disabled=${sending.has(item.id)}
-      @click=${() => void sendItem(item)}
-    >
-      ${sending.has(item.id) ? "Sending…" : "Send reply"}
-    </button>`;
+  return undefined;
 }
 
 function keepingChatLogsPinned(host: HTMLElement, draw: () => void): void {
@@ -1786,11 +1776,11 @@ function keepingChatLogsPinned(host: HTMLElement, draw: () => void): void {
 function drawSurface(surface: InboxSurface): void {
   if (!surface.host.isConnected && surface.pane) return;
   keepingChatLogsPinned(surface.host, () => render(surfaceTpl(surface), surface.host));
-  sizeChatInputs(surface.host);
+  const selected = inboxState.items.find((item) => item.id === surface.selectedId);
+  if (selected) ensureItemSource(selected);
 }
 
 let fullSurface: InboxSurface | null = null;
-let asideObserver: ResizeObserver | null = null;
 let fullViewId = "all";
 let pendingItemId: string | null = null;
 let loadingDeepLink = false;
@@ -1824,7 +1814,6 @@ function drawFull(): void {
       showHandled: fullSurface?.showHandled ?? false,
     };
     appState.mainEl.replaceChildren(host);
-    observeAsideSize(host);
   }
   fullSurface.viewId = fullViewId;
   if (pendingItemId) {
@@ -1858,46 +1847,7 @@ function drawFull(): void {
       ${surfaceTpl(surface)}
     `;
   keepingChatLogsPinned(host, () => render(page, host));
-  sizeAside(host);
-  sizeChatInputs(host);
-}
-
-/**
- * The assistant sticks to the top of a page that now scrolls, so its height is
- * the viewport below wherever it starts rather than a share of a fixed frame.
- */
-function sizeAside(host: HTMLElement): void {
-  if (!host.querySelector(".inbox-item-aside")) return;
-  const pad = getComputedStyle(host);
-  const padTop = Number.parseFloat(pad.paddingTop) || 0;
-  const padBottom = Number.parseFloat(pad.paddingBottom) || 0;
-  const available = host.clientHeight - padTop - padBottom;
-  const height = Math.min(ASIDE_MAX_HEIGHT, Math.max(ASIDE_MIN_HEIGHT, available));
-  const next = `${height}px`;
-  if (host.style.getPropertyValue("--inbox-aside-height") === next) return;
-  host.style.setProperty("--inbox-aside-height", next);
-}
-
-function observeAsideSize(host: HTMLElement): void {
-  if (typeof ResizeObserver === "undefined") return;
-  asideObserver?.disconnect();
-  asideObserver = new ResizeObserver(() => {
-    sizeAside(host);
-    sizeChatInputs(host);
-  });
-  asideObserver.observe(host);
-}
-
-function autosizeChatInput(box: HTMLTextAreaElement): void {
-  box.style.height = "auto";
-  const cap = Number.parseFloat(getComputedStyle(box).maxHeight) || CHAT_INPUT_MAX_HEIGHT;
-  const content = box.scrollHeight;
-  box.style.height = `${Math.min(cap, content)}px`;
-  box.style.overflowY = content > cap ? "auto" : "hidden";
-}
-
-function sizeChatInputs(host: HTMLElement): void {
-  for (const box of host.querySelectorAll<HTMLTextAreaElement>(".inbox-chat-input")) autosizeChatInput(box);
+  if (openItem) ensureItemSource(openItem);
 }
 
 function syncInboxUrl(itemId: string | null, push = false): void {

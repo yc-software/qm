@@ -135,6 +135,7 @@ test("single and multiview headers render mutually exclusive tools and pane cont
   const actions = runInNewContext(compile(`${source}\nnew GroupActions();`), {
     document: { createElement: () => ({}), addEventListener: () => {} },
     groupActions: new Set(),
+    tabMenu: null,
     dockApi,
     html,
     nothing: "",

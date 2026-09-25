@@ -8,6 +8,7 @@ import {
 import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
+import { rehydrateOpenGoal } from "./goal.ts";
 import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
 import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
@@ -76,6 +77,7 @@ export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
     pausedOnApproval: false,
     silentRequested: false,
     pollFire: Boolean(turn.pollFire),
+    goal: turn.goal ?? rehydrateOpenGoal(turn.history),
     emit: turn.emit,
     scopeLabel: turn.scopeLabel,
     orgScopeId: turn.orgScopeId,
@@ -103,7 +105,7 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
           surfaceTools: turn.surfaceTools,
           delegateWork: turn.delegateWork,
           surfaceName: turn.surfaceName,
-          credentialExecServices: turn.credentialExecServices,
+          ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
         }
       : { surfaceTools: true, surfaceName: "slack" }),
   };

@@ -154,28 +154,33 @@ test("a steered turn persists every reply, not only the last result's", async ()
   assert.deepEqual(userTexts, ["what is the capital of france?", "now do the other three"]);
 });
 
-test("a user stop that surfaces as a non-success SDK result is a clean stop, and the stop stays pending", async () => {
-  const signals = createMemoryRunSignalStore();
-  const runId = "run-stop-error";
-  currentScript = async function* (prompts) {
-    await prompts[Symbol.asyncIterator]().next();
-    await signals.send(runId, { kind: "abort" });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    yield resultMessage("", { subtype: "error_during_execution", errors: ["turn interrupted"], is_error: true });
-  };
+for (const shutdown of [false, true]) {
+  test(`a user stop stays explicit when shutdown=${shutdown}`, async () => {
+    const cancel = new AbortController();
+    const signals = createMemoryRunSignalStore();
+    const runId = "run-stop-error";
+    currentScript = async function* (prompts) {
+      await prompts[Symbol.asyncIterator]().next();
+      await signals.send(runId, { kind: "abort" });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (shutdown) cancel.abort();
+      yield resultMessage("", { subtype: "error_during_execution", errors: ["turn interrupted"], is_error: true });
+    };
 
-  const harness = createClaudeHarness({ signals });
-  const { turn } = harnessTurn({ runId });
-  const result = await harness.turns.runTurn(turn);
+    const harness = createClaudeHarness({ signals });
+    const { turn } = harnessTurn({ runId, cancel: cancel.signal });
+    const result = await harness.turns.runTurn(turn);
 
-  assert.equal(result.stopped, true, "an interrupted turn the SDK calls an error is still a user stop");
-  assert.equal(result.reply, "");
-  assert.deepEqual(
-    (await signals.takePending(runId)).map((s) => s.kind),
-    ["abort"],
-    "the stop stays pending for the terminal drain",
-  );
-});
+    assert.equal(result.stopped, true, "an interrupted turn the SDK calls an error is still a user stop");
+    assert.equal(result.stoppedByUser, true);
+    assert.equal(result.reply, "");
+    assert.deepEqual(
+      (await signals.takePending(runId)).map((s) => s.kind),
+      ["abort"],
+      "the stop stays pending for the terminal drain",
+    );
+  });
+}
 
 for (const late of [
   { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: " late" } } },
@@ -204,6 +209,7 @@ for (const late of [
     release.resolve();
     const result = await running;
     assert.equal(result.stopped, true);
+    assert.equal(result.stoppedByUser, undefined);
     assert.equal(result.reply, "Visible partial");
     assert.deepEqual(deltas, ["Visible partial"]);
     assert.deepEqual(
@@ -250,6 +256,7 @@ for (const bookkeeping of ["request recording", "thinking persistence"]) {
     release.resolve();
     const result = await running;
     assert.equal(result.stopped, true);
+    assert.equal(result.stoppedByUser, undefined);
     assert.equal(result.reply, "Visible partial");
     assert.deepEqual(
       entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
@@ -640,7 +647,6 @@ test("Claude coordinators expose neither command tools nor native subagents", as
   assert.deepEqual(capturedOptions.tools, []);
   assert.equal(capturedOptions.agents, undefined);
   const allowed = capturedOptions.allowedTools as string[];
-  for (const name of ["Agent", "mcp__qm__execute", "mcp__qm__background", "mcp__qm__credential_exec"])
-    assert.ok(!allowed.includes(name));
+  for (const name of ["Agent", "mcp__qm__execute", "mcp__qm__background"]) assert.ok(!allowed.includes(name));
   await harness.turns.close?.();
 });

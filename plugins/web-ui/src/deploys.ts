@@ -1,7 +1,7 @@
 import { openDeploymentPermissions } from "./deploy-permissions";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { Archive, Check, Copy, ExternalLink, RotateCcw, X } from "lucide";
+import { Archive, Check, Copy, ExternalLink, Plus, RotateCcw, Trash2, X } from "lucide";
 import { api, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, icon, relTime } from "./ui";
@@ -44,6 +44,14 @@ const DEPLOY_TABS: Array<{ value: DeploymentTab; label: string }> = [
   { value: "archived", label: "Archived" },
 ];
 
+type DeployEditField = "displayName" | "name" | "embedAncestors";
+
+const DEPLOY_EDIT_FIELDS: Record<DeployEditField, { endpoint: string; savedValue: (d: DeploymentView) => string }> = {
+  displayName: { endpoint: "display-name", savedValue: (d) => d.displayName ?? "" },
+  name: { endpoint: "name", savedValue: (d) => d.name ?? "" },
+  embedAncestors: { endpoint: "embed-ancestors", savedValue: (d) => (d.embedAncestors ?? []).join("\n") },
+};
+
 let deployList: DeploymentView[] = [];
 let deployNotices: DeploymentNotices = { list: "", detail: null };
 let deployLoading = false;
@@ -53,8 +61,9 @@ let deployTab: DeploymentTab = "yours";
 let deployPageHost: HTMLElement | null = null;
 let activeDeploy: DeploymentView | null = null;
 let visibleVersionCount = 10;
-let editingDeploy: { id: string; field: "displayName" | "name" } | null = null;
+let editingDeploy: { id: string; field: DeployEditField } | null = null;
 let deployDraft = "";
+let embedDraft: string[] = [];
 let deploySaving = false;
 let archiveCandidate: DeploymentView | null = null;
 let restoreArchiveFocus = false;
@@ -264,6 +273,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
   const contextScope = deploymentContextScope(d);
   const editingName = editingDeploy?.id === d.id && editingDeploy.field === "displayName";
   const editingSlug = editingDeploy?.id === d.id && editingDeploy.field === "name";
+  const editingEmbed = editingDeploy?.id === d.id && editingDeploy.field === "embedAncestors";
   render(
     html`
       <div class="resource-detail deploy-detail">
@@ -309,6 +319,25 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
                 <div class="deploy-setting-row">
                   <div><strong>App URL</strong><span>Changes the app URL. Existing links do not redirect.</span></div>
                   ${editingSlug ? deployEditForm(d, "name") : html`<div class="deploy-setting-value"><code>/d/${deploymentSlug(d)}/</code><button class="btn" type="button" @click=${() => startEditDeploy(d, "name")}>Change</button></div>`}
+                </div>
+                <div class="deploy-setting-row">
+                  <div>
+                    <strong>Embedding</strong
+                    ><span
+                      >Sites allowed to show this app inside their own page. Every frame between the app and the browser
+                      tab must be listed.</span
+                    >
+                  </div>
+                  ${
+                    editingEmbed
+                      ? deployEditForm(d, "embedAncestors")
+                      : html`<div class="deploy-setting-value">
+                          ${embedAncestorsSummary(d)}
+                          <button class="btn" type="button" @click=${() => startEditDeploy(d, "embedAncestors")}>
+                            ${d.embedAncestors?.length ? "Change" : "Allow"}
+                          </button>
+                        </div>`
+                  }
                 </div>
                 <div class="actions deploy-danger-actions">
                   ${
@@ -383,7 +412,23 @@ function returnToDeploysList(): void {
   drawDeploysPage();
 }
 
-function deployEditForm(d: DeploymentView, field: "displayName" | "name"): TemplateResult {
+function cleanEmbedDraft(rows: readonly string[]): string[] {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const value = row.trim();
+    if (value) seen.add(value);
+  }
+  return [...seen];
+}
+
+function embedAncestorsSummary(d: DeploymentView): TemplateResult {
+  const origins = d.embedAncestors ?? [];
+  if (!origins.length) return html`<span class="deploy-embed-empty">Not embeddable</span>`;
+  return html`<span class="deploy-embed-origins">${origins.map((origin) => html`<code>${origin}</code>`)}</span>`;
+}
+
+function deployEditForm(d: DeploymentView, field: DeployEditField): TemplateResult {
+  if (field === "embedAncestors") return deployEmbedForm(d);
   const slug = field === "name";
   return html`
     <form
@@ -424,9 +469,95 @@ function deployEditForm(d: DeploymentView, field: "displayName" | "name"): Templ
   `;
 }
 
-function startEditDeploy(d: DeploymentView, field: "displayName" | "name"): void {
+function deployEmbedForm(d: DeploymentView): TemplateResult {
+  const setRow = (index: number, value: string) => {
+    embedDraft = embedDraft.map((row, i) => (i === index ? value : row));
+  };
+  const removeRow = (index: number) => {
+    embedDraft = embedDraft.filter((_, i) => i !== index);
+    if (!embedDraft.length) embedDraft = [""];
+    drawDeployDetail(d);
+    focusEmbedRow(Math.min(index, embedDraft.length - 1));
+  };
+  const addRow = () => {
+    embedDraft = [...embedDraft, ""];
+    drawDeployDetail(d);
+    focusEmbedRow(embedDraft.length - 1);
+  };
+  return html`
+    <form
+      class="deploy-embed-editor"
+      @submit=${(event: SubmitEvent) => {
+        event.preventDefault();
+        void commitEditDeploy(d);
+      }}
+    >
+      <ul class="deploy-embed-list">
+        ${embedDraft.map(
+          (row, index) => html`
+            <li>
+              <input
+                class="deploy-edit-input deploy-embed-input"
+                data-embed-row=${index}
+                aria-label="Site allowed to embed this app"
+                spellcheck="false"
+                placeholder="https://tools.example.com"
+                ?disabled=${deploySaving}
+                .value=${live(row)}
+                @input=${(event: InputEvent) => setRow(index, (event.currentTarget as HTMLInputElement).value)}
+                @keydown=${(event: KeyboardEvent) => event.key === "Escape" && cancelEditDeploy()}
+              />
+              <button
+                class="icon-btn"
+                type="button"
+                ${tip("Remove")}
+                aria-label="Remove this site"
+                ?disabled=${deploySaving}
+                @click=${() => removeRow(index)}
+              >
+                ${icon(Trash2, 14)}
+              </button>
+            </li>
+          `,
+        )}
+      </ul>
+      <div class="deploy-embed-actions">
+        <button class="btn" type="button" ?disabled=${deploySaving} @click=${addRow}>
+          ${icon(Plus, 14)}<span>Add site</span>
+        </button>
+        <span class="spacer"></span>
+        <button class="icon-btn" type="submit" aria-label="Save" ${tip("Save")} ?disabled=${deploySaving}>
+          ${icon(Check, 14)}
+        </button>
+        <button
+          class="icon-btn"
+          type="button"
+          ${tip("Cancel")}
+          aria-label="Cancel"
+          ?disabled=${deploySaving}
+          @click=${cancelEditDeploy}
+        >
+          ${icon(X, 14)}
+        </button>
+      </div>
+      <div class="hint deploy-embed-hint">
+        An https origin each, e.g. <code>https://tools.example.com</code> or <code>https://*.example.com</code>. Save
+        with none listed to forbid embedding again.
+      </div>
+    </form>
+  `;
+}
+
+function focusEmbedRow(index: number): void {
+  requestAnimationFrame(() => {
+    document.querySelector<HTMLInputElement>(`[data-embed-row="${index}"]`)?.focus();
+  });
+}
+
+function startEditDeploy(d: DeploymentView, field: DeployEditField): void {
   editingDeploy = { id: d.id, field };
-  deployDraft = field === "displayName" ? (d.displayName ?? "") : (d.name ?? "");
+  if (field === "embedAncestors") embedDraft = [...(d.embedAncestors ?? []), ""];
+  else deployDraft = DEPLOY_EDIT_FIELDS[field].savedValue(d);
   deployNotices = withoutDeploymentDetailNotice(deployNotices);
   drawDeployDetail(d);
   requestAnimationFrame(() => {
@@ -439,6 +570,7 @@ function startEditDeploy(d: DeploymentView, field: "displayName" | "name"): void
 function cancelEditDeploy(): void {
   editingDeploy = null;
   deployDraft = "";
+  embedDraft = [];
   if (activeDeploy) drawDeployDetail(activeDeploy);
   else drawDeploysPage();
 }
@@ -447,8 +579,10 @@ async function commitEditDeploy(d: DeploymentView): Promise<void> {
   if (!editingDeploy || deploySaving) return;
   const field = editingDeploy.field;
   const value = deployDraft.trim();
-  const current = field === "displayName" ? (d.displayName ?? "") : (d.name ?? "");
-  if (value === current) return cancelEditDeploy();
+  const embedAncestors = field === "embedAncestors" ? cleanEmbedDraft(embedDraft) : [];
+  const current = DEPLOY_EDIT_FIELDS[field].savedValue(d);
+  const next = field === "embedAncestors" ? embedAncestors.join("\n") : value;
+  if (next === current) return cancelEditDeploy();
   if (field === "name" && !value) {
     deployNotices = withDeploymentDetailNotice(deployNotices, d.id, "A URL slug is required.");
     return drawDeployDetail(d);
@@ -456,14 +590,20 @@ async function commitEditDeploy(d: DeploymentView): Promise<void> {
   deploySaving = true;
   drawDeployDetail(d);
   try {
-    const endpoint = field === "displayName" ? "display-name" : "name";
-    const payload = field === "displayName" ? { displayName: value } : { name: value };
+    const { endpoint } = DEPLOY_EDIT_FIELDS[field];
+    const payloads: Record<DeployEditField, object> = {
+      displayName: { displayName: value },
+      name: { name: value },
+      embedAncestors: { embedAncestors },
+    };
+    const payload = payloads[field];
     await api(`/api/deployments/${encodeURIComponent(d.id)}/${endpoint}`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
     editingDeploy = null;
     deployDraft = "";
+    embedDraft = [];
     deploySaving = false;
     await refreshDeployments();
     const updated = deployList.find((item) => item.id === d.id) ?? d;
