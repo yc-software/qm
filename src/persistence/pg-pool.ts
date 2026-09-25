@@ -100,6 +100,7 @@ export const PG_MIGRATIONS_TABLE = "qm_schema_migrations";
 export interface PgMigrationDefinition {
   id: string;
   statements: readonly string[];
+  statementParams?: readonly unknown[][];
   expectedChecksum?: string;
   legacyId?: string;
 }
@@ -189,11 +190,15 @@ export function definePgMigration(
   statements: readonly string[],
   expectedChecksum?: string,
   legacyId?: string,
+  statementParams?: readonly unknown[][],
 ): PgMigration {
   if (!/^[a-z0-9][a-z0-9._/-]*$/i.test(id) || id.includes("..")) {
     throw new Error(`pg-pool: invalid migration id ${JSON.stringify(id)}`);
   }
-  const normalized = statements.map((statement) => statement.trim()).filter((statement) => statement.length > 0);
+  const entries = statements
+    .map((statement, index) => ({ statement: statement.trim(), params: statementParams?.[index] ?? [] }))
+    .filter(({ statement }) => statement.length > 0);
+  const normalized = entries.map(({ statement }) => statement);
   for (const statement of normalized) assertOneStatement(statement);
   const checksum = pgMigrationChecksum(normalized);
   if (expectedChecksum !== undefined && checksum !== expectedChecksum) {
@@ -201,7 +206,13 @@ export function definePgMigration(
       `pg-pool: migration ${id} source checksum mismatch (expected=${expectedChecksum}, actual=${checksum})`,
     );
   }
-  return { id, statements: normalized, checksum, ...(legacyId ? { legacyId } : {}) };
+  return {
+    id,
+    statements: normalized,
+    ...(statementParams ? { statementParams: entries.map(({ params }) => params) } : {}),
+    checksum,
+    ...(legacyId ? { legacyId } : {}),
+  };
 }
 
 export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<void> {
@@ -233,7 +244,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         if (migration.legacyId || !migration.statements.every((statement) => concurrentIndexName(statement))) {
           throw new Error(`pg-pool: concurrent index migration ${migration.id} must contain only concurrent indexes`);
         }
-        for (const statement of migration.statements) {
+        for (const [index, statement] of migration.statements.entries()) {
           const name = concurrentIndexName(statement)!;
           const table =
             /\sON\s+(?:ONLY\s+)?([a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?)\s*(?:USING\s+[a-z_]+\s*)?\(/i.exec(
@@ -253,7 +264,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
           if (existing && !existing.same_table)
             throw new Error(`pg-pool: concurrent index ${name} belongs to a different table`);
           if (existing?.indisvalid === false) await client.query(`DROP INDEX CONCURRENTLY ${existing.qualified_name}`);
-          await client.query(statement);
+          await client.query(statement, migration.statementParams?.[index]);
           const built = (await inspect()).rows[0];
           if (!built?.indisvalid || !built.indisready || !built.same_table) {
             throw new Error(`pg-pool: concurrent index ${name} is not ready and valid`);
@@ -277,7 +288,9 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
             adopted = legacy.rows.length > 0;
           }
         }
-        if (!adopted) for (const statement of migration.statements) await client.query(statement);
+        if (!adopted)
+          for (const [index, statement] of migration.statements.entries())
+            await client.query(statement, migration.statementParams?.[index]);
         await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [
           migration.id,
           migration.checksum,
@@ -359,7 +372,8 @@ async function applyPgMaintenance(pool: Pool, maintenance: readonly PgMigration[
     for (const operation of maintenance) {
       await client.query("BEGIN");
       try {
-        for (const statement of operation.statements) await client.query(statement);
+        for (const [index, statement] of operation.statements.entries())
+          await client.query(statement, operation.statementParams?.[index]);
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK").catch(swallowAs(`pg-pool: rollback maintenance ${operation.id}`, undefined));
@@ -419,7 +433,13 @@ export function createPgPool(
       ? [{ id: idOrDefinitions, statements: statementsOrMaintenance as readonly string[] }]
       : idOrDefinitions;
   const migrations = definitions.map((definition) =>
-    definePgMigration(definition.id, definition.statements, definition.expectedChecksum, definition.legacyId),
+    definePgMigration(
+      definition.id,
+      definition.statements,
+      definition.expectedChecksum,
+      definition.legacyId,
+      definition.statementParams,
+    ),
   );
   for (const migration of migrations) registerPgMigration(connectionString, migration);
   const maintenanceSource =
@@ -428,13 +448,29 @@ export function createPgPool(
       : (statementsOrMaintenance as readonly PgMaintenanceDefinition[]);
   const preMigrationMaintenance = maintenanceSource
     .filter((definition) => definition.beforeMigrations)
-    .map((definition) => definePgMigration(definition.id, definition.statements));
+    .map((definition) =>
+      definePgMigration(
+        definition.id,
+        definition.statements,
+        definition.expectedChecksum,
+        definition.legacyId,
+        definition.statementParams,
+      ),
+    );
   for (const maintenance of preMigrationMaintenance) {
     registerPgMigration(connectionString, maintenance, registeredPreMigrationMaintenance);
   }
   const postMigrationMaintenance = maintenanceSource
     .filter((definition) => !definition.beforeMigrations)
-    .map((definition) => definePgMigration(definition.id, definition.statements));
+    .map((definition) =>
+      definePgMigration(
+        definition.id,
+        definition.statements,
+        definition.expectedChecksum,
+        definition.legacyId,
+        definition.statementParams,
+      ),
+    );
   let readyP: Promise<void> | null = null;
   let sessionPoolP: Promise<Pool> | null = null;
   let queryPoolP: Promise<Pool> | null = null;
@@ -558,6 +594,7 @@ export function createPgPool(
       definition.statements,
       definition.expectedChecksum,
       definition.legacyId,
+      definition.statementParams,
     );
     registerPgMigration(connectionString, migration);
     if (closed) throw new Error("Postgres store is closed");
@@ -567,7 +604,13 @@ export function createPgPool(
   function registerMigration(definition: PgMigrationDefinition): void {
     registerPgMigration(
       connectionString,
-      definePgMigration(definition.id, definition.statements, definition.expectedChecksum, definition.legacyId),
+      definePgMigration(
+        definition.id,
+        definition.statements,
+        definition.expectedChecksum,
+        definition.legacyId,
+        definition.statementParams,
+      ),
     );
   }
   return { pool, sessionPool, q, query, registerMigration, migrate, close };

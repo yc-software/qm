@@ -87,6 +87,17 @@ test("released migrations can pin their source checksum", () => {
   );
 });
 
+test("migration parameter bindings follow normalized statements without changing source checksums", () => {
+  const statements = [" ", " SELECT $1::text ", "", " SELECT $1::int "];
+  const migration = definePgMigration("test/bound/0001", statements, undefined, undefined, [[], ["first"], [], [7]]);
+  assert.deepEqual(migration.statements, ["SELECT $1::text", "SELECT $1::int"]);
+  assert.deepEqual(migration.statementParams, [["first"], [7]]);
+  assert.equal(
+    definePgMigration("test/bound/0001", statements, migration.checksum, undefined, [[], ["second"], [], [9]]).checksum,
+    migration.checksum,
+  );
+});
+
 test("migration definitions reject invalid ids and multi-statement elements", () => {
   assert.throws(() => definePgMigration("../bad", ["SELECT 1"]), /migration id/);
   assert.throws(() => definePgMigration("test/good/0001", ["SELECT 1; SELECT 2"]), /single statement/);
