@@ -729,6 +729,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           true,
         );
       }
+      await recordResult(callId, { tool: "execute", ...scopeNote }, text(errMessage(e)), true);
       throw e;
     }
   };

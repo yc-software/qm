@@ -3824,6 +3824,10 @@ test("command exit codes are data; timeouts and thrown tool errors are failures"
         });
       if (outcome === "provider") {
         await assert.rejects(run, /sandbox provider unavailable/);
+        const result = entries.find((e) => e.type === "tool_result")!.payload;
+        assert.equal(result.isError, true);
+        assert.equal(result.result, "sandbox provider unavailable");
+        assert.equal(result.code, undefined);
         continue;
       }
       const returned = await run();
