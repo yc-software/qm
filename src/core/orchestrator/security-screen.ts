@@ -16,6 +16,8 @@ import type { OrchestratorDeps } from "./types.ts";
 
 const DEFAULT_SECURITY_SCREEN_TIMEOUT_MS = 15_000;
 const MAX_SCREEN_REQUEST_CHARS = 2_000;
+const MAX_SECURITY_SOURCE_LOCALIZATIONS = 64;
+const MAX_SECURITY_SOURCE_CONCURRENCY = 4;
 
 const unscreenedVerdict = (): SecurityScreenVerdict => ({
   decision: "auto",
@@ -36,6 +38,23 @@ export type SecurityClassifier = (
     request?: string;
   },
 ) => Promise<SecurityScreenVerdict | undefined>;
+
+export async function localizeSecuritySources<T extends object>(
+  sources: readonly T[],
+  classify: (source: T) => Promise<SecurityScreenVerdict | undefined>,
+): Promise<Map<T, SecurityScreenVerdict | undefined> | null> {
+  if (sources.length <= 1 || sources.length > MAX_SECURITY_SOURCE_LOCALIZATIONS) return null;
+  const verdicts = new Map<T, SecurityScreenVerdict | undefined>();
+  for (let start = 0; start < sources.length; start += MAX_SECURITY_SOURCE_CONCURRENCY) {
+    const batch = sources.slice(start, start + MAX_SECURITY_SOURCE_CONCURRENCY);
+    const results = await Promise.allSettled(batch.map((source) => classify(source)));
+    batch.forEach((source, index) => {
+      const result = results[index];
+      verdicts.set(source, result?.status === "fulfilled" ? result.value : undefined);
+    });
+  }
+  return verdicts;
+}
 
 export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassifier {
   return async function classifySecurityData(payload, actorId, scopeLabel, recordLlmRequest, context = {}) {

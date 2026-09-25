@@ -201,7 +201,7 @@ import {
 } from "./orchestrator/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
-import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
+import { createSecurityClassifier, localizeSecuritySources } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import type { EgressPolicy } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
@@ -810,7 +810,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           });
         }
       }
-      const externalPromptData = screenInbound
+      const externalScreenSources: Array<{
+        source: string;
+        content: string;
+        overheard?: OverheardEntryPayload;
+      }> = screenInbound
         ? [
             ...(ambientTurn && actor.displayName?.trim()
               ? [{ source: "sender", content: senderNote(actor.displayName) }]
@@ -818,11 +822,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.conversationHeader?.trim()
               ? [{ source: "conversation-header", content: input.conversationHeader }]
               : []),
-            ...screenedOverheard.map((entry) => ({ source: "overheard", content: renderOverheard(entry) })),
+            ...screenedOverheard.map((entry) => ({
+              source: "overheard",
+              content: renderOverheard(entry),
+              overheard: entry,
+            })),
             ...attachmentPromptData,
             ...(input.inboundNotes ?? []).map((note) => ({ source: "inbound-file-note", content: note })),
           ]
         : [];
+      const externalPromptData = externalScreenSources.map(({ source, content }) => ({ source, content }));
       const sessionSender = input.sessionSenderId ? await deps.sessions.get(input.sessionSenderId) : null;
       const verifiedSessionMessage = Boolean(
         sessionSender &&
@@ -830,17 +839,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         sessionSender.scopeId === scopeId &&
         (await deps.sessions.getForParticipant(sessionSender.id, actor.id)),
       );
+      const screenInput = {
+        ...input,
+        ...turnOriginRequestFields(input.origin),
+        overheard: [],
+        verifiedSwarm: Boolean(input.swarm && swarmBinding),
+        verifiedSessionMessage,
+      };
+      const turnScreenPayload = screenInbound
+        ? securityScreenPayload({ ...screenInput, externalPromptData: [] })
+        : null;
       const screenPayload = screenInbound
         ? securityScreenPayload({
-            ...input,
-            ...turnOriginRequestFields(input.origin),
-            overheard: [],
+            ...screenInput,
             externalPromptData,
-            verifiedSwarm: Boolean(input.swarm && swarmBinding),
-            verifiedSessionMessage,
           })
         : null;
       let flaggedScreenedInput: { reason: string; sources: string[] } | undefined;
+      let taintedOverheard = new Set(screenedOverheard);
       let inputUnscreened = false;
       if (screenPayload || hasUnscreenableAttachment) {
         const canScreenText =
@@ -859,7 +875,56 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         else if (screenPayload.truncated) unscreenableCause = "oversize-input";
         else if (!deps.securityScreener && !deps.harness.models.screenSecurity) unscreenableCause = "no-screener";
         if (verdict?.decision === "strict") {
-          const sources = externalPromptData.map((item) => item.source);
+          const turnScreenSource = "message";
+          const externalLocalizationPayloads = externalScreenSources.flatMap((item) => {
+            const payload = securityScreenPayload({
+              text: "",
+              externalPromptData: [{ source: item.source, content: item.content }],
+            });
+            return payload
+              ? [
+                  {
+                    source: item.source,
+                    content: payload.content,
+                    ...(item.overheard ? { overheard: item.overheard } : {}),
+                  },
+                ]
+              : [];
+          });
+          const localizationPayloads = [
+            ...(turnScreenPayload ? [{ source: turnScreenSource, content: turnScreenPayload.content }] : []),
+            ...externalLocalizationPayloads,
+          ];
+          let sources = localizationPayloads.map((item) => item.source);
+          const sourceVerdicts = await localizeSecuritySources(localizationPayloads, (item) =>
+            classifySecurityData(item.content, actor.id, scopeId, recordScreenRequest, {
+              hook: "user_input",
+              surface: input.surface,
+              origin: input.origin.kind,
+            }),
+          );
+          if (sourceVerdicts) {
+            const localized = [...sourceVerdicts.values()].some(
+              (sourceVerdict) => sourceVerdict?.decision === "strict",
+            );
+            if (localized) {
+              sources = localizationPayloads.flatMap((item) => {
+                const sourceVerdict = sourceVerdicts.get(item);
+                return sourceVerdict?.decision !== "auto" || sourceVerdict.unscreened === true ? [item.source] : [];
+              });
+            }
+            const overheardVerdicts = new Map<OverheardEntryPayload, SecurityScreenVerdict | undefined>();
+            externalLocalizationPayloads.forEach((item) => {
+              if (item.overheard) overheardVerdicts.set(item.overheard, sourceVerdicts.get(item));
+            });
+            taintedOverheard = new Set(
+              screenedOverheard.filter((entry) => {
+                if (!localized) return true;
+                const sourceVerdict = overheardVerdicts.get(entry);
+                return sourceVerdict?.decision !== "auto" || sourceVerdict.unscreened === true;
+              }),
+            );
+          }
           flaggedScreenedInput = {
             reason: verdict.reason ?? "strict security screen verdict",
             sources,
@@ -936,9 +1001,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             await reconcileSessionParticipants(session.id);
             await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
             for (const overheard of screenedOverheard) {
+              const securityTainted = taintedOverheard.has(overheard);
               const imported = await deps.sessions.append(lease, {
                 type: "user",
-                payload: { ...overheard, securityTainted: true },
+                payload: { ...overheard, ...(securityTainted ? { securityTainted: true } : {}) },
                 scopeLabel: scopeId,
               });
               await deps.sessions.appendTape(lease, {
@@ -957,7 +1023,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   ts: overheard.ts,
                   ...(overheard.name ? { author: overheard.name } : {}),
                   ...(overheard.files?.length ? { attachments: overheard.files } : {}),
-                  securityTainted: true,
+                  ...(securityTainted ? { securityTainted: true } : {}),
                   entryCreatedAt: imported.createdAt,
                 },
               });
