@@ -33,6 +33,7 @@ export interface ToolPayload {
   isError?: boolean;
   result?: string;
   unscreened?: boolean;
+  quarantined?: boolean;
   action?: string;
   process_id?: string;
   sandbox_id?: string | null;
@@ -99,7 +100,19 @@ export function toolRowKind(row: ToolRowModel, status: WorkBlock["status"]): Too
     if (!isTerminalWorkStatus(status)) return "running";
     return status === "failed" ? "failed" : "attempted";
   }
-  const failed = result.isError === true || !!result.error || result.denied === true || result.timedOut === true;
+  const completedNonzeroExecution =
+    toolCategory({ ...result, ...((row.call?.payload ?? {}) as ToolPayload) }) === "execute" &&
+    typeof result.code === "number" &&
+    Number.isFinite(result.code) &&
+    result.code !== 0 &&
+    result.timedOut === false &&
+    toolExecutionOutput(result) !== null;
+  const failed =
+    (result.isError === true && !completedNonzeroExecution) ||
+    !!result.error ||
+    result.denied === true ||
+    result.timedOut === true ||
+    result.quarantined === true;
   return failed ? "failed" : "ok";
 }
 

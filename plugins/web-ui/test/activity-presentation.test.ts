@@ -179,3 +179,33 @@ test("ordinary command exits stay neutral while tool errors retain failure label
     }
   }
 });
+
+test("historical completed nonzero exits do not inherit the old error flag", () => {
+  for (const identity of [{ tool: "execute" }, { tool: "sandbox", action: "exec" }]) {
+    for (const output of [
+      { stdout: "", stderr: "" },
+      { unscreened: true, result: "[NOT security-screened]\n[exit 1]" },
+    ]) {
+      const tool = row("[ -d dir ]", { ...identity, ...output, code: 1, timedOut: false, isError: true });
+      tool.call!.payload = { ...identity, command: "[ -d dir ]", purpose: "Check directory" };
+      assert.equal(activityLabel(tool, "complete"), "Check directory · exit 1");
+      assert.deepEqual(activityGroupSummary([{ kind: "tool", row: tool }], "complete"), {
+        label: "Ran commands",
+        category: "execute",
+        attention: false,
+      });
+      for (const failure of [
+        { timedOut: true },
+        { error: "provider error" },
+        { denied: true },
+        { quarantined: true },
+      ]) {
+        const failed = {
+          ...tool,
+          result: { ...tool.result!, payload: { ...(tool.result!.payload as ToolPayload), ...failure } },
+        };
+        assert.equal(activityLabel(failed, "complete"), "Check directory · Failed");
+      }
+    }
+  }
+});
