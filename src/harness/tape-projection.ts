@@ -398,7 +398,7 @@ type TranscriptStore = Pick<
   SessionStore,
   "getEntries" | "visibleEntries" | "getTape" | "latestEntrySeq" | "participantWindowsOf"
 > &
-  Partial<Pick<SessionStore, "getTranscriptEntries">>;
+  Partial<Pick<SessionStore, "getTranscriptEntries" | "canReadTranscriptSuffix">>;
 
 interface TranscriptRead {
   entries: SessionEntry[];
@@ -407,11 +407,7 @@ interface TranscriptRead {
 
 export interface TranscriptSource {
   forRender(sessionId: string, opts?: GetEntriesOptions): Promise<TranscriptRead>;
-  forViewer(
-    sessionId: string,
-    principalId: string,
-    opts?: { limit?: number; beforeSeq?: number },
-  ): Promise<TranscriptRead>;
+  forViewer(sessionId: string, principalId: string, opts?: GetEntriesOptions): Promise<TranscriptRead>;
 }
 
 interface ProjectedRead {
@@ -421,7 +417,12 @@ interface ProjectedRead {
 }
 
 export function createTranscriptSource(sessions: TranscriptStore): TranscriptSource {
-  const projected = async (sessionId: string, limit?: number, beforeSeq?: number): Promise<ProjectedRead | null> => {
+  const projected = async (
+    sessionId: string,
+    limit?: number,
+    beforeSeq?: number,
+    sinceSeq?: number,
+  ): Promise<ProjectedRead | null> => {
     try {
       const latest = Math.min(
         await sessions.latestEntrySeq(sessionId),
@@ -429,8 +430,12 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
       );
       if (latest < 0) return { entries: [], anchored: false, base: -1 };
       if (sessions.getTranscriptEntries) {
-        const entries = await sessions.getTranscriptEntries(sessionId, { limit, beforeSeq });
-        const first = limit === undefined ? 0 : Math.max(0, latest - limit + 1);
+        const first = Math.min(latest + 1, Math.max(sinceSeq ?? 0, limit === undefined ? 0 : latest - limit + 1));
+        const [entries, completePrefix] = await Promise.all([
+          sessions.getTranscriptEntries(sessionId, { limit, beforeSeq, sinceSeq }),
+          sinceSeq === undefined || first === 0 || sessions.canReadTranscriptSuffix?.(sessionId, first),
+        ]);
+        if (sinceSeq !== undefined && !completePrefix) return projected(sessionId, limit, beforeSeq);
         if (entries.length === latest - first + 1 && entries.every((entry, i) => entry.seq === first + i)) {
           return { entries, anchored: first > 0, base: first - 1 };
         }
@@ -463,16 +468,19 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
 
   return {
     async forRender(sessionId, opts?): Promise<TranscriptRead> {
-      const read = await projected(sessionId, opts?.limit, opts?.beforeSeq);
+      const read = await projected(sessionId, opts?.limit, opts?.beforeSeq, opts?.sinceSeq);
       if (read === null) {
-        const rows = await sessions.getEntries(sessionId, opts);
-        return { entries: rows, earlier: rows[0]?.seq ?? 0 };
+        const rows = await sessions.getEntries(sessionId, { ...opts, sinceSeq: undefined });
+        const entries = rows.filter((entry) => entry.seq >= (opts?.sinceSeq ?? 0));
+        const earlier = rows.slice(0, rows.length - entries.length).filter((entry) => entry.type !== "soul");
+        return { entries, earlier: (rows[0]?.seq ?? 0) + earlier.length };
       }
       const since = opts?.sinceSeq !== undefined ? read.entries.filter((e) => e.seq >= opts.sinceSeq!) : read.entries;
       const limit = opts?.beforeSeq !== undefined && !read.anchored ? undefined : opts?.limit;
       const entries = limit !== undefined ? since.slice(-limit) : since;
       const below = read.anchored ? read.base + 1 : 0;
-      return { entries, earlier: read.entries.length - entries.length + below };
+      const earlier = read.entries.slice(0, read.entries.length - entries.length).filter((e) => e.type !== "soul");
+      return { entries, earlier: earlier.length + below };
     },
     async forViewer(sessionId, principalId, opts?): Promise<TranscriptRead> {
       const fallback = async (): Promise<TranscriptRead> => ({
@@ -494,7 +502,7 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
         return fallback();
       }
       const limit = window.validToSeq === null ? opts?.limit : undefined;
-      let read = await projected(sessionId, limit, opts?.beforeSeq);
+      let read = await projected(sessionId, limit, opts?.beforeSeq, opts?.sinceSeq);
       if (read === null) return fallback();
       let filtered = read.entries.filter((e) => entryWithinTenure(e, window));
       if (opts?.beforeSeq !== undefined && !read.anchored) return { entries: filtered, earlier: 0 };
@@ -503,8 +511,10 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
         if (read === null) return fallback();
         filtered = read.entries.filter((e) => entryWithinTenure(e, window));
       }
-      if (limit === undefined) return { entries: filtered, earlier: 0 };
-      const below = read.anchored ? Math.max(0, read.base + 1 - window.validFromSeq) : 0;
+      const below = read.anchored
+        ? Math.max(0, Math.min(read.base + 1, window.validToSeq ?? Infinity) - window.validFromSeq)
+        : 0;
+      if (limit === undefined) return { entries: filtered, earlier: below };
       return { entries: filtered.slice(-limit), earlier: Math.max(0, filtered.length - limit) + below };
     },
   };

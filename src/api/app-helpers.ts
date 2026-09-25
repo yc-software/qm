@@ -284,10 +284,14 @@ export function createAppHelpers(deps: AppDeps, app: App) {
 
   async function sessionsForViewer(principalId: string): Promise<Session[]> {
     const sessions = await deps.sessions.listByParticipant(principalId);
-    const allowed = await Promise.all(
-      sessions.map((session) => managedProjectMembership(session.scopeId, principalId)),
+    const allowed = new Map(
+      await Promise.all(
+        [...new Set(sessions.map((session) => session.scopeId))].map(
+          async (scope) => [scope, await managedProjectMembership(scope, principalId)] as const,
+        ),
+      ),
     );
-    return sessions.filter((_session, index) => allowed[index] !== false);
+    return sessions.filter((session) => allowed.get(session.scopeId) !== false);
   }
 
   async function sessionForViewer(sessionId: string, principalId: string): Promise<Session | null> {

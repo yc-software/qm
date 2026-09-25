@@ -1055,6 +1055,20 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(rowToEntry).reverse();
     },
 
+    async canReadTranscriptSuffix(sessionId, beforeSeq) {
+      const rows = await q(
+        `SELECT NOT EXISTS (
+           SELECT 1 FROM session_entries WHERE session_id = $1 AND seq < $2 AND type = 'soul'
+         ) AND (
+           SELECT COUNT(DISTINCT entry_seq) FROM session_tape
+            WHERE session_id = $1 AND entry_seq >= 0 AND entry_seq < $2
+              AND kind = 'annotation' AND safe_json(payload)->>'event' = 'transcript_entry'
+         ) = $2 AS complete`,
+        [sessionId, beforeSeq],
+      );
+      return rows[0]?.complete === true;
+    },
+
     async appendTape(lease, rec: NewTapeRecord): Promise<TapeRecord> {
       return withLease(lease, "tape append without a valid session lease", (client) =>
         insertTapeRow(client, lease.sessionId, rec),
@@ -1694,19 +1708,24 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async scopeSessionRollups(scope, orgWide): Promise<ScopeSessionRollup[]> {
       const rows = await q(
-        `SELECT scope_id,
-                COUNT(*) FILTER (WHERE NOT background) AS sessions,
-                COUNT(*) FILTER (WHERE background) AS background_sessions,
-                MAX(last_activity) AS last_activity,
-                COALESCE(MAX(last_activity) FILTER (WHERE NOT background), 0) AS last_conversation_activity,
-                (array_agg(id ORDER BY last_activity DESC, id DESC) FILTER (WHERE NOT background AND turns > 0))[1]
-                  AS preview_session_id
-           FROM (SELECT s.scope_id, s.id, COALESCE(s.turns, 0) AS turns,
-                        ${lastActivityExpr("s")} AS last_activity,
-                        ${isBackground("s")} AS background
-                   FROM sessions s
-                  WHERE ($1::boolean OR s.scope_id = $2)) t
-          GROUP BY scope_id`,
+        `SELECT r.scope_id, r.sessions, r.background_sessions, r.last_activity, r.last_conversation_activity,
+                (
+                  SELECT s.id FROM sessions s
+                   WHERE s.scope_id = r.scope_id AND ${lastActivityExpr("s")} <= r.preview_activity
+                     AND NOT (${isBackground("s")}) AND s.turns > 0
+                   ORDER BY ${lastActivityExpr("s")} DESC, s.id DESC LIMIT 1
+                ) AS preview_session_id
+           FROM (SELECT scope_id,
+                        COUNT(*) FILTER (WHERE NOT background) AS sessions,
+                        COUNT(*) FILTER (WHERE background) AS background_sessions,
+                        MAX(last_activity) AS last_activity,
+                        COALESCE(MAX(last_activity) FILTER (WHERE NOT background), 0) AS last_conversation_activity,
+                        MAX(last_activity) FILTER (WHERE NOT background AND turns > 0) AS preview_activity
+                   FROM (SELECT s.scope_id, s.turns, ${lastActivityExpr("s")} AS last_activity,
+                                ${isBackground("s")} AS background
+                           FROM sessions s
+                          WHERE ($1::boolean OR s.scope_id = $2)) t
+                  GROUP BY scope_id) r`,
         [orgWide, scope],
       );
       return rows.map((r) => ({

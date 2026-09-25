@@ -27,6 +27,37 @@ function start() {
 const ALICE_ADMIN = { "x-admin-actor": "admin-alice@default-org" };
 const json = async (r: Response): Promise<any> => r.json();
 
+test("the scope directory starts independent resource reads together", async () => {
+  const s = start();
+  const gate = Promise.withResolvers<void>();
+  const started = new Set<string>();
+  const ready = Promise.withResolvers<void>();
+  const hold =
+    <T>(name: string, read: () => Promise<T>) =>
+    async () => {
+      started.add(name);
+      ready.resolve();
+      await gate.promise;
+      return read();
+    };
+  const app = s.built.app;
+  app.listCrons = hold("crons", app.listCrons.bind(app));
+  app.listDeployments = hold("deployments", app.listDeployments.bind(app));
+  app.listSkills = hold("skills", app.listSkills.bind(app));
+  app.listEnvironments = hold("environments", app.listEnvironments.bind(app));
+  const rollups = s.built.sessions.scopeSessionRollups.bind(s.built.sessions);
+  s.built.sessions.scopeSessionRollups = hold("rollups", () => rollups("org:default-org", true));
+  const request = fetch(`${s.base}/v1/admin/scopes`, { headers: ALICE_ADMIN });
+  try {
+    await ready.promise;
+    assert.deepEqual([...started].sort(), ["crons", "deployments", "environments", "rollups", "skills"]);
+  } finally {
+    gate.resolve();
+    await request;
+    await s.close();
+  }
+});
+
 test("the admin scope directory lists every known scope with labels and counts (powers the picker)", async () => {
   const s = start();
   try {

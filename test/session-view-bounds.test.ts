@@ -272,3 +272,127 @@ test("earlier pages retain tape fallback and viewer tenure boundaries", async ()
     await built.runtime.stop();
   }
 });
+
+test("incremental transcript reads bound canonical storage and preserve windows and pins", async () => {
+  const built = freshApp();
+  try {
+    const { session, narration } = await coarseForeignSession(built.sessions, 100);
+    await built.app.pinConversationItem(session.threadRef, "U1", { entrySeq: narration.seq });
+    const canonical = built.sessions.getTranscriptEntries.bind(built.sessions);
+    const calls: Array<{ sinceSeq?: number; beforeSeq?: number } | undefined> = [];
+    let loadedRows = 0;
+    built.sessions.getTranscriptEntries = async (id, opts) => {
+      calls.push(opts);
+      const rows = await canonical(id, opts);
+      loadedRows += rows.length;
+      return rows;
+    };
+    for (const read of [
+      () => built.app.getSession(session.id, { sinceSeq: 490 }),
+      () => built.app.getSessionForViewer(session.id, "U1", { sinceSeq: 490 }),
+    ]) {
+      calls.length = 0;
+      loadedRows = 0;
+      const page = (await read())!;
+      assert.equal(page.entries.length, 10);
+      assert.equal(page.earlierEntries, 490);
+      assert.equal(loadedRows, 10);
+      assert.ok(calls.every((opts) => opts?.sinceSeq === 490));
+    }
+    await built.sessions.addParticipant(session.id, "late");
+    const { lease } = await built.sessions.acquireLease(session.id);
+    await built.sessions.append(lease!, {
+      type: "soul",
+      payload: { text: "legacy instructions" },
+      scopeLabel: session.scopeId,
+    });
+    for (let i = 0; i < 10; i++) {
+      await built.sessions.append(lease!, {
+        type: "user",
+        payload: { text: `new question ${i}` },
+        scopeLabel: session.scopeId,
+      });
+      await built.sessions.append(lease!, {
+        type: "assistant",
+        payload: { text: `new reply ${i}` },
+        scopeLabel: session.scopeId,
+      });
+    }
+    await built.sessions.removeParticipant(session.id, "U1");
+    await built.sessions.append(lease!, {
+      type: "user",
+      payload: { text: "after departure" },
+      scopeLabel: session.scopeId,
+    });
+    await built.sessions.releaseLease(lease!);
+    for (const viewer of [undefined, "U1", "late", "stranger"]) {
+      const read = (window?: { sinceSeq?: number; beforeSeq?: number }) =>
+        viewer === undefined
+          ? built.app.getSession(session.id, window)
+          : built.app.getSessionForViewer(session.id, viewer, window);
+      const full = await read();
+      for (const window of [
+        { sinceSeq: 490 },
+        { sinceSeq: 500, beforeSeq: 515 },
+        { sinceSeq: 515, beforeSeq: 500 },
+        { sinceSeq: 900 },
+      ]) {
+        calls.length = 0;
+        const page = await read(window);
+        if (!full) {
+          assert.equal(page, null);
+          continue;
+        }
+        const expected = windowedTranscript(full.entries as SessionEntry[], window);
+        assert.deepEqual(page!.entries, expected.entries);
+        assert.equal(page!.earlierEntries ?? 0, expected.earlier);
+        assert.deepEqual(page!.pins, full.pins);
+        assert.ok(calls.length > 0);
+        assert.ok(calls.some((opts) => opts?.sinceSeq === window.sinceSeq));
+      }
+    }
+    withoutCanonicalTranscript(built.sessions);
+    for (const viewer of [undefined, "U1", "late"]) {
+      const read = (window?: { sinceSeq?: number; beforeSeq?: number }) =>
+        viewer === undefined
+          ? built.app.getSession(session.id, window)
+          : built.app.getSessionForViewer(session.id, viewer, window);
+      const full = (await read())!;
+      for (const window of [
+        { sinceSeq: 490, beforeSeq: 516 },
+        { sinceSeq: 515, beforeSeq: 520 },
+      ]) {
+        const expected = windowedTranscript(full.entries as SessionEntry[], window);
+        const page = (await read(window))!;
+        assert.deepEqual(page.entries, expected.entries);
+        assert.equal(page.earlierEntries ?? 0, expected.earlier);
+      }
+    }
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("incremental reads retain coarse tape fallback when a canonical prefix is missing", async () => {
+  const built = freshApp();
+  try {
+    const { session } = await coarseForeignSession(built.sessions, 100);
+    const canonical = built.sessions.getTranscriptEntries.bind(built.sessions);
+    built.sessions.getTranscriptEntries = async (id, opts) =>
+      (await canonical(id, opts)).filter((entry) => entry.seq >= 450);
+    built.sessions.canReadTranscriptSuffix = async () => false;
+    const full = (await built.app.getSession(session.id))!;
+    assert.equal(full.entries.length, 200);
+    const window = { sinceSeq: 490 };
+    const expected = windowedTranscript(full.entries as SessionEntry[], window);
+    for (const page of [
+      await built.app.getSession(session.id, window),
+      await built.app.getSessionForViewer(session.id, "U1", window),
+    ]) {
+      assert.deepEqual(page!.entries, expected.entries);
+      assert.equal(page!.earlierEntries ?? 0, expected.earlier);
+    }
+  } finally {
+    await built.runtime.stop();
+  }
+});

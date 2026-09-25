@@ -2781,6 +2781,9 @@ test(
       });
     const before = await s.getEntries(session.id);
     assert.deepEqual(await s.getTranscriptEntries(session.id), before);
+    assert.equal(await s.canReadTranscriptSuffix(session.id, 0), true);
+    assert.equal(await s.canReadTranscriptSuffix(session.id, 4), true);
+    assert.equal(await s.canReadTranscriptSuffix(session.id, 5), false);
     assert.deepEqual(await s.getTranscriptEntries(session.id, { limit: 2 }), before.slice(-2));
     assert.deepEqual(await s.getTranscriptEntries(session.id, { sinceSeq: 1, limit: 2 }), before.slice(-2));
     for (const beforeSeq of [0, 1, 3, 4, 99]) {
@@ -2803,6 +2806,10 @@ test(
     assert.equal(await s.clearSecurityTaint(session.id), true);
     assert.equal((await s.getTape(session.id)).length, 8);
     assert.equal(await s.tapeCoverage(session.id), -1);
+    assert.equal(await s.canReadTranscriptSuffix(session.id, 4), true);
+    await s.append(lease, { type: "soul", payload: { text: "legacy instructions" }, scopeLabel: scope });
+    assert.equal(await s.canReadTranscriptSuffix(session.id, 4), true);
+    assert.equal(await s.canReadTranscriptSuffix(session.id, 5), false);
     await s.releaseLease(lease);
   },
 );
@@ -2857,6 +2864,7 @@ test("pg transcript backfill is bounded, idempotent, and independent of model co
     const dry = await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 200, apply: false });
     assert.deepEqual(dry, { busy: false, scanned: 200, changed: 200, afterSeq: 199 });
     assert.deepEqual(await s.getTranscriptEntries(session.id), []);
+    assert.equal(await s.canReadTranscriptSuffix(session.id, 620), false);
     for (let afterSeq = -1; afterSeq < 619;) {
       const page = await migrateTranscriptPage(client, session.id, { afterSeq, limit: 200, apply: true });
       assert.ok(!page.busy);

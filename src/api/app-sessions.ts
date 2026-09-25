@@ -212,7 +212,7 @@ export function createSessionMethods(
       if (!session) return null;
       let limit = tailWindowLimit(window);
       const [initialRead, pinRecords] = await Promise.all([
-        transcripts.forRender(sessionId, { limit, beforeSeq: window?.beforeSeq }),
+        transcripts.forRender(sessionId, { limit, beforeSeq: window?.beforeSeq, sinceSeq: window?.sinceSeq }),
         deps.sessions.listPins(sessionId),
       ]);
       let read = initialRead;
@@ -257,7 +257,11 @@ export function createSessionMethods(
       if (!session) return null;
       let limit = tailWindowLimit(window);
       const [initialRead, pinRecords] = await Promise.all([
-        transcripts.forViewer(sessionId, principalId, { limit, beforeSeq: window?.beforeSeq }),
+        transcripts.forViewer(sessionId, principalId, {
+          limit,
+          beforeSeq: window?.beforeSeq,
+          sinceSeq: window?.sinceSeq,
+        }),
         deps.sessions.listPins(sessionId),
       ]);
       let read = initialRead;

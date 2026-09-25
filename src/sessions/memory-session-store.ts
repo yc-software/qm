@@ -316,6 +316,15 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return opts?.limit === undefined ? filtered : filtered.slice(-opts.limit);
     },
 
+    async canReadTranscriptSuffix(sessionId, beforeSeq) {
+      const prefix = new Map<number, string>();
+      for (const row of tape.get(sessionId) ?? []) {
+        const entry = transcriptEntryFromTape(row);
+        if (entry && entry.seq >= 0 && entry.seq < beforeSeq) prefix.set(entry.seq, entry.type);
+      }
+      return prefix.size === beforeSeq && [...prefix.values()].every((type) => type !== "soul");
+    },
+
     async getContextWindow(sessionId) {
       return contextWindowFromEntries(entries.get(sessionId) ?? []);
     },
