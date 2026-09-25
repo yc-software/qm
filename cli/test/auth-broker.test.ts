@@ -150,7 +150,7 @@ test("docker local wires the host daemon coordinates only into core", () => {
   assert.equal(dockerServiceEnv(local, "portal").DOCKER_HOST, undefined);
 });
 
-test("the broker's generated secrets reach both sides under the right names", () => {
+test("the broker's generated secrets reach every consumer under the right names", () => {
   const config = brokerConfig();
   const secrets = computedSecrets(config);
   const clientSecret = secrets.find((secret) => secret.name === "AUTH_CLIENT_SECRET")!;
@@ -171,6 +171,7 @@ test("the broker's generated secrets reach both sides under the right names", ()
   assert.equal(allowed.required, false);
   assert.deepEqual(runtimeSecretNames("auth", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
   assert.deepEqual(runtimeSecretNames("portal", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
+  assert.deepEqual(runtimeSecretNames("core", allowed), ["AUTH_ALLOWED_EMAILS"]);
   assert.ok(names.has("RESEND_API_KEY"));
   assert.ok(!names.has("SMTP_HOST"), "only the configured transport's credentials are collected");
   for (const name of ["RESEND_API_KEY", "AUTH_EMAIL_FROM"]) {
@@ -180,6 +181,12 @@ test("the broker's generated secrets reach both sides under the right names", ()
     assert.deepEqual(runtimeSecretNames("core", shared), [name], `core emails external-user invitations with ${name}`);
   }
   assert.ok(secretsForService(config, "auth").some((secret) => secret.name === "CORE_SIGNING_SECRET"));
+});
+
+test("an external identity provider receives no stale broker allowlist", () => {
+  const config = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc")).config;
+  assert.ok(!config.services.includes("auth"));
+  assert.ok(!computedSecrets(config).some((secret) => secret.name === "AUTH_ALLOWED_EMAILS"));
 });
 
 test("without a configured domain the allowlist becomes a required secret on both services", () => {

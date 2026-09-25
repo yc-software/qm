@@ -445,31 +445,14 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "AUTH_ALLOWED_EMAILS",
     service: "core",
-    required: {
-      when: {
-        kind: "all",
-        conditions: [
-          { kind: "service-enabled", service: "auth" },
-          { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" },
-        ],
-      },
-    },
+    required: { when: { kind: "service-enabled", service: "auth" }, optional: true },
     description: "Email-auth principals protected from unrelated directory-source deactivation.",
   },
   {
     name: "AUTH_ALLOWED_EMAILS",
     service: "portal",
     envName: "OIDC_ALLOWED_EMAILS",
-    required: {
-      when: {
-        kind: "all",
-        conditions: [
-          { kind: "service-enabled", service: "auth" },
-          { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" },
-        ],
-      },
-      optionalOtherwise: true,
-    },
+    required: { when: { kind: "service-enabled", service: "auth" }, optional: true },
     description: "Email addresses allowed to sign in; the portal enforces the same list the broker does.",
   },
   {
