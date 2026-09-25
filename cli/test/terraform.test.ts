@@ -511,6 +511,20 @@ test("terraform derives account-scoped infrastructure coordinates", () => {
   );
 });
 
+test("infra render rejects the scaffold AWS account", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-terraform-placeholder-"));
+  try {
+    mkdirSync(join(dir, "infra"));
+    writeFileSync(join(dir, "infra", "terraform.tfvars"), terraformVars(config, "", declared));
+    assert.throws(
+      () => renderTerraformVars({ ...config, aws: { ...config.aws!, accountId: "000000000000" } }, dir),
+      /replace the scaffolded aws\.accountId "000000000000"/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("GitHub environments remain compatible with AWS scaffolds created before the variable existed", () => {
   const legacyDeclared = declared.filter((name) => name !== "github_environment");
   const legacyConfig: QmConfig = {
@@ -720,6 +734,10 @@ test("AWS module reuses account OIDC, guards account and passes configured task 
 
 test("AWS module provisions durable encrypted object storage and configurable safe teardown", () => {
   assert.match(mainTf, /resource "aws_s3_bucket" "objects"/);
+  assert.match(
+    mainTf,
+    /resource "aws_s3_bucket" "objects" \{\s*bucket\s*= var\.object_store_bucket\s*force_destroy\s*= var\.object_store_force_destroy\s*tags\s*= local\.tags\s*lifecycle \{ prevent_destroy = true \}\s*\}/,
+  );
   assert.match(mainTf, /sse_algorithm = "AES256"/);
   assert.match(mainTf, /versioning_configuration \{ status = "Enabled" \}/);
   assert.match(mainTf, /resource "aws_s3_bucket_lifecycle_configuration" "objects"/);

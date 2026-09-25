@@ -315,6 +315,9 @@ export function assertTerraformScaffoldSupportsConfig(config: QmConfig, configDi
 export function renderTerraformVars(config: QmConfig, configDir: string): void {
   const path = join(configDir, "infra", "terraform.tfvars");
   if (!existsSync(path)) throw new CliError(`${path} does not exist; scaffold it with qm init --target aws`);
+  if (config.aws?.accountId === "000000000000") {
+    throw new CliError('replace the scaffolded aws.accountId "000000000000" before rendering infrastructure');
+  }
   assertTerraformScaffoldSupportsConfig(config, configDir);
   const existing = readFileSync(path, "utf8");
   const declared = declaredInDir(configDir);
