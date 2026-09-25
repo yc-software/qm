@@ -140,7 +140,10 @@ export interface PrincipalRule {
 type PrincipalArgs = { sub: string; claims: Record<string, unknown>; userinfo: Record<string, unknown> };
 
 function envRefusal(rule: PrincipalRule, email: string, args: PrincipalArgs): string | null {
-  if (rule.allowedEmails?.map((allowed) => allowed.trim().toLowerCase()).includes(email)) return null;
+  const listed = rule.allowedEmails?.map((allowed) => allowed.trim().toLowerCase()).includes(email) ?? false;
+  if (rule.requireCoreAdmission && listed) return null;
+  if (rule.allowedEmails?.length && !listed && !rule.requireCoreAdmission)
+    return "account is not on the permitted email list";
   if (rule.allowedEmailDomain) {
     const domain = rule.allowedEmailDomain.toLowerCase();
     if (!email.endsWith(`@${domain}`)) return "account is outside the permitted domain";
@@ -148,7 +151,7 @@ function envRefusal(rule: PrincipalRule, email: string, args: PrincipalArgs): st
     if (typeof hd === "string" && hd.toLowerCase() !== domain) return "account is outside the permitted domain";
     return null;
   }
-  if (rule.allowedEmails?.length) return "account is not on the permitted email list";
+  if (rule.allowedEmails?.length && !listed) return "account is not on the permitted email list";
   return null;
 }
 

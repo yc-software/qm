@@ -225,8 +225,10 @@ and only accepts it when `PORTAL_PUBLIC_URL` is loopback.
 Identity: `OIDC_PRINCIPAL_CLAIM` — `email` (default; the org-canonical id: the
 verified work email, lowercased; sign-in fails unless the IdP marks the email verified) or `sub`
 (the IdP's opaque subject, e.g. the Slack U… id — only for deployments still keyed on Slack ids).
-`OIDC_ALLOWED_EMAIL_DOMAIN` — with `email`, additionally reject any account outside this domain
-(checked against the email suffix and Google's `hd` claim).
+`OIDC_ALLOWED_EMAILS` and `OIDC_ALLOWED_EMAIL_DOMAIN` — with `email`, external OIDC accounts must
+match every configured restriction, including the email suffix and Google's `hd` claim for the domain.
+The built-in broker admits an address matching either its explicit list or domain before requiring core
+admission; `hd` validation applies when admission comes from the domain.
 An address those rules reject still signs in when an org admin has invited it as an
 external user: the callback asks core over the signed core client
 (`GET /v1/auth/broker/email-allowed`) and accepts an active invitation, `hd` notwithstanding.
