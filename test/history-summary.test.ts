@@ -1,7 +1,3 @@
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import { processRun } from "../src/runs/worker.ts";
-import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
-import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { zstdDecompressSync } from "node:zlib";
@@ -14,6 +10,11 @@ import { getRequiredModel } from "../src/model/pi-models.ts";
 import { createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import { zeroUsage } from "../src/harness/replay.ts";
 import type { SessionEntry } from "../src/types.ts";
+
+import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
+import { processRun } from "../src/runs/worker.ts";
+import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
+import type { Orchestrator } from "../src/core/orchestrator.ts";
 
 const model = getRequiredModel("claude-opus-5");
 const summary = "## Goal\nInvestigate migration failures.\n## Constraints & Preferences\nDo not change production.";
@@ -162,6 +163,7 @@ test("Astra compaction serializes a supported reasoning effort through the provi
 for (const message of [
   "This request was blocked under Anthropic's Usage Policy.",
   "This request would violate Anthropic’s usage policy.",
+  "This request would violate Anthropic's Terms of Service.",
 ]) {
   test(`compaction treats explicit provider refusal as terminal: ${message}`, async () => {
     let calls = 0;
@@ -173,12 +175,29 @@ for (const message of [
       (error: unknown) => {
         assert.ok(error instanceof NonRetryableTurnError);
         assert.equal(error.message, COMPACTION_REFUSED_TEXT);
+        assert.ok(error.cause instanceof Error);
+        assert.ok(error.cause.message.includes(message));
         return true;
       },
     );
     assert.equal(calls, 1);
   });
 }
+
+test("compaction classifies thrown provider refusals and retains the original cause", async () => {
+  const cause = new Error("Blocked under Anthropic's Usage Policy.");
+  await assert.rejects(
+    summarizeHistory([], model, () => {
+      throw cause;
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof NonRetryableTurnError);
+      assert.equal(error.message, COMPACTION_REFUSED_TEXT);
+      assert.equal(error.cause, cause);
+      return true;
+    },
+  );
+});
 
 test("transient summary errors remain retryable", async () => {
   await assert.rejects(

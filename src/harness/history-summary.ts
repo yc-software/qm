@@ -1,7 +1,7 @@
-import { NonRetryableTurnError } from "../core/turn-error.ts";
-import { COMPACTION_REFUSED_TEXT } from "../../plugins/chassis/src/failure-copy.ts";
 import { generateSummary } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { COMPACTION_REFUSED_TEXT } from "../../plugins/chassis/src/failure-copy.ts";
 import { contextSummaryPayload } from "../sessions/session-store.ts";
 import type { SessionEntry } from "../types.ts";
 import { compactTranscript, validateCompactSummary } from "./context-compaction.ts";
@@ -44,14 +44,6 @@ export async function summarizeHistory(
     async (summaryModel, context, options) => {
       const stream = await streamFn(summaryModel, context, options);
       const result = await stream.result();
-      if (
-        result.stopReason === "error" &&
-        /(?:blocked under|violate) Anthropic(?:'|’)?s (?:Usage Policy|Terms of Service)/i.test(
-          result.errorMessage ?? "",
-        )
-      ) {
-        throw new NonRetryableTurnError(COMPACTION_REFUSED_TEXT, { cause: new Error(result.errorMessage) });
-      }
       if (result.stopReason !== "stop") {
         throw new Error(
           `Compaction did not complete (${result.stopReason}): ${result.errorMessage ?? "incomplete summary"}`,
@@ -59,6 +51,14 @@ export async function summarizeHistory(
       }
       return stream;
     },
-  );
+  ).catch((error: unknown) => {
+    if (
+      error instanceof Error &&
+      /(?:blocked under|violate) Anthropic(?:'|’)?s (?:Usage Policy|Terms of Service)/i.test(error.message)
+    ) {
+      throw new NonRetryableTurnError(COMPACTION_REFUSED_TEXT, { cause: error });
+    }
+    throw error;
+  });
   return validateCompactSummary(text);
 }
