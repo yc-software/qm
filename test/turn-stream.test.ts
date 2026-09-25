@@ -326,6 +326,7 @@ test("a harvested first block is stripped from the final reply (never shown twic
     });
     const finished = await built.runs.waitFor(ack.runId!, 5_000);
     assert.equal(finished.status, "done");
+    assert.equal(finished.deliveryState?.replying, true, "Slack engagement survives outside the worker stream");
     assert.equal(finished.result?.reply, "All clear — nothing broke.", "the acked preamble is stripped from the reply");
   } finally {
     await built.runtime.stop();

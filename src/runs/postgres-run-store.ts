@@ -363,12 +363,14 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     async setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState): Promise<boolean> {
       const { rowCount } =
         leaseToken === null
-          ? await q("UPDATE runs SET delivery_state=$1 WHERE id=$2", [JSON.stringify(state), runId])
-          : await q("UPDATE runs SET delivery_state=$1 WHERE id=$2 AND lease_token=$3", [
-              JSON.stringify(state),
-              runId,
-              leaseToken,
-            ]);
+          ? await q(
+              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2",
+              [JSON.stringify(state), runId],
+            )
+          : await q(
+              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2 AND lease_token=$3",
+              [JSON.stringify(state), runId, leaseToken],
+            );
       return rowCount > 0;
     },
 

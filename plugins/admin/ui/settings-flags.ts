@@ -135,6 +135,7 @@ function template() {
           >
             <option value="persistent_subagents">Persistent subagents</option>
             <option value="inbox_loops">Inbox Loops</option>
+            <option value="slack_loading_indicator">Slack loading indicator (experimental)</option>
           </select></label
         >
         <div>
@@ -142,7 +143,13 @@ function template() {
           <div id="feature-flag-scopes" aria-labelledby="feature-flag-scope-label" ?inert=${state.saving}>
             ${state.selector || "Loading people and scopes…"}
           </div>
-          <span class="hint">Persistent subagents are available for personal scopes only.</span>
+          <span class="hint"
+            >${
+              state.feature === "slack_loading_indicator"
+                ? "Shows Slack’s Working indicator in threads and adds them to Slack’s session list. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing session entries."
+                : "Persistent subagents are available for personal scopes only."
+            }</span
+          >
         </div>
       </div>
     </div>

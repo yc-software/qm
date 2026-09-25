@@ -240,6 +240,8 @@ class FakeCore implements SlackCoreClient {
   activeRun: string | undefined;
   abortedRuns: string[] = [];
   queuedRunId: string | undefined;
+  engageRun = false;
+  sessionStatus?: SlackCoreClient["sessionStatus"];
   private heldRunClaimed = false;
   readonly polled: string[] = [];
   private runGate: Promise<void> | undefined;
@@ -302,8 +304,9 @@ class FakeCore implements SlackCoreClient {
     }
     return this.result;
   }
-  async waitRun(runId: string): Promise<TurnResult | null> {
+  async waitRun(runId: string, hooks?: { onEngaged?(): void }): Promise<TurnResult | null> {
     this.polled.push(runId);
+    if (this.engageRun) hooks?.onEngaged?.();
     if (this.runGate) await this.runGate;
     return this.result;
   }
@@ -1700,6 +1703,66 @@ test("a denyMessage account stays silent on ambient channel chatter from unliste
     assert.deepEqual(f.client.posts, []);
     assert.deepEqual(f.client.ephemerals, []);
     assert.deepEqual(f.core.ingests, []);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("thread status is detached from reply delivery and steering cannot take ownership", async () => {
+  const f = await fixture({ coreSingleton: false });
+  const starts: unknown[][] = [];
+  let release!: () => void;
+  const network = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  f.core.sessionStatus = {
+    start: async (...args) => {
+      starts.push(args.slice(1));
+      await network;
+    },
+    reconcile: async () => {},
+  };
+  f.core.engageRun = true;
+  f.core.holdRun("r1");
+  try {
+    const original = f.app.emitEvent("app_mention", { channel: "C1", user: "U1", text: "<@UBOT> work", ts: "700.1" });
+    await waitFor(() => starts.length === 1);
+    await f.app.emitEvent("app_mention", {
+      channel: "C1",
+      thread_ts: "700.1",
+      user: "U1",
+      text: "<@UBOT> also this",
+      ts: "700.2",
+    });
+    assert.deepEqual(starts, [["T1:UBOT", "r1", "C1", "700.1"]]);
+    f.core.finishRun({ status: "ok", reply: "finished" });
+    await original;
+    assert.ok(f.client.posts.some((post) => post.text === "finished" && post.thread_ts === "700.1"));
+    assert.equal(starts.length, 1);
+  } finally {
+    release();
+    await f.stop();
+  }
+});
+
+test("top-level DM replies remain top-level and never start native thread status", async () => {
+  const f = await fixture();
+  let starts = 0;
+  f.core.sessionStatus = {
+    start: async () => {
+      starts++;
+    },
+    reconcile: async () => {},
+  };
+  f.core.engageRun = true;
+  f.core.holdRun("r1");
+  try {
+    const incoming = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello", ts: "701.1" });
+    await waitFor(() => f.core.polled.length === 1);
+    f.core.finishRun({ status: "ok", reply: "hello back" });
+    await incoming;
+    assert.equal(starts, 0);
+    assert.ok(f.client.posts.some((post) => post.text === "hello back" && !post.thread_ts));
   } finally {
     await f.stop();
   }

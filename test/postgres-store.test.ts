@@ -2010,6 +2010,13 @@ test("pg run store: delivery state round-trips; onTerminal fires once with it", 
     const seen: string[] = [];
     runs.onTerminal((run) => seen.push(`${run.id}:${run.status}:${run.deliveryState?.editRef ?? ""}`));
     const claimed = await runs.claimById(r.id, "w1", 5_000);
+    assert.equal(await runs.setDeliveryState(r.id, "wrong-token", { replying: true }), false);
+    assert.equal((await runs.get(r.id))?.deliveryState?.replying, undefined);
+    await Promise.all([
+      runs.setDeliveryState(r.id, claimed!.leaseToken!, { replying: true }),
+      runs.setDeliveryState(r.id, null, { editRef: "171.002" }),
+    ]);
+    assert.deepEqual((await runs.get(r.id))?.deliveryState, { editRef: "171.002", replying: true });
     await runs.complete(r.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
     assert.deepEqual(seen, [`${r.id}:done:171.002`], "terminal listener sees the checkpointed state");
 

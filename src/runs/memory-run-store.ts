@@ -152,7 +152,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       const run = runs.get(runId);
       if (!run) return false;
       if (leaseToken !== null && run.leaseToken !== leaseToken) return false;
-      run.deliveryState = state;
+      run.deliveryState = { ...run.deliveryState, ...state };
       return true;
     },
 

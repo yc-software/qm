@@ -2431,7 +2431,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         }
 
-        if (input.runId) deps.turnStream?.begin(input.runId);
+        if (input.runId) {
+          if (input.surface === "slack" && input.runLeaseToken) {
+            await deps.runs
+              ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
+              .catch(swallowAs("orchestrator: persist reply engagement", false));
+          }
+          deps.turnStream?.begin(input.runId);
+        }
 
         const backgroundBroker =
           deps.processes && supportsProcessSessions(deps.sandbox)

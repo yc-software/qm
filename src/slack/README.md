@@ -24,10 +24,10 @@ Slack  ⇄ (WebSocket)  slack surface (in core)  ── direct calls ──▶  
 ### Slack Agents (top-bar pin)
 
 The manifest enables Slack's [Agents & AI Apps](https://docs.slack.dev/ai/developing-agents)
-feature (`agent_view`) for one reason: users can pin the app to the Slack top bar and open
-it anywhere. Conversations in the resulting split pane are ordinary DM thread messages and
-flow through the normal DM machinery unchanged — none of the extra agent UI (status
-indicators, thread titles, context passing, suggested prompts) is implemented.
+feature (`agent_view`) so users can pin the app to the Slack top bar and open it anywhere.
+Conversations in the resulting split pane are ordinary DM thread messages and flow through
+the normal DM machinery unchanged. Thread titles, context passing and suggested prompts
+are not implemented. Native loading status is experimental and off by default.
 
 Two caveats:
 
@@ -38,6 +38,36 @@ Two caveats:
   `assistant_thread_context_changed` events (Slack requires both to enable the feature;
   the plugin acknowledges them as no-ops). Installs that don't update keep working
   exactly as before.
+
+### Optional native loading indicator
+
+In Admin → Customize → Feature flags, choose **Slack loading indicator (experimental)**
+and enable it for selected people or conversation scopes. This is an admin-managed opt-in,
+not a personal settings toggle. Leave it disabled on apps subscribed to
+`agent_session_stopped`: native Stop events are not handled yet. Existing text-stop behavior
+is unchanged. The app must be declared as an agent in Slack and have `chat:write`.
+
+The plugin calls [`agents.sessions.setStatus`](https://docs.slack.dev/reference/methods/agents.sessions.setstatus)
+with `processing` only after core commits to answering. Slack shows its native Working
+indicator in the existing reply thread. No custom text, titles or extra status messages are
+posted; reactions and replies remain unchanged. Unthreaded DMs stay unthreaded and have no
+native indicator. Quiet ambient turns show nothing.
+
+This creates Slack session entries, visible to everyone in shared threads. Disabling the
+flag clears working status but does not remove those entries or stop ongoing work.
+Completion, failure and cancellation return the session to `active`, never `closed`.
+Active means the run finished, not that every queued delivery succeeded; pending approvals
+are not modeled as a separate native status.
+
+Reply engagement is recorded in the existing run delivery state so a Slack receiver can
+observe work on another worker without relying on an in-process stream. A durable,
+account-and-thread-scoped record tracks engaged runs. A minute sweep uses the
+existing run store to recover cleanup after restart, and refreshes live processing every
+30 minutes because Slack expires it after one hour. Expired run leases are not refreshed.
+Status calls use a separate client with a five-second timeout and no retries, and never
+block replies. Transient failures are retried by reconciliation; unsupported installs are
+suppressed until core restarts. If Slack remains unreachable, its one-hour expiry is the
+last cleanup fallback. See [Slack agent sessions](https://docs.slack.dev/ai/agent-sessions).
 
 > **Running locally alongside another developer? Each dev needs their OWN app.**
 > See [Local dev with multiple developers](#local-dev-with-multiple-developers)

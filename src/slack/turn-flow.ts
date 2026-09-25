@@ -21,6 +21,7 @@ export function slackFailureClause(err: unknown): string {
 export type CoreTurnBody = Omit<TurnRequest, "surface">;
 
 interface TurnHooks {
+  onEngaged?: () => void;
   deferDeliveryAck?: boolean;
   onQueued?: (runId: string) => void | Promise<void>;
   onSteered?: (runId: string) => void | Promise<void>;
@@ -110,6 +111,7 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
     let result: TurnResult | null;
     try {
       result = await core.waitRun(runId, {
+        ...(hooks.onEngaged ? { onEngaged: hooks.onEngaged } : {}),
         ...(hooks.onFirstBlock ? { onFirstBlock: hooks.onFirstBlock } : {}),
         ...(hooks.onSurfacePosted ? { onSurfacePosted: hooks.onSurfacePosted } : {}),
         ...(hooks.onTasks ? { onTasks: hooks.onTasks } : {}),
