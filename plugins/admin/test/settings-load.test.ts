@@ -298,3 +298,59 @@ test("admin shell calls resolve against the shipped Lit bundle", () => {
     f.dom.window.close();
   }
 });
+
+test("models view loads and saves purpose cards through the real page handlers", async () => {
+  const f = litFixture();
+  try {
+    f.root.innerHTML = '<template data-settings-card="card-base-model"></template>';
+    f.ui.settings.mountCards();
+    const data = {
+      baseModelDefault: "model",
+      baseModelOptions: [{ id: "model" }],
+      harnessOptions: ["pi"],
+      thinkingLevelsByHarness: { pi: ["auto", "low"] },
+      runtime: null,
+      cronRuntime: null,
+      subagentRuntime: null,
+    };
+    const requests: any[] = [];
+    const context = vm.createContext({
+      document: f.document,
+      governanceUI: f.ui,
+      requestedView: "models",
+      r: { data },
+      scope: "org:test",
+      governanceReq: 1,
+      governanceSaveSeq: 0,
+      sectionSnapshots: new Map(),
+      governanceSaveReview: async () => true,
+      setStatus: (id: string, message: string, tone: string) => f.ui.status(id.replace(/^st-/, ""), message, tone),
+      api: async (...args: any[]) => {
+        requests.push(args);
+        return { ok: true };
+      },
+    });
+    vm.runInContext(extract('if (requestedView === "models") {', "refreshModelChoices.push"), context);
+    vm.runInContext(extract("const SAVE = Object.fromEntries(", "const sectionSnapshots ="), context);
+    vm.runInContext(
+      extract('document.querySelectorAll("[data-save]").forEach', '$("view-governance").addEventListener("input"'),
+      context,
+    );
+    for (const key of ["cron-runtime", "subagent-runtime"]) {
+      assert.equal(f.document.getElementById(`card-${key}`)!.classList.contains("hidden"), false);
+      const button = f.document.querySelector<HTMLButtonElement>(`[data-save="${key}"]`)!;
+      (f.document.getElementById(`${key}-inherit`) as HTMLInputElement).click();
+      await button.onclick!(new f.window.PointerEvent("click"));
+      assert.equal(requests.at(-1)[1], `/api/scopes/org%3Atest/${key}`);
+      assert.equal(requests.at(-1)[2].modelId, "model");
+      assert.equal(f.ui.states.get(key).dirty, false);
+      (f.document.getElementById(`${key}-inherit`) as HTMLInputElement).click();
+      await button.onclick!(new f.window.PointerEvent("click"));
+      assert.equal(JSON.stringify(requests.at(-1)[2]), '{"inherit":true}');
+      assert.equal(f.ui.states.get(key).dirty, false);
+      assert.ok(html.includes(`$("card-${key}"),`));
+    }
+  } finally {
+    f.dom.window.close();
+  }
+});

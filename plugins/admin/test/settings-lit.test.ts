@@ -203,3 +203,41 @@ test("runtime reasoning choices follow the selected model and preserve legacy de
     dom.window.close();
   }
 });
+
+test("purpose runtime cards independently set and clear overrides using the runtime editor", () => {
+  const dom = setup();
+  try {
+    dom.window.eval(
+      "settingsUI.load(" + JSON.stringify({ ...models, cronRuntime: null, subagentRuntime: null }) + ',"org:test")',
+    );
+    const doc = dom.window.document;
+    for (const key of ["cron-runtime", "subagent-runtime"]) {
+      const collect = () => JSON.parse(String(dom.window.eval(`JSON.stringify(settingsUI.collect("${key}"))`)));
+      assert.deepEqual(collect(), { inherit: true });
+      assert.equal(doc.querySelectorAll(`#card-${key}`).length, 1);
+      assert.equal((doc.getElementById(`${key}-harness`) as HTMLSelectElement).disabled, true);
+      (doc.getElementById(`${key}-inherit`) as HTMLInputElement).click();
+      const harness = doc.getElementById(`${key}-harness`) as HTMLSelectElement;
+      harness.value = "codex";
+      harness.dispatchEvent(new dom.window.Event("change"));
+      assert.deepEqual(collect(), { harnessId: "codex", modelId: "b", effortLevel: "auto", fastMode: false });
+      (doc.getElementById(`${key}-inherit`) as HTMLInputElement).click();
+      assert.deepEqual(collect(), { inherit: true });
+      assert.equal(dom.window.eval(`settingsUI.states.get("${key}").dirty`), false);
+    }
+    assert.equal(dom.window.eval('settingsUI.collect("runtime").fastMode'), true);
+    dom.window.eval(
+      "settingsUI.load(" +
+        JSON.stringify({
+          ...models,
+          cronRuntime: { harnessId: "codex", modelId: "b", effortLevel: "low", fastMode: false },
+          subagentRuntime: null,
+        }) +
+        ',"org:test")',
+    );
+    assert.equal((doc.getElementById("cron-runtime-inherit") as HTMLInputElement).checked, false);
+    assert.equal((doc.getElementById("cron-runtime-model") as HTMLSelectElement).value, "b");
+  } finally {
+    dom.window.close();
+  }
+});

@@ -38,7 +38,10 @@ interface Rig {
   syscallsFor(session: Session): ReturnType<ReturnType<typeof createSessionSyscalls>["forTurn"]>;
 }
 
-async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
+async function rig(opts?: {
+  treeRunCap?: number;
+  prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
+}): Promise<Rig> {
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
   const signals = createMemoryRunSignalStore();
@@ -50,6 +53,7 @@ async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
     signals,
     maxAttempts: 3,
     ...(opts?.treeRunCap !== undefined ? { treeRunCap: opts.treeRunCap } : {}),
+    ...(opts?.prepareRequest ? { prepareRequest: opts.prepareRequest } : {}),
   });
   const room = await sessions.getOrCreateByThread("slack:dm:D1", "dm", scope, undefined, "slack");
   await sessions.updateTitle(room.id, "dm with alex");
@@ -99,6 +103,63 @@ test("open creates a child session with parent pointer, spawn meta, and a queued
   assert.match(request.text, /subagent-task/);
   assert.match(request.text, /build a personal website/);
   assert.equal(out.liveRunsRemaining, SUBAGENT_TREE_RUN_CAP - 1);
+});
+
+for (const explicit of [
+  {},
+  { fastMode: false },
+  { model: "chosen-model", harness: "pi", thinkingLevel: "high", fastMode: false },
+  { model: "chosen-model", fastMode: true },
+]) {
+  test(`child followups preserve only explicit runtime choices: ${JSON.stringify(explicit)}`, async () => {
+    const runtimeKeys = ["model", "harness", "thinkingLevel", "fastMode"] as const;
+    let defaults = { model: "old-default", harness: "codex", thinkingLevel: "low", fastMode: true };
+    const preparedInputs: OrchestratorInput[] = [];
+    const r = await rig({
+      prepareRequest: async (request) => {
+        preparedInputs.push(request);
+        return { ...defaults, ...request };
+      },
+    });
+    const syscalls = r.syscallsFor(r.room);
+    const opened = await syscalls.open({ task: "initial task", ...explicit });
+    assert.ok(opened.ok);
+    const child = await freshSession(r.sessions, opened.sessionId);
+    const first = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+    for (const key of runtimeKeys) {
+      assert.equal(child.spawnMeta?.[key], explicit[key as keyof typeof explicit]);
+      assert.equal(Object.hasOwn(child.spawnMeta!, key), Object.hasOwn(explicit, key));
+      assert.equal(first.request[key], { ...defaults, ...explicit }[key]);
+    }
+    const claimed = await r.runs.claimById(first.id, "worker", 60_000);
+    assert.ok(claimed);
+    await r.runs.complete(first.id, claimed.leaseToken!, { status: "ok", reply: "done" });
+    defaults = { model: "new-default", harness: "claude", thinkingLevel: "medium", fastMode: false };
+    const followup = await syscalls.write({ followup: true, target: child.id, text: "next task" });
+    assert.ok(followup.ok);
+    assert.equal(followup.delivered, "queued_turn");
+    const next = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+    for (const key of runtimeKeys) {
+      assert.equal(Object.hasOwn(preparedInputs[1]!, key), Object.hasOwn(explicit, key));
+      assert.equal(next.request[key], { ...defaults, ...explicit }[key]);
+    }
+    assert.equal((await freshSession(r.sessions, child.id)).parentSessionId, r.room.id);
+  });
+}
+
+test("followup tasks cannot turn an ordinary session into a child", async () => {
+  const r = await rig();
+  const ordinary = await r.sessions.getOrCreateByThread("web:ordinary", "dm", scope, undefined, "web");
+  await r.sessions.addParticipant(ordinary.id, actor.id);
+  await r.runs.enqueue({
+    sessionId: ordinary.threadRef,
+    request: { actor, conversation, surface: "web", origin: { kind: "human" }, text: "hello" },
+  });
+  const out = await r.syscallsFor(r.room).write({ followup: true, target: ordinary.id, text: "new task" });
+  assert.ok(!out.ok);
+  assert.match(out.message, /only target an attached subagent/);
+  assert.equal((await freshSession(r.sessions, ordinary.id)).parentSessionId, undefined);
+  assert.equal((await r.runs.inFlightForThread(ordinary.threadRef)).length, 1);
 });
 
 test("nested sessions share the same tree without an artificial depth limit", async () => {

@@ -1,3 +1,5 @@
+import { swarmFixture } from "./support/swarm-fixture.ts";
+import { createHarnessRouter, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -100,12 +102,17 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-function buildOrchestrator(harness: Harness, maxContextTokens?: number, defaultTurnWallClockMs?: number) {
+function buildOrchestrator(
+  harness: Harness,
+  maxContextTokens?: number,
+  defaultTurnWallClockMs?: number,
+  swarm?: Awaited<ReturnType<typeof swarmFixture>>,
+) {
   const config = createMemoryConfigStore(ORG);
   const acl = createAclStore();
   const auditLog = createAuditLog();
   const errors = createErrorLog();
-  const sessions = createMemorySessionStore();
+  const sessions = swarm?.sessions ?? createMemorySessionStore();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "cc-")));
   const deploy = createDeployService({
     deployStore: createDeployStore(),
@@ -115,12 +122,14 @@ function buildOrchestrator(harness: Harness, maxContextTokens?: number, defaultT
     acl,
   });
   const orch = createOrchestrator({
+    config,
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, config, acl),
     sessions,
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
-    sandbox: fakeSandbox(),
+    sandbox: swarm?.sandbox ?? fakeSandbox(),
+    ...(swarm ? { swarms: swarm.service, sandboxResources: swarm.sandboxes } : {}),
     modelGateway: createModelGateway(),
     auditLog,
     errors,
@@ -136,7 +145,7 @@ function buildOrchestrator(harness: Harness, maxContextTokens?: number, defaultT
       { authorizesCapabilityScope: async () => true },
     ),
   });
-  return { orch, sessions, errors };
+  return { orch, sessions, errors, config };
 }
 
 async function seed(sessions: SessionStore, entries: Array<Partial<SessionEntry>>): Promise<string> {
@@ -1220,4 +1229,153 @@ test("only a cron automation receives task-runtime authority and each fire start
     [true, false, true],
   );
   assert.equal(resumed, 2);
+});
+
+test("cron and loop dispatch use purpose defaults while task handoffs and later fires stay isolated", async () => {
+  const base = createMockHarness();
+  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
+  const handoff = { ...category, modelId: "gpt-6-sol", fastMode: false };
+  const seen: import("../src/harness/harness.ts").RuntimeChoice[] = [];
+  const adapter: Harness = {
+    ...base,
+    turns: {
+      ...base.turns,
+      runTurn: async (input) => {
+        seen.push(input.runtime as typeof category);
+        const state = await input.runtimeControl!(input.runtime as typeof category, { action: "get" });
+        assert.ok(state.ok);
+        assert.deepEqual(state.effective, category);
+        if (seen.length === 1) return { reply: "", runtimeHandoff: { choice: handoff, lifetime: "task" } };
+        return { reply: "done" };
+      },
+    },
+  };
+  const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
+    resolveRuntimeChoiceDurable(
+      built.config,
+      "org:default-org",
+      input.scopeLabel,
+      category,
+      input.runtime,
+      undefined,
+      input.runtimePurpose,
+    ),
+  );
+  const built = buildOrchestrator(router);
+  built.config.setApprovedHarnesses(["pi"]);
+  await built.config.setRuntimeSelectionLatest(PERSONAL, {
+    harnessId: "pi",
+    modelId: "claude-sonnet-5",
+    effortLevel: "high",
+  });
+  await built.config.setPurposeRuntime("cron", category);
+  for (const surface of ["cron", "loop"]) {
+    const result = await built.orch.handleTurn({
+      ...turn(surface),
+      surface,
+      origin: { kind: "automation" },
+      runId: surface,
+      surfaceTools: false,
+    });
+    assert.equal(result.status, "ok");
+  }
+  assert.deepEqual(seen, [category, handoff, category]);
+});
+
+test("human child continuations respect non-fast category defaults", async () => {
+  const base = createMockHarness();
+  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
+  const seen: unknown[] = [];
+  const adapter: Harness = {
+    ...base,
+    turns: {
+      ...base.turns,
+      runTurn: async (input) => {
+        seen.push(input.runtime);
+        return { reply: "done" };
+      },
+    },
+  };
+  const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
+    resolveRuntimeChoiceDurable(
+      built.config,
+      "org:default-org",
+      input.scopeLabel,
+      category,
+      input.runtime,
+      undefined,
+      input.runtimePurpose,
+    ),
+  );
+  const built = buildOrchestrator(router);
+  built.config.setApprovedHarnesses(["pi"]);
+  built.config.setInteractiveFastMode(true);
+  await built.config.flushScope("org:default-org");
+  await built.config.setPurposeRuntime("subagent", category);
+  const parent = await built.sessions.getOrCreateByThread("parent", "dm", PERSONAL);
+  const child = await built.sessions.getOrCreateByThread("subagent:review", "dm", PERSONAL);
+  await built.sessions.setParentSession(child.id, parent.id);
+  await built.orch.handleTurn({
+    surface: "web",
+    actor,
+    conversation: { ...conv, threadRef: child.threadRef },
+    origin: { kind: "human" },
+    text: "continue",
+    surfaceTools: false,
+  });
+  assert.deepEqual(seen, [category]);
+});
+
+test("verified swarm workers use category defaults instead of copied parent choices, retaining unset behavior and handoffs", async () => {
+  const inherited = { harnessId: "pi" as const, modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
+  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
+  const handoff = { ...category, modelId: "gpt-6-sol" };
+  for (const configured of [false, true]) {
+    const f = await swarmFixture({
+      runtime: {
+        harness: inherited.harnessId,
+        model: inherited.modelId,
+        thinkingLevel: inherited.effortLevel,
+        fastMode: inherited.fastMode,
+      },
+    });
+    const [peer] = await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
+    await f.service.sweep();
+    const worker = await f.workerCaller(peer!.id);
+    assert.equal(worker.kind, "agent");
+    if (worker.kind !== "agent") throw new Error("expected worker");
+    const run = (await f.runs.get(worker.claims.runId!))!;
+    const base = createMockHarness();
+    const seen: unknown[] = [];
+    const adapter: Harness = {
+      ...base,
+      turns: {
+        ...base.turns,
+        runTurn: async (input) => {
+          seen.push(input.runtime);
+          if (seen.length === 1) return { reply: "", runtimeHandoff: { choice: handoff, lifetime: "task" } };
+          return { reply: "done" };
+        },
+      },
+    };
+    const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
+      resolveRuntimeChoiceDurable(
+        built.config,
+        "org:default-org",
+        input.scopeLabel,
+        inherited,
+        input.runtime,
+        undefined,
+        input.runtimePurpose,
+      ),
+    );
+    const built = buildOrchestrator(router, undefined, undefined, f);
+    built.config.setApprovedHarnesses(["pi"]);
+    await built.config.flushScope("org:default-org");
+    if (configured) await built.config.setPurposeRuntime("subagent", category);
+    const result = await built.orch.handleTurn({ ...run.request, runId: run.id });
+    assert.equal(result.status, "ok");
+    assert.deepEqual(seen, [configured ? category : inherited, handoff]);
+    assert.equal(run.request.model, inherited.modelId, "the verified stored dispatch is not mutated");
+  }
 });

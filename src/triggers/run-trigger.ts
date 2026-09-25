@@ -335,6 +335,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(spec.runtime ? { model: spec.runtime.modelId, harness: spec.runtime.harnessId } : {}),
         ...turnModelOptions({
           triggered: true,
+          surface: spec.surface,
           thinkingLevel: spec.runtime?.effortLevel ?? spec.thinkingLevel,
           fastMode: spec.runtime?.fastMode,
         }),

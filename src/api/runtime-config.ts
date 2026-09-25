@@ -1,3 +1,5 @@
+import type { RuntimePurpose } from "../resolution/config-store.ts";
+import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
 import { resolveIndividualAuthRouting } from "../core/individual-auth-routing.ts";
 import { gatewayModelCatalog } from "../model/gateway-models.ts";
 import type { AppDeps } from "./app-types.ts";
@@ -89,6 +91,8 @@ export async function runtimeConfigBody(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
   authorizeChoice?: (choice: RuntimeChoice) => Promise<string | null>,
+  purpose?: RuntimePurpose,
+  requested?: Partial<RuntimeChoice>,
 ) {
   if (authorizeChoice)
     ctx = { deps: { ...ctx.deps, providerKeys: ALL_PROVIDERS_AVAILABLE, modelCredentials: undefined } };
@@ -143,8 +147,11 @@ export async function runtimeConfigBody(
   } else if (legacyModel) {
     scopeOverride = { harnessId: fallback.harnessId, modelId: legacyModel, orgRevision: 0 };
   }
-  const effective = scopeOverride ?? orgDefault;
-  const selected = [orgDefault, scopeOverride, effective].filter((choice) => choice !== null);
+  const effective = purpose
+    ? await resolveRuntimeChoiceDurable(config, org, scope, fallback, requested, undefined, purpose)
+    : (scopeOverride ?? orgDefault);
+  const purposeDefault = purpose ? await config.getPurposeRuntimeDurable(purpose) : undefined;
+  const selected = [orgDefault, scopeOverride, effective, purposeDefault].filter((choice) => choice != null);
   const allowlist = await config.getWebuiModelsDurable(org);
   const modelsByHarness = Object.fromEntries(
     approvedHarnesses.map((harnessId) => {
@@ -160,6 +167,7 @@ export async function runtimeConfigBody(
           (!authorizeChoice ||
             !allowlist ||
             choice.modelId === orgDefault.modelId ||
+            choice.modelId === purposeDefault?.modelId ||
             allowlist.includes(codexProviderModelId(choice.modelId))) &&
           choice.harnessId === harnessId &&
           modelSupportedByHarness(choice.modelId, harnessId) &&
@@ -194,6 +202,7 @@ export async function runtimeConfigBody(
   );
   return {
     scopeId: scope,
+    ...(purpose ? { executionPurpose: purpose } : {}),
     approvedHarnesses,
     modelsByHarness,
     modelCatalog,
@@ -230,7 +239,11 @@ export function validateRuntimeChoice(choice: RuntimeChoice): string | null {
   return null;
 }
 
-export async function webuiModelEnabled(ctx: { deps: RuntimeDeps }, modelId: string): Promise<boolean> {
+export async function webuiModelEnabled(
+  ctx: { deps: RuntimeDeps },
+  modelId: string,
+  purpose?: RuntimePurpose,
+): Promise<boolean> {
   modelId = codexProviderModelId(modelId);
   const config = ctx.deps.config!;
   const picker = await config.getWebuiModelsDurable(orgScope());
@@ -239,19 +252,21 @@ export async function webuiModelEnabled(ctx: { deps: RuntimeDeps }, modelId: str
   const org = orgScope();
   const stored = await config.getRuntimeSelectionDurable(org);
   const orgModel = stored?.modelId ?? (await config.getBaseModelOwnDurable(org)) ?? runtimeFallback(ctx).modelId;
-  return modelId === orgModel;
+  const purposeModel = purpose ? (await config.getPurposeRuntimeDurable(purpose))?.modelId : undefined;
+  return modelId === orgModel || modelId === purposeModel;
 }
 
 export async function availableRuntimeError(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
   choice: RuntimeChoice,
+  purpose?: RuntimePurpose,
 ): Promise<string | null> {
   await ctx.deps.refreshModels?.();
-  const choices = await runtimeConfigBody(ctx, scope);
+  const choices = await runtimeConfigBody(ctx, scope, undefined, purpose, choice);
   if (
     !choices.modelsByHarness[choice.harnessId]?.includes(choice.modelId) ||
-    !(await webuiModelEnabled(ctx, choice.modelId))
+    !(await webuiModelEnabled(ctx, choice.modelId, purpose))
   )
     return "runtime is no longer available or enabled on this deployment";
   return validateRuntimeChoice({

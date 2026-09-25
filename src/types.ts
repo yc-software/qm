@@ -84,6 +84,7 @@ export interface SpawnMeta {
   model?: string;
   harness?: string;
   thinkingLevel?: string;
+  fastMode?: boolean;
 }
 
 export interface SessionStatus {

@@ -3365,6 +3365,22 @@ test("conversation coordinators cannot execute commands through any command tool
   );
 });
 
+test("sessions open schema and dispatch preserve an explicit false fast mode", async () => {
+  const tc = fakeToolContext();
+  tc.sessionSyscalls = {
+    open: async (input) => {
+      assert.equal(input.fastMode, false);
+      return { ok: true, sessionId: "child", title: "child", liveRunsRemaining: 9 };
+    },
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async () => ({ ok: false, message: "unused" }),
+  };
+  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "sessions")!;
+  assert.ok(Check(session.parameters, { action: "open", task: "test", fastMode: false }));
+  assert.ok(!Check(session.parameters, { action: "open", task: "test", fastMode: "false" }));
+  assert.match(textOut(await call(session, { action: "open", task: "test", fastMode: false })), /child/);
+});
+
 test("conversation coordinator mailbox checks never block on children", async () => {
   const waits: number[] = [];
   const tc = fakeToolContext();

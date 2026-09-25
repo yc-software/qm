@@ -113,6 +113,7 @@ export interface SessionOpenInput {
   model?: string;
   harness?: string;
   thinkingLevel?: string;
+  fastMode?: boolean;
 }
 
 type SessionOpenResult =
@@ -318,6 +319,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.model ? { model: meta.model } : {}),
     ...(meta.harness ? { harness: meta.harness } : {}),
     ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
+    ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
     ...(meta.timezone ? { timezone: meta.timezone } : {}),
   };
 }
@@ -604,6 +606,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 ...(input.model ? { model: input.model } : {}),
                 ...(input.harness ? { harness: input.harness } : {}),
                 ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+                ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
               };
               if (!existing?.spawnMeta) {
                 await deps.sessions.setParentSession(child.id, binding.session.id);
@@ -670,6 +673,14 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 target,
                 {
                   ...meta,
+                  ...(target.parentSessionId
+                    ? {
+                        model: target.spawnMeta?.model,
+                        harness: target.spawnMeta?.harness,
+                        thinkingLevel: target.spawnMeta?.thinkingLevel,
+                        fastMode: target.spawnMeta?.fastMode,
+                      }
+                    : {}),
                   surface: meta.surface ?? target.surface ?? "web",
                   actor: caller.actor,
                   origin: caller.origin,

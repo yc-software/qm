@@ -6662,6 +6662,8 @@
 
         [
           $("card-base-model"),
+          $("card-cron-runtime"),
+          $("card-subagent-runtime"),
           providers,
           $("card-webui-models"),
           $("card-soul"),
@@ -8158,6 +8160,8 @@
         const modelsByHarness = r.data.modelsByHarness || {};
         if (requestedView === "models") {
           governanceUI.settings.load(r.data, scope, "runtime");
+          governanceUI.settings.load(r.data, scope, "cron-runtime");
+          governanceUI.settings.load(r.data, scope, "subagent-runtime");
           governanceUI.settings.load(r.data, scope, "webui-models");
         }
         refreshModelChoices.push(() => governanceUI.settings.updateCatalog(r.data));
@@ -8660,6 +8664,8 @@
         "org-ambient": "st-governance-org-ambient",
         "channel-header-pin-default": "st-channel-header-pin-default",
         runtime: "st-runtime",
+        "cron-runtime": "st-cron-runtime",
+        "subagent-runtime": "st-subagent-runtime",
         "webui-models": "st-webui-models",
         "ack-emoji": "st-ack-emoji",
         branding: "st-branding",
@@ -8670,6 +8676,8 @@
         "soul",
         "external-slack-participants",
         "runtime",
+        "cron-runtime",
+        "subagent-runtime",
         "webui-models",
         "ack-emoji",
         "branding",

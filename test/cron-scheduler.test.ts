@@ -1765,5 +1765,6 @@ test("scheduled and manual fires use the saved runtime; clearing it restores inh
   assert.equal(calls.length, 3);
   assert.equal(calls[2]?.model, undefined);
   assert.equal(calls[2]?.harness, undefined);
-  assert.equal(calls[2]?.thinkingLevel, "xhigh");
+  assert.equal(calls[2]?.thinkingLevel, undefined);
+  assert.equal(calls[2]?.fastMode, undefined);
 });

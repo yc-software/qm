@@ -11,7 +11,7 @@ import { isPersonAuthored, resolveTurnOrigin } from "../core/turn-origin.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
-import { turnModelOptions, validateWebTurnModelOptions } from "../core/turn-options.ts";
+import { turnModelOptions, turnRuntimePurpose, validateWebTurnModelOptions } from "../core/turn-options.ts";
 import { isProjectGroupRef, projectIdFromGroupRef } from "../projects/project-store.ts";
 import { samePerson } from "../directory/person.ts";
 import {
@@ -194,18 +194,35 @@ export function createTurnMethods(
           ? await deps.config.getModelAccountDurable(actor.id)
           : "company";
       const individualAuth = modelAccount !== "company";
+      const runtimePurpose = turnRuntimePurpose(req, isSubagentThreadRef(req.conversation.threadRef));
       if (req.triggered && (req.model || req.harness)) {
-        const choices = await runtimeConfigBody({ deps }, conversationScope(req.conversation, actor.id));
+        const choices = await runtimeConfigBody(
+          { deps },
+          conversationScope(req.conversation, actor.id),
+          undefined,
+          runtimePurpose,
+          {
+            ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
+            ...(req.model ? { modelId: req.model } : {}),
+            ...(req.thinkingLevel ? { effortLevel: req.thinkingLevel } : {}),
+            ...(typeof req.fastMode === "boolean" ? { fastMode: req.fastMode } : {}),
+          },
+        );
         const harness = req.harness ?? choices.effective.harnessId;
         const model = req.model ?? choices.effective.modelId;
         const error = !isHarnessId(harness)
           ? "harness_not_approved"
-          : await availableRuntimeError({ deps }, conversationScope(req.conversation, actor.id), {
-              harnessId: harness,
-              modelId: model,
-              effortLevel: req.thinkingLevel,
-              fastMode: req.fastMode,
-            });
+          : await availableRuntimeError(
+              { deps },
+              conversationScope(req.conversation, actor.id),
+              {
+                harnessId: harness,
+                modelId: model,
+                effortLevel: req.thinkingLevel,
+                fastMode: req.fastMode,
+              },
+              runtimePurpose,
+            );
         if (error) return { status: "refused", reason: error };
       }
       let requestedModel = req.model;
@@ -254,10 +271,20 @@ export function createTurnMethods(
             orgRuntime = modelUnavailableReason(orgModel)
               ? { harnessId: storedOrgRuntime?.harnessId ?? runtimeFallback.harnessId, modelId: orgModel }
               : await resolveRuntimeChoiceDurable(deps.config, org, org, runtimeFallback);
-            runtime = await resolveRuntimeChoiceDurable(deps.config, org, targetScope, runtimeFallback, {
-              ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
-              ...(req.model ? { modelId: req.model } : {}),
-            });
+            runtime = await resolveRuntimeChoiceDurable(
+              deps.config,
+              org,
+              targetScope,
+              runtimeFallback,
+              {
+                ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
+                ...(req.model ? { modelId: req.model } : {}),
+                ...(req.thinkingLevel ? { effortLevel: req.thinkingLevel } : {}),
+                ...(typeof req.fastMode === "boolean" ? { fastMode: req.fastMode } : {}),
+              },
+              undefined,
+              runtimePurpose,
+            );
           } catch (error) {
             swallow("turn: runtime resolution", error);
             return { status: "refused", reason: `I couldn't set up that runtime choice — ${GENERIC_FAILURE_CLAUSE}` };

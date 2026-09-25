@@ -1510,6 +1510,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       model: Type.Optional(Type.String({ description: "open: model override; fails closed if unavailable." })),
       harness: Type.Optional(Type.String({ description: "open: harness override." })),
       thinkingLevel: Type.Optional(Type.String({ description: "open: reasoning effort override." })),
+      fastMode: Type.Optional(Type.Boolean({ description: "open: fast mode override." })),
       target: Type.Optional(
         Type.String({
           description:
@@ -1529,6 +1530,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         requestId?: string;
         harness?: string;
         thinkingLevel?: string;
+        fastMode?: boolean;
         task?: string;
         name?: string;
         readOnly?: boolean;
@@ -1573,6 +1575,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           task: p.task ?? "",
           ...(p.harness ? { harness: p.harness } : {}),
           ...(p.thinkingLevel ? { thinkingLevel: p.thinkingLevel } : {}),
+          ...(p.fastMode !== undefined ? { fastMode: p.fastMode } : {}),
           ...(p.name ? { name: p.name } : {}),
           ...(p.readOnly !== undefined ? { readOnly: p.readOnly } : {}),
           ...(p.model ? { model: p.model } : {}),

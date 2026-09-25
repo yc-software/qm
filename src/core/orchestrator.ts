@@ -25,7 +25,7 @@ import type {
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { turnOriginRequestFields } from "./turn-origin.ts";
-import { resolveTurnFastMode } from "./turn-options.ts";
+import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { renderGatewayContext } from "./gateway-context.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
@@ -538,6 +538,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       )
         throw new NonRetryableTurnError("swarm service unavailable");
       const swarmBinding = await deps.swarms?.binding(input);
+      if (input.swarm && swarmBinding?.member.parentId && (await deps.config?.getPurposeRuntimeDurable("subagent")))
+        input = { ...input, model: undefined, harness: undefined, thinkingLevel: undefined, fastMode: undefined };
       const swarmEntryProvenance = input.swarm ? { origin: "automation", swarm: input.swarm } : {};
       await deps.refreshModels?.();
       const { actor, conversation } = input;
@@ -3076,8 +3078,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? Math.min(requestedTurnWallClockMs, configuredTurnWallClockMs)
               : requestedTurnWallClockMs;
         }
+        const runtimePurpose = turnRuntimePurpose(
+          { surface: input.surface, triggered: automatedTurn },
+          !!session.parentSessionId || !!swarmBinding?.member.parentId,
+        );
+        const purposeDefault = runtimePurpose ? await deps.config?.getPurposeRuntimeDurable(runtimePurpose) : undefined;
         const wantsOrgFastMode =
-          typeof input.fastMode !== "boolean" && humanTurn && (await deps.config?.getInteractiveFastModeDurable());
+          typeof input.fastMode !== "boolean" &&
+          !purposeDefault &&
+          humanTurn &&
+          (await deps.config?.getInteractiveFastModeDurable());
         const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanTurn, wantsOrgFastMode === true);
         const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
           let userProviderKeys: ProviderKeys | undefined;
@@ -3093,12 +3103,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               account === "anthropic" ? null : userCredStore.get(actor.id, "openai"),
             ]);
             const orgRuntime = await deps.config?.getRuntimeSelectionDurable(resolution.orgScopeId);
-            const preferredHarness = runtime.harnessId ?? input.harness ?? orgRuntime?.harnessId ?? deps.defaultHarness;
+            const preferredHarness =
+              runtime.harnessId ??
+              input.harness ??
+              purposeDefault?.harnessId ??
+              orgRuntime?.harnessId ??
+              deps.defaultHarness;
             const routing = resolveIndividualAuthRouting(
               anthCred ?? null,
               oaiCred ?? null,
-              account === "personal" || input.surface === "web" ? (runtime.modelId ?? input.model) : runtime.modelId,
-              account === "personal" || input.surface === "web" ? preferredHarness : runtime.harnessId,
+              account === "personal" || input.surface === "web"
+                ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId)
+                : (runtime.modelId ?? purposeDefault?.modelId),
+              account === "personal" || input.surface === "web"
+                ? preferredHarness
+                : (runtime.harnessId ?? purposeDefault?.harnessId),
             );
             if (routing?.kind === "apikey") {
               userHarnessOverride = "pi";
@@ -3147,10 +3166,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let { userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken, codexTurnAuth } =
           await loadRuntimeAuth({});
         if (
-          input.surface === "web" &&
+          (input.surface === "web" || purposeDefault) &&
           userHarnessOverride &&
-          ((input.model && input.model !== userModelOverride) ||
-            (input.harness && input.harness !== userHarnessOverride))
+          (((input.model ?? purposeDefault?.modelId) &&
+            (input.model ?? purposeDefault?.modelId) !== userModelOverride) ||
+            ((input.harness ?? purposeDefault?.harnessId) &&
+              (input.harness ?? purposeDefault?.harnessId) !== userHarnessOverride))
         )
           throw new NonRetryableTurnError("Your connected AI account cannot serve this model on that harness.");
         const effectiveModel = userModelOverride ?? input.model;
@@ -3172,6 +3193,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(input.thinkingLevel ? { effortLevel: input.thinkingLevel } : {}),
           ...(typeof effectiveFastMode === "boolean" ? { fastMode: effectiveFastMode } : {}),
         };
+        const runtimeDefaults = requestedRuntime;
         const runtimeClaims: CapabilityClaims = controlClaims ?? {
           ...scopeAttestation,
           exp: Date.now() + CAPABILITY_TTL_MS,
@@ -3204,12 +3226,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
         if (restoredRuntime) await adoptRuntime(restoredRuntime);
         if (automatedTurn && input.model && input.harness && isHarnessId(input.harness)) {
-          const error = await deps.validateScheduledRuntime?.(scopeId, {
-            harnessId: input.harness,
-            modelId: input.model,
-            effortLevel: input.thinkingLevel,
-            fastMode: input.fastMode,
-          });
+          const error = await deps.validateScheduledRuntime?.(
+            scopeId,
+            {
+              harnessId: input.harness,
+              modelId: input.model,
+              effortLevel: input.thinkingLevel,
+              fastMode: input.fastMode,
+            },
+            runtimePurpose,
+          );
           if (error) throw new NonRetryableTurnError(error);
         }
         const runHarnessSegment = (
@@ -3378,8 +3404,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             },
             ...(userProviderKeys ? { providerKeys: userProviderKeys } : {}),
             ...(claudeOauthToken ? { claudeOauthToken } : {}),
-            ...(userHarnessOverride && !restoredRuntime && runtimeHandoffs === 0 ? { runtimePinned: true } : {}),
+            ...(userHarnessOverride && !purposeDefault && !restoredRuntime && runtimeHandoffs === 0
+              ? { runtimePinned: true }
+              : {}),
             runtimeActorId: actor.id,
+            ...(runtimePurpose ? { runtimePurpose } : {}),
             ...(deps.runtime && input.runId
               ? {
                   runtimeControl: (
@@ -3395,6 +3424,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       !!userHarnessOverride,
                       signal,
                       automatedTurn && input.surface === "cron",
+                      runtimePurpose,
+                      runtimeDefaults,
                     ),
                 }
               : {}),

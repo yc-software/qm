@@ -21,6 +21,8 @@ import { repeat } from "lit/directives/repeat.js";
 
 type Model = { id: string; name?: string; effortLevels?: string[] };
 type Data = Record<string, any>;
+const runtimeKeys = ["runtime", "cron-runtime", "subagent-runtime"];
+const runtimeReadKey = (key: string) => key.replace(/-runtime$/, "Runtime");
 export class SettingsState extends SettingState {
   context: Data = {};
   selected = "";
@@ -29,6 +31,11 @@ export class SettingsState extends SettingState {
   collect(_validate = true): Data {
     if (_validate && this.key === "soul" && (this.draft.content || "").length > 100000)
       throw new Error("Maximum length reached");
+    if (this.key !== "runtime" && runtimeKeys.includes(this.key)) {
+      if (this.draft.inherit) return { inherit: true };
+      const { inherit: _inherit, ...selection } = this.draft;
+      return structuredClone(selection);
+    }
     if (this.key === "branding")
       return Object.fromEntries(Object.entries(this.draft).map(([key, value]) => [key, String(value).trim()]));
     return structuredClone(this.draft);
@@ -60,7 +67,7 @@ export class SettingsState extends SettingState {
     );
   }
   normalize() {
-    if (this.key !== "runtime") return;
+    if (!runtimeKeys.includes(this.key)) return;
     if (!this.harnesses.includes(this.draft.harnessId)) this.draft.harnessId = this.harnesses[0];
     if (!this.models.some((m) => m.id === this.draft.modelId)) this.draft.modelId = this.models[0]?.id || "";
     if (!this.efforts.includes(this.draft.effortLevel))
@@ -93,7 +100,7 @@ export class SettingsState extends SettingState {
   }
 }
 export const states = new Map(
-  ["runtime", "webui-models", "soul", "branding"].map((key) => [key, new SettingsState(key)]),
+  [...runtimeKeys, "webui-models", "soul", "branding"].map((key) => [key, new SettingsState(key)]),
 );
 export const { owns, collect, capture, commit, status, statusKey } = settingRegistry(states);
 export function load(data: Data, scope: string, only?: string) {
@@ -125,16 +132,17 @@ export function load(data: Data, scope: string, only?: string) {
     s.available =
       scope.startsWith("org:") &&
       !!data.baseModelOptions?.length &&
-      (key !== "runtime" || (!!data.baseModelDefault && "runtime" in data));
-    s.draft =
-      key === "runtime"
-        ? {
-            harnessId: data.runtime?.harnessId || data.harnessDefault || "pi",
-            modelId: data.runtime?.modelId || data.baseModel || data.baseModelDefault || "",
-            effortLevel: data.runtime?.effortLevel || "auto",
-            fastMode: data.runtime?.fastMode === true,
-          }
-        : { ids: (data.webuiModels || []).filter(Boolean) };
+      (!runtimeKeys.includes(key) || (!!data.baseModelDefault && runtimeReadKey(key) in data));
+    const runtime = data[runtimeReadKey(key)];
+    s.draft = runtimeKeys.includes(key)
+      ? {
+          ...(key !== "runtime" ? { inherit: !runtime } : {}),
+          harnessId: runtime?.harnessId || data.harnessDefault || "pi",
+          modelId: runtime?.modelId || data.baseModel || data.baseModelDefault || "",
+          effortLevel: runtime?.effortLevel || "auto",
+          fastMode: runtime?.fastMode === true,
+        }
+      : { ids: (data.webuiModels || []).filter(Boolean) };
     s.normalize();
     s.saving = false;
     s.selected = "";
@@ -172,21 +180,48 @@ const label = (s: SettingsState, id: string) => {
 function card(s: SettingsState) {
   if (s.key === "soul") return soulCard(s);
   if (s.key === "branding") return brandingCard(s);
-  if (s.key === "runtime")
+  if (runtimeKeys.includes(s.key)) {
+    const prefix = s.key === "runtime" ? "base" : s.key;
+    const purpose = s.key !== "runtime";
+    const [title, description] = {
+      runtime: ["Conversation runtime", "The default runtime for conversations unless overridden."],
+      "cron-runtime": ["Cron runtime", "Used for scheduled jobs without a per-job runtime override."],
+      "subagent-runtime": ["Sub-agent runtime", "Used for new sub-agents unless explicitly overridden."],
+    }[s.key]!;
     return html`<section
       class=${classMap({ card: true, "sv-models": true, hidden: !s.available, dirty: s.dirty })}
-      id="card-base-model"
+      id=${s.key === "runtime" ? "card-base-model" : `card-${s.key}`}
     >
       <div class="head">
-        <h2>Default runtime</h2>
-        <p>The harness, model, and reasoning level used across your organization unless overridden.</p>
+        <h2>${title}</h2>
+        <p>${description}</p>
       </div>
       <div class="body">
+        ${
+          purpose
+            ? html`<label class="setting-toggle">
+                <input
+                  type="checkbox"
+                  id=${`${prefix}-inherit`}
+                  .checked=${!!s.draft.inherit}
+                  @change=${(e: Event) => s.change("inherit", (e.target as HTMLInputElement).checked)}
+                />
+                <span class="setting-switch" aria-hidden="true"></span>
+                <span class="setting-copy"
+                  ><strong>Use existing fallback</strong
+                  ><small
+                    >${s.key === "cron-runtime" ? "Use the job's scope default." : "Use the child’s scope default."}</small
+                  ></span
+                >
+              </label>`
+            : null
+        }
         <div class="model-runtime-fields">
           <div>
-            <label for="base-harness">Harness</label
+            <label for=${`${prefix}-harness`}>Harness</label
             ><select
-              id="base-harness"
+              id=${`${prefix}-harness`}
+              ?disabled=${purpose && s.draft.inherit}
               .value=${s.draft.harnessId || ""}
               @change=${(e: Event) => s.change("harnessId", value(e))}
             >
@@ -194,32 +229,43 @@ function card(s: SettingsState) {
             </select>
           </div>
           <div>
-            <label for="base-model">Model</label
+            <label for=${`${prefix}-model`}>Model</label
             ><select
-              id="base-model"
+              id=${`${prefix}-model`}
+              ?disabled=${purpose && s.draft.inherit}
               .value=${s.draft.modelId || ""}
               @change=${(e: Event) => s.change("modelId", value(e))}
             >
-              ${s.models.map((m) => html`<option value=${m.id} ?selected=${m.id === s.draft.modelId}>${m.name} (${m.id})</option>`)}
+              ${repeat(
+                s.models,
+                (m) => m.id,
+                (m) => html`<option value=${m.id} ?selected=${m.id === s.draft.modelId}>${m.name} (${m.id})</option>`,
+              )}
             </select>
           </div>
           <div>
-            <label for="base-effort">Reasoning level</label
+            <label for=${`${prefix}-effort`}>Reasoning level</label
             ><select
-              id="base-effort"
+              id=${`${prefix}-effort`}
+              ?disabled=${purpose && s.draft.inherit}
               .value=${s.draft.effortLevel || "auto"}
               @change=${(e: Event) => s.change("effortLevel", value(e))}
             >
-              ${s.efforts.map((id) => html`<option value=${id} ?selected=${id === s.draft.effortLevel}>${effortLabels[id] || id}</option>`)}
+              ${repeat(
+                s.efforts,
+                (id) => id,
+                (id) =>
+                  html`<option value=${id} ?selected=${id === s.draft.effortLevel}>${effortLabels[id] || id}</option>`,
+              )}
             </select>
           </div>
         </div>
-        <label class="setting-toggle" id="base-fast-mode-control" style=${s.fastCapable ? "" : "display: none"}
+        <label class="setting-toggle" id=${`${prefix}-fast-mode-control`} style=${s.fastCapable ? "" : "display: none"}
           ><input
             type="checkbox"
-            id="base-fast-mode"
+            id=${`${prefix}-fast-mode`}
             .checked=${!!s.draft.fastMode}
-            ?disabled=${!s.fastCapable}
+            ?disabled=${!s.fastCapable || (purpose && s.draft.inherit)}
             @change=${(e: Event) => s.change("fastMode", (e.target as HTMLInputElement).checked)}
           /><span class="setting-switch" aria-hidden="true"></span
           ><span class="setting-copy"
@@ -229,6 +275,7 @@ function card(s: SettingsState) {
       </div>
       ${saveFooter(s)}
     </section>`;
+  }
   const ids: string[] = s.draft.ids || [];
   const available = s.catalog.filter((m) => !ids.includes(m.id));
   return html`<section
@@ -291,10 +338,16 @@ export function mountCards() {
   mountFlags();
   mountProviders();
   mountCredentials();
+  const renderRuntimes = mountTemplate('template[data-settings-card="card-base-model"]', () =>
+    runtimeKeys.map((key) => card(states.get(key)!)),
+  );
   for (const [key, s] of states) {
+    if (runtimeKeys.includes(key)) {
+      s.render = renderRuntimes;
+      continue;
+    }
     const id = (
       {
-        runtime: "card-base-model",
         soul: "card-soul",
         branding: "card-branding",
         "webui-models": "card-webui-models",

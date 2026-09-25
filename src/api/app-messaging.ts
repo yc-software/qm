@@ -164,7 +164,8 @@ export function createMessagingMethods(
     assertCronRuntime(cron);
     if (!cron.runtime) return;
     const error =
-      validateRuntimeChoice(cron.runtime) ?? (await availableRuntimeError({ deps }, cron.ownerScopeId, cron.runtime));
+      validateRuntimeChoice(cron.runtime) ??
+      (await availableRuntimeError({ deps }, cron.ownerScopeId, cron.runtime, "cron"));
     if (error) throw new Error(error);
   };
 
