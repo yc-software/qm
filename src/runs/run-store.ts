@@ -84,6 +84,7 @@ export interface RunStore {
   latestForThread(threadRef: string, opts?: { excludePrivateMessages?: boolean }): Promise<Run | null>;
   pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;
+  deferReturn(runId: string, delayMs: number): Promise<void>;
 
   onTerminal(listener: (run: Run) => void): void;
 

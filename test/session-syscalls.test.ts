@@ -639,7 +639,7 @@ test("writes revalidate access even while a target is running", async () => {
   assert.deepEqual(await r.signals.takePending(run!.id), []);
 });
 
-test("completion cannot expand the finished run's audience during roster refresh", async () => {
+test("completion cannot expand the finished run's audience and retries after its return delay", async (t) => {
   const r = await rig();
   const opened = await r.syscallsFor(r.room).open({ task: "private research" });
   assert.ok(opened.ok);
@@ -647,24 +647,52 @@ test("completion cannot expand the finished run's audience during roster refresh
   const [run] = await r.runs.inFlightForThread(child.threadRef);
   const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
   await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "private result" });
-  await assert.rejects(
-    deliverSubagentMail(
-      {
-        mailbox: r.mailbox,
-        sessions: r.sessions,
-        runs: r.runs,
-        maxAttempts: 3,
-        prepareRequest: async (request) => ({
-          ...request,
-          conversation: { ...request.conversation, audience: [actor, { id: "new-member", type: "internal" }] },
-        }),
-      },
-      (await r.runs.get(run!.id))!,
-    ),
-    /audience/,
-  );
+  let expanded = true;
+  let attempts = 0;
+  const recover = async () => {
+    for (const pending of await r.runs.pendingReturns()) {
+      attempts++;
+      try {
+        if (
+          await deliverSubagentMail(
+            {
+              mailbox: r.mailbox,
+              sessions: r.sessions,
+              runs: r.runs,
+              maxAttempts: 3,
+              prepareRequest: async (request) => ({
+                ...request,
+                conversation: {
+                  ...request.conversation,
+                  audience: expanded ? [actor, { id: "new-member", type: "internal" }] : [actor],
+                },
+              }),
+            },
+            pending,
+          )
+        )
+          await r.runs.markReturned(pending.id);
+      } catch (error) {
+        await r.runs.deferReturn(pending.id, 60_000);
+        throw error;
+      }
+    }
+  };
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  await assert.rejects(recover(), /audience/);
   assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
-  assert.equal((await r.runs.pendingReturns()).length, 1);
+  assert.deepEqual(await r.mailbox.pending(r.room.id), []);
+  expanded = false;
+  for (let i = 0; i < 59; i++) {
+    t.mock.timers.tick(1_000);
+    await recover();
+  }
+  assert.equal(attempts, 1);
+  t.mock.timers.tick(1_000);
+  await recover();
+  assert.equal(attempts, 2);
+  assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
+  assert.deepEqual(await r.runs.pendingReturns(), []);
 });
 
 test("private session replies stay read-only, queue behind running work, and do not return to a parent", async () => {

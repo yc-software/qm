@@ -2214,22 +2214,27 @@ export function buildApp(
   });
   let lastSignalPrune = 0;
   const returnSessionRun = (run: Run) =>
-    advisoryLock.withLock("session-tree-admission", async () => {
-      const settled = await deliverSubagentMail(
-        {
-          sessions,
-          runs,
-          maxAttempts,
-          mailbox: sessionMailbox,
-          prepareRequest: prepareSessionRequest,
-          delegationEnabled: (actorId) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId)),
-          deliveries,
-          signals: runSignals,
-        },
-        run,
-      );
-      if (settled) await runs.markReturned(run.id);
-    });
+    advisoryLock
+      .withLock("session-tree-admission", async () => {
+        const settled = await deliverSubagentMail(
+          {
+            sessions,
+            runs,
+            maxAttempts,
+            mailbox: sessionMailbox,
+            prepareRequest: prepareSessionRequest,
+            delegationEnabled: (actorId) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId)),
+            deliveries,
+            signals: runSignals,
+          },
+          run,
+        );
+        if (settled) await runs.markReturned(run.id);
+      })
+      .catch(async (error: unknown) => {
+        await runs.deferReturn(run.id, 60_000);
+        throw error;
+      });
   runs.onTerminal((run) => {
     if (run.sessionId.startsWith("agent:main:subagent:"))
       void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));

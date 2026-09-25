@@ -169,10 +169,12 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       );
     },
     async pendingReturns(limit = 100, afterId = "") {
+      const now = Date.now();
       return [...runs.values()]
         .filter(
           (run) =>
             isTerminal(run.status) &&
+            (retryAfter.get(run.id) ?? 0) <= now &&
             (!returned.has(run.id) ||
               (() => {
                 const wake = runs.get(byKey.get(`subagent-return:${run.id}`) ?? "");
@@ -186,6 +188,10 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     },
     async markReturned(runId) {
       returned.add(runId);
+    },
+    async deferReturn(runId, delayMs) {
+      const run = runs.get(runId);
+      if (run && isTerminal(run.status)) retryAfter.set(runId, Date.now() + Math.max(0, delayMs));
     },
     onTerminal(listener) {
       terminalListeners.push(listener);
