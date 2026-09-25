@@ -103,6 +103,7 @@ test("pg map: rejects an unsafe table name (the DDL/DML interpolation guard)", (
   const factory = createPostgresMapFactory("postgres://unused");
   assert.throws(() => factory.map("bad name"), /invalid table name/);
   assert.throws(() => factory.map("crons;--"), /invalid table name/);
+  assert.throws(() => factory.map<{ owner: string }>("map_widgets", ["bad field" as "owner"]), /invalid index field/);
 });
 
 test(
@@ -179,12 +180,13 @@ test("pg map: select mirrors the memory map — folded field filter, projection,
     ["sel-c", { name: "sel-c", tags: [], nested: { n: 3 }, owner: "Someone@X.com", secretEnc: "enc-c" }],
   ];
   const factory = createPostgresMapFactory(URL!);
-  const pgMap = factory.map<Owned>("map_widgets");
+  let pgMap = factory.map<Owned>("map_widgets");
   const memMap = createMemoryMap<Owned>();
   for (const [id, row] of rows) {
     await pgMap.put(id, row);
     await memMap.put(id, row);
   }
+  pgMap = factory.map<Owned>("map_widgets", ["owner"]);
   try {
     const mine = await pgMap.select({ omit: ["secretEnc"], where: { field: "owner", anyOfFold: ["U7"] } });
     assert.deepEqual(mine, await memMap.select({ omit: ["secretEnc"], where: { field: "owner", anyOfFold: ["U7"] } }));
@@ -221,10 +223,27 @@ test("pg map: select mirrors the memory map — folded field filter, projection,
     await memMap.put("sel-d", turkish);
     const swept = await pgMap.select({ where: { field: "owner", anyOfFold: ["no-such-owner"] } });
     assert.deepEqual(swept, await memMap.select({ where: { field: "owner", anyOfFold: ["no-such-owner"] } }));
+    const indexes = await factory.pool.q(
+      "SELECT indexrelid::regclass::text AS name, indisvalid FROM pg_index WHERE indrelid = 'map_widgets'::regclass",
+    );
+    for (const name of ["map_widgets_owner_fold", "map_widgets_owner_unicode"]) {
+      assert.ok(indexes.some((index) => index.name === name && index.indisvalid));
+    }
+    await pgMap.merge("sel-a", { owner: "Moved" });
+    assert.deepEqual(
+      (await pgMap.select({ where: { field: "owner", anyOfFold: ["MOVED"] } })).map((w) => w.name),
+      ["sel-a", "sel-d"],
+    );
     assert.deepEqual(
       swept.map((w) => w.name),
       ["sel-d"],
       "a non-ASCII field value is always a candidate — SQL lower() and JS toLowerCase() disagree there",
+    );
+    await pgMap.merge("sel-d", { owner: "josé" });
+    assert.deepEqual(
+      (await pgMap.select({ where: { field: "owner", anyOfFold: ["josé"] } })).map((row) => row.name),
+      ["sel-d"],
+      "a row matching both indexed branches is returned once",
     );
   } finally {
     for (const id of [...rows.map(([id]) => id), "sel-d"]) await pgMap.delete(id);
@@ -235,8 +254,8 @@ test("pg map: select mirrors the memory map — folded field filter, projection,
 test("pg keychain: listByOwner is a per-owner projected read with no secret material", { skip }, async () => {
   const factory = createPostgresMapFactory(URL!);
   const keychain = createKeychain({
-    creds: factory.map<KeychainCredential>("map_keychain_creds"),
-    grants: factory.map<KeychainGrant>("map_keychain_grants"),
+    creds: factory.map<KeychainCredential>("map_keychain_creds", ["ownerId"]),
+    grants: factory.map<KeychainGrant>("map_keychain_grants", ["ownerId"]),
     asks: factory.map<KeychainAsk>("map_keychain_asks"),
     key: deriveConnectorKey("postgres-keychain-test-key"),
   });
@@ -272,8 +291,8 @@ test("pg map: concurrent keychain instances claim a once grant exactly once", { 
   const key = deriveConnectorKey("postgres-keychain-test-key");
   const build = (factory: ReturnType<typeof createPostgresMapFactory>) =>
     createKeychain({
-      creds: factory.map<KeychainCredential>("map_keychain_creds"),
-      grants: factory.map<KeychainGrant>("map_keychain_grants"),
+      creds: factory.map<KeychainCredential>("map_keychain_creds", ["ownerId"]),
+      grants: factory.map<KeychainGrant>("map_keychain_grants", ["ownerId"]),
       asks: factory.map<KeychainAsk>("map_keychain_asks"),
       key,
     });

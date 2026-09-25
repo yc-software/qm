@@ -179,7 +179,7 @@ test("the Postgres map select projects and filters inside SQL, never fetching th
   assert.equal(reads.length, 1);
   assert.match(
     reads[0]!.sql,
-    /^SELECT json - \$1::text\[\] AS json FROM select_probe WHERE \(lower\(json->>\$2\) = ANY\(\$3::text\[\]\) OR json->>\$2 ~ '\[\^\\x01-\\x7f\]'\) ORDER BY id$/,
+    /^SELECT json - \$1::text\[\] AS json FROM select_probe WHERE id IN \(\s+SELECT id FROM select_probe WHERE lower\(json->>\$2\) = ANY\(\$3::text\[\]\)\s+UNION\s+SELECT id FROM select_probe WHERE json->>\$2 ~ '\[\^\\x01-\\x7f\]'\) ORDER BY id$/,
   );
   assert.deepEqual(reads[0]!.params, [["secretEnc"], "owner", ["u1", "alice@x.com"]]);
 

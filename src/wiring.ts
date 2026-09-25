@@ -606,8 +606,8 @@ export function buildApp(
       membership.managesArtifactHome!(scopeId, authoredBy ?? "", principalId),
   });
   const pgArtifactMap = config.databaseUrl ? createPostgresMapFactory(config.databaseUrl) : null;
-  const artifactMap = <T>(table: string): DurableMap<T> =>
-    pgArtifactMap ? pgArtifactMap.map<T>(table) : createMemoryMap<T>();
+  const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
+    pgArtifactMap ? pgArtifactMap.map<T>(table, indexedFields) : createMemoryMap<T>();
   setProviderBaseUrls(config.providerBaseUrls);
   const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveModel(id));
   if (unknownGatewayModels.length) {
@@ -1201,8 +1201,8 @@ export function buildApp(
     ...(legacyCredentialKey ? { fallbacks: [legacyCredentialKey] } : {}),
   };
   const credentialStore: Keychain = createKeychain({
-    creds: artifactMap<KeychainCredential>("keychain_credentials"),
-    grants: artifactMap<KeychainGrant>("keychain_grants"),
+    creds: artifactMap<KeychainCredential>("keychain_credentials", ["ownerId"]),
+    grants: artifactMap<KeychainGrant>("keychain_grants", ["ownerId"]),
     asks: artifactMap<KeychainAsk>("keychain_asks"),
     key: credentialKey,
     lock: advisoryLock,
@@ -1490,7 +1490,7 @@ export function buildApp(
     config.swarmsEnabled !== false && config.sessionStore === swarmStoreKind && runStoreKind === swarmStoreKind
       ? createSwarmService({
           defaults: config.swarmDefaults,
-          store: createSwarmStore(artifactMap<SwarmStorage>("swarms"), {
+          store: createSwarmStore(artifactMap<SwarmStorage>("swarms", ["pending"]), {
             runs,
             sessions,
             ...(pgArtifactMap && runStoreKind === "postgres" ? { pg: pgArtifactMap.pool } : {}),
@@ -1739,7 +1739,7 @@ export function buildApp(
     : createMemoryEnvironmentStore();
   const monitors = createMonitorStore(artifactMap<Monitor>("monitors"));
   const loopStore = createLoopStore(artifactMap<Loop>("loops"));
-  const loopItemsMap = artifactMap<LoopItem>("loop_items");
+  const loopItemsMap = artifactMap<LoopItem>("loop_items", ["loopId"]);
   const loopOwnerCache = new Map<string, string>();
   const publishLoopEvent = (event: import("./loops/ledger-events.ts").LedgerEvent): void => {
     void (async () => {
@@ -1758,7 +1758,7 @@ export function buildApp(
       return Boolean(loop && (loop.surface !== "inbox" || loop.state === "enabled"));
     },
   });
-  const loopOutputs = createLoopOutputStore(artifactMap<LoopOutput>("loop_outputs"), (output) =>
+  const loopOutputs = createLoopOutputStore(artifactMap<LoopOutput>("loop_outputs", ["itemId"]), (output) =>
     publishLoopEvent({ loopId: output.loopId, itemId: output.itemId, op: "ready", at: Date.now() }),
   );
   const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
@@ -1838,7 +1838,7 @@ export function buildApp(
       conversation: { ...request.conversation, audience, publishMembers: audience },
     };
   };
-  const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox"));
+  const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox", ["recipientId"]));
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
     enabled: async (actorId) =>
@@ -2353,8 +2353,8 @@ export function buildApp(
   });
   const loopIngress = createLoopIngress({
     enabledFor: (owner) => featureFlags.enabled("inbox_loops", scopeId("personal", owner)),
-    sources: artifactMap<LoopIngress>("loop_ingress"),
-    deliveries: artifactMap<IngressDelivery>("loop_ingress_deliveries"),
+    sources: artifactMap<LoopIngress>("loop_ingress", ["loopId"]),
+    deliveries: artifactMap<IngressDelivery>("loop_ingress_deliveries", ["queueKey"]),
     loops: loopStore,
     items: loopItems,
     outputs: loopOutputs,

@@ -190,6 +190,8 @@ function rowToSpendRow(r: Record<string, unknown>): SpendRow {
 
 const LAST_ACTIVITY_DEBOUNCE_MS = 60_000;
 const SEARCH_TIMEOUT_MS = 10_000;
+const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
+  AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
 
 export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
   const now = opts.now ?? (() => Date.now());
@@ -206,14 +208,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
        OR (${participant}.valid_to_seq IS NULL AND (${participant}.valid_to IS NULL OR ${entry}.created_at < ${participant}.valid_to))))`;
   const participantSessionsSql = (extraWhere: string): string =>
     `SELECT s.*, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
-            COALESCE(MAX(e.created_at), s.created_at) AS user_last_activity,
+            COALESCE((SELECT MAX(e.created_at) FROM session_entries e
+                       WHERE e.session_id = s.id AND e.type = 'user'), s.created_at) AS user_last_activity,
             EXISTS (SELECT 1 FROM session_entries x WHERE x.session_id = s.id
                       AND ${withinParticipantWindow("x", "p")}) AS has_entries
        FROM sessions s
        JOIN participants p ON p.session_id = s.id
-       LEFT JOIN session_entries e ON e.session_id = s.id AND e.type = 'user'
-      WHERE p.principal_id = $1${extraWhere}
-      GROUP BY s.id, p.title, p.archived, p.pinned, p.color, p.valid_from, p.valid_to, p.valid_from_seq, p.valid_to_seq`;
+      WHERE p.principal_id = $1${extraWhere}`;
   const participantSessions = async (principalId: string, opts?: { limit: number }): Promise<Session[]> => {
     const limit = opts ? Math.max(0, Math.floor(opts.limit)) : undefined;
     const rows = await q(
@@ -593,6 +594,46 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           `SET LOCAL lock_timeout = '3s'`,
           `CREATE INDEX IF NOT EXISTS session_llm_requests_created_at
         ON session_llm_requests(created_at)`,
+        ],
+      },
+      {
+        id: "sessions/store/0019-participant-activity-indexes",
+        statements: [
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS participants_by_principal
+             ON participants(principal_id, session_id)`,
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_user_activity
+             ON session_entries(session_id, created_at DESC) WHERE type = 'user'`,
+        ],
+      },
+      {
+        id: "sessions/store/0020-spend-usage-json",
+        statements: [
+          `CREATE OR REPLACE FUNCTION spend_usage_json(t text) RETURNS jsonb
+             LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $spend_usage_json$
+             SELECT CASE WHEN pg_input_is_valid(j ->> 'costUsd', 'double precision') IS NOT FALSE
+                          AND pg_input_is_valid(j ->> 'input', 'bigint') IS NOT FALSE
+                          AND pg_input_is_valid(j ->> 'output', 'bigint') IS NOT FALSE
+                          AND pg_input_is_valid(j ->> 'cacheRead', 'bigint') IS NOT FALSE
+                          AND pg_input_is_valid(j ->> 'cacheWrite', 'bigint') IS NOT FALSE THEN j END
+               FROM (SELECT CASE WHEN pg_input_is_valid(t, 'jsonb') THEN t::jsonb END AS j OFFSET 0) parsed
+             $spend_usage_json$`,
+        ],
+      },
+      {
+        id: "sessions/store/0021-spend-covering-index",
+        statements: [
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_spend
+             ON session_llm_requests(created_at,
+               ((spend_usage_json(usage_json) ->> 'costUsd')::double precision),
+               ((spend_usage_json(usage_json) ->> 'input')::bigint),
+               ((spend_usage_json(usage_json) ->> 'output')::bigint),
+               ((spend_usage_json(usage_json) ->> 'cacheRead')::bigint),
+               ((spend_usage_json(usage_json) ->> 'cacheWrite')::bigint))
+             INCLUDE (session_id, model, usage_json)
+             WHERE usage_json IS NOT NULL AND ${SPEND_INDEXABLE}`,
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_spend_wide
+             ON session_llm_requests(created_at)
+             WHERE usage_json IS NOT NULL AND NOT ${SPEND_INDEXABLE}`,
         ],
       },
     ],
@@ -1632,12 +1673,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async spendRollup(range): Promise<SpendRow[]> {
       const rows = await q(
-        `WITH RECURSIVE spending AS (
-           SELECT DISTINCT session_id FROM session_llm_requests
-            WHERE created_at >= $1 AND created_at < $2 AND usage_json IS NOT NULL
-         ), ancestry AS (
+        `WITH RECURSIVE ancestry AS (
            SELECT s.id AS session_id, s.parent_session_id, ${originExpr("s")} AS origin, ARRAY[s.id] AS path
-             FROM sessions s JOIN spending r ON r.session_id = s.id
+             FROM sessions s
+            WHERE s.parent_session_id IS NOT NULL AND ${originExpr("s")} = 'conversation'
            UNION ALL
            SELECT a.session_id, p.parent_session_id, ${originExpr("p")}, a.path || p.id
              FROM ancestry a JOIN sessions p ON p.id = a.parent_session_id
@@ -1645,30 +1684,41 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          ), origins AS (
            SELECT DISTINCT ON (session_id) session_id, origin
              FROM ancestry ORDER BY session_id, cardinality(path) DESC
-         )
-         SELECT day, scope_id, origin, model,
+         ), rollup AS MATERIALIZED (
+           SELECT (r.created_at / 86400000)::bigint AS day, s.scope_id,
+                COALESCE(o.origin, ${originExpr("s")}) AS origin, r.model,
                 COUNT(*) AS calls,
                 COALESCE(SUM(cost_usd), 0) AS cost_usd,
                 COALESCE(SUM(input), 0) AS input,
                 COALESCE(SUM(output), 0) AS output,
                 COALESCE(SUM(cache_read), 0) AS cache_read,
                 COALESCE(SUM(cache_write), 0) AS cache_write
-           FROM (SELECT (r.created_at / 86400000)::bigint AS day,
-                        s.scope_id,
-                        r.model,
-                        o.origin,
-                        (u.j ->> 'costUsd')::double precision AS cost_usd,
-                        (u.j ->> 'input')::bigint AS input,
-                        (u.j ->> 'output')::bigint AS output,
-                        (u.j ->> 'cacheRead')::bigint AS cache_read,
-                        (u.j ->> 'cacheWrite')::bigint AS cache_write
-                   FROM session_llm_requests r
-                   JOIN sessions s ON s.id = r.session_id
-                   JOIN origins o ON o.session_id = s.id
-                   CROSS JOIN LATERAL (SELECT r.usage_json::jsonb AS j) u
-                  WHERE r.created_at >= $1 AND r.created_at < $2
-                    AND r.usage_json IS NOT NULL) t
-          GROUP BY day, scope_id, origin, model`,
+           FROM (SELECT created_at, session_id, model,
+                        (spend_usage_json(usage_json) ->> 'costUsd')::double precision AS cost_usd,
+                        (spend_usage_json(usage_json) ->> 'input')::bigint AS input,
+                        (spend_usage_json(usage_json) ->> 'output')::bigint AS output,
+                        (spend_usage_json(usage_json) ->> 'cacheRead')::bigint AS cache_read,
+                        (spend_usage_json(usage_json) ->> 'cacheWrite')::bigint AS cache_write
+                   FROM session_llm_requests
+                  WHERE created_at >= $1 AND created_at < $2 AND usage_json IS NOT NULL
+                    AND ${SPEND_INDEXABLE}
+                 UNION ALL
+                 SELECT created_at, session_id, model,
+                        (usage_json::jsonb ->> 'costUsd')::double precision AS cost_usd,
+                        (usage_json::jsonb ->> 'input')::bigint AS input,
+                        (usage_json::jsonb ->> 'output')::bigint AS output,
+                        (usage_json::jsonb ->> 'cacheRead')::bigint AS cache_read,
+                        (usage_json::jsonb ->> 'cacheWrite')::bigint AS cache_write
+                   FROM session_llm_requests
+                  WHERE created_at >= $1 AND created_at < $2 AND usage_json IS NOT NULL
+                    AND NOT ${SPEND_INDEXABLE}
+                    AND EXISTS (SELECT 1 FROM sessions WHERE id = session_llm_requests.session_id)
+                 OFFSET 0) r
+           JOIN sessions s ON s.id = r.session_id
+           LEFT JOIN origins o ON o.session_id = s.id
+          GROUP BY day, s.scope_id, COALESCE(o.origin, ${originExpr("s")}), r.model
+         )
+         SELECT * FROM rollup ORDER BY day, scope_id, origin, model`,
         [range.from, range.to],
       );
       return rows.map(rowToSpendRow);
