@@ -962,8 +962,8 @@ test("inbox followup runtime and attachments affect only that item turn", async 
   for (const scheduled of s.turns.slice(1)) {
     assert.equal(scheduled.model, undefined);
     assert.equal(scheduled.harness, undefined);
-    assert.equal(scheduled.fastMode, false);
-    assert.equal(scheduled.thinkingLevel, "xhigh");
+    assert.equal(scheduled.fastMode, undefined);
+    assert.equal(scheduled.thinkingLevel, undefined);
     assert.equal(scheduled.attachments, undefined);
   }
 });
