@@ -282,7 +282,7 @@ test("resolvePrincipal unions broker rules without widening retained external OI
       { sub: "g", claims: {}, userinfo: { email: "other@gmail.com", email_verified: true } },
       async () => ({ allowed: false }),
     ),
-    /permitted domain/,
+    /permitted email list/,
   );
   await assert.rejects(
     resolvePrincipal(
