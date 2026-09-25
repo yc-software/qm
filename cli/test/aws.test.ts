@@ -1362,6 +1362,8 @@ test("AWS up records a restore point under the lease before any mutation and sta
   const priorPath = process.env.PATH;
   process.env.PATH = `${dir}:${priorPath}`;
   const started = Date.now();
+  const priorStatus = process.env.AWS_FAKE_DB_STATUS;
+  process.env.AWS_FAKE_DB_STATUS = "storage-optimization";
   try {
     await awsUp(single, dir, { dryRun: true });
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /rds /, "plan is read-only and never touches RDS");
@@ -1396,6 +1398,8 @@ test("AWS up records a restore point under the lease before any mutation and sta
     );
   } finally {
     process.env.PATH = priorPath;
+    if (priorStatus === undefined) delete process.env.AWS_FAKE_DB_STATUS;
+    else process.env.AWS_FAKE_DB_STATUS = priorStatus;
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
