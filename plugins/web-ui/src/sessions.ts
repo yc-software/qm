@@ -403,9 +403,9 @@ export function renderList(): void {
                               class="archived-toggle"
                               type="button"
                               @click=${() => {
-                          archivedLimit += SESSION_BATCH_SIZE;
-                          renderList();
-                        }}
+                                archivedLimit += SESSION_BATCH_SIZE;
+                                renderList();
+                              }}
                             >
                               Show more archived conversations
                             </button>`
