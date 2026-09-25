@@ -203,29 +203,32 @@ export function reviveGoalRecord(goal: GoalRecord): GoalRecord {
  * notice — on every later turn.
  */
 export function rehydrateOpenGoal(history: ReadonlyArray<{ type: string; payload?: unknown }>): GoalRecord | null {
-  for (let i = history.length - 1; i >= 0; i--) {
-    const h = history[i]!;
-    if (h.type !== "system") continue;
-    const payload = h.payload as { kind?: string; goal?: GoalRecord } | null;
-    if (payload?.kind !== "goal" || !payload.goal) continue;
-    const status = (payload.goal as { status?: string }).status;
-    return status === "active" || status === "paused" ? reviveGoalRecord(payload.goal) : null;
-  }
-  return null;
+  const goal = latestGoalRecord(history);
+  return goal && (goal.status === "active" || goal.status === "paused") ? reviveGoalRecord(goal) : null;
 }
 
-export function latestGoalRecord(entries: ReadonlyArray<{ type: string; payload?: unknown }>): GoalRecord | null {
+export function latestGoalEntry<T extends { type: string; payload?: unknown }>(entries: ReadonlyArray<T>): T | null {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
     if (e.type !== "system" && e.type !== "tool_result") continue;
     const payload = e.payload as { kind?: string; tool?: string; goal?: GoalRecord | null } | null;
     const carrier = e.type === "system" ? payload?.kind === "goal" : payload?.tool === "goal";
-    if (!carrier || !payload?.goal) continue;
-    const goal = reviveGoalRecord(payload.goal);
-    goal.blockedStreak = Math.max(0, Math.floor(finitePositive(payload.goal.blockedStreak) ?? 0));
-    return goal;
+    if (carrier && payload?.goal) return e;
   }
   return null;
+}
+
+export function latestGoalRecord(entries: ReadonlyArray<{ type: string; payload?: unknown }>): GoalRecord | null {
+  const entry = latestGoalEntry(entries);
+  if (!entry) return null;
+  const stored = (entry.payload as { goal: GoalRecord }).goal;
+  const goal = reviveGoalRecord(stored);
+  goal.blockedStreak = Math.max(0, Math.floor(finitePositive(stored.blockedStreak) ?? 0));
+  return goal;
+}
+
+export function goalSnapshotPayload(goal: GoalRecord): { kind: "goal"; goal: GoalRecord } {
+  return { kind: "goal", goal: structuredClone(goal) };
 }
 
 export function goalReport(goal: GoalRecord): string {

@@ -115,6 +115,7 @@ import {
   goalSteeringNote,
   meterGoalCall,
   rehydrateOpenGoal,
+  goalSnapshotPayload,
 } from "./goal.ts";
 
 export interface PiHarnessOptions {
@@ -2416,7 +2417,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (entry.ref.goal) {
               const goalEntry = await turn.emit({
                 type: "system",
-                payload: { kind: "goal", goal: { ...entry.ref.goal } },
+                payload: goalSnapshotPayload(entry.ref.goal),
                 scopeLabel: turn.scopeLabel,
               });
               await tapeEntryMirror(goalEntry);
@@ -2450,7 +2451,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               }
               const goalEntry = await turn.emit({
                 type: "system",
-                payload: { kind: "goal", goal: { ...g } },
+                payload: goalSnapshotPayload(g),
                 scopeLabel: turn.scopeLabel,
               });
               await tapeEntryMirror(goalEntry);
@@ -2486,7 +2487,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const g = entry.ref.goal;
             const goalEntry = await turn.emit({
               type: "system",
-              payload: { kind: "goal", goal: { ...g } },
+              payload: goalSnapshotPayload(g),
               scopeLabel: turn.scopeLabel,
             });
             await tapeEntryMirror(goalEntry);

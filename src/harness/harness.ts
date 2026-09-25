@@ -158,6 +158,7 @@ export interface HarnessTurnResult {
   reply: string;
   silent?: boolean;
   stopped?: true;
+  stoppedByUser?: true;
   stoppedTapeComplete?: true;
   pendingApprovals?: Array<{
     command: string;

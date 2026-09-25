@@ -1,7 +1,7 @@
 import test from "node:test";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -584,3 +584,47 @@ test("OpenCode child requests inherit fast mode and a reused runtime honors swit
     assert.deepEqual(JSON.parse(result.reply), [fastMode ? { serviceTier: "priority" } : {}, {}]);
   }
 });
+
+for (const mechanism of ["signal", "cancel", "both"] as const) {
+  test(`OpenCode preserves explicit Stop provenance via ${mechanism}`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-stop-"));
+    const signals = createMemoryRunSignalStore();
+    const cancel = new AbortController();
+    const harness = createOpenCodeHarness({
+      binaryPath: fakeSidecar(
+        dir,
+        "stop",
+        `
+        if (req.method === "POST" && message) {
+          await readBody(req);
+          globalThis.pendingPrompt = res;
+          require("node:fs").writeFileSync(${JSON.stringify(join(dir, "started"))}, "1");
+          return;
+        }
+        if (req.method === "POST" && url.pathname.endsWith("/abort")) {
+          if (globalThis.pendingPrompt) { json(globalThis.pendingPrompt, { info: {}, parts: [] }); globalThis.pendingPrompt = null; }
+          return json(res, true);
+        }
+        if (req.method === "GET" && message) return json(res, []);
+      `,
+      ),
+      signals,
+      turnWallClockMs: 5_000,
+    });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const running = harness.turns.runTurn({ ...turnInput([], []), runId: "stop", cancel: cancel.signal });
+    const deadline = Date.now() + 4_000;
+    while (!existsSync(join(dir, "started"))) {
+      if (Date.now() > deadline) throw new Error("mock OpenCode never started");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (mechanism !== "cancel") await signals.send("stop", { kind: "abort" });
+    if (mechanism !== "signal") cancel.abort();
+    const result = await running;
+    assert.equal(result.stoppedByUser, mechanism === "cancel" ? undefined : true);
+    if (mechanism !== "cancel") assert.equal(result.stopped, true);
+  });
+}

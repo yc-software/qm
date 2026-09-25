@@ -16,7 +16,7 @@ import { withTapedEntryMirrors } from "./harness-shared.ts";
 import { NON_INTERACTIVE_THINKING_LEVEL, NON_INTERACTIVE_FAST_MODE } from "../core/turn-options.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { createGrindMeter } from "./grind.ts";
-import { enforceGoal, latestGoalRecord, rehydrateOpenGoal, type GoalRecord } from "./goal.ts";
+import { enforceGoal, goalSnapshotPayload, latestGoalRecord, rehydrateOpenGoal, type GoalRecord } from "./goal.ts";
 
 const GOAL_ROUND_MIN_WALL_MS = 30_000;
 
@@ -88,11 +88,11 @@ async function runTurnEnforcingGoal(
       return blocked() ? "halted" : "ok";
     },
   });
-  if (result.stopped && goal.status === "active") {
+  if (result.stopped && (result.stoppedByUser || !input.cancel?.aborted) && goal.status === "active") {
     goal.status = "paused";
     goal.updatedAt = Date.now();
   }
-  await dispatched.emit({ type: "system", payload: { kind: "goal", goal: { ...goal } }, scopeLabel: input.scopeLabel });
+  await dispatched.emit({ type: "system", payload: goalSnapshotPayload(goal), scopeLabel: input.scopeLabel });
   if (!enforced.waiverNote) return result;
   await dispatched.emit({ type: "assistant", payload: { text: enforced.waiverNote }, scopeLabel: input.scopeLabel });
   return { ...result, reply: [result.reply, enforced.waiverNote].filter(Boolean).join("\n\n") };

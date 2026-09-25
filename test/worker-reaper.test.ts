@@ -230,132 +230,107 @@ test("a heartbeat landing between SELECT and retire leaves the run AND its sessi
   );
 });
 
-test("draining a worker mid-turn hands back the session write-lock, not just the run lease", async () => {
+test("shutdown cancels before handback and holds both leases until the turn unwinds", async () => {
   const { runs } = createMemoryRunStore();
   const sessions = createMemorySessionStore();
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
-  const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
-
-  const { orchestrator, started, unblock } = gatedOrchestrator(async () => {
-    assert.ok((await sessions.acquireLease(session.id)).lease, "the in-flight turn acquired the session lease");
+  const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 1 })).run;
+  let started!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    started = resolve;
   });
-
-  const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
-  worker.start();
-  await started;
-
-  await worker.releaseInFlight();
-
-  const { lease: reacquired } = await sessions.acquireLease(session.id);
-  assert.ok(reacquired, "drain released the session write-lock so the fresh instance can resume");
-  assert.notEqual((await runs.get(enq.id))?.status, "running", "the run was handed back too");
-
-  unblock();
-  await worker.stop();
-});
-
-test("releaseInFlight is once-per-run — a late duplicate cannot yank a lock the fresh instance re-acquired", async () => {
-  const { runs } = createMemoryRunStore();
-  const sessions = createMemorySessionStore();
-  const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
-  await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 });
-  const { orchestrator, started, unblock } = gatedOrchestrator(async () => {
-    assert.ok((await sessions.acquireLease(session.id)).lease);
+  let unwind!: () => void;
+  const cleanup = new Promise<void>((resolve) => {
+    unwind = resolve;
   });
-
-  const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
-  worker.start();
-  await started;
-
-  const stopping = worker.stop(60_000);
-  await worker.releaseInFlight();
-  assert.ok((await sessions.acquireLease(session.id)).lease, "the fresh instance re-acquires the session lock");
-
-  await worker.releaseInFlight();
-  assert.equal(
-    (await sessions.acquireLease(session.id)).lease,
-    null,
-    "the duplicate release did not strip the fresh instance's lock",
-  );
-
-  unblock();
-  await stopping;
-});
-
-test("a backstop retry still unlocks the session after the first attempt's unlock failed", async () => {
-  const { runs } = createMemoryRunStore();
-  const store = createMemorySessionStore();
-  const session = await store.getOrCreateByThread("t1", "dm", "personal:U1");
-  let failUnlocks = 1;
-  const sessions = {
-    ...store,
-    async forceReleaseLease(id: string) {
-      if (failUnlocks-- > 0) throw new Error("pg blip");
-      return store.forceReleaseLease(id);
+  let signal!: AbortSignal;
+  let leaseToken!: string;
+  const orchestrator = {
+    async handleTurn(input: OrchestratorInput) {
+      signal = input.cancel!;
+      leaseToken = input.runLeaseToken!;
+      const { lease } = await sessions.acquireLease(session.id);
+      assert.ok(lease);
+      started();
+      try {
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+        await cleanup;
+        await sessions.append(lease, { type: "system", payload: { kind: "checkpoint" }, scopeLabel: "personal:U1" });
+        return { status: "silent" as const, stopped: true };
+      } finally {
+        await sessions.releaseLease(lease);
+      }
     },
-  };
-  const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
-  const { orchestrator, started, unblock } = gatedOrchestrator(async () => {
-    assert.ok((await store.acquireLease(session.id)).lease);
-  });
-
-  const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+  } as unknown as Orchestrator;
+  const worker = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, heartbeatIntervalMs: 5, pollMs: 5 });
   worker.start();
-  await started;
-
-  const stopping = worker.stop(60_000);
-  await worker.releaseInFlight();
-  assert.equal((await runs.get(enq.id))?.status, "running", "the run is not claimable before its session unlocks");
-  assert.equal((await store.acquireLease(session.id)).lease, null, "the session lock is still stranded");
-
-  await worker.releaseInFlight();
-  assert.ok((await store.acquireLease(session.id)).lease, "the retry completed the session unlock");
-  assert.equal((await runs.get(enq.id))?.status, "pending", "then handed the run back");
-
-  unblock();
-  await stopping;
-});
-
-test("overlapping releaseInFlight calls collapse into one release (graceful stop vs backstop)", async () => {
-  const { runs } = createMemoryRunStore();
-  const store = createMemorySessionStore();
-  const session = await store.getOrCreateByThread("t1", "dm", "personal:U1");
-  let unlockCalls = 0;
-  let releaseGate: () => void = () => {};
-  const gate = new Promise<void>((r) => {
-    releaseGate = r;
+  await ready;
+  await worker.stop(1);
+  let released = false;
+  const handback = worker.releaseInFlight().then(() => {
+    released = true;
   });
-  const sessions = {
-    ...store,
-    async forceReleaseLease(id: string) {
-      unlockCalls += 1;
-      await gate;
-      return store.forceReleaseLease(id);
-    },
-  };
-  await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 });
-  const { orchestrator, started, unblock } = gatedOrchestrator(async () => {
-    assert.ok((await store.acquireLease(session.id)).lease);
-  });
-
-  const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
-  worker.start();
-  await started;
-
-  const stopping = worker.stop(60_000);
-  const first = worker.releaseInFlight();
+  await sleep(20);
+  assert.equal(signal.aborted, true, "shutdown reaches the existing cancellation signal immediately");
+  assert.equal(released, false, "handback waits for the cancellation checkpoint and finally block");
+  assert.equal(worker.busy(), true);
+  assert.equal((await runs.get(enq.id))?.status, "running");
+  assert.equal(await runs.claim("replacement", 5_000), null);
+  assert.equal((await sessions.acquireLease(session.id)).lease, null);
   const second = worker.releaseInFlight();
-  releaseGate();
-  await Promise.all([first, second]);
-  assert.equal(unlockCalls, 1, "the overlapping call joined the in-flight release instead of re-running it");
+  unwind();
+  await Promise.all([handback, second]);
+  assert.equal(worker.busy(), false);
+  assert.equal((await runs.get(enq.id))?.status, "pending");
+  assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
+  const replacement = await runs.claim("replacement", 5_000);
+  assert.ok(replacement);
+  const freshLease = (await sessions.acquireLease(session.id)).lease;
+  assert.ok(freshLease);
+  await worker.releaseInFlight();
+  assert.equal((await sessions.acquireLease(session.id)).lease, null, "late shutdown cannot steal a new lease");
+  assert.equal(await runs.complete(enq.id, leaseToken, { status: "silent" }), false);
+  assert.deepEqual(await runs.fail(enq.id, leaseToken, "late error"), { requeued: false });
+  assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
+});
 
+test("an uncooperative turn keeps both leases until it actually exits", async () => {
+  const { runs } = createMemoryRunStore();
+  const sessions = createMemorySessionStore();
+  const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
+  const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
+  let held: Awaited<ReturnType<typeof sessions.acquireLease>>["lease"];
+  const { orchestrator, started, unblock } = gatedOrchestrator(
+    async () => {
+      held = (await sessions.acquireLease(session.id)).lease;
+      assert.ok(held);
+    },
+    async () => {
+      await sessions.releaseLease(held!);
+    },
+  );
+  const worker = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+  worker.start();
+  await started;
+  await worker.stop(1);
+  let released = false;
+  const handback = worker.releaseInFlight().then(() => {
+    released = true;
+  });
+  await sleep(20);
+  assert.equal(released, false);
+  assert.equal((await runs.get(enq.id))?.status, "running");
+  assert.equal((await sessions.acquireLease(session.id)).lease, null);
+  assert.equal(await runs.claim("replacement", 5_000), null);
   unblock();
-  await stopping;
+  await handback;
+  assert.equal((await runs.get(enq.id))?.status, "pending");
+  assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
+  assert.ok((await sessions.acquireLease(session.id)).lease);
 });
 
 test("a thrown claim neither kills the worker loop nor blocks the drain handback", async () => {
   const store = createMemoryRunStore();
-  const sessions = createMemorySessionStore();
   let explode = 2;
   const runs = {
     ...store.runs,
@@ -367,7 +342,7 @@ test("a thrown claim neither kills the worker loop nor blocks the drain handback
   const enq = (await store.runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const { orchestrator, started, unblock } = gatedOrchestrator();
 
-  const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+  const worker = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
   worker.start();
   await started;
 
@@ -377,7 +352,10 @@ test("a thrown claim neither kills the worker loop nor blocks the drain handback
   assert.equal((await store.runs.get(enq.id))?.status, "done", "the drain still settled the turn");
 });
 
-function gatedOrchestrator(onStart?: () => Promise<void>): {
+function gatedOrchestrator(
+  onStart?: () => Promise<void>,
+  onEnd?: () => Promise<void>,
+): {
   orchestrator: Orchestrator;
   started: Promise<void>;
   unblock: () => void;
@@ -395,6 +373,7 @@ function gatedOrchestrator(onStart?: () => Promise<void>): {
       await onStart?.();
       signalStarted();
       await gate;
+      await onEnd?.();
       return { status: "ok", reply: "finished" };
     },
   } as unknown as Orchestrator;
@@ -403,11 +382,10 @@ function gatedOrchestrator(onStart?: () => Promise<void>): {
 
 test("stop() lets an in-flight turn finish inside the drain budget — the run completes instead of being handed back", async () => {
   const { runs } = createMemoryRunStore();
-  const sessions = createMemorySessionStore();
   const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const { orchestrator, started, unblock } = gatedOrchestrator();
 
-  const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+  const worker = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
   worker.start();
   await started;
 
@@ -418,27 +396,6 @@ test("stop() lets an in-flight turn finish inside the drain budget — the run c
   assert.equal((await runs.get(enq.id))?.status, "done", "the turn finished inside the budget");
   await worker.releaseInFlight();
   assert.equal((await runs.get(enq.id))?.status, "done", "nothing left to hand back");
-});
-
-test("a turn still running past the drain budget is handed back, and its late completion is a no-op", async () => {
-  const { runs } = createMemoryRunStore();
-  const sessions = createMemorySessionStore();
-  const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
-  const { orchestrator, started, unblock } = gatedOrchestrator();
-
-  const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
-  worker.start();
-  await started;
-
-  await worker.stop(30);
-  assert.equal((await runs.get(enq.id))?.status, "running", "stop() itself never touches the lease");
-
-  await worker.releaseInFlight();
-  assert.equal((await runs.get(enq.id))?.status, "pending", "the straggler was handed back to the queue");
-
-  unblock();
-  await sleep(30);
-  assert.equal((await runs.get(enq.id))?.status, "pending", "the zombie turn's complete() is a token-guarded no-op");
 });
 
 test("runtime.stop() drains the in-flight run even with the queue non-empty", async () => {
@@ -536,10 +493,9 @@ test("runtime.start() leaves queued runs idle when background work is disabled",
 
 test("timed-out stop cannot resurrect a worker while its previous turn drains", async () => {
   const { runs } = createMemoryRunStore();
-  const sessions = createMemorySessionStore();
   const first = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const { orchestrator, started, unblock } = gatedOrchestrator();
-  const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+  const worker = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
   worker.start();
   await started;
   await worker.stop(5);
@@ -559,7 +515,6 @@ test("timed-out stop cannot resurrect a worker while its previous turn drains", 
 
 test("stopClaims relinquishes new work while keeping an active turn and its heartbeats alive", async () => {
   const { runs } = createMemoryRunStore();
-  const sessions = createMemorySessionStore();
   const first = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const { orchestrator, started, unblock } = gatedOrchestrator();
   let beats = 0;
@@ -568,7 +523,7 @@ test("stopClaims relinquishes new work while keeping an active turn and its hear
     beats++;
     return heartbeat(...args);
   };
-  const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, heartbeatIntervalMs: 5, pollMs: 5 });
+  const worker = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, heartbeatIntervalMs: 5, pollMs: 5 });
   worker.start();
   await started;
   await worker.stopClaims();
@@ -587,7 +542,6 @@ test("stopClaims relinquishes new work while keeping an active turn and its hear
 
 test("stopClaims waits for an outstanding claim to be handed back before acknowledging", async () => {
   const { runs } = createMemoryRunStore();
-  const sessions = createMemorySessionStore();
   const pending = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const claim = runs.claim.bind(runs);
   const gate = Promise.withResolvers<void>();
@@ -604,7 +558,7 @@ test("stopClaims waits for an outstanding claim to be handed back before acknowl
       return { status: "ok", reply: "unexpected" };
     },
   } as unknown as Orchestrator;
-  const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+  const worker = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
   worker.start();
   await claiming.promise;
   let relinquished = false;
@@ -733,7 +687,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
   }
 });
 
-test("final shutdown bounds tracked worker drain without claiming ownership is drained", async () => {
+test("final shutdown waits for an already-started completion instead of releasing its lease", async () => {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "bounded-drain-")),
@@ -763,15 +717,17 @@ test("final shutdown bounds tracked worker drain without claiming ownership is d
     const ownershipDrain = built.runtime.backgroundDrained().then(() => {
       drained = true;
     });
-    await Promise.race([
-      built.runtime.stop(),
-      sleep(2000).then(() => assert.fail("shutdown exceeded its drain budget")),
-    ]);
+    let stopped = false;
+    const stopping = built.runtime.stop().then(() => {
+      stopped = true;
+    });
+    await sleep(80);
+    assert.equal(stopped, false);
     assert.equal(drained, false);
-    assert.equal((await built.runs.get(queued.runId!))?.status, "pending");
+    assert.equal((await built.runs.get(queued.runId!))?.status, "running");
     release.resolve();
-    await ownershipDrain;
-    assert.equal((await built.runs.get(queued.runId!))?.status, "pending");
+    await Promise.all([stopping, ownershipDrain]);
+    assert.equal((await built.runs.get(queued.runId!))?.status, "done");
   } finally {
     release.resolve();
     await built.runtime.backgroundDrained();

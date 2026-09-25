@@ -1900,7 +1900,7 @@ test("Codex persists repeated public commentary in order with distinct streaming
 });
 
 for (const final of [true, false]) {
-  for (const mechanism of ["signal", "cancel"] as const) {
+  for (const mechanism of ["signal", "cancel", "both"] as const) {
     test(`Codex saves only pre-stop ${final ? "final" : "commentary"} text via ${mechanism}`, async (t) => {
       const dir = mkdtempSync(join(tmpdir(), "qm-codex-partial-stop-"));
       const signals = createMemoryRunSignalStore();
@@ -1947,9 +1947,13 @@ for (const final of [true, false]) {
       });
       await received.promise;
       if (mechanism === "cancel") cancel.abort();
-      else await signals.send("partial-stop-run", { kind: "abort" });
+      else {
+        await signals.send("partial-stop-run", { kind: "abort" });
+        if (mechanism === "both") cancel.abort();
+      }
       const result = await running;
       assert.equal(result.stopped, true);
+      assert.equal(result.stoppedByUser, mechanism === "cancel" ? undefined : true);
       assert.deepEqual(
         entries.filter((entry) => entry.type === "text").map((entry) => entry.payload),
         [{ text: "Checking.", phase: "commentary" }],
