@@ -225,12 +225,15 @@ and only accepts it when `PORTAL_PUBLIC_URL` is loopback.
 Identity: `OIDC_PRINCIPAL_CLAIM` — `email` (default; the org-canonical id: the
 verified work email, lowercased; sign-in fails unless the IdP marks the email verified) or `sub`
 (the IdP's opaque subject, e.g. the Slack U… id — only for deployments still keyed on Slack ids).
-`OIDC_ALLOWED_EMAIL_DOMAIN` — with `email`, additionally reject any account outside this domain
-(checked against the email suffix and Google's `hd` claim).
+`OIDC_ALLOWED_EMAILS` and `OIDC_ALLOWED_EMAIL_DOMAIN` — with `email`, external OIDC accounts must
+match every configured restriction, including the email suffix and Google's `hd` claim for the domain.
+The built-in broker always asks core, whose admission policy accepts a configured explicit address or
+domain as well as active external invitations and deployment-only access.
 An address those rules reject still signs in when an org admin has invited it as an
 external user: the callback asks core over the signed core client
 (`GET /v1/auth/broker/email-allowed`) and accepts an active invitation, `hd` notwithstanding.
-An address the env rules permit never triggers the lookup; core unreachable means not allowed.
+In external OIDC mode, an address the env rules permit never triggers the lookup. The built-in broker
+always performs it; when a required core lookup is unreachable, sign-in is not allowed.
 Deployments keyed on `sub` never consult it, so external users cannot sign in there.
 
 ### Google Workspace SSO with the email principal
