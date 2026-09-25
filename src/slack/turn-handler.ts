@@ -667,7 +667,15 @@ export function createTurnHandler(deps: {
         const { directives, dropped } = resolveReactionTargets(reactions, allowedTs);
         if (dropped) console.error(`[slack-plugin] dropped ${dropped} reaction(s) with an unresolvable message id`);
         await applyAndLogReactions(client, inc.channel, inc.ts, directives);
-        if (actionableAgentRequests.length) {
+        if (actionableAgentRequests.length && queuedRunId) {
+          await approvals.postRunAgentRequests(
+            client,
+            queuedRunId,
+            inc.channel,
+            replyThreadTs,
+            actionableAgentRequests,
+          );
+        } else if (actionableAgentRequests.length) {
           await approvals.postAgentRequests(
             client,
             {

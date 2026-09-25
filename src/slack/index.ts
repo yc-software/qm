@@ -379,6 +379,7 @@ export async function startSlackPlugin(
   });
   const deliveries = createDeliveryPoller({
     core,
+    approvals,
     flow,
     threads,
     clientForIdentity,

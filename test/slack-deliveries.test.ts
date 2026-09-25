@@ -361,3 +361,44 @@ for (const type of ["slack", "group", "principal"]) {
     assert.deepEqual(recovered.acknowledgements, ["D1"]);
   });
 }
+
+test("explicit post and recovered run deliveries dispatch stripped handoffs", async () => {
+  for (const key of ["post:RUN1:slack:C1:100.200:0", "run:RUN1"]) {
+    const requests: unknown[][] = [];
+    const row = {
+      id: "handoff",
+      idempotencyKey: key,
+      createdAt: Date.now() - 60_000,
+      text: "[[ask-agent: <@U2> | Check the synthetic report.]]",
+      destination: { type: "slack", target: "C1:100.200" },
+    };
+    let pending = true;
+    const poller = createDeliveryPoller({
+      core: {
+        holdDeliveryDispatch: (fn: any) => fn(new Promise(() => {})),
+        claimDeliveries: async (type: string) => {
+          if (type !== "slack" || !pending) return [];
+          pending = false;
+          return [row];
+        },
+        ackDelivery: async () => {},
+      } as never,
+      flow: { inFlightRuns: new Set() } as never,
+      threads: { mark: () => {} } as never,
+      clientForIdentity: () => ({}),
+      approvals: {
+        postRunAgentRequests: async (...args: unknown[]) => {
+          requests.push(args);
+        },
+      },
+    } as Parameters<typeof createDeliveryPoller>[0]);
+    await poller.pollDeliveries({});
+    assert.equal(requests.length, 1, key);
+    assert.deepEqual(requests[0]?.slice(1), [
+      "RUN1",
+      "C1",
+      "100.200",
+      [{ targetUserId: "U2", task: "Check the synthetic report." }],
+    ]);
+  }
+});
