@@ -169,8 +169,8 @@ test("the broker's generated secrets reach both sides under the right names", ()
   assert.ok(!names.has("PORTAL_EXPECTED_TEAM_ID"));
   const allowed = secrets.find((secret) => secret.name === "AUTH_ALLOWED_EMAILS")!;
   assert.equal(allowed.required, false);
-  assert.deepEqual(runtimeSecretNames("auth", allowed), ["AUTH_ALLOWED_EMAILS"]);
-  assert.deepEqual(runtimeSecretNames("portal", allowed), ["OIDC_ALLOWED_EMAILS"]);
+  assert.deepEqual(runtimeSecretNames("auth", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
+  assert.deepEqual(runtimeSecretNames("portal", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
   assert.ok(names.has("RESEND_API_KEY"));
   assert.ok(!names.has("SMTP_HOST"), "only the configured transport's credentials are collected");
   for (const name of ["RESEND_API_KEY", "AUTH_EMAIL_FROM"]) {
