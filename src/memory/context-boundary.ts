@@ -1,12 +1,8 @@
 import { createHash } from "node:crypto";
 import type { Principal, ScopeId, SessionEntry } from "../types.ts";
-import type { MemoryService } from "./memory-service.ts";
-import type { SharingPosture } from "../resolution/sharing-posture.ts";
 
 export interface MemoryContextSnapshot {
   audience: string;
-  facts: string[];
-  readEpoch?: number;
 }
 
 interface MemoryContext {
@@ -24,11 +20,7 @@ export function memoryContextPayload(entry: SessionEntry): MemoryContext | null 
     typeof p.fingerprint === "string" &&
     Number.isSafeInteger(p.throughSeq) &&
     p.throughSeq! >= -1 &&
-    (p.snapshot?.readEpoch === undefined ||
-      (Number.isSafeInteger(p.snapshot.readEpoch) && p.snapshot.readEpoch >= 0)) &&
-    typeof p.snapshot?.audience === "string" &&
-    Array.isArray(p.snapshot.facts) &&
-    p.snapshot.facts.every((fact) => typeof fact === "string")
+    typeof p.snapshot?.audience === "string"
     ? (p as MemoryContext)
     : null;
 }
@@ -38,25 +30,14 @@ export function memoryContextFingerprint(value: unknown): string {
 }
 
 export function buildMemoryContextSnapshot(input: {
-  actorId: string;
-  readEpoch?: number;
+  targetScope: ScopeId;
   audience: readonly Principal[];
-  posture: SharingPosture | undefined;
-  heads: { scope: ScopeId; head: Awaited<ReturnType<NonNullable<MemoryService["readHead"]>>> }[];
 }): MemoryContextSnapshot {
   return {
-    readEpoch: input.readEpoch ?? 0,
     audience: memoryContextFingerprint({
-      actor: input.actorId,
-      audience: input.audience.map((person) => [person.id, person.type, person.teamIds]).sort(),
-      posture: input.posture,
+      scope: input.targetScope,
+      audience: input.audience.map((person) => [person.id, person.type]).sort(),
     }),
-    facts: input.heads
-      .flatMap(({ scope, head }) => {
-        if (head.records) return head.records.records.map((record) => memoryContextFingerprint([scope, record]));
-        return head.content ? [memoryContextFingerprint([scope, head.content])] : [];
-      })
-      .sort(),
   };
 }
 
@@ -73,12 +54,7 @@ export function nextMemoryContext(
 ): MemoryContext {
   const previous = entries.findLast((entry) => memoryContextPayload(entry));
   const payload = previous && memoryContextPayload(previous);
-  const allowed = new Set(snapshot.facts);
-  const compatible =
-    payload &&
-    (!payload.snapshot.facts.length || payload.snapshot.audience === snapshot.audience) &&
-    (payload.snapshot.readEpoch ?? 0) === (snapshot.readEpoch ?? 0) &&
-    payload.snapshot.facts.every((fact) => allowed.has(fact));
+  const compatible = payload && payload.snapshot.audience === snapshot.audience;
   const hasPriorContext =
     !!payload ||
     entries.some(

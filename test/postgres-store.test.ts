@@ -2686,38 +2686,6 @@ test("pg unstarted withdrawal preserves claimed and released turns atomically", 
   }
 });
 
-test(
-  "pg memory read epoch: atomic across stores, restart durable, and independent of the turn lease",
-  { skip, timeout: 10_000 },
-  async () => {
-    const first = createPostgresSessionStore(URL!);
-    const second = createPostgresSessionStore(URL!);
-    const session = await first.getOrCreateByThread(`memory-epoch-${randomUUID()}`, "dm", "personal:alice");
-    const other = await first.getOrCreateByThread(`memory-epoch-other-${randomUUID()}`, "dm", "personal:alice");
-    assert.equal(await first.memoryReadEpoch(session.id), 0);
-    const { lease } = await first.acquireLease(session.id, "turn");
-    assert.ok(lease);
-    const before = await first.get(session.id);
-    try {
-      await Promise.all(
-        Array.from({ length: 40 }, (_, index) => (index % 2 ? first : second).noteMemoryRead(session.id)),
-      );
-      const restarted = createPostgresSessionStore(URL!);
-      assert.equal(await restarted.memoryReadEpoch(session.id), 40);
-      assert.equal(await restarted.memoryReadEpoch(other.id), 0);
-      assert.deepEqual(await restarted.get(session.id), before);
-      assert.deepEqual(await restarted.getEntries(session.id), []);
-      assert.deepEqual(await restarted.getTape(session.id), []);
-      assert.equal((await restarted.peekLease(session.id))?.holder, "turn");
-    } finally {
-      await first.releaseLease(lease);
-    }
-    await first.deleteSession(session.id);
-    await assert.rejects(second.noteMemoryRead(session.id), /Session missing/);
-    await assert.rejects(second.memoryReadEpoch(session.id), /Session not found/);
-  },
-);
-
 test("pg context window preserves user memory checkpoints through compaction and restart", { skip }, async () => {
   const store = createPostgresSessionStore(URL!);
   const session = await store.getOrCreateByThread(`memory-checkpoint-${randomUUID()}`, "dm", "personal:alice");
@@ -2729,11 +2697,7 @@ test("pg context window preserves user memory checkpoints through compaction and
     await append("user", { text: "EXPIRED_USER" });
     await append("assistant", { text: "EXPIRED_ASSISTANT" });
     await append("system", { kind: "context_summary", throughSeq: 1, text: "EXPIRED_SUMMARY" });
-    const checkpoint = nextMemoryContext(
-      await store.getEntries(session.id),
-      { audience: "a", facts: ["allowed"], readEpoch: 0 },
-      2,
-    );
+    const checkpoint = nextMemoryContext(await store.getEntries(session.id), { audience: "a" }, 2);
     const checkpointEntry = await append("user", { text: "CURRENT_USER", memoryContext: checkpoint });
     const reply = await append("assistant", { text: "CURRENT_REPLY" });
     const summary = await append("system", { kind: "context_summary", throughSeq: reply.seq, text: "CURRENT_SUMMARY" });
@@ -2750,7 +2714,7 @@ test("pg context window preserves user memory checkpoints through compaction and
       [summary.seq],
     );
     assert.doesNotMatch(JSON.stringify(forModelContext(window.entries)), /EXPIRED_|CURRENT_USER|CURRENT_REPLY/);
-    const reset = nextMemoryContext(window.entries, { audience: "a", facts: [], readEpoch: 0 }, summary.seq);
+    const reset = nextMemoryContext(window.entries, { audience: "b" }, summary.seq);
     assert.equal(reset.throughSeq, summary.seq);
     const newUser = await append("user", { text: "AFTER_RESET", memoryContext: reset });
     const resetWindow = await restarted.getContextWindow(session.id);

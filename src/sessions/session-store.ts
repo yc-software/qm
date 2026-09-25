@@ -699,8 +699,6 @@ export interface SessionStore {
   ): Promise<Session>;
   getByThread(threadRef: string): Promise<Session | null>;
   get(sessionId: string): Promise<Session | null>;
-  memoryReadEpoch(sessionId: string): Promise<number>;
-  noteMemoryRead(sessionId: string): Promise<void>;
 
   updateTitle(sessionId: string, title: string): Promise<void>;
   setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;

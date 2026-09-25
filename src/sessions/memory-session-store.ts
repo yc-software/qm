@@ -72,7 +72,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
   const now = opts.now ?? (() => Date.now());
   const leaseTtlMs = opts.leaseTtlMs ?? 5 * 60_000;
   const sessions = new Map<string, Session>();
-  const memoryReadEpochs = new Map<string, number>();
   const entries = new Map<string, SessionEntry[]>();
   const tape = new Map<string, TapeRecord[]>();
   const searchIndex = new Map<string, NewSearchEntry[]>();
@@ -156,18 +155,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return sessions.get(id) ?? null;
     },
 
-    async memoryReadEpoch(sessionId) {
-      if (!sessions.has(sessionId)) throw new Error("Session not found");
-      return memoryReadEpochs.get(sessionId) ?? 0;
-    },
-
-    async noteMemoryRead(sessionId) {
-      if (!sessions.has(sessionId)) throw new Error("Session not found");
-      const next = (memoryReadEpochs.get(sessionId) ?? 0) + 1;
-      if (!Number.isSafeInteger(next)) throw new Error("Memory read epoch exhausted");
-      memoryReadEpochs.set(sessionId, next);
-    },
-
     async updateTitle(sessionId, title) {
       const s = sessions.get(sessionId);
       if (s) s.title = title;
@@ -245,7 +232,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         participants.get(principalId)?.delete(sessionId);
       }
       sessions.delete(sessionId);
-      memoryReadEpochs.delete(sessionId);
       entries.delete(sessionId);
       tape.delete(sessionId);
       searchIndex.delete(sessionId);

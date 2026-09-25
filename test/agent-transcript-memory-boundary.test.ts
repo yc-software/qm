@@ -60,8 +60,7 @@ async function fixture() {
       payload,
       scopeLabel: ROOM,
     });
-  const snapshot = () =>
-    buildMemoryContextSnapshot({ actorId: "alice", audience, posture: "open", heads: [{ scope: HOME, head: head() }] });
+  const snapshot = () => buildMemoryContextSnapshot({ targetScope: ROOM, audience });
   const checkpoint = async (throughSeq = -1) => {
     const current = snapshot();
     return append("system", {
@@ -133,7 +132,7 @@ async function fixture() {
 }
 
 for (const change of ["remove", "reclassify", "posture", "audience"] as const) {
-  test(`agent transcript rejects an idle target after ${change}, while human transcript remains available`, async () => {
+  test(`agent transcript ${change === "audience" ? "rejects" : "preserves"} retained context after ${change}`, async () => {
     const f = await fixture();
     try {
       await f.checkpoint();
@@ -149,8 +148,14 @@ for (const change of ["remove", "reclassify", "posture", "audience"] as const) {
           { id: "eve", type: "internal" },
         ]);
       const response = await f.get();
-      assert.equal(response.status, 403);
-      assert.deepEqual(await response.json(), { error: "forbidden" });
+      assert.equal(response.status, change === "audience" ? 403 : 200);
+      if (change === "audience") assert.deepEqual(await response.json(), { error: "forbidden" });
+      else assert.match(await response.text(), /PRIVATE_SENTINEL/);
+      if (change !== "audience") {
+        const fresh = await f.memoryRead();
+        assert.equal(fresh.status, 200);
+        assert.doesNotMatch(await fresh.text(), /PRIVATE_SENTINEL/);
+      }
       const human = await f.human();
       assert.equal(human.status, 200);
       assert.match(await human.text(), /PRIVATE_SENTINEL/);
@@ -180,7 +185,7 @@ test("agent transcript enforces durable cutoff through old pages, pins and metad
     await f.built.sessions.addPin(f.session.id, { addedBy: "alice", text: "PRIVATE_SENTINEL" });
     await f.built.sessions.updateTitle(f.session.id, "PRIVATE_SENTINEL");
     await f.built.sessions.updateStatus(f.session.id, { emoji: "✅", text: "PRIVATE_SENTINEL" });
-    f.setRecords({ version: 1, records: [] });
+    f.setAudience([{ id: "alice", type: "internal" }]);
     await f.checkpoint(old.seq);
     await f.append("user", { text: "new question" });
     await f.append("assistant", { text: "SAFE_REPLY" });
@@ -198,19 +203,17 @@ test("agent transcript enforces durable cutoff through old pages, pins and metad
   }
 });
 
-test("explicit memory reads invalidate the target checkpoint but validation reads do not", async () => {
+test("explicit memory reads preserve the target checkpoint", async () => {
   const f = await fixture();
   try {
     await f.checkpoint();
     await f.append("assistant", { text: "SAFE_REPLY" });
     assert.equal((await f.get()).status, 200);
     assert.equal((await f.get()).status, 200);
-    assert.equal(await f.built.sessions.memoryReadEpoch(f.session.id), 0);
     const memory = await f.memoryRead();
     assert.equal(memory.status, 200);
     assert.match(await memory.text(), /PRIVATE_SENTINEL/);
-    assert.equal(await f.built.sessions.memoryReadEpoch(f.session.id), 1);
-    assert.equal((await f.get()).status, 403);
+    assert.equal((await f.get()).status, 200);
   } finally {
     await f.close();
   }
@@ -257,13 +260,13 @@ test("agent list and patch responses do not disclose retained titles or statuses
   }
 });
 
-for (const state of ["unknown", "revoked", "cutoff"] as const) {
+for (const state of ["unknown", "audience", "cutoff"] as const) {
   test(`agent fork refuses ${state} source before creating any conversation`, async () => {
     const f = await fixture();
     try {
       const old = await f.append("assistant", { text: "PRIVATE_SENTINEL" });
       if (state !== "unknown") await f.checkpoint(state === "cutoff" ? old.seq : -1);
-      if (state === "revoked") f.setRecords({ version: 1, records: [] });
+      if (state === "audience") f.setAudience([{ id: "alice", type: "internal" }]);
       const before = (await f.built.app.listSessions("alice")).map((session) => session.id);
       const response = await f.post("/fork");
       assert.equal(response.status, 403);

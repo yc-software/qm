@@ -211,7 +211,6 @@ export interface SessionSyscallDeps {
     | "childrenOf"
     | "addParticipant"
     | "updateTitle"
-    | "memoryReadEpoch"
     | "getEntries"
     | "latestEntrySeq"
     | "visibleEntries"
@@ -467,11 +466,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         if (binding.memoryContext) {
           const all = await deps.sessions.getEntries(target.id);
           const last = all.findLast((entry) => memoryContextPayload(entry));
-          const next = nextMemoryContext(
-            all,
-            { ...binding.memoryContext, readEpoch: await deps.sessions.memoryReadEpoch(target.id) },
-            all.at(-1)?.seq ?? -1,
-          );
+          const next = nextMemoryContext(all, binding.memoryContext, all.at(-1)?.seq ?? -1);
           if (!last || next.throughSeq > memoryContextPayload(last)!.throughSeq) return [];
           if (next.throughSeq < 0) readableTitles.add(target.id);
           const visible = new Set(memoryBoundedEntries(all).map((entry) => entry.seq));

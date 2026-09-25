@@ -568,13 +568,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ],
       },
       {
-        id: "sessions/store/0018-memory-read-epoch",
-        statements: [
-          `SET LOCAL lock_timeout = '3s'`,
-          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS memory_read_epoch BIGINT NOT NULL DEFAULT 0`,
-        ],
-      },
-      {
         id: "sessions/store/0016-status",
         statements: ["ALTER TABLE sessions ADD COLUMN IF NOT EXISTS status JSONB"],
       },
@@ -711,22 +704,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     async get(id): Promise<Session | null> {
       const rows = await q("SELECT * FROM sessions WHERE id = $1", [id]);
       return rows[0] ? rowToSession(rows[0]) : null;
-    },
-
-    async memoryReadEpoch(sessionId) {
-      const rows = await q("SELECT memory_read_epoch FROM sessions WHERE id = $1", [sessionId]);
-      if (!rows[0]) throw new Error("Session not found");
-      const epoch = Number(rows[0].memory_read_epoch);
-      if (!Number.isSafeInteger(epoch) || epoch < 0) throw new Error("Invalid memory read epoch");
-      return epoch;
-    },
-
-    async noteMemoryRead(sessionId) {
-      const rows = await q(
-        "UPDATE sessions SET memory_read_epoch = memory_read_epoch + 1 WHERE id = $1 AND memory_read_epoch < $2 RETURNING id",
-        [sessionId, Number.MAX_SAFE_INTEGER],
-      );
-      if (!rows.length) throw new Error("Session missing or memory read epoch exhausted");
     },
 
     async updateTitle(sessionId, title): Promise<void> {

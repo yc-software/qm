@@ -2,7 +2,7 @@
 
 This change adds provenance and sensitivity metadata to the Postgres notebook store
 and applies a shared disclosure view to fresh model recall and agent memory APIs.
-Automatic capture classification and durable retained-context invalidation are included.
+Automatic capture classification and durable audience isolation are included.
 Existing memories are not automatically declassified. See the conservative behavior
 and qualification limits below before rolling this out.
 
@@ -105,43 +105,45 @@ results is not inferred.
 
 ## Durable retained-context boundary
 
-Each model turn records its authorized-memory snapshot in the existing session log.
-The checkpoint contains hashes, not another copy of fact text. Before the next turn,
-removed or reclassified facts, changed eligible audiences/policies, or a disabled
-recall source advance a durable replay cutoff. Simple fact additions preserve history.
-The automatic recall body and its checkpoint are derived from the same filtered heads.
+Each model turn records a hash of its destination scope and complete audience identities
+and principal types in the existing session log. Changing the audience or destination
+advances a durable replay cutoff, even if no memory was recalled. Speaker rotation,
+team membership changes and sharing-posture changes alone do not change the audience.
 
-A reset excludes the whole earlier model context, not just matching strings: user
-environments, summaries, assistant paraphrases, tool results and historical tape.
-Native harness state is reset, stale retry answers and approvals cannot replay, and
-background summaries started before the boundary are discarded. Human transcript and
-administrator audit records are not erased. The next model turn receives current
-memory and begins a fresh context window. This is next-turn invalidation, not live
-cancellation of an already executing model request.
+Information legitimately learned for the same audience can remain in retained context
+after source access is revoked, a notebook fact is removed or reclassified, or recall
+is disabled. Explicit memory reads, searches and history requests do not reset the
+next turn. Fresh memory reads still apply current provenance, sensitivity and source
+authorization; retained conversation context is not permission to read a source again.
 
-Explicit memory reads, searches and history requests can return facts absent from the
-starting snapshot. Before returning those results, tools and capability APIs increment
-a durable session read epoch without taking the turn lease. A changed epoch triggers
-a conservative reset on the next turn even if the notebook later returns to its
-original state. This deliberately sacrifices some continuity after explicit reads
-rather than retaining untracked facts. The epoch is atomic and restart-safe.
+An audience reset excludes the whole earlier model context, not just matching strings:
+user environments, summaries, assistant paraphrases, tool results and historical tape.
+Native harness state resets only when the cutoff advances. Stale retry answers and
+approvals cannot replay, and background summaries started before the boundary are
+discarded. Later turns retain newer durable session history without resetting again.
+Unversioned external prior turns, overheard history and detect context remain excluded
+after a cutoff because they cannot be distinguished from pre-boundary content. Human
+transcript and administrator audit records are not erased. This is next-turn audience
+isolation, not live cancellation of an already executing model request.
 
-Model-facing history and conversation APIs enforce the boundary. Untracked legacy or
-incompatible target conversations are unavailable to those APIs; human transcript
-views remain unchanged. Derived titles, status text and pins are not used to bypass
-an unavailable agent transcript. Session coordination uses safe identifiers when a
-prior title cannot be justified against the current memory snapshot.
+Model-facing history and conversation APIs enforce the audience boundary. Untracked
+legacy or incompatible target conversations are unavailable to those APIs; human
+transcript views remain unchanged. Existing cutoffs remain in force. Checkpoints from
+the earlier fact-tracking format use a different audience hash and cause one
+conservative reset on their next turn. Derived titles, status text and pins cannot
+bypass an unavailable agent transcript. Session coordination uses safe identifiers
+when a prior title is not authorized for the current audience.
 
 ## Qualification and limits
 
 Synthetic regressions cover capture failures, inherited restrictions, copying,
 classification changes, audience changes, source revocation, restart/compaction,
-explicit off-snapshot reads, provider routes and agent transcript reopening. Local
-Postgres tests cover migrations, concurrent read epochs and checkpoint persistence.
-A launched development portal exercised the actual web/core/worker/Postgres path and
-verified that a withdrawn sentinel disappears from the next captured model request
-while remaining in the human audit transcript. That routing test used the mock model.
-A separate live-model smoke test exercised benign, medical and secret classifications.
+explicit off-snapshot reads, provider routes and agent transcript reopening. Same
+audience tests retain learned facts while fresh notebook reads exclude withdrawn or
+reclassified records. Audience-change tests exclude older history and preserve newer
+history on subsequent turns, including speaker rotation. Postgres tests cover
+migrations and checkpoint persistence. A separate live-model smoke test exercised
+benign, medical and secret classifications.
 
 Live Slack and every real provider harness have not been qualified. Direct MCP tools,
 explicit administrator inspection, exported files and other independently authorized
