@@ -1723,12 +1723,6 @@ a.chat-row-open {
   margin-top: 10px;
 }
 
-.steer-label {
-  font-size: 11px;
-  color: var(--muted-foreground);
-  margin: 2px 4px 3px 0;
-  user-select: none;
-}
 .steered-row .user-bubble {
   border: 1px dashed var(--border);
 }
