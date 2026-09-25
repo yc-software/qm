@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolveTurnContext } from "../src/resolution/turn-context.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
+import { createMemoryService, type MemoryService } from "../src/memory/memory-service.ts";
+import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
@@ -68,8 +69,8 @@ test("one context loads full source-labelled notebooks and shares authority with
   const context = await resolveTurnContext(input);
   const recalled = await context.recall();
   assert.match(recalled, /### personal:alice[\s\S]*LOCAL_FACT/);
-  assert.match(recalled, /### channel:eng[\s\S]*SHARED_FACT[\s\S]*LAST_FACT/);
-  assert.ok(recalled.length > 12000, "no relevance or per-notebook recall truncation");
+  assert.match(recalled, /### channel:eng[\s\S]*LAST_FACT/);
+  assert.ok(!recalled.includes("SHARED_FACT"), "per-scope recall keeps the bounded tail, not the full notebook");
   assert.deepEqual(await context.searchMemory("LAST_FACT"), ["[channel:eng] LAST_FACT"]);
   assert.deepEqual(context.memoryAccess?.read, ["personal:alice", "org:test", "channel:eng"]);
   assert.deepEqual(context.baseRecallScopes, ["personal:alice", "org:test"], "reusable tokens exclude carried sources");
@@ -116,10 +117,10 @@ for (const mode of [
 
 test("fresh turn re-resolves membership after an earlier successful read", async () => {
   const { input, removeMember } = await fixture();
-  assert.match(await (await resolveTurnContext(input)).recall(), /SHARED_FACT/);
+  assert.match(await (await resolveTurnContext(input)).recall(), /LAST_FACT/);
   removeMember();
   const next = await resolveTurnContext(input);
-  assert.doesNotMatch(await next.recall(), /SHARED_FACT/);
+  assert.doesNotMatch(await next.recall(), /LAST_FACT/);
   assert.equal(await next.readFile("shared/open-channel-eng/plan.txt"), null);
 });
 
@@ -163,4 +164,41 @@ test("ambiguous file aliases fail closed in the shared reader", async () => {
   const result = await (await resolveTurnContext(input)).readFile("shared/plan.txt");
   assert.ok(result && "error" in result);
   assert.match(result.error, /ambiguous shared handle/);
+});
+
+test("turn recall consults routed external memory providers with the turn context", async () => {
+  const calls: string[] = [];
+  const external: MemoryService = {
+    async recall(scope, context) {
+      calls.push(
+        `external:${scope}:${context?.query ?? ""}:${context?.actorId ?? ""}:${context?.conversationScopeId ?? ""}`,
+      );
+      return "- EXTERNAL_FACT";
+    },
+    async capture() {
+      return 0;
+    },
+    async query() {
+      return [];
+    },
+    async read() {
+      return "";
+    },
+    async replace() {},
+  };
+  const { input, memory } = await fixture();
+  const routed = createRoutedMemoryService({
+    providers: { notebook: memory, external },
+    routes: [
+      { provider: "notebook", scopes: ["personal", "channel", "group", "org"] },
+      { provider: "external", scopes: ["personal", "channel", "group", "org"], manage: false },
+    ],
+  });
+  const context = await resolveTurnContext({ ...input, memory: routed, recallQuery: "what is the plan" });
+  const recalled = await context.recall();
+  assert.ok(
+    calls.includes("external:personal:alice:what is the plan:alice:personal:alice"),
+    `external provider was not consulted with the turn context, got: ${calls.join(" | ")}`,
+  );
+  assert.match(recalled, /EXTERNAL_FACT/);
 });
