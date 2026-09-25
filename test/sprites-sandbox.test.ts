@@ -197,6 +197,39 @@ test("force-through pins the platform policy and injects proxy env", async () =>
   assert.equal(h.env?.NO_PROXY, "localhost,127.0.0.1,::1");
 });
 
+test("proxy migration keeps both hosts reachable across cutover and rollback", async () => {
+  const token = await proxyToken();
+  const oldUrl = "https://old.example.com";
+  const newUrl = "https://new.example.com";
+  for (const [primary, additional] of [
+    [oldUrl, newUrl],
+    [newUrl, oldUrl],
+    [oldUrl, newUrl],
+  ]) {
+    const s = make({ egressProxyUrl: primary, egressProxyAdditionalUrls: [additional, primary] });
+    const h = await s.provision(layers, { egressToken: token });
+    assert.deepEqual(fake.policy(h.id), [
+      { domain: "new.example.com", action: "allow" },
+      { domain: "old.example.com", action: "allow" },
+    ]);
+    assert.equal(new URL(h.env!.HTTPS_PROXY!).hostname, new URL(primary!).hostname);
+  }
+});
+
+test("proxy migration rejects mismatched provider policy and invalid configuration", async () => {
+  const s = make({
+    egressProxyUrl: "https://new.example.com",
+    egressProxyAdditionalUrls: ["https://old.example.com"],
+  });
+  fake.breakPolicyReadback(sandboxScopeName("qmt", scope));
+  await assert.rejects(s.provision(layers, { egressToken: await proxyToken() }), /readback mismatch/);
+  assert.throws(() => make({ egressProxyAdditionalUrls: ["https://old.example.com"] }), /require a primary/);
+  assert.throws(
+    () => make({ egressProxyUrl: "https://new.example.com", egressProxyAdditionalUrls: ["file:///tmp/x"] }),
+    /HTTP\(S\)/,
+  );
+});
+
 test("force-through strips agent-supplied proxy vars", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   const h = await s.provision(layers, {

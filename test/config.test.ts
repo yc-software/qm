@@ -21,6 +21,19 @@ const productionEnv = {
   SANDBOX_BACKEND: "local",
 } as const;
 
+test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
+  assert.equal(loadConfig({}).spritesSandbox.egressProxyAdditionalUrls, undefined);
+  const config = loadConfig({
+    SPRITES_EGRESS_PROXY_URL: "https://primary.example.com",
+    SPRITES_EGRESS_PROXY_ADDITIONAL_URLS: " https://old.example.com, ,https://next.example.com ",
+  });
+  assert.equal(config.spritesSandbox.egressProxyUrl, "https://primary.example.com");
+  assert.deepEqual(config.spritesSandbox.egressProxyAdditionalUrls, [
+    "https://old.example.com",
+    "https://next.example.com",
+  ]);
+});
+
 test("capability compression is explicitly enabled after verifier rollout", () => {
   assert.equal(loadConfig({}).capabilityTokenCompression, false);
   assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "0" }).capabilityTokenCompression, false);

@@ -122,6 +122,7 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   namePrefix?: string;
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
+  egressProxyAdditionalUrls?: string[];
   memoryMb?: number;
   checkpointIntervalMs?: number;
   snapshots?: HomeSnapshotStore;
@@ -284,18 +285,34 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     }
   }
 
-  const egressProxyHost = opts.egressProxyUrl ? new URL(opts.egressProxyUrl).hostname : undefined;
+  const norm = (domain?: string): string => (domain ?? "").toLowerCase().replace(/\.$/, "");
+  const egressProxyHosts = opts.egressProxyUrl
+    ? [
+        ...new Set(
+          [opts.egressProxyUrl, ...(opts.egressProxyAdditionalUrls ?? [])].map((value) => {
+            const url = new URL(value);
+            if (!["https:", "http:"].includes(url.protocol) || !url.hostname || url.username || url.password)
+              throw new Error("sprites egress proxy URLs must be HTTP(S) URLs without credentials");
+            return norm(url.hostname);
+          }),
+        ),
+      ].sort()
+    : [];
+  if (!opts.egressProxyUrl && opts.egressProxyAdditionalUrls?.length)
+    throw new Error("sprites additional egress proxy URLs require a primary proxy URL");
 
   async function ensureEgressPolicy(name: string): Promise<void> {
-    const rules = [{ domain: egressProxyHost!, action: "allow" as const }];
+    const rules = egressProxyHosts.map((domain) => ({ domain, action: "allow" as const }));
     const want = JSON.stringify(rules);
     if (egressPolicyByName.get(name) === want) return;
     const s = sprite(name);
     await attempt(`egress policy ${name}`, () => retrySpritesControl(() => s.updateNetworkPolicy({ rules })));
     const got = await attempt(`egress policy readback ${name}`, () => retrySpritesControl(() => s.getNetworkPolicy()));
-    const norm = (d?: string) => (d ?? "").toLowerCase().replace(/\.$/, "");
-    const only = got.rules?.length === 1 ? got.rules[0] : undefined;
-    const bound = !!only && norm(only.domain) === norm(egressProxyHost) && only.action?.toLowerCase() === "allow";
+    const actual = got.rules ?? [];
+    const bound =
+      actual.length === rules.length &&
+      actual.every((rule) => rule.action?.toLowerCase() === "allow") &&
+      JSON.stringify(actual.map((rule) => norm(rule.domain)).sort()) === JSON.stringify(egressProxyHosts);
     if (!bound)
       throw new Error(`sprites egress policy ${name}: readback mismatch (${JSON.stringify(got).slice(0, 200)})`);
     egressPolicyByName.set(name, want);

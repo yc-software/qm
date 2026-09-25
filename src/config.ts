@@ -349,6 +349,7 @@ interface SpritesSandboxEnv {
   baseUrl?: string;
   namePrefix?: string;
   egressProxyUrl?: string;
+  egressProxyAdditionalUrls?: string[];
   snapshotS3Bucket?: string;
   memoryMb?: number;
   defaultTimeoutSec?: number;
@@ -360,6 +361,13 @@ function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
     ...(env.SPRITES_BASE_URL ? { baseUrl: env.SPRITES_BASE_URL } : {}),
     ...(env.SPRITES_NAME_PREFIX ? { namePrefix: env.SPRITES_NAME_PREFIX } : {}),
     ...(env.SPRITES_EGRESS_PROXY_URL ? { egressProxyUrl: env.SPRITES_EGRESS_PROXY_URL } : {}),
+    ...(env.SPRITES_EGRESS_PROXY_ADDITIONAL_URLS?.trim()
+      ? {
+          egressProxyAdditionalUrls: env.SPRITES_EGRESS_PROXY_ADDITIONAL_URLS.split(",")
+            .map((url) => url.trim())
+            .filter(Boolean),
+        }
+      : {}),
     ...(env.SPRITES_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.SPRITES_SNAPSHOT_S3_BUCKET } : {}),
     ...(numEnvStrict("SPRITES_MEMORY_MB", env.SPRITES_MEMORY_MB) !== undefined
       ? { memoryMb: numEnvStrict("SPRITES_MEMORY_MB", env.SPRITES_MEMORY_MB) }
