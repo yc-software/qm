@@ -69,6 +69,8 @@ interface TurnMetricPatch {
 
 export interface MetricsSink {
   record(s: Omit<TurnMetricSample, "ts">): void;
+  flush(): Promise<void>;
+  close?(): Promise<void>;
   updateByRunId(runId: string, patch: TurnMetricPatch): Promise<void>;
   list(opts?: { scopeId?: string; sessionId?: string; since?: number; limit?: number }): Promise<TurnMetricSample[]>;
 }
@@ -81,6 +83,7 @@ export function createMetricsSink(): MetricsSink {
   });
   return {
     record: sink.record,
+    flush: async () => {},
     updateByRunId: (runId, patch) => {
       for (let i = sink.all().length - 1; i >= 0; i--) {
         const row = sink.all()[i]!;

@@ -110,6 +110,9 @@ export async function main(): Promise<void> {
     sessionStore: "memory",
     runStore: "memory",
   });
+  await built.config.hydrate?.();
+  await built.identity.hydrate();
+  await built.mcpToolService.ready();
 
   const command = buildGitCliSmokeCommand({ requireGlab, requireGhAuth, requireGlabAuth });
 

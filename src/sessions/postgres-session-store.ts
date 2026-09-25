@@ -307,7 +307,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           OR s.turns IS DISTINCT FROM c.turns
           OR s.last_activity IS DISTINCT FROM c.last_activity)`;
 
-  const { pool, q } = createPgPool(
+  const pg = createPgPool(
     connectionString,
     [
       {
@@ -776,6 +776,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       { id: "sessions/maintenance/recount-recent", statements: [recountRecentSessions] },
     ],
   );
+  const { pool, q } = pg;
 
   const lockSession = (client: PoolClient, sessionId: string) =>
     client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [sessionId]);
@@ -831,6 +832,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   };
 
   return {
+    close: pg.close,
     leaseTtlMs,
     async getOrCreateByThread(threadRef, type, scopeId, channelName, surface): Promise<Session> {
       const heal = async (row: Record<string, unknown>): Promise<Session> => {
