@@ -142,6 +142,17 @@ test("verification authenticates without sending a message", async (t) => {
   assert.equal(server.messages.length, 0);
 });
 
+test("no AUTH is sent when credentials are absent", async (t) => {
+  const server = await fakeSmtp();
+  t.after(() => server.close());
+  const unauthenticated = options(server.port, { username: "", password: "" });
+  await smtpDeliver(unauthenticated, { from: "no-reply@example.com", to: "admin@example.com", data: "Subject: hi" });
+  assert.deepEqual(
+    server.transcript.map((line) => line.split(" ")[0]),
+    ["EHLO", "MAIL", "RCPT", "DATA", "QUIT"],
+  );
+});
+
 test("STARTTLS mode refuses a server that does not advertise STARTTLS", async (t) => {
   const server = await fakeSmtp({ offerStartTls: false });
   t.after(() => server.close());
