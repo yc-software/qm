@@ -1688,7 +1688,7 @@ a.chat-row-open {
   flex-direction: column;
   align-items: flex-end;
 }
-.message-stack .user-row:not(:has(~ .user-row)) {
+.message-stack .user-row.latest-prompt {
   position: sticky;
   top: var(--chat-sticky-top, 0px);
   z-index: 3;
@@ -1704,7 +1704,7 @@ a.chat-row-open {
   top: auto;
 }
 
-.message-stack .user-row:not(:has(~ .user-row)) > .user-bubble {
+.message-stack .user-row.latest-prompt > .user-bubble {
   pointer-events: auto;
   transition: box-shadow 120ms ease;
 }
@@ -1890,6 +1890,7 @@ button.subagent-chip:hover {
   }
 }
 .assistant-row {
+  contain: layout style;
   display: block;
 }
 .assistant-body {
@@ -2021,14 +2022,14 @@ qm-markdown .tok-in {
 .user-bubble :is(markdown-block, qm-markdown) p {
   line-height: inherit;
 }
-.message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble > .pin-content {
+.message-stack .user-row.latest-prompt:not(.pin-expanded) .user-bubble > .pin-content {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 6;
   overflow: hidden;
 }
 .message-stack
-  .user-row:not(:has(~ .user-row)):not(.pin-expanded)
+  .user-row.latest-prompt:not(.pin-expanded)
   .user-bubble
   > .pin-content:has(code-block, pre, table, img, svg, math, .katex-display, video, iframe) {
   max-height: 6lh;
@@ -2065,7 +2066,7 @@ qm-markdown .tok-in {
   pointer-events: auto;
   cursor: pointer;
 }
-.message-stack .user-row:not(:has(~ .user-row)) > .user-bubble > .pin-toggle:not([hidden]) {
+.message-stack .user-row.latest-prompt > .user-bubble > .pin-toggle:not([hidden]) {
   display: flex;
   align-items: center;
   gap: 2px;
@@ -4702,15 +4703,20 @@ summary.stopped-head:focus-visible {
   justify-content: center;
 }
 .wl-swell {
+  display: inline-block;
+  flex: none;
   color: var(--muted-foreground);
   overflow: hidden;
 }
 .wl-swell .wl-row {
+  display: block;
+  overflow: visible;
+  will-change: transform;
   animation: wl-swell-scroll 1.6s linear infinite;
 }
 @keyframes wl-swell-scroll {
   to {
-    transform: translateX(-24px);
+    transform: translateX(var(--wl-shift));
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -8595,6 +8601,7 @@ h3.ambient-field-label {
 
 .split-pane-content {
   container: split-pane / size;
+  contain: layout style;
   position: relative;
   width: 100%;
   height: 100%;

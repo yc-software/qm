@@ -64,7 +64,7 @@ export function createTranscriptViewport() {
 
   function clearPrompt(): void {
     if (content) content.scrollTop = 0;
-    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded", "pin-condensed");
+    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded", "pin-condensed", "latest-prompt");
     prompt?.style.removeProperty("--pin-expanded-max");
     prompt?.style.removeProperty("--pin-rest-height");
     prompt?.style.removeProperty("--pin-content-max");
@@ -305,7 +305,8 @@ export function createTranscriptViewport() {
       if (stack) observer?.observe(stack);
     }
     const nextPins = scroller?.querySelector<HTMLElement>(".pinned-strip") ?? null;
-    const nextPrompt = scroller?.querySelector<HTMLElement>(".message-stack .user-row:not(:has(~ .user-row))") ?? null;
+    const prompts = stack?.querySelectorAll<HTMLElement>(".user-row");
+    const nextPrompt = prompts?.item(prompts.length - 1) ?? null;
     if (pins !== nextPins) {
       changed = true;
       if (pins) observer?.unobserve(pins);
@@ -320,6 +321,7 @@ export function createTranscriptViewport() {
       promptKey = prompt?.dataset.index;
       if (prompt) observer?.observe(prompt);
     }
+    prompt?.classList.add("latest-prompt");
     const nextContent = prompt?.querySelector<HTMLElement>(".pin-content") ?? null;
     if (content !== nextContent) {
       changed = true;

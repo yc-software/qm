@@ -9,7 +9,7 @@ const shared = readFileSync(new URL("../src/shared-session.ts", import.meta.url)
 test("only the collapsed pinned prompt is capped and overflow clips instead of nesting scrollbars", () => {
   const bubble =
     css.match(
-      /\.message-stack\s+\.user-row:not\(:has\(~ \.user-row\)\):not\(\.pin-expanded\)\s+\.user-bubble\s+>\s+\.pin-content \{[^}]*\}/,
+      /\.message-stack\s+\.user-row\.latest-prompt:not\(\.pin-expanded\)\s+\.user-bubble\s+>\s+\.pin-content \{[^}]*\}/,
     )?.[0] ?? "";
   assert.match(bubble, /-webkit-line-clamp: 6;/);
   assert.match(bubble, /overflow: hidden;/);

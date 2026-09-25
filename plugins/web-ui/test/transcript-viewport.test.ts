@@ -6,8 +6,7 @@ const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 
 test("only an actually stuck prompt gets elevation", () => {
-  const normal =
-    css.match(/\.message-stack \.user-row:not\(:has\(~ \.user-row\)\) > \.user-bubble \{[^}]*\}/)?.[0] ?? "";
+  const normal = css.match(/\.message-stack \.user-row\.latest-prompt > \.user-bubble \{[^}]*\}/)?.[0] ?? "";
   assert.doesNotMatch(normal, /box-shadow: var/);
   assert.match(css, /\.user-row\.stuck > \.user-bubble/);
 });
@@ -909,6 +908,27 @@ test("revealing a message cancels pending and future bottom following", () => {
     f.viewport.follow();
     f.flush();
     assert.equal(f.s.scrollTop, 40);
+  } finally {
+    f.close();
+  }
+});
+
+test("the latest-prompt marker moves between rows and is restored after a template update", () => {
+  const f = fixture();
+  try {
+    assert.equal(f.prompt.classList.contains("latest-prompt"), true);
+    f.prompt.classList.remove("latest-prompt");
+    f.viewport.sync(f.s);
+    assert.equal(f.prompt.classList.contains("latest-prompt"), true);
+    const next = f.prompt.cloneNode(true) as HTMLElement;
+    next.className = "user-row";
+    next.dataset.index = "2";
+    f.prompt.after(next);
+    f.viewport.sync(f.s);
+    assert.equal(f.prompt.classList.contains("latest-prompt"), false);
+    assert.equal(next.classList.contains("latest-prompt"), true);
+    f.viewport.dispose();
+    assert.equal(next.classList.contains("latest-prompt"), false);
   } finally {
     f.close();
   }
