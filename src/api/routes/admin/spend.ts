@@ -363,14 +363,17 @@ export async function spend(ctx: ApiCtx): Promise<void> {
   if (from === null) return bad("from must be a YYYY-MM-DD date (UTC) or epoch milliseconds");
   if (to <= from) return bad("to must be later than from");
 
-  const rows = (await deps.sessions?.spendRollup({ from, to })) ?? [];
+  const { rows, asOf } = deps.sessions?.spendReport
+    ? await deps.sessions.spendReport({ from, to })
+    : { rows: (await deps.sessions?.spendRollup({ from, to })) ?? [], asOf: undefined };
   const labels = await discoverScopes(
     app,
     deps,
     rows.map((r) => r.scopeId),
   );
   const report = summarizeSpend(rows, { from, to, bucket, label: (id) => labels.get(id) ?? "" });
-  if (format === "json") return sendJson(res, 200, { scopeId: scope, ...report });
+  if (format === "json")
+    return sendJson(res, 200, { scopeId: scope, ...report, ...(asOf === undefined ? {} : { asOf }) });
 
   const body = spendCsv(report, breakdown);
   res.writeHead(200, {

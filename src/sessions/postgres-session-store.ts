@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool, type PgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbSafeStringify } from "../util/text.ts";
+import { reportFailure } from "../util/errors.ts";
 import type { Session, SessionEntry, SessionType, ScopeId } from "../types.ts";
 import type {
   NewSessionPin,
@@ -241,6 +242,56 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                   WHEN json_typeof(j) = 'string' THEN j #>> '{}'
                   ELSE NULL END
         FROM (SELECT safe_json(replace(${col}, '\\u0000', '')) AS j) _)`;
+
+  const spendSql = `WITH RECURSIVE ancestry AS (
+           SELECT s.id AS session_id, s.parent_session_id, ${originExpr("s")} AS origin, ARRAY[s.id] AS path
+             FROM sessions s
+            WHERE s.parent_session_id IS NOT NULL AND ${originExpr("s")} = 'conversation'
+              AND EXISTS (SELECT 1 FROM session_llm_requests r
+                           WHERE r.session_id = s.id AND r.created_at >= $1 AND r.created_at < $2
+                             AND r.usage_json IS NOT NULL)
+           UNION ALL
+           SELECT a.session_id, p.parent_session_id, ${originExpr("p")}, a.path || p.id
+             FROM ancestry a JOIN sessions p ON p.id = a.parent_session_id
+            WHERE a.origin = 'conversation' AND NOT p.id = ANY(a.path) AND cardinality(a.path) < 64
+         ), origins AS (
+           SELECT DISTINCT ON (session_id) session_id, origin
+             FROM ancestry ORDER BY session_id, cardinality(path) DESC
+         ), rollup AS MATERIALIZED (
+           SELECT (r.created_at / 86400000)::bigint AS day, s.scope_id,
+                COALESCE(o.origin, ${originExpr("s")}) AS origin, r.model,
+                COUNT(*) AS calls,
+                COALESCE(SUM(cost_usd), 0)::text AS cost_usd,
+                COALESCE(SUM(input), 0) AS input,
+                COALESCE(SUM(output), 0) AS output,
+                COALESCE(SUM(cache_read), 0) AS cache_read,
+                COALESCE(SUM(cache_write), 0) AS cache_write
+           FROM (SELECT created_at, session_id, model,
+                        (spend_usage_json(usage_json) ->> 'costUsd')::double precision AS cost_usd,
+                        (spend_usage_json(usage_json) ->> 'input')::bigint AS input,
+                        (spend_usage_json(usage_json) ->> 'output')::bigint AS output,
+                        (spend_usage_json(usage_json) ->> 'cacheRead')::bigint AS cache_read,
+                        (spend_usage_json(usage_json) ->> 'cacheWrite')::bigint AS cache_write
+                   FROM session_llm_requests
+                  WHERE created_at >= $1 AND created_at < $2 AND usage_json IS NOT NULL
+                    AND ${SPEND_INDEXABLE}
+                 UNION ALL
+                 SELECT created_at, session_id, model,
+                        (usage_json::jsonb ->> 'costUsd')::double precision AS cost_usd,
+                        (usage_json::jsonb ->> 'input')::bigint AS input,
+                        (usage_json::jsonb ->> 'output')::bigint AS output,
+                        (usage_json::jsonb ->> 'cacheRead')::bigint AS cache_read,
+                        (usage_json::jsonb ->> 'cacheWrite')::bigint AS cache_write
+                   FROM session_llm_requests
+                  WHERE created_at >= $1 AND created_at < $2 AND usage_json IS NOT NULL
+                    AND NOT ${SPEND_INDEXABLE}
+                    AND EXISTS (SELECT 1 FROM sessions WHERE id = session_llm_requests.session_id)
+                 OFFSET 0) r
+           JOIN sessions s ON s.id = r.session_id
+           LEFT JOIN origins o ON o.session_id = s.id
+          GROUP BY day, s.scope_id, COALESCE(o.origin, ${originExpr("s")}), r.model
+         )
+         SELECT * FROM rollup ORDER BY day, scope_id, origin, model`;
 
   const recountRecentSessions = `UPDATE sessions s
         SET messages = c.messages, turns = c.turns, last_activity = c.last_activity
@@ -649,6 +700,53 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_spend_wide
              ON session_llm_requests(created_at)
              WHERE usage_json IS NOT NULL AND NOT ${SPEND_INDEXABLE}`,
+        ],
+      },
+      {
+        id: "sessions/store/0022-spend-days",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `CREATE TABLE session_spend_days(day BIGINT PRIMARY KEY, rows JSONB NOT NULL, updated_at BIGINT NOT NULL)`,
+          `CREATE TABLE session_spend_dirty(
+             day BIGINT, session_id TEXT, writer xid8 NOT NULL DEFAULT pg_current_xact_id(),
+             UNIQUE(day, writer), CHECK (num_nonnulls(day, session_id) = 1)
+           )`,
+          `CREATE OR REPLACE FUNCTION invalidate_request_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_request_spend$
+           BEGIN
+             INSERT INTO session_spend_dirty(day)
+             SELECT DISTINCT floor(at::numeric / 86400000)::bigint
+               FROM (VALUES
+                 (CASE WHEN TG_OP <> 'INSERT' AND OLD.usage_json IS NOT NULL THEN OLD.created_at END),
+                 (CASE WHEN TG_OP <> 'DELETE' AND NEW.usage_json IS NOT NULL THEN NEW.created_at END)
+               ) changed(at) WHERE at IS NOT NULL
+             ON CONFLICT DO NOTHING;
+             RETURN NULL;
+           END $invalidate_request_spend$`,
+          `CREATE TRIGGER session_llm_requests_spend_dirty
+           AFTER INSERT OR UPDATE OF created_at, session_id, model, usage_json OR DELETE ON session_llm_requests
+           FOR EACH ROW EXECUTE FUNCTION invalidate_request_spend()`,
+          `CREATE OR REPLACE FUNCTION invalidate_session_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_session_spend$
+           BEGIN
+             IF TG_OP = 'UPDATE' AND ROW(OLD.id, OLD.scope_id, OLD.origin, OLD.thread_ref, OLD.parent_session_id)
+                  IS NOT DISTINCT FROM ROW(NEW.id, NEW.scope_id, NEW.origin, NEW.thread_ref, NEW.parent_session_id) THEN
+               RETURN NULL;
+             END IF;
+             INSERT INTO session_spend_dirty(session_id)
+             SELECT DISTINCT id FROM (VALUES (OLD.id), (NEW.id)) changed(id) WHERE id IS NOT NULL;
+             RETURN NULL;
+           END $invalidate_session_spend$`,
+          `CREATE TRIGGER sessions_spend_dirty
+           AFTER INSERT OR UPDATE OF id, scope_id, origin, thread_ref, parent_session_id OR DELETE ON sessions
+           FOR EACH ROW EXECUTE FUNCTION invalidate_session_spend()`,
+        ],
+      },
+      {
+        id: "sessions/store/0023-spend-days-backfill",
+        statements: [
+          `INSERT INTO session_spend_dirty(day)
+           SELECT DISTINCT floor(created_at::numeric / 86400000)::bigint
+             FROM session_llm_requests WHERE usage_json IS NOT NULL
+           ON CONFLICT DO NOTHING`,
         ],
       },
     ],
@@ -1687,59 +1785,77 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async spendRollup(range): Promise<SpendRow[]> {
-      const rows = await q(
-        `WITH RECURSIVE ancestry AS (
-           SELECT s.id AS session_id, s.parent_session_id, ${originExpr("s")} AS origin, ARRAY[s.id] AS path
-             FROM sessions s
-            WHERE s.parent_session_id IS NOT NULL AND ${originExpr("s")} = 'conversation'
-              AND EXISTS (SELECT 1 FROM session_llm_requests r
-                           WHERE r.session_id = s.id AND r.created_at >= $1 AND r.created_at < $2
-                             AND r.usage_json IS NOT NULL)
-           UNION ALL
-           SELECT a.session_id, p.parent_session_id, ${originExpr("p")}, a.path || p.id
-             FROM ancestry a JOIN sessions p ON p.id = a.parent_session_id
-            WHERE a.origin = 'conversation' AND NOT p.id = ANY(a.path) AND cardinality(a.path) < 64
-         ), origins AS (
-           SELECT DISTINCT ON (session_id) session_id, origin
-             FROM ancestry ORDER BY session_id, cardinality(path) DESC
-         ), rollup AS MATERIALIZED (
-           SELECT (r.created_at / 86400000)::bigint AS day, s.scope_id,
-                COALESCE(o.origin, ${originExpr("s")}) AS origin, r.model,
-                COUNT(*) AS calls,
-                COALESCE(SUM(cost_usd), 0) AS cost_usd,
-                COALESCE(SUM(input), 0) AS input,
-                COALESCE(SUM(output), 0) AS output,
-                COALESCE(SUM(cache_read), 0) AS cache_read,
-                COALESCE(SUM(cache_write), 0) AS cache_write
-           FROM (SELECT created_at, session_id, model,
-                        (spend_usage_json(usage_json) ->> 'costUsd')::double precision AS cost_usd,
-                        (spend_usage_json(usage_json) ->> 'input')::bigint AS input,
-                        (spend_usage_json(usage_json) ->> 'output')::bigint AS output,
-                        (spend_usage_json(usage_json) ->> 'cacheRead')::bigint AS cache_read,
-                        (spend_usage_json(usage_json) ->> 'cacheWrite')::bigint AS cache_write
-                   FROM session_llm_requests
-                  WHERE created_at >= $1 AND created_at < $2 AND usage_json IS NOT NULL
-                    AND ${SPEND_INDEXABLE}
-                 UNION ALL
-                 SELECT created_at, session_id, model,
-                        (usage_json::jsonb ->> 'costUsd')::double precision AS cost_usd,
-                        (usage_json::jsonb ->> 'input')::bigint AS input,
-                        (usage_json::jsonb ->> 'output')::bigint AS output,
-                        (usage_json::jsonb ->> 'cacheRead')::bigint AS cache_read,
-                        (usage_json::jsonb ->> 'cacheWrite')::bigint AS cache_write
-                   FROM session_llm_requests
-                  WHERE created_at >= $1 AND created_at < $2 AND usage_json IS NOT NULL
-                    AND NOT ${SPEND_INDEXABLE}
-                    AND EXISTS (SELECT 1 FROM sessions WHERE id = session_llm_requests.session_id)
-                 OFFSET 0) r
-           JOIN sessions s ON s.id = r.session_id
-           LEFT JOIN origins o ON o.session_id = s.id
-          GROUP BY day, s.scope_id, COALESCE(o.origin, ${originExpr("s")}), r.model
-         )
-         SELECT * FROM rollup ORDER BY day, scope_id, origin, model`,
-        [range.from, range.to],
+      return (await q(spendSql, [range.from, range.to])).map(rowToSpendRow);
+    },
+
+    async spendReport(range) {
+      const dayMs = 86_400_000;
+      if (range.from < 0 || range.from % dayMs || range.to % dayMs) {
+        return { rows: (await q(spendSql, [range.from, range.to])).map(rowToSpendRow) };
+      }
+      let asOf = now();
+      const days = await q(
+        `WITH pending AS (SELECT DISTINCT day FROM session_spend_dirty WHERE day >= $1 AND day < $2)
+         SELECT COALESCE(c.day, p.day) AS day, c.rows, c.updated_at,
+                p.day IS NOT NULL OR EXISTS (SELECT 1 FROM session_spend_dirty WHERE session_id IS NOT NULL) AS pending
+           FROM (SELECT * FROM session_spend_days WHERE day >= $1 AND day < $2) c
+           FULL JOIN pending p ON p.day = c.day ORDER BY day`,
+        [range.from / dayMs, range.to / dayMs],
       );
-      return rows.map(rowToSpendRow);
+      if (days.some((day) => day.rows === null)) {
+        return { rows: (await q(spendSql, [range.from, range.to])).map(rowToSpendRow) };
+      }
+      const rows: SpendRow[] = [];
+      for (const day of days) {
+        rows.push(...(day.rows as Record<string, unknown>[]).map(rowToSpendRow));
+        if (day.pending) asOf = Math.min(asOf, Number(day.updated_at));
+      }
+      return { rows, asOf };
+    },
+
+    async refreshSpendRollup() {
+      const started = Date.now();
+      await withPgTransaction(await pool(), async (client) => {
+        const changed = await client.query(
+          "DELETE FROM session_spend_dirty WHERE session_id IS NOT NULL RETURNING session_id",
+        );
+        if (!changed.rowCount) return;
+        await client.query(
+          `WITH RECURSIVE affected(id) AS (
+             SELECT unnest($1::text[])
+             UNION
+             SELECT s.id FROM sessions s JOIN affected a ON s.parent_session_id = a.id
+           )
+           INSERT INTO session_spend_dirty(day)
+           SELECT DISTINCT floor(r.created_at::numeric / 86400000)::bigint
+             FROM session_llm_requests r JOIN affected a ON a.id = r.session_id WHERE r.usage_json IS NOT NULL
+           ON CONFLICT DO NOTHING`,
+          [changed.rows.map((r) => r.session_id)],
+        );
+      });
+      const days = await q(
+        `SELECT d.day FROM (SELECT DISTINCT day FROM session_spend_dirty WHERE day IS NOT NULL) d
+         LEFT JOIN session_spend_days c ON c.day = d.day ORDER BY c.updated_at NULLS FIRST, d.day DESC`,
+      );
+      for (const { day } of days) {
+        try {
+          await withPgTransaction(await pool(), async (client) => {
+            const pending = await client.query("DELETE FROM session_spend_dirty WHERE day = $1 RETURNING day", [day]);
+            if (!pending.rowCount) return;
+            const updatedAt = now();
+            const rows = await client.query(spendSql, [Number(day) * 86_400_000, (Number(day) + 1) * 86_400_000]);
+            await client.query(
+              `INSERT INTO session_spend_days(day, rows, updated_at) VALUES ($1, $2, $3)
+               ON CONFLICT (day) DO UPDATE SET rows = EXCLUDED.rows, updated_at = EXCLUDED.updated_at`,
+              [day, jsonbSafeStringify(rows.rows), updatedAt],
+            );
+          });
+        } catch (error) {
+          reportFailure("spend: refresh daily totals", error);
+          continue;
+        }
+        if (Date.now() - started >= 5_000) break;
+      }
     },
 
     async listParticipants(): Promise<ParticipantWindow[]> {

@@ -101,6 +101,12 @@ function render(data: any) {
   return { f, calls, view, peopleRows };
 }
 
+test("spend view: shows the saved report freshness", () => {
+  const { f } = render({ ...DATA, asOf: Date.UTC(2026, 8, 25, 12) });
+  assert.match(f.root.textContent!, /Totals as of.*Updated every minute/);
+  f.window.close();
+});
+
 test("spend view: KPI stats, stacked chart and range tabs describe the whole org", () => {
   const { f, calls } = render(DATA);
   assert.deepEqual(JSON.parse(JSON.stringify(calls.shell.stats)), [

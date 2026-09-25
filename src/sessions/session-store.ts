@@ -804,6 +804,10 @@ export interface SessionStore {
 
   spendRollup(range: { from: number; to: number }): Promise<SpendRow[]>;
 
+  spendReport?(range: { from: number; to: number }): Promise<{ rows: SpendRow[]; asOf?: number }>;
+
+  refreshSpendRollup?(): Promise<void>;
+
   listParticipants(): Promise<ParticipantWindow[]>;
 
   distinctParticipants(): Promise<string[]>;

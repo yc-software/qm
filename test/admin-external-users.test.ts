@@ -537,6 +537,25 @@ test("expiry classifies an external as guest, and the signed broker check answer
   }
 });
 
+test("the directory resolves participants without loading their session windows", async (t) => {
+  const s = start();
+  t.after(s.close);
+  for (const thread of ["first", "second"]) {
+    const session = await s.built.sessions.getOrCreateByThread(thread, "dm", "personal:alice");
+    await s.built.sessions.addParticipant(session.id, "alice");
+    await s.built.sessions.addParticipant(session.id, "inactive");
+  }
+  await s.built.identity.deactivate("inactive");
+  t.mock.method(s.built.sessions, "listParticipants", () => {
+    throw new Error("Directory lookup must not load participant windows");
+  });
+  const alice = { principalId: "alice", displayName: "alice", type: "internal" };
+  assert.deepEqual(await s.built.app.directoryMembers(), [alice]);
+  assert.deepEqual(await s.built.app.directoryMember("alice"), alice);
+  assert.deepEqual(await s.built.app.resolveRecipient("alice"), { kind: "one", member: alice });
+  assert.equal(await s.built.app.directoryMember("inactive"), null);
+});
+
 test("the directory resolves an active external member and not an expired one", async () => {
   const s = start();
   try {
