@@ -102,7 +102,7 @@ import {
 } from "../security/security-posture.ts";
 import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
-import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
+import { composeMemoryPolicy, DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { collectBlob, createMemoryBlobTransferStore } from "../persistence/blob-transfer.ts";
 import { skillsIndex } from "../skills/materialize.ts";
@@ -1042,6 +1042,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const rwLayer = resolution.layers.find((l) => l.mode === "rw");
       if (rwLayer && environmentId !== rwLayer.scopeId) rwLayer.scopeId = environmentId;
       for (const layer of resolution.layers) await deps.workspace.ensureScope(layer.scopeId);
+      const turnMemoryPolicy = composeMemoryPolicy(memoryPolicy, resolution.memoryPolicy);
 
       const context = await resolveTurnContext({
         actor,
@@ -1054,7 +1055,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         sessions: deps.sessions,
         isCurrentSharedScopeMember,
         resolution,
-        memoryPolicy,
+        memoryPolicy: turnMemoryPolicy,
         useMemory,
         memory: deps.memory,
         workspace: deps.workspace,
@@ -1595,7 +1596,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             actorIsOrgAdmin &&
             liveTurn &&
             useMemory &&
-            memoryPolicy.capture !== "off" &&
+            turnMemoryPolicy.capture !== "off" &&
             resolution.orgScopeId !== memoryScopeId
           ) {
             orgMemoryWrite = resolution.orgScopeId;
@@ -3934,7 +3935,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
         });
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
-        if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
+        if (!pausing && !cancelStopped && useMemory && turnMemoryPolicy.capture !== "off" && onTurnEnd) {
           const prior = pendingCaptures.get(memoryScopeId);
           const capture = (async () => {
             if (prior) await prior.catch(swallowAs("prior memory capture", undefined));

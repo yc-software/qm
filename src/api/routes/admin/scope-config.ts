@@ -254,6 +254,7 @@ const SETTINGS_RESOURCES = {
     "baseModel",
     "runtime",
     "securityPosture",
+    "memoryPolicy",
     "sharingPosture",
     "autoFlagger",
     "approvalGrantModes",
@@ -465,6 +466,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     directoryMembers,
     directoryChannels,
     sharingPostureOverride,
+    memoryPolicyOverride,
     egress,
   ] = await Promise.all([
     Promise.all(
@@ -479,6 +481,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
       ? read("channels", () => deps.directory?.listChannels?.())
       : undefined,
     includes("governance") ? deps.config.getSharingPostureOwnDurable(targetScope) : undefined,
+    includes("governance") ? deps.config.getMemoryPolicyOwnDurable(targetScope) : undefined,
     includes("governance") ? scopeEgress(deps, targetScope) : undefined,
   ]);
   const values = Object.fromEntries(entries);
@@ -509,7 +512,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     ...(includes("credentials")
       ? { serviceCredentials, directoryMembers: directoryMembers ?? [], directoryChannels: directoryChannels ?? [] }
       : {}),
-    ...(includes("governance") ? { sharingPostureOverride, ...egress } : {}),
+    ...(includes("governance") ? { sharingPostureOverride, memoryPolicyOverride, ...egress } : {}),
     ...modelOptions,
   });
 }

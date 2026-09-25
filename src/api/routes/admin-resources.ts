@@ -47,6 +47,7 @@ import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { DEVICE_FLOW_CUTOVER_MODES, type DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
 import { FEATURE_NAMES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
+import type { MemoryPolicy } from "../../memory/policy.ts";
 
 export interface AutoFlaggerDraft {
   harnessId: HarnessId;
@@ -173,6 +174,39 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           : { error: `security-posture requires { posture: ${SECURITY_POSTURES.join(" | ")} }` };
       },
       (deps, scope, posture) => deps.config!.setSecurityPosture(scope, posture),
+    ),
+  },
+  {
+    id: "memory-policy",
+    kind: "custom",
+    target: "any",
+    clearable: true,
+    label:
+      "Memory capture and recall. Deployment and organization restrictions are floors; narrower scopes may only restrict them further.",
+    readKey: "memoryPolicy",
+    get: (deps, scope) => deps.config!.getMemoryPolicyDurable(scope),
+    apply: generic<MemoryPolicy | null>(
+      (body, { scope }) => {
+        const kind = parseScopeId(scope).kind;
+        if (kind !== "personal" && kind !== "channel" && kind !== "group" && kind !== "org")
+          return { error: "memory-policy applies only to personal, channel, group, or org scopes" };
+        if (typeof body !== "object" || body === null || Array.isArray(body))
+          return { error: "memory-policy requires an object" };
+        const value = body as { inherit?: unknown; recall?: unknown; capture?: unknown };
+        if (value.inherit === true) return { value: null };
+        if (value.recall !== "off" && value.recall !== "writable" && value.recall !== "visible")
+          return { error: "memory-policy requires recall (off | writable | visible)" };
+        if (value.capture !== "off" && value.capture !== "writable")
+          return { error: "memory-policy requires capture (off | writable)" };
+        return {
+          value: {
+            recall: value.recall,
+            capture: value.capture,
+          },
+        };
+      },
+      (deps, scope, policy) =>
+        policy === null ? deps.config!.clearMemoryPolicy(scope) : deps.config!.setMemoryPolicy(scope, policy),
     ),
   },
   {

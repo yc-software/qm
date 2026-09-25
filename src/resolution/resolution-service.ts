@@ -89,6 +89,7 @@ export function createResolutionService(
       }
       const sharingPosture = await config.resolveSharingPostureDurable(scopeId("personal", actor.id), scope);
       const approvalGrantModes = await config.getApprovalGrantModesDurable(scope);
+      const memoryPolicy = await config.getMemoryPolicyDurable(scope);
 
       const egress = {
         allowedHosts: audienceEgressFloor(conversation.audience, config, orgScope, scope),
@@ -110,6 +111,7 @@ export function createResolutionService(
         securityPolicy,
         sharingPosture,
         approvalGrantModes,
+        memoryPolicy,
         orgScopeId: orgScope,
         grantedHandles,
       };

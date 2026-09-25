@@ -17,6 +17,47 @@ export {
 } from "./governance-state.ts";
 
 const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
+  "card-memory-policy": (s) =>
+    html`<section
+      class=${classMap({ card: true, "sv-governance": true, "setting-row": true, hidden: !s.available, dirty: s.dirty })}
+      id="card-memory-policy"
+    >
+      <div class="head">
+        <h2>Memory policy</h2>
+        <p>Control future memory capture and recall. Existing memories are retained when either setting is off.</p>
+      </div>
+      <div class="body">
+        <p>
+          Effective: capture ${s.context.memoryPolicy?.capture === "off" ? "off" : "on"}; recall
+          ${s.context.memoryPolicy?.recall || "visible"}.
+          ${s.context.memoryPolicyOverride == null ? "Following parent." : "This scope has an override."}
+        </p>
+        <label for="memory-capture">Capture</label>
+        <select
+          id="memory-capture"
+          .value=${s.value("memory-capture")}
+          @change=${(event: Event) => changeField(s, "memory-capture", event)}
+        >
+          <option value="writable">On — save durable facts from this scope</option>
+          <option value="off">Off — do not save new facts</option>
+        </select>
+        <label for="memory-recall">Recall</label>
+        <select
+          id="memory-recall"
+          .value=${s.value("memory-recall")}
+          @change=${(event: Event) => changeField(s, "memory-recall", event)}
+        >
+          <option value="visible">Visible — recall all permitted memory layers</option>
+          <option value="writable">Writable only — recall this scope's notebook</option>
+          <option value="off">Off — do not send memories to the model</option>
+        </select>
+      </div>
+      <div class="foot">
+        ${saveButton(s, "Apply")}
+        <button id="memory-policy-inherit" type="button">Follow parent</button>
+        ${settingStatus(s)}
+      </div>
+    </section>`,
   "card-security-posture": (s) =>
     html`<section
       class=${classMap({ card: true, "sv-governance": true, "setting-row": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}

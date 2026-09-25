@@ -131,6 +131,26 @@ test("external audience is rejected before reading mirror or Slack", async () =>
   assert.deepEqual(result.view.messages, []);
 });
 
+test("unresolved audience is rejected before reading mirror or Slack even when externals are enabled", async () => {
+  let reads = 0;
+  const serializer = createConversationSerializer({
+    ids,
+    directory,
+    externalParticipantsEnabled: async () => true,
+    readHistory: async () => {
+      reads++;
+      return { raw: [], hasMore: false };
+    },
+  });
+  const result = await serializer.serializeSlackConversation(
+    {},
+    { kind: "channel", channel: "C1", ts: "1", files: [] },
+    { audience: [{ externalId: "U1", identityFailure: "unresolved_principal" }] },
+  );
+  assert.deepEqual(result.view.messages, []);
+  assert.equal(reads, 0);
+});
+
 test("failed reads preserve the triggering event in automatic context", async () => {
   const serializer = createConversationSerializer({
     ids,

@@ -67,6 +67,7 @@ export interface ScratchPromoteDeps {
   consolidateAfter: number;
   captureQuietMs?: number;
   captureMaxTurns?: number;
+  captureAllowed?: (scopeId: ScopeId) => Promise<boolean>;
   onCaptureError?: (e: unknown, scopeId: ScopeId) => void;
 }
 
@@ -173,8 +174,10 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
   };
 
   async function flushBurst(burst: Burst): Promise<void> {
+    if (deps.captureAllowed && !(await deps.captureAllowed(burst.conversationScopeId))) return;
     const facts = await extractFacts(deps.harness, burst.turns);
     if (!facts.length) return;
+    if (deps.captureAllowed && !(await deps.captureAllowed(burst.conversationScopeId))) return;
     const at = Date.now();
     await memory.capture(burst.scopeId, facts, at);
     await ccCaptureToPersonal(memory, burst.conversationScopeId, burst.actorId, facts, at, burst.conversationLabel);

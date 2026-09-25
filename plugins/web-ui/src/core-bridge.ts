@@ -295,6 +295,17 @@ export async function forkSession(
   });
 }
 
+export async function editSubmittedMessage(
+  id: string,
+  seq: number,
+  text: string,
+): Promise<{ session: CoreSession; entries: SessionEntry[] }> {
+  return api<{ session: CoreSession; entries: SessionEntry[] }>(
+    `/api/sessions/${encodeURIComponent(id)}/messages/${seq}/edit`,
+    { method: "POST", body: JSON.stringify({ text }) },
+  );
+}
+
 export function forkCutSeq(entries: SessionEntry[], userOrdinal: number, isUserMessage: boolean): number | undefined {
   const seqs = forkableUserSeqs(entries);
   if (isUserMessage) return seqs[userOrdinal - 1];
@@ -391,6 +402,7 @@ export interface SessionEntry {
   seq?: number;
   parentSeq?: number | null;
   truncated?: boolean;
+  editable?: boolean;
 }
 
 export interface ToolActivity {
@@ -1663,6 +1675,7 @@ interface HistoryUserMessage {
   edited?: boolean;
   deleted?: boolean;
   subagentMail?: SubagentMailRef;
+  editable?: boolean;
 }
 
 export interface SubagentMailRef {
@@ -1974,6 +1987,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
           role: "user",
           ...(typeof payload?.runId === "string" ? { runId: payload.runId } : {}),
           ...(e.seq !== undefined ? { entrySeq: e.seq } : {}),
+          ...(e.editable ? { editable: true } : {}),
           content: userText,
           timestamp: e.createdAt,
           ...(mail ? { subagentMail: mail } : {}),

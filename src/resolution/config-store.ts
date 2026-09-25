@@ -21,6 +21,7 @@ import {
   type DecryptedConnectorClient,
 } from "../connectors/connector-client-store.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
+import { composeMemoryPolicy, type MemoryPolicy } from "../memory/policy.ts";
 
 export interface PersistedSoul {
   scopeId: ScopeId;
@@ -46,6 +47,10 @@ export interface PersistedCommandPolicy {
 export interface PersistedSecurityPosture {
   scopeId: ScopeId;
   posture: SecurityPosture;
+}
+export interface PersistedMemoryPolicy {
+  scopeId: ScopeId;
+  policy: MemoryPolicy;
 }
 export interface PersistedSharingPosture {
   scopeId: ScopeId;
@@ -153,6 +158,7 @@ interface ScopeConfigPresence {
   soul: boolean;
   commandPolicy: boolean;
   securityPosture: boolean;
+  memoryPolicy: boolean;
   sharingPosture: boolean;
   approvalGrantModes: boolean;
   egress: boolean;
@@ -185,6 +191,10 @@ export interface ScopedConfigStore {
   getSecurityPostureDurable(id: ScopeId): Promise<SecurityPosture>;
   setSecurityPosture(id: ScopeId, posture: SecurityPosture): Promise<void>;
   clearSecurityPosture(id: ScopeId): void;
+  getMemoryPolicyDurable(id: ScopeId): Promise<MemoryPolicy>;
+  getMemoryPolicyOwnDurable(id: ScopeId): Promise<MemoryPolicy | null>;
+  setMemoryPolicy(id: ScopeId, policy: MemoryPolicy): Promise<void>;
+  clearMemoryPolicy(id: ScopeId): Promise<void>;
   getSharingPosture(id: ScopeId): SharingPosture;
   getSharingPostureDurable(id: ScopeId): Promise<SharingPosture>;
   getSharingPostureOwnDurable(id: ScopeId): Promise<SharingPosture | null>;
@@ -282,6 +292,7 @@ export function createMemoryConfigStore(
     soulHistory?: DurableMap<PersistedSoulRevision>;
     commandPolicies?: DurableMap<PersistedCommandPolicy>;
     securityPostures?: DurableMap<PersistedSecurityPosture>;
+    memoryPolicies?: DurableMap<PersistedMemoryPolicy>;
     sharingPostures?: DurableMap<PersistedSharingPosture>;
     approvalGrantModes?: DurableMap<PersistedApprovalGrantModes>;
     egressPolicies?: DurableMap<PersistedEgressPolicy>;
@@ -306,6 +317,7 @@ export function createMemoryConfigStore(
     deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
     connectorSecretKey?: Buffer | string;
     defaultSecurityPosture?: SecurityPosture;
+    defaultMemoryPolicy?: MemoryPolicy;
     defaultSharingPosture?: SharingPosture;
   } = {},
 ): ScopedConfigStore {
@@ -338,6 +350,7 @@ export function createMemoryConfigStore(
   const soulHistoryStore = opts.soulHistory ?? createMemoryMap<PersistedSoulRevision>();
   const commandPolicyStore = opts.commandPolicies ?? createMemoryMap<PersistedCommandPolicy>();
   const securityPostureStore = opts.securityPostures ?? createMemoryMap<PersistedSecurityPosture>();
+  const memoryPolicyStore = opts.memoryPolicies ?? createMemoryMap<PersistedMemoryPolicy>();
   const sharingPostureStore = opts.sharingPostures ?? createMemoryMap<PersistedSharingPosture>();
   const approvalGrantModesStore = opts.approvalGrantModes ?? createMemoryMap<PersistedApprovalGrantModes>();
   const egressStore = opts.egressPolicies ?? createMemoryMap<PersistedEgressPolicy>();
@@ -361,6 +374,7 @@ export function createMemoryConfigStore(
   const autoFlaggerStore = opts.autoFlaggerConfigs ?? createMemoryMap<PersistedAutoFlaggerConfig>();
   const turnWallClockStore = opts.turnWallClocks ?? createMemoryMap<PersistedTurnWallClock>();
   const deploymentIdentity = opts.deploymentIdentity ?? createMemoryMap<PersistedDeploymentIdentity>();
+  const defaultMemoryPolicy = opts.defaultMemoryPolicy;
   const persistWarn = (what: string) => reportFailureAs(`config: persist ${what}`, undefined);
   const writeQueue = createKeyedQueue();
   const pendingWrites = new Map<string, Promise<void>>();
@@ -728,6 +742,20 @@ export function createMemoryConfigStore(
     clearSecurityPosture(id) {
       securityPostures.delete(id);
       persist(`securityPosture:${id}`, "security posture", () => securityPostureStore.delete(id));
+    },
+    async getMemoryPolicyDurable(id) {
+      const orgPolicy = (await memoryPolicyStore.get(org))?.policy;
+      const scopePolicy = id === org ? undefined : (await memoryPolicyStore.get(id))?.policy;
+      return composeMemoryPolicy(defaultMemoryPolicy, orgPolicy, scopePolicy);
+    },
+    async getMemoryPolicyOwnDurable(id) {
+      return (await memoryPolicyStore.get(id))?.policy ?? null;
+    },
+    async setMemoryPolicy(id, policy) {
+      await writeQueue(`memoryPolicy:${id}`, () => memoryPolicyStore.put(id, { scopeId: id, policy }));
+    },
+    async clearMemoryPolicy(id) {
+      await writeQueue(`memoryPolicy:${id}`, () => memoryPolicyStore.delete(id));
     },
     getSharingPosture(id) {
       const orgPosture = sharingPostures.get(org) ?? defaultSharingPosture;
@@ -1142,6 +1170,7 @@ export function createMemoryConfigStore(
         soul,
         commandPolicy,
         securityPosture,
+        memoryPolicy,
         sharingPosture,
         grantModes,
         egressPolicy,
@@ -1154,6 +1183,7 @@ export function createMemoryConfigStore(
         soulStore.get(id),
         commandPolicyStore.get(id),
         securityPostureStore.get(id),
+        memoryPolicyStore.get(id),
         sharingPostureStore.get(id),
         approvalGrantModesStore.get(id),
         egressStore.get(id),
@@ -1167,6 +1197,7 @@ export function createMemoryConfigStore(
         soul: !!soul,
         commandPolicy: !!commandPolicy,
         securityPosture: !!securityPosture,
+        memoryPolicy: !!memoryPolicy,
         sharingPosture: !!sharingPosture,
         approvalGrantModes: !!grantModes,
         egress: !!egressPolicy,
@@ -1270,6 +1301,7 @@ export function createMemoryConfigStore(
         `soul:${id}`,
         `policy:${id}`,
         `securityPosture:${id}`,
+        `memoryPolicy:${id}`,
         `sharingPosture:${id}`,
         `approvalGrantModes:${id}`,
         `egress:${id}`,

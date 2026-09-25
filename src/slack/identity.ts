@@ -3,6 +3,7 @@ import { LRUCache } from "lru-cache";
 export interface ActorAssertion {
   externalId: string;
   isExternalGuest?: boolean;
+  identityFailure?: "unresolved_principal" | "directory_lookup_failed";
   isBot?: boolean;
   displayName?: string;
 }
@@ -43,7 +44,7 @@ export function classifyUser(
   identity: SlackIdentityMode = "slack-id",
 ): ActorAssertion {
   const user = u ?? {};
-  let isGuest = Boolean(
+  const isGuest = Boolean(
     !u ||
     user.deleted ||
     user.is_restricted ||
@@ -56,7 +57,14 @@ export function classifyUser(
   if (identity === "email" && !user.is_bot) {
     const email = (user.profile?.email ?? "").trim().toLowerCase();
     if (email.includes("@")) externalId = email;
-    else isGuest = true;
+    else if (!isGuest) {
+      return {
+        externalId,
+        isExternalGuest: false,
+        identityFailure: "unresolved_principal",
+        ...(displayName ? { displayName } : {}),
+      };
+    }
   }
   return {
     externalId,
@@ -82,6 +90,10 @@ export function slackUserTimezone(u: SlackUser | undefined): string | undefined 
 
 export function externalMarker(): ActorAssertion {
   return { externalId: "slack-external", isExternalGuest: true };
+}
+
+export function isResolvedInternal(actor: ActorAssertion): boolean {
+  return !actor.isExternalGuest && !actor.identityFailure;
 }
 
 export function probeIdentityMode(members: SlackUser[], ownTeamId: string): SlackIdentityMode | "undecided" {
@@ -110,7 +122,7 @@ export function groupDmDisplayName(members: readonly ActorAssertion[]): string |
   const names: string[] = [];
   const seen = new Set<string>();
   for (const member of members) {
-    if (member.isExternalGuest) continue;
+    if (!isResolvedInternal(member)) continue;
     const name = (member.displayName ?? member.externalId).trim();
     if (!name || seen.has(name)) continue;
     seen.add(name);
@@ -132,7 +144,7 @@ export function computeChannelAudience(
     const byId = new Map<string, ActorAssertion>();
     for (const m of [actor, ...members]) if (m.externalId) byId.set(m.externalId, m);
     const audience = [...byId.values()];
-    if (isExternallyShared(info) && audience.every((m) => !m.isExternalGuest)) {
+    if (isExternallyShared(info) && audience.every(isResolvedInternal)) {
       audience.push(externalMarker());
     }
     return audience;
@@ -150,7 +162,7 @@ export function computePublishMembers(
   if (!complete) return undefined;
   if (isExternallyShared(info)) return undefined;
   const all = [actor, ...members];
-  if (all.some((m) => m.isExternalGuest)) return undefined;
+  if (all.some((m) => !isResolvedInternal(m))) return undefined;
   const byId = new Map<string, ActorAssertion>();
   for (const m of all) if (m.externalId) byId.set(m.externalId, m);
   return [...byId.values()];
@@ -163,14 +175,14 @@ export function allInternalChannelMembers(
 ): string[] | undefined {
   if (!complete) return undefined;
   if (isExternallyShared(info)) return undefined;
-  if (members.some((m) => m.isExternalGuest)) return undefined;
+  if (members.some((m) => !isResolvedInternal(m))) return undefined;
   return internalChannelMembers(members, true);
 }
 
 export function internalChannelMembers(members: ActorAssertion[], complete: boolean): string[] | undefined {
   if (!complete) return undefined;
   const ids = new Set<string>();
-  for (const m of members) if (m.externalId && !m.isExternalGuest) ids.add(m.externalId);
+  for (const m of members) if (m.externalId && isResolvedInternal(m)) ids.add(m.externalId);
   return [...ids];
 }
 
@@ -195,7 +207,7 @@ export async function resolveChannelMembership(opts: {
   for (const id of memberIds) {
     const { actor: member, ok } = await opts.classify(id);
     members.push(member);
-    if (member.externalId && !member.isExternalGuest) slackIdsByPrincipal.set(member.externalId, id);
+    if (member.externalId && isResolvedInternal(member)) slackIdsByPrincipal.set(member.externalId, id);
     if (!ok) complete = false;
   }
   const audience = computeChannelAudience(actor, members, info);

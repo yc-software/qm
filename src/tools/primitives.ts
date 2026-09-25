@@ -1185,9 +1185,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async memoryRead(): Promise<string | null> {
-      const write = deps.memoryAccess?.write;
-      if (!deps.memory || !write) return null;
-      return timed("recall", () => deps.memory!.read(write));
+      const read = deps.memoryAccess?.read ?? [];
+      const scopeId = deps.memoryScopeId;
+      if (!deps.memory || !scopeId || !read.includes(scopeId)) return null;
+      return timed("recall", () => deps.memory!.read(scopeId));
     },
 
     async memoryRemember(facts: string[]): Promise<number | null> {

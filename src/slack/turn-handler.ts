@@ -264,6 +264,20 @@ export function createTurnHandler(deps: {
       }
     };
 
+    if (actor.identityFailure) {
+      const reason =
+        actor.identityFailure === "directory_lookup_failed" ? "directory lookup failed" : "email identity unresolved";
+      console.warn(`[slack-plugin] refusing turn ch=${inc.channel} ts=${inc.ts}: ${reason}`);
+      if (!inc.unprompted) {
+        await ephemeralOrSay(
+          actor.identityFailure === "directory_lookup_failed"
+            ? "I can't verify your Slack identity right now. Try again in a moment or contact an administrator."
+            : "I can't verify your email identity in Slack. Ask an administrator to check email visibility and the users:read.email scope.",
+        );
+      }
+      return;
+    }
+
     if (inc.kind === "dm") {
       threadRef = dmThreadRef(inc.channel, inc.threadTs);
       replyThreadTs = inc.threadTs;
@@ -301,6 +315,21 @@ export function createTurnHandler(deps: {
       publishMembers = membership.publishMembers;
       slackIdsByPrincipal = membership.slackIdsByPrincipal;
       if (conversationKind === "group") channelName = groupDmDisplayName(audience) ?? channelName;
+    }
+
+    const audienceIdentityFailure = audience.find((member) => member.identityFailure)?.identityFailure;
+    if (audienceIdentityFailure) {
+      const reason =
+        audienceIdentityFailure === "directory_lookup_failed" ? "directory lookup failed" : "email identity unresolved";
+      console.warn(`[slack-plugin] refusing turn ch=${inc.channel} ts=${inc.ts}: audience ${reason}`);
+      if (!inc.unprompted) {
+        await ephemeralOrSay(
+          audienceIdentityFailure === "directory_lookup_failed"
+            ? "I can't verify everyone in this conversation right now. Try again in a moment or contact an administrator."
+            : "I can't verify everyone's email identity in Slack. Ask an administrator to check email visibility and the users:read.email scope.",
+        );
+      }
+      return;
     }
 
     const gatewayContext: GatewayContext =
@@ -873,12 +902,13 @@ export function createTurnHandler(deps: {
         async () => {
           const reactorUser = await classifyUserCached(client, reactorId);
           const reactor = reactorUser.actor;
-          if (reactor.isExternalGuest) return;
+          if (reactor.isExternalGuest || reactor.identityFailure) return;
           if (deps.allowActor && !deps.allowActor(reactor)) return;
           let prefetched: Incoming["prefetched"];
           if (!isDM) {
             const info = await getChannelInfo(client, channel);
             const membership = await channelMembership(client, channel, reactor, reactorId, info);
+            if (membership.audience.some((a) => a.identityFailure)) return;
             if (membership.audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled())) return;
             prefetched = {
               actor: reactor,

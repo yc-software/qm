@@ -22,6 +22,7 @@ export {
   classifyUser,
   slackUserTimezone,
   externalMarker,
+  isResolvedInternal,
   probeIdentityMode,
   type ChannelMeta,
   isMpim,

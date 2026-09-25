@@ -53,6 +53,30 @@ test("capture lands in the dated scratch log, not MEMORY.md", async () => {
   assert.equal(await memory.capture(SCOPE, ["prefers terse replies"], TODAY), 0);
 });
 
+test("debounced scratch capture rechecks governance before writing", async () => {
+  let allowed = true;
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "msp-")));
+  const base = createMemoryService(workspace);
+  const { strategy } = createScratchPromote({
+    harness: harnessOf(() => Promise.resolve("- Revoked scratch fact")),
+    memory: base,
+    workspace,
+    consolidateAfter: 0,
+    captureQuietMs: 30,
+    captureAllowed: async () => allowed,
+  });
+  await strategy.onTurnEnd!({
+    scopeId: SCOPE,
+    conversationScopeId: "channel:private",
+    input: "remember this",
+    reply: "okay",
+    actorId: "U1",
+  });
+  allowed = false;
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal(await workspace.read(SCOPE, logPath(Date.now())), null);
+});
+
 test("a notebook edit landing during a marker bump survives", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "msp-")));
   const base = createMemoryService(workspace);

@@ -377,7 +377,7 @@ export function createApprovals(deps: {
     for (const req of requests) {
       const target = resolveAgentRequestTarget(ctx.audience, req.targetUserId, ctx.slackIdsByPrincipal);
       const originAgentLabel = channelAgentLabel(ctx.kind, ctx.channelName, ctx.channel);
-      if (!target || target.isExternalGuest) {
+      if (!target || target.isExternalGuest || target.identityFailure) {
         await client.chat.postMessage(
           slackReplyArgs(
             ctx.channel,
@@ -608,9 +608,12 @@ export function createApprovals(deps: {
       return;
     }
 
+    const recoveredRequester = ctx.recovered === true ? await directory.classifyActor(client, clickerId) : undefined;
     const requesterMatches =
       clickerId === ctx.requesterId ||
-      (ctx.recovered === true && (await directory.classifyActor(client, clickerId)).externalId === ctx.requesterId);
+      (recoveredRequester !== undefined &&
+        !recoveredRequester.identityFailure &&
+        recoveredRequester.externalId === ctx.requesterId);
     if (!requesterMatches) {
       await client.chat
         .postEphemeral({
@@ -653,6 +656,7 @@ export function createApprovals(deps: {
     const cardIsRemote = cardChannel !== ctx.channel;
     try {
       const approver = await directory.classifyActor(client, clickerId);
+      if (approver.identityFailure) throw new Error("the approver identity could not be resolved");
       const onQueued =
         messageTs && !cardIsRemote && !delegated
           ? (runId: string): void => {
@@ -952,7 +956,7 @@ export function createApprovals(deps: {
       await updateSlackMessage(client, ctx.originChannel, ctx.originStatusTs, agentRequestStatusText(ctx, "running"));
       const classified = await directory.classifyUserCached(client, ctx.targetUserId);
       const actor = classified.actor;
-      if (actor.isExternalGuest) throw new Error("the target user is not internal");
+      if (actor.isExternalGuest || actor.identityFailure) throw new Error("the target user is not internal");
       const personalTurn: Omit<CoreTurnBody, "approval"> = {
         actor,
         conversation: {

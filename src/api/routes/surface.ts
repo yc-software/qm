@@ -2,7 +2,9 @@ import { isSessionStatus } from "../../sessions/session-status.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeFallback, runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
-import type { Grant, ScopeId, Session } from "../../types.ts";
+import type { AttachmentMeta, Grant, IncomingAttachment, ScopeId, Session, TurnRequest } from "../../types.ts";
+import { isTerminal } from "../../runs/run-store.ts";
+import { samePerson } from "../../directory/person.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
 import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
@@ -120,6 +122,114 @@ async function forkSession(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
+async function editSubmittedMessage(ctx: ApiCtx): Promise<void> {
+  const { res, app, body, deps } = ctx;
+  const sessionId = ctx.params.id!;
+  const seq = Number(ctx.params.seq);
+  const b = body as { principalId?: unknown; text?: unknown };
+  if (
+    typeof b.principalId !== "string" ||
+    !b.principalId ||
+    typeof b.text !== "string" ||
+    !b.text.trim() ||
+    !Number.isInteger(seq) ||
+    seq < 0
+  ) {
+    return sendJson(res, 400, { error: "bad_request" });
+  }
+  const session = await app.getSessionForViewer(sessionId, b.principalId, { tailTurns: 1 });
+  const visible = await app.getSessionEntryForViewer(sessionId, b.principalId, seq);
+  const payload = visible?.entry.payload as { runId?: unknown } | undefined;
+  const run = typeof payload?.runId === "string" ? await deps.runs?.get(payload.runId) : null;
+  if (
+    visible?.entry.type !== "user" ||
+    !session ||
+    session.session.surface !== "web" ||
+    !deps.sessions ||
+    !run ||
+    run.request.conversation.threadRef !== session.session.threadRef ||
+    run.turnUserSeq !== seq ||
+    !samePerson(run.request.actor.id, b.principalId)
+  ) {
+    return sendJson(res, 404, { error: "not_found" });
+  }
+  if (!isTerminal(run.status)) return sendJson(res, 409, { error: "message_busy" });
+  const entryAttachments = (visible.entry.payload as { attachments?: unknown }).attachments;
+  const stagedAttachments: IncomingAttachment[] = [];
+  const discardStaged = () =>
+    Promise.all(stagedAttachments.map((attachment) => deps.blobTransfer?.delete(attachment.blobId).catch(() => undefined)));
+  if (Array.isArray(entryAttachments) && entryAttachments.length) {
+    if (!deps.blobTransfer) {
+      return sendJson(res, 409, { error: "attachment_unavailable", message: "The original attachments are unavailable." });
+    }
+    try {
+      for (const attachment of entryAttachments as AttachmentMeta[]) {
+        if (!attachment.artifactId) throw new Error("attachment has no durable artifact");
+        const opened = await app.openFileForViewer(attachment.artifactId, b.principalId);
+        if (!opened) throw new Error("attachment artifact is unavailable");
+        const staged = await deps.blobTransfer.put(opened.stream);
+        stagedAttachments.push({
+          name: opened.name,
+          mimetype: opened.mimetype,
+          sizeBytes: staged.sizeBytes,
+          blobId: staged.blobId,
+          ...(attachment.author ? { author: attachment.author } : {}),
+          ...(attachment.sourceId ? { sourceId: attachment.sourceId } : {}),
+        });
+      }
+    } catch {
+      await discardStaged();
+      return sendJson(res, 409, { error: "attachment_unavailable", message: "The original attachments are unavailable." });
+    }
+  }
+  const fork = await app.forkSession(sessionId, b.principalId, { upToSeq: seq - 1 });
+  if (!fork) {
+    await discardStaged();
+    return sendJson(res, 404, { error: "not_found" });
+  }
+  const source = run.request;
+  const request: TurnRequest = {
+    surface: "web",
+    actor: {
+      externalId: b.principalId,
+      ...(source.actor.displayName ? { displayName: source.actor.displayName } : {}),
+    },
+    conversation: {
+      kind: source.conversation.kind,
+      threadRef: fork.session.threadRef,
+      ...(source.conversation.channelRef ? { channelRef: source.conversation.channelRef } : {}),
+      ...(source.conversation.channelName ? { channelName: source.conversation.channelName } : {}),
+      ...(source.conversation.audience.length
+        ? {
+            audience: source.conversation.audience.map((actor) => ({
+              externalId: actor.id,
+              ...(actor.type === "guest" ? { isExternalGuest: true } : {}),
+              ...(actor.teamIds?.length ? { teamIds: actor.teamIds } : {}),
+              ...(actor.displayName ? { displayName: actor.displayName } : {}),
+            })),
+          }
+        : {}),
+    },
+    text: b.text.trim(),
+    ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
+    ...(source.model ? { model: source.model } : {}),
+    ...(source.harness ? { harness: source.harness } : {}),
+    ...(source.thinkingLevel ? { thinkingLevel: source.thinkingLevel } : {}),
+    ...(typeof source.fastMode === "boolean" ? { fastMode: source.fastMode } : {}),
+    async: true,
+  };
+  const turn = await app.turn(request);
+  if (turn.status === "refused") {
+    await discardStaged();
+    if (!(await app.discardSession(fork.session.id, b.principalId))) await deps.sessions.deleteSession(fork.session.id);
+    return sendJson(res, 409, {
+      error: "edit_turn_refused",
+      message: turn.reason ?? "The edited message was refused.",
+    });
+  }
+  return sendJson(res, 202, { ...fork, turn });
+}
+
 async function spawnAgentConversation(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability, deps } = ctx;
   if (!capability) {
@@ -217,7 +327,7 @@ function transcriptWindow(
 }
 
 async function getSession(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
+  const { res, app, url, deps } = ctx;
   const id = ctx.params.id!;
   const viewer = url.searchParams.get("viewer");
   if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
@@ -230,7 +340,21 @@ async function getSession(ctx: ApiCtx): Promise<void> {
   }
   const found = await app.getSessionForViewer(id, viewer, Object.keys(window).length ? window : undefined);
   if (!found) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, found);
+  const entries = await Promise.all(
+    found.entries.map(async (entry) => {
+      const runId = entry.type === "user" ? (entry.payload as { runId?: unknown } | null)?.runId : undefined;
+      if (typeof runId !== "string") return entry;
+      const run = await deps.runs?.get(runId);
+      return run &&
+        isTerminal(run.status) &&
+        samePerson(run.request.actor.id, viewer) &&
+        run.request.conversation.threadRef === found.session.threadRef &&
+        run.turnUserSeq === entry.seq
+        ? { ...entry, editable: true }
+        : entry;
+    }),
+  );
+  return sendJson(res, 200, { ...found, entries });
 }
 
 async function getAgentConversation(ctx: ApiCtx): Promise<void> {
@@ -658,7 +782,11 @@ async function getSelfMemoryHistory(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: 'scope must be "org" when present' });
   }
   let scope: ScopeId | undefined = makeScopeId("personal", principalId);
-  if (capability) scope = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
+  if (capability)
+    scope =
+      requestedScope === "org"
+        ? capability.memory?.read.find((candidate) => parseScopeId(candidate).kind === "org")
+        : capability.memory?.read[0];
   if (!scope) return sendJson(res, 404, { error: "not_found" });
   if (!deps.memory?.history) return sendJson(res, 200, { revisions: [] });
   return sendJson(res, 200, { revisions: await deps.memory.history(scope, 30) });
@@ -786,21 +914,29 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
   if (requestedScope !== undefined && requestedScope !== "org") {
     return sendJson(res, 400, { error: "bad_request", message: 'scope must be "org" when present' });
   }
-  const write = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
-  if (!write) {
+  let target: string | undefined;
+  if (method === "GET") {
+    target =
+      requestedScope === "org"
+        ? capability.memory?.read.find((scope) => parseScopeId(scope).kind === "org")
+        : capability.memory?.read[0];
+  } else {
+    target = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
+  }
+  if (!target) {
+    let message = "memory capture is not enabled for this conversation";
+    if (method === "GET") message = "memory recall is not enabled for this conversation";
+    else if (requestedScope === "org") message = "org memory writes require an org admin";
     return sendJson(res, 403, {
       error: "forbidden",
-      message:
-        requestedScope === "org"
-          ? "org memory writes require an org admin"
-          : "memory capture is not enabled for this conversation",
+      message,
     });
   }
 
   if (method === "POST" && pathname === "/v1/memory/facts") {
     const facts = parseFacts(body);
     if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
-    const added = await deps.memory.capture(write, facts, Date.now(), capability.actorId, {
+    const added = await deps.memory.capture(target, facts, Date.now(), capability.actorId, {
       mode: "explicit",
       actorId: capability.actorId,
     });
@@ -808,31 +944,31 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
       principalId: capability.actorId,
       action: "memory.agent.capture",
       resource: "memory",
-      scopeLabel: write,
+      scopeLabel: target,
     });
-    return sendJson(res, 200, { ok: true, added, scopeId: write });
+    return sendJson(res, 200, { ok: true, added, scopeId: target });
   }
   if (method === "GET" && pathname === "/v1/memory/self") {
     audit(deps, {
       principalId: capability.actorId,
       action: "memory.agent.read",
       resource: "memory",
-      scopeLabel: write,
+      scopeLabel: target,
     });
-    return sendJson(res, 200, { scopeId: write, content: await deps.memory.read(write) });
+    return sendJson(res, 200, { scopeId: target, content: await deps.memory.read(target) });
   }
   if (method === "PUT" && pathname === "/v1/memory/self") {
     const b = body as { content?: unknown };
     if (typeof b.content !== "string")
       return sendJson(res, 400, { error: "bad_request", message: "content (string) required" });
-    await deps.memory.replace(write, b.content, capability.actorId);
+    await deps.memory.replace(target, b.content, capability.actorId);
     audit(deps, {
       principalId: capability.actorId,
       action: "memory.agent.curate",
       resource: "memory",
-      scopeLabel: write,
+      scopeLabel: target,
     });
-    return sendJson(res, 200, { ok: true, scopeId: write });
+    return sendJson(res, 200, { ok: true, scopeId: target });
   }
 
   return sendJson(res, 404, { error: "not_found", message: `${method} ${pathname}` });
@@ -1389,6 +1525,12 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/sessions/search", auth: "source", handle: searchSessions },
   { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
   { method: "POST", path: "/v1/sessions/:id/fork", auth: "source", handle: forkSession },
+  {
+    method: "POST",
+    path: "/v1/sessions/:id/messages/:seq/edit",
+    auth: "source",
+    handle: editSubmittedMessage,
+  },
   { method: "POST", path: "/v1/sessions/:id/adopt", auth: "source", handle: adoptSession },
   { method: "POST", path: "/v1/sessions/:id/detach", auth: "source", handle: detachSession },
   { method: "GET", path: "/v1/sessions/:id/approvals", auth: "source", handle: listSessionApprovals },

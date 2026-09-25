@@ -83,6 +83,7 @@ export function createMirror(deps: {
 }): Mirror {
   const { core, ids, directory, externalParticipantsEnabled } = deps;
   const ambientRoomGate = new Map<string, { allowed: boolean; at: number }>();
+  const ambientIdentityGate = new Map<string, { allowed: boolean; at: number }>();
 
   async function pushSurfaceEvents(events: IngestEvent[]): Promise<void> {
     if (!events.length) return;
@@ -123,7 +124,20 @@ export function createMirror(deps: {
     const type = m.channel_type;
     if (!opts.kind && type !== "channel" && type !== "group" && type !== "mpim") return;
     const kind = opts.kind ?? (type === "mpim" ? "group" : "channel");
-    if (!(await externalParticipantsEnabled())) {
+    if (await externalParticipantsEnabled()) {
+      if (m.user) {
+        const author = await directory.classifyUserCached(client, m.user);
+        if (!author.ok || author.actor.identityFailure) return;
+      }
+      if (kind !== "dm") {
+        let gate = ambientIdentityGate.get(container);
+        if (!gate || Date.now() - gate.at > 5_000) {
+          gate = { allowed: await directory.channelIdentityResolved(client, container), at: Date.now() };
+          ambientIdentityGate.set(container, gate);
+        }
+        if (!gate.allowed) return;
+      }
+    } else {
       let gate = ambientRoomGate.get(container);
       if (!gate || Date.now() - gate.at > 5_000) {
         const info = kind === "group" ? undefined : await directory.getChannelInfo(client, container);
