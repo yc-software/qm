@@ -226,6 +226,18 @@ mock.module("@slack/web-api", {
 const { slackPluginConfigFromEnv, startSlackPlugin } = await import("../src/slack/index.ts");
 
 class FakeCore implements SlackCoreClient {
+  async getAgentRequestRun() {
+    return null;
+  }
+  async holdAgentRequestDispatch<T>(_key: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
+    return fn(new Promise(() => {}));
+  }
+  async reserveAgentRequest(requestId: string, record: SlackAgentRequestContext) {
+    const existing = await this.getAgentRequest(requestId);
+    if (existing) return existing;
+    await this.putAgentRequest(requestId, record);
+    return record;
+  }
   async decideDeploymentAccess(): Promise<string> {
     throw new Error("not used");
   }

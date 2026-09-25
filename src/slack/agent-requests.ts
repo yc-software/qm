@@ -66,7 +66,7 @@ export const AGENT_REQUEST_INSTRUCTION =
   "resource, login, environment variable, or private setup belongs to that person and cannot be " +
   "borrowed by the channel agent. Do not claim you know what's in their personal setup unless the " +
   "conversation says so. Instead, ask that person's personal agent by writing a directive somewhere " +
-  "in your reply: `[[ask-agent: <@USERID> | task for their personal agent]]`. Use the Slack user id " +
+  "in the text of your Slack post tool call to this conversation: `[[ask-agent: <@USERID> | task for their personal agent]]`. Use the Slack user id " +
   "shown in the People here line, for example `<@U123>`. The task should say exactly what the " +
   "personal agent should try and what result is safe to share back to this thread; never ask it to " +
   "reveal secrets. The plugin strips this directive from what humans see, DMs that person for " +
