@@ -13,7 +13,7 @@ import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail, type InviteMailer } from "../src/admin/invite-email.ts";
 import { adminStatusFromGrants } from "../src/admin/admin-service.ts";
-import { coreEmailAllowed } from "../plugins/chassis/src/external-members.ts";
+import { coreEmailAdmission, coreEmailAllowed } from "../plugins/chassis/src/external-members.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -95,6 +95,33 @@ const capFor = (actorId: string) =>
     },
     SECRET,
   );
+
+test("broker admission preserves configured email members without external invitations", async (t) => {
+  const s = start({ signed: true, emailAuthDomain: "corp.example", emailAuthPrincipals: ["ops@allowed.example"] });
+  t.after(s.close);
+  for (const email of ["Ops@Allowed.example", "person@corp.example"]) {
+    assert.equal(s.built.identity.externalMember(email), undefined);
+    assert.deepEqual(await coreEmailAdmission(s.base, SECRET, email), { allowed: true });
+  }
+  for (const email of ["stranger@allowed.example", "person@othercorp.example", "person@corp.example.attacker.test"]) {
+    assert.deepEqual(await coreEmailAdmission(s.base, SECRET, email), { allowed: false });
+  }
+  await s.built.identity.deactivate("ops@allowed.example");
+  assert.deepEqual(await coreEmailAdmission(s.base, SECRET, "ops@allowed.example"), { allowed: false });
+  s.built.config.setInternalMemberOverrides(["ops@allowed.example"]);
+  assert.deepEqual(await coreEmailAdmission(s.base, SECRET, "ops@allowed.example"), { allowed: false });
+  await s.built.identity.putExternalMember({
+    email: "person@corp.example",
+    role: "member",
+    expiresAt: Date.now() - 1,
+    invitedBy: ALICE,
+    createdAt: Date.now() - DAY_MS,
+    updatedAt: Date.now(),
+  });
+  assert.deepEqual(await coreEmailAdmission(s.base, SECRET, "person@corp.example"), { allowed: false });
+  s.built.config.setInternalMemberOverrides(["person@corp.example"]);
+  assert.deepEqual(await coreEmailAdmission(s.base, SECRET, "person@corp.example"), { allowed: false });
+});
 
 test("inviting an external user stores the record, lists it as active, audits, and reports the missing mailer", async () => {
   const s = start();
