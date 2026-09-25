@@ -535,6 +535,8 @@ export function createKeychain(deps: {
   oauthRefreshMarginMs?: number;
   now?: () => number;
 }): Keychain {
+  if (deps.refreshConnector && !deps.creds.update)
+    throw new Error("connector refresh requires atomic credential updates");
   const now = deps.now ?? Date.now;
   const lock = deps.lock ?? createMemoryAdvisoryLock();
   const oauthSkew = deps.oauthSkewMs ?? 60_000;
@@ -695,19 +697,19 @@ export function createKeychain(deps: {
   const oauthSlot = (accountType?: string) => `oauth:${accountType && accountType !== "default" ? accountType : ""}`;
   const oauthId = (host: string, principalId: string, accountType?: string) =>
     credId(principalId, host.toLowerCase(), oauthSlot(accountType));
-  const inflightRefreshes = new Map<string, Promise<string | null>>();
+  const inflightRefreshes = new Map<string, Promise<void>>();
 
-  async function putConnectorToken(
+  function connectorTokenRecord(
     host: string,
     principalId: string,
     token: OAuthToken,
-    accountType?: string,
-  ): Promise<KeychainCredential> {
+    accountType: string | undefined,
+    prior: KeychainCredential | null,
+  ): KeychainCredential {
     const t = now();
     const id = oauthId(host, principalId, accountType);
-    const prior = await deps.creds.get(id);
     const at = token.accountType ?? accountType;
-    const rec: KeychainCredential = {
+    return {
       id,
       ownerId: principalId,
       orgId: token.orgId ?? configOrgId(),
@@ -731,6 +733,16 @@ export function createKeychain(deps: {
       createdAt: prior?.createdAt ?? t,
       updatedAt: t,
     };
+  }
+
+  async function putConnectorToken(
+    host: string,
+    principalId: string,
+    token: OAuthToken,
+    accountType?: string,
+  ): Promise<KeychainCredential> {
+    const id = oauthId(host, principalId, accountType);
+    const rec = connectorTokenRecord(host, principalId, token, accountType, await deps.creds.get(id));
     await deps.creds.put(id, rec);
     return rec;
   }
@@ -757,6 +769,11 @@ export function createKeychain(deps: {
     };
   }
 
+  const sameConnectorToken = (current: KeychainCredential, expected: KeychainCredential) =>
+    current.updatedAt === expected.updatedAt &&
+    current.fingerprint === expected.fingerprint &&
+    current.secretEnc === expected.secretEnc;
+
   function storedRefreshError(e: unknown): string {
     const msg = errMessage(e).replace(/\s+/g, " ").trim();
     return msg.length > 500 ? `${msg.slice(0, 497)}...` : msg;
@@ -764,12 +781,12 @@ export function createKeychain(deps: {
 
   async function markConnectorRefreshFailure(rec: KeychainCredential, message: string): Promise<void> {
     const t = now();
-    const current = await deps.creds.get(rec.id);
-    if (!current || current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint) return;
-    await deps.creds.merge(rec.id, {
+    const failed = (current: KeychainCredential) => ({
+      ...current,
       refresh: { ...current.refresh, refreshFailedAt: t, refreshError: message },
       updatedAt: t,
     });
+    await deps.creds.update!(rec.id, (current) => (sameConnectorToken(current, rec) ? failed(current) : current));
   }
 
   async function refreshAndStore(
@@ -777,10 +794,10 @@ export function createKeychain(deps: {
     principalId: string,
     accountType: string | undefined,
     rec: KeychainCredential,
-  ): Promise<string | null> {
-    if (!deps.refreshConnector) return null;
+  ): Promise<void> {
+    if (!deps.refreshConnector) return;
     const stored = tryDecrypt(rec, recToOAuthToken);
-    if (!stored) return null;
+    if (!stored) return;
     try {
       const fresh = await deps.refreshConnector(host, stored, {
         ...(stored.accountType ? { accountType: stored.accountType } : {}),
@@ -795,15 +812,9 @@ export function createKeychain(deps: {
         ...(stored.accountId ? { accountId: stored.accountId } : {}),
         ...fresh,
       };
-      // Compare-and-set: if another flight already rotated this credential,
-      // keep its result rather than clobbering a newer refresh token.
-      const current = await deps.creds.get(rec.id);
-      if (current && (current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint)) {
-        const latest = tryDecrypt(current, recToOAuthToken);
-        return latest?.accessToken ?? null;
-      }
-      await putConnectorToken(host, principalId, merged, accountType);
-      return merged.accessToken;
+      await deps.creds.update!(rec.id, (latest) =>
+        sameConnectorToken(latest, rec) ? connectorTokenRecord(host, principalId, merged, accountType, latest) : latest,
+      );
     } catch (e) {
       const message = storedRefreshError(e);
       console.error(`[keychain] connector token refresh failed for ${host}: ${message}`);
@@ -814,7 +825,6 @@ export function createKeychain(deps: {
           `[keychain] connector token refresh failure metadata write failed for ${host}: ${errMessage(writeErr)}`,
         );
       }
-      return null;
     }
   }
 
@@ -831,9 +841,11 @@ export function createKeychain(deps: {
         inflightRefreshes.set(rec.id, pending);
         void pending.finally(() => inflightRefreshes.delete(rec.id));
       }
-      return pending;
-    }
-    if (oauthExpired(rec, t) && !refreshable) return null;
+      await pending;
+      const current = await deps.creds.get(rec.id);
+      if (!current || oauthExpired(current, now())) return null;
+      return tryDecrypt(current, (r) => decryptSecret(r.secretEnc, deps.key));
+    } else if (oauthExpired(rec, t) && !refreshable) return null;
     return tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
   }
 
