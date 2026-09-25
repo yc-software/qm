@@ -3,6 +3,9 @@ import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { SlackAgentRequestContext } from "../src/api/slack-core-client.ts";
 import type { TurnResult } from "../src/types.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
+import { createTaskAcknowledgements, type TaskAckState } from "../src/slack/task-ack.ts";
 
 type Handler = (args: any) => Promise<void>;
 
@@ -244,6 +247,11 @@ class FakeCore implements SlackCoreClient {
   readonly polled: string[] = [];
   private runGate: Promise<void> | undefined;
   private releaseRun: (() => void) | undefined;
+  private heldHooks: { onEngaged?(): void } | undefined;
+  taskAcknowledgements: SlackCoreClient["taskAcknowledgements"];
+  enableTaskAcks(): void {
+    this.taskAcknowledgements = createTaskAcknowledgements(createMemoryMap<TaskAckState>(), createNoopLeaderLease());
+  }
   readonly modelChangeListeners: Array<(scope: any) => void> = [];
   readonly headerPinChangeListeners: Array<(scope: any) => void> = [];
   readonly headerPinScopes = new Set<string>();
@@ -302,10 +310,14 @@ class FakeCore implements SlackCoreClient {
     }
     return this.result;
   }
-  async waitRun(runId: string): Promise<TurnResult | null> {
+  async waitRun(runId: string, hooks?: { onEngaged?(): void }): Promise<TurnResult | null> {
     this.polled.push(runId);
+    this.heldHooks = hooks;
     if (this.runGate) await this.runGate;
     return this.result;
+  }
+  engage(): void {
+    this.heldHooks?.onEngaged?.();
   }
   /** Enqueue `runId` on the first submit and hold waitRun open; every later submit is a
    *  mid-turn STEER answered with that same live run's id. `finishRun` releases the waiters. */
@@ -414,10 +426,12 @@ async function fixture(
     allowFrom?: string[];
     denyMessage?: string;
     coreSingleton?: boolean;
+    taskAcks?: boolean;
   } = {},
 ) {
   const core = new FakeCore();
   core.externalParticipants = options.externalParticipants ?? false;
+  if (options.taskAcks) core.enableTaskAcks();
   const started = startSlackPlugin(
     {
       botToken: "xoxb-test",
@@ -1247,12 +1261,18 @@ test("a blocked-thread result without approval details tells only the sender ins
   }
 });
 
-test("an internal channel mention carries the complete audience and thread context", async () => {
-  const f = await fixture();
+test("an internal channel mention carries complete context and a durable acknowledgement", async () => {
+  const f = await fixture({ taskAcks: true });
   try {
+    f.core.holdRun("r-mention");
     const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> status?", ts: "104.1" };
     f.client.messagesByChannel.set("C1", [event]);
-    await f.app.emitEvent("app_mention", event);
+    const turn = f.app.emitEvent("app_mention", event);
+    await waitFor(() => f.client.reactionsAdded.length === 1);
+    assert.deepEqual(f.client.reactionsAdded, [{ channel: "C1", timestamp: "104.1", name: "eyes" }]);
+    f.core.finishRun({ status: "ok", reply: "agent reply" });
+    await turn;
+    assert.deepEqual(f.client.reactionsRemoved, [{ channel: "C1", timestamp: "104.1", name: "eyes" }]);
     assert.equal(f.core.turns.length, 1);
     assert.equal(f.core.turns[0].text, "status?");
     assert.equal(f.core.turns[0].conversation.threadRef, "ch:C1:104.1");
@@ -1290,8 +1310,8 @@ test("an unaddressed top-level channel message is mirrored but never becomes a t
   }
 });
 
-test("a group-DM thread-follow runs unprompted yet attests its author's liveness", async () => {
-  const f = await fixture();
+test("a group-DM thread-follow is acknowledged only after core engages", async () => {
+  const f = await fixture({ taskAcks: true });
   try {
     f.client.channelsById.set("G1", { id: "G1", name: "", is_member: true, is_private: true, is_mpim: true });
     f.client.membersByChannel.set("G1", ["U1", "U2", "UBOT"]);
@@ -1299,7 +1319,8 @@ test("a group-DM thread-follow runs unprompted yet attests its author's liveness
       { channel: "G1", user: "U1", text: "kick off", ts: "300.1" },
       { channel: "G1", user: "UBOT", text: "on it", ts: "300.2", thread_ts: "300.1" },
     ]);
-    await f.app.emitMessage({
+    f.core.holdRun("r-follow");
+    const turn = f.app.emitMessage({
       channel: "G1",
       channel_type: "mpim",
       user: "U2",
@@ -1307,12 +1328,47 @@ test("a group-DM thread-follow runs unprompted yet attests its author's liveness
       ts: "300.3",
       thread_ts: "300.1",
     });
+    await waitFor(() => f.core.polled.includes("r-follow"));
+    assert.equal(f.client.reactionsAdded.length, 0);
+    f.core.engage();
+    await waitFor(() => f.client.reactionsAdded.length === 1);
+    f.core.finishRun({ status: "ok", reply: "agent reply" });
+    await turn;
+    assert.deepEqual(f.client.reactionsRemoved, [{ channel: "G1", timestamp: "300.3", name: "eyes" }]);
     assert.equal(f.core.turns.length, 1);
     assert.equal(f.core.turns[0].unprompted, true);
     assert.equal(f.core.turns[0].entryTs, "300.3");
     assert.equal(f.core.turns[0].liveActor, true, "a member's own verbatim follow-up is a live act");
     assert.equal(f.core.turns[0].conversation.kind, "group");
     assert.equal(f.core.turns[0].conversation.threadRef, "grp:G1:300.1");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a declined thread-follow never touches reactions", async () => {
+  const f = await fixture({ taskAcks: true });
+  try {
+    f.client.channelsById.set("G1", { id: "G1", name: "", is_member: true, is_private: true, is_mpim: true });
+    f.client.membersByChannel.set("G1", ["U1", "U2", "UBOT"]);
+    f.client.messagesByChannel.set("G1", [
+      { channel: "G1", user: "U1", text: "kick off", ts: "300.1" },
+      { channel: "G1", user: "UBOT", text: "on it", ts: "300.2", thread_ts: "300.1" },
+    ]);
+    f.core.holdRun("r-declined");
+    const turn = f.app.emitMessage({
+      channel: "G1",
+      channel_type: "mpim",
+      user: "U2",
+      text: "lunch?",
+      ts: "300.4",
+      thread_ts: "300.1",
+    });
+    await waitFor(() => f.core.polled.includes("r-declined"));
+    f.core.finishRun({ status: "silent" });
+    await turn;
+    assert.equal(f.client.reactionsAdded.length, 0);
+    assert.equal(f.client.reactionsRemoved.length, 0);
   } finally {
     await f.stop();
   }

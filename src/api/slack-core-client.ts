@@ -42,6 +42,7 @@ import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
 
 interface SlackRunHooks {
+  onEngaged?(): void;
   onFirstBlock?(text: string): void;
   onSurfacePosted?(): void;
   onTasks?(tasks: Array<{ id: string; title: string; status: TaskStatus }>): void | Promise<void>;
@@ -335,6 +336,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       const waiters = terminalWaiters.get(runId) ?? new Set();
       terminalWaiters.set(runId, waiters);
       const unsubscribe = deps.turnStream.subscribe(runId, {
+        onReplying: hooks.onEngaged,
         onFirstBlock: signalFirstBlock,
         onSurfacePosted: signalSurface,
       });

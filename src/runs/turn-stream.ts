@@ -26,6 +26,7 @@ export interface TurnStream {
 }
 
 interface TurnStreamListener {
+  onReplying?(): void;
   onFirstBlock?(text: string): void;
   onSurfacePosted?(): void;
 }
@@ -89,6 +90,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       const entry = runs.get(runId);
       if (entry) entry.replying = true;
       else runs.set(runId, makeEntry());
+      for (const l of listeners.get(runId) ?? []) l.onReplying?.();
       opts.onChange?.(runId);
     },
 
@@ -192,6 +194,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
         listeners.set(runId, set);
       }
       set.add(listener);
+      if (runs.get(runId)?.replying) listener.onReplying?.();
       return () => {
         set.delete(listener);
         if (set.size === 0 && listeners.get(runId) === set) listeners.delete(runId);
