@@ -710,7 +710,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ],
           details: r,
         },
-        r.code !== 0 || r.timedOut,
+        r.timedOut,
         undefined,
         false,
         undefined,
