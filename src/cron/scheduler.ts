@@ -217,6 +217,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       }
       return fireEnabled(current, t, fireKey, scheduledAt);
     };
+    if (scheduledAt !== undefined && deps.lock?.tryWithLock) {
+      const result = await deps.lock.tryWithLock(`cron-lifecycle:${cron.id}`, run);
+      if (result) return result;
+      await deps.crons.defer(cron.id, now() + BUSY_DEFER_MS);
+      return { authzFailed: false, deferred: true };
+    }
     return deps.lock ? deps.lock.withLock(`cron-lifecycle:${cron.id}`, run) : run();
   }
 
