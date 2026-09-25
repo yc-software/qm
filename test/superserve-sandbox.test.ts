@@ -33,6 +33,8 @@ function newWorkspace() {
 const scope = scopeId("personal", "tester");
 const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 const scopeName = (): string => sandboxScopeName("qmt", scope);
+const RESOLVERS = ["1.1.1.1/32", "8.8.8.8/32"];
+const STRICT = { allowOut: ["api.example.com", ...RESOLVERS], denyOut: ["0.0.0.0/0"] };
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSuperserveSandbox(newWorkspace(), {
@@ -111,7 +113,7 @@ test("provision creates one sandbox per scope with scope metadata and lifecycle 
   assert.equal(record.metadata[SUPERSERVE_METADATA.scope], scopeName());
   assert.equal(record.metadata[SUPERSERVE_METADATA.prefix], "qmt");
   assert.equal(record.metadata[SUPERSERVE_METADATA.kind], "scope");
-  assert.equal(record.timeoutSeconds, 15 * 60);
+  assert.equal(record.timeoutSeconds, 3600);
   assert.equal(record.autoDeleteSeconds, 30 * 24 * 3600);
 });
 
@@ -125,7 +127,7 @@ test("egress allow/deny lists are applied at create time", async () => {
   sandbox = make({ egressAllow: ["api.example.com", "*.github.com"], egressDeny: ["0.0.0.0/0"] });
   await sandbox.provision(layers);
   assert.deepEqual(fake.current(scopeName())?.network, {
-    allowOut: ["api.example.com", "*.github.com"],
+    allowOut: ["api.example.com", "*.github.com", ...RESOLVERS],
     denyOut: ["0.0.0.0/0"],
   });
 });
@@ -158,7 +160,7 @@ test("a paused sandbox under a different egress policy is destroyed and replaced
   assert.equal(replaced.coldStart, true);
   assert.equal(fake.createdCount(scopeName()), 2);
   assert.notEqual(fake.current(scopeName())!.id, oldId);
-  assert.deepEqual(fake.current(scopeName())?.network, { allowOut: ["api.example.com"], denyOut: ["0.0.0.0/0"] });
+  assert.deepEqual(fake.current(scopeName())?.network, STRICT);
   assert.equal(fake.calls().indexOf(`connect:${oldId}`, fake.calls().indexOf(`pause:${oldId}`)), -1, "never resumed");
   assert.ok(fake.calls().includes(`kill:${oldId}`));
   assert.deepEqual(errors, ["sandbox_egress:policy_changed"]);
@@ -204,7 +206,7 @@ test("network reconciliation reads the actual policy independently of metadata",
   );
   assert.notEqual(fake.current(scopeName())!.id, stampedId, "but drifted network state is caught anyway");
   assert.ok(fake.calls().includes(`kill:${stampedId}`));
-  assert.deepEqual(fake.current(scopeName())?.network, { allowOut: ["api.example.com"], denyOut: ["0.0.0.0/0"] });
+  assert.deepEqual(fake.current(scopeName())?.network, STRICT);
 });
 
 test("a paused sandbox keeps its disk when its policy can be updated without resuming", async () => {
@@ -221,7 +223,7 @@ test("a paused sandbox keeps its disk when its policy can be updated without res
   const adopted = await tightened.provision(layers);
   assert.equal(fake.createdCount(scopeName()), 1, "a routine policy change never destroys the disk");
   assert.equal(fake.current(scopeName())!.id, keptId);
-  assert.deepEqual(fake.current(scopeName())?.network, { allowOut: ["api.example.com"], denyOut: ["0.0.0.0/0"] });
+  assert.deepEqual(fake.current(scopeName())?.network, STRICT);
   assert.equal(await tightened.readFile(adopted, "resident.txt"), "months of work\n");
   const calls = fake.calls();
   assert.ok(
@@ -263,7 +265,7 @@ test("a cached sandbox whose network drifted is reconciled before the next comma
   assert.equal(fake.current(scopeName())!.id, id);
   assert.deepEqual(
     fake.current(scopeName())?.network,
-    { allowOut: ["api.example.com"], denyOut: ["0.0.0.0/0"] },
+    STRICT,
     "drift on a cached session is repaired rather than trusted",
   );
   assert.equal((await sandbox.run(h, "echo ok")).stdout.trim(), "ok");
@@ -291,7 +293,7 @@ test("an active sandbox gets a changed egress policy applied before its first co
   const tightened = make({ egressDeny: ["0.0.0.0/0"], egressAllow: ["api.example.com"] });
   await tightened.provision(layers);
   assert.equal(fake.createdCount(scopeName()), 1);
-  assert.deepEqual(fake.current(scopeName())?.network, { allowOut: ["api.example.com"], denyOut: ["0.0.0.0/0"] });
+  assert.deepEqual(fake.current(scopeName())?.network, STRICT);
   const calls = fake.calls();
   const connectAt = calls.lastIndexOf(`connect:${id}`);
   const policyAt = calls.lastIndexOf(`update:${id}`, connectAt);
@@ -305,12 +307,13 @@ test("an active sandbox gets a changed egress policy applied before its first co
   assert.equal(meta[SUPERSERVE_METADATA.kind], "scope");
   assert.ok(meta[SUPERSERVE_METADATA.egress]);
 
-  const relaxed = make({ idlePauseSec: 120, retentionSec: 3600 });
+  const relaxed = make({ activeLimitSec: 120, retentionSec: 3600 });
   const relaxedHandle = await relaxed.provision(layers);
   assert.deepEqual(fake.current(scopeName())?.network, { allowOut: [], denyOut: [] });
   assert.equal(fake.current(scopeName())?.autoDeleteSeconds, 3600);
+  assert.equal(fake.current(scopeName())?.timeoutSeconds, 120, "a shorter active-time ceiling lands on adoption");
   await relaxed.teardown(relaxedHandle);
-  assert.equal(fake.current(scopeName())?.timeoutSeconds, 120, "a shorter idle pause lands at the next plain teardown");
+  assert.equal(fake.current(scopeName())?.status, "paused");
 });
 
 test("computerStatus observing a deleted sandbox clears cached state so the next provision replaces it", async () => {
@@ -435,14 +438,13 @@ test("an older core leaves newer read-only layers intact", async () => {
   assert.equal((await older.run(held, "cat global/policy.txt")).stdout, "new");
 });
 
-test("teardown preserves the sandbox until automatic pause; resume preserves its disk", async () => {
+test("a plain teardown pauses the sandbox; the next provision resumes it with its disk", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.writeFile(h, "keep.txt", "still here\n");
   await sandbox.teardown(h);
-  assert.equal(fake.current(scopeName())?.status, "active");
-  assert.ok(!fake.calls().some((c) => c.startsWith("pause:")));
+  assert.equal(fake.current(scopeName())?.status, "paused");
+  assert.ok(fake.calls().some((c) => c.startsWith("pause:")));
 
-  fake.pause(scopeName());
   const again = await sandbox.provision(layers);
   assert.equal(again.coldStart, false);
   assert.equal(fake.createdCount(scopeName()), 1);
@@ -476,7 +478,7 @@ test("a sandbox built from an older template is replaced on adoption", async () 
 });
 
 test("an older core never reverts a sandbox a newer core already reconfigured", async () => {
-  const older = make({ template: "qm-agent-1.0.0", configEpoch: 1_000, idlePauseSec: 600, retentionSec: 3_600 });
+  const older = make({ template: "qm-agent-1.0.0", configEpoch: 1_000, activeLimitSec: 600, retentionSec: 3_600 });
   const first = await older.provision(layers);
   await older.teardown(first);
 
@@ -484,14 +486,14 @@ test("an older core never reverts a sandbox a newer core already reconfigured", 
     template: "qm-agent-1.1.0",
     configEpoch: 2_000,
     egressDeny: ["0.0.0.0/0"],
-    idlePauseSec: 1_200,
+    activeLimitSec: 1_200,
     retentionSec: 7_200,
   });
   await newer.provision(layers);
   assert.equal(fake.createdCount(scopeName()), 2);
   const upgradedId = fake.current(scopeName())!.id;
 
-  const olderAgain = make({ template: "qm-agent-1.0.0", configEpoch: 1_000, idlePauseSec: 600, retentionSec: 3_600 });
+  const olderAgain = make({ template: "qm-agent-1.0.0", configEpoch: 1_000, activeLimitSec: 600, retentionSec: 3_600 });
   const h = await olderAgain.provision(layers);
   assert.equal(h.coldStart, false);
   assert.equal(fake.createdCount(scopeName()), 2, "no third sandbox");
@@ -508,11 +510,11 @@ test("an older core never reverts a sandbox a newer core already reconfigured", 
 });
 
 test("an older core with a cached session stops configuring once a newer core takes over", async () => {
-  const older = make({ configEpoch: 1_000, idlePauseSec: 600 });
+  const older = make({ configEpoch: 1_000, activeLimitSec: 600 });
   const h = await older.provision(layers);
   await older.teardown(h);
 
-  const newer = make({ configEpoch: 2_000, idlePauseSec: 1_800 });
+  const newer = make({ configEpoch: 2_000, activeLimitSec: 1_800 });
   await newer.teardown(await newer.provision(layers));
   assert.equal(fake.current(scopeName())?.timeoutSeconds, 1_800);
 
@@ -523,11 +525,11 @@ test("an older core with a cached session stops configuring once a newer core ta
 });
 
 test("a core without a durable generation never outranks one that has one", async () => {
-  const durable = make({ configEpoch: 3, idlePauseSec: 1_800, template: "qm-agent-1.1.0" });
+  const durable = make({ configEpoch: 3, activeLimitSec: 1_800, template: "qm-agent-1.1.0" });
   await durable.teardown(await durable.provision(layers));
   const stamped = fake.current(scopeName())!.id;
 
-  const ephemeral = make({ configEpoch: 0, idlePauseSec: 600, template: "qm-agent-1.0.0" });
+  const ephemeral = make({ configEpoch: 0, activeLimitSec: 600, template: "qm-agent-1.0.0" });
   const h = await ephemeral.provision(layers);
   await ephemeral.teardown(h, { keepWarm: true });
 
@@ -553,34 +555,36 @@ test("an older core never reinstalls deployment tools over a newer generation's"
   assert.equal(reconciles, reconciledByOwner, "the older generation leaves the newer one's guest tools alone");
 });
 
-test("a teardown rechecks the sandbox's stamp before it rewrites the lifecycle timeout", async () => {
-  const older = make({ configEpoch: 1_000, idlePauseSec: 600 });
+test("a teardown rechecks the sandbox's stamp before it pauses", async () => {
+  const older = make({ configEpoch: 1_000, activeLimitSec: 600 });
   const held = await older.provision(layers);
 
-  const newer = make({ configEpoch: 2_000, idlePauseSec: 1_800 });
-  await newer.teardown(await newer.provision(layers));
+  const newer = make({ configEpoch: 2_000, activeLimitSec: 1_800 });
+  const taken = await newer.provision(layers);
   assert.equal(fake.current(scopeName())?.timeoutSeconds, 1_800);
 
-  await older.teardown(held, { keepWarm: true });
+  await older.teardown(held);
   assert.equal(
-    fake.current(scopeName())?.timeoutSeconds,
-    1_800,
-    "a handle provisioned before the newer core took over no longer rewrites the timeout",
+    fake.current(scopeName())?.status,
+    "active",
+    "a handle provisioned before the newer core took over no longer pauses the sandbox",
   );
+  await newer.teardown(taken);
+  assert.equal(fake.current(scopeName())?.status, "paused");
 });
 
 test("a newer core stamps its epoch even when only lifecycle settings changed", async () => {
-  const older = make({ configEpoch: 1_000, idlePauseSec: 600 });
+  const older = make({ configEpoch: 1_000, activeLimitSec: 600 });
   await older.teardown(await older.provision(layers));
   assert.equal(fake.current(scopeName())?.metadata[SUPERSERVE_METADATA.epoch], "1000");
 
-  const newer = make({ configEpoch: 2_000, idlePauseSec: 900, retentionSec: 7_200 });
+  const newer = make({ configEpoch: 2_000, activeLimitSec: 900, retentionSec: 7_200 });
   await newer.provision(layers);
   assert.equal(fake.createdCount(scopeName()), 1);
   assert.equal(fake.current(scopeName())?.metadata[SUPERSERVE_METADATA.epoch], "2000");
   assert.equal(fake.current(scopeName())?.autoDeleteSeconds, 7_200);
 
-  const olderAgain = make({ configEpoch: 1_000, idlePauseSec: 600, retentionSec: 3_600 });
+  const olderAgain = make({ configEpoch: 1_000, activeLimitSec: 600, retentionSec: 3_600 });
   await olderAgain.teardown(await olderAgain.provision(layers));
   assert.equal(fake.current(scopeName())?.autoDeleteSeconds, 7_200);
   assert.equal(fake.current(scopeName())?.timeoutSeconds, 900);
@@ -595,15 +599,15 @@ test("the config epoch is claimed once per deployment generation, so a restarted
   assert.equal(newRelease, claimed + 1, "each new generation is strictly higher than every generation before it");
   assert.equal(await createConfigEpochResolver(epochs, "release-1")(), claimed, "a restart still ranks below it");
 
-  const older = make({ configEpoch: createConfigEpochResolver(epochs, "release-1"), idlePauseSec: 600 });
+  const older = make({ configEpoch: createConfigEpochResolver(epochs, "release-1"), activeLimitSec: 600 });
   await older.teardown(await older.provision(layers));
   assert.equal(fake.current(scopeName())?.metadata[SUPERSERVE_METADATA.epoch], String(claimed));
 
-  const newer = make({ configEpoch: createConfigEpochResolver(epochs, "release-2"), idlePauseSec: 1_800 });
+  const newer = make({ configEpoch: createConfigEpochResolver(epochs, "release-2"), activeLimitSec: 1_800 });
   await newer.teardown(await newer.provision(layers));
   assert.equal(fake.current(scopeName())?.timeoutSeconds, 1_800);
 
-  const restarted = make({ configEpoch: createConfigEpochResolver(epochs, "release-1"), idlePauseSec: 600 });
+  const restarted = make({ configEpoch: createConfigEpochResolver(epochs, "release-1"), activeLimitSec: 600 });
   await restarted.teardown(await restarted.provision(layers));
   assert.equal(fake.current(scopeName())?.timeoutSeconds, 1_800, "the restarted older release stays passive");
   assert.equal(fake.current(scopeName())?.metadata[SUPERSERVE_METADATA.epoch], String(newRelease));
@@ -697,38 +701,90 @@ test("a gone sandbox never forgets a replacement another instance already record
   assert.equal(status.provisioned, true);
 });
 
-test("reconnecting keeps a longer keep-warm timeout until a plain teardown restores it", async () => {
-  sandbox = make({ idlePauseSec: 600, keepWarmSec: 5400 });
+test("the active-time ceiling is capped at Superserve's maximum and re-stamped on adoption", async () => {
+  sandbox = make({ activeLimitSec: 30 * 24 * 3600 });
   const h = await sandbox.provision(layers);
-  await sandbox.teardown(h, { keepWarm: true });
-  assert.equal(fake.current(scopeName())?.timeoutSeconds, 5400);
-
-  const other = make({ idlePauseSec: 600, keepWarmSec: 5400 });
-  await other.computerStatus!(scope);
-  const probed = await other.provision(layers);
-  assert.equal(fake.current(scopeName())?.timeoutSeconds, 5400, "another instance's probe keeps the warm window");
-  await other.teardown(probed);
-  assert.equal(fake.current(scopeName())?.timeoutSeconds, 600);
-});
-
-test("keepWarm teardown extends the active-time limit; a plain teardown restores it", async () => {
-  sandbox = make({ idlePauseSec: 600, keepWarmSec: 5400 });
-  const h = await sandbox.provision(layers);
-  assert.equal(fake.current(scopeName())?.timeoutSeconds, 600);
-  await sandbox.teardown(h, { keepWarm: true });
-  assert.equal(fake.current(scopeName())?.timeoutSeconds, 5400);
-  assert.equal(fake.current(scopeName())?.status, "active");
+  assert.equal(fake.current(scopeName())?.timeoutSeconds, 7 * 24 * 3600);
   await sandbox.teardown(h);
-  assert.equal(fake.current(scopeName())?.timeoutSeconds, 600);
+
+  const other = make({ activeLimitSec: 5400 });
+  await other.teardown(await other.provision(layers));
+  assert.equal(fake.current(scopeName())?.timeoutSeconds, 5400);
 });
 
-test("a concurrent handle keeps working after another handle's teardown", async () => {
+test("a keepWarm teardown leaves the sandbox running for background work", async () => {
+  const h = await sandbox.provision(layers);
+  await sandbox.teardown(h, { keepWarm: true });
+  assert.equal(fake.current(scopeName())?.status, "active");
+  assert.ok(!fake.calls().some((c) => c.startsWith("pause:")));
+});
+
+test("concurrent handles keep the sandbox running until the last one closes", async () => {
   const a = await sandbox.provision(layers);
   const b = await sandbox.provision(layers);
   await sandbox.teardown(a);
+  assert.equal(fake.current(scopeName())?.status, "active");
   const r = await sandbox.run(b, "echo still-running");
   assert.equal(r.code, 0);
   assert.match(r.stdout, /still-running/);
+  await sandbox.teardown(b);
+  assert.equal(fake.current(scopeName())?.status, "paused");
+});
+
+test("a handle whose provision failed releases its share of the sandbox", async () => {
+  const h = await sandbox.provision(layers);
+  fake.beforeNextRun(async () => {
+    throw new Error("prep exploded");
+  });
+  await assert.rejects(sandbox.provision(layers), /prep exploded/);
+  assert.equal(fake.current(scopeName())?.status, "active", "the surviving handle still holds it");
+  await sandbox.teardown(h);
+  assert.equal(fake.current(scopeName())?.status, "paused");
+});
+
+test("bare IP rules read back as /32 without forcing a replacement", async () => {
+  const strict = { egressDeny: ["0.0.0.0/0"], egressAllow: ["203.0.113.7"] };
+  sandbox = make(strict);
+  const h = await sandbox.provision(layers);
+  await sandbox.teardown(h);
+  const id = fake.current(scopeName())!.id;
+
+  const again = make(strict);
+  await again.provision(layers);
+  assert.equal(fake.createdCount(scopeName()), 1);
+  assert.ok(!fake.calls().includes(`kill:${id}`));
+  assert.deepEqual(fake.current(scopeName())?.network, { allowOut: ["203.0.113.7/32"], denyOut: ["0.0.0.0/0"] });
+});
+
+test("a deny-all policy also admits the resolvers domain rules need and the core API host", async () => {
+  sandbox = make({
+    egressDeny: ["0.0.0.0/0"],
+    egressAllow: ["*.github.com"],
+    apiBaseUrl: "https://core.example.com/api",
+  });
+  await sandbox.provision(layers);
+  assert.deepEqual(fake.current(scopeName())?.network, {
+    allowOut: ["*.github.com", ...RESOLVERS, "core.example.com"],
+    denyOut: ["0.0.0.0/0"],
+  });
+  assert.equal(sandbox.profile.egressEnforcement, "domain");
+  assert.equal(make({ egressDeny: ["10.0.0.0/8"] }).profile.egressEnforcement, "ip_port");
+  assert.equal(make().profile.egressEnforcement, "none");
+});
+
+test("a failed sandbox is deleted and replaced on the next provision", async () => {
+  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  sandbox = make({ store });
+  const h = await sandbox.provision(layers);
+  await sandbox.teardown(h);
+  const failedId = fake.current(scopeName())!.id;
+  fake.fail(scopeName());
+
+  const again = await sandbox.provision(layers);
+  assert.equal(again.coldStart, true);
+  assert.equal(fake.createdCount(scopeName()), 2);
+  assert.ok(fake.calls().includes(`kill:${failedId}`), "the failed entry does not linger");
+  assert.equal((await store.get(scope))?.sandboxId, fake.current(scopeName())!.id);
 });
 
 test("a fresh core with an empty store rediscovers the sandbox by scope metadata", async () => {
