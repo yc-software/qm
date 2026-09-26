@@ -290,6 +290,7 @@ export function stripClaudeImageBytes(message: SDKMessage): unknown {
 }
 
 function effort(level: string | undefined): "low" | "medium" | "high" | "xhigh" | "max" | undefined {
+  if (level === "ultracode") return "xhigh";
   return level === "low" || level === "medium" || level === "high" || level === "xhigh" || level === "max"
     ? level
     : undefined;
@@ -378,6 +379,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const requestedModel = turn.runtime?.modelId;
     const model = modelSupportedByHarness(requestedModel, "claude") ? requestedModel! : resolveModelId(turn.scopeLabel);
     const turnEffort = effort(turn.runtime?.effortLevel);
+    const ultracode = turn.runtime?.effortLevel === "ultracode";
+    const fast = Boolean(turn.runtime?.fastMode && modelSupportsFastMode(model));
     const text = promptText(turn);
     const initial = userMessage(text, turn.images);
     if (turn.documents?.length && Array.isArray(initial.message.content)) {
@@ -475,8 +478,13 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         model,
         ...(opts.binaryPath ? { pathToClaudeCodeExecutable: opts.binaryPath } : {}),
         ...(turnEffort ? { effort: turnEffort } : {}),
-        ...(turn.runtime?.fastMode && modelSupportsFastMode(model)
-          ? { settings: { fastMode: true, fastModePerSessionOptIn: true } }
+        ...(fast || ultracode
+          ? {
+              settings: {
+                ...(fast ? { fastMode: true, fastModePerSessionOptIn: true } : {}),
+                ...(ultracode ? { ultracode: true } : {}),
+              },
+            }
           : {}),
       },
     });

@@ -16,6 +16,7 @@ import {
   safeModelMetadata,
   modelOfferedInWebui,
   modelUnavailableReason,
+  supportedThinkingLevel,
   thinkingLevelsForHarness,
   harnessSupportsFastMode,
   codexProviderModelId,
@@ -74,11 +75,8 @@ export async function userRuntimeConfigBody(ctx: { deps: RuntimeDeps }, scope: S
       ...snapshot.effective,
       harnessId: route.harness,
       modelId: route.model,
-      effortLevel: thinkingLevelsForHarness(route.harness, route.model).includes(
-        snapshot.effective.effortLevel ?? "auto",
-      )
-        ? snapshot.effective.effortLevel
-        : "auto",
+      effortLevel:
+        supportedThinkingLevel(route.harness, route.model, snapshot.effective.effortLevel ?? "auto") ?? "auto",
       fastMode:
         snapshot.effective.fastMode === true &&
         harnessSupportsFastMode(route.harness) &&

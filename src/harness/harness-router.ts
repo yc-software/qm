@@ -6,6 +6,7 @@ import {
   isHarnessId,
   modelSupportedByHarness,
   resolveModel,
+  supportedThinkingLevel,
   thinkingLevelsForHarness,
   modelUnavailableReason,
   type HarnessId,
@@ -99,6 +100,8 @@ async function runTurnEnforcingGoal(
 }
 
 function normalizeRuntimeChoice(choice: RuntimeChoice): RuntimeChoice {
+  const effortLevel =
+    choice.effortLevel && supportedThinkingLevel(choice.harnessId, choice.modelId, choice.effortLevel);
   if (
     (choice.effortLevel === "adaptive" || choice.effortLevel === "default") &&
     !thinkingLevelsForHarness(choice.harnessId, choice.modelId).includes(choice.effortLevel)
@@ -109,9 +112,7 @@ function normalizeRuntimeChoice(choice: RuntimeChoice): RuntimeChoice {
   return {
     harnessId: choice.harnessId,
     modelId: choice.modelId,
-    ...(choice.effortLevel && thinkingLevelsForHarness(choice.harnessId, choice.modelId).includes(choice.effortLevel)
-      ? { effortLevel: choice.effortLevel }
-      : {}),
+    ...(effortLevel ? { effortLevel } : {}),
     ...(typeof choice.fastMode === "boolean"
       ? {
           fastMode:
@@ -144,16 +145,17 @@ export function resolveRuntimeChoice(
       throw new NonRetryableTurnError(`runtime ${choice.harnessId}/${choice.modelId} is not approved`);
     const unavailable = modelUnavailableReason(choice.modelId);
     if (unavailable) throw new NonRetryableTurnError(`${choice.modelId}: ${unavailable}`);
-    if (
-      choice.effortLevel !== undefined &&
-      !thinkingLevelsForHarness(choice.harnessId, choice.modelId).includes(choice.effortLevel)
-    )
+    const effortLevel =
+      choice.effortLevel === undefined
+        ? undefined
+        : supportedThinkingLevel(choice.harnessId, choice.modelId, choice.effortLevel);
+    if (choice.effortLevel !== undefined && !effortLevel)
       throw new NonRetryableTurnError(
         `${choice.effortLevel} reasoning is not supported by ${choice.harnessId}/${choice.modelId}`,
       );
     if (choice.fastMode && (!harnessSupportsFastMode(choice.harnessId) || !fastModeModelIds().includes(choice.modelId)))
       throw new NonRetryableTurnError(`fast mode is not supported by ${choice.harnessId}/${choice.modelId}`);
-    return { ...choice, harnessId: choice.harnessId };
+    return { ...choice, harnessId: choice.harnessId, ...(effortLevel ? { effortLevel } : {}) };
   }
   if (purpose === "cron")
     requested = { effortLevel: NON_INTERACTIVE_THINKING_LEVEL, fastMode: NON_INTERACTIVE_FAST_MODE, ...requested };

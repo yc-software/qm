@@ -77,12 +77,19 @@ export function effortLevelsForHarness(
   const advertised = (model as ModelMetadata | undefined)?.effortLevelsByHarness?.[harnessId];
   return EFFORT_LEVELS.filter(({ value }) => {
     if (advertised) return advertised.includes(value);
-    if (value === "adaptive" || value === "default") return false;
-    if (harnessId === "pi") return true;
-    if (harnessId === "claude") return value !== "ultracode";
-    if (harnessId === "codex") return value !== "max" && value !== "ultracode";
-    return false;
+    if (!["pi", "claude", "codex"].includes(harnessId) || !TIER_ORDER.includes(value)) return false;
+    if (value === "ultra") return harnessId === "codex";
+    if (value === "ultracode") return harnessId === "claude";
+    return true;
   });
+}
+
+const TIER_ORDER: readonly EffortLevel[] = ["low", "medium", "high", "xhigh", "max", "ultra", "ultracode"];
+const PEAK_EFFORTS: readonly EffortLevel[] = ["max", "ultra", "ultracode"];
+
+export function isPeakEffort(harnessId: string, model: Model<Api> | undefined, level: string): boolean {
+  const top = effortLevelsForHarness(harnessId, model).at(-1)?.value;
+  return top === level && PEAK_EFFORTS.includes(top);
 }
 
 export function resolveEffort(
@@ -93,6 +100,11 @@ export function resolveEffort(
 ): EffortLevel {
   const levels = effortLevelsForHarness(harnessId, model);
   if (effort === "auto" || levels.some(({ value }) => value === effort)) return effort;
+  const rank = TIER_ORDER.indexOf(effort);
+  const lower = levels
+    .filter(({ value }) => rank >= 0 && TIER_ORDER.indexOf(value) >= 0 && TIER_ORDER.indexOf(value) <= rank)
+    .at(-1);
+  if (lower) return lower.value;
   if (fallback && levels.some(({ value }) => value === fallback)) return fallback;
   return levels[0]?.value ?? "auto";
 }

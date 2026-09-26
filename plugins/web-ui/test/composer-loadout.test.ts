@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   compatibleHarnessOptions,
   effortLevelsForHarness,
+  isPeakEffort,
   resolveEffort,
   loadoutModelId,
   modelLoadoutOptions,
@@ -199,15 +200,15 @@ test("the model catalog falls back from unavailable saved harnesses using only c
 test("harness effort choices exclude unsupported settings and label extra high clearly", () => {
   assert.deepEqual(
     effortLevelsForHarness("pi").map(({ value }) => value),
-    ["low", "medium", "high", "xhigh", "max", "ultracode"],
-  );
-  assert.deepEqual(
-    effortLevelsForHarness("claude").map(({ value }) => value),
     ["low", "medium", "high", "xhigh", "max"],
   );
   assert.deepEqual(
+    effortLevelsForHarness("claude").map(({ value }) => value),
+    ["low", "medium", "high", "xhigh", "max", "ultracode"],
+  );
+  assert.deepEqual(
     effortLevelsForHarness("codex").map(({ value }) => value),
-    ["low", "medium", "high", "xhigh"],
+    ["low", "medium", "high", "xhigh", "max", "ultra"],
   );
   for (const harnessId of ["pi", "claude", "codex"])
     assert.equal(effortLevelsForHarness(harnessId).find(({ value }) => value === "xhigh")?.label, "Extra high");
@@ -223,7 +224,7 @@ test("native reasoning choices require model and harness metadata while legacy s
     },
   };
   assert.deepEqual(effortLevelsForHarness("pi", model), [
-    { value: "adaptive", label: "Auto" },
+    { value: "adaptive", label: "Adaptive" },
     { value: "default", label: "Provider default" },
     { value: "low", label: "Low" },
     { value: "high", label: "High" },
@@ -258,7 +259,29 @@ test("a saved unset effort stays unset instead of being rewritten to a visible l
   assert.equal(resolveEffort("codex", undefined, "auto"), "auto");
   assert.equal(resolveEffort("opencode", undefined, "high"), "auto");
   assert.equal(resolveEffort("pi", model, "high"), "high");
-  assert.equal(resolveEffort("pi", model, "ultracode", "low"), "low");
-  assert.equal(resolveEffort("pi", model, "ultracode", "auto"), "default");
+  assert.equal(resolveEffort("pi", model, "ultracode", "low"), "high");
+  assert.equal(resolveEffort("pi", model, "xhigh"), "high");
+  const untiered = { ...model, effortLevelsByHarness: { pi: ["auto", "default"] } };
+  assert.equal(resolveEffort("pi", untiered, "max"), "default");
   assert.deepEqual(parseLoadout(JSON.stringify([entry("pi:one", "auto")])), [entry("pi:one", "auto")]);
+});
+
+test("only the top tier each provider offers is the rainbow peak", () => {
+  const model = {
+    ...option("pi:one").model,
+    effortLevelsByHarness: {
+      pi: ["auto", "low", "high", "xhigh", "max"],
+      claude: ["auto", "low", "high", "xhigh", "max", "ultracode"],
+      codex: ["auto", "low", "high", "xhigh", "max", "ultra"],
+      opencode: ["auto", "low", "high"],
+    },
+  };
+  const peaks = (harnessId: string) =>
+    ["low", "high", "xhigh", "max", "ultra", "ultracode"].filter((level) => isPeakEffort(harnessId, model, level));
+  assert.deepEqual(peaks("pi"), ["max"]);
+  assert.deepEqual(peaks("claude"), ["ultracode"]);
+  assert.deepEqual(peaks("codex"), ["ultra"]);
+  assert.deepEqual(peaks("opencode"), []);
+  assert.equal(effortLabel("ultra"), "Ultra");
+  assert.equal(effortLabel("ultracode"), "Ultracode");
 });

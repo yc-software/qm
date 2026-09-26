@@ -670,3 +670,21 @@ for (const surfaceTools of [false, true]) {
     assert.ok(entries.some((entry) => entry.type === "tool_result" && (entry.payload as { silent?: boolean }).silent));
   });
 }
+
+test("Claude Code ultracode runs at xhigh with the ultracode setting on", async () => {
+  for (const [level, effort, settings] of [
+    ["ultracode", "xhigh", { ultracode: true }],
+    ["max", "max", undefined],
+  ] as const) {
+    currentScript = async function* (prompts) {
+      await prompts[Symbol.asyncIterator]().next();
+      yield resultMessage("ok");
+    };
+    const { turn } = harnessTurn({
+      runtime: { harnessId: "claude", modelId: "claude-opus-5-5", effortLevel: level },
+    });
+    await createClaudeHarness().turns.runTurn(turn);
+    assert.equal(capturedOptions.effort, effort);
+    assert.deepEqual(capturedOptions.settings, settings);
+  }
+});

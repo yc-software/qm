@@ -181,7 +181,7 @@ test("runtime reasoning choices follow the selected model and keep an unset leve
     const choices = () => [...select().options].map((option) => [option.value, option.textContent]);
     assert.deepEqual(choices(), [
       ["auto", "Not set"],
-      ["adaptive", "Auto"],
+      ["adaptive", "Adaptive"],
       ["default", "Provider default"],
       ["high", "High"],
     ]);
@@ -198,6 +198,14 @@ test("runtime reasoning choices follow the selected model and keep an unset leve
     );
     dom.window.eval('settingsUI.states.get("runtime").change("modelId", "b")');
     assert.deepEqual(choices(), [["high", "High"]]);
+    assert.equal(dom.window.eval('settingsUI.collect("runtime").effortLevel'), "high");
+    dom.window.eval(
+      'settingsUI.states.get("runtime").context.modelsByHarness.pi = [{id:"a",effortLevels:["auto","low","high","max"]},{id:"b",effortLevels:["auto","low","high"]}]',
+    );
+    dom.window.eval('settingsUI.states.get("runtime").change("modelId", "a")');
+    dom.window.eval('settingsUI.states.get("runtime").change("effortLevel", "ultracode")');
+    assert.equal(dom.window.eval('settingsUI.collect("runtime").effortLevel'), "max");
+    dom.window.eval('settingsUI.states.get("runtime").change("modelId", "b")');
     assert.equal(dom.window.eval('settingsUI.collect("runtime").effortLevel'), "high");
     dom.window.eval(
       'settingsUI.states.get("runtime").context.modelsByHarness.pi = [{id:"b"}]; settingsUI.states.get("runtime").changed()',

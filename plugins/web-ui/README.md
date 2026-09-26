@@ -148,7 +148,8 @@ the CSS media queries, the composer, and the split canvas.
 - **Custom chat UI** — a first-party conversation surface with a left history rail, centered
   transcript, bottom composer, inline **model selector** (the models core reports as
   serviceable for the approved harnesses),
-  explicit **effort selector** (`low|medium|high|xhigh|max|ultracode|auto`), **Fast mode**
+  explicit **effort selector** listing only the levels each model's provider offers (Ultra on Codex,
+  Ultracode on Claude Code), **Fast mode**
   toggle, attachments, streaming partials, and a theme picker. Settings → Theme takes
   light, dark, or system, or an imported palette: drop in an iTerm2 `.itermcolors` preset or
   a VS Code color theme `.json` and the app repaints from it (background, text, sidebar,

@@ -102,13 +102,11 @@ function selectedValue(config: RuntimeConfig): string {
 }
 
 function selectedEffort(config: RuntimeConfig): string {
-  return (
-    config.effective.effortLevel ??
-    defaultEffortForModel(
-      optionsFor(config).find((option) => option.value === `${config.effective.harnessId}:${config.effective.modelId}`)
-        ?.model,
-    )
+  const option = optionsFor(config).find(
+    (option) => option.value === `${config.effective.harnessId}:${config.effective.modelId}`,
   );
+  const effort = (config.effective.effortLevel ?? defaultEffortForModel(option?.model)) as EffortLevel;
+  return option ? resolveEffort(option.harnessId, option.model, effort) : effort;
 }
 
 async function choose(scope: string, value: string, effort?: string, fast = false): Promise<void> {

@@ -643,7 +643,7 @@ test("the personal-account picker preserves composer choices and saves context d
     });
     assert.equal(context.contextModelState.config.effective.modelId, "beta");
     config.modelCatalog!.alpha!.effortLevelsByHarness = {
-      pi: ["auto", "adaptive", "default", "low", "high", "xhigh", "max", "ultracode"],
+      pi: ["auto", "adaptive", "default", "low", "high", "xhigh", "max"],
       claude: ["auto", "low", "high"],
     };
     config.effective = { harnessId: "pi", modelId: "alpha", effortLevel: "auto" };
@@ -658,16 +658,16 @@ test("the personal-account picker preserves composer choices and saves context d
     const effortChoices = () => [...host.querySelectorAll<HTMLButtonElement>(".loadout-effort")];
     assert.deepEqual(
       effortChoices().map((item) => item.textContent?.trim()),
-      ["Auto", "Provider default", "Low", "High", "Extra high", "Max", "Ultracode"],
+      ["Adaptive", "Provider default", "Low", "High", "Extra high", "Max"],
     );
     assert.deepEqual(
       [...host.querySelectorAll(".loadout-effort .effort-peak")].map((item) => item.textContent?.trim()),
-      ["Ultracode"],
+      ["Max"],
     );
     assert.ok(effortChoices().every((item) => item.getAttribute("aria-checked") === "false"));
     assert.doesNotMatch(host.textContent ?? "", /Legacy default/);
     effortChoices()
-      .find((item) => item.textContent?.trim() === "Auto")!
+      .find((item) => item.textContent?.trim() === "Adaptive")!
       .click();
     assert.equal(composer!.state.effortLevel, "adaptive");
     assert.equal(saved().find(({ value }) => value === "pi:alpha")?.effort, "adaptive");
@@ -686,7 +686,7 @@ test("the personal-account picker preserves composer choices and saves context d
     contextButton(".loadout-button").click();
     contextButton('[data-loadout-section="effort"]').click();
     [...contextHost.querySelectorAll<HTMLButtonElement>(".loadout-effort")]
-      .find((item) => item.textContent?.trim() === "Auto")!
+      .find((item) => item.textContent?.trim() === "Adaptive")!
       .click();
     await tick();
     assert.equal(updates.at(-1)?.effortLevel, "adaptive");

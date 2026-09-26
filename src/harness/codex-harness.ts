@@ -355,8 +355,17 @@ export function codexTaskTitle(prompt: unknown): string {
   return title.length > 120 ? `${title.slice(0, 119).trimEnd()}…` : title;
 }
 
-export function codexReasoningEffort(value: string | undefined): "low" | "medium" | "high" | "xhigh" | undefined {
-  return value === "low" || value === "medium" || value === "high" || value === "xhigh" ? value : undefined;
+export function codexReasoningEffort(
+  value: string | undefined,
+): "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | undefined {
+  return value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh" ||
+    value === "max" ||
+    value === "ultra"
+    ? value
+    : undefined;
 }
 
 export function codexTurnInputText(

@@ -18,6 +18,7 @@ import { modelSupportsFastMode } from "./pi-models";
 import {
   LOADOUT_CAP,
   effortLevelsForHarness,
+  isPeakEffort,
   compatibleHarnessOptions,
   loadoutModelId,
   modelLoadoutOptions,
@@ -27,9 +28,14 @@ import { tip } from "./tooltip";
 import { isPhone } from "./viewport";
 import { burstEffortConfetti } from "./effort-confetti";
 
-function effortText(level: EffortLevel): TemplateResult | string {
+function effortText(
+  level: EffortLevel,
+  option: Pick<ModelOption, "harnessId" | "model"> | undefined,
+): TemplateResult | string {
   const label = effortLabel(level);
-  return level === "ultracode" ? html`<span class="effort-peak">${label}</span>` : label;
+  return option && isPeakEffort(option.harnessId, option.model, level)
+    ? html`<span class="effort-peak">${label}</span>`
+    : label;
 }
 
 interface ModelPickerBindings<T> {
@@ -118,7 +124,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
         role="menuitemradio"
         aria-checked=${active ? "true" : "false"}
         @click=${(event: MouseEvent) => {
-          burstEffortConfetti(event, settings.effort, option.harnessId);
+          burstEffortConfetti(event, settings.effort, option.harnessId, option.model);
           dismissSelection();
           applyLoadout(entry, agent);
         }}
@@ -131,7 +137,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
           </span>
           <span class="loadout-details">
             <span class="loadout-harness">${option.harnessLabel}</span>
-            ${effortLabel(settings.effort) ? html`<span>${effortText(settings.effort)}</span>` : nothing}
+            ${effortLabel(settings.effort) ? html`<span>${effortText(settings.effort, option)}</span>` : nothing}
             ${settings.fast ? html`<span class="loadout-bolt" aria-label="Fast">${icon(Zap, 10)}</span>` : nothing}
           </span>
         </span>
@@ -278,12 +284,12 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                   role="menuitemradio"
                   aria-checked=${composerState.effortLevel === level.value ? "true" : "false"}
                   @click=${(event: MouseEvent) => {
-                    burstEffortConfetti(event, level.value, selected.harnessId);
+                    burstEffortConfetti(event, level.value, selected.harnessId, selected.model);
                     selectEffort(level.value, agent);
                     closeLoadoutSection();
                   }}
                 >
-                  <span>${effortText(level.value)}</span
+                  <span>${effortText(level.value, selected)}</span
                   >${composerState.effortLevel === level.value ? icon(Check, 15) : nothing}
                 </button>`,
             )
@@ -463,7 +469,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
         }}
       >
         <span class="menu-label">${choice?.label ?? "Choose model"}</span>
-        ${choice && effortLabel(composerState.effortLevel) ? html`<span class="menu-suffix">${effortText(composerState.effortLevel)}</span>` : nothing}
+        ${choice && effortLabel(composerState.effortLevel) ? html`<span class="menu-suffix">${effortText(composerState.effortLevel, choice)}</span>` : nothing}
         ${fastOn ? html`<span class="loadout-bolt">${icon(Zap, 13)}</span>` : nothing}${icon(ChevronDown, 13)}
       </button>
       ${
@@ -557,7 +563,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                                 >
                                   <span class="loadout-setting-label">Effort</span
                                   ><span class="loadout-setting-value"
-                                    >${effortText(composerState.effortLevel)}<span class="loadout-end"
+                                    >${effortText(composerState.effortLevel, selected)}<span class="loadout-end"
                                       >${icon(ChevronRight, 14)}</span
                                     ></span
                                   >

@@ -43,8 +43,11 @@ test("switching setups preserves prior tweaks and validates effort and Fast for 
     composer.indexOf("function normalizeLoadoutEntry"),
     composer.indexOf("function seededLoadout"),
   );
-  assert.ok(normalize.includes("effortLevelsForHarness(option.harnessId, option.model, entry.effort)"));
-  assert.ok(/levels.some\([\s\S]*?\? entry.effort/.test(normalize));
+  assert.ok(
+    normalize.includes(
+      "resolveEffort(option.harnessId, option.model, entry.effort, defaultEffortForModel(option.model))",
+    ),
+  );
   assert.ok(apply.includes("normalizeLoadoutEntry(entry, option)"));
   assert.ok(
     /entry.fast && harnessSupportsFastMode\(option.harnessId\) && modelSupportsFastMode\(scopeKey\(\), option.model.id\)/.test(

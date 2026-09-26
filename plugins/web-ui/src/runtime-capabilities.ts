@@ -1,15 +1,17 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 
-export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultracode" | "auto" | "adaptive" | "default";
+export type EffortLevel =
+  "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | "ultracode" | "auto" | "adaptive" | "default";
 
 export const EFFORT_LEVELS: Array<{ value: EffortLevel; label: string }> = [
-  { value: "adaptive", label: "Auto" },
+  { value: "adaptive", label: "Adaptive" },
   { value: "default", label: "Provider default" },
   { value: "low", label: "Low" },
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
   { value: "xhigh", label: "Extra high" },
   { value: "max", label: "Max" },
+  { value: "ultra", label: "Ultra" },
   { value: "ultracode", label: "Ultracode" },
 ];
 

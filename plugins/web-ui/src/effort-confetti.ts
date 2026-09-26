@@ -1,16 +1,17 @@
-import { effortLevelsForHarness } from "./composer-loadout";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { isPeakEffort } from "./composer-loadout";
 
 const COLORS = ["#e8843a", "#e45d79", "#a78bfa", "#60a5fa", "#5cc074", "#f6cc46"];
 let activeBurst: HTMLElement | null = null;
 let activeAnchor: Element | null = null;
 
-function isHighestEffort(level: string, harnessId: string): boolean {
-  const levels = effortLevelsForHarness(harnessId);
-  return levels.length > 1 && levels.at(-1)?.value === level;
-}
-
-export function burstEffortConfetti(event: Event, level: string, harnessId: string): void {
-  if (!isHighestEffort(level, harnessId) || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+export function burstEffortConfetti(
+  event: Event,
+  level: string,
+  harnessId: string,
+  model: Model<Api> | undefined,
+): void {
+  if (!isPeakEffort(harnessId, model, level) || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const target = event.currentTarget as HTMLElement | null;
   if (!target?.isConnected || typeof target.animate !== "function") return;
   const anchor = target.querySelector<HTMLElement>(".effort-peak") ?? target;

@@ -1,6 +1,6 @@
 import { gatewayModelCatalog, gatewayModelsVersion, isGatewayModelId, resolveGatewayModel } from "./gateway-models.ts";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import { parseModelOverlay, type ModelOverlay } from "./model-overlay.ts";
 import { providerBaseUrl } from "./provider-endpoints.ts";
 import { isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
@@ -33,8 +33,12 @@ export const THINKING_LEVELS = [
   "high",
   "xhigh",
   "max",
+  "ultra",
   "ultracode",
 ] as const;
+const EFFORT_TIERS = ["low", "medium", "high", "xhigh", "max"] as const;
+type EffortTier = (typeof EFFORT_TIERS)[number];
+const TIER_ORDER: readonly string[] = [...EFFORT_TIERS, "ultra", "ultracode"];
 export const HARNESS_IDS = ["pi", "opencode", "codex", "claude", "mock"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
@@ -54,18 +58,58 @@ export function modelSupportsProviderDefault(model: Pick<Model<Api>, "api" | "co
   );
 }
 
+function providerEfforts(modelId: string): readonly EffortTier[] {
+  const entry = REGISTRY_BY_ID.get(modelId) ?? REGISTRY_BY_ID.get(codexProviderModelId(modelId));
+  if (entry?.efforts) return entry.efforts;
+  const model = resolveModel(modelId);
+  if (!model?.reasoning) return [];
+  const supported = getSupportedThinkingLevels(model) as readonly string[];
+  return EFFORT_TIERS.filter((tier) => supported.includes(tier));
+}
+
+function clientTier(harnessId: HarnessId, modelId: string): "ultra" | "ultracode" | undefined {
+  const entry = REGISTRY_BY_ID.get(modelId) ?? REGISTRY_BY_ID.get(codexProviderModelId(modelId));
+  if (harnessId === "codex") return entry?.codexUltra ? "ultra" : undefined;
+  if (harnessId === "claude") return providerEfforts(modelId).includes("xhigh") ? "ultracode" : undefined;
+  return undefined;
+}
+
 export function thinkingLevelsForHarness(harnessId: HarnessId, modelId?: string): readonly string[] {
-  const model = modelId ? resolveModel(modelId) : undefined;
-  return THINKING_LEVELS.filter((level) => {
-    if (level === "adaptive")
-      return harnessId === "pi" && (!modelId || (!!model && modelSupportsAdaptiveThinking(model)));
-    if (level === "default")
-      return harnessId === "pi" && (!modelId || (!!model && modelSupportsProviderDefault(model)));
-    if (harnessId === "pi") return true;
-    if (harnessId === "claude") return level !== "ultracode";
-    if (harnessId === "codex") return level !== "max" && level !== "ultracode";
-    return level === "auto";
-  });
+  if (!["pi", "claude", "codex"].includes(harnessId)) return ["auto"];
+  if (!modelId) {
+    const extra = harnessId === "codex" ? ["ultra"] : harnessId === "claude" ? ["ultracode"] : ["default", "adaptive"];
+    return THINKING_LEVELS.filter(
+      (level) => level === "auto" || (EFFORT_TIERS as readonly string[]).includes(level) || extra.includes(level),
+    );
+  }
+  if (harnessId !== "pi" && !modelSupportedByHarness(modelId, harnessId)) return ["auto"];
+  const model = resolveModel(modelId);
+  const modes =
+    harnessId === "pi" && model
+      ? [
+          ...(modelSupportsProviderDefault(model) ? ["default"] : []),
+          ...(modelSupportsAdaptiveThinking(model) ? ["adaptive"] : []),
+        ]
+      : [];
+  const tier = clientTier(harnessId, modelId);
+  return ["auto", ...modes, ...providerEfforts(modelId), ...(tier ? [tier] : [])];
+}
+
+export function supportedThinkingLevel(
+  harnessId: HarnessId,
+  modelId: string | undefined,
+  level: string,
+): string | undefined {
+  const levels = thinkingLevelsForHarness(harnessId, modelId);
+  if (levels.includes(level)) return level;
+  const rank = TIER_ORDER.indexOf(level);
+  if (rank < 0) return undefined;
+  return levels
+    .filter((candidate) => {
+      const candidateRank = TIER_ORDER.indexOf(candidate);
+      return candidateRank >= 0 && candidateRank <= rank;
+    })
+    .at(-1);
 }
 
 export function harnessSupportsFastMode(harnessId: HarnessId): boolean {
@@ -93,6 +137,8 @@ interface ModelEntry {
   webui: boolean;
   base: boolean;
   auxiliary?: boolean;
+  efforts?: readonly EffortTier[];
+  codexUltra?: true;
   clone?: {
     template: string;
     input: number;
@@ -113,7 +159,14 @@ interface ModelEntry {
   };
 }
 
-const GPT_56_CLONE = { template: "gpt-5.5", contextWindow: 1_050_000, maxTokens: 128_000 } as const;
+const GPT_56_CLONE = {
+  template: "gpt-5.5",
+  contextWindow: 1_050_000,
+  maxTokens: 128_000,
+  thinkingLevelMap: { max: "max" },
+} as const;
+const ANTHROPIC_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+const OPENAI_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 export const MODEL_REGISTRY: readonly ModelEntry[] = [
   {
@@ -122,6 +175,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: true,
     webui: true,
     base: true,
+    efforts: ANTHROPIC_EFFORTS,
     clone: {
       template: "claude-opus-4-8",
       thinkingLevelMap: { off: null },
@@ -139,6 +193,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: false,
     webui: true,
     base: true,
+    efforts: ANTHROPIC_EFFORTS,
     clone: {
       template: "claude-fable-5",
       input: 10,
@@ -149,13 +204,21 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       maxTokens: 128_000,
     },
   },
-  { id: "claude-fable-5", name: "Claude Fable 5", fastMode: false, webui: true, base: true },
+  {
+    id: "claude-fable-5",
+    name: "Claude Fable 5",
+    fastMode: false,
+    webui: true,
+    base: true,
+    efforts: ANTHROPIC_EFFORTS,
+  },
   {
     id: "claude-opus-5",
     name: "Claude Opus 5",
     fastMode: true,
     webui: true,
     base: true,
+    efforts: ANTHROPIC_EFFORTS,
     clone: {
       template: "claude-opus-4-8",
       input: 5,
@@ -165,9 +228,31 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       maxTokens: 128_000,
     },
   },
-  { id: "claude-opus-4-8", name: "Claude Opus 4.8", fastMode: true, webui: true, base: true },
-  { id: "claude-sonnet-5", name: "Claude Sonnet 5", fastMode: false, webui: true, base: true },
-  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", fastMode: false, webui: true, base: true, auxiliary: true },
+  {
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8",
+    fastMode: true,
+    webui: true,
+    base: true,
+    efforts: ANTHROPIC_EFFORTS,
+  },
+  {
+    id: "claude-sonnet-5",
+    name: "Claude Sonnet 5",
+    fastMode: false,
+    webui: true,
+    base: true,
+    efforts: ANTHROPIC_EFFORTS,
+  },
+  {
+    id: "claude-haiku-4-5",
+    name: "Claude Haiku 4.5",
+    fastMode: false,
+    webui: true,
+    base: true,
+    auxiliary: true,
+    efforts: [],
+  },
   {
     id: "gpt-5.6-sol",
     buttonLabel: "5.6 Sol",
@@ -175,6 +260,8 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: true,
     webui: true,
     base: true,
+    efforts: OPENAI_EFFORTS,
+    codexUltra: true,
     clone: {
       ...GPT_56_CLONE,
       input: 4,
@@ -190,6 +277,8 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: true,
     webui: true,
     base: true,
+    efforts: OPENAI_EFFORTS,
+    codexUltra: true,
     clone: {
       ...GPT_56_CLONE,
       input: 2,
@@ -205,6 +294,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: true,
     webui: true,
     base: true,
+    efforts: OPENAI_EFFORTS,
     auxiliary: true,
     clone: {
       ...GPT_56_CLONE,
@@ -221,6 +311,8 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: true,
     webui: true,
     base: true,
+    efforts: OPENAI_EFFORTS,
+    codexUltra: true,
     clone: {
       ...GPT_56_CLONE,
       input: 10,
@@ -237,6 +329,8 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: true,
     webui: true,
     base: true,
+    efforts: OPENAI_EFFORTS,
+    codexUltra: true,
     clone: {
       ...GPT_56_CLONE,
       input: 2,
@@ -252,6 +346,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: true,
     webui: true,
     base: true,
+    efforts: OPENAI_EFFORTS,
     clone: {
       ...GPT_56_CLONE,
       input: 0.1,
@@ -260,9 +355,23 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       tiers: [{ inputTokensAbove: 272_000, input: 0.2, output: 0.75, cacheRead: 0.02, cacheWrite: 0.25 }],
     },
   },
-  { id: "openrouter/auto", name: "OpenRouter Auto", fastMode: false, webui: true, base: true },
-  { id: "claude-opus-4-7", name: "Claude Opus 4.7", fastMode: false, webui: false, base: false },
-  { id: "claude-opus-4-6", name: "Claude Opus 4.6", fastMode: false, webui: false, base: false },
+  { id: "openrouter/auto", name: "OpenRouter Auto", fastMode: false, webui: true, base: true, efforts: [] },
+  {
+    id: "claude-opus-4-7",
+    name: "Claude Opus 4.7",
+    fastMode: false,
+    webui: false,
+    base: false,
+    efforts: ANTHROPIC_EFFORTS,
+  },
+  {
+    id: "claude-opus-4-6",
+    name: "Claude Opus 4.6",
+    fastMode: false,
+    webui: false,
+    base: false,
+    efforts: ["low", "medium", "high", "max"],
+  },
 ];
 
 let overlays = new Map<string, ModelOverlay>();
