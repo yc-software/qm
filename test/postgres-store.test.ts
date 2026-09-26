@@ -19,6 +19,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
 import { byScopeId, rollupsFromSummaries } from "./support/scope-rollup-oracle.ts";
+import { assertRunListOrderParity } from "./support/run-list-order-parity.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
@@ -2117,6 +2118,15 @@ test("pg run store: one-running-per-session holds under concurrent claims (uniqu
     assert.equal((await runs.get(r2.id))?.status, "pending", "the queued sibling stays queued");
   } finally {
     await raw.end();
+    await close();
+  }
+});
+
+test("pg run lists order timestamp ties by newest insertion before filtering and limits", { skip }, async () => {
+  const { runs, close } = createPostgresRunStore(URL!);
+  try {
+    await assertRunListOrderParity(runs, "pg-run-list", turn);
+  } finally {
     await close();
   }
 });

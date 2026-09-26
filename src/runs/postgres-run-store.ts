@@ -479,10 +479,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     async list({ limit = 200, threadRef }: { limit?: number; threadRef?: string } = {}): Promise<Run[]> {
       const { rows } = threadRef
         ? await q(
-            "SELECT * FROM runs WHERE session_id = $1 OR starts_with(session_id, $1 || ':task:') OR starts_with(session_id, $1 || ':status:') ORDER BY created_at DESC LIMIT $2",
+            "SELECT * FROM runs WHERE session_id = $1 OR starts_with(session_id, $1 || ':task:') OR starts_with(session_id, $1 || ':status:') ORDER BY created_at DESC, seq DESC LIMIT $2",
             [threadRef, limit],
           )
-        : await q("SELECT * FROM runs ORDER BY created_at DESC LIMIT $1", [limit]);
+        : await q("SELECT * FROM runs ORDER BY created_at DESC, seq DESC LIMIT $1", [limit]);
       return rows.map(rowToRun);
     },
 
