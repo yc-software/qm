@@ -1608,12 +1608,21 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       if (p.action === "send_message" || p.action === "followup_task") {
         const followup = p.action === "followup_task";
         const body = followup ? p.task : p.text;
+        if (followup && p.interrupt) {
+          const message = "interrupt applies to send_message, not followup_task.";
+          return recordResult(
+            callId,
+            { tool: "sessions", action: p.action, error: message },
+            text(`[error] ${message}`),
+            true,
+          );
+        }
         const result = await syscalls.write({
           requestId: callId,
           followup,
           target: p.target ?? "",
           ...(body ? { text: body } : {}),
-          ...(!followup && p.interrupt ? { interrupt: true } : {}),
+          ...(p.interrupt ? { interrupt: true } : {}),
         });
         if (!result.ok) {
           return recordResult(
@@ -2888,7 +2897,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           return { ok: false, message: "requires `old` (an exact passage of the current guidance) and `new`" };
         const at = current.indexOf(params.old);
         if (at < 0)
-          return { ok: false, message: "found no exact match for `old`; read the guidance and copy it exactly" };
+          return {
+            ok: false,
+            message:
+              "found no exact match for `old` in this scope's own guidance; org policy layered above it cannot be edited",
+          };
         if (current.indexOf(params.old, at + 1) >= 0)
           return { ok: false, message: "found `old` more than once; include more surrounding text so it is unique" };
         return { ok: true, next: current.slice(0, at) + params.new + current.slice(at + params.old.length) };

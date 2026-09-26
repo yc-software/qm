@@ -3455,17 +3455,16 @@ test("sessions followup_task takes its instruction in task, like open", async ()
     textOut(await call(session, { action: "send_message", target: "child", text: "fyi" })),
     /queued internally/,
   );
-  await call(session, { action: "followup_task", target: "child", task: "stop?", interrupt: true });
   assert.match(
-    textOut(await call(session, { action: "followup_task", target: "child", text: "misplaced" })),
-    /followup_task requires `task`/,
+    textOut(await call(session, { action: "followup_task", target: "child", task: "stop?", interrupt: true })),
+    /interrupt applies to send_message/,
   );
+  await call(session, { action: "followup_task", target: "child", text: "misplaced" });
   assert.deepEqual(
     writes.map(({ followup, text, interrupt }) => ({ followup, text, interrupt })),
     [
       { followup: true, text: "next task", interrupt: undefined },
       { followup: false, text: "fyi", interrupt: undefined },
-      { followup: true, text: "stop?", interrupt: undefined },
       { followup: true, text: undefined, interrupt: undefined },
     ],
   );
