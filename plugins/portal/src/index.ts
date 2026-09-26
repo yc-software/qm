@@ -1260,7 +1260,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     (/^\/share\/external\/[a-f0-9-]{36}(?:\/files\/[a-f0-9-]{36})?$/.test(pathname) ||
       /^\/assets\/[a-zA-Z0-9_.-]+$/.test(pathname))
   ) {
-    return proxyToUpstream(req, res, { baseUrl: UPSTREAMS["web-ui"]!, path: pathname, search: url.search }, ["accept"]);
+    return proxyToUpstream(req, res, { baseUrl: UPSTREAMS["web-ui"]!, path: pathname, search: url.search }, [
+      "accept",
+      "accept-encoding",
+    ]);
   }
 
   if (!session) {

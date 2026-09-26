@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 
-test("a restored tab finishes loading after becoming hidden while session metadata is pending", async () => {
+test("a restored tab finishes loading after becoming hidden while its transcript is pending", async () => {
   const sessions = [
     SESSION,
     ...["b", "c"].map((id) => ({
@@ -15,6 +15,7 @@ test("a restored tab finishes loading after becoming hidden while session metada
   const h = await harness({
     path: "/",
     welcome: true,
+    holdTranscript: true,
     listSessions: sessions,
     entries: [{ seq: 1, type: "assistant", createdAt: 1, payload: { text: "Restored target transcript" } }],
     remoteCanvas: {
@@ -64,12 +65,15 @@ test("a restored tab finishes loading after becoming hidden while session metada
     assert.ok(pane()?.querySelector(".chat-loading"));
     select(tabs[1]!);
     h.releaseSessions();
+    h.releaseTranscript();
     await booted;
     const otherTile = document.querySelector('[data-pane-id="c"]');
     assert.ok(otherTile);
-    for (let i = 0; i < 100 && otherTile.querySelector(".chat-loading"); i++)
+    for (let i = 0; i < 100 && !otherTile.textContent?.includes("Restored target transcript"); i++)
       await new Promise((resolve) => setTimeout(resolve, 5));
     assert.equal(otherTile.querySelector(".chat-loading"), null, "the other tile has loaded");
+    assert.match(otherTile.textContent ?? "", /Restored target transcript/);
+    assert.doesNotMatch(otherTile.textContent ?? "", /Couldn't load this conversation/);
     select(tabs[0]!);
     for (let i = 0; i < 100 && !pane()?.textContent?.includes("Restored target transcript"); i++)
       await new Promise((resolve) => setTimeout(resolve, 5));

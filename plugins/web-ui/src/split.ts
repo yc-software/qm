@@ -70,8 +70,6 @@ import type { Conversation } from "./conv-types";
 import {
   openSession,
   openSessionInto,
-  refreshSessions,
-  sessionsReady,
   renderList,
   sessionsState,
   sessionTitle,
@@ -82,6 +80,7 @@ import { conversationBackground, type RowIndicators } from "./session-list";
 import { scopeToolCount, setScopedSession, type SessionTool } from "./session-scope";
 import {
   fetchTranscript,
+  fetchSessionApprovals,
   fetchUiState,
   putUiState,
   TAIL_TURNS,
@@ -1027,16 +1026,7 @@ class PaneContent implements IContentRenderer {
     const isCurrent = conversation.mountLoadingPane();
     let session = sessionsState.list.find((s) => s.id === wanted);
     if (!session) {
-      await sessionsReady();
-      if (this.disposed || !isCurrent()) return;
-      session = sessionsState.list.find((s) => s.id === wanted);
-    }
-    if (!session) {
-      await refreshSessions({ silent: true });
-      if (this.disposed || !isCurrent()) return;
-      session = sessionsState.list.find((s) => s.id === wanted);
-    }
-    if (!session) {
+      const approvals = fetchSessionApprovals(wanted);
       const page = await fetchTranscript(wanted, { tailTurns: TAIL_TURNS }).catch(() => null);
       if (this.disposed || !isCurrent()) return;
       session = page?.session;
@@ -1047,7 +1037,7 @@ class PaneContent implements IContentRenderer {
         });
         return;
       }
-      await openSessionInto(conversation, session, Promise.resolve(page));
+      await openSessionInto(conversation, session, Promise.resolve(page), approvals);
       if (this.disposed) return;
       refreshHeaders();
       return;
