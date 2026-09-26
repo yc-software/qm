@@ -78,15 +78,7 @@ import {
 } from "./sessions";
 import { conversationBackground, type RowIndicators } from "./session-list";
 import { scopeToolCount, setScopedSession, type SessionTool } from "./session-scope";
-import {
-  fetchTranscript,
-  fetchSessionApprovals,
-  fetchUiState,
-  putUiState,
-  TAIL_TURNS,
-  type CoreSession,
-  type UiStateRecord,
-} from "./core-bridge";
+import { fetchUiState, putUiState, type CoreSession, type UiStateRecord } from "./core-bridge";
 import { isPhone, onPhoneChange } from "./viewport";
 
 export const splitState = {
@@ -1032,26 +1024,8 @@ class PaneContent implements IContentRenderer {
       conversation.newChat(context ? { scopeId: context.scopeId, name: context.name ?? null } : undefined);
       return;
     }
-    const isCurrent = conversation.mountLoadingPane();
-    let session = sessionsState.list.find((s) => s.id === wanted);
-    if (!session) {
-      const approvals = fetchSessionApprovals(wanted);
-      const page = await fetchTranscript(wanted, { tailTurns: TAIL_TURNS }).catch(() => null);
-      if (this.disposed || !isCurrent()) return;
-      session = page?.session;
-      if (!session) {
-        conversation.mountLoadError(() => {
-          this.loaded = false;
-          void this.load();
-        });
-        return;
-      }
-      await openSessionInto(conversation, session, Promise.resolve(page), approvals);
-      if (this.disposed) return;
-      refreshHeaders();
-      return;
-    }
-    await openSessionInto(conversation, session);
+    const session = sessionsState.list.find((s) => s.id === wanted);
+    await openSessionInto(conversation, session ?? wanted);
     if (this.disposed) return;
     refreshHeaders();
   }

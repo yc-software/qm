@@ -1735,52 +1735,84 @@ export async function openSession(
   return openSessionInto(pane ?? mainConversation(), s, entriesPrefetch, approvalsPrefetch, true);
 }
 
+const sessionReads = new WeakMap<
+  Conversation,
+  {
+    sessionId: string;
+    isCurrent: () => boolean;
+    entries: Promise<TranscriptPage | null>;
+    approvals: Promise<{ approvals: PendingApproval[] } | null> | null;
+  }
+>();
+
 export async function openSessionInto(
   conv: Conversation,
-  s: CoreSession,
+  source: CoreSession | string,
   entriesPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
   tracked = conv === mainConversation(),
 ): Promise<void> {
-  if (!s.id) {
-    if (conv.state.threadRef !== s.threadRef) {
-      conv.mountContinuable(s.threadRef, null, s.scopeId || null, [], s.channelName ?? null);
+  if (typeof source !== "string" && !source.id) {
+    if (conv.state.threadRef !== source.threadRef) {
+      conv.mountContinuable(source.threadRef, null, source.scopeId || null, [], source.channelName ?? null);
       renderList();
     }
     return;
   }
-  if (s.id === conv.state.sessionId && !entriesPrefetch) return;
+  const sessionId = typeof source === "string" ? source : source.id;
+  if (sessionId === conv.state.sessionId && !entriesPrefetch) return;
 
-  refreshSessionsOnOpen();
+  if (tracked) refreshSessionsOnOpen();
 
-  const opening = s.id;
+  const opening = sessionId;
   if (tracked) {
     sessionsState.openingKey = opening;
     renderList();
   }
   if (!isLiveConversation(conv)) return;
+  const pending = sessionReads.get(conv);
+  const shared =
+    !entriesPrefetch && !approvalsPrefetch && pending?.sessionId === sessionId && pending.isCurrent()
+      ? pending
+      : undefined;
   const isCurrent = conv.mountLoadingPane();
 
   const fetchEntries = (): Promise<TranscriptPage | null> =>
-    fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(() => null);
-  const continuable = isContinuable(s, appState.me?.user ?? "");
+    fetchTranscript(sessionId, { tailTurns: TAIL_TURNS }).catch(() => null);
+  const read = {
+    sessionId,
+    isCurrent,
+    entries: shared?.entries ?? (entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries()),
+    approvals:
+      shared?.approvals ??
+      (typeof source === "string" || isContinuable(source, appState.me?.user ?? "")
+        ? (approvalsPrefetch ?? fetchSessionApprovals(sessionId))
+        : null),
+  };
+  sessionReads.set(conv, read);
   const [entriesRes, approvalsRes] = await Promise.all([
-    entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries(),
-    continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : Promise.resolve(null),
-  ]);
+    read.entries,
+    read.entries.then((page) => {
+      const session = typeof source === "string" ? page?.session : source;
+      return session && isContinuable(session, appState.me?.user ?? "") ? read.approvals : null;
+    }),
+  ]).finally(() => {
+    if (sessionReads.get(conv) === read) sessionReads.delete(conv);
+  });
   if (!isLiveConversation(conv) || !isCurrent()) return;
 
   if (tracked) {
     if (sessionsState.openingKey !== opening) return;
     sessionsState.openingKey = null;
   }
-  if (!entriesPrefetch && conv.state.sessionId === s.id) {
+  if (!entriesPrefetch && conv.state.sessionId === sessionId) {
     renderList();
     return;
   }
 
-  if (!entriesRes) {
-    conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
+  const s = typeof source === "string" ? entriesRes?.session : source;
+  if (!entriesRes || !s) {
+    conv.mountLoadError(() => void openSessionInto(conv, source, undefined, undefined, tracked));
     renderList();
     return;
   }
@@ -1790,6 +1822,7 @@ export async function openSessionInto(
   const inheritedMessages = entriesToMessages(split.inherited, transcriptModel());
   const earlier = currentEarlierCount(s, entriesRes.earlierEntries ?? 0);
   const anchorSeq = entriesRes.entries?.[0]?.seq ?? null;
+  const continuable = isContinuable(s, appState.me?.user ?? "");
   if (continuable) {
     attachPendingApprovals(messages, approvalsRes?.approvals ?? [], transcriptModel());
     conv.mountContinuable(s.threadRef, s.id, s.scopeId, messages, s.channelName ?? null, s, inheritedMessages);
