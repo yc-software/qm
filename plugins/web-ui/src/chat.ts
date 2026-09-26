@@ -1008,7 +1008,7 @@ export function createChatSurface(
     dropAbandonedNewChat(null);
     teardownActiveChat();
     const container = ctx.container();
-    if (!container || !ctx.visible()) return () => false;
+    if (!container) return () => false;
     const host = document.createElement("div");
     host.className = "custom-chat";
     render(
