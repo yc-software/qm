@@ -267,7 +267,7 @@ export async function appendCoverageImport(
   });
 }
 
-function coverageImportEvent(entries: readonly SessionEntry[]): {
+export function coverageImportEvent(entries: readonly SessionEntry[]): {
   event: "legacy_import";
   messages: PiReplayMessage[];
   scopes: ScopeId[];
