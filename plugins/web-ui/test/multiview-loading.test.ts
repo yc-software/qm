@@ -57,11 +57,14 @@ test("a restored tab finishes loading after becoming hidden while its transcript
     const tabs = Array.from(document.querySelectorAll(".dv-tab"));
     assert.equal(tabs.length, 3);
     assert.equal(h.sessionsState.loaded, false);
+    assert.equal(h.requests.filter((path) => path === `/api/sessions/${SESSION.id}?tailTurns=25`).length, 0);
     const select = (tab: Element): void => {
       tab.dispatchEvent(new window.MouseEvent("pointerdown", { bubbles: true }));
     };
     const pane = (): Element | null => document.querySelector(`[data-pane-id="${SESSION.id}"]`);
     select(tabs[0]!);
+    for (let i = 0; i < 100 && !pane()?.querySelector(".chat-loading"); i++)
+      await new Promise((resolve) => setTimeout(resolve, 5));
     assert.ok(pane()?.querySelector(".chat-loading"));
     select(tabs[1]!);
     h.releaseSessions();
