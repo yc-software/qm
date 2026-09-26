@@ -14,7 +14,7 @@ export const EFFORT_LEVELS: Array<{ value: EffortLevel; label: string }> = [
 ];
 
 export function effortLabel(level: EffortLevel): string {
-  return EFFORT_LEVELS.find((option) => option.value === level)?.label ?? "";
+  return level === "auto" ? "" : (EFFORT_LEVELS.find((option) => option.value === level)?.label ?? level);
 }
 
 export function harnessSupportsEffort(harnessId: string): boolean {
