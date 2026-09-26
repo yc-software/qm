@@ -38,6 +38,7 @@ import {
 } from "./seed.ts";
 import { UI_MAPS, uiRows } from "./seed-ui.ts";
 import { RESOURCE_MAPS, resourceRows, registerResourceSchemas, seedResourceRelations } from "./seed-resources.ts";
+import { activityTimestampSql, prepareActivityPayloads, activityRunSql, activityChannelSql } from "./seed-activity.ts";
 
 const MAPS = ["idempotency", "session_mailbox"];
 
@@ -220,7 +221,7 @@ export async function seedDatabase(
   const scope = "s.scope";
   const browserResourceScope = `CASE WHEN g=1 THEN ${sq(`personal:${admin}`)} WHEN g=2 THEN 'org:perf' ELSE s.scope END`;
   const principal = sq(admin);
-  const stamp = `${at} - (g % ${durationDays}) * 86400000`;
+  const stamp = activityTimestampSql(at, durationDays);
   const id = (kind: string, value = "g") => `md5('qm-perf-${kind}-' || (${value})::text)::uuid::text`;
   const genericJoin = `FROM generate_series($1::bigint, $2::bigint) g JOIN perf_sessions s ON s.n = ((g-1) % ${sessionCount})+1`;
   const write = async (table: string, sql: string, count = target(table)) => {
@@ -296,6 +297,7 @@ export async function seedDatabase(
       }
     }
     const payloadShapeDiagnostics = await bank(client, plan);
+    await prepareActivityPayloads(client, plan);
     await client.query(`INSERT INTO sessions(id,type,scope_id,thread_ref,surface,created_at,title,last_activity,messages,turns,origin,origin_id)
       SELECT id,CASE WHEN scope LIKE 'channel:%' THEN 'channel' WHEN scope LIKE 'group:%' THEN 'group' ELSE 'dm' END,scope,thread,surface,at-${durationDays}::bigint*86400000,title,at,messages,turns,origin,CASE WHEN origin='cron' THEN 'perf-cron-'||(n % ${Math.max(1, target("crons"))}) END FROM perf_sessions`);
     const memberships = plan.memberships;
@@ -399,7 +401,7 @@ export async function seedDatabase(
     );
     await write(
       "runs",
-      `INSERT INTO runs(id,session_id,status,request,result,attempts,created_at,started_at,finished_at,returned_at) SELECT ${id("run")},s.thread,'done',json_build_object('surface','web','actor',json_build_object('externalId',${principal}),'conversation',json_build_object('kind','dm','threadRef',s.thread),'text','QM performance completed fixture')::text,'{}',1,${stamp},${stamp}+10,${stamp}+1200,${stamp}+1200 ${genericJoin}`,
+      `INSERT INTO runs(id,session_id,status,request,result,idempotency_key,attempts,created_at,started_at,finished_at,returned_at) ${activityRunSql(plan)}`,
     );
     await write(
       "tool_calls",
@@ -459,7 +461,7 @@ export async function seedDatabase(
     );
     await write(
       "channel_messages",
-      `INSERT INTO channel_messages(org_id,container,ts,author_id,author_name,text,created_at,handled) SELECT 'perf','perf-'||(1+g%${Math.max(1, plan.scopes.filter((s) => s.startsWith("channel:")).length)}),g::text,${principal},'Performance user','QM performance Slack fixture '||g,${stamp},true ${genericJoin}`,
+      `INSERT INTO channel_messages(org_id,container,ts,author_id,author_name,text,created_at,handled,sub,bot,self,deleted,edited_at,deleted_at,mentions) ${activityChannelSql(plan)}`,
     );
     if (target("channel_files") && !target("channel_messages"))
       throw new Error("Channel files require cached messages");
@@ -805,6 +807,9 @@ export async function seedDatabase(
         "Assistant visible complexity is conservatively reweighted to retain observed quantiles under the exact searchable fraction; serialized payload sizes may increase slightly.",
         "Targets come from input aggregate estimates, not exact production counts",
         "Synthetic storage and compression must be compared with production before environment qualification",
+        "Native activity payloads use source-conditioned marginal aggregates when supplied; run source frequencies still follow the seeded session mapping, not sampled source proportions",
+        "Run attachments and context-field correlations, channel vocabulary across documents and retained index churn require separate parity verification",
+        "Generic activity timestamps preserve UTC days and recent-window counts; canonical session/transcript timestamps remain unchanged",
         "Files contain metadata only; opening/downloading files is unsupported",
         "Agent runs, crons, deliveries, jobs and processes are inert; workload replay is separate",
         "Any missing table or count mismatch prevents fixture qualification",
