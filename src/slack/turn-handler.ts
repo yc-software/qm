@@ -65,6 +65,7 @@ import {
 } from "./lib.ts";
 import type { GatewayContext, TurnResult } from "../types.ts";
 import type { AckGate } from "./deferred-ack.ts";
+import type { AckPresenter } from "./presenters.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { CoreTurnBody, TurnFlow } from "./turn-flow.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
@@ -389,32 +390,34 @@ export function createTurnHandler(deps: {
       if (intercepted) return;
     }
 
-    const ack = inc.unprompted
-      ? undefined
-      : createAckPresenter({
-          taskManaged,
-          postAck: async (text) => {
-            const rendered = toSlackMrkdwn(text);
-            if (await taskList?.addLead(rendered)) return;
-            const ts = await postReply(rendered);
-            if (ts) {
-              await taskList?.attach(ts, rendered);
-            }
-          },
-          addReaction: (name) => client.reactions.add({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
-          removeReaction: (name) =>
-            client.reactions.remove({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
-          emojiCandidates: (() => {
-            const override = deps.ackEmojiCandidates?.();
-            return override?.length ? [...override] : [...DEFAULT_ACK_REACTIONS];
-          })(),
-          emojiPick: taskManaged
-            ? undefined
-            : ackEmoji.requestAckEmoji(text, ackEmoji.ackPickCandidates(client), {
-                channel: inc.channel,
-                ts: inc.ts,
-              }),
-        });
+    let ack: AckPresenter | undefined;
+    const startAck = (): AckPresenter =>
+      (ack ??= createAckPresenter({
+        taskManaged,
+        postAck: async (text) => {
+          const rendered = toSlackMrkdwn(text);
+          if (await taskList?.addLead(rendered)) return;
+          const ts = await postReply(rendered);
+          if (ts) {
+            await taskList?.attach(ts, rendered);
+          }
+        },
+        addReaction: (name) => client.reactions.add({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
+        removeReaction: (name) =>
+          client.reactions.remove({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
+        emojiCandidates: (() => {
+          const override = deps.ackEmojiCandidates?.();
+          return override?.length ? [...override] : [...DEFAULT_ACK_REACTIONS];
+        })(),
+        emojiPick: taskManaged
+          ? undefined
+          : ackEmoji.requestAckEmoji(text, ackEmoji.ackPickCandidates(client), {
+              channel: inc.channel,
+              ts: inc.ts,
+            }),
+      }));
+    const acknowledges = !inc.unprompted || !inc.synthetic;
+    if (!inc.unprompted) startAck();
     if (!inc.unprompted) {
       taskList = createTaskListPresenter({
         post: (text, blocks) => postReply(text, blocks),
@@ -598,12 +601,13 @@ export function createTurnHandler(deps: {
             inc.ackGate?.persisted();
             await moveTaskAck(runId, inc.ts);
           },
-          ...(ack
+          ...(acknowledges
             ? {
+                onReplying: () => void startAck(),
                 onFirstBlock: (blockText: string) => {
-                  ack.onFirstBlock(extractPrivateContinuation(cleanAgentReplyForSlack(blockText).text).text);
+                  startAck().onFirstBlock(extractPrivateContinuation(cleanAgentReplyForSlack(blockText).text).text);
                 },
-                onSurfacePosted: () => ack.onSurfacePosted(),
+                onSurfacePosted: () => startAck().onSurfacePosted(),
               }
             : {}),
           ...(taskList

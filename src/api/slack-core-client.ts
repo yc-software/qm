@@ -43,6 +43,7 @@ import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
 
 interface SlackRunHooks {
+  onReplying?(): void;
   onFirstBlock?(text: string): void;
   onSurfacePosted?(): void;
   onTasks?(tasks: Array<{ id: string; title: string; status: TaskStatus }>): void | Promise<void>;
@@ -329,8 +330,14 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async waitRun(runId, hooks = {}) {
+      let replyingSignaled = false;
       let firstBlockSignaled = false;
       let surfaceSignaled = false;
+      const signalReplying = (): void => {
+        if (replyingSignaled || !deps.turnStream.replying(runId)) return;
+        replyingSignaled = true;
+        hooks.onReplying?.();
+      };
       const signalFirstBlock = (text: string): void => {
         if (firstBlockSignaled || !text.trim()) return;
         firstBlockSignaled = true;
@@ -392,6 +399,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
               if (view?.surfacePosted) signalSurface();
               return (view?.result as TurnResult | null | undefined) ?? null;
             }
+            signalReplying();
             await emitTasks();
             await emitGoal().catch(swallowAs("slack-core-client: goal refresh", undefined));
             const fb = deps.turnStream.firstBlock(runId);
