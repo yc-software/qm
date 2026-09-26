@@ -4,6 +4,7 @@ import { audit, authorizeAdmin, orgScope } from "./shared.ts";
 import type { NewSkillPack, SkillPack } from "../../skills/skill-pack-store.ts";
 import type { PackConfig } from "../../skills/normalize.ts";
 import { parseScopeId, type ScopeId } from "../../types.ts";
+import { isValidCredentialSlug } from "../../credentials/keychain.ts";
 
 function asSubset(v: unknown): "all" | string[] | undefined {
   if (v === "all" || v === undefined) return "all";
@@ -24,16 +25,41 @@ function asScopeIds(v: unknown): ScopeId[] | undefined {
   return [...new Set(out)];
 }
 
-function asConfig(v: unknown): PackConfig | undefined {
-  if (v === undefined) return undefined;
-  if (typeof v !== "object" || v === null) return undefined;
+type Read<T> = { value: T } | { error: string };
+
+function readGlobs(field: string, v: unknown): Read<string[]> {
+  if (!Array.isArray(v) || v.some((x) => typeof x !== "string"))
+    return { error: `config.${field} must be an array of strings` };
+  return { value: v as string[] };
+}
+
+function readConfig(v: unknown): Read<PackConfig | undefined> {
+  if (v === undefined || v === null) return { value: undefined };
+  if (typeof v !== "object" || Array.isArray(v)) return { error: "config must be an object, or null to clear it" };
   const o = v as Record<string, unknown>;
   const cfg: PackConfig = {};
-  if (Array.isArray(o.skillGlobs)) cfg.skillGlobs = o.skillGlobs.filter((x): x is string => typeof x === "string");
-  if (Array.isArray(o.exclude)) cfg.exclude = o.exclude.filter((x): x is string => typeof x === "string");
-  if (o.fieldOverrides && typeof o.fieldOverrides === "object")
+  for (const field of ["skillGlobs", "exclude"] as const) {
+    if (o[field] === undefined) continue;
+    const globs = readGlobs(field, o[field]);
+    if ("error" in globs) return globs;
+    cfg[field] = globs.value;
+  }
+  if (o.fieldOverrides !== undefined) {
+    if (typeof o.fieldOverrides !== "object" || o.fieldOverrides === null || Array.isArray(o.fieldOverrides))
+      return { error: "config.fieldOverrides must be an object" };
     cfg.fieldOverrides = o.fieldOverrides as Record<string, string>;
-  return cfg;
+  }
+  return { value: cfg };
+}
+
+function readCredentialSlug(v: unknown): Read<string | undefined> {
+  if (v === undefined || v === null) return { value: undefined };
+  if (typeof v !== "string") return { error: "authCredentialSlug must be a string, or null to clear it" };
+  const slug = v.trim();
+  if (!slug) return { value: undefined };
+  if (!isValidCredentialSlug(slug))
+    return { error: "authCredentialSlug must be lowercase kebab-case (a-z, 0-9, -), at most 63 characters" };
+  return { value: slug };
 }
 
 async function listPacks(ctx: ApiCtx): Promise<void> {
@@ -68,6 +94,11 @@ async function registerPack(ctx: ApiCtx): Promise<void> {
   const subset = asSubset(b.subset);
   if (subset === undefined)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "subset must be 'all' or string[]" });
+  const registered = readCredentialSlug(b.authCredentialSlug);
+  if ("error" in registered) return sendJson(ctx.res, 400, { error: "bad_request", message: registered.error });
+  const configured = readConfig(b.config);
+  if ("error" in configured) return sendJson(ctx.res, 400, { error: "bad_request", message: configured.error });
+  const config = configured.value;
   const input: NewSkillPack = {
     kind: "git",
     url: b.url.trim(),
@@ -78,10 +109,8 @@ async function registerPack(ctx: ApiCtx): Promise<void> {
     targetScopeId: orgScope(ctx.deps),
     subset,
     createdBy: actor.id,
-    ...(asConfig(b.config) ? { config: asConfig(b.config) } : {}),
-    ...(typeof b.authCredentialSlug === "string" && b.authCredentialSlug
-      ? { authCredentialSlug: b.authCredentialSlug }
-      : {}),
+    ...(config ? { config } : {}),
+    ...(registered.value ? { authCredentialSlug: registered.value } : {}),
   };
   const pack = await ctx.app.registerSkillPack(input);
   audit(ctx.deps, {
@@ -89,6 +118,7 @@ async function registerPack(ctx: ApiCtx): Promise<void> {
     action: "skill_pack.register",
     resource: pack.id,
     scopeLabel: pack.targetScopeId,
+    ...(registered.value ? { detail: `authCredentialSlug=${registered.value}` } : {}),
   });
   sendJson(ctx.res, 200, { pack });
 }
@@ -157,13 +187,25 @@ async function patchPack(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 400, { error: "bad_request", message: "subset must be 'all' or string[]" });
     patch.subset = subset;
   }
-  if (b.config !== undefined) patch.config = asConfig(b.config);
+  if (b.config !== undefined) {
+    const configured = readConfig(b.config);
+    if ("error" in configured) return sendJson(ctx.res, 400, { error: "bad_request", message: configured.error });
+    patch.config = configured.value;
+  }
+  if (b.authCredentialSlug !== undefined) {
+    const read = readCredentialSlug(b.authCredentialSlug);
+    if ("error" in read) return sendJson(ctx.res, 400, { error: "bad_request", message: read.error });
+    patch.authCredentialSlug = read.value;
+  }
   const pack = await ctx.app.updateSkillPack(ctx.params.id!, patch);
   audit(ctx.deps, {
     principalId: actor.id,
     action: "skill_pack.update",
     resource: pack.id,
     scopeLabel: pack.targetScopeId,
+    ...("authCredentialSlug" in patch
+      ? { detail: `authCredentialSlug=${patch.authCredentialSlug ?? "(cleared)"}` }
+      : {}),
   });
   sendJson(ctx.res, 200, { pack });
 }
