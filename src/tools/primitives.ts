@@ -306,6 +306,7 @@ export interface ToolContext extends SurfaceToolDeps {
   soulRead(): { effectiveSoul: string; soul: string | null; soulVersion: number } | ControlUnavailable;
   soulWrite(
     content: string,
+    expectedVersion?: number,
   ): Promise<ControlOk<{ version: number }> | ControlErr<"soul_update_denied"> | ControlUnavailable>;
   shareArtifact(req: ShareArtifactRequest): Promise<ShareArtifactResult | ControlUnavailable>;
 }
@@ -422,9 +423,10 @@ export interface SurfaceToolDeps {
   readFile(ref: string): Promise<SurfaceFileResult>;
   getStandingOrder(): Promise<SurfaceStandingOrderResult>;
   setStandingOrder(
-    orders: string,
+    orders: string | undefined,
     bots?: Record<string, BotPolicy>,
     ambientEnabled?: boolean | null,
+    expectedOrders?: string,
   ): Promise<SurfaceStandingOrderResult>;
 }
 
@@ -1380,9 +1382,9 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!deps.control || !deps.controlClaims) return CONTROL_UNAVAILABLE;
       return deps.control.readSoul(deps.controlClaims);
     },
-    soulWrite: (content) =>
+    soulWrite: (content, expectedVersion) =>
       controlOp(
-        async (c, cl) => c.writeSoul(content, cl),
+        async (c, cl) => c.writeSoul(content, cl, expectedVersion),
         (r) => r.ok,
       ),
     shareArtifact: (req) =>
@@ -1422,8 +1424,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     readMembers: () => surfaceOp((s) => s.readMembers()),
     readFile: (ref) => surfaceOp((s) => s.readFile(ref)),
     getStandingOrder: () => surfaceOp((s) => s.getStandingOrder()),
-    setStandingOrder: (orders, bots, ambientEnabled) =>
-      surfaceOp((s) => s.setStandingOrder(orders, bots, ambientEnabled)),
+    setStandingOrder: (orders, bots, ambientEnabled, expectedOrders) =>
+      surfaceOp((s) => s.setStandingOrder(orders, bots, ambientEnabled, expectedOrders)),
     attach: (files) =>
       deps.attach ? deps.attach(files) : Promise.resolve({ ok: false as const, message: ATTACH_UNAVAILABLE_MESSAGE }),
   };

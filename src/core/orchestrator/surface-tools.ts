@@ -28,7 +28,7 @@ import type {
 } from "../../tools/primitives.ts";
 import { collectBlob, MAX_BLOB_BYTES, type BlobTransferStore } from "../../persistence/blob-transfer.ts";
 import { collectNamedOutbound, type ArtifactRegistration } from "../attachments.ts";
-import { parseBotLedger, type BotPolicy } from "../../surface-cache/channel-policy-store.ts";
+import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../../surface-cache/channel-policy-store.ts";
 import { isoFromTs } from "../../util/message-tag.ts";
 import { errMessage } from "../../util/errors.ts";
 import { adminSessionUrl } from "../../util/admin-links.ts";
@@ -493,7 +493,12 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(p?.ambientEnabled !== undefined ? { ambientEnabled: p.ambientEnabled } : {}),
       };
     },
-    setStandingOrder: async (orders: string, bots?: Record<string, BotPolicy>, ambientEnabled?: boolean | null) => {
+    setStandingOrder: async (
+      orders: string | undefined,
+      bots?: Record<string, BotPolicy>,
+      ambientEnabled?: boolean | null,
+      expectedOrders?: string,
+    ) => {
       if (!deps.channelPolicy) return { ok: false, message: "standing orders aren't available on this turn" };
       if (conversation.kind === "dm" || !conversation.channelRef)
         return { ok: false, message: "standing orders are per-channel — you can only set one from inside a channel." };
@@ -503,12 +508,18 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         if ("error" in parsed) return { ok: false, message: parsed.error };
         parsedBots = parsed.bots;
       }
-      const p = await deps.channelPolicy.set(conversation.channelRef, orders, {
-        setBy: actor.id,
-        bots: parsedBots,
-        sessionId: session.id,
-        ambientEnabled,
-      });
+      let p: ChannelPolicy;
+      try {
+        p = await deps.channelPolicy.set(conversation.channelRef, orders, {
+          setBy: actor.id,
+          bots: parsedBots,
+          sessionId: session.id,
+          ambientEnabled,
+          expectedOrders,
+        });
+      } catch (error) {
+        return { ok: false, message: errMessage(error) };
+      }
       deps.auditLog.record({
         at: Date.now(),
         principalId: actor.id,
@@ -518,7 +529,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       });
       return {
         ok: true,
-        orders,
+        orders: p.orders,
         ...(p.bots && Object.keys(p.bots).length ? { bots: p.bots } : {}),
         ...(p.ambientEnabled !== undefined ? { ambientEnabled: p.ambientEnabled } : {}),
       };

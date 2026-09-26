@@ -1130,7 +1130,11 @@ export function createSessionMethods(
         try {
           await deps.config.refreshScope(scopeIdValue);
           snapshot = await deps.config.captureSoulSnapshot(scopeIdValue);
-          const version = await deps.config.setSoulLatest(scopeIdValue, content, actorId);
+          const version =
+            opts?.expectedVersion === undefined
+              ? await deps.config.setSoulLatest(scopeIdValue, content, actorId)
+              : await deps.config.setSoulIfVersion(scopeIdValue, opts.expectedVersion, content, actorId);
+          if (version === null) throw new Error("Guidance changed; read it and retry the edit.");
           deps.auditLog.record({
             at: Date.now(),
             principalId: actorId,
@@ -1141,6 +1145,7 @@ export function createSessionMethods(
           return version;
         } catch (error) {
           if (snapshot !== undefined) deps.config.restoreSoulCacheSnapshot(scopeIdValue, snapshot);
+          if (opts?.expectedVersion !== undefined) await deps.config.refreshScope(scopeIdValue);
           throw error;
         }
       };

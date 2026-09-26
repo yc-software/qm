@@ -347,8 +347,8 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async getStandingOrder() {
       return { ok: true, orders: "" };
     },
-    async setStandingOrder(orders: string) {
-      return { ok: true, orders };
+    async setStandingOrder(orders) {
+      return { ok: true, orders: orders ?? "" };
     },
     mcpToolDefs() {
       return [];
@@ -2400,7 +2400,7 @@ test("guidance reads and writes channel ambient replies without changing omitted
     },
     async setStandingOrder(orders, _bots, nextAmbientEnabled) {
       if (nextAmbientEnabled !== undefined) ambientEnabled = nextAmbientEnabled ?? undefined;
-      return { ok: true, orders, ...(ambientEnabled === undefined ? {} : { ambientEnabled }) };
+      return { ok: true, orders: orders ?? "keep watch", ...(ambientEnabled === undefined ? {} : { ambientEnabled }) };
     },
   };
 
@@ -2424,7 +2424,7 @@ test("guidance edit swaps one exact passage in either scope and refuses ambiguou
       return { ok: true, orders };
     },
     async setStandingOrder(next, bots, ambientEnabled) {
-      orders = next;
+      orders = next ?? orders;
       setCalls.push({ bots, ambientEnabled });
       return { ok: true, orders };
     },

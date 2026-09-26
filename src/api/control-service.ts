@@ -172,6 +172,7 @@ export interface ControlService {
   writeSoul(
     content: string,
     claims: CapabilityClaims,
+    expectedVersion?: number,
   ): Promise<ControlOk<{ version: number }> | ControlErr<"soul_update_denied">>;
   shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
 }
@@ -862,10 +863,11 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       return { effectiveSoul, soul, soulVersion };
     },
 
-    async writeSoul(content, capability) {
+    async writeSoul(content, capability, expectedVersion) {
       try {
         const version = await app.updateSoul(capability.scopeId, content, capability.actorId, {
           allowSharedScope: true,
+          expectedVersion,
         });
         return { ok: true, version };
       } catch (e) {
