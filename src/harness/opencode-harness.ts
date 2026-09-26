@@ -39,6 +39,7 @@ import {
 import { coreToolOptions, type ToolContextRef } from "./agent-tools.ts";
 import {
   bridgedTools,
+  bridgedToolText,
   harnessToolContext,
   harnessToolOptions,
   oneShotModelUtilities,
@@ -211,15 +212,14 @@ export function modelRef(id: string): { providerID: string; modelID: string } {
 }
 
 function stripDataUrls(message: unknown): unknown {
-  const m = message as { parts?: unknown[] };
-  if (!m || !Array.isArray(m.parts)) return message;
-  const parts = m.parts.map((part) => {
-    const p = part as { url?: unknown };
-    if (typeof p?.url !== "string" || !p.url.startsWith("data:")) return part;
-    const { url: _url, ...rest } = p;
-    return { ...rest, omitted: true };
-  });
-  return { ...(message as Record<string, unknown>), parts };
+  if (Array.isArray(message)) return message.map(stripDataUrls);
+  if (!message || typeof message !== "object") return message;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(message)) {
+    if (key === "url" && typeof value === "string" && value.startsWith("data:")) result.omitted = true;
+    else result[key] = stripDataUrls(value);
+  }
+  return result;
 }
 
 function replayMessages(
@@ -669,12 +669,16 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
               return json(res, 404, { output: `[tool unavailable: ${input.tool ?? "unknown"}]` });
             try {
               const result = await tool.execute(input.callID ?? randomBytes(8).toString("hex"), input.args ?? {});
-              const output = (result.content ?? [])
-                .filter((item) => item.type === "text")
-                .map((item) => item.text ?? "")
-                .join("\n");
+              const attachments = (result.content ?? [])
+                .filter((part) => part.type === "image")
+                .map((part) => ({
+                  type: "file",
+                  mime: part.mimeType,
+                  url: `data:${part.mimeType};base64,${part.data}`,
+                }));
               return json(res, 200, {
-                output,
+                output: bridgedToolText(result),
+                ...(attachments.length ? { attachments } : {}),
                 terminate: Boolean(
                   result.terminate ||
                   state.ref.runtimeHandoff ||

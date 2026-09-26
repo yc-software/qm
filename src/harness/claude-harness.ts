@@ -40,7 +40,6 @@ import { coreToolOptions } from "./agent-tools.ts";
 import {
   bridgedTools,
   nativeChildToolAllowed,
-  bridgedToolText,
   harnessToolContext,
   harnessToolOptions,
   oneShotModelUtilities,
@@ -365,7 +364,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         try {
           const result = await definition.execute(callId, args);
           if (result.terminate || ref.pausedOnApproval || ref.silentRequested) setImmediate(terminateProvider);
-          return { content: [{ type: "text", text: bridgedToolText(result) }] };
+          return { content: result.content ?? [] };
         } catch (error) {
           return {
             content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],

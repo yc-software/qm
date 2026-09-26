@@ -1064,7 +1064,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const read = defineTool({
     name: "read",
     label: "read",
-    description: "Read a file from the workspace (scope, then global). Returns its contents.",
+    description:
+      "Read a workspace file (scope, then global). Returns text or an image for visual inspection (PNG, JPEG, GIF, WebP; up to 5 MB).",
     parameters: Type.Object({
       path: Type.String({ description: "Relative path within the workspace." }),
     }),
@@ -1074,7 +1075,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       await recordCall(callId, { tool: "files", action: "read", path: params.path });
       const signal = ref.abortSignal;
       signal?.throwIfAborted();
-      const { content, sourceScopeId, shared } = await tc.read(params.path, signal);
+      const { content, image, sourceScopeId, shared } = await tc.read(params.path, signal);
       signal?.throwIfAborted();
       return recordResult(
         callId,
@@ -1085,7 +1086,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           found: content !== null,
           ...(content !== null ? { bytes: content.length, sourceScopeId } : {}),
         },
-        text(content ?? `[no such file: ${params.path}]`),
+        {
+          content: [
+            { type: "text" as const, text: content ?? `[no such file: ${params.path}]` },
+            ...(image ? [{ type: "image" as const, ...image }] : []),
+          ],
+          details: {},
+        },
         content === null,
         sourceScopeId,
         false,

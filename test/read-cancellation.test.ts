@@ -6,12 +6,12 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 
 function setup(overrides: Partial<ToolContextDeps> = {}) {
-  const pending = Promise.withResolvers<string | null>();
+  const pending = Promise.withResolvers<Uint8Array | null>();
   const started = Promise.withResolvers<void>();
   let reads = 0;
   const tc = createToolContext({
     sandbox: {
-      readFile: async () => {
+      readFileBytes: async () => {
         reads++;
         started.resolve();
         return pending.promise;
@@ -61,7 +61,7 @@ test("cancelled file reads settle before IO and do not start fallback reads", as
 
 test("already cancelled reads never start IO", async () => {
   const { tc, pending, reads } = setup();
-  pending.resolve("data");
+  pending.resolve(Buffer.from("data"));
   await assert.rejects(tc.read("notes.md", AbortSignal.abort()), { name: "AbortError" });
   assert.equal(reads(), 0);
 });
