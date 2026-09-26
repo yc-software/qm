@@ -478,13 +478,14 @@ export function createMessagingMethods(
       }
       return true;
     },
-    async upsertChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations) {
+    async upsertChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations, partial) {
       const applied = await deps.directory.replaceChannels(
         channels,
         channelMembers,
         syncedAt,
         channelRosterIds,
         revocations,
+        partial,
       );
       await h.syncLinkedProjectRosters();
       return applied;

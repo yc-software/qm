@@ -241,6 +241,7 @@ export function createTurnHandler(deps: {
     let isMpimChannel: boolean | undefined;
     let publishMembers: ActorAssertion[] | undefined;
     let channelInfo: ChannelMeta | undefined;
+    let channelObservedAt: number | undefined;
     let slackIdsByPrincipal: Map<string, string> | undefined;
     let conversationKind: SlackConversationKind = inc.kind;
     let allowedTs: Set<string> = new Set();
@@ -284,6 +285,7 @@ export function createTurnHandler(deps: {
         deps.ensureHeader?.(client, inc.channel, `personal:${actor.externalId}`, "dm");
     } else {
       channelRef = inc.channel;
+      channelObservedAt = Date.now();
       const info = inc.prefetched ? inc.prefetched.info : await getChannelInfo(client, inc.channel);
       channelInfo = info;
       isPrivate = info?.is_private;
@@ -309,7 +311,7 @@ export function createTurnHandler(deps: {
             publishMembers: inc.prefetched.publishMembers,
             slackIdsByPrincipal: inc.prefetched.slackIdsByPrincipal,
           }
-        : await channelMembership(client, inc.channel, actor, inc.userId, channelInfo);
+        : await channelMembership(client, inc.channel, actor, inc.userId, channelInfo, channelObservedAt);
       audience = membership.audience;
       publishMembers = membership.publishMembers;
       slackIdsByPrincipal = membership.slackIdsByPrincipal;
@@ -925,8 +927,9 @@ export function createTurnHandler(deps: {
           if (deps.allowActor && !deps.allowActor(reactor)) return;
           let prefetched: Incoming["prefetched"];
           if (!isDM) {
+            const observedAt = Date.now();
             const info = await getChannelInfo(client, channel);
-            const membership = await channelMembership(client, channel, reactor, reactorId, info);
+            const membership = await channelMembership(client, channel, reactor, reactorId, info, observedAt);
             if (membership.audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled())) return;
             prefetched = {
               actor: reactor,

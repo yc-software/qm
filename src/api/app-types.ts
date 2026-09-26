@@ -498,6 +498,7 @@ export interface App {
     syncedAt?: number,
     channelRosterIds?: string[],
     revocations?: ChannelMembership[],
+    partial?: boolean,
   ): Promise<boolean>;
   upsertGroups(
     groupMembers: GroupMembership[],
