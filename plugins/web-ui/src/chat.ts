@@ -1791,7 +1791,7 @@ export function createChatSurface(
         shouldShowWork(work, isStreaming || msg.stopReason === "error" || msg.stopReason === "aborted" ? "" : text);
       const steeringOnly =
         !showWork && work ? messageWorkTimeline(work, text).filter((item) => item.kind === "steer") : [];
-      let workView =
+      let workView: TemplateResult | typeof nothing =
         work && steeringOnly.length ? html`${steeringOnly.map((item) => renderTimelineItem(item, work))}` : nothing;
       if (showWork) {
         workView = workBlock(
