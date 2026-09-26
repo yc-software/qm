@@ -13,11 +13,11 @@ import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-se
 import { materializeRoLayers } from "./ro-layers.ts";
 import { createExecExport, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
 import { spawnDockerExec, type DockerExec } from "./docker-exec.ts";
-import { ephemeralCredLinkScript } from "../credentials/resident-paths.ts";
+import { ephemeralCredLinkScript, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { shortHash } from "../util/crypto.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
-import { execFailureDetail } from "./sandbox.ts";
+import { execFailureDetail, visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import type {
   AgentComputerProfile,
   ExecOptions,
@@ -51,6 +51,8 @@ export interface LocalSandboxOptions {
   repoRoot?: string;
   dockerExec?: DockerExec;
   fetchImpl?: typeof fetch;
+  extraTools?: string[];
+  credentialPaths?: CredentialPathSpec[];
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
@@ -348,8 +350,23 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     spec: {
       os: `Debian 12 (bookworm), glibc — local Docker container on a ${arch()} host`,
       runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
-      tools: ["git", "curl", "wget", "jq", "unzip", "gnupg", "python3", "gh", "aws (CLI v2)"],
-      notInstalled: ["gcloud", "kubectl", "flyctl", "glab"],
+      get tools() {
+        return visibleTools([
+          "git",
+          "curl",
+          "wget",
+          "jq",
+          "unzip",
+          "gnupg",
+          "python3",
+          "gh",
+          "aws (CLI v2)",
+          ...(opts.extraTools ?? []),
+        ]);
+      },
+      get notInstalled() {
+        return visibleNotInstalled(["gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+      },
       ...(opts.cpus ? { cpus: opts.cpus } : {}),
       ...(opts.memoryMb ? { memoryMb: opts.memoryMb } : {}),
       homeDir,
@@ -377,7 +394,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
     defaultHomeDir: homeDir,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths().map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
   });
 
   const sandbox: Sandbox = {
@@ -409,7 +426,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       try {
         const prep = await execRaw(
           name,
-          `mkdir -p ${shq(workspaceDir)} && ${ephemeralCredLinkScript(homeDir)}`,
+          `mkdir -p ${shq(workspaceDir)} && ${ephemeralCredLinkScript(homeDir, opts.credentialPaths ?? [])}`,
           PREP_TIMEOUT_SEC,
         );
         if (prep.code !== 0)

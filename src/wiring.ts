@@ -844,6 +844,8 @@ export function buildApp(
   const buildLocal = (): Sandbox =>
     createLocalSandbox(workspace, {
       ...config.localSandbox,
+      extraTools: deploymentLayer.advertisedTools,
+      credentialPaths: deploymentLayer.credentialPaths,
       onError: sandboxOnError,
     });
   const buildSprites = (): Sandbox => {
