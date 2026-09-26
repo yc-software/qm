@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { registeredPgMigrations } from "../../src/persistence/pg-pool.ts";
+import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { bindSearchText, SEARCH_BINDING_SQL, searchPayloads } from "./seed-search.ts";
 import { validateTarget } from "./seed.ts";
 
@@ -72,7 +74,7 @@ test(
   {
     skip: process.env.QM_PERF_TEST_DATABASE_URL
       ? false
-      : "set QM_PERF_TEST_DATABASE_URL to a migrated isolated fixture for temporary PostgreSQL check",
+      : "set QM_PERF_TEST_DATABASE_URL to an isolated database for temporary PostgreSQL check",
   },
   async () => {
     const url = process.env.QM_PERF_TEST_DATABASE_URL!;
@@ -92,14 +94,15 @@ test(
             .relpersistence,
           "t",
         );
-      const original = (
-        await db.query("SELECT pg_get_functiondef('public.sync_session_entry_search()'::regprocedure) AS body")
-      ).rows[0].body as string;
-      assert.ok(original.startsWith("CREATE OR REPLACE FUNCTION public.sync_session_entry_search()"));
-      assert.ok(!original.includes("SET search_path"));
-      await db.query(
-        original.replace("FUNCTION public.sync_session_entry_search()", "FUNCTION pg_temp.sync_session_entry_search()"),
-      );
+      createPostgresSessionStore(url);
+      const functions = registeredPgMigrations(url)
+        .flatMap((migration) => migration.statements)
+        .filter((sql) =>
+          /^CREATE OR REPLACE FUNCTION (safe_json|entry_search_text|sync_session_entry_search)\(/.test(sql),
+        );
+      assert.equal(functions.length, 3);
+      for (const sql of functions)
+        await db.query(sql.replace(/\b(safe_json|entry_search_text|sync_session_entry_search)\(/g, "pg_temp.$1("));
       await db.query(
         "CREATE TRIGGER search_write_through AFTER INSERT OR UPDATE OR DELETE ON pg_temp.session_entries FOR EACH ROW EXECUTE FUNCTION pg_temp.sync_session_entry_search()",
       );

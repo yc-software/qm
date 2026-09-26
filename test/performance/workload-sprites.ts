@@ -629,7 +629,7 @@ export async function createSpritesFixture(
       );
       if (server.listening)
         await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
-      const settled = await Promise.allSettled([...pending]);
+      const settled = await Promise.allSettled(pending);
       const cleanupErrors: unknown[] = [];
       for (const guest of guests.values()) {
         try {
