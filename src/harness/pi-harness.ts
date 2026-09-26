@@ -763,6 +763,10 @@ export function trimPayloadToByteBudget(payload: unknown, maxBytes: number = MAX
     if (block?.type === "input_image" && typeof block.image_url === "string" && block.image_url.startsWith("data:")) {
       return block.image_url.length;
     }
+    const imageUrl = block?.image_url as { url?: unknown } | undefined;
+    if (block?.type === "image_url" && typeof imageUrl?.url === "string" && imageUrl.url.startsWith("data:")) {
+      return imageUrl.url.length;
+    }
     return block?.file_data?.length ?? block?.file?.file_data?.length ?? block?.inlineData?.data?.length ?? 0;
   };
   const placeholder = (b: unknown) => {
@@ -803,8 +807,9 @@ export function trimPayloadToByteBudget(payload: unknown, maxBytes: number = MAX
 
   const items = (p[listKey] as unknown[]).map((m) => {
     if (toShed <= 0) return m;
-    const msg = m as { content?: unknown; parts?: unknown };
-    const key = listKey === "contents" ? "parts" : "content";
+    const msg = m as { content?: unknown; parts?: unknown; output?: unknown };
+    let key: "parts" | "content" | "output" = listKey === "contents" ? "parts" : "content";
+    if (listKey === "input" && Array.isArray(msg?.output)) key = "output";
     if (!Array.isArray(msg?.[key])) return m;
     const content = trimContent(msg[key]);
     return content === msg[key] ? m : { ...(m as Record<string, unknown>), [key]: content };

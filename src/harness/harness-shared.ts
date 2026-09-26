@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import {
   parseSecurityScreenVerdict,
@@ -31,10 +32,7 @@ export type BridgedTool = {
   name: string;
   description: string;
   parameters: unknown;
-  execute(
-    callId: string,
-    args: unknown,
-  ): Promise<{ content?: Array<{ type?: string; text?: string }>; terminate?: boolean }>;
+  execute(callId: string, args: unknown): Promise<{ content?: Array<TextContent | ImageContent>; terminate?: boolean }>;
 };
 
 export interface SteerIntake {
@@ -161,7 +159,7 @@ export function bridgedTools(ref: ToolContextRef, options: AgentToolsOptions): B
 
 export function bridgedToolText(result: Awaited<ReturnType<BridgedTool["execute"]>>): string {
   return (result.content ?? [])
-    .filter((item): item is { type?: string; text: string } => typeof item.text === "string")
+    .filter((item) => item.type === "text")
     .map((item) => item.text)
     .join("\n");
 }

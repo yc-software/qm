@@ -43,8 +43,9 @@ function harness(opts: { memoryStart?: string; recall?: boolean } = {}) {
     async writeFile(_h: SandboxHandle, path: string, data: string) {
       sandboxFiles.set(path, data);
     },
-    async readFile(_h: SandboxHandle, path: string) {
-      return sandboxFiles.get(path) ?? null;
+    async readFileBytes(_h: SandboxHandle, path: string) {
+      const content = sandboxFiles.get(path);
+      return content === undefined ? null : Buffer.from(content);
     },
   } as unknown as Sandbox;
 

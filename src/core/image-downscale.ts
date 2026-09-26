@@ -35,22 +35,22 @@ function readUInt24LE(bytes: Uint8Array, offset: number): number {
   return bytes[offset]! | (bytes[offset + 1]! << 8) | (bytes[offset + 2]! << 16);
 }
 
-function pngDimensions(bytes: Uint8Array): ImageDimensions | undefined {
+function pngDimensions(bytes: Buffer): ImageDimensions | undefined {
   if (bytes.length < 24) return undefined;
   const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   if (!signature.every((v, i) => bytes[i] === v)) return undefined;
   if (Buffer.from(bytes.subarray(12, 16)).toString("ascii") !== "IHDR") return undefined;
-  return { width: Buffer.from(bytes).readUInt32BE(16), height: Buffer.from(bytes).readUInt32BE(20), format: "png" };
+  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20), format: "png" };
 }
 
-function gifDimensions(bytes: Uint8Array): ImageDimensions | undefined {
+function gifDimensions(bytes: Buffer): ImageDimensions | undefined {
   if (bytes.length < 10) return undefined;
   const header = Buffer.from(bytes.subarray(0, 6)).toString("ascii");
   if (header !== "GIF87a" && header !== "GIF89a") return undefined;
-  return { width: Buffer.from(bytes).readUInt16LE(6), height: Buffer.from(bytes).readUInt16LE(8), format: "gif" };
+  return { width: bytes.readUInt16LE(6), height: bytes.readUInt16LE(8), format: "gif" };
 }
 
-function jpegDimensions(bytes: Uint8Array): ImageDimensions | undefined {
+function jpegDimensions(bytes: Buffer): ImageDimensions | undefined {
   if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return undefined;
   let offset = 2;
   while (offset + 3 < bytes.length) {
@@ -62,14 +62,14 @@ function jpegDimensions(bytes: Uint8Array): ImageDimensions | undefined {
     if (marker === 0xd9 || marker === 0xda) return undefined;
     if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
     if (offset + 2 > bytes.length) return undefined;
-    const length = Buffer.from(bytes).readUInt16BE(offset);
+    const length = bytes.readUInt16BE(offset);
     if (length < 2 || offset + length > bytes.length) return undefined;
     const start = offset + 2;
     if (JPEG_SOF_MARKERS.has(marker)) {
       if (start + 5 > bytes.length) return undefined;
       return {
-        width: Buffer.from(bytes).readUInt16BE(start + 3),
-        height: Buffer.from(bytes).readUInt16BE(start + 1),
+        width: bytes.readUInt16BE(start + 3),
+        height: bytes.readUInt16BE(start + 1),
         format: "jpeg",
       };
     }
@@ -78,14 +78,14 @@ function jpegDimensions(bytes: Uint8Array): ImageDimensions | undefined {
   return undefined;
 }
 
-function webpDimensions(bytes: Uint8Array): ImageDimensions | undefined {
+function webpDimensions(bytes: Buffer): ImageDimensions | undefined {
   if (bytes.length < 30) return undefined;
   if (Buffer.from(bytes.subarray(0, 4)).toString("ascii") !== "RIFF") return undefined;
   if (Buffer.from(bytes.subarray(8, 12)).toString("ascii") !== "WEBP") return undefined;
   let offset = 12;
   while (offset + 8 <= bytes.length) {
     const type = Buffer.from(bytes.subarray(offset, offset + 4)).toString("ascii");
-    const length = Buffer.from(bytes).readUInt32LE(offset + 4);
+    const length = bytes.readUInt32LE(offset + 4);
     const start = offset + 8;
     if (start + length > bytes.length) return undefined;
     if (type === "VP8X" && length >= 10) {
@@ -110,8 +110,8 @@ function webpDimensions(bytes: Uint8Array): ImageDimensions | undefined {
       bytes[start + 5] === 0x2a
     ) {
       return {
-        width: Buffer.from(bytes).readUInt16LE(start + 6) & 0x3fff,
-        height: Buffer.from(bytes).readUInt16LE(start + 8) & 0x3fff,
+        width: bytes.readUInt16LE(start + 6) & 0x3fff,
+        height: bytes.readUInt16LE(start + 8) & 0x3fff,
         format: "webp",
       };
     }
@@ -121,7 +121,8 @@ function webpDimensions(bytes: Uint8Array): ImageDimensions | undefined {
 }
 
 export function sniffImageDimensions(bytes: Uint8Array): ImageDimensions | undefined {
-  return pngDimensions(bytes) ?? jpegDimensions(bytes) ?? gifDimensions(bytes) ?? webpDimensions(bytes);
+  const view = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return pngDimensions(view) ?? jpegDimensions(view) ?? gifDimensions(view) ?? webpDimensions(view);
 }
 
 function imageMagickArgs(format: ImageDimensions["format"]): string[] {

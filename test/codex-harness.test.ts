@@ -486,6 +486,82 @@ test("Codex forwards tool-result screening into its native tool bridge", () => {
   assert.equal(ref.screenToolResult, screenToolResult);
 });
 
+test("Codex sends workspace image tool results through dynamic tools without recording image bytes", async (t) => {
+  const data = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGP4zwAE/0Ho/38GAB7vBPzpVsU+AAAAAElFTkSuQmCC";
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-image-"));
+  const binary = join(dir, "codex-test");
+  const responsePath = join(dir, "tool-response.json");
+  writeFileSync(
+    binary,
+    `#!${process.execPath}
+const readline = require("node:readline");
+const fs = require("node:fs");
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") send({ id: msg.id, result: {} });
+  if (msg.method === "thread/start") send({ id: msg.id, result: { thread: { id: "image-thread" } } });
+  if (msg.method === "turn/start") {
+    send({ id: msg.id, result: { turn: { id: "image-turn", status: "inProgress", items: [] } } });
+    send({ id: "image-call", method: "item/tool/call", params: { threadId: "image-thread", callId: "read-preview", tool: "files", arguments: { action: "read", path: "preview.png" } } });
+  }
+  if (msg.id === "image-call") {
+    fs.writeFileSync(${JSON.stringify(responsePath)}, JSON.stringify(msg.result));
+    const item = { type: "dynamicToolCall", id: "read-preview", tool: "files", arguments: { action: "read", path: "preview.png" }, status: "completed", contentItems: msg.result.contentItems, success: msg.result.success };
+    send({ method: "item/completed", params: { threadId: "image-thread", turnId: "image-turn", item } });
+    send({ method: "turn/completed", params: { threadId: "image-thread", turn: { id: "image-turn", status: "completed", items: [{ type: "agentMessage", id: "answer", text: "inspected", phase: "final_answer" }] } } });
+  }
+});
+`,
+  );
+  chmodSync(binary, 0o755);
+  const harness = createCodexHarness({ binaryPath: binary, env: testHarnessEnv(dir), turnWallClockMs: 10_000 });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const tape: unknown[] = [];
+  const entries: SessionEntry[] = [];
+  const scope = "org:test" as ScopeId;
+  await harness.turns.runTurn({
+    session: { id: "image-session" } as Session,
+    input: "Inspect the synthetic preview.",
+    systemPrompt: "Inspect images with the files tool.",
+    history: [],
+    tools: {
+      read: async () => ({
+        content: "[image: preview.png]",
+        sourceScopeId: scope,
+        image: { data, mimeType: "image/png" },
+      }),
+    } as unknown as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    emit: async (entry) => {
+      const saved = {
+        ...entry,
+        sessionId: "image-session",
+        seq: entries.length + 1,
+        createdAt: Date.now(),
+      } as SessionEntry;
+      entries.push(saved);
+      return saved;
+    },
+    tape: async (record) => {
+      tape.push(record);
+    },
+    recordModelCall: () => {},
+  });
+  const delivered = JSON.parse(readFileSync(responsePath, "utf8"));
+  assert.equal(delivered.success, true);
+  assert.deepEqual(delivered.contentItems, [
+    { type: "inputText", text: "[image: preview.png]" },
+    { type: "inputImage", imageUrl: `data:image/png;base64,${data}` },
+  ]);
+  assert.ok(tape.some((record) => JSON.stringify(record).includes("dynamicToolCall")));
+  assert.equal(JSON.stringify({ tape, entries }).includes(data), false);
+});
+
 test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-test-"));
   const tasks = createMemoryTaskStore();

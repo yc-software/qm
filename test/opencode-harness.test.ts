@@ -104,6 +104,62 @@ function turnInput(entries: SessionEntry[], llmRows: HarnessLlmRequestRecord[]):
   };
 }
 
+test("OpenCode sends workspace image tool results as attachments without recording image bytes", async (t) => {
+  const data = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGP4zwAE/0Ho/38GAB7vBPzpVsU+AAAAAElFTkSuQmCC";
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-image-"));
+  const responsePath = join(dir, "tool-response.json");
+  const harness = createOpenCodeHarness({
+    binaryPath: fakeSidecar(
+      dir,
+      "image",
+      `
+      if (req.method === "POST" && message) {
+        await readBody(req);
+        const result = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + message[1] + "/tool", {
+          method: "POST",
+          headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET, "content-type": "application/json" },
+          body: JSON.stringify({ tool: "files", callID: "read-preview", args: { action: "read", path: "preview.png" } }),
+        }).then((response) => response.json());
+        require("node:fs").writeFileSync(${JSON.stringify(responsePath)}, JSON.stringify(result));
+        const assistant = ${okAssistant};
+        assistant.parts.push({ id: "image-part", sessionID: message[1], messageID: "msg_1", type: "tool", callID: "read-preview", tool: "qm_files", state: { status: "completed", input: { action: "read", path: "preview.png" }, output: result.output, title: "files", metadata: {}, attachments: result.attachments, time: { start: 1000, end: 2000 } } });
+        globalThis.imageAssistant = assistant;
+        await capture(message[1], { system: "Inspect images.", messages: [assistant] });
+        return json(res, assistant);
+      }
+      if (req.method === "GET" && message) return json(res, [globalThis.imageAssistant]);
+    `,
+    ),
+    turnWallClockMs: 10_000,
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const tape: unknown[] = [];
+  const entries: SessionEntry[] = [];
+  const llmRows: HarnessLlmRequestRecord[] = [];
+  await harness.turns.runTurn({
+    ...turnInput(entries, llmRows),
+    input: "Inspect the synthetic preview.",
+    tools: {
+      read: async () => ({
+        content: "[image: preview.png]",
+        sourceScopeId: "org:test",
+        image: { data, mimeType: "image/png" },
+      }),
+    } as unknown as HarnessTurnInput["tools"],
+    tape: async (record) => {
+      tape.push(record);
+    },
+  });
+  const delivered = JSON.parse(readFileSync(responsePath, "utf8"));
+  assert.equal(delivered.output, "[image: preview.png]");
+  assert.deepEqual(delivered.attachments, [{ type: "file", mime: "image/png", url: `data:image/png;base64,${data}` }]);
+  assert.ok(tape.some((record) => JSON.stringify(record).includes("read-preview")));
+  assert.equal(JSON.stringify({ tape, entries, llmRows }).includes(data), false);
+});
+
 test("OpenCode surfaces a provider error as a non-retryable failure, never a successful empty reply", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-opencode-test-"));
   const harness = createOpenCodeHarness({

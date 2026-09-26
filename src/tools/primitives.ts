@@ -2,6 +2,7 @@ import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker 
 import { withAbort } from "../util/async.ts";
 import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-types.ts";
 import { readContextFile } from "../resolution/context-files.ts";
+import { sniffImageDimensions } from "../core/image-downscale.ts";
 import { contextMemory, type TurnContext } from "../resolution/turn-context.ts";
 import { randomUUID } from "node:crypto";
 import type { SandboxAccessPlan, SandboxResources } from "../sandbox/sandbox-resources.ts";
@@ -56,7 +57,7 @@ import { publicUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import { mimeFromName } from "../core/attachments.ts";
+import { isVisionAttachment, MAX_VISION_IMAGE_BYTES, mimeFromName } from "../core/attachments.ts";
 import { swallow, errMessage } from "../util/errors.ts";
 import { fileArtifactId, type FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
@@ -150,6 +151,7 @@ export class CommandDenied extends Error {
 
 interface ReadResult {
   content: string | null;
+  image?: { data: string; mimeType: string };
   sourceScopeId: ScopeId | null;
   shared?: true;
 }
@@ -920,7 +922,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (sharedFile) {
         const { grant: granted, bytes } = sharedFile;
         if (bytes === null) return { content: null, sourceScopeId: granted.ownerScopeId };
-        const asText = tryDecodeUtf8(bytes);
+        const asText = sniffImageDimensions(bytes) ? null : tryDecodeUtf8(bytes);
         if (asText !== null) return { content: asText, sourceScopeId: granted.ownerScopeId, shared: true };
         if (granted.carried) {
           return {
@@ -938,6 +940,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         await deps.sandbox.writeFileBytes(handle, materializedPath, bytes);
         signal?.throwIfAborted();
         return {
+          ...fileReadResult(materializedPath, bytes, granted.ownerScopeId),
           content:
             `[binary file materialized into the sandbox at ${materializedPath} (${bytes.length} bytes) — ` +
             `to send it, attach it to a message: name \`${materializedPath}\` in the surface \`post\` action's \`files\`]`,
@@ -949,11 +952,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       signal?.throwIfAborted();
       const handle = await deps.provision();
       return timed("file_op", async () => {
-        const direct = await withAbort(() => deps.sandbox.readFile(handle, path), signal);
-        if (direct !== null) return { content: direct, sourceScopeId: writableScopeId };
+        const direct = await withAbort(() => deps.sandbox.readFileBytes(handle, path), signal);
+        if (direct !== null) return fileReadResult(path, direct, writableScopeId);
         for (const mount of fallbackMounts) {
-          const v = await withAbort(() => deps.sandbox.readFile(handle, join(mount.mountPath, path)), signal);
-          if (v !== null) return { content: v, sourceScopeId: mount.scopeId };
+          const v = await withAbort(() => deps.sandbox.readFileBytes(handle, join(mount.mountPath, path)), signal);
+          if (v !== null) return fileReadResult(path, v, mount.scopeId);
         }
         return { content: null, sourceScopeId: null };
       });
@@ -1457,9 +1460,31 @@ function audienceFromGrantees(
   };
 }
 
+function fileReadResult(path: string, bytes: Uint8Array, sourceScopeId: ScopeId | null): ReadResult {
+  const dimensions = sniffImageDimensions(bytes);
+  if (dimensions || isVisionAttachment({ name: path, mimetype: "" })) {
+    if (bytes.length > MAX_VISION_IMAGE_BYTES)
+      throw new Error(`Image exceeds the ${MAX_VISION_IMAGE_BYTES}-byte limit; resize it before reading.`);
+    if (!dimensions || dimensions.width === 0 || dimensions.height === 0)
+      throw new Error("Invalid image; render a valid PNG, JPEG, GIF, or WebP before reading.");
+    return {
+      content: `[image: ${path}]`,
+      image: { mimeType: `image/${dimensions.format}`, data: Buffer.from(bytes).toString("base64") },
+      sourceScopeId,
+    };
+  }
+  return {
+    content:
+      tryDecodeUtf8(bytes) ??
+      "[binary file: use execute to process it; for visual inspection, render PNG, JPEG, GIF, or WebP]",
+    sourceScopeId,
+  };
+}
+
 function tryDecodeUtf8(bytes: Uint8Array): string | null {
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return text.includes("\0") ? null : text;
   } catch {
     return null;
   }

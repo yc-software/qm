@@ -546,6 +546,14 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           if (method === "item/completed") {
             let stamp: Awaited<ReturnType<typeof recordSteerIntake>> | undefined;
             let tapeItem = item;
+            if (item.type === "dynamicToolCall" && Array.isArray(item.contentItems)) {
+              tapeItem = {
+                ...item,
+                contentItems: item.contentItems.map((part) =>
+                  part.type === "inputImage" ? { type: "inputText", text: "[image omitted]" } : part,
+                ),
+              };
+            }
             if (
               threadId === state.threadId &&
               item.type === "userMessage" &&
@@ -622,7 +630,14 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
               }
               void state.interrupt?.();
             });
-          return { contentItems: [{ type: "inputText", text: output }], success: true };
+          return {
+            contentItems: (result.content ?? []).map((part) =>
+              part.type === "image"
+                ? { type: "inputImage", imageUrl: `data:${part.mimeType};base64,${part.data}` }
+                : { type: "inputText", text: part.text },
+            ),
+            success: true,
+          };
         } catch (error) {
           const output = error instanceof Error ? error.message : String(error);
           state.responseItems.push({ type: "function_call_output", call_id: callId, output });

@@ -1,4 +1,6 @@
 import { tool, type Plugin, type ToolContext } from "@opencode-ai/plugin";
+import type { ToolAttachment } from "@opencode-ai/plugin/tool";
+import { stripDataUrls } from "./harness.ts";
 
 type JsonSchema = {
   type?: string | string[];
@@ -43,6 +45,7 @@ type SessionContext = {
 
 type ToolResponse = {
   output: string;
+  attachments?: ToolAttachment[];
   terminate?: boolean;
 };
 
@@ -237,6 +240,7 @@ const OpenCodeBridgePlugin: Plugin = async ({ client }) => {
           if (result.terminate) {
             await client.session.abort({ path: { id: context.sessionID } }).catch(() => undefined);
           }
+          if (result.attachments?.length) return { output: result.output, attachments: result.attachments };
           return result.output;
         },
       }),
@@ -284,7 +288,7 @@ const OpenCodeBridgePlugin: Plugin = async ({ client }) => {
       }
       await request(`session/${encodeURIComponent(sessionID)}/capture`, {
         method: "POST",
-        body: JSON.stringify({ system: context.systemPrompt ?? "", messages: output.messages }),
+        body: JSON.stringify({ system: context.systemPrompt ?? "", messages: stripDataUrls(output.messages) }),
       });
     },
   };
