@@ -71,6 +71,8 @@ Write the file with `files` action `write`, verify the result locally (`curl -fs
 then `chromium --headless --no-sandbox --disable-gpu --screenshot=page.png http://localhost:<port>`
 and `files({ action: "read", path: "page.png" })` when a render check matters), and serve it with the `publish` skill to confirm visual
 accuracy and hand over a stable link.
+Use the preview preparation steps in `taste-skill` when a screenshot needs resizing or
+conversion; the file reader does not perform those operations.
 
 ## Font Substitution Reference
 

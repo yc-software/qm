@@ -2,7 +2,7 @@ import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker 
 import { withAbort } from "../util/async.ts";
 import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-types.ts";
 import { readContextFile } from "../resolution/context-files.ts";
-import { downscaleVisionImage, hasCompleteImagePayload, sniffImageDimensions } from "../core/image-downscale.ts";
+import { sniffImageDimensions } from "../core/image-downscale.ts";
 import { contextMemory, type TurnContext } from "../resolution/turn-context.ts";
 import { randomUUID } from "node:crypto";
 import type { SandboxAccessPlan, SandboxResources } from "../sandbox/sandbox-resources.ts";
@@ -940,7 +940,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         await deps.sandbox.writeFileBytes(handle, materializedPath, bytes);
         signal?.throwIfAborted();
         return {
-          ...(await withAbort(() => fileReadResult(materializedPath, bytes, granted.ownerScopeId, signal), signal)),
+          ...fileReadResult(materializedPath, bytes, granted.ownerScopeId),
           content:
             `[binary file materialized into the sandbox at ${materializedPath} (${bytes.length} bytes) — ` +
             `to send it, attach it to a message: name \`${materializedPath}\` in the surface \`post\` action's \`files\`]`,
@@ -953,10 +953,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const handle = await deps.provision();
       return timed("file_op", async () => {
         const direct = await withAbort(() => deps.sandbox.readFileBytes(handle, path), signal);
-        if (direct !== null) return withAbort(() => fileReadResult(path, direct, writableScopeId, signal), signal);
+        if (direct !== null) return fileReadResult(path, direct, writableScopeId);
         for (const mount of fallbackMounts) {
           const v = await withAbort(() => deps.sandbox.readFileBytes(handle, join(mount.mountPath, path)), signal);
-          if (v !== null) return withAbort(() => fileReadResult(path, v, mount.scopeId, signal), signal);
+          if (v !== null) return fileReadResult(path, v, mount.scopeId);
         }
         return { content: null, sourceScopeId: null };
       });
@@ -1460,30 +1460,16 @@ function audienceFromGrantees(
   };
 }
 
-async function fileReadResult(
-  path: string,
-  bytes: Uint8Array,
-  sourceScopeId: ScopeId | null,
-  signal?: AbortSignal,
-): Promise<ReadResult> {
+function fileReadResult(path: string, bytes: Uint8Array, sourceScopeId: ScopeId | null): ReadResult {
   const dimensions = sniffImageDimensions(bytes);
   if (dimensions || isVisionAttachment({ name: path, mimetype: "" })) {
     if (bytes.length > MAX_VISION_IMAGE_BYTES)
       throw new Error(`Image exceeds the ${MAX_VISION_IMAGE_BYTES}-byte limit; resize it before reading.`);
-    if (
-      !dimensions ||
-      dimensions.width === 0 ||
-      dimensions.height === 0 ||
-      !hasCompleteImagePayload(bytes, dimensions.format)
-    )
+    if (!dimensions || dimensions.width === 0 || dimensions.height === 0)
       throw new Error("Invalid image; render a valid PNG, JPEG, GIF, or WebP before reading.");
-    const mimeType = `image/${dimensions.format}`;
-    const imageBytes = await downscaleVisionImage(bytes, mimeType, undefined, signal);
-    if (imageBytes.length > MAX_VISION_IMAGE_BYTES)
-      throw new Error(`Image exceeds the ${MAX_VISION_IMAGE_BYTES}-byte limit after resizing.`);
     return {
       content: `[image: ${path}]`,
-      image: { mimeType, data: Buffer.from(imageBytes).toString("base64") },
+      image: { mimeType: `image/${dimensions.format}`, data: Buffer.from(bytes).toString("base64") },
       sourceScopeId,
     };
   }

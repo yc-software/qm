@@ -74,20 +74,6 @@ for (const [format, data] of Object.entries(images)) {
     ]);
     assert.equal(JSON.stringify(entries).includes(data), false);
   });
-
-  test(`incomplete ${format} files fail at the tool boundary`, async () => {
-    const bytes = Buffer.from(data, "base64");
-    const headerSize =
-      format === "jpeg" ? bytes.indexOf(Buffer.from([0xff, 0xda])) : { png: 24, gif: 10, webp: 30 }[format]!;
-    const { read } = setup({
-      [`header.${format}`]: bytes.subarray(0, headerSize),
-      [`truncated.${format}`]: bytes.subarray(0, -1),
-      [`trailing.${format}`]: Buffer.concat([bytes, Buffer.from("trailing data")]),
-    });
-    await assert.rejects(read(`header.${format}`), /Invalid image/);
-    await assert.rejects(read(`truncated.${format}`), /Invalid image/);
-    assert.equal((await read(`trailing.${format}`)).content[1]?.type, "image");
-  });
 }
 
 test("image headers determine the MIME type regardless of the filename", async () => {
@@ -116,13 +102,16 @@ test("text, empty files, missing files and read-only mounts retain their behavio
 test("invalid, empty, oversized and unsupported images never become binary model text", async () => {
   const oversized = Buffer.alloc(5_000_001);
   png.copy(oversized);
+  const zeroWidth = Buffer.from(png);
+  zeroWidth.writeUInt32BE(0, 16);
   const { read } = setup({
     "invalid.png": Buffer.from("not an image"),
     "empty.png": Buffer.alloc(0),
+    "zero-width.png": zeroWidth,
     "large.png": oversized,
     "unsupported.bmp": Buffer.from([0x42, 0x4d, 0, 255]),
   });
-  for (const path of ["invalid.png", "empty.png"]) await assert.rejects(read(path), /Invalid image/);
+  for (const path of ["invalid.png", "empty.png", "zero-width.png"]) await assert.rejects(read(path), /Invalid image/);
   await assert.rejects(read("large.png"), /5000000-byte limit/);
   assert.match(JSON.stringify((await read("unsupported.bmp")).content), /binary file.*PNG, JPEG, GIF, or WebP/);
 });
