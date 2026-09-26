@@ -116,6 +116,7 @@ let dockApi: DockviewApi | null = null;
 let toastEl: HTMLElement | null = null;
 let lastLayout: SerializedDockview | null = null;
 let pendingSeed: PendingSeed | null = null;
+let restoringLayout = false;
 const paneContents = new Map<string, PaneContent>();
 const paneTabs = new Set<PaneTab>();
 const groupActions = new Set<GroupActions>();
@@ -301,6 +302,7 @@ function ensureCanvas(): boolean {
   dockApi = buildDock();
   const seed = pendingSeed;
   pendingSeed = null;
+  restoringLayout = true;
   try {
     if (lastLayout) {
       dockApi.fromJSON(lastLayout);
@@ -314,7 +316,10 @@ function ensureCanvas(): boolean {
     canvasHost.replaceChildren();
     lastLayout = null;
     dockApi = buildDock();
+  } finally {
+    restoringLayout = false;
   }
+  for (const pane of paneContents.values()) void pane.load();
   ensureDeliveryStream();
   splitState.focusedId = dockApi.activePanel?.id ?? dockApi.panels[0]?.id ?? null;
   syncDocumentTitle();
@@ -999,8 +1004,8 @@ class PaneContent implements IContentRenderer {
     for (const handler of this.redrawOnResize) handler();
   }
 
-  private async load(): Promise<void> {
-    await Promise.resolve();
+  async load(): Promise<void> {
+    if (restoringLayout) return;
     if (this.loaded || this.disposed || !this.visible) return;
     this.loaded = true;
     this.syncDensity();

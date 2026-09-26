@@ -40,7 +40,7 @@ test("every new-chat affordance follows the shared placement rule", () => {
 
 test("a pane opened from a project's + starts its chat in that project", () => {
   assert.match(split, /scopeId\?: string;/, "PaneParams must carry the project");
-  const load = split.match(/private async load\(\): Promise<void> \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
+  const load = split.match(/async load\(\): Promise<void> \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.ok(load, "the pane loader not found");
   const seeded = load.indexOf("contextsState.list.find((c) => c.scopeId === scopeId)");
   assert.ok(seeded > 0, "the seed scope must resolve against contexts the viewer can actually use");
@@ -55,11 +55,11 @@ test("a pane is an element in this document — never a second copy of the app",
   assert.doesNotMatch(split, /defaultRenderer: "always"/, "a pane behind a tab must cost nothing until shown");
   assert.match(split, /createConversation\(\{/, "each pane owns a conversation instance");
   assert.match(split, /disposeConversation\(this\.conversation\)/, "and releases it when the pane closes");
-  const load = split.match(/private async load\(\): Promise<void> \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
+  const load = split.match(/async load\(\): Promise<void> \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.match(
     load,
-    /if \(this\.loaded \|\| this\.disposed\) return;/,
-    "a pane loads its transcript once, and never after it closes",
+    /if \(this\.loaded \|\| this\.disposed \|\| !this\.visible\) return;/,
+    "a visible pane loads its transcript once, and never after it closes",
   );
   assert.match(load, /if \(this\.disposed\) return;/, "and drops the continuation if the pane closed mid-load");
   assert.match(
