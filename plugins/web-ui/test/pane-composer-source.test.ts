@@ -6,7 +6,7 @@ import { JSDOM } from "jsdom";
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 const composer = readFileSync(new URL("../src/composer.ts", import.meta.url), "utf8");
 
-test("pane composers default to the full-width input above a separate toolbar", () => {
+test("single-pane composers default to the full-width input above a separate toolbar", () => {
   assert.doesNotMatch(css, /\.embed-layout/, "panes are elements now, not framed documents");
   const wrap = css.match(/^\.composer-wrap \{[^}]*\}/m)?.[0] ?? "";
   assert.doesNotMatch(wrap, /display: flex;/);
@@ -41,19 +41,38 @@ test("pane settings control is visible without hover", () => {
   assert.doesNotMatch(block, /opacity: 0;/);
 });
 
-test("short or narrow split panes put the textarea and toolbar on the same grid row", () => {
-  assert.match(css, /\.split-pane-content \{\s*container: split-pane \/ size;/);
-  const short = css.slice(css.indexOf("@container split-pane (max-height: 480px) or (max-width: 560px)"));
-  assert.match(css, /@container split-pane \(max-height: 480px\) or \(max-width: 560px\)/);
-  assert.match(short, /\.composer-wrap \{[^}]*display: grid;[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/);
-  assert.match(short, /\.composer-wrap > \* \{\s*grid-column: 1 \/ -1;/);
-  assert.match(short, /\.composer-input \{[^}]*grid-column: 1;[^}]*min-height: 34px;[^}]*max-height: 120px;/);
-  assert.match(short, /\.composer-toolbar \{[^}]*grid-column: 2;[^}]*flex-wrap: nowrap;/);
-  assert.doesNotMatch(short, /\.composer-input \{[^}]*(?<!-)height:/);
-  assert.match(short, /\.composer-input::placeholder \{\s*white-space: nowrap;/);
+test("multiview composers use one row regardless of pane dimensions and reset in single view", () => {
+  assert.doesNotMatch(css, /@container split-pane \(max-height: 480px\) or \(max-width: 560px\)/);
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter(([, selector]) => selector.includes(".split-canvas:not(.single-pane) .composer-wrap"))
+    .map(([rule]) => rule)
+    .join("\n");
+  const dom = new JSDOM(`<style>${rules}</style><div class="split-canvas">
+    <div class="split-pane-content" style="width: 1050px; height: 510px">
+      <form class="composer-wrap">
+        <div class="attachment-strip"></div>
+        <textarea class="composer-input"></textarea>
+        <div class="composer-toolbar"></div>
+      </form>
+    </div>
+  </div>`);
+  const canvas = dom.window.document.querySelector(".split-canvas")!;
+  const style = (selector: string) => dom.window.getComputedStyle(canvas.querySelector(selector)!);
+  assert.equal(style(".composer-wrap").display, "grid");
+  assert.equal(style(".composer-wrap").gridTemplateColumns, "minmax(0, 1fr) auto");
+  assert.equal(style(".attachment-strip").gridColumn, "1 / -1");
+  assert.equal(style(".composer-input").gridColumn, "1");
+  assert.equal(style(".composer-toolbar").gridColumn, "2");
+  assert.equal(style(".composer-input").minHeight, "34px");
+  assert.equal(style(".composer-input").maxHeight, "120px");
+  canvas.classList.add("single-pane");
+  assert.notEqual(style(".composer-wrap").display, "grid");
+  assert.notEqual(style(".composer-input").gridColumn, "1");
+  assert.notEqual(style(".composer-toolbar").gridColumn, "2");
+  dom.window.close();
 });
 
-test("narrow short panes hide runtime labels, not the accessible picker", () => {
+test("narrow panes hide runtime labels, not the accessible picker", () => {
   const narrow = css.slice(css.indexOf("@container split-pane (max-width: 470px)"));
   assert.match(narrow, /\.loadout-button \.menu-label,/);
   assert.match(narrow, /\.loadout-button \.menu-suffix \{\s*display: none;/);
@@ -65,7 +84,7 @@ test("narrow short panes hide runtime labels, not the accessible picker", () => 
   );
 });
 
-test("the smallest short panes leave text space even with stop controls", () => {
+test("the smallest panes leave text space even with stop controls", () => {
   const minimum = css.slice(css.indexOf("@container split-pane (max-width: 300px)"));
   assert.match(minimum, /\.composer-toolbar \.stop-btn \{\s*width: 28px;\s*height: 28px;\s*min-height: 28px;/);
   assert.match(minimum, /\.composer-attach \{\s*transform: none;/);

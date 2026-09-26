@@ -12505,42 +12505,39 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   flex-wrap: wrap;
 }
 
-@container split-pane (max-height: 480px) or (max-width: 560px) {
-  .composer-wrap {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 6px;
-    padding: 6px;
-    border-radius: 16px;
-  }
-  .composer-wrap > * {
-    grid-column: 1 / -1;
-  }
-  .composer-wrap .composer-input {
-    grid-column: 1;
-    min-width: 0;
-    min-height: 34px;
-    max-height: 120px;
-    padding: 6px 8px;
-  }
-  .composer-wrap .composer-input::placeholder {
-    white-space: nowrap;
-  }
-  .composer-wrap .composer-toolbar {
-    grid-column: 2;
-    flex-wrap: nowrap;
-    gap: 4px;
-  }
-  .composer-wrap .composer-left,
-  .composer-wrap .composer-right {
-    width: auto;
-    flex-wrap: nowrap;
-    gap: 4px;
-  }
-  .composer-wrap .composer-toolbar .menu-button.loadout-button {
-    max-width: 180px;
-  }
+.split-canvas:not(.single-pane) .composer-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+}
+.split-canvas:not(.single-pane) .composer-wrap > * {
+  grid-column: 1 / -1;
+}
+.split-canvas:not(.single-pane) .composer-wrap .composer-input {
+  grid-column: 1;
+  min-width: 0;
+  min-height: 34px;
+  max-height: 120px;
+  padding: 6px 8px;
+}
+.split-canvas:not(.single-pane) .composer-wrap .composer-input::placeholder {
+  white-space: nowrap;
+}
+.split-canvas:not(.single-pane) .composer-wrap .composer-toolbar {
+  grid-column: 2;
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+.split-canvas:not(.single-pane) .composer-wrap .composer-left,
+.split-canvas:not(.single-pane) .composer-wrap .composer-right {
+  width: auto;
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+.split-canvas:not(.single-pane) .composer-wrap .composer-toolbar .menu-button.loadout-button {
+  max-width: 180px;
 }
 
 @container split-pane (max-width: 470px) {
