@@ -61,6 +61,7 @@ import {
   reconcileLoadout,
   upsertLoadout,
   effortLevelsForHarness,
+  resolveEffort,
   compatibleHarnessOptions,
   modelLoadoutOptions,
   type LoadoutEntry,
@@ -248,8 +249,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         (restoredLoadout?.value === selected?.value ? restoredLoadout?.effort : undefined) ??
         (getRuntimeConfig(scopeKey())?.effective.effortLevel as EffortLevel | undefined) ??
         defaultEffortForModel(selected?.model);
-      const levels = effortLevelsForHarness(selected?.harnessId ?? "", selected?.model, effort);
-      return levels.some((level) => level.value === effort) ? effort : levels[0]!.value;
+      return resolveEffort(selected?.harnessId ?? "", selected?.model, effort);
     },
     set effortLevel(value: EffortLevel) {
       ++effortSelectionRevision;
@@ -980,12 +980,9 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function normalizeLoadoutEntry(entry: LoadoutEntry, option: ModelOption): LoadoutEntry {
-    const levels = effortLevelsForHarness(option.harnessId, option.model, entry.effort);
-    const defaultEffort = defaultEffortForModel(option.model);
-    const fallbackEffort = levels.some((level) => level.value === defaultEffort) ? defaultEffort : levels[0]!.value;
     return {
       value: option.value,
-      effort: levels.some((level) => level.value === entry.effort) ? entry.effort : fallbackEffort,
+      effort: resolveEffort(option.harnessId, option.model, entry.effort, defaultEffortForModel(option.model)),
       fast:
         entry.fast && harnessSupportsFastMode(option.harnessId) && modelSupportsFastMode(scopeKey(), option.model.id),
     };
@@ -1824,9 +1821,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const selected = currentModelOption();
     if (
       !selected ||
-      !effortLevelsForHarness(selected.harnessId, selected.model, composerState.effortLevel).some(
-        (option) => option.value === level,
-      )
+      !effortLevelsForHarness(selected.harnessId, selected.model).some((option) => option.value === level)
     )
       return;
     composerState.effortLevel = level;

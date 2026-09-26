@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   compatibleHarnessOptions,
   effortLevelsForHarness,
+  resolveEffort,
   loadoutModelId,
   modelLoadoutOptions,
   parseLoadout,
@@ -10,7 +11,7 @@ import {
   upsertLoadout,
   type LoadoutEntry,
 } from "../src/composer-loadout.ts";
-import type { ModelOption } from "../src/model-options.ts";
+import { effortLabel, type ModelOption } from "../src/model-options.ts";
 
 function entry(value: string, effort: LoadoutEntry["effort"] = "auto", fast = false): LoadoutEntry {
   return { value, effort, fast };
@@ -210,8 +211,7 @@ test("harness effort choices exclude unsupported settings and label extra high c
   );
   for (const harnessId of ["pi", "claude", "codex"])
     assert.equal(effortLevelsForHarness(harnessId).find(({ value }) => value === "xhigh")?.label, "Extra high");
-  for (const harnessId of ["opencode", "mock", "unknown"])
-    assert.deepEqual(effortLevelsForHarness(harnessId), [{ value: "auto", label: "Legacy default" }]);
+  for (const harnessId of ["opencode", "mock", "unknown"]) assert.deepEqual(effortLevelsForHarness(harnessId), []);
 });
 
 test("native reasoning choices require model and harness metadata while legacy settings survive", () => {
@@ -228,21 +228,37 @@ test("native reasoning choices require model and harness metadata while legacy s
     { value: "low", label: "Low" },
     { value: "high", label: "High" },
   ]);
-  assert.equal(effortLevelsForHarness("pi", model, "auto")[0]?.label, "Legacy default");
   for (const harness of ["claude", "codex"])
-    assert.ok(
-      effortLevelsForHarness(harness, model, "adaptive").every(
-        ({ value }) => value !== "adaptive" && value !== "default",
-      ),
-    );
-  for (const selected of ["auto", "adaptive", "default"])
-    assert.ok(
-      effortLevelsForHarness("pi", option("pi:one").model, selected).every(
-        ({ value }) => value !== "adaptive" && value !== "default",
-      ),
-    );
+    assert.ok(effortLevelsForHarness(harness, model).every(({ value }) => value !== "adaptive" && value !== "default"));
+  assert.ok(
+    effortLevelsForHarness("pi", option("pi:one").model).every(
+      ({ value }) => value !== "adaptive" && value !== "default",
+    ),
+  );
   const withoutEfforts = { ...model, effortLevelsByHarness: { pi: [] } };
-  assert.deepEqual(effortLevelsForHarness("pi", withoutEfforts), [{ value: "auto", label: "Legacy default" }]);
+  assert.deepEqual(effortLevelsForHarness("pi", withoutEfforts), []);
   const saved = [entry("pi:one", "adaptive"), entry("pi:two", "default"), entry("pi:three", "auto")];
   assert.deepEqual(parseLoadout(JSON.stringify(saved)), saved);
+});
+
+test("no effort choice is ever labelled Legacy default", () => {
+  const model = {
+    ...option("pi:one").model,
+    effortLevelsByHarness: { pi: ["auto", "adaptive", "default", "low", "high"], claude: ["auto", "low"] },
+  };
+  for (const harnessId of ["pi", "claude", "codex", "opencode"])
+    for (const candidate of [undefined, model])
+      assert.ok(effortLevelsForHarness(harnessId, candidate).every(({ value, label }) => value !== "auto" && label));
+  assert.equal(effortLabel("auto"), "");
+});
+
+test("a saved unset effort stays unset instead of being rewritten to a visible level", () => {
+  const model = { ...option("pi:one").model, effortLevelsByHarness: { pi: ["auto", "default", "low", "high"] } };
+  assert.equal(resolveEffort("pi", model, "auto"), "auto");
+  assert.equal(resolveEffort("codex", undefined, "auto"), "auto");
+  assert.equal(resolveEffort("opencode", undefined, "high"), "auto");
+  assert.equal(resolveEffort("pi", model, "high"), "high");
+  assert.equal(resolveEffort("pi", model, "ultracode", "low"), "low");
+  assert.equal(resolveEffort("pi", model, "ultracode", "auto"), "default");
+  assert.deepEqual(parseLoadout(JSON.stringify([entry("pi:one", "auto")])), [entry("pi:one", "auto")]);
 });

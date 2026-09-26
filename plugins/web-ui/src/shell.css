@@ -3930,8 +3930,8 @@ qm-markdown .tok-in {
 }
 .effort-peak {
   background-image:
-    linear-gradient(105deg, transparent 43%, rgb(0 0 0 / 0.3) 50%, transparent 57%),
-    linear-gradient(90deg, #cf361f, #af5614, #8a6b07, #607825, #317e43, #347a78, #2b769f, #5465d4, #a72aec);
+    linear-gradient(105deg, transparent 43%, rgb(0 0 0 / 0.14) 50%, transparent 57%),
+    linear-gradient(90deg, #ac5446, #92643b, #7f6c34, #547731, #327b51, #317878, #3e7398, #5e65bd, #8e53b9);
   background-repeat: no-repeat;
   background-size:
     180% 100%,
@@ -3972,8 +3972,8 @@ qm-markdown .tok-in {
 :root.dark .effort-peak,
 .dark .effort-peak {
   background-image:
-    linear-gradient(105deg, transparent 43%, rgb(255 255 255 / 0.95) 50%, transparent 57%),
-    linear-gradient(90deg, #e45d49, #e8843a, #f6cc46, #abcc59, #5cc074, #55b7b5, #5ba9d3, #7b88de, #c46bf5);
+    linear-gradient(105deg, transparent 43%, rgb(255 255 255 / 0.45) 50%, transparent 57%),
+    linear-gradient(90deg, #cf8a80, #c49164, #b59945, #76aa41, #42af70, #41abab, #6da2c7, #9297d5, #b58bd3);
 }
 @supports not ((background-clip: text) or (-webkit-background-clip: text)) {
   .effort-peak {

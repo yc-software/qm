@@ -643,7 +643,7 @@ test("the personal-account picker preserves composer choices and saves context d
     });
     assert.equal(context.contextModelState.config.effective.modelId, "beta");
     config.modelCatalog!.alpha!.effortLevelsByHarness = {
-      pi: ["auto", "adaptive", "default", "low", "high"],
+      pi: ["auto", "adaptive", "default", "low", "high", "xhigh", "max", "ultracode"],
       claude: ["auto", "low", "high"],
     };
     config.effective = { harnessId: "pi", modelId: "alpha", effortLevel: "auto" };
@@ -651,12 +651,21 @@ test("the personal-account picker preserves composer choices and saves context d
     localStorage.removeItem("web-ui:loadout");
     await composer!.refreshRuntimeSelection(null, agent, true);
     await mount();
+    assert.equal(composer!.state.effortLevel, "auto");
+    assert.equal(host.querySelector(".loadout-button .menu-suffix"), null);
+    assert.doesNotMatch(button(".loadout-button").getAttribute("aria-label") ?? "", /effort/);
     button('[data-loadout-section="effort"]').click();
     const effortChoices = () => [...host.querySelectorAll<HTMLButtonElement>(".loadout-effort")];
     assert.deepEqual(
       effortChoices().map((item) => item.textContent?.trim()),
-      ["Legacy default", "Auto", "Provider default", "Low", "High"],
+      ["Auto", "Provider default", "Low", "High", "Extra high", "Max", "Ultracode"],
     );
+    assert.deepEqual(
+      [...host.querySelectorAll(".loadout-effort .effort-peak")].map((item) => item.textContent?.trim()),
+      ["Ultracode"],
+    );
+    assert.ok(effortChoices().every((item) => item.getAttribute("aria-checked") === "false"));
+    assert.doesNotMatch(host.textContent ?? "", /Legacy default/);
     effortChoices()
       .find((item) => item.textContent?.trim() === "Auto")!
       .click();

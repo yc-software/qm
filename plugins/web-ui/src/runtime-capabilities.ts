@@ -3,7 +3,6 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultracode" | "auto" | "adaptive" | "default";
 
 export const EFFORT_LEVELS: Array<{ value: EffortLevel; label: string }> = [
-  { value: "auto", label: "Legacy default" },
   { value: "adaptive", label: "Auto" },
   { value: "default", label: "Provider default" },
   { value: "low", label: "Low" },
@@ -15,7 +14,7 @@ export const EFFORT_LEVELS: Array<{ value: EffortLevel; label: string }> = [
 ];
 
 export function effortLabel(level: EffortLevel): string {
-  return EFFORT_LEVELS.find((option) => option.value === level)?.label ?? level;
+  return EFFORT_LEVELS.find((option) => option.value === level)?.label ?? "";
 }
 
 export function harnessSupportsEffort(harnessId: string): boolean {

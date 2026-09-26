@@ -30,7 +30,7 @@ function rampAfter(marker: string): string[] {
   return [...spectrum![1]!.matchAll(/#[0-9a-f]{6}/g)].map((m) => m[0]);
 }
 
-test("the Extra high spectrum clears AA on the surfaces it is painted on", () => {
+test("the Ultracode spectrum clears AA on the surfaces it is painted on", () => {
   const light = rampAfter(".effort-peak {");
   const dark = rampAfter(":root.dark .effort-peak,");
   assert.equal(light.length, 9);
@@ -64,4 +64,22 @@ test("the spectrum never leaves the label invisible when the paint is dropped", 
     assert.match(block, /color: inherit;/, `${guard} must restore a visible colour`);
   }
   assert.match(css, /\.effort-peak::selection \{\s*color: var\(--foreground\);/);
+});
+
+function saturation(hex: string): number {
+  const [r, g, b] = [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r!, g!, b!);
+  const min = Math.min(r!, g!, b!);
+  const lightness = (max + min) / 2;
+  return max === min ? 0 : (max - min) / (1 - Math.abs(2 * lightness - 1));
+}
+
+test("the Ultracode spectrum stays soft rather than saturated", () => {
+  for (const stop of [...rampAfter(".effort-peak {"), ...rampAfter(":root.dark .effort-peak,")])
+    assert.ok(saturation(stop) <= 0.5, `${stop} is ${saturation(stop).toFixed(2)} saturated`);
+  const glints = [...css.matchAll(/linear-gradient\(105deg,[^)]*rgb\((?:0 0 0|255 255 255) \/ (0?\.\d+)\)/g)].map((m) =>
+    Number(m[1]),
+  );
+  assert.equal(glints.length, 2);
+  assert.ok(glints.every((alpha) => alpha <= 0.5));
 });

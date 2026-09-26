@@ -4137,7 +4137,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       effort: Type.Optional(
         Type.String({
           description:
-            "Use modelCatalog[modelId].effortLevelsByHarness[harnessId] from get. adaptive = native Auto; default = provider default; auto = legacy harness default, not adaptive reasoning.",
+            "Use modelCatalog[modelId].effortLevelsByHarness[harnessId] from get. adaptive = native Auto; default = provider default; auto = unset, so the harness picks its usual level (not adaptive reasoning).",
         }),
       ),
       fastMode: Type.Optional(Type.Boolean()),

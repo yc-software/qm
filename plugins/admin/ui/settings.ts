@@ -55,10 +55,7 @@ export class SettingsState extends SettingState {
   get efforts(): string[] {
     const advertised = this.models.find((model) => model.id === this.draft.modelId)?.effortLevels;
     const levels: string[] = advertised ?? this.context.thinkingLevelsByHarness?.[this.draft.harnessId] ?? [];
-    const choices = levels.filter(
-      (level) => level !== "auto" && (advertised || (level !== "adaptive" && level !== "default")),
-    );
-    return this.draft.effortLevel === "auto" || !choices.length ? ["auto", ...choices] : choices;
+    return levels.filter((level) => level !== "auto" && (advertised || (level !== "adaptive" && level !== "default")));
   }
   get fastCapable() {
     return (
@@ -70,8 +67,8 @@ export class SettingsState extends SettingState {
     if (!runtimeKeys.includes(this.key)) return;
     if (!this.harnesses.includes(this.draft.harnessId)) this.draft.harnessId = this.harnesses[0];
     if (!this.models.some((m) => m.id === this.draft.modelId)) this.draft.modelId = this.models[0]?.id || "";
-    if (!this.efforts.includes(this.draft.effortLevel))
-      this.draft.effortLevel = this.efforts.includes("auto") ? "auto" : this.efforts[0];
+    if (this.draft.effortLevel !== "auto" && !this.efforts.includes(this.draft.effortLevel))
+      this.draft.effortLevel = this.efforts[0] ?? "auto";
     if (!this.fastCapable) this.draft.fastMode = false;
   }
   change(field: string, value: unknown) {
@@ -162,7 +159,6 @@ const harnessLabels: Record<string, string> = {
   claude: "Claude Code",
 };
 const effortLabels: Record<string, string> = {
-  auto: "Legacy default",
   adaptive: "Auto",
   default: "Provider default",
   low: "Low",
@@ -247,10 +243,15 @@ function card(s: SettingsState) {
             <label for=${`${prefix}-effort`}>Reasoning level</label
             ><select
               id=${`${prefix}-effort`}
-              ?disabled=${purpose && s.draft.inherit}
+              ?disabled=${(purpose && s.draft.inherit) || !s.efforts.length}
               .value=${s.draft.effortLevel || "auto"}
               @change=${(e: Event) => s.change("effortLevel", value(e))}
             >
+              ${
+                (s.draft.effortLevel || "auto") === "auto"
+                  ? html`<option value="auto" selected hidden>Not set</option>`
+                  : null
+              }
               ${repeat(
                 s.efforts,
                 (id) => id,
