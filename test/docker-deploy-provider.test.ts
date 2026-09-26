@@ -36,11 +36,138 @@ test("Docker deployments use isolated networks and remove them on destroy", asyn
 
   const firstName = `agent-deploy-${first.id.slice(0, 12)}`;
   const secondName = `agent-deploy-${second.id.slice(0, 12)}`;
+  const firstVolume = `qm-app-${first.id.slice(0, 12)}`;
   assert.ok(calls.some((args) => args.join(" ") === `network create ${firstName}-net`));
   assert.ok(calls.some((args) => args.join(" ") === `network create ${secondName}-net`));
   assert.ok(calls.some((args) => args.join(" ").includes(`--name ${firstName} --network ${firstName}-net`)));
   assert.ok(calls.some((args) => args.join(" ").includes(`--name ${secondName} --network ${secondName}-net`)));
   assert.ok(calls.some((args) => args.join(" ") === `network rm ${firstName}-net`));
+  assert.ok(calls.some((args) => args.join(" ") === `volume rm ${firstVolume}`));
+});
+
+test("Docker Apps copy snapshots through managed volumes before starting", async () => {
+  const calls: string[][] = [];
+  const dockerExec: DockerExec = async (args) => {
+    calls.push(args);
+    return {
+      code: args[1] === "inspect" ? 1 : 0,
+      stdout: "",
+      stderr: args[1] === "inspect" ? "No such network" : "",
+    };
+  };
+  const store = createDeployStore();
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U-app-volume"),
+    createdBy: "U-app-volume",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/app-volume",
+  });
+  const provider = createDockerDeployProvider({ dockerExec });
+
+  await provider.apply(deployment, deployment.versions[0]!);
+
+  const app = `agent-deploy-${deployment.id.slice(0, 12)}`;
+  const volume = `qm-app-${deployment.id.slice(0, 12)}`;
+  const create = calls.findIndex((args) => args[0] === "create" && args.includes(app));
+  const copy = calls.findIndex((args) => args[0] === "cp" && args.includes(`${app}:/app`));
+  const start = calls.findIndex((args) => args[0] === "start" && args.includes(app));
+  assert.ok(calls.some((args) => args.join(" ") === `volume create ${volume}`));
+  assert.ok(create >= 0);
+  assert.ok(copy > create);
+  assert.ok(start > copy);
+  assert.ok(calls[create]!.includes(`${volume}:/app`));
+  assert.equal(calls[create]!.includes(`${deployment.versions[0]!.snapshotDir}:/app:ro`), false);
+});
+
+test("Docker Apps remove the managed volume when snapshot delivery fails", async () => {
+  const calls: string[][] = [];
+  const dockerExec: DockerExec = async (args) => {
+    calls.push(args);
+    if (args[0] === "network" && args[1] === "inspect") return { code: 1, stdout: "", stderr: "No such network" };
+    if (args[0] === "cp") return { code: 1, stdout: "", stderr: "copy failed" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const store = createDeployStore();
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U-app-volume-failure"),
+    createdBy: "U-app-volume-failure",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/app-volume-failure",
+  });
+  const provider = createDockerDeployProvider({ dockerExec });
+  const app = `agent-deploy-${deployment.id.slice(0, 12)}`;
+  const volume = `qm-app-${deployment.id.slice(0, 12)}`;
+
+  await assert.rejects(provider.apply(deployment, deployment.versions[0]!), /snapshot copy failed: copy failed/);
+
+  const copy = calls.findIndex((args) => args[0] === "cp");
+  assert.ok(calls.findLastIndex((args) => args.join(" ") === `rm -f ${app}`) > copy);
+  assert.ok(calls.findLastIndex((args) => args.join(" ") === `volume rm ${volume}`) > copy);
+  assert.equal(
+    calls.some((args) => args[0] === "start" && args.includes(app)),
+    false,
+  );
+});
+
+test("Docker Apps remove their workload network when App-volume creation fails", async () => {
+  const calls: string[][] = [];
+  const dockerExec: DockerExec = async (args) => {
+    calls.push(args);
+    if (args[0] === "network" && args[1] === "inspect") return { code: 1, stdout: "", stderr: "No such network" };
+    if (args[0] === "volume" && args[1] === "create") return { code: 1, stdout: "", stderr: "volume unavailable" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const store = createDeployStore();
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U-app-volume-create-failure"),
+    createdBy: "U-app-volume-create-failure",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/app-volume-create-failure",
+  });
+  const provider = createDockerDeployProvider({ dockerExec });
+  const app = `agent-deploy-${deployment.id.slice(0, 12)}`;
+
+  await assert.rejects(provider.apply(deployment, deployment.versions[0]!), /volume create.*volume unavailable/);
+
+  assert.ok(calls.some((args) => args.join(" ") === `network rm ${app}-net`));
+});
+
+test("Docker Apps continue cleanup after managed-volume removal fails", async () => {
+  const calls: string[][] = [];
+  let deployedVolume = "";
+  const dockerExec: DockerExec = async (args) => {
+    calls.push(args);
+    if (args[0] === "network" && args[1] === "inspect") return { code: 1, stdout: "", stderr: "No such network" };
+    if (args[0] === "volume" && args[1] === "create") {
+      deployedVolume = args[2]!;
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    if (args[0] === "volume" && args[1] === "rm" && args[2] === deployedVolume) {
+      return { code: 1, stdout: "", stderr: "volume is in use" };
+    }
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const store = createDeployStore();
+  const first = await store.create({
+    ownerScopeId: scopeId("personal", "U-app-volume-destroy-failure"),
+    createdBy: "U-app-volume-destroy-failure",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/app-volume-destroy-failure",
+  });
+  const second = await store.create({
+    ownerScopeId: scopeId("personal", "U-app-volume-destroy-retry"),
+    createdBy: "U-app-volume-destroy-retry",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/app-volume-destroy-retry",
+  });
+  const provider = createDockerDeployProvider({ dockerExec, basePort: 9800 });
+  const firstEndpoint = await provider.apply(first, first.versions[0]!);
+  const app = `agent-deploy-${first.id.slice(0, 12)}`;
+
+  await assert.rejects(provider.destroy(first), /docker volume rm.*volume is in use/);
+
+  assert.ok(calls.some((args) => args.join(" ") === `network rm ${app}-net`));
+  assert.deepEqual(await provider.apply(second, second.versions[0]!), firstEndpoint);
 });
 
 test("Docker provider migrates running deployments off the legacy shared network", async () => {
