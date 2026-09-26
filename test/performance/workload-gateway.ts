@@ -235,7 +235,7 @@ export function createGatewayFixture(profile: GatewayFixture, record: (row: Reco
         evidence.forwardedBodySha256 = sha(forwarded);
         const abort = new AbortController();
         res.on("close", () => abort.abort());
-        const upstreamResponse = await fetch(new URL(path, upstream), {
+        const upstreamResponse = await fetch(new URL("/v1/messages", upstream), {
           method: "POST",
           headers: {
             "content-type": "application/json",

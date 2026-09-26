@@ -164,6 +164,8 @@ test("TLS gateway verifies signed bodies and native catalog and screening client
       ["/v1/messages", { ...message.headers, "api-key": "qm-perf-wrong-secret-value" }, body],
       ["/v1/messages", (await signed("/v1/messages", body, new Date(Date.now() - 600000))).headers, body],
       ["/unknown", message.headers, body],
+      ["//127.0.0.1/v1/messages", message.headers, body],
+      ["/v1/messages?upstream=http://127.0.0.1", message.headers, body],
     ] as const) {
       const rejected = await request(url + path, { method: "POST", headers, body: wire, dispatcher: agent });
       assert.equal(rejected.status, 400);

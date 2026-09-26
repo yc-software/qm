@@ -77,6 +77,8 @@ jobs:
   performance-harness:
     name: Performance harness
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     services:
       postgres:
         image: postgres:16
