@@ -1913,14 +1913,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             }
           > = [];
           const tapeMessage = async (message: unknown): Promise<void> => {
-            if (tapeError) return;
             const role = (message as { role?: string }).role;
             if (role !== "user" && role !== "assistant" && role !== "toolResult") return;
             const isTrigger = role === "user" && !tapedTriggerUser;
             if (isTrigger) tapedTriggerUser = true;
-            const callId = role === "toolResult" ? (message as { toolCallId?: unknown }).toolCallId : undefined;
-            const resultScope = typeof callId === "string" ? entry.ref.tapeResultScopes?.get(callId) : undefined;
-            if (typeof callId === "string") entry.ref.tapeResultScopes?.delete(callId);
             const steerAt =
               role === "user" && !isTrigger
                 ? pendingSteerTapeMeta.findIndex(
@@ -1930,7 +1926,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const steer = steerAt >= 0 ? pendingSteerTapeMeta.splice(steerAt, 1)[0] : undefined;
             if (steer) await thinkTail;
             const steerStamp = steer ? await recordSteerIntake(turn, steer) : undefined;
-            if (!turn.tape) return;
+            if (!turn.tape || tapeError) return;
+            const callId = role === "toolResult" ? (message as { toolCallId?: unknown }).toolCallId : undefined;
+            const resultScope = typeof callId === "string" ? entry.ref.tapeResultScopes?.get(callId) : undefined;
+            if (typeof callId === "string") entry.ref.tapeResultScopes?.delete(callId);
             const rec: NewTapeRecord = {
               kind: "message",
               harness: "pi",

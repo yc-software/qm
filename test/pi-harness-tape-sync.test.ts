@@ -507,3 +507,75 @@ for (const stopBeforeIntake of [false, true]) {
     }
   });
 }
+
+for (const failure of ["acknowledge", "tape"] as const) {
+  test(`a consumed steer is recorded when ${failure === "acknowledge" ? "its acknowledgement fails" : "an earlier tape append failed"}`, async () => {
+    const signals = createMemoryRunSignalStore();
+    if (failure === "acknowledge")
+      signals.acknowledge = async () => {
+        throw new Error("signal store unavailable");
+      };
+    const harness = createPiHarness({ apiKey: "sk-test", signals });
+    const sink: Sink = { entries: [], tape: [] };
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      if (++calls > 1) return sse(textReplyEvents("done"));
+      const events = textReplyEvents("");
+      events[1] = {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "read-memory", name: "memory", input: {} },
+      };
+      events[2] = {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: JSON.stringify({ action: "read" }) },
+      };
+      events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
+      return sse(events);
+    }) as typeof fetch;
+    try {
+      const turn = turnInput("steer-failure", sink, {
+        runId: "steer-failure",
+        tools: {
+          memoryRead: async () => {
+            await signals.send("steer-failure", { kind: "steer", text: "use the other file", ts: "fail.1" });
+            await new Promise((resolve) => setTimeout(resolve, 30));
+            return "saved facts";
+          },
+        } as HarnessTurnInput["tools"],
+        tape: async (rec: NewTapeRecord) => {
+          if (failure === "tape" && rec.kind === "message" && (rec.payload as { role?: string }).role === "toolResult")
+            throw new Error("tape insert refused");
+          sink.tape.push(rec);
+        },
+      });
+      const steered = () =>
+        sink.entries.filter((entry) => entry.type === "user" && (entry.payload as { steered?: boolean }).steered);
+      if (failure === "tape") {
+        await assert.rejects(harness.turns.runTurn(turn), /tape insert refused/);
+        assert.equal(steered().length, 1, "the consumed steer keeps its canonical intake entry");
+        assert.equal((await signals.pending("steer-failure")).length, 0, "the recorded steer is acknowledged");
+        assert.equal(
+          sink.tape.some((rec) => rec.meta?.ts === "fail.1"),
+          false,
+          "no tape row is written after the tape failed",
+        );
+      } else {
+        const result = await harness.turns.runTurn(turn);
+        assert.equal(result.reply, "done", "an acknowledgement failure does not tear down the live turn");
+        assert.equal(steered().length, 1);
+        assert.equal(sink.tape.find((rec) => rec.meta?.ts === "fail.1")?.entrySeq, steered()[0]!.seq);
+        assert.equal(
+          (await signals.pending("steer-failure")).filter((row) => row.signal.kind === "steer").length,
+          1,
+          "an unacknowledged steer stays pending for replay",
+        );
+      }
+    } finally {
+      globalThis.fetch = realFetch;
+      await harness.turns.close?.();
+    }
+  });
+}

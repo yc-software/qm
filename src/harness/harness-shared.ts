@@ -12,7 +12,7 @@ import { rehydrateOpenGoal } from "./goal.ts";
 import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
 import { tapeCheckpointPayload, tapeEntryMirrorRecord, type NewTapeRecord } from "../sessions/session-store.ts";
-import { swallow } from "../util/errors.ts";
+import { swallow, swallowAs } from "../util/errors.ts";
 
 export interface HarnessToolPlumbing {
   scratchExec?: boolean;
@@ -58,7 +58,7 @@ export async function recordSteerIntake(
     },
     scopeLabel: turn.scopeLabel,
   });
-  await steer.acknowledge?.();
+  await steer.acknowledge?.().catch(swallowAs("steer acknowledge", undefined));
   return {
     entrySeq: entry.seq,
     meta: {

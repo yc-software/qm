@@ -177,6 +177,21 @@ function equalSecret(actual: string, expected: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+const OPENCODE_ID_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+let openCodeIdTime = 0;
+let openCodeIdCounter = 0;
+
+export function openCodeMessageId(now = Date.now()): string {
+  if (now !== openCodeIdTime) {
+    openCodeIdTime = now;
+    openCodeIdCounter = 0;
+  }
+  openCodeIdCounter++;
+  const ordered = (BigInt(now) * 4096n + BigInt(openCodeIdCounter)) & 0xffffffffffffn;
+  const suffix = Array.from(randomBytes(14), (byte) => OPENCODE_ID_ALPHABET[byte % 62]).join("");
+  return `msg_${ordered.toString(16).padStart(12, "0")}${suffix}`;
+}
+
 function sessionToken(secret: string, sessionId: string): string {
   return createHmac("sha256", secret).update(sessionId).digest("base64url");
 }
@@ -976,7 +991,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
           text,
           parts: [...parts],
           intake,
-          messageId: `msg_${Date.now().toString(16)}${randomBytes(12).toString("hex")}`,
+          messageId: openCodeMessageId(),
         };
         parts.push(...(await documentParts(documents)));
         state.steers.push(steer);
