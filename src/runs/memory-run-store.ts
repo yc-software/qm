@@ -152,7 +152,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       const run = runs.get(runId);
       if (!run) return false;
       if (leaseToken !== null && run.leaseToken !== leaseToken) return false;
-      run.deliveryState = state;
+      run.deliveryState = { ...run.deliveryState, ...state };
       return true;
     },
 
@@ -162,7 +162,13 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
           .reverse()
           .filter(
             (run) =>
-              run.sessionId === threadRef && !(opts?.excludePrivateMessages && run.request.privateSessionMessage),
+              run.sessionId === threadRef &&
+              !(opts?.excludePrivateMessages && run.request.privateSessionMessage) &&
+              (!opts?.statusUpdatesOnly ||
+                run.deliveryState?.replying === true ||
+                (run.request.surface === "monitor" &&
+                  (run.status === "failed" ||
+                    (run.status === "done" && ["failed", "refused"].includes(run.result?.status ?? ""))))),
           )
           .sort((a, b) => b.createdAt - a.createdAt)
           .at(0) ?? null

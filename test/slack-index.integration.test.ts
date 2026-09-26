@@ -240,6 +240,8 @@ class FakeCore implements SlackCoreClient {
   activeRun: string | undefined;
   abortedRuns: string[] = [];
   queuedRunId: string | undefined;
+  engageRun = false;
+  sessionStatus?: SlackCoreClient["sessionStatus"];
   private heldRunClaimed = false;
   readonly polled: string[] = [];
   private runGate: Promise<void> | undefined;
@@ -302,8 +304,9 @@ class FakeCore implements SlackCoreClient {
     }
     return this.result;
   }
-  async waitRun(runId: string): Promise<TurnResult | null> {
+  async waitRun(runId: string, hooks?: { onEngaged?(): void }): Promise<TurnResult | null> {
     this.polled.push(runId);
+    if (this.engageRun) hooks?.onEngaged?.();
     if (this.runGate) await this.runGate;
     return this.result;
   }
@@ -1700,6 +1703,127 @@ test("a denyMessage account stays silent on ambient channel chatter from unliste
     assert.deepEqual(f.client.posts, []);
     assert.deepEqual(f.client.ephemerals, []);
     assert.deepEqual(f.core.ingests, []);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("thread status is detached from reply delivery and steering cannot take ownership", async () => {
+  const f = await fixture({ coreSingleton: false });
+  const starts: unknown[][] = [];
+  let release!: () => void;
+  const network = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  f.core.sessionStatus = {
+    start: async (...args) => {
+      starts.push(args.slice(1));
+      await network;
+    },
+    reconcile: async () => {},
+  };
+  f.core.engageRun = true;
+  f.core.holdRun("r1");
+  try {
+    const original = f.app.emitEvent("app_mention", { channel: "C1", user: "U1", text: "<@UBOT> work", ts: "700.1" });
+    await waitFor(() => starts.length === 1);
+    await f.app.emitEvent("app_mention", {
+      channel: "C1",
+      thread_ts: "700.1",
+      user: "U1",
+      text: "<@UBOT> also this",
+      ts: "700.2",
+    });
+    assert.deepEqual(starts, [["T1:UBOT", "r1", "C1", "700.1"]]);
+    f.core.finishRun({ status: "ok", reply: "finished" });
+    await original;
+    assert.ok(f.client.posts.some((post) => post.text === "finished" && post.thread_ts === "700.1"));
+    assert.equal(starts.length, 1);
+  } finally {
+    release();
+    await f.stop();
+  }
+});
+
+test("top-level DM replies remain top-level and never start native thread status", async () => {
+  const f = await fixture();
+  let starts = 0;
+  f.core.sessionStatus = {
+    start: async () => {
+      starts++;
+    },
+    reconcile: async () => {},
+  };
+  f.core.engageRun = true;
+  f.core.holdRun("r1");
+  try {
+    const incoming = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello", ts: "701.1" });
+    await waitFor(() => f.core.polled.length === 1);
+    f.core.finishRun({ status: "ok", reply: "hello back" });
+    await incoming;
+    assert.equal(starts, 0);
+    assert.ok(f.client.posts.some((post) => post.text === "hello back" && !post.thread_ts));
+  } finally {
+    await f.stop();
+  }
+});
+
+test("own task-card status events never enter the mirror, but ordinary bot edits remain", async () => {
+  const f = await fixture();
+  const status = {
+    user: "UBOT",
+    bot_id: "BBOT",
+    text: "Working",
+    ts: "200.1",
+    blocks: [{ type: "task_card", task_id: "qm_status:test", title: "Working", status: "in_progress" }],
+  };
+  try {
+    await f.app.emitMessage({ channel: "C1", channel_type: "channel", ...status });
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
+      subtype: "message_changed",
+      message: { ...status, text: "Finished" },
+      previous_message: status,
+      ts: "200.2",
+    });
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
+      subtype: "message_deleted",
+      previous_message: status,
+      deleted_ts: status.ts,
+      ts: "200.3",
+    });
+    assert.equal(f.core.ingests.flat().filter((event: any) => event.ts === status.ts).length, 0);
+    assert.equal(f.core.turns.length, 0);
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
+      subtype: "message_changed",
+      message: { user: "UBOT", bot_id: "BBOT", text: "Updated answer", ts: "201.1" },
+      ts: "201.2",
+    });
+    assert.equal(f.core.ingests.flat().find((event: any) => event.ts === "201.1")?.text, "Updated answer");
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
+      user: "UBOT",
+      bot_id: "BBOT",
+      text: "ordinary malformed blocks",
+      ts: "201.3",
+      blocks: { unexpected: true },
+    });
+    assert.equal(f.core.ingests.flat().find((event: any) => event.ts === "201.3")?.text, "ordinary malformed blocks");
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
+      ...status,
+      user: "U1",
+      bot_id: undefined,
+      ts: "202.1",
+    });
+    assert.ok(f.core.ingests.flat().some((event: any) => event.ts === "202.1"));
   } finally {
     await f.stop();
   }

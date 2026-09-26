@@ -2010,8 +2010,28 @@ test("pg run store: delivery state round-trips; onTerminal fires once with it", 
     const seen: string[] = [];
     runs.onTerminal((run) => seen.push(`${run.id}:${run.status}:${run.deliveryState?.editRef ?? ""}`));
     const claimed = await runs.claimById(r.id, "w1", 5_000);
+    assert.equal(await runs.setDeliveryState(r.id, "wrong-token", { replying: true }), false);
+    assert.equal((await runs.get(r.id))?.deliveryState?.replying, undefined);
+    await Promise.all([
+      runs.setDeliveryState(r.id, claimed!.leaseToken!, { replying: true }),
+      runs.setDeliveryState(r.id, null, { editRef: "171.002" }),
+    ]);
+    assert.deepEqual((await runs.get(r.id))?.deliveryState, { editRef: "171.002", replying: true });
     await runs.complete(r.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
     assert.deepEqual(seen, [`${r.id}:done:171.002`], "terminal listener sees the checkpointed state");
+
+    const quiet = (await runs.enqueue({ sessionId: "sDeliver", request: turn("quiet") })).run;
+    assert.equal((await runs.latestForThread("sDeliver"))?.id, quiet.id);
+    assert.equal((await runs.latestForThread("sDeliver", { statusUpdatesOnly: true }))?.id, r.id);
+    assert.equal(await runs.latestForThread("other-thread", { statusUpdatesOnly: true }), null);
+    await runs.withdraw(quiet.id);
+    const monitor = (await runs.enqueue({ sessionId: "sDeliver", request: { ...turn("monitor"), surface: "monitor" } }))
+      .run;
+    const monitorClaim = await runs.claimById(monitor.id, "monitor-worker", 5_000);
+    await runs.complete(monitor.id, monitorClaim!.leaseToken!, { status: "refused" });
+    await runs.enqueue({ sessionId: "sDeliver", request: turn("quiet after monitor") });
+    assert.equal((await runs.latestForThread("sDeliver", { statusUpdatesOnly: true }))?.id, monitor.id);
+    seen.pop();
 
     const parked = (await runs.enqueue({ sessionId: "sPark", request: turn("y"), maxAttempts: 1 })).run;
     const c = await runs.claimById(parked.id, "w2", 5_000);

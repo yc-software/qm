@@ -1,4 +1,11 @@
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
+import {
+  createSlackSessionStatus,
+  type SlackStatusActivity,
+  type SlackSessionStatus,
+  type SlackSessionStatusState,
+} from "../slack/session-status.ts";
+import type { FeatureFlagStore } from "../feature-flags.ts";
 import { decideDeploymentAccess } from "../slack/deploy-access.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { ActorAssertion } from "../types.ts";
@@ -43,6 +50,7 @@ import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
 
 interface SlackRunHooks {
+  onEngaged?(): void;
   onFirstBlock?(text: string): void;
   onSurfacePosted?(): void;
   onTasks?(tasks: Array<{ id: string; title: string; status: TaskStatus }>): void | Promise<void>;
@@ -95,6 +103,7 @@ export interface SlackCoreClient {
   decideDeploymentAccess(value: string, actor: ActorAssertion, approve: boolean): Promise<string>;
   keychainApprovals?: KeychainApprovals;
   taskAcknowledgements?: TaskAcknowledgements;
+  sessionStatus?: SlackSessionStatus;
   externalSlackParticipants(): Promise<boolean>;
   internalMemberOverrides(): Promise<string[]>;
   ackEmojiOverride(): Promise<string[] | null>;
@@ -165,6 +174,9 @@ export interface SlackCoreClientDeps {
   identity: IdentityService;
   keychainApprovals?: KeychainApprovals;
   taskAcknowledgements?: DurableMap<TaskAckState>;
+  sessionStatus?: DurableMap<SlackSessionStatusState>;
+  statusActivity?: SlackStatusActivity;
+  featureFlags?: FeatureFlagStore;
   app: App;
   config: ScopedConfigStore;
   runtimeFallback: RuntimeChoice;
@@ -243,6 +255,18 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     ...(deps.keychainApprovals ? { keychainApprovals: deps.keychainApprovals } : {}),
     ...(deps.taskAcknowledgements
       ? { taskAcknowledgements: createTaskAcknowledgements(deps.taskAcknowledgements, lease, deps) }
+      : {}),
+    ...(deps.sessionStatus && deps.featureFlags
+      ? {
+          sessionStatus: createSlackSessionStatus(
+            deps.sessionStatus,
+            lease,
+            deps.runs,
+            deps.featureFlags,
+            Date.now,
+            deps.statusActivity,
+          ),
+        }
       : {}),
     async externalSlackParticipants() {
       return (await deps.config.getExternalSlackParticipantsDurable(orgScope)) === true;
@@ -329,6 +353,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async waitRun(runId, hooks = {}) {
+      let engagedSignaled = false;
       let firstBlockSignaled = false;
       let surfaceSignaled = false;
       const signalFirstBlock = (text: string): void => {
@@ -391,6 +416,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
               await emitGoal().catch(swallowAs("slack-core-client: terminal goal refresh", undefined));
               if (view?.surfacePosted) signalSurface();
               return (view?.result as TurnResult | null | undefined) ?? null;
+            }
+            if (!engagedSignaled && (deps.turnStream.replying(runId) || run.deliveryState?.replying)) {
+              engagedSignaled = true;
+              hooks.onEngaged?.();
             }
             await emitTasks();
             await emitGoal().catch(swallowAs("slack-core-client: goal refresh", undefined));

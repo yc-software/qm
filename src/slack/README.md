@@ -24,10 +24,10 @@ Slack  ⇄ (WebSocket)  slack surface (in core)  ── direct calls ──▶  
 ### Slack Agents (top-bar pin)
 
 The manifest enables Slack's [Agents & AI Apps](https://docs.slack.dev/ai/developing-agents)
-feature (`agent_view`) for one reason: users can pin the app to the Slack top bar and open
-it anywhere. Conversations in the resulting split pane are ordinary DM thread messages and
-flow through the normal DM machinery unchanged — none of the extra agent UI (status
-indicators, thread titles, context passing, suggested prompts) is implemented.
+feature (`agent_view`) so users can pin the app to the Slack top bar and open it anywhere.
+Conversations in the resulting split pane are ordinary DM thread messages and flow through
+the normal DM machinery unchanged. Thread titles, context passing and suggested prompts
+are not implemented. Native loading status is experimental and off by default.
 
 Two caveats:
 
@@ -38,6 +38,54 @@ Two caveats:
   `assistant_thread_context_changed` events (Slack requires both to enable the feature;
   the plugin acknowledges them as no-ops). Installs that don't update keep working
   exactly as before.
+
+### Optional native loading indicator
+
+In Admin → Customize → Feature flags, choose **Slack loading indicator (experimental)**
+and enable it for selected people or conversation scopes. This is an admin-managed opt-in,
+not a personal settings toggle. Leave it disabled on apps subscribed to
+`agent_session_stopped`: native Stop events are not handled yet. Existing text-stop behavior
+is unchanged. The app must be declared as an agent in Slack and have `chat:write`.
+
+The plugin calls [`agents.sessions.setStatus`](https://docs.slack.dev/reference/methods/agents.sessions.setstatus)
+with `processing` only after core commits to answering. One ordinary native
+[`task_card`](https://docs.slack.dev/reference/block-kit/blocks/task-card-block) message
+is posted in the existing reply thread and updated in place. Quiet ambient turns show
+nothing; unthreaded DMs stay unthreaded and have no indicator or card.
+
+The card distinguishes live work, registered background jobs, and active process watches
+in this conversation. Waiting cards survive the live turn and core restarts. Recurring
+crons, other conversations' jobs, and agent prose do not create waiting state. Job status
+uses the same durable registry as the web UI: unwatched exits become visible when the
+job is checked, reconciled during sandbox setup, or expires. Watches use the existing
+monitor poller. Raw commands and monitor instructions are never included in cards. Own status-card
+messages and edits are excluded from conversation history and the event mirror.
+
+After more than five minutes from the first engagement, including waits and resumptions,
+a small **Follow via QM Web** context link is appended to the same card. It opens the exact
+web session, retains normal web authorization, and stays on the final card. No separate
+message or button is created. Without a configured public web URL the link is omitted.
+A minute sweep means the link or background transition can take up to a minute to appear.
+
+Completion, failure, refusal, approval waits and cancellation get explicit labels. A
+terminal card has no spinner. **Finished** describes the recorded work lifecycle, not
+successful task completion or transport delivery. The transient native session status
+returns to `active` when live work ends, even while background waiting remains visible.
+Disabling the flag settles cards and clears native working status without stopping work
+or deleting Slack messages and session-list entries. Shared-thread cards are visible to
+everyone in that thread.
+
+Reply engagement is recorded in run delivery state, including monitor wakes, so receivers
+can observe another worker. The existing durable map and leader lease retain one card's
+message timestamp, original start time, and update state per account and thread. Processing
+refreshes every 30 minutes, before Slack's one-hour expiry. Expired run leases are not
+shown as active processing. A separate five-second-timeout client keeps status failures
+out of reply delivery; reconciliation retries transient failures. Unsupported native
+session methods do not block task cards, and card failures do not block native status.
+Slack does not offer conditional writes: late writes are repaired on reconciliation,
+and an ambiguous initial post can still duplicate if Slack does not deduplicate its
+persisted `client_msg_id`. If Slack stays unreachable, card updates cannot be guaranteed;
+only its native session indicator has a one-hour expiry.
 
 > **Running locally alongside another developer? Each dev needs their OWN app.**
 > See [Local dev with multiple developers](#local-dev-with-multiple-developers)

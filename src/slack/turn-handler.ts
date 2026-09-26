@@ -137,6 +137,8 @@ export function createTurnHandler(deps: {
   externalAccess?: ExternalSlackAccess;
   continuePrivate?: (runId: string, task: string) => Promise<void>;
   rateLimitNotice?: SlackRateLimitNotice;
+  onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
+  onSettled?: () => void;
   core: SlackCoreClient;
   flow: TurnFlow;
   directory: Directory;
@@ -584,6 +586,9 @@ export function createTurnHandler(deps: {
         { ...turn, intakePreambleMs: Math.round(tSubmit - t0), clientSentAt: Date.now() },
         {
           deferDeliveryAck: true,
+          onEngaged: () => {
+            if (queuedRunId && replyThreadTs) deps.onEngaged?.(queuedRunId, inc.channel, replyThreadTs);
+          },
           onQueued: async (runId) => {
             queuedRunId = runId;
             inFlightRunByThread.set(threadRef, runId);
@@ -640,7 +645,10 @@ export function createTurnHandler(deps: {
       }
       return;
     } finally {
-      if (queuedRunId) inFlightRunByThread.clear(threadRef, queuedRunId);
+      if (queuedRunId) {
+        inFlightRunByThread.clear(threadRef, queuedRunId);
+        deps.onSettled?.();
+      }
     }
 
     // This message was folded into a run that was already live. The handler that OWNS that run

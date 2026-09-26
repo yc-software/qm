@@ -363,19 +363,21 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     async setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState): Promise<boolean> {
       const { rowCount } =
         leaseToken === null
-          ? await q("UPDATE runs SET delivery_state=$1 WHERE id=$2", [JSON.stringify(state), runId])
-          : await q("UPDATE runs SET delivery_state=$1 WHERE id=$2 AND lease_token=$3", [
-              JSON.stringify(state),
-              runId,
-              leaseToken,
-            ]);
+          ? await q(
+              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2",
+              [JSON.stringify(state), runId],
+            )
+          : await q(
+              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2 AND lease_token=$3",
+              [JSON.stringify(state), runId, leaseToken],
+            );
       return rowCount > 0;
     },
 
     async latestForThread(threadRef, opts) {
       const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true') ORDER BY created_at DESC, seq DESC LIMIT 1",
-        [threadRef, Boolean(opts?.excludePrivateMessages)],
+        "SELECT * FROM runs WHERE session_id = $1 AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true') AND (NOT $3::boolean OR delivery_state::jsonb->>'replying' = 'true' OR (request::jsonb->>'surface' = 'monitor' AND (status = 'failed' OR (status = 'done' AND result::jsonb->>'status' IN ('failed', 'refused'))))) ORDER BY created_at DESC, seq DESC LIMIT 1",
+        [threadRef, Boolean(opts?.excludePrivateMessages), Boolean(opts?.statusUpdatesOnly)],
       );
       return rows[0] ? rowToRun(rows[0]) : null;
     },

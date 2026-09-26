@@ -360,11 +360,24 @@ for (const backend of backends) {
     assert.equal((await runs.get(r.id))?.deliveryState?.editRef, "171.002");
     assert.equal(await runs.setDeliveryState(r.id, claimed?.leaseToken ?? "", { editRef: "171.003" }), true);
     assert.equal((await runs.get(r.id))?.deliveryState?.editRef, "171.003");
+    assert.equal(await runs.setDeliveryState(r.id, claimed?.leaseToken ?? "", { replying: true }), true);
+    await runs.setDeliveryState(r.id, null, { editRef: "171.003" });
+    assert.deepEqual((await runs.get(r.id))?.deliveryState, { editRef: "171.003", replying: true });
     const seen: string[] = [];
     runs.onTerminal((run) => seen.push(`${run.id}:${run.status}:${run.deliveryState?.editRef ?? ""}`));
     await runs.complete(r.id, claimed?.leaseToken ?? "", { status: "ok", reply: "done" });
     assert.deepEqual(seen, [`${r.id}:done:171.003`], "terminal listener sees the checkpointed state");
     assert.equal((await runs.get(r.id))?.deliveryState?.editRef, "171.003");
+    const quiet = (await runs.enqueue({ sessionId: "s1", request: turn("quiet") })).run;
+    assert.equal((await runs.latestForThread("s1"))?.id, quiet.id);
+    assert.equal((await runs.latestForThread("s1", { statusUpdatesOnly: true }))?.id, r.id);
+    assert.equal(await runs.latestForThread("t1", { statusUpdatesOnly: true }), null);
+    await runs.withdraw(quiet.id);
+    const monitor = (await runs.enqueue({ sessionId: "s1", request: turn("monitor", "monitor") })).run;
+    const monitorClaim = await runs.claimById(monitor.id, "monitor-worker", 5_000);
+    await runs.complete(monitor.id, monitorClaim!.leaseToken!, { status: "refused" });
+    await runs.enqueue({ sessionId: "s1", request: turn("quiet after monitor") });
+    assert.equal((await runs.latestForThread("s1", { statusUpdatesOnly: true }))?.id, monitor.id);
   });
 
   test(`[${backend.name}] onTerminal fires once per terminal transition, including a parked fail`, async () => {
