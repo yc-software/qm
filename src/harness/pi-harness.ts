@@ -1946,7 +1946,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                     },
                   }
                 : {}),
-              ...(steerStamp ?? {}),
+              ...steerStamp,
             };
             try {
               await turn.tape(rec);
