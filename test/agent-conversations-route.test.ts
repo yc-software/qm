@@ -1,11 +1,13 @@
 import "./support/auto-fake-sprites.ts";
-import { describe, it, before, after } from "node:test";
+import { describe, it, before, after, test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
-import { scopeId, type TurnRequest, type SessionStatus } from "../src/types.ts";
+import { scopeId, type TurnRequest, type SessionStatus, type Session } from "../src/types.ts";
+import { seedSessionTurn } from "../src/api/seed-session.ts";
+import type { App } from "../src/api/app-types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -374,4 +376,31 @@ describe("agent conversations self-API", async () => {
     assert.equal(conversation.title, "Launch plan");
     assert.equal(conversation.pinned, true);
   });
+});
+
+test("a seeded fork of a Slack conversation runs as a web turn on its web thread", async () => {
+  const seen: Array<{ surface?: string; threadRef: string; channelRef?: string }> = [];
+  await seedSessionTurn(
+    {
+      turn: async (req) => {
+        seen.push({
+          surface: req.surface,
+          threadRef: req.conversation.threadRef,
+          channelRef: req.conversation.channelRef,
+        });
+        return { status: "queued", runId: "r" } as Awaited<ReturnType<App["turn"]>>;
+      },
+    },
+    "U1",
+    {
+      id: "fork",
+      threadRef: "web:U1:fork",
+      type: "channel",
+      scopeId: "channel:C1",
+      surface: "slack",
+      createdAt: 1,
+    } as Session,
+    "continue",
+  );
+  assert.deepEqual(seen, [{ surface: "web", threadRef: "web:U1:fork", channelRef: "C1" }]);
 });

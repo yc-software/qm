@@ -9,7 +9,7 @@ export async function seedSessionTurn(
 ): Promise<Awaited<ReturnType<App["turn"]>>> {
   const sessionScope = parseScopeId(session.scopeId);
   return app.turn({
-    surface: session.surface ?? "web",
+    surface: "web",
     actor: { externalId: actorId },
     conversation: {
       kind: session.type,

@@ -156,7 +156,8 @@ export interface SessionStartInput {
   title?: string;
 }
 
-type SessionStartResult = { ok: true; sessionId: string; title: string } | { ok: false; message: string };
+type SessionStartResult =
+  { ok: true; sessionId: string; title: string; refused?: string } | { ok: false; message: string };
 
 interface SessionSummary {
   sessionId: string;
@@ -176,6 +177,7 @@ interface SessionSyscallBinding {
   session: Session;
   scopeId: ScopeId;
   orgScopeId?: ScopeId;
+  liveTurn?: boolean;
   request: Pick<
     OrchestratorInput,
     | "cancel"
@@ -243,7 +245,7 @@ export interface SessionSyscallDeps {
     start(
       actorId: string,
       input: { scopeId: ScopeId; forkOf?: string; text?: string; title?: string },
-    ): Promise<{ session: Session } | { error: string }>;
+    ): Promise<{ session: Session; refused?: string } | { error: string }>;
   };
 }
 
@@ -673,7 +675,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (!target)
                 return {
                   ok: false,
-                  message: `no session matches "${input.target}" — use a sessionId from open or read.`,
+                  message: `no session matches "${input.target}" — use a sessionId from open, read, or list.`,
                 };
               if (target.threadRef.startsWith("swarm:"))
                 throw new Error("send messages to swarm workers through the swarm API");
@@ -831,7 +833,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           }
           const target = await resolveTarget(input.target);
           if (!target)
-            return { ok: false, message: `no session matches "${input.target}" — use a sessionId from open or read.` };
+            return {
+              ok: false,
+              message: `no session matches "${input.target}" — use a sessionId from open, read, or list.`,
+            };
           if (target.scopeId !== binding.scopeId)
             return { ok: false, message: "that session lives in a different context and cannot be read from here." };
           const limit = Math.min(Math.max(1, input.limit ?? READ_DEFAULT_LIMIT), 200);
@@ -860,7 +865,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           await currentCaller();
           const conversations = deps.conversations;
           if (!conversations) return { ok: false, message: "sessions aren't available on this deployment." };
-          const visible = (await conversations.list(binding.request.actor.id)).filter(
+          const audience = binding.request.conversation.audience.length
+            ? binding.request.conversation.audience
+            : [binding.request.actor];
+          const candidates = (await conversations.list(binding.request.actor.id)).filter(
             (s) =>
               s.scopeId === binding.scopeId &&
               !s.parentSessionId &&
@@ -868,6 +876,13 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               !s.threadRef.startsWith("swarm:") &&
               !s.archived,
           );
+          const visible: Session[] = [];
+          for (const session of candidates) {
+            const seen = await Promise.all(
+              audience.map((person) => deps.sessions.getForParticipant(session.id, person.id)),
+            );
+            if (seen.every(Boolean)) visible.push(session);
+          }
           const recent = visible
             .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt))
             .slice(0, SESSION_LIST_LIMIT);
@@ -890,14 +905,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           const conversations = deps.conversations;
           if (!conversations) return { ok: false, message: "sessions aren't available on this deployment." };
           const verb = input.fork ? "fork" : "new";
-          const { conversation } = binding.request;
-          const attended =
-            binding.request.origin?.kind === "human" &&
-            conversation.audience.every((person) => person.type === "internal") &&
-            (conversation.kind === "dm" ||
-              (!!conversation.publishMembers?.length &&
-                conversation.publishMembers.every((person) => person.type === "internal")));
-          if (!attended)
+          if (binding.liveTurn !== true)
             return {
               ok: false,
               message: `${verb} needs a person attending this turn — not a cron, trigger, subagent, or other automation.`,
@@ -918,7 +926,12 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             })
             .catch((error: unknown) => ({ error: errMessage(error) }));
           if ("error" in out) return { ok: false, message: out.error };
-          return { ok: true, sessionId: out.session.id, title: out.session.title?.trim() || "Untitled" };
+          return {
+            ok: true,
+            sessionId: out.session.id,
+            title: out.session.title?.trim() || "Untitled",
+            ...(out.refused ? { refused: out.refused } : {}),
+          };
         },
       };
     },

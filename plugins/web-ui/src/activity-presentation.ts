@@ -202,7 +202,12 @@ export function sessionPresentation(
   else if (state === "attempted") label = `Tried to ${verbs[2]}`;
   else if (state === "approval") label = `${row.pending ? "Approval needed" : "Approval requested"} to ${verbs[2]}`;
   const target =
-    result.title || call.name || call.target || result.sessionId || (action === "open" ? "subagent" : "subagents");
+    result.title ||
+    call.name ||
+    call.target ||
+    result.sessionId ||
+    ({ open: "subagent", new: "session", fork: "session", list: "sessions" } as Record<string, string>)[action] ||
+    "subagents";
   const preview = ["write", "send_message", "followup_task"].includes(action)
     ? (call.text ?? call.task ?? "").replace(/\s+/g, " ").trim()
     : "";

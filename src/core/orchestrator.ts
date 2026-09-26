@@ -2694,6 +2694,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   session,
                   scopeId: scopeId as ScopeId,
                   orgScopeId: resolution.orgScopeId,
+                  liveTurn,
                   request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
                 }),
               }

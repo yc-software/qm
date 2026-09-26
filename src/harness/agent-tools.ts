@@ -1747,16 +1747,20 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ...(p.title ? { title: p.title } : {}),
         });
         if (!result.ok) return fail(result.message);
+        let outcome = "";
+        if (result.refused) outcome = `, but your message was refused there: ${result.refused}`;
+        else if (p.text) outcome = " and is working on the message you gave it";
         return recordResult(
           callId,
           { tool: "sessions", action: p.action, sessionId: result.sessionId, title: result.title },
           text(
-            `${p.action === "fork" ? "Forked this conversation into" : "Started"} session "${result.title}" (sessionId ${result.sessionId}). It appears in the sidebar${p.text ? " and is working on the message you gave it" : ""}.`,
+            `${p.action === "fork" ? "Forked this conversation into" : "Started"} session "${result.title}" (sessionId ${result.sessionId}). It appears in the sidebar${outcome}.`,
           ),
         );
       }
       if (!p.target?.trim()) return fail(`${p.action} requires \`target\`: a sessionId from list.`);
       if (p.action === "send_message") {
+        if (!p.text?.trim()) return fail("send_message requires `text`: the note to deliver.");
         const result = await syscalls.write({
           requestId: callId,
           target: p.target,

@@ -1863,8 +1863,12 @@ export function buildApp(
         if (input.text) {
           const turn = await seedSessionTurn(app, actorId, out.session, input.text);
           if (turn.status === "refused") {
-            if (!input.forkOf) await app.discardSession(out.session.id, actorId);
-            return { error: (turn as { reason?: string }).reason ?? "the first message was refused" };
+            const reason = (turn as { reason?: string }).reason ?? "the first message was refused";
+            if (!input.forkOf) {
+              await app.discardSession(out.session.id, actorId);
+              return { error: reason };
+            }
+            return { session: (await sessions.get(out.session.id)) ?? out.session, refused: reason };
           }
         }
         return { session: (await sessions.get(out.session.id)) ?? out.session };

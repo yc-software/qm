@@ -1658,7 +1658,7 @@ for (const surface of ["slack", "web"] as const) {
   }
 }
 
-test("sessions list shows only this context's sidebar sessions and create needs a live person", async () => {
+test("sessions list shows only sidebar sessions the whole audience can see and create needs a live turn", async () => {
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
   const started: Array<{ forkOf?: string; text?: string; title?: string; scopeId: ScopeId }> = [];
@@ -1668,6 +1668,9 @@ test("sessions list shows only this context's sidebar sessions and create needs 
   await sessions.updateTitle(peer.id, "peer");
   const archived = await sessions.getOrCreateByThread("web:U1:old", "dm", scope, undefined, "web");
   const elsewhere = await sessions.getOrCreateByThread("web:U1:other", "channel", scopeId("channel", "C9"));
+  for (const s of [room, peer, archived, elsewhere]) await sessions.addParticipant(s.id, actor.id);
+  const guest: Principal = { id: "G1", type: "guest", displayName: "Guest" };
+  await sessions.addParticipant(room.id, guest.id);
   const factory = createSessionSyscalls({
     mailbox: createSessionMailbox(createMemoryMap<SessionMessage>()),
     sessions,
@@ -1693,26 +1696,32 @@ test("sessions list shows only this context's sidebar sessions and create needs 
       },
     },
   });
-  const guest: Principal = { id: "G1", type: "guest", displayName: "Guest" };
-  const forTurn = (origin: OrchestratorInput["origin"], readOnly?: boolean, audience: Principal[] = [actor]) =>
+  const forTurn = (liveTurn: boolean, opts: { readOnly?: boolean; audience?: Principal[] } = {}) =>
     factory.forTurn({
       session: room,
       scopeId: scope,
+      liveTurn,
       request: {
         surface: "web",
-        conversation: { kind: "dm", threadRef: room.threadRef, audience },
+        conversation: { kind: "dm", threadRef: room.threadRef, audience: opts.audience ?? [actor] },
         actor,
-        origin,
-        ...(readOnly ? { readOnly } : {}),
+        origin: { kind: "human" },
+        ...(opts.readOnly ? { readOnly: true } : {}),
       } as Parameters<typeof factory.forTurn>[0]["request"],
     });
-  const live = forTurn({ kind: "human" });
+  const live = forTurn(true);
   const listed = await live.list!();
   assert.ok(listed.ok);
   assert.deepEqual(listed.sessions.map((s) => [s.title, s.current]).sort(), [
     ["peer", false],
     ["room", true],
   ]);
+  const shared = await forTurn(false, { audience: [actor, guest] }).list!();
+  assert.ok(shared.ok);
+  assert.deepEqual(
+    shared.sessions.map((s) => s.title),
+    ["room"],
+  );
   assert.deepEqual(await live.start!({ fork: false }), {
     ok: false,
     message: "new requires `text`: the new session's first message.",
@@ -1723,12 +1732,7 @@ test("sessions list shows only this context's sidebar sessions and create needs 
     { scopeId: scope, text: "hello", title: "fresh" },
     { scopeId: scope, forkOf: room.id },
   ]);
-  for (const blocked of [
-    forTurn({ kind: "automation" }),
-    forTurn({ kind: "ambient", live: true }),
-    forTurn({ kind: "human" }, true),
-    forTurn({ kind: "human" }, false, [actor, guest]),
-  ]) {
+  for (const blocked of [forTurn(false), forTurn(true, { readOnly: true })]) {
     const out = await blocked.start!({ fork: true });
     assert.equal(out.ok, false);
   }
