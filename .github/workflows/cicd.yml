@@ -74,6 +74,42 @@ jobs:
       - name: Core checks passed
         run: echo "Core typecheck and root test shards passed."
 
+  performance-harness:
+    name: Performance harness
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: qm_perf_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            test/performance/package-lock.json
+      - name: Install
+        run: |
+          npm ci
+          npm run build:connector-sdk
+          npm ci --prefix test/performance
+          npm run install:browser --prefix test/performance
+      - name: Verify harness, fixtures and workload protocols
+        env:
+          QM_PERF_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm_perf_test
+        run: npm test --prefix test/performance
+
   cli:
     name: CLI
     runs-on: ubuntu-latest
@@ -161,6 +197,7 @@ jobs:
           npm ci
           npm ci --prefix plugins/web-ui
           npm ci --prefix desktop --ignore-scripts
+          npm ci --prefix test/performance
       - name: Formatting
         run: npm run format:check
       - name: Lint whole repo, incl. plugins

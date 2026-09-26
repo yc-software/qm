@@ -1,0 +1,14 @@
+{
+  "name": "qm-performance",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "install:browser": "playwright install --with-deps chromium",
+    "test": "node --test *.test.mjs *.test.ts",
+    "run": "node run.mjs",
+    "verify": "node verify.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}
