@@ -169,7 +169,7 @@ test("web surface readiness requires populated observed rows and follows account
     "/admin/api/me": { principal: "actor", scopeId: "org:fixture", isAdmin: true },
     "/admin/api/scopes": { scopeId: "org:fixture", scopes: [] },
     "/me": { user: "actor", permissions: ["loops", "inbox"] },
-    "/api/sessions": { sessions: [{ id: "session", surface: "web", createdAt: 1 }] },
+    "/api/sessions": { sessions: [{ id: "session", threadRef: "web:session", surface: "web", createdAt: 1 }] },
     "/api/contexts": {
       contexts: [{ scopeId: "group:fixture", kind: "group", project: { name: "Synthetic project" }, sessionCount: 3 }],
     },
@@ -461,8 +461,13 @@ test("admin history uses independent scope cohorts and derives seeded search and
         data: {
           scopeId: "channel:admin-history",
           offset: 0,
+          limit: 50,
           total: 61,
-          sessions: [{ id: "first", firstMessage: "QM PERF first first" }],
+          sessions: Array.from({ length: 50 }, (_, i) => ({
+            id: i ? `first-${i}` : "first",
+            scopeId: "channel:admin-history",
+            firstMessage: i ? `QM performance fixture first page ${i}` : "QM PERF first first",
+          })),
         },
       },
       {
@@ -471,8 +476,13 @@ test("admin history uses independent scope cohorts and derives seeded search and
         data: {
           scopeId: "channel:admin-history",
           offset: 50,
+          limit: 50,
           total: 61,
-          sessions: [{ id: "later", firstMessage: "QM PERF later first" }],
+          sessions: Array.from({ length: 11 }, (_, i) => ({
+            id: i ? `later-${i}` : "later",
+            scopeId: "channel:admin-history",
+            firstMessage: i ? `QM performance fixture later page ${i}` : "QM PERF later first",
+          })),
         },
       },
       {
@@ -517,6 +527,43 @@ test("admin history uses independent scope cohorts and derives seeded search and
   const partial = structuredClone(evidence);
   partial.rows.find((row) => row.path === "/api/resources/search?q=performance").data.failed = ["files"];
   assert.equal(deriveViewFixtures(fixture, partial).views["web.search"], undefined);
+  const reorderedFixture = structuredClone(fixture);
+  reorderedFixture.adminHistoryCohorts.max.rootCase.sessionId = "not-on-first-page";
+  const reordered = structuredClone(evidence);
+  const firstPage = reordered.rows.find((row) => row.path === `${path}0&category=conversation`).data;
+  firstPage.sessions[0].firstMessage = "QM performance fixture actual first-page row";
+  const normalized = deriveViewFixtures(reorderedFixture, reordered);
+  assert.deepEqual(normalized.views["history.max"].expectedText, ["QM performance fixture actual first-page row"]);
+  assert.ok(
+    normalized.viewReadinessEvidence.normalizations.some(
+      (row) =>
+        row.view === "history.max" &&
+        row.declaredSessionId === "not-on-first-page" &&
+        row.renderedSessionId === "first" &&
+        row.offset === 0,
+    ),
+  );
+  for (const change of [
+    (page) => {
+      page.offset = 1;
+    },
+    (page) => {
+      page.limit = 100;
+    },
+    (page) => {
+      page.sessions.pop();
+    },
+    (page) => {
+      page.sessions[0].scopeId = "channel:other";
+    },
+    (page) => {
+      page.sessions[0].firstMessage = "not a synthetic fixture sentinel";
+    },
+  ]) {
+    const invalid = structuredClone(evidence);
+    change(invalid.rows.find((row) => row.path === `${path}0&category=conversation`).data);
+    assert.equal(deriveViewFixtures(fixture, invalid).views["history.max"], undefined);
+  }
 });
 
 test("multiview fixture represents twelve tabs across four visible panes", () => {
@@ -608,6 +655,7 @@ test("fixture preparation derives first-page sidebar identities and the actual p
   };
   const sessions = Array.from({ length: 60 }, (_, i) => ({
     id: i === 59 ? "late" : `session-${i}`,
+    threadRef: `web:session-${i}`,
     surface: "web",
     createdAt: 100 - i,
   }));
@@ -657,6 +705,64 @@ test("fixture preparation derives first-page sidebar identities and the actual p
   const bad = structuredClone(evidence);
   bad.rows.find((row) => row.path.includes("beforeSeq")).data.entries[0].seq = 101;
   assert.equal(deriveViewFixtures(fixture, bad).browser.earlierPage, undefined);
+});
+
+test("sidebar pagination uses native thread surfaces and clears rejected cloned anchors", () => {
+  const fixture = {
+    fixtureId: "fixture",
+    orgScopeId: "org:fixture",
+    adminPrincipalId: "actor",
+    cohorts: { max: { principalId: "actor", rootCase: { sessionId: "web-0" } } },
+    sidebarPagination: { principalId: "actor", sessionId: "web-0" },
+    browser: { sidebarPagination: { principalId: "actor", sessionId: "web-52" } },
+  };
+  const sessions = Array.from({ length: 110 }, (_, i) => ({
+    id: `web-${i}`,
+    threadRef: `web:actor:${i}`,
+    surface: i % 5 ? "web" : "slack",
+    scopeId: i % 2 ? "personal:actor" : "project:fixture",
+    createdAt: 200 - i,
+  }));
+  sessions[49].threadRef = "agent:main:subagent:visible";
+  sessions[49].surface = "web";
+  sessions.unshift(
+    { id: "wrong-surface", threadRef: "dm:actor:slack", surface: "web", createdAt: 999 },
+    { id: "pinned", threadRef: "web:actor:pinned", surface: "web", pinned: true, createdAt: 999 },
+    { id: "archived", threadRef: "web:actor:archived", surface: "web", archived: true, createdAt: 999 },
+    { id: "child", threadRef: "web:actor:child", surface: "web", parentSessionId: "web-0", createdAt: 999 },
+  );
+  const evidence = {
+    fixtureId: "fixture",
+    rows: [
+      { path: "/admin/api/me", status: 200, data: { principal: "actor", scopeId: "org:fixture", isAdmin: true } },
+      { path: "/admin/api/scopes", status: 200, data: { scopeId: "org:fixture", scopes: [] } },
+      { path: "/me", status: 200, data: { user: "actor" } },
+      { path: "/api/sessions", status: 200, data: { sessions } },
+    ],
+  };
+  const derived = deriveViewFixtures(fixture, evidence);
+  assert.equal(derived.browser.rootSidebarCases.max.sessionId, "web-0");
+  assert.equal(derived.sidebarPagination.sessionId, "web-52");
+  assert.equal(derived.browser.sidebarPagination, undefined);
+  assert.equal(fixture.browser.sidebarPagination.sessionId, "web-52");
+  for (const sessionId of ["web-0", "web-109", "missing", "wrong-surface"]) {
+    const input = structuredClone(fixture);
+    input.browser.sidebarPagination.sessionId = sessionId;
+    const normalized = deriveViewFixtures(input, evidence);
+    assert.equal(normalized.sidebarPagination.sessionId, "web-50");
+    assert.ok(
+      normalized.viewReadinessEvidence.normalizations.some(
+        (row) => row.view === "sidebarPagination" && row.declaredSessionId === sessionId && row.renderedOrdinal === 50,
+      ),
+    );
+  }
+  const short = structuredClone(evidence);
+  short.rows.find((row) => row.path === "/api/sessions").data.sessions = sessions.slice(0, 54);
+  const unsupported = deriveViewFixtures(fixture, short);
+  assert.equal(unsupported.sidebarPagination, undefined);
+  assert.equal(unsupported.browser.sidebarPagination, undefined);
+  assert.ok(unsupported.viewReadinessEvidence.gaps.some((row) => row.scenario === "sidebarPagination"));
+  assert.ok(buildCatalog(unsupported).find((row) => row.id === "web.sidebar.more").missing.length);
 });
 
 test("UI setup writes and verifies only the authenticated fixture principal through the real API contract", async () => {

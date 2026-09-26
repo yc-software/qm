@@ -67,13 +67,35 @@ export function deriveViewFixtures(fixture, observations) {
     assert.equal(page.offset, offset, "History pagination did not reach its requested offset");
     if (Number.isSafeInteger(cohort.conversationCount))
       assert.equal(page.total, cohort.conversationCount, "Admin conversation count differs from its fixture cohort");
+    assert.equal(page.limit, 50, "History pagination changed its requested page size");
+    assert.ok(Number.isSafeInteger(page.total) && page.total > offset);
+    assert.equal(page.sessions.length, Math.min(50, page.total - offset), "History page has an incomplete row count");
+    assert.equal(new Set(page.sessions.map((entry) => entry.id)).size, page.sessions.length);
+    assert.ok(
+      page.sessions.every((entry) => entry.scopeId === cohort.scopeId),
+      "History row has the wrong scope",
+    );
     assert.ok(page.sessions.length > 0, "History fixture has no rows on the requested page");
-    const row = offset ? page.sessions[0] : page.sessions.find((entry) => entry.id === cohort.rootCase.sessionId);
+    const declared = cohort.rootCase?.sessionId;
+    const seeded = (entry) =>
+      entry.firstMessage?.startsWith(`QM PERF ${entry.id} first`) ||
+      entry.firstMessage?.startsWith("QM performance fixture ");
+    const row = offset
+      ? page.sessions[0]
+      : (page.sessions.find((entry) => entry.id === declared) ?? page.sessions.find(seeded));
     assert.ok(row, "History page is missing its fixture conversation");
     let sentinel = `QM PERF ${row.id} first`;
-    if (offset && row.firstMessage?.startsWith("QM performance fixture ")) sentinel = row.firstMessage;
+    if (row.firstMessage?.startsWith("QM performance fixture ")) sentinel = row.firstMessage;
     assert.ok(row.firstMessage?.startsWith(sentinel), "Fixture history first-message sentinel is missing");
     if (offset) assert.ok(!read(historyPath(cohort)).sessions.some((entry) => entry.id === row.id));
+    if (!offset && row.id !== declared)
+      normalizations.push({
+        view: name,
+        scopeId: cohort.scopeId,
+        offset,
+        declaredSessionId: declared,
+        renderedSessionId: row.id,
+      });
     text(name, sentinel, {
       rows: { selector: ".dense-row", minimum: page.sessions.length },
       controlSelector: `a.dense-row[href^="/admin/history/s/${encodeURIComponent(row.id)}"]`,
@@ -485,14 +507,33 @@ export function deriveViewFixtures(fixture, observations) {
   output.browser.rootSidebarCases = {};
   delete output.browser.earlierPage;
   delete output.browser.mixedEarlierPage;
+  delete output.sidebarPagination;
+  delete output.browser.sidebarPagination;
+  const sidebarWebSessions = (principalId) => {
+    assert.equal(read("/me", principalId).user, principalId);
+    const sessions = read("/api/sessions", principalId).sessions;
+    assert.ok(
+      sessions.every(
+        (row) => typeof row.id === "string" && row.id && typeof row.threadRef === "string" && row.threadRef,
+      ),
+    );
+    assert.equal(new Set(sessions.map((row) => row.id)).size, sessions.length);
+    assert.equal(new Set(sessions.map((row) => row.threadRef)).size, sessions.length);
+    return sessions
+      .filter(
+        (row) =>
+          !row.parentSessionId &&
+          !row.archived &&
+          !row.pinned &&
+          (row.threadRef.startsWith("web:") ||
+            (row.threadRef.startsWith("agent:main:subagent:") && row.surface === "web")),
+      )
+      .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt));
+  };
   for (const name of ["median", "p95", "max"])
     attempt(`web.root.${name}`, () => {
       const cohort = (fixture.cohorts ?? fixture.principalCohorts)[name];
-      assert.equal(read("/me", cohort.principalId).user, cohort.principalId);
-      const sessions = read("/api/sessions", cohort.principalId)
-        .sessions.filter((row) => !row.parentSessionId && !row.archived && !row.pinned && row.surface === "web")
-        .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt))
-        .slice(0, 50);
+      const sessions = sidebarWebSessions(cohort.principalId).slice(0, 50);
       assert.ok(sessions.length, "Homepage fixture has no visible web conversations");
       const row = sessions.find((entry) => entry.id === cohort.rootCase?.sessionId) ?? sessions[0];
       output.browser.rootSidebarCases[name] = { sessionId: row.id, principalId: cohort.principalId };
@@ -597,19 +638,22 @@ export function deriveViewFixtures(fixture, observations) {
     throw new Error("Mixed boundary needs more than 100 preparation pages");
   });
   attempt("sidebarPagination", () => {
-    const sessions = read("/api/sessions")
-      .sessions.filter((row) => !row.parentSessionId && !row.archived && !row.pinned && row.surface === "web")
-      .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt));
+    const sessions = sidebarWebSessions(admin);
     assert.ok(sessions.length > 50, "Sidebar fixture has fewer than two pages of visible web conversations");
-    const declared = fixture.sidebarPagination;
-    if (declared) {
-      assert.equal(declared.principalId, admin);
-      assert.ok(
-        sessions.findIndex((row) => row.id === declared.sessionId) >= 50,
-        "Declared sidebar case is not beyond the first visible page",
-      );
-      output.sidebarPagination = structuredClone(declared);
-    } else output.sidebarPagination = { principalId: admin, sessionId: sessions[50].id };
+    const declared = fixture.browser?.sidebarPagination ?? fixture.sidebarPagination;
+    if (declared) assert.equal(declared.principalId, admin);
+    const ordinal = sessions.findIndex((row) => row.id === declared?.sessionId);
+    const selected = ordinal >= 50 && ordinal < 100 ? ordinal : 50;
+    output.sidebarPagination = { principalId: admin, sessionId: sessions[selected].id };
+    if (output.sidebarPagination.sessionId !== declared?.sessionId)
+      normalizations.push({
+        view: "sidebarPagination",
+        principalId: admin,
+        declaredSessionId: declared?.sessionId,
+        declaredOrdinal: ordinal,
+        renderedSessionId: output.sidebarPagination.sessionId,
+        renderedOrdinal: selected,
+      });
   });
   output.viewReadinessEvidence = {
     fixtureId: fixture.fixtureId,

@@ -320,9 +320,10 @@ export function requiredResponsesComplete(requests, requirements) {
   });
 }
 
-function observe(page, origin, requirements) {
+export function observe(page, origin, requirements) {
   const requests = [];
   const errors = [];
+  const byRequest = new Map();
   const pending = new Set();
   const changed = new Set();
   const notify = () => {
@@ -330,42 +331,59 @@ function observe(page, origin, requirements) {
   };
   let identity;
   let active = false;
+  let generation = 0;
   page.on("pageerror", (error) => {
     if (active) errors.push({ type: "pageerror", ...plainError(error) });
   });
-  page.on("requestfailed", (request) => {
-    if (active && new URL(request.url()).origin === origin && request.failure()?.errorText !== "net::ERR_ABORTED")
-      errors.push({
-        type: "requestfailed",
-        path: new URL(request.url()).pathname,
-        message: request.failure()?.errorText,
-      });
-  });
-  page.on("response", (response) => {
-    const url = new URL(response.url());
-    if (url.origin === origin && ["/me", "/admin/api/me"].includes(url.pathname) && response.status() === 200) {
-      const job = response
-        .json()
-        .then((data) => {
-          identity = data.principal ?? data.user;
-        })
-        .catch(() => {});
-      pending.add(job);
-      void job.finally(() => pending.delete(job));
-    }
+  page.on("request", (request) => {
     if (!active) return;
-    const request = response.request();
+    const url = new URL(request.url());
     const entry = {
       path: url.pathname,
       origin: url.origin,
       sameOrigin: url.origin === origin,
       method: request.method(),
       resourceType: request.resourceType(),
-      status: response.status(),
+      startedAt: Date.now(),
       timing: request.timing(),
-      fromServiceWorker: response.fromServiceWorker(),
+      completed: false,
+      phase: "started",
     };
+    byRequest.set(request, entry);
     requests.push(entry);
+    notify();
+  });
+  page.on("requestfailed", (request) => {
+    const entry = byRequest.get(request);
+    if (!active || !entry) return;
+    entry.phase = "failed";
+    entry.failedAt = Date.now();
+    entry.failure = request.failure()?.errorText;
+    entry.timing = request.timing();
+    if (entry.sameOrigin && entry.failure !== "net::ERR_ABORTED")
+      errors.push({ type: "requestfailed", path: entry.path, message: entry.failure });
+    notify();
+  });
+  page.on("response", (response) => {
+    const request = response.request();
+    const entry = byRequest.get(request);
+    if (!active || !entry) return;
+    const observedGeneration = generation;
+    entry.status = response.status();
+    entry.phase = "response";
+    entry.responseAt = Date.now();
+    entry.timing = request.timing();
+    entry.fromServiceWorker = response.fromServiceWorker();
+    if (entry.sameOrigin && ["/me", "/admin/api/me"].includes(entry.path) && entry.status === 200) {
+      const job = response
+        .json()
+        .then((data) => {
+          if (generation === observedGeneration) identity = data.principal ?? data.user;
+        })
+        .catch(() => {});
+      pending.add(job);
+      void job.finally(() => pending.delete(job));
+    }
     const requirement = requirements.find((item) => item.path === entry.path);
     if (
       entry.sameOrigin &&
@@ -378,6 +396,7 @@ function observe(page, origin, requirements) {
       const job = response
         .json()
         .then((data) => {
+          if (generation !== observedGeneration) return;
           if (requirement.paginated) entry.finalPage = Array.isArray(data.items) && !data.nextCursor;
           if (requirement.settledField) entry.settled = !data[requirement.settledField];
           if (requirement.followupWhenNonempty)
@@ -391,6 +410,7 @@ function observe(page, origin, requirements) {
         })
         .catch(() => {})
         .then(() => {
+          if (generation !== observedGeneration) return;
           if (requirement.expectedError && !entry.expectedErrorMatched)
             errors.push({
               type: "contract",
@@ -402,31 +422,33 @@ function observe(page, origin, requirements) {
       pending.add(job);
       void job.finally(() => pending.delete(job));
     }
-    if (url.origin === origin && response.status() >= 400 && !requirement?.expectedError)
-      errors.push({ type: "http", path: url.pathname, status: response.status() });
+    if (entry.sameOrigin && entry.status >= 400 && !requirement?.expectedError)
+      errors.push({ type: "http", path: entry.path, status: entry.status });
     const job = response
       .allHeaders()
       .then((headers) => {
+        if (generation !== observedGeneration) return;
         entry.encoding = headers["content-encoding"] ?? null;
         entry.contentLength = headers["content-length"] ? Number(headers["content-length"]) : null;
         entry.serverTiming = headers["server-timing"] ?? null;
         entry.contentType = headers["content-type"] ?? null;
       })
-      .catch((error) => errors.push({ type: "headers", ...plainError(error) }));
+      .catch((error) => {
+        if (generation === observedGeneration) errors.push({ type: "headers", ...plainError(error) });
+      });
     pending.add(job);
     void job.finally(() => pending.delete(job));
   });
   page.on("requestfinished", (request) => {
-    if (!active) return;
-    const entry = [...requests]
-      .reverse()
-      .find(
-        (item) => item.path === new URL(request.url()).pathname && item.timing.startTime === request.timing().startTime,
-      );
-    if (!entry) return;
+    const entry = byRequest.get(request);
+    if (!active || !entry) return;
+    const observedGeneration = generation;
+    entry.phase = "finished";
+    entry.finishedAt = Date.now();
     const job = request
       .sizes()
       .then((sizes) => {
+        if (generation !== observedGeneration) return;
         entry.bytes = sizes;
         entry.timing = request.timing();
         entry.completed = true;
@@ -448,8 +470,9 @@ function observe(page, origin, requirements) {
         };
         const timer = setTimeout(() => {
           changed.delete(done);
+          const unfinished = requirements.filter((requirement) => !requiredResponsesComplete(requests, [requirement]));
           reject(
-            new Error(`Required page requests did not finish: ${requirements.map((entry) => entry.path).join(", ")}`),
+            new Error(`Required page requests did not finish: ${unfinished.map((entry) => entry.path).join(", ")}`),
           );
         }, timeoutMs);
         changed.add(done);
@@ -457,6 +480,9 @@ function observe(page, origin, requirements) {
       });
     },
     start() {
+      generation++;
+      byRequest.clear();
+      pending.clear();
       requests.length = 0;
       errors.length = 0;
       active = true;
@@ -464,6 +490,9 @@ function observe(page, origin, requirements) {
     async finish() {
       active = false;
       await Promise.all(pending);
+      const now = Date.now();
+      for (const entry of requests)
+        if (!entry.completed && entry.phase !== "failed") entry.pendingForMs = now - entry.startedAt;
       return { requests, errors, identity };
     },
   };
