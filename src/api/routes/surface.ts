@@ -30,6 +30,7 @@ import {
 } from "../../surfaces/ui-state.ts";
 import { redactWebhook } from "./webhooks.ts";
 import { type ApiCtx, type Route } from "./route.ts";
+import { seedSessionTurn } from "../seed-session.ts";
 import {
   ARTIFACT_TYPES,
   isArtifactType,
@@ -145,20 +146,7 @@ async function spawnAgentConversation(ctx: ApiCtx): Promise<void> {
   });
   if (!out) return sendJson(res, 404, { error: "not_found", message: "cannot start a session in this scope" });
   const session = out.session;
-  const sessionScope = parseScopeId(session.scopeId);
-  const turn = await app.turn({
-    surface: session.surface ?? "web",
-    actor: { externalId: capability.actorId },
-    conversation: {
-      kind: session.type,
-      threadRef: session.threadRef,
-      ...(sessionScope.kind === "channel" || sessionScope.kind === "group" ? { channelRef: sessionScope.ref } : {}),
-      ...(session.channelName ? { channelName: session.channelName } : {}),
-    },
-    text: b.text,
-    spawned: true,
-    async: true,
-  });
+  const turn = await seedSessionTurn(app, capability.actorId, session, b.text);
   if (turn.status === "refused") {
     await app.discardSession(session.id, capability.actorId);
     return sendJson(res, 409, {

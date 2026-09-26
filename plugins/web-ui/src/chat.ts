@@ -1588,7 +1588,7 @@ export function createChatSurface(
       !isStreaming &&
       !(message as { subagentMail?: SubagentMailRef }).subagentMail &&
       !work?.activity.some((activity) =>
-        ["session", "sessions"].includes((activity.payload as ToolPayload | null)?.tool ?? ""),
+        ["session", "sessions", "subagents"].includes((activity.payload as ToolPayload | null)?.tool ?? ""),
       ) &&
       (!work || ((work.status === "complete" || work.status === "failed") && !work.pendingApprovals?.length));
     if (!cacheable) return chatMessage(message, index, isStreaming);

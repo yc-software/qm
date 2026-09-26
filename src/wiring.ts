@@ -354,6 +354,7 @@ import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus
 import { createMemoryRunActivityStore, type RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
+import { seedSessionTurn } from "./api/seed-session.ts";
 import { createSwarmStore, type SwarmStorage } from "./swarms/swarm-store.ts";
 import { createSwarmService } from "./swarms/swarm-service.ts";
 import { createSlackCoreClient, type SlackAgentRequestContext, type SlackCoreClient } from "./api/slack-core-client.ts";
@@ -1851,6 +1852,24 @@ export function buildApp(
     advisoryLock,
     prepareRequest: prepareSessionRequest,
     authorize: (session, actorId) => canWriteScope(actorId, session.scopeId),
+    conversations: {
+      list: (actorId) => app.listSessions(actorId),
+      async start(actorId, input) {
+        const out = input.forkOf
+          ? await app.forkSession(input.forkOf, actorId)
+          : await app.spawnSession(actorId, { scopeId: input.scopeId, ...(input.title ? { title: input.title } : {}) });
+        if (!out) return { error: "cannot start a session in this context" };
+        if (input.forkOf && input.title) await sessions.updateTitle(out.session.id, input.title);
+        if (input.text) {
+          const turn = await seedSessionTurn(app, actorId, out.session, input.text);
+          if (turn.status === "refused") {
+            if (!input.forkOf) await app.discardSession(out.session.id, actorId);
+            return { error: (turn as { reason?: string }).reason ?? "the first message was refused" };
+          }
+        }
+        return { session: (await sessions.get(out.session.id)) ?? out.session };
+      },
+    },
     async validateRuntime(input, scope) {
       await resolveRuntimeChoiceDurable(
         configStore,

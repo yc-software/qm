@@ -190,6 +190,8 @@ export function sessionPresentation(
     interrupt: ["Interrupted", "Interrupting", "interrupt"],
     close: ["Closed", "Closing", "close"],
     list: ["Listed", "Listing", "list"],
+    new: ["Started", "Starting", "start"],
+    fork: ["Forked into", "Forking into", "fork into"],
   };
   const verbs = actions[action];
   if (!verbs) return null;

@@ -1437,7 +1437,14 @@ test("readOnly exposes observation and constrained session coordination without 
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
     assert.ok(names(full).has(t), `full toolset has ${t}`);
   }
-  assert.deepEqual([...names(readOnly)].sort(), ["finish_silently", "history", "memory", "runtime", "sessions"]);
+  assert.deepEqual([...names(readOnly)].sort(), [
+    "finish_silently",
+    "history",
+    "memory",
+    "runtime",
+    "sessions",
+    "subagents",
+  ]);
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
     assert.ok(!names(readOnly).has(t), `read-only toolset drops ${t}`);
   }
@@ -3271,7 +3278,9 @@ test("read passes turn cancellation through and cannot record a late success", a
 
 test("session tools are omitted when the actor feature is disabled", () => {
   assert.equal(
-    createAgentTools({ current: fakeToolContext() }, { sessionTools: false }).some((tool) => tool.name === "sessions"),
+    createAgentTools({ current: fakeToolContext() }, { sessionTools: false }).some((tool) =>
+      ["sessions", "subagents"].includes(tool.name),
+    ),
     false,
   );
 });
@@ -3405,7 +3414,7 @@ test("conversation coordinators cannot execute commands through any command tool
         textOut(await call(sandbox, { action: "start_process", command: "echo forbidden" })),
         /unsupported sandbox action/,
       );
-      assert.ok(tools.some((tool) => tool.name === "sessions"));
+      assert.ok(tools.some((tool) => tool.name === "subagents"));
     }
   }
   assert.ok(
@@ -3413,7 +3422,7 @@ test("conversation coordinators cannot execute commands through any command tool
   );
 });
 
-test("sessions open schema and dispatch preserve an explicit false fast mode", async () => {
+test("subagents open schema and dispatch preserve an explicit false fast mode", async () => {
   const tc = fakeToolContext();
   tc.sessionSyscalls = {
     open: async (input) => {
@@ -3423,13 +3432,13 @@ test("sessions open schema and dispatch preserve an explicit false fast mode", a
     write: async () => ({ ok: false, message: "unused" }),
     read: async () => ({ ok: false, message: "unused" }),
   };
-  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "sessions")!;
+  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents")!;
   assert.ok(Check(session.parameters, { action: "open", task: "test", fastMode: false }));
   assert.ok(!Check(session.parameters, { action: "open", task: "test", fastMode: "false" }));
   assert.match(textOut(await call(session, { action: "open", task: "test", fastMode: false })), /child/);
 });
 
-test("sessions followup_task takes its instruction in task, like open", async () => {
+test("subagents followup_task takes its instruction in task, like open", async () => {
   const writes: Array<{ followup?: boolean; text?: string; interrupt?: boolean }> = [];
   const tc = fakeToolContext();
   tc.sessionSyscalls = {
@@ -3445,7 +3454,7 @@ test("sessions followup_task takes its instruction in task, like open", async ()
     },
     read: async () => ({ ok: false, message: "unused" }),
   };
-  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "sessions")!;
+  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents")!;
   assert.ok(!Check(session.parameters, { action: "write", target: "child", text: "hi" }));
   assert.match(
     textOut(await call(session, { action: "followup_task", target: "child", task: "next task" })),
@@ -3482,7 +3491,7 @@ test("conversation coordinator mailbox checks never block on children", async ()
     write: async () => ({ ok: false, message: "unused" }),
     read: async () => ({ ok: false, message: "unused" }),
   };
-  const session = createAgentTools({ current: tc }, { delegateWork: true }).find((tool) => tool.name === "sessions")!;
+  const session = createAgentTools({ current: tc }, { delegateWork: true }).find((tool) => tool.name === "subagents")!;
   await call(session, { action: "wait", timeoutMs: 60000 });
   assert.ok(waits.length > 0);
   assert.ok(waits.every((timeout) => timeout === 0));
@@ -3506,7 +3515,7 @@ test("resource catalog exposes one home per operation and leaves MCP tools intac
     },
   );
   const names = tools.map((tool) => tool.name);
-  for (const name of ["files", "apps", "skills", "sessions", "goal", "cron", "example_search"])
+  for (const name of ["files", "apps", "skills", "sessions", "subagents", "goal", "cron", "example_search"])
     assert.ok(names.includes(name));
   for (const name of [
     "read",
@@ -3966,4 +3975,46 @@ test("thrown execution errors leave pending child messages for the next delivere
     assert.match(JSON.stringify(await call(tool, input)), /Important child finding/);
     assert.equal(pending, false);
   }
+});
+
+test("subagents and sessions are separate tools with one noun each", async () => {
+  const writes: Array<{ followup?: boolean; target: string; text?: string }> = [];
+  const starts: Array<{ fork: boolean; text?: string; title?: string }> = [];
+  const tc = fakeToolContext();
+  tc.sessionSyscalls = {
+    open: async () => ({ ok: false, message: "unused" }),
+    write: async (input) => {
+      writes.push(input);
+      return { ok: true, sessionId: "peer", title: "peer", delivered: "queued_message" };
+    },
+    read: async () => ({ ok: true, mode: "children", children: [] }),
+    list: async () => ({
+      ok: true,
+      sessions: [{ sessionId: "peer", title: "peer", status: "idle", current: false }],
+    }),
+    start: async (input) => {
+      starts.push(input);
+      return { ok: true, sessionId: "made", title: "made" };
+    },
+  };
+  const tools = createAgentTools({ current: tc });
+  const subagents = tools.find((tool) => tool.name === "subagents")!;
+  const sessions = tools.find((tool) => tool.name === "sessions")!;
+  assert.match(subagents.description, /does not get its own sidebar entry/);
+  assert.match(subagents.description, /does not inherit this conversation/);
+  assert.match(sessions.description, /web sidebar/);
+  for (const action of ["open", "followup_task", "wait"])
+    assert.ok(!Check(sessions.parameters, { action }), `sessions has no ${action}`);
+  for (const action of ["list", "new", "fork"])
+    assert.ok(!Check(subagents.parameters, { action }), `subagents has no ${action}`);
+  assert.match(textOut(await call(sessions, { action: "list" })), /peer \(peer\) — idle/);
+  assert.match(textOut(await call(sessions, { action: "new", text: "hi", title: "t" })), /Started session "made"/);
+  assert.match(textOut(await call(sessions, { action: "fork" })), /Forked this conversation into session "made"/);
+  assert.match(textOut(await call(sessions, { action: "send_message", target: "peer", text: "fyi" })), /queued/);
+  assert.match(textOut(await call(sessions, { action: "read" })), /requires `target`/);
+  assert.deepEqual(starts, [{ fork: false, text: "hi", title: "t" }, { fork: true }]);
+  assert.deepEqual(
+    writes.map(({ followup, target, text }) => ({ followup, target, text })),
+    [{ followup: undefined, target: "peer", text: "fyi" }],
+  );
 });

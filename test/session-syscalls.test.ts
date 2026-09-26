@@ -1657,3 +1657,80 @@ for (const surface of ["slack", "web"] as const) {
     });
   }
 }
+
+test("sessions list shows only this context's sidebar sessions and create needs a live person", async () => {
+  const sessions = createMemorySessionStore();
+  const { runs } = createMemoryRunStore();
+  const started: Array<{ forkOf?: string; text?: string; title?: string; scopeId: ScopeId }> = [];
+  const room = await sessions.getOrCreateByThread("web:U1:room", "dm", scope, undefined, "web");
+  await sessions.updateTitle(room.id, "room");
+  const peer = await sessions.getOrCreateByThread("web:U1:peer", "dm", scope, undefined, "web");
+  await sessions.updateTitle(peer.id, "peer");
+  const archived = await sessions.getOrCreateByThread("web:U1:old", "dm", scope, undefined, "web");
+  const elsewhere = await sessions.getOrCreateByThread("web:U1:other", "channel", scopeId("channel", "C9"));
+  const factory = createSessionSyscalls({
+    mailbox: createSessionMailbox(createMemoryMap<SessionMessage>()),
+    sessions,
+    runs,
+    signals: createMemoryRunSignalStore(),
+    maxAttempts: 3,
+    conversations: {
+      list: async () => [
+        (await sessions.get(room.id))!,
+        (await sessions.get(peer.id))!,
+        { ...(await sessions.get(archived.id))!, archived: true },
+        (await sessions.get(elsewhere.id))!,
+        {
+          ...(await sessions.get(peer.id))!,
+          id: "child",
+          threadRef: "agent:main:subagent:x",
+          parentSessionId: room.id,
+        },
+      ],
+      start: async (_actorId, input) => {
+        started.push(input);
+        return { session: { ...(await sessions.get(peer.id))!, id: "made", title: "made" } };
+      },
+    },
+  });
+  const guest: Principal = { id: "G1", type: "guest", displayName: "Guest" };
+  const forTurn = (origin: OrchestratorInput["origin"], readOnly?: boolean, audience: Principal[] = [actor]) =>
+    factory.forTurn({
+      session: room,
+      scopeId: scope,
+      request: {
+        surface: "web",
+        conversation: { kind: "dm", threadRef: room.threadRef, audience },
+        actor,
+        origin,
+        ...(readOnly ? { readOnly } : {}),
+      } as Parameters<typeof factory.forTurn>[0]["request"],
+    });
+  const live = forTurn({ kind: "human" });
+  const listed = await live.list!();
+  assert.ok(listed.ok);
+  assert.deepEqual(listed.sessions.map((s) => [s.title, s.current]).sort(), [
+    ["peer", false],
+    ["room", true],
+  ]);
+  assert.deepEqual(await live.start!({ fork: false }), {
+    ok: false,
+    message: "new requires `text`: the new session's first message.",
+  });
+  assert.equal((await live.start!({ fork: false, text: "hello", title: "fresh" })).ok, true);
+  assert.equal((await live.start!({ fork: true })).ok, true);
+  assert.deepEqual(started, [
+    { scopeId: scope, text: "hello", title: "fresh" },
+    { scopeId: scope, forkOf: room.id },
+  ]);
+  for (const blocked of [
+    forTurn({ kind: "automation" }),
+    forTurn({ kind: "ambient", live: true }),
+    forTurn({ kind: "human" }, true),
+    forTurn({ kind: "human" }, false, [actor, guest]),
+  ]) {
+    const out = await blocked.start!({ fork: true });
+    assert.equal(out.ok, false);
+  }
+  assert.equal(started.length, 2);
+});
