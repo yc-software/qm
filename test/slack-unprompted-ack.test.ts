@@ -104,6 +104,7 @@ test("an answered followup's ack clears as soon as QM posts into the thread", as
 
 test("an answered followup whose reply post fails still clears its ack", async () => {
   const h = harness(async (hooks) => {
+    await hooks.onQueued?.("r1");
     hooks.onReplying?.();
     await new Promise((r) => setTimeout(r, 2_200));
     return { status: "ok", reply: "Staging is green." };
@@ -111,7 +112,7 @@ test("an answered followup whose reply post fails still clears its ack", async (
   h.client.chat.postMessage = async () => {
     throw new Error("slack 500");
   };
-  await assert.rejects(h.handler.handleIncoming(h.followup, h.client), /slack 500/);
+  await h.handler.handleIncoming(h.followup, h.client);
   assert.deepEqual(h.reactions, ["+eyes@2.000", "-eyes@2.000"]);
 });
 
