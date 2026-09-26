@@ -2,10 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { gzipSync } from "node:zlib";
 
 const calls: Array<{ url: string; cookie: unknown; identity: unknown }> = [];
 const upstream = createServer((req, res) => {
   calls.push({ url: req.url!, cookie: req.headers.cookie, identity: req.headers["x-portal-identity"] });
+  res.setHeader("vary", "accept-encoding");
+  if (req.headers["accept-encoding"]?.includes("gzip")) {
+    res.setHeader("content-encoding", "gzip");
+    return void res.end(gzipSync("public content"));
+  }
   res.end("public content");
 });
 await new Promise<void>((resolve) => upstream.listen(0, resolve));
@@ -50,4 +56,19 @@ test("anonymous public shares forward no identity and do not open private routes
   }
   assert.equal((await fetch(`${base}/share/external/${token}`, { method: "POST", redirect: "manual" })).status, 401);
   assert.equal(calls.length, before);
+});
+
+test("public assets and shared files preserve the client's compression negotiation", async () => {
+  const token = "11111111-1111-4111-8111-111111111111";
+  for (const path of ["/assets/shared-Abc123.js", `/share/external/${token}/files/${token}`]) {
+    for (const encoding of ["gzip", "identity"]) {
+      const response = await fetch(`${base}${path}`, { headers: { "accept-encoding": encoding } });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-encoding"), encoding === "gzip" ? "gzip" : null);
+      assert.equal(response.headers.get("vary"), "accept-encoding");
+      assert.equal(await response.text(), "public content");
+      assert.equal(calls.at(-1)!.cookie, undefined);
+      assert.equal(calls.at(-1)!.identity, undefined);
+    }
+  }
 });

@@ -7491,9 +7491,9 @@
       function historyIsIndex() {
         return view === "history" && orgWideView() && !urlToState().session;
       }
-      function renderCurrentData() {
+      function renderCurrentData(refresh = true) {
         if (historyIsIndex()) return void renderScopeIndex();
-        renderData();
+        renderData(refresh);
       }
       function hasGovernanceDraft() {
         return isGovLike(view) && !!$("view-governance").querySelector(".card.dirty");
@@ -7641,7 +7641,7 @@
           const memoryEditor = view === "memory" && !(orgWideView() && urlToState().mem !== "edit");
 
           if (!(memoryEditor && orgWideView())) defaultShell();
-          if (view !== "governance" && !memoryEditor) renderCurrentData();
+          if (view !== "governance" && !memoryEditor) renderCurrentData(false);
         }
       }
       function dirLabel(id) {
@@ -9291,9 +9291,8 @@
           keychain: renderKeychain,
         })[view](root, data);
       }
-      async function renderData() {
+      async function renderData(refresh = true) {
         const root = $("view-data");
-        const reqId = ++dataReq;
         const q = "scope=" + encodeURIComponent(scope);
         const ep = ENDPOINT[view] || view;
         let path = ORG_WIDE.has(view) ? `/api/${ep}` : `/api/${ep}?${q}`;
@@ -9310,8 +9309,13 @@
         }
         if (view === "errors") path += `&limit=${ERRORS_PAGE_SIZE}&offset=${(page - 1) * ERRORS_PAGE_SIZE}`;
         if (view === "spend") path += `?${spendQuery(urlToState())}`;
-        const cacheable = view !== "memory";
+        const cacheable = view !== "memory" || path === "/api/memory/scopes";
         const cached = cacheable ? dataCache.get(path) : undefined;
+        if (!refresh) {
+          if (cached !== undefined) paintData(root, cached);
+          return;
+        }
+        const reqId = ++dataReq;
         if (cached !== undefined) {
           paintData(root, cached);
         } else {

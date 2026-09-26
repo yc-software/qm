@@ -53,6 +53,67 @@ test("settings navigation never starts the all-scopes history scan", () => {
   }
 });
 
+test("scope labels repaint loaded lists without repeating or invalidating their data request", async () => {
+  for (const view of ["memory", "files"]) {
+    for (const directoryFirst of [false, true]) {
+      const f = litFixture();
+      try {
+        const directory = Promise.withResolvers<unknown>();
+        const data = Promise.withResolvers<unknown>();
+        const requests: string[] = [];
+        let paints = 0;
+        const context = vm.createContext({
+          view,
+          scope: "org:test",
+          scopeDir: null,
+          dataReq: 0,
+          dataCache: new Map(),
+          viewLoadedAt: {},
+          SCOPED: new Set([view]),
+          ORG_WIDE: new Set(),
+          ENDPOINT: {},
+          VIEW_TITLE: {},
+          $: () => f.root,
+          document: f.document,
+          urlToState: () => ({}),
+          orgWideView: () => true,
+          historyIsIndex: () => false,
+          defaultShell() {},
+          api: (_method: string, path: string) => {
+            requests.push(path);
+            return path === "/api/scopes" ? directory.promise : data.promise;
+          },
+          paintData: () => {
+            paints++;
+          },
+        });
+        vm.runInContext(
+          extract("function renderCurrentData", "function hasGovernanceDraft") +
+            extract("async function loadScopeDirectory", "function dirLabel") +
+            extract("async function renderData", "function kpis"),
+          context,
+        );
+        const pending = vm.runInContext("renderData()", context);
+        const labels = vm.runInContext("loadScopeDirectory()", context);
+        const finishDirectory = async () => {
+          directory.resolve({ ok: true, data: { scopes: [{ scopeId: "org:test", label: "Test" }] } });
+          await labels;
+        };
+        if (directoryFirst) await finishDirectory();
+        data.resolve({ ok: true, data: { scopes: [], files: [] } });
+        await pending;
+        if (!directoryFirst) await finishDirectory();
+        assert.equal(requests.length, 2, `${view}: one list request and one directory request`);
+        assert.equal(paints, directoryFirst ? 1 : 2);
+        await vm.runInContext("renderData()", context);
+        assert.equal(requests.length, 3, "Explicit refresh still fetches fresh data");
+      } finally {
+        f.dom.window.close();
+      }
+    }
+  }
+});
+
 test("catalog completion appends options only to the requesting settings view", async () => {
   const source = extract("if (r.data.modelCatalogRefreshing) {", "\n      }\n      async function refreshSoulConflict");
   for (const stale of [false, true]) {

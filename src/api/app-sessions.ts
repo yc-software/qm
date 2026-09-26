@@ -111,7 +111,7 @@ export function createSessionMethods(
     approvalRecordIsCurrent,
     principalCanAccessCurrentScope,
     principalCanWriteScope,
-    principalGitPermission,
+    deploymentPermissionsForViewer,
     principalCanManageScope,
     membershipControlsScope,
     authorizesCapabilityScope,
@@ -217,12 +217,13 @@ export function createSessionMethods(
       ]);
       let read = initialRead;
       let all = transcriptEntries(read.entries);
-      while (limit !== undefined && read.earlier > 0 && !coversTailWindow(all, window!.tailTurns!)) {
+      let w = windowedTranscript(all, window);
+      while (limit !== undefined && read.earlier > 0 && w.earlier === 0 && !coversTailWindow(all, window!.tailTurns!)) {
         limit *= 2;
         read = await transcripts.forRender(sessionId, { limit, beforeSeq: window?.beforeSeq });
         all = transcriptEntries(read.entries);
+        w = windowedTranscript(all, window);
       }
-      const w = windowedTranscript(all, window);
       const earlier = w.earlier + read.earlier;
       const pins = await decoratedPins(pinRecords, all, (seq) => storedEntryAt(sessionId, seq));
       return {
@@ -266,12 +267,18 @@ export function createSessionMethods(
       ]);
       let read = initialRead;
       let visible = transcriptEntries(read.entries);
-      while (limit !== undefined && read.earlier > 0 && !coversTailWindow(visible, window!.tailTurns!)) {
+      let w = windowedTranscript(visible, window);
+      while (
+        limit !== undefined &&
+        read.earlier > 0 &&
+        w.earlier === 0 &&
+        !coversTailWindow(visible, window!.tailTurns!)
+      ) {
         limit *= 2;
         read = await transcripts.forViewer(sessionId, principalId, { limit, beforeSeq: window?.beforeSeq });
         visible = transcriptEntries(read.entries);
+        w = windowedTranscript(visible, window);
       }
-      const w = windowedTranscript(visible, window);
       const earlier = w.earlier + read.earlier;
       const pins = await decoratedPins(pinRecords, visible, (seq) => viewerStoredEntryAt(sessionId, principalId, seq));
       return {
@@ -701,12 +708,13 @@ export function createSessionMethods(
         cursor = next.nextCursor;
       }
       files.sort((a, b) => b.createdAt - a.createdAt);
+      const permissionFor = deploymentPermissionsForViewer(principalId);
       const deployments = (
         await Promise.all(
           allDeployments
             .filter((d) => d.createdInScope === scope || d.ownerScopeId === scope)
             .map(async (d): Promise<ScopeDeployment | null> => {
-              const permission = await principalGitPermission(d, principalId);
+              const permission = await permissionFor(d);
               return permission
                 ? {
                     id: d.id,

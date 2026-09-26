@@ -82,7 +82,7 @@ function fixture() {
   let height = 1000;
   let pinsHeight = 30;
   let promptTop = 50;
-  Object.defineProperties(s, { scrollHeight: { get: () => height }, clientHeight: { value: 200 } });
+  Object.defineProperties(s, { scrollHeight: { get: () => height }, clientHeight: { value: 200, configurable: true } });
   s.scrollTop = 800;
   s.getBoundingClientRect = () => ({ top: 20 }) as DOMRect;
   pins.getBoundingClientRect = () => ({ height: pinsHeight }) as DOMRect;
@@ -167,6 +167,26 @@ function fixture() {
     },
   };
 }
+
+test("hiding a transcript cannot turn its reset scroll position into a history request", () => {
+  const f = fixture();
+  try {
+    const button = f.s.ownerDocument.createElement("button");
+    button.className = "earlier-messages-btn";
+    f.s.prepend(button);
+    let loads = 0;
+    button.addEventListener("click", () => loads++);
+    Object.defineProperty(f.s, "clientHeight", { value: 0 });
+    f.scroll(0);
+    f.wheelUp();
+    assert.equal(loads, 0);
+    Object.defineProperty(f.s, "clientHeight", { value: 200 });
+    f.wheelUp();
+    assert.equal(loads, 1);
+  } finally {
+    f.close();
+  }
+});
 
 test("scrolling toward earlier messages loads before reaching the top and pauses following", () => {
   const f = fixture();

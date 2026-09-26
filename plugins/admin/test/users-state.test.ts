@@ -17,6 +17,59 @@ function model() {
   });
   return view;
 }
+test("roster loads only keychain summary and renders canonical and zero counts", async () => {
+  const f = litFixture();
+  const requests: string[] = [];
+  const users = ["Alice@example.com", "U2"].map((principalId) => ({
+    principalId,
+    sessionCount: 1,
+    turnCount: 1,
+  }));
+  f.ui.users.users(
+    f.root,
+    { users, grants: [], externalUsers: [] },
+    {
+      defaultShell() {},
+      api: async (_method: string, path: string) => {
+        requests.push(path);
+        return {
+          ok: true,
+          data: { people: [{ principalId: "alice@example.com", credentialCount: 2, activeGrantCount: 3 }] },
+        };
+      },
+      labelRole: String,
+    },
+  );
+  await Promise.resolve();
+  assert.deepEqual(requests, ["/api/keychain?summary=1"]);
+  const rows = [...f.root.querySelectorAll(".users-roster tbody tr")];
+  assert.deepEqual(
+    rows.map((row) => [...row.querySelectorAll("td")].slice(5, 7).map((cell) => cell.textContent)),
+    [
+      ["2", "3"],
+      ["0", "0"],
+    ],
+  );
+  f.dom.window.close();
+});
+test("roster keeps counts unknown when an older core returns only global summary counts", async () => {
+  const f = litFixture();
+  f.ui.users.users(
+    f.root,
+    { users: [{ principalId: "U1", sessionCount: 1, turnCount: 1 }], grants: [], externalUsers: [] },
+    {
+      defaultShell() {},
+      api: async () => ({ ok: true, data: { users: 1, standing: 2 } }),
+      labelRole: String,
+    },
+  );
+  await Promise.resolve();
+  assert.deepEqual(
+    [...f.root.querySelectorAll(".users-roster tbody td")].slice(5, 7).map((cell) => cell.textContent),
+    ["-", "-"],
+  );
+  f.dom.window.close();
+});
 test("user invitation keeps newer edited fields open when the submitted invitation succeeds", async () => {
   const view = model();
   let resolve!: (value: any) => void;

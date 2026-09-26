@@ -411,8 +411,8 @@ export async function show(sessionId: string, limit: number | undefined, expand:
         full = fullTool(unit);
       full.classList.toggle("filtered", hidden);
       if (unit.delivery || unit.llmReqs?.length) return full;
-      const cp = call?.payload,
-        rp = res?.payload,
+      const cp = call?.payload ?? {},
+        rp = res?.payload ?? {},
         name = s.toolName(cp, rp),
         toggle = () => {
           if (open.has(unit)) open.delete(unit);

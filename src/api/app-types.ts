@@ -142,6 +142,7 @@ export interface DeploymentView {
 
 export interface ViewerDeployment extends DeploymentView {
   permission: Permission;
+  gitUrl?: string;
 }
 
 export function deploymentView(d: Deployment): DeploymentView {
@@ -214,6 +215,12 @@ type ProjectViewMutation =
 interface DeploymentGitUrl {
   url: string;
   permission: "read" | "write";
+}
+
+export interface DeploymentGitUrlOptions {
+  secret: string;
+  baseUrl: string;
+  ttlMs?: number;
 }
 
 interface SessionBackgroundView {
@@ -526,7 +533,12 @@ export interface App {
   redeploy(id: string, input: RedeployInput): Promise<Deployment>;
   listDeployments(): Promise<Deployment[]>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
-  listDeploymentsForViewer(principalId: string): Promise<ViewerDeployment[]>;
+  listDeploymentsForViewer(principalId: string, git?: DeploymentGitUrlOptions): Promise<ViewerDeployment[]>;
+  getDeploymentForViewer(
+    idOrName: string,
+    principalId: string,
+    git?: DeploymentGitUrlOptions,
+  ): Promise<ViewerDeployment | null>;
   effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null>;
   deploymentGitPermissionFor(idOrName: string, principalId: string): Promise<"read" | "write" | null>;
   listSkills(): Promise<Skill[]>;
@@ -598,7 +610,7 @@ export interface App {
   deploymentGitUrlFor(
     idOrName: string,
     principalId: string,
-    opts: { secret: string; baseUrl: string; ttlMs?: number },
+    opts: DeploymentGitUrlOptions,
   ): Promise<DeploymentGitUrl | null>;
   authorizesDeploymentGitAccess(id: string, principalId: string, permission: "read" | "write"): Promise<boolean>;
   reapIdleDeployments(ttlMs: number, now?: number): Promise<number>;

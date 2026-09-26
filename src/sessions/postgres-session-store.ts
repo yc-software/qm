@@ -749,6 +749,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            ON CONFLICT DO NOTHING`,
         ],
       },
+      {
+        id: "sessions/store/0024-user-preview-seq",
+        statements: [
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_user_preview
+           ON session_entries(session_id, seq DESC)
+           WHERE type = 'user' AND (payload IS NULL OR payload NOT LIKE '%"overheard":true%')`,
+        ],
+      },
     ],
     [
       {
@@ -1667,10 +1675,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const out = new Map<string, string>();
       if (sessionIds.length === 0) return out;
       const rows = await q(
-        `SELECT DISTINCT ON (le.session_id) le.session_id, ${previewExpr("le.payload")} AS last_user
-           FROM session_entries le
-          WHERE le.session_id = ANY($1) AND ${userTurn("le")}
-          ORDER BY le.session_id, le.seq DESC`,
+        `SELECT wanted.session_id, ${previewExpr("latest.payload")} AS last_user
+           FROM unnest($1::text[]) AS wanted(session_id)
+           CROSS JOIN LATERAL (
+             SELECT le.payload FROM session_entries le
+              WHERE le.session_id = wanted.session_id AND ${userTurn("le")}
+              ORDER BY le.seq DESC LIMIT 1
+           ) latest`,
         [sessionIds],
       );
       for (const r of rows) out.set(r.session_id as string, userMessagePreview(r.last_user ?? null, 100));

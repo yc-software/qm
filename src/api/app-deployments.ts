@@ -5,10 +5,29 @@ import { deploymentShareScope } from "../deploy/email-access.ts";
 import { errMessage } from "../util/errors.ts";
 import type { Reach } from "../deploy/deploy-service.ts";
 import { mintDeployGitAccess } from "../deploy/access-token.ts";
+import type { Deployment } from "../deploy/deploy-store.ts";
 
-import type { App, AppDeps, ViewerDeployment } from "./app-types.ts";
+import type { App, AppDeps, DeploymentGitUrlOptions, ViewerDeployment } from "./app-types.ts";
 import { deploymentView } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
+
+async function deploymentGitUrl(
+  id: string,
+  principalId: string,
+  permission: "read" | "write",
+  opts: DeploymentGitUrlOptions,
+) {
+  const token = await mintDeployGitAccess(opts.secret, {
+    deploymentId: id,
+    permission,
+    principalId,
+    exp: Date.now() + (opts.ttlMs ?? 60 * 60 * 1000),
+  });
+  const url = new URL(`/v1/deployments/${encodeURIComponent(id)}/git`, opts.baseUrl);
+  url.username = "deployment";
+  url.password = token;
+  return { url: url.toString(), permission };
+}
 
 export function createDeploymentMethods(
   deps: AppDeps,
@@ -23,6 +42,7 @@ export function createDeploymentMethods(
   | "inviteToDeployment"
   | "deploymentGrantees"
   | "listDeploymentsForViewer"
+  | "getDeploymentForViewer"
   | "effectiveDeploymentPermission"
   | "deploymentGitPermissionFor"
   | "rollbackDeployment"
@@ -49,6 +69,20 @@ export function createDeploymentMethods(
 > {
   const { effectiveDeploymentPermission, principalCanReadDeployment, principalGitPermission } = h;
   const invitationLock = deps.advisoryLock ?? createMemoryAdvisoryLock();
+  async function viewerDeployment(
+    deployment: Deployment,
+    principalId: string,
+    git?: DeploymentGitUrlOptions,
+    permissionFor = (row: Deployment) => principalGitPermission(row, principalId),
+  ): Promise<ViewerDeployment | null> {
+    const permission = await permissionFor(deployment);
+    if (!permission) return null;
+    return {
+      ...deploymentView(deployment),
+      permission,
+      ...(git ? { gitUrl: (await deploymentGitUrl(deployment.id, principalId, permission, git)).url } : {}),
+    };
+  }
   return {
     deploy(input) {
       return deps.deploy.deploy(input);
@@ -116,21 +150,21 @@ export function createDeploymentMethods(
     deploymentGrantees(idOrName) {
       return deps.deploy.deploymentGrantees(idOrName);
     },
-    async listDeploymentsForViewer(principalId) {
+    async listDeploymentsForViewer(principalId, git) {
       const deployments = await deps.deploy.listDeployments();
-      const enriched = await Promise.all(
-        deployments.map(async (d): Promise<ViewerDeployment | null> => {
-          const permission = await principalGitPermission(d, principalId);
-          return permission ? { ...deploymentView(d), permission } : null;
-        }),
-      );
+      const permissionFor = h.deploymentPermissionsForViewer(principalId);
+      const enriched = await Promise.all(deployments.map((d) => viewerDeployment(d, principalId, git, permissionFor)));
       return enriched.filter((d): d is ViewerDeployment => d != null);
+    },
+    async getDeploymentForViewer(idOrName, principalId, git) {
+      const deployment = await deps.deploy.getDeployment(idOrName);
+      return deployment ? viewerDeployment(deployment, principalId, git) : null;
     },
     effectiveDeploymentPermission(d, principalId) {
       return effectiveDeploymentPermission(d, principalId);
     },
     async deploymentGitPermissionFor(idOrName, principalId) {
-      const deployment = (await deps.deploy.listDeployments()).find((d) => d.id === idOrName || d.name === idOrName);
+      const deployment = await deps.deploy.getDeployment(idOrName);
       return deployment ? principalGitPermission(deployment, principalId) : null;
     },
     rollbackDeployment(id, version) {
@@ -191,16 +225,7 @@ export function createDeploymentMethods(
       if (!d) return null;
       const permission = await principalGitPermission(d, principalId);
       if (!permission) return null;
-      const token = await mintDeployGitAccess(opts.secret, {
-        deploymentId: d.id,
-        permission,
-        principalId,
-        exp: Date.now() + (opts.ttlMs ?? 60 * 60 * 1000),
-      });
-      const url = new URL(`/v1/deployments/${encodeURIComponent(d.id)}/git`, opts.baseUrl);
-      url.username = "deployment";
-      url.password = token;
-      return { url: url.toString(), permission };
+      return deploymentGitUrl(d.id, principalId, permission, opts);
     },
     async authorizesDeploymentGitAccess(id, principalId, permission) {
       const d = await deps.deploy.getDeployment(id);

@@ -181,6 +181,10 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       }
       return Response.json({ session, entries: opts.entries ?? [] });
     }
+    const listedSession = (opts.listSessions as CoreSession[] | undefined)?.find(
+      (listed) => path === `/api/sessions/${listed.id}` || path.startsWith(`/api/sessions/${listed.id}?`),
+    );
+    if (listedSession) return Response.json({ session: listedSession, entries: opts.entries ?? [] });
     if (path === "/api/sessions") {
       await sessionsHeld;
       return Response.json({ sessions: opts.listSessions ?? [] });
