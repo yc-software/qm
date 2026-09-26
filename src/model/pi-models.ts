@@ -39,6 +39,7 @@ export const THINKING_LEVELS = [
 const EFFORT_TIERS = ["low", "medium", "high", "xhigh", "max"] as const;
 type EffortTier = (typeof EFFORT_TIERS)[number];
 export const TIER_ORDER: readonly string[] = [...EFFORT_TIERS, "ultra", "ultracode"];
+const CLIENT_TIERS: Partial<Record<HarnessId, string[]>> = { codex: ["ultra"], claude: ["ultracode"] };
 export const HARNESS_IDS = ["pi", "opencode", "codex", "claude", "mock"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
@@ -77,7 +78,7 @@ function clientTier(harnessId: HarnessId, modelId: string): "ultra" | "ultracode
 export function thinkingLevelsForHarness(harnessId: HarnessId, modelId?: string): readonly string[] {
   if (!["pi", "claude", "codex"].includes(harnessId)) return ["auto"];
   if (!modelId) {
-    const extra = harnessId === "codex" ? ["ultra"] : harnessId === "claude" ? ["ultracode"] : ["default", "adaptive"];
+    const extra = CLIENT_TIERS[harnessId] ?? ["default", "adaptive"];
     return THINKING_LEVELS.filter(
       (level) => level === "auto" || (EFFORT_TIERS as readonly string[]).includes(level) || extra.includes(level),
     );
