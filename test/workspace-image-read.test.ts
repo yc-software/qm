@@ -74,6 +74,20 @@ for (const [format, data] of Object.entries(images)) {
     ]);
     assert.equal(JSON.stringify(entries).includes(data), false);
   });
+
+  test(`incomplete ${format} files fail at the tool boundary`, async () => {
+    const bytes = Buffer.from(data, "base64");
+    const headerSize =
+      format === "jpeg" ? bytes.indexOf(Buffer.from([0xff, 0xda])) : { png: 24, gif: 10, webp: 30 }[format]!;
+    const { read } = setup({
+      [`header.${format}`]: bytes.subarray(0, headerSize),
+      [`truncated.${format}`]: bytes.subarray(0, -1),
+      [`trailing.${format}`]: Buffer.concat([bytes, Buffer.from("trailing data")]),
+    });
+    await assert.rejects(read(`header.${format}`), /Invalid image/);
+    await assert.rejects(read(`truncated.${format}`), /Invalid image/);
+    assert.equal((await read(`trailing.${format}`)).content[1]?.type, "image");
+  });
 }
 
 test("image headers determine the MIME type regardless of the filename", async () => {

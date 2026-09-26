@@ -803,8 +803,9 @@ export function trimPayloadToByteBudget(payload: unknown, maxBytes: number = MAX
 
   const items = (p[listKey] as unknown[]).map((m) => {
     if (toShed <= 0) return m;
-    const msg = m as { content?: unknown; parts?: unknown };
-    const key = listKey === "contents" ? "parts" : "content";
+    const msg = m as { content?: unknown; parts?: unknown; output?: unknown };
+    let key: "parts" | "content" | "output" = listKey === "contents" ? "parts" : "content";
+    if (listKey === "input" && Array.isArray(msg?.output)) key = "output";
     if (!Array.isArray(msg?.[key])) return m;
     const content = trimContent(msg[key]);
     return content === msg[key] ? m : { ...(m as Record<string, unknown>), [key]: content };

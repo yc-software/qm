@@ -12,7 +12,7 @@ export interface ImageDownscaleDeps {
   spawn: (
     command: string,
     args: string[],
-    options: { stdio: ["pipe", "pipe", "pipe"] },
+    options: { stdio: ["pipe", "pipe", "pipe"]; signal?: AbortSignal; timeout: number; killSignal: "SIGKILL" },
   ) => ChildProcessWithoutNullStreams;
   warn: (message: string) => void;
 }
@@ -124,6 +124,88 @@ export function sniffImageDimensions(bytes: Uint8Array): ImageDimensions | undef
   return pngDimensions(bytes) ?? jpegDimensions(bytes) ?? gifDimensions(bytes) ?? webpDimensions(bytes);
 }
 
+export function hasCompleteImagePayload(bytes: Uint8Array, format: ImageDimensions["format"]): boolean {
+  const data = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let hasPixels = false;
+  if (format === "png") {
+    if (data.length < 33 || data.readUInt32BE(8) !== 13) return false;
+    let offset = 8;
+    while (offset + 12 <= data.length) {
+      const size = data.readUInt32BE(offset);
+      if (size > data.length - offset - 12) return false;
+      const type = data.toString("ascii", offset + 4, offset + 8);
+      if (type === "IDAT" && size > 0) hasPixels = true;
+      if (type === "IEND") return size === 0 && hasPixels;
+      offset += size + 12;
+    }
+  } else if (format === "jpeg") {
+    let offset = 2;
+    let inScan = false;
+    while (offset < data.length) {
+      if (data[offset] !== 0xff) {
+        if (!inScan) return false;
+        hasPixels = true;
+        offset++;
+        continue;
+      }
+      while (data[offset] === 0xff) offset++;
+      const marker = data[offset++];
+      if (marker === 0xd9) return hasPixels;
+      if (inScan && marker === 0) {
+        hasPixels = true;
+        continue;
+      }
+      if (inScan && marker !== undefined && marker >= 0xd0 && marker <= 0xd7) continue;
+      inScan = false;
+      if (marker === 0x01) continue;
+      if (offset + 2 > data.length) return false;
+      const size = data.readUInt16BE(offset);
+      if (size < 2 || offset + size > data.length) return false;
+      offset += size;
+      inScan = marker === 0xda;
+    }
+  } else if (format === "gif") {
+    if (data.length < 13) return false;
+    let offset = 13 + (data[10]! & 0x80 ? 3 * (2 << (data[10]! & 7)) : 0);
+    while (offset < data.length) {
+      const marker = data[offset++];
+      if (marker === 0x3b) return hasPixels;
+      if (marker === 0x21) offset++;
+      else if (marker === 0x2c) {
+        if (offset + 10 > data.length) return false;
+        const packed = data[offset + 8]!;
+        offset += 10 + (packed & 0x80 ? 3 * (2 << (packed & 7)) : 0);
+      } else return false;
+      while (offset < data.length) {
+        const size = data[offset++]!;
+        if (size === 0) break;
+        if (offset + size > data.length) return false;
+        if (marker === 0x2c) hasPixels = true;
+        offset += size;
+      }
+    }
+  } else {
+    if (data.length < 12) return false;
+    const end = data.readUInt32LE(4) + 8;
+    if (end > data.length) return false;
+    const chunksComplete = (start: number, limit: number, frame = false): boolean => {
+      let offset = start;
+      while (offset + 8 <= limit) {
+        const type = data.toString("ascii", offset, offset + 4);
+        const size = data.readUInt32LE(offset + 4);
+        const next = offset + 8 + size;
+        if (next + (size & 1) > limit) return false;
+        if ((type === "VP8 " && size > 10) || (type === "VP8L" && size > 5)) hasPixels = true;
+        if (type === "ANMF" && (frame || size < 16 || !chunksComplete(offset + 24, next, true))) return false;
+        offset = next + (size & 1);
+      }
+      return offset === limit;
+    };
+    return chunksComplete(12, end) && hasPixels;
+  }
+  return false;
+}
+
 function imageMagickArgs(format: ImageDimensions["format"]): string[] {
   return ["-", "-resize", `${MAX_VISION_IMAGE_DIMENSION}x${MAX_VISION_IMAGE_DIMENSION}>`, `${format}:-`];
 }
@@ -153,6 +235,7 @@ async function runConverter(
   command: string,
   args: string[],
   deps: ImageDownscaleDeps,
+  signal?: AbortSignal,
 ): Promise<{ missing: boolean; output?: Uint8Array }> {
   return await new Promise((resolve) => {
     let settled = false;
@@ -163,7 +246,12 @@ async function runConverter(
     };
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = deps.spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+      child = deps.spawn(command, args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        signal,
+        timeout: 15_000,
+        killSignal: "SIGKILL",
+      });
     } catch (err) {
       finish({ missing: (err as NodeJS.ErrnoException).code === "ENOENT" });
       return;
@@ -193,7 +281,9 @@ export async function downscaleVisionImage(
   bytes: Uint8Array,
   mimeType: string,
   deps: ImageDownscaleDeps = DEFAULT_DEPS,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
+  signal?.throwIfAborted();
   const expectedFormat = FORMAT_BY_MIME.get(mimeType);
   if (!expectedFormat) return bytes;
   const dimensions = sniffImageDimensions(bytes);
@@ -206,7 +296,8 @@ export async function downscaleVisionImage(
   ];
   let sawConverter = false;
   for (const [command, args] of attempts) {
-    const result = await runConverter(bytes, command, args, deps);
+    const result = await runConverter(bytes, command, args, deps, signal);
+    signal?.throwIfAborted();
     if (!result.missing) sawConverter = true;
     if (result.output && outputIsUsable(result.output)) return result.output;
   }

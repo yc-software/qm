@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { zstdDecompressSync } from "node:zlib";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
+import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import {
   buildDetectionPrompt,
   createPiHarness,
@@ -765,6 +766,44 @@ test("trimPayloadToByteBudget also trims the OpenAI Responses wire shape", () =>
   });
   assert.match(out.input[0].content[0].text, /image removed/);
   assert.ok(JSON.stringify(out).length <= 18_000_000);
+});
+
+test("trimPayloadToByteBudget trims Responses image tool output from the installed adapter", () => {
+  const data = "AAAA".repeat(1_500_000);
+  const payload = {
+    input: convertResponsesMessages(
+      getBuiltinModel("openai", "gpt-5"),
+      {
+        messages: Array.from({ length: 3 }, (_, index) => ({
+          role: "toolResult" as const,
+          toolCallId: `read-${index}`,
+          toolName: "files",
+          content: [
+            { type: "text" as const, text: "[image: preview.png]" },
+            { type: "image" as const, data, mimeType: "image/png" },
+          ],
+          isError: false,
+          timestamp: index,
+        })),
+      },
+      new Set(["openai"]),
+    ),
+  };
+  const original = payload.input[0];
+  assert.ok(original?.type === "function_call_output" && Array.isArray(original.output));
+  assert.equal(original.output[1]?.type, "input_image");
+  const out = trimPayloadToByteBudget(payload) as typeof payload;
+  const oldest = out.input[0];
+  const newest = out.input[2];
+  assert.ok(oldest?.type === "function_call_output" && Array.isArray(oldest.output));
+  assert.ok(newest?.type === "function_call_output" && Array.isArray(newest.output));
+  assert.equal(oldest.call_id, "read-0");
+  assert.deepEqual(oldest.output[0], { type: "input_text", text: "[image: preview.png]" });
+  assert.ok(oldest.output[1]?.type === "input_text");
+  assert.match(oldest.output[1].text, /image removed/);
+  assert.equal(newest.output[1]?.type, "input_image");
+  assert.ok(Buffer.byteLength(JSON.stringify(out)) <= 18_000_000);
+  assert.equal(original.output[1]?.type, "input_image");
 });
 
 test("trimPayloadToByteBudget keeps a shed image block's cache_control breakpoint", () => {

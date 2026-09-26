@@ -78,6 +78,7 @@ test("Claude sends workspace image tool results through MCP without recording im
         ],
       },
       parent_tool_use_id: null,
+      tool_use_result: result,
     };
     yield resultMessage("inspected");
   };

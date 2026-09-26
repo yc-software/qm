@@ -290,7 +290,8 @@ export function stripClaudeImageBytes(message: SDKMessage): unknown {
     JSON.stringify(message, function (key, value) {
       if (value && typeof value === "object" && value.type === "document")
         return { type: "text", text: "[document omitted; restored from attachments]" };
-      return key === "data" && typeof value === "string" && (this as { type?: unknown }).type === "base64"
+      const type = (this as { type?: unknown }).type;
+      return key === "data" && typeof value === "string" && (type === "base64" || type === "image")
         ? "[image omitted]"
         : value;
     }),

@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   downscaleVisionImage,
   MAX_VISION_IMAGE_DIMENSION,
@@ -154,4 +154,30 @@ test("downscaleVisionImage falls back to original bytes when no converter is ava
   );
   assert.equal(warnings.length, 1);
   assert.match(warnings[0]!, /no image converter was found on PATH/);
+});
+
+test("aborting image conversion kills the running converter without starting a fallback", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  let closed: Promise<NodeJS.Signals | null> | undefined;
+  const conversion = downscaleVisionImage(
+    png(2400, 1800),
+    "image/png",
+    {
+      spawn(_command, _args, options) {
+        calls++;
+        assert.equal(options.signal, controller.signal);
+        assert.equal(options.timeout, 15_000);
+        const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], options);
+        closed = new Promise((resolve) => child.once("close", (_code, signal) => resolve(signal)));
+        child.once("spawn", () => controller.abort());
+        return child;
+      },
+      warn: () => assert.fail("aborted conversion must not fall back"),
+    },
+    controller.signal,
+  );
+  await assert.rejects(conversion, { name: "AbortError" });
+  assert.equal(await closed, "SIGKILL");
+  assert.equal(calls, 1);
 });
