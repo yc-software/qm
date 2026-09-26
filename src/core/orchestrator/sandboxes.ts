@@ -58,6 +58,7 @@ export interface TurnSandboxContext {
   visibleSkillsForTurn: () => Promise<SkillResolution[]>;
   emitGapWork: (phase: GapPhase, start: number, end: number) => void;
   perf: { credsMs: number };
+  incognito?: boolean;
 }
 
 export function createTurnSandboxes(ctx: TurnSandboxContext) {
@@ -87,6 +88,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     visibleSkillsForTurn,
     emitGapWork,
     perf,
+    incognito,
   } = ctx;
 
   let ownerAuthCommand: ((command: string, env?: Record<string, string>) => string) | undefined;
@@ -384,7 +386,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     if (content === undefined) return missing;
     if (deps.skills)
       void deps.skills.recordUse(resolution.skill.id).catch((e) => swallow("orchestrator: skill recordUse", e));
-    if (!shipsFiles) return { content, sourceScopeId: resolution.skill.scopeId };
+    if (!shipsFiles || incognito) return { content, sourceScopeId: resolution.skill.scopeId };
     const access = sandboxId ? await accessResource(sandboxId) : undefined;
     if (access?.crossScope) return { content, sourceScopeId: resolution.skill.scopeId };
     const handle = access ? await provisionResource(access) : await provision();

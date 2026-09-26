@@ -109,6 +109,7 @@ export interface Session {
   forkBoundarySeq?: number;
   parentSessionId?: string;
   spawnMeta?: SpawnMeta;
+  incognito?: true;
   lastActivityAt?: number;
   hasEntries?: boolean;
   working?: boolean;
@@ -681,6 +682,7 @@ export interface TurnRequest {
   fastMode?: boolean;
   readOnly?: boolean;
   skipMemory?: boolean;
+  incognito?: boolean;
   surfaceTools?: boolean;
   addressed?: boolean;
   envelopeWrapped?: boolean;
@@ -760,7 +762,8 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "session_busy";
+  refusalKind?: "security_quarantine" | "session_busy" | "incognito_conflict";
+  incognito?: true;
   adminUrl?: string;
   runId?: string;
   steered?: true;

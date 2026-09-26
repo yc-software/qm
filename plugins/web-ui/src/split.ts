@@ -14,6 +14,7 @@ import {
   Cog,
   Expand,
   Files,
+  Ghost,
   KeyRound,
   Link,
   Maximize2,
@@ -77,6 +78,7 @@ import {
   sessionTitle,
   archiveSessionById,
   syncWorkingPulse,
+  startNewIncognitoChat,
 } from "./sessions";
 import { conversationBackground, type RowIndicators } from "./session-list";
 import { scopeToolCount, setScopedSession, type SessionTool } from "./session-scope";
@@ -102,6 +104,7 @@ interface PaneParams {
   sessionId?: string;
   threadRef?: string;
   scopeId?: string;
+  incognito?: string;
   [kindParamsKey: string]: string | undefined;
 }
 
@@ -623,7 +626,7 @@ function tabIntoPane(paneId: string, params: PaneParams, index?: number): boolea
   return true;
 }
 
-export function startNewChatInCanvas(scopeId?: string, threadRef?: string): Conversation | null {
+export function startNewChatInCanvas(scopeId?: string, threadRef?: string, incognito = false): Conversation | null {
   if (!mountRestoredCanvas() || !dockApi) return null;
   if (appState.currentView !== "chats") switchView("chats");
   if (!ensureCanvas() || !dockApi) return null;
@@ -634,7 +637,7 @@ export function startNewChatInCanvas(scopeId?: string, threadRef?: string): Conv
   const { width, height } = target.group.element.getBoundingClientRect();
   const direction = width >= height ? "right" : "below";
   const fresh = addPane(
-    { ...(scopeId ? { scopeId } : {}), ...(threadRef ? { threadRef } : {}) },
+    { ...(scopeId ? { scopeId } : {}), ...(threadRef ? { threadRef } : {}), ...(incognito ? { incognito: "1" } : {}) },
     { referencePanel: target.id, direction: tile ? direction : "within" },
   );
   if (replace) dockApi.removePanel(target);
@@ -1002,6 +1005,7 @@ class PaneContent implements IContentRenderer {
     this.loaded = true;
     this.syncDensity();
     const { sessionId, threadRef, scopeId } = this.params;
+    const incognito = this.params.incognito === "1";
     const entry = paneKindEntry(this.params);
     if (entry) {
       this.kindPane = entry.kind.mount({
@@ -1017,11 +1021,11 @@ class PaneContent implements IContentRenderer {
       sessionId ?? (threadRef ? (sessionsState.list.find((s) => s.threadRef === threadRef)?.id ?? null) : null);
     if (!wanted) {
       if (threadRef) {
-        conversation.mountContinuable(threadRef, null, scopeId ?? null, []);
+        conversation.mountContinuable(threadRef, null, scopeId ?? null, [], null, undefined, [], incognito);
         return;
       }
       const context = scopeId ? contextsState.list.find((c) => c.scopeId === scopeId) : undefined;
-      conversation.newChat(context ? { scopeId: context.scopeId, name: context.name ?? null } : undefined);
+      conversation.newChat(context ? { scopeId: context.scopeId, name: context.name ?? null } : undefined, incognito);
       return;
     }
     const isCurrent = conversation.mountLoadingPane();
@@ -1259,6 +1263,13 @@ class PaneTab implements ITabRenderer {
             : nothing
         }
         <span class="split-pane-title-text" dir="auto">${title}</span>
+        ${
+          dockApi?.panels.length !== 1 && paneContents.get(panel.id)?.conversation?.state.incognito
+            ? html`<span class="split-pane-incognito" aria-label="Incognito" ${tip("Incognito")}
+                >${icon(Ghost, 15)}</span
+              >`
+            : nothing
+        }
         ${sessionStatusMark(paneSession(panel)?.status)}
         ${
           this.inStrip
@@ -1428,6 +1439,17 @@ class GroupActions implements IHeaderActionsRenderer {
                 </button>
               `,
             )}
+            <button
+              class="session-menu-option"
+              type="button"
+              role="menuitem"
+              @click=${() => {
+                closeMenu();
+                startNewIncognitoChat();
+              }}
+            >
+              ${icon(Ghost, 15)}<span>Go incognito</span>
+            </button>
             <div class="split-tools-menu-sep" role="separator"></div>
             <button
               class="session-menu-option"
@@ -1525,6 +1547,17 @@ class GroupActions implements IHeaderActionsRenderer {
       html`${
           single
             ? html`<span class="split-single-tools">
+                <button
+                  class="session-tool split-pane-incognito ${
+                    panel && paneContents.get(panel.id)?.conversation?.state.incognito ? "active" : ""
+                  }"
+                  type="button"
+                  aria-label="Go incognito"
+                  ${tip("Go incognito")}
+                  @click=${() => startNewIncognitoChat()}
+                >
+                  ${icon(Ghost, 15)}
+                </button>
                 ${PANE_TOOLS.map((t) => {
                   const count = scope ? scopeToolCount(t.tool, scope, () => this.draw()) : null;
                   return html`<button

@@ -941,7 +941,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             computer_use: false,
             image_generation: false,
             in_app_browser: false,
-            multi_agent: !turn.readOnly && !turn.delegateWork,
+            multi_agent: !turn.readOnly && !turn.delegateWork && !turn.incognito,
             request_permissions_tool: false,
             tool_suggest: false,
           },

@@ -142,6 +142,61 @@ test("skipMemory turns neither recall nor capture", async () => {
   assert.equal(captures, 0);
 });
 
+test("incognito turns read memory but never capture it, while normal turns still capture", async () => {
+  const captured: string[] = [];
+  const turns: Array<{ incognito?: boolean; systemPrompt: string; context: string }> = [];
+  const base = createMockHarness();
+  const harness: Harness = {
+    ...base,
+    turns: {
+      ...base.turns,
+      runTurn: (turn) => {
+        turns.push({
+          incognito: turn.incognito,
+          systemPrompt: turn.systemPrompt,
+          context: `${turn.systemPrompt}\n${turn.environment ?? ""}`,
+        });
+        return base.turns.runTurn(turn);
+      },
+    },
+  };
+  const memory: MemoryService = {
+    recall: async () => "",
+    capture: async () => 0,
+    query: async () => [],
+    read: async () => "- (2026-09-01) Owns the deployment canary",
+    replace: async () => {},
+  };
+  const orch = buildOrchestrator(harness, memory, {
+    onTurnEnd: async (ctx) => {
+      captured.push(ctx.sessionId ?? "");
+    },
+    promptLines: () => ['Save durable facts with memory action "remember".'],
+  });
+
+  const first = await orch.handleTurn({ ...dm("dm:U1:incognito", "deployment canary"), incognito: true });
+  const followUp = await orch.handleTurn(dm("dm:U1:incognito", "deployment follow-up"));
+  const conflict = await orch.handleTurn({ ...dm("dm:U1:incognito", "make it normal"), incognito: false });
+  const normal = await orch.handleTurn(dm("dm:U1:normal", "deployment canary"));
+  for (let i = 0; i < 200 && captured.length === 0; i++) await new Promise((r) => setTimeout(r, 5));
+
+  assert.equal(first.status, "ok");
+  assert.equal(followUp.status, "ok");
+  assert.equal(followUp.sessionId, first.sessionId);
+  assert.equal(conflict.status, "refused");
+  assert.equal(conflict.refusalKind, "incognito_conflict");
+  assert.deepEqual(captured, [normal.sessionId], "only the normal turn is captured");
+  assert.deepEqual(
+    turns.map((turn) => turn.incognito === true),
+    [true, true, false],
+  );
+  assert.match(turns[0]!.context, /Owns the deployment canary/, "incognito turns still read memory");
+  assert.match(turns[0]!.systemPrompt, /## Incognito conversation/);
+  assert.doesNotMatch(turns[0]!.systemPrompt, /memory action "remember"/);
+  assert.doesNotMatch(turns[2]!.systemPrompt, /## Incognito conversation/);
+  assert.match(turns[2]!.systemPrompt, /memory action "remember"/);
+});
+
 test("approval replay preserves the memory opt-out", () => {
   assert.equal(replayableRequest({ ...dm("dm:U1:approval", "deployment canary"), skipMemory: true }).skipMemory, true);
 });

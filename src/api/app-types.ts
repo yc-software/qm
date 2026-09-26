@@ -284,6 +284,7 @@ export interface App {
     viewer?: string,
   ): Promise<{
     status: Run["status"];
+    incognito?: true;
     result: TurnResult | null;
     input?: {
       runId: string;

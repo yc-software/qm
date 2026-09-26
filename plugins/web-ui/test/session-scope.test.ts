@@ -33,10 +33,9 @@ function load(api: (path: string) => Promise<unknown> = async () => ({})) {
       closeFormMenus: () => {},
       toggleFormMenu: () => {},
       ...Object.fromEntries(
-        ["ArrowUpLeft", "Box", "Brain", "Clock3", "Ellipsis", "Files", "GitFork", "KeyRound", "Rocket"].map((name) => [
-          name,
-          name,
-        ]),
+        ["ArrowUpLeft", "Box", "Brain", "Clock3", "Ellipsis", "Files", "Ghost", "GitFork", "KeyRound", "Rocket"].map(
+          (name) => [name, name],
+        ),
       ),
     },
   ) as {
@@ -172,4 +171,13 @@ test("session status appears after the heading and before tools", () => {
   assert.equal(status.getAttribute("aria-label"), "Live in production");
   assert.ok(status.previousElementSibling?.classList.contains("session-heading"));
   assert.ok(status.nextElementSibling?.classList.contains("session-tools"));
+});
+
+test("an incognito session carries a ghost badge in its heading", () => {
+  const host = document.createElement("div");
+  render(load().sessionTopbarTpl({ crumb: null, title: "Private", incognito: true, onTool: () => {} }), host);
+  const badge = host.querySelector(".session-heading .session-incognito-badge");
+  assert.equal(badge?.textContent?.trim(), "Incognito");
+  render(load().sessionTopbarTpl({ crumb: null, title: "Ordinary", onTool: () => {} }), host);
+  assert.equal(host.querySelector(".session-incognito-badge"), null);
 });

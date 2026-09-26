@@ -1103,7 +1103,8 @@ export async function boot(): Promise<void> {
     const linked = (await transcript)?.session;
     if (linked) {
       exitSplitIfActive();
-      if (!sessionsState.list.some((s) => s.id === linked.id)) sessionsState.list = [linked, ...sessionsState.list];
+      if (!linked.incognito && !sessionsState.list.some((s) => s.id === linked.id))
+        sessionsState.list = [linked, ...sessionsState.list];
       revealSessionSurface(linked);
       await openSession(linked, transcript, approvalsPrefetch ?? undefined);
       if (wantedSeq !== null)

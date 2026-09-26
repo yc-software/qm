@@ -30,6 +30,7 @@ import { swallow, swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
+import { INCOGNITO_CONFLICT_REASON, incognitoConflicts } from "../sessions/incognito.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import { STALE_LEASE_GRACE_MS } from "./app-types.ts";
@@ -48,11 +49,7 @@ export function attributedSteerText(
   return `${steerer.displayName?.trim() || steerer.id}: ${text}`;
 }
 
-export function createTurnMethods(
-  deps: AppDeps,
-  h: AppHelpers,
-  ambient: AmbientHelpers,
-): Pick<
+type TurnMethods = Pick<
   App,
   | "turn"
   | "getApproval"
@@ -70,7 +67,9 @@ export function createTurnMethods(
   | "editQueuedRun"
   | "signalRun"
   | "replayOrphanedRunSignals"
-> {
+>;
+
+export function createTurnMethods(deps: AppDeps, h: AppHelpers, ambient: AmbientHelpers): TurnMethods {
   const {
     withAdminLink,
     drive,
@@ -97,7 +96,7 @@ export function createTurnMethods(
     };
     return deps.advisoryLock ? deps.advisoryLock.withLock("session-tree-admission", stop) : stop();
   }
-  return {
+  const methods: TurnMethods = {
     async turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult> {
       const startedAt = performance.now();
       const historicalSlack = Object.keys(deps.externalSlackPolicies ?? {}).length
@@ -337,6 +336,12 @@ export function createTurnMethods(
         }
       }
 
+      if (
+        req.incognito !== undefined &&
+        incognitoConflicts(await deps.sessions.getByThread(req.conversation.threadRef), req.incognito)
+      )
+        return { status: "refused", refusalKind: "incognito_conflict", reason: INCOGNITO_CONFLICT_REASON };
+
       const rawAudience = req.conversation.audience ?? [req.actor];
       const audience: Principal[] =
         projectAudience ??
@@ -402,6 +407,7 @@ export function createTurnMethods(
             }
           : {}),
         ...(req.skipMemory ? { skipMemory: true } : {}),
+        ...(req.incognito !== undefined ? { incognito: req.incognito } : {}),
         ...(req.unattendedGrants?.length ? { unattendedGrants: req.unattendedGrants } : {}),
         ...(req.botActor ? { botActor: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),
@@ -725,8 +731,11 @@ export function createTurnMethods(
       const tasks = await deps.tasks?.list({ originRunId: runId });
       const stale =
         run.status === "pending" ? run.attempts > 0 : !alive && leaseLapsed(run, Date.now() - STALE_LEASE_GRACE_MS);
+      const session = await deps.sessions.getByThread(run.sessionId);
+      const incognito = session ? session.incognito === true : run.request.incognito === true;
       return {
         status: run.status,
+        ...(incognito ? { incognito: true as const } : {}),
         result: run.result ? await withAdminLink(run.result) : run.result,
         ...(run.request.surface === "web" &&
         !run.request.approval &&
@@ -885,6 +894,14 @@ export function createTurnMethods(
       if (signal.request && signal.request.conversation.threadRef !== run.request.conversation.threadRef) {
         return { accepted: false, reason: "conversation_mismatch" };
       }
+      if (
+        signal.request?.incognito !== undefined &&
+        incognitoConflicts(
+          await deps.sessions.getByThread(run.request.conversation.threadRef),
+          signal.request.incognito,
+        )
+      )
+        return { accepted: false, reason: "incognito_conflict" };
       if (signal.kind === "steer") {
         const principal = viewer ?? signal.request?.actor.externalId ?? run.request.actor.id;
         const account = principal ? await deps.config.getModelAccountDurable(principal) : undefined;
@@ -934,6 +951,14 @@ export function createTurnMethods(
 
     replayOrphanedRunSignals(runId) {
       return replayOrphanedRunSignals(runId).then(() => undefined);
+    },
+  };
+  return {
+    ...methods,
+    async turn(req, replay) {
+      const result = await methods.turn(req, replay);
+      if (!result.sessionId || (await deps.sessions.get(result.sessionId))?.incognito !== true) return result;
+      return { ...result, incognito: true };
     },
   };
 }

@@ -3,6 +3,8 @@ import { createGoalRecord } from "../src/harness/goal.ts";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { harnessToolOptions } from "../src/harness/harness-shared.ts";
+import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
@@ -1441,6 +1443,143 @@ test("readOnly exposes observation and constrained session coordination without 
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
     assert.ok(!names(readOnly).has(t), `read-only toolset drops ${t}`);
   }
+});
+
+test("incognito drops tools that only write and refuses saves in mixed tools", async () => {
+  const names = (ts: ReturnType<typeof createAgentTools>) => new Set(ts.map((t) => t.name));
+  const removed = ["execute", "background", "sandbox", "register_login", "apps", "cron", "webhook", "sessions"];
+  const kept = ["memory", "history", "files", "skills", "guidance", "attach", "goal", "runtime"];
+  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "personal:U1" };
+  const normal = createAgentTools(ref, { controlTools: true, scratchExec: true, reachExec: true });
+  const incognito = createAgentTools(ref, { controlTools: true, scratchExec: true, reachExec: true, incognito: true });
+  const resources = createAgentTools(ref, { controlTools: true, sandboxResources: true, incognito: true });
+  for (const t of [...removed, ...kept]) assert.ok(names(normal).has(t), `normal toolset has ${t}`);
+  for (const t of removed) {
+    assert.ok(!names(incognito).has(t), `incognito toolset drops ${t}`);
+    assert.ok(!names(resources).has(t), `incognito sandbox-resources toolset drops ${t}`);
+  }
+  for (const t of kept) assert.ok(names(incognito).has(t), `incognito toolset keeps ${t}`);
+});
+
+test("bridged harnesses carry the turn's incognito flag into the tool surface", () => {
+  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "personal:U1" };
+  const turn = (incognito?: boolean) =>
+    ({ tools: fakeToolContext(), ...(incognito ? { incognito } : {}) }) as unknown as HarnessTurnInput;
+  const names = (incognito?: boolean) =>
+    new Set(createAgentTools(ref, harnessToolOptions({ controlTools: true }, turn(incognito))).map((t) => t.name));
+  assert.ok(names().has("execute"));
+  assert.ok(names().has("apps"));
+  assert.ok(!names(true).has("execute"));
+  assert.ok(!names(true).has("apps"));
+  assert.ok(names(true).has("memory"));
+});
+
+test("incognito mixed tools refuse writes, allow reads, and keep attach working", async () => {
+  const emitted: Emitted[] = [];
+  const writes: string[] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async memoryRemember(facts) {
+        writes.push("memory remember");
+        return facts.length;
+      },
+      async memoryRewrite() {
+        writes.push("memory rewrite");
+        return true;
+      },
+      async write() {
+        writes.push("files write");
+        return { shared: [] };
+      },
+      async soulWrite() {
+        writes.push("guidance write");
+        return { ok: true, version: 4 };
+      },
+      async shareArtifact() {
+        writes.push("share");
+        return {
+          ok: true,
+          verb: "share",
+          type: "file",
+          id: "F1",
+          target: { scope: "channel:C1", label: "#avery-jordan" },
+          permission: "read",
+        };
+      },
+      runtime: async (request) => {
+        writes.push(`runtime ${request.lifetime ?? "task"}`);
+        return { ok: true };
+      },
+    },
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const tools = createAgentTools(ref, { controlTools: true, incognito: true });
+  const tool = (name: string) => tools.find((t) => t.name === name);
+  const refusal = /\[not saved\] This is an incognito conversation, so nothing can be saved to your qm\./;
+
+  assert.match(textOut(await call(tool("memory"), { action: "remember", facts: ["likes tea"] })), refusal);
+  assert.match(textOut(await call(tool("memory"), { action: "rewrite", content: "# Memory" })), refusal);
+  assert.match(textOut(await call(tool("files"), { action: "write", path: "a.txt", data: "x" })), refusal);
+  assert.match(textOut(await call(tool("files"), { action: "share", path: "a.txt", scope: "channel:C1" })), refusal);
+  assert.match(textOut(await call(tool("skills"), { action: "share", id: "S1", toScope: "org" })), refusal);
+  assert.match(textOut(await call(tool("skills"), { action: "move", id: "S1", toScope: "org" })), refusal);
+  assert.match(
+    textOut(await call(tool("guidance"), { action: "replace", scope: "conversation", content: "Be terse." })),
+    refusal,
+  );
+  assert.match(
+    textOut(await call(tool("guidance"), { action: "edit", scope: "conversation", old: "terse", new: "brief" })),
+    refusal,
+  );
+  assert.match(
+    textOut(await call(tool("runtime"), { action: "set", model: "Astra", lifetime: "scope" })),
+    /incognito conversation/,
+  );
+  assert.deepEqual(writes, []);
+
+  assert.match(textOut(await call(tool("memory"), { action: "search", query: "billing" })), /billing service/);
+  assert.match(textOut(await call(tool("memory"), { action: "read" })), /billing service/);
+  assert.equal(textOut(await call(tool("files"), { action: "read", path: "a.txt" })), "data");
+  assert.match(textOut(await call(tool("guidance"), { action: "read", scope: "conversation" })), /Be terse/);
+  assert.match(textOut(await call(tool("attach"), { files: ["report.md"] })), /\[attached\] report\.md/);
+  assert.match(textOut(await call(tool("runtime"), { action: "set", model: "Astra" })), /"ok":true/);
+  assert.deepEqual(writes, ["runtime task"]);
+  assert.ok(
+    emitted.some(
+      (e) =>
+        e.type === "tool_result" &&
+        e.payload.tool === "memory" &&
+        e.payload.action === "remember" &&
+        e.payload.incognito === true,
+    ),
+  );
+});
+
+test("mixed tools still write when the conversation is not incognito", async () => {
+  const writes: string[] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async memoryRemember(facts) {
+        writes.push("memory remember");
+        return facts.length;
+      },
+      async write() {
+        writes.push("files write");
+        return { shared: [] };
+      },
+    },
+    scopeLabel: "personal:U1",
+  };
+  const tools = createAgentTools(ref, { controlTools: true });
+  const tool = (name: string) => tools.find((t) => t.name === name);
+  assert.match(textOut(await call(tool("memory"), { action: "remember", facts: ["likes tea"] })), /Remembered 1/);
+  assert.match(textOut(await call(tool("files"), { action: "write", path: "a.txt", data: "x" })), /wrote a\.txt/);
+  assert.deepEqual(writes, ["memory remember", "files write"]);
 });
 
 test("finish_silently on a poll fire terminates the turn at the tool contract; off one it no-ops", async () => {

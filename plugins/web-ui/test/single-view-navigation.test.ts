@@ -158,6 +158,9 @@ test("single and multiview headers render mutually exclusive tools and pane cont
     MoreHorizontal: "",
     Shrink: "",
     Expand: "",
+    Ghost: "",
+    paneContents: new Map(),
+    startNewIncognitoChat: () => {},
   }) as { init: (props: unknown) => void; draw: () => void; menuOpen: boolean };
   let activePanelChanged: (() => void) | undefined;
   actions.init({

@@ -146,6 +146,7 @@ export interface CoreSession {
   forkBoundarySeq?: number;
   parentSessionId?: string;
   surface?: string;
+  incognito?: true;
 }
 
 export function inheritedTranscript(
@@ -482,6 +483,7 @@ export interface TurnOptions {
   harness?: string;
   scopeId?: string | null;
   channelName?: string | null;
+  incognito?: boolean;
 }
 
 export interface ActiveRun {
@@ -1073,6 +1075,7 @@ function turnRequestBody(
     ...(timezone ? { timezone } : {}),
     ...(turnOptions.scopeId ? { scopeId: turnOptions.scopeId } : {}),
     ...(turnOptions.channelName ? { channelName: turnOptions.channelName } : {}),
+    ...(turnOptions.incognito ? { incognito: true } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };

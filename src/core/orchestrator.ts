@@ -19,6 +19,7 @@ import type {
   Destination,
   EntryType,
   ScopeId,
+  Session,
   SessionEntry,
   SessionType,
   TurnResult,
@@ -130,6 +131,7 @@ import {
   tapeNeedsInterruptHeal,
 } from "../harness/tape-fold.ts";
 import { openSessionEntry, searchSessionEntries } from "../sessions/history-search.ts";
+import { INCOGNITO_CONFLICT_REASON, incognitoConflicts } from "../sessions/incognito.ts";
 import { createTranscriptSource } from "../harness/tape-projection.ts";
 import { defaultPublishAudience } from "../resolution/publish-audience.ts";
 import {
@@ -614,6 +616,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         )
           return { status: "refused", reason: "subagent session access is no longer current" };
       }
+      const storedSession = delegatedSession ?? (await deps.sessions.getByThread(conversation.threadRef));
+      if (incognitoConflicts(storedSession, input.incognito))
+        return { status: "refused", refusalKind: "incognito_conflict", reason: INCOGNITO_CONFLICT_REASON };
+      const incognito = storedSession ? storedSession.incognito === true : input.incognito === true;
+      const incognitoMismatch = (session: Session): TurnResult | null =>
+        (session.incognito === true) === incognito
+          ? null
+          : {
+              status: "refused",
+              sessionId: session.id,
+              refusalKind: "incognito_conflict",
+              reason: INCOGNITO_CONFLICT_REASON,
+            };
       const managedGroupRef =
         conversation.kind === "group" &&
         conversation.channelRef &&
@@ -938,7 +953,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scopeId,
           conversation.channelName,
           input.surface,
+          { incognito },
         );
+        const flaggedMismatch = incognitoMismatch(session);
+        if (flaggedMismatch) return flaggedMismatch;
         screenSession.id = session.id;
         if (!input.sessionParticipantIds?.length && !automatedTurn)
           await deps.sessions.addParticipant(session.id, actor.id);
@@ -1115,7 +1133,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           slack: isSlack,
         };
       }
-      const delegateWork = requiresDelegation(input, delegationEnabled);
+      const delegateWork = !incognito && requiresDelegation(input, delegationEnabled);
       let modeFrame = applyPromptVars(frameMd, frameVars);
       if (delegateWork)
         modeFrame +=
@@ -1132,6 +1150,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (input.privateSessionMessage)
         systemPrompt +=
           "\n\nThis is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.";
+      if (incognito)
+        systemPrompt +=
+          "\n\n## Incognito conversation\nThe user started this conversation in incognito mode. Nothing from it is saved to their qm: you can read their memory and profile, but you cannot write memory, standing instructions, files, skills, apps, or schedules, and there is no computer to run commands on. You can still attach files to your replies. When the user asks you to remember, save, schedule, publish, or run something, tell them this incognito conversation can't do that instead of attempting it. Skip the onboarding skill and setup flow.";
       const sharingPrompt = renderSharingPosturePrompt(actor, sharingSources);
       if (sharingPrompt) systemPrompt += `\n\n${sharingPrompt}`;
       const scopeProfile = supportsScopeProfile(deps.sandbox)
@@ -1139,7 +1160,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .profileFor(memoryScopeId, swarmBinding?.sandboxId)
             .catch(swallowAs("orchestrator: scope profile read", deps.sandbox.profile))
         : deps.sandbox.profile;
-      const strategyLines = useMemory ? (memoryStrategy.promptLines?.() ?? []) : [];
+      const strategyLines = useMemory && !incognito ? (memoryStrategy.promptLines?.() ?? []) : [];
       if (strategyLines.length) {
         systemPrompt += `\n\n${strategyLines.join("\n")}`;
       }
@@ -1277,7 +1298,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let onboardingBlock = isIdeasConversation(input)
         ? "## Ideas conversation\nThe user chose to explore ideas in this conversation. Skip the onboarding skill and setup flow for this entire conversation, including follow-ups. Do not mark onboarding completed or dismissed in memory. Use available authorized company context and answer their request directly."
         : "";
-      if (!onboardingBlock && useMemory && conversation.kind === "dm" && onboardingSkillVisible(visibleSkills)) {
+      if (
+        !onboardingBlock &&
+        !incognito &&
+        useMemory &&
+        conversation.kind === "dm" &&
+        onboardingSkillVisible(visibleSkills)
+      ) {
         onboardingBlock = await resolveOnboardingStatus(deps.memory, deps.sessions, memoryScopeId)
           .then(renderPendingOnboardingPrompt)
           .catch(swallowAs("orchestrator: onboarding status", ""));
@@ -1296,7 +1323,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId,
         conversation.channelName,
         input.surface,
+        { incognito },
       );
+      const sessionMismatch = incognitoMismatch(session);
+      if (sessionMismatch) return sessionMismatch;
       screenSession.id = session.id;
       leaseMs += Date.now() - sessionStart;
       if (!input.sessionParticipantIds?.length && !automatedTurn)
@@ -1635,6 +1665,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             actorIsOrgAdmin &&
             liveTurn &&
             useMemory &&
+            !incognito &&
             memoryPolicy.capture !== "off" &&
             resolution.orgScopeId !== memoryScopeId
           ) {
@@ -1673,6 +1704,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(automatedTurn ? { triggered: true } : {}),
           ...(!liveTurn && input.unattendedGrants ? { grants: input.unattendedGrants } : {}),
           ...(input.runId ? { runId: input.runId } : {}),
+          ...(incognito ? { incognito: true } : {}),
           sessionId: session.id,
           runAttempt: input.attempt,
           runLeaseToken: input.runLeaseToken,
@@ -1688,6 +1720,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...scopeAttestation,
             aud: OAUTH_CONSENT_AUD,
             exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
+            ...(incognito ? { incognito: true } : {}),
           },
           deps.capabilitySecret ?? deps.signingSecret,
           deps.capabilityTokenCompression,
@@ -1981,6 +2014,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         visibleSkillsForTurn,
         emitGapWork,
         perf,
+        incognito,
       });
       const leaseStart = Date.now();
       const acquired = await acquireTurnLeaseOrRefuse({
@@ -2686,6 +2720,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
           ...(!external &&
+          !incognito &&
           deps.sessionSyscalls &&
           (delegationEnabled ||
             (await deps.featureFlags?.enabled("persistent_subagents", `personal:${actor.id}` as ScopeId)) === true)
@@ -2699,7 +2734,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
-          ...(external || strictReadOnly || !deps.keychain
+          ...(external || strictReadOnly || incognito || !deps.keychain
             ? {}
             : {
                 registerLogin: async (service: string, paths: readonly CredentialPathSpec[]) =>
@@ -3124,6 +3159,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
         if (
           !strictReadOnly &&
+          !incognito &&
           deps.eagerProvision &&
           sessionUsedTools &&
           !isPollFire &&
@@ -3541,6 +3577,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             documents: [...documentInputs.documents],
             ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
+            ...(incognito ? { incognito: true } : {}),
             surfaceName,
             delegateWork,
             ...(input.clientTools?.length ? { clientTools: input.clientTools } : {}),
@@ -4063,7 +4100,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
         });
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
-        if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
+        if (!pausing && !cancelStopped && useMemory && !incognito && memoryPolicy.capture !== "off" && onTurnEnd) {
           const prior = pendingCaptures.get(memoryScopeId);
           const capture = (async () => {
             if (prior) await prior.catch(swallowAs("prior memory capture", undefined));

@@ -429,9 +429,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         if (trimmed.toLowerCase() === "parent")
           return current?.parentSessionId ? deps.sessions.get(current.parentSessionId) : null;
         const byId = await deps.sessions.get(trimmed);
-        if (byId) return byId;
+        if (byId) return byId.incognito ? null : byId;
         const byThread = await deps.sessions.getByThread(trimmed);
-        if (byThread) return byThread;
+        if (byThread) return byThread.incognito ? null : byThread;
         const children = await deps.sessions.childrenOf(binding.session.id);
         const siblings = current?.parentSessionId ? await deps.sessions.childrenOf(current.parentSessionId) : [];
         return [...children, ...siblings].find((c) => c.title?.trim().toLowerCase() === trimmed.toLowerCase()) ?? null;

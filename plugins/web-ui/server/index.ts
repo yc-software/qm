@@ -2397,6 +2397,7 @@ const apiRoutes: readonly WebRoute[] = [
       const attachments: CoreAttachment[] = [];
       let approval: { requestId: string; approved: boolean; scope?: string } | undefined;
       let proactiveOpener = false;
+      let incognito = false;
       let idempotencyKey: string | undefined;
       try {
         const p = JSON.parse(await readBody(req));
@@ -2409,6 +2410,7 @@ const apiRoutes: readonly WebRoute[] = [
         )
           idempotencyKey = `web:${user}:${p.clientTurnId}`;
         if (p.proactiveOpener === true) proactiveOpener = true;
+        if (p.incognito === true) incognito = true;
         if (p.approval && typeof p.approval.requestId === "string" && typeof p.approval.approved === "boolean") {
           approval = {
             requestId: p.approval.requestId,
@@ -2462,6 +2464,7 @@ const apiRoutes: readonly WebRoute[] = [
         ...(attachments.length ? { attachments } : {}),
         ...(approval ? { approval } : {}),
         ...(proactiveOpener ? { proactiveOpener: true } : {}),
+        ...(incognito ? { incognito: true } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
       };
       return postTurnAndMint(req, res, turn, user, threadRef);

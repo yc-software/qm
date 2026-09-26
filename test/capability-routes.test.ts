@@ -392,6 +392,61 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal(built.config.soulVersion(scopeId("org", "default-org")), orgVerBefore, "org SOUL floor untouched");
   });
 
+  it("refuses user-state writes from an incognito capability but still serves reads", async () => {
+    const incognito = { "x-agent-capability": await capFor("U2", scopeId("personal", "U2"), { incognito: true }) };
+    const before = built.config.soulVersion(scopeId("personal", "U2"));
+    for (const [path, body] of [
+      ["/v1/soul", { content: "Always answer in haiku." }],
+      ["/v1/crons", { action: "check the build", schedule: { everyMs: 3_600_000 } }],
+      ["/v1/skills", { name: "incognito-skill", description: "x", body: "x" }],
+      ["/v1/memory/restore", { revision: 1 }],
+      ["/v1/memory/facts", { facts: ["likes haiku"] }],
+      ["/v1/pins", { text: "remember this" }],
+      ["/v1/conversations", { title: "spawned" }],
+    ] as const) {
+      const res = await post(path, body, incognito);
+      assert.equal(res.status, 403, path);
+      assert.deepEqual(await res.json(), {
+        error: "incognito",
+        message: "This is an incognito conversation, so nothing can be saved to your qm.",
+      });
+    }
+    assert.equal(built.config.soulVersion(scopeId("personal", "U2")), before);
+    assert.equal((await get("/v1/soul", incognito)).status, 200);
+    const normal = await post(
+      "/v1/soul",
+      { content: "Always answer in haiku." },
+      { "x-agent-capability": await capFor("U2") },
+    );
+    assert.equal(normal.status, 200);
+  });
+
+  it("hides an incognito conversation from other sessions' self-API but not from its own", async () => {
+    const scope = scopeId("personal", "U1");
+    const secret = await built.sessions.getOrCreateByThread(
+      "web:U1:incognito-self-api",
+      "dm",
+      scope,
+      undefined,
+      "web",
+      {
+        incognito: true,
+      },
+    );
+    await built.sessions.addParticipant(secret.id, "U1", undefined, { includeHistory: true });
+    const { lease } = await built.sessions.acquireLease(secret.id);
+    assert.ok(lease);
+    await built.sessions.append(lease, { type: "user", payload: { text: "private thought" }, scopeLabel: scope });
+    await built.sessions.releaseLease(lease);
+
+    const other = { "x-agent-capability": await capFor("U1", scope, { sessionId: "another-session" }) };
+    const own = { "x-agent-capability": await capFor("U1", scope, { sessionId: secret.id }) };
+    assert.equal((await get(`/v1/conversations/${secret.id}`, other)).status, 404);
+    assert.equal((await get(`/v1/conversations/${secret.id}`, own)).status, 200);
+    const listed = (await (await get("/v1/conversations", other)).json()) as { conversations: Array<{ id: string }> };
+    assert.ok(!listed.conversations.some((conversation) => conversation.id === secret.id));
+  });
+
   it("updates the token's shared-scope SOUL without touching the actor's personal SOUL", async () => {
     const personalScope = scopeId("personal", "U8");
     const channelScope = scopeId("channel", "C");

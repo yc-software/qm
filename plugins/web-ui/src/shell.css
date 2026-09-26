@@ -1319,7 +1319,8 @@ a.chat-row-open {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.session-fork-badge {
+.session-fork-badge,
+.session-incognito-badge {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -1331,8 +1332,10 @@ a.chat-row-open {
   color: var(--muted-foreground);
   font-size: 11.5px;
   font-weight: 550;
-  cursor: pointer;
   white-space: nowrap;
+}
+.session-fork-badge {
+  cursor: pointer;
 }
 .session-fork-badge:hover:not(:disabled) {
   color: var(--foreground);
@@ -1652,6 +1655,31 @@ a.chat-row-open {
   .chat-cta {
     font-size: 22px;
   }
+}
+
+.incognito-hint {
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  max-width: var(--content-w);
+  margin: 0 0 20px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+.incognito-hint-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 550;
+}
+.incognito-hint p {
+  margin: 0;
+  font-size: 13.5px;
 }
 
 .message-row.welcome-greeting {
@@ -8533,6 +8561,16 @@ h3.ambient-field-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  margin-right: 6px;
+}
+
+.split-pane-incognito {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--muted-foreground);
+}
+.split-pane-incognito:not(.session-tool) {
   margin-right: 6px;
 }
 

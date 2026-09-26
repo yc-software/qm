@@ -407,7 +407,11 @@ export function createSessionMethods(
       const waiting = new Set(approvalRows.filter((r) => r.blocksInput !== false).map((r) => r.sessionId));
       const sessions = all.filter(
         (s) =>
-          s.hasEntries !== false || Boolean(s.title?.trim()) || workingThreadRefs.has(s.threadRef) || waiting.has(s.id),
+          !s.incognito &&
+          (s.hasEntries !== false ||
+            Boolean(s.title?.trim()) ||
+            workingThreadRefs.has(s.threadRef) ||
+            waiting.has(s.id)),
       );
       const now = Date.now();
       const jobCounts = new Map<string, number>();
@@ -868,6 +872,7 @@ export function createSessionMethods(
           source.scopeId,
           source.channelName,
           source.surface ?? "web",
+          { incognito: source.incognito === true },
         );
         await Promise.all(
           (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),

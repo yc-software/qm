@@ -7,6 +7,7 @@ import { acquireLeaseWithin, cronIdOf, sessionCategory, sessionOrigin } from "..
 import { parseSessionWakeRef } from "../src/api/routes/admin/origins.ts";
 import { scopeId } from "../src/types.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
+import { assertIncognitoSessionParity } from "./support/incognito-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
 import { byScopeId, rollupsFromSummaries } from "./support/scope-rollup-oracle.ts";
 
@@ -1135,4 +1136,8 @@ test("renewLease keeps a live turn's lock fresh and refuses stale or superseded 
 
 test("personal conversation counts exclude synthetic and inherited chats", async () => {
   await assertPersonalConversationParity(createMemorySessionStore(), "personal-count");
+});
+
+test("memory store: incognito is set at creation, immutable, exposed, and hidden from search", async () => {
+  await assertIncognitoSessionParity(createMemorySessionStore(), "mem-incognito");
 });

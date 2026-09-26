@@ -88,6 +88,7 @@ export function ensureDeliveryStream(): void {
       for (const conv of live) conv.onDelivery(threadRef);
     },
     (event) => {
+      if (event.sessionId) for (const conv of live) conv.adoptIncognitoSession(event.threadRef, event.sessionId);
       if (event.state === "metadata") {
         void refreshSessions({ silent: true });
         return;

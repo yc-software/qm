@@ -1047,7 +1047,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     promptParts.push(...(await documentParts(turn.documents ?? [])));
     const enabled = Object.fromEntries(definitions.map((tool) => [tool.name, false]));
     for (const tool of tools) enabled[bridgeToolName(tool.name)] = true;
-    enabled.task = !turn.readOnly && !turn.delegateWork;
+    enabled.task = !turn.readOnly && !turn.delegateWork && !turn.incognito;
     let timer: NodeJS.Timeout | undefined;
     let signalsStopped = false;
     try {

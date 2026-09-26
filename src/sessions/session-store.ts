@@ -704,6 +704,7 @@ export interface SessionStore {
     scopeId: ScopeId,
     channelName?: string,
     surface?: string,
+    opts?: { incognito?: boolean },
   ): Promise<Session>;
   getByThread(threadRef: string): Promise<Session | null>;
   get(sessionId: string): Promise<Session | null>;

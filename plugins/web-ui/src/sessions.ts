@@ -542,6 +542,11 @@ export function startNewChat(
   return conv;
 }
 
+export function startNewIncognitoChat(): void {
+  closeSidebarOnNarrowView();
+  if (!startNewChatInCanvas(undefined, undefined, true)) mainConversation().newChat(undefined, true);
+}
+
 export function startNewChatInLastScope(): void {
   const mounted = (focusedPaneConversation() ?? mainConversation()).state;
   const scopeId = mounted.scopeId ?? visibleSessions().find((s) => !s.archived)?.scopeId ?? null;

@@ -99,6 +99,8 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   } = body;
   if (typeof safeBody.idempotencyKey === "string" && safeBody.idempotencyKey.startsWith("slack:"))
     return { error: "idempotencyKey must not use the reserved slack: prefix" };
+  if (safeBody.incognito !== undefined && typeof safeBody.incognito !== "boolean")
+    return { error: "incognito must be a boolean" };
   const resolvedOrigin = publicTurnOrigin(safeBody);
   if (resolvedOrigin.error) return { error: resolvedOrigin.error };
   const origin = resolvedOrigin.origin;
@@ -122,6 +124,7 @@ async function postTurn(ctx: ApiCtx): Promise<void> {
   if ("error" in sanitized) return sendJson(res, 400, { error: "bad_request", message: sanitized.error });
   const result = await app.turn({ ...sanitized.request, async: wantAsync });
   if (result.status === "queued") return sendJson(res, 202, result);
+  if (result.refusalKind === "incognito_conflict") return sendJson(res, 409, result);
   const status = result.status === "refused" ? 403 : 200;
   return sendJson(res, status, result);
 }

@@ -497,9 +497,9 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const runtimePending = activeRuntimeConfig === null;
     const inputBlocked = runtimePending || ctx.chat.state.resolvingApprovals.size > 0 || blockingPauses.length > 0;
     const attachingDisabled = inputBlocked;
-    let placeholder =
-      options.placeholder ??
-      (appEditSlug(ctx.chat.state.threadRef, appState.me?.user) ? "Describe a change…" : "Ask anything");
+    let placeholder = options.placeholder;
+    if (appEditSlug(ctx.chat.state.threadRef, appState.me?.user)) placeholder ??= "Describe a change…";
+    placeholder ??= ctx.chat.state.incognito ? "Message incognito" : "Ask anything";
     if (inputBlocked) placeholder = runtimePending ? "Loading runtime…" : "Approve or deny to continue";
     else if (agent.state.isStreaming) placeholder = "Queue a message for after this turn…";
     let composerNotice: TemplateResult | typeof nothing = nothing;

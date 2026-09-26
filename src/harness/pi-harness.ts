@@ -1585,6 +1585,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     sessionTools = false,
     delegateWork = false,
     clientTools?: readonly ClientToolDeclaration[],
+    incognito = false,
   ): Promise<{ entry: TurnSession; compileMs: number }> {
     const compileStart = Date.now();
     let reconstructed: PiReplayMessage[] | null;
@@ -1649,6 +1650,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ...(surfaceName ? { surfaceName } : {}),
           ...(clientTools?.length ? { clientTools } : {}),
           ...(readOnly ? { readOnly: true } : {}),
+          ...(incognito ? { incognito: true } : {}),
           ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
           ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
           ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
@@ -1823,6 +1825,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           Boolean(turn.tools.sessionSyscalls),
           turn.delegateWork,
           turn.clientTools,
+          turn.incognito,
         );
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;

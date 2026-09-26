@@ -128,6 +128,34 @@ test("the opener defers Slack setup until status can be checked without requirin
   assert.match(PROACTIVE_OPENER_PROMPT, /do not ask them to create OAuth apps or supply project keys/);
 });
 
+test("incognito conversations skip onboarding and carry the incognito block on every turn", async () => {
+  const { app, skills, memory } = freshApp();
+  await waitForOnboardingSkill(skills);
+  const threadRef = "web:U1:12345678-1234-4123-8123-00000000abcd";
+  for (const incognito of [true, undefined]) {
+    const sys = await app.turn({
+      surface: "web",
+      actor,
+      conversation: { kind: "dm", threadRef },
+      text: "!sysprompt",
+      ...(incognito ? { incognito } : {}),
+    } as TurnRequest);
+    assert.equal(sys.incognito, true);
+    assert.doesNotMatch(sys.reply ?? "", /## Pending Onboarding/);
+    assert.match(sys.reply ?? "", /## Incognito conversation\nThe user started this conversation in incognito mode/);
+  }
+  assert.equal(detectOnboardingStatus(await memory.read(scopeId("personal", "U1"))), "not_started");
+  const ordinary = await app.turn({
+    surface: "web",
+    actor,
+    conversation: { kind: "dm", threadRef: "web:U1:not-incognito" },
+    text: "!sysprompt",
+  } as TurnRequest);
+  assert.equal(ordinary.incognito, undefined);
+  assert.match(ordinary.reply ?? "", /## Pending Onboarding/);
+  assert.doesNotMatch(ordinary.reply ?? "", /## Incognito conversation/);
+});
+
 test("ideas web conversations bypass onboarding on every turn without completing it", async () => {
   const { app, skills, memory } = freshApp();
   await waitForOnboardingSkill(skills);

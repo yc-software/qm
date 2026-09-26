@@ -122,7 +122,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
 
   return {
     leaseTtlMs,
-    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface) {
+    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, opts) {
       const existingId = byThread.get(threadRef);
       if (existingId) {
         const s = sessions.get(existingId);
@@ -140,6 +140,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         createdAt: now(),
         ...(channelName ? { channelName } : {}),
         ...(surface ? { surface } : {}),
+        ...(opts?.incognito === true ? { incognito: true as const } : {}),
       };
       sessions.set(session.id, session);
       entries.set(session.id, []);
@@ -579,7 +580,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         if (!win) continue;
         const indexed = searchIndex.get(sessionId) ?? [];
         const session = sessions.get(sessionId);
-        if (!session) continue;
+        if (!session || session.incognito) continue;
         for (const row of indexed) {
           if (!entryWithinTenure(row, win)) continue;
           if (!matchesSearchTerms(row.text, terms)) continue;

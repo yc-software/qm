@@ -1022,6 +1022,45 @@ test("soul read returns the effective SOUL; write replaces this scope's SOUL and
   assert.match(after.effectiveSoul, /Always greet in Spanish\./);
 });
 
+test("an incognito capability can read but not write user state through the control service", async () => {
+  const { control } = setup();
+  const refusal = "This is an incognito conversation, so nothing can be saved to your qm.";
+  const cron = await control.createCron({ schedule: { everyMs: 3_600_000 }, action: "check the build" }, claims("U1"));
+  assert.ok(cron.ok, JSON.stringify(cron));
+  const incognito = claims("U1", scopeId("personal", "U1"), { incognito: true });
+
+  assert.deepEqual(await control.writeSoul("Always greet in Spanish.", incognito), {
+    ok: false,
+    code: "soul_update_denied",
+    message: refusal,
+  });
+  const forbidden = { ok: false, code: "forbidden", message: refusal };
+  assert.deepEqual(
+    await control.createCron({ schedule: { everyMs: 3_600_000 }, action: "check the build" }, incognito),
+    forbidden,
+  );
+  assert.deepEqual(await control.patchCron(cron.cron.id, { title: "renamed" }, incognito), forbidden);
+  assert.deepEqual(await control.noteCron(cron.cron.id, "a note", incognito), forbidden);
+  assert.deepEqual(await control.setCronEnabled(cron.cron.id, false, incognito), forbidden);
+  assert.deepEqual(await control.runCron(cron.cron.id, incognito), forbidden);
+  assert.deepEqual(await control.retargetCron(cron.cron.id, ROOM.key, incognito), forbidden);
+  assert.deepEqual(await control.deleteCron(cron.cron.id, incognito), forbidden);
+  assert.deepEqual(
+    await control.createWebhook(
+      { action: "handle it", verification: { scheme: "hmac-sha256", secret: "s" } },
+      incognito,
+      undefined,
+    ),
+    forbidden,
+  );
+  assert.deepEqual(await control.disableWebhook("W1", incognito), forbidden);
+  assert.deepEqual(await control.shareArtifact({ type: "file", id: "F1", scope: "org" }, incognito), forbidden);
+
+  assert.equal(control.readSoul(incognito).soul, null);
+  assert.equal((await control.listCrons(incognito)).crons.length, 1);
+  assert.equal((await control.getCron(cron.cron.id, incognito)).ok, true);
+});
+
 test("soul write in a shared (channel) scope is allowed (allowSharedScope, like the agent route)", async () => {
   const { control } = setup();
   const w = await control.writeSoul("Channel standing note.", claims("U1", scopeId("channel", "C9")));

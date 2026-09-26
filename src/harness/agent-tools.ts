@@ -2,7 +2,7 @@ import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { createGrindMeter, grindState } from "./grind.ts";
-import type { HarnessHandoff, RuntimeRequest } from "./runtime-types.ts";
+import type { HarnessHandoff, RuntimeRequest, RuntimeResult } from "./runtime-types.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 import { Check, Clone } from "typebox/value";
@@ -32,6 +32,7 @@ import {
 import { SANDBOX_CAPABILITY_TTL_MS } from "../auth/capability-token.ts";
 import { CRON_FIRE_NOTE_MAX_CHARS } from "../api/control-service.ts";
 import { utcMinute } from "../util/time.ts";
+import { INCOGNITO_WRITE_REFUSAL } from "../sessions/incognito.ts";
 
 function describePublishAudience(a: PublishAudienceDescriptor | undefined): string {
   if (!a) return "Owned by you.";
@@ -329,6 +330,7 @@ export interface AgentToolsOptions {
   controlTools?: boolean;
   sandboxResources?: boolean;
   readOnly?: boolean;
+  incognito?: boolean;
   surfaceTools?: boolean;
   delegateWork?: boolean;
   surfaceName?: string;
@@ -337,7 +339,7 @@ export interface AgentToolsOptions {
 
 export type CoreToolOptions = Omit<
   AgentToolsOptions,
-  "readOnly" | "surfaceTools" | "surfaceName" | "delegateWork" | "clientTools"
+  "readOnly" | "incognito" | "surfaceTools" | "surfaceName" | "delegateWork" | "clientTools"
 >;
 
 export function coreToolOptions(config: Config): CoreToolOptions {
@@ -359,6 +361,17 @@ const CLIENT_TOOL_DEFAULT_TIMEOUT_MS = 10_000;
 const CLIENT_TOOL_TIMEOUT_TEXT = "The page didn't respond in time. It may have been closed or navigated away.";
 
 const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime", "sessions"]);
+
+const INCOGNITO_REMOVED_TOOL_NAMES = new Set([
+  "execute",
+  "background",
+  "sandbox",
+  "register_login",
+  "apps",
+  "cron",
+  "webhook",
+  "sessions",
+]);
 
 export function pauseStampAfterToolCall(
   ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff">,
@@ -3240,6 +3253,26 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     });
   }
 
+  const incognito = opts?.incognito === true;
+  function refusedInIncognito(tool: ToolDefinition, actions: readonly string[]): ToolDefinition {
+    if (!incognito) return tool;
+    const inner = tool.execute.bind(tool) as (callId: string, params: unknown, ...rest: unknown[]) => unknown;
+    return {
+      ...tool,
+      async execute(callId: string, params: unknown, ...rest: unknown[]) {
+        const action = isObj(params) && typeof params.action === "string" ? params.action : undefined;
+        if (action === undefined || !actions.includes(action)) return inner(callId, params, ...rest);
+        await recordCall(callId, { tool: tool.name, action, incognito: true });
+        return recordResult(
+          callId,
+          { tool: tool.name, action, incognito: true },
+          text(`[not saved] ${INCOGNITO_WRITE_REFUSAL}`),
+          true,
+        );
+      },
+    } as ToolDefinition;
+  }
+
   const surfaceName = opts?.surfaceName ?? "slack";
   const surfaceLabel = surfaceName === "slack" ? "Slack" : surfaceName;
   const surface = defineTool({
@@ -4163,10 +4196,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           true,
         );
       }
-      const result =
-        opts?.readOnly && request.action !== "get"
-          ? { ok: false as const, error: "read_only" }
-          : ((await ref.current?.runtime?.(request, ref.abortSignal)) ?? { ok: false, error: "runtime_unavailable" });
+      let result: RuntimeResult;
+      if (opts?.readOnly && request.action !== "get") result = { ok: false, error: "read_only" };
+      else if (incognito && request.action !== "get" && request.lifetime === "scope")
+        result = { ok: false, error: "incognito", message: INCOGNITO_WRITE_REFUSAL };
+      else
+        result = (await ref.current?.runtime?.(request, ref.abortSignal)) ?? {
+          ok: false,
+          error: "runtime_unavailable",
+        };
       const handoff = result.ok ? result.handoff : undefined;
       const ret = await recordCoreAuthoredResult(
         callId,
@@ -4186,16 +4224,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const tools = [
     ...(!opts?.sandboxResources && !delegateWork ? [execute] : []),
-    resourceTool("skills", {
-      read: skill,
-      ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
-    }),
-    resourceTool("files", { read, write, share: fileShare }),
+    refusedInIncognito(
+      resourceTool("skills", {
+        read: skill,
+        ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
+      }),
+      ["share", "move"],
+    ),
+    refusedInIncognito(resourceTool("files", { read, write, share: fileShare }), ["write", "share"]),
     resourceTool("apps", {
       publish,
       ...(controlTools ? { share: sharingTool("deploy"), move: sharingTool("deploy", true) } : {}),
     }),
-    memory,
+    refusedInIncognito(memory, ["remember", "rewrite"]),
     history,
     ...(!opts?.sandboxResources && !delegateWork ? [background] : []),
     ...(opts?.sessionTools === false ? [] : [sessionTool]),
@@ -4214,7 +4255,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           webhook,
         ]
       : []),
-    ...(controlTools || surfaceTools ? [guidance] : []),
+    ...(controlTools || surfaceTools ? [refusedInIncognito(guidance, ["replace", "edit"])] : []),
     ...(surfaceTools ? [surface] : [attach]),
     finishSilently,
     resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }),
@@ -4224,7 +4265,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ...clientTools,
   ];
   const mcpNames = new Set(mcpTools.map((t) => t.name));
-  const active = opts?.readOnly ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || mcpNames.has(t.name)) : tools;
+  const available = incognito ? tools.filter((t) => !INCOGNITO_REMOVED_TOOL_NAMES.has(t.name)) : tools;
+  const active = opts?.readOnly
+    ? available.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || mcpNames.has(t.name))
+    : available;
   return active.map((t) =>
     withRuntimeBarrier(withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref), ref),
   );

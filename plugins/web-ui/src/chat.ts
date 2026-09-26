@@ -44,6 +44,7 @@ import {
   FileImage,
   FileText,
   Files,
+  Ghost,
   GitFork,
   Link2,
   Maximize2,
@@ -279,6 +280,7 @@ export function createChatSurface(
     pins: [] as SessionPin[],
     pinsExpanded: false,
     labelSpeakers: false,
+    incognito: false,
   };
 
   function updateSpeakerLabels(messages: AgentMessage[]): void {
@@ -344,7 +346,7 @@ export function createChatSurface(
   let liveWorkExpanded = false;
 
   function notePendingSessionOnSend(): void {
-    if (!chatState.threadRef || chatState.sessionId !== null) return;
+    if (!chatState.threadRef || chatState.sessionId !== null || chatState.incognito) return;
     const existing = sessionsState.list.find((s) => s.id && s.threadRef === chatState.threadRef);
     if (existing) {
       if (chatState.agent) adoptActiveSessionFromList(chatState.agent);
@@ -371,6 +373,7 @@ export function createChatSurface(
     chatState.sessionId = null;
     chatState.scopeId = null;
     chatState.contextName = null;
+    chatState.incognito = false;
     chatState.normalStreamFn = null;
     chatState.onWork = null;
     chatState.resolvingApprovals.clear();
@@ -390,7 +393,7 @@ export function createChatSurface(
     connectedConnectors.clear();
   }
 
-  function newChat(context?: { scopeId: string; name: string | null }): string {
+  function newChat(context?: { scopeId: string; name: string | null }, incognito = false): string {
     appState.currentView = "chats";
     renderSidebarTop();
     const user = appState.me?.user ?? "anon";
@@ -399,7 +402,7 @@ export function createChatSurface(
     if (carried) saveDraft(threadRef, carried);
     ctx.composer.resetComposer();
     forkOriginController.reset();
-    mountContinuable(threadRef, null, context?.scopeId ?? null, [], context?.name ?? null);
+    mountContinuable(threadRef, null, context?.scopeId ?? null, [], context?.name ?? null, undefined, [], incognito);
     renderList();
     ctx.composer.focusComposerEnd();
     return threadRef;
@@ -445,6 +448,7 @@ export function createChatSurface(
     contextName: string | null = null,
     session?: CoreSession,
     inheritedMessages: ReturnType<typeof entriesToMessages> = [],
+    incognito = session?.incognito === true,
   ): void {
     const container = ctx.claimContainer();
     if (!container) return;
@@ -459,6 +463,7 @@ export function createChatSurface(
     chatState.sessionId = sessionId;
     chatState.scopeId = scopeId;
     chatState.contextName = contextName;
+    chatState.incognito = incognito;
     chatState.forkSession = session ?? null;
     chatState.inheritedMessages = inheritedMessages;
     chatState.inheritedExpanded = false;
@@ -570,7 +575,7 @@ export function createChatSurface(
     scopeId: string | null,
     messages: ReturnType<typeof entriesToMessages>,
   ): boolean {
-    if (appState.me?.welcomeCohort || appEditSlug(threadRef, appState.me?.user)) return false;
+    if (chatState.incognito || appState.me?.welcomeCohort || appEditSlug(threadRef, appState.me?.user)) return false;
     if (
       !shouldStartProactiveOpener({
         started: proactiveOpenerStarted,
@@ -618,6 +623,7 @@ export function createChatSurface(
       harness,
       scopeId: chatState.scopeId,
       channelName: chatState.contextName,
+      ...(chatState.incognito && chatState.sessionId === null ? { incognito: true } : {}),
     };
   }
 
@@ -936,6 +942,15 @@ export function createChatSurface(
     syncLocation();
   }
 
+  function adoptIncognitoSession(threadRef: string, sessionId: string): void {
+    const agent = chatState.agent;
+    if (!agent || !chatState.incognito || chatState.sessionId !== null || chatState.threadRef !== threadRef) return;
+    chatState.sessionId = sessionId;
+    chatState.rememberedSessionId = sessionId;
+    syncLocation();
+    drawActiveChat(agent);
+  }
+
   function postCurrentPaneState(): void {
     if (!ctx.pane) return;
     const live = liveTurnThreadRef({
@@ -951,6 +966,7 @@ export function createChatSurface(
   }
 
   async function settleNewSessionTitle(agent: Agent, threadRef: string): Promise<void> {
+    if (chatState.incognito) return;
     const titled = (): boolean => {
       const s = sessionsState.list.find((row) => row.threadRef === threadRef);
       return Boolean(s?.title && s.title.trim());
@@ -1273,6 +1289,13 @@ export function createChatSurface(
     </div>`;
   }
 
+  function incognitoHint(): TemplateResult {
+    return html`<div class="incognito-hint">
+      <span class="incognito-hint-label">${icon(Ghost, 16)}<span>Incognito</span></span>
+      <p>Nothing from this chat is saved to your qm.</p>
+    </div>`;
+  }
+
   function chatCta(): string {
     if (chatState.threadRef !== ctaThreadRef) {
       ctaThreadRef = chatState.threadRef;
@@ -1413,6 +1436,7 @@ export function createChatSurface(
     const editingApp = appEditSlug(chatState.threadRef, appState.me?.user);
     const showWelcome =
       !editingApp &&
+      !chatState.incognito &&
       (appState.me?.welcomeCohort
         ? isWelcomeConversation(sessionsState.list, appState.me.user, chatState.threadRef, chatState.scopeId)
         : isNewUser && !messages.length);
@@ -1470,7 +1494,8 @@ export function createChatSurface(
               ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
               ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
               ${glanceTier ? nothing : liveWorkStatus(agent)}
-              ${emptyChat && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
+              ${emptyChat && chatState.incognito ? incognitoHint() : nothing}
+              ${emptyChat && !chatState.incognito && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
               ${ctx.pane ? suggestions : nothing}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>
@@ -1515,6 +1540,7 @@ export function createChatSurface(
       sessionId: chatState.sessionId ?? session?.id,
       crumb,
       title,
+      incognito: chatState.incognito,
       parent: parentId
         ? { title: parent?.title?.trim() || "Parent session", onClick: () => void openSessionById(parentId) }
         : null,
@@ -3069,6 +3095,7 @@ export function createChatSurface(
     resolveCommandApproval,
     approvalSummaryView,
     notePendingSessionOnSend,
+    adoptIncognitoSession,
     syncPaneState: postCurrentPaneState,
     onDelivery,
     resumeIfIdle,

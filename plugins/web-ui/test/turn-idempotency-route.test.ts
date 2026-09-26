@@ -89,3 +89,21 @@ test("ordinary chats and invalid app references cannot inject app context", asyn
   assert.equal(response.status, 403);
   assert.equal(turns.length, count);
 });
+
+test("an incognito flag reaches core only as a literal true", async () => {
+  const cases: Array<[unknown, true | undefined]> = [
+    [true, true],
+    [false, undefined],
+    ["true", undefined],
+    [undefined, undefined],
+  ];
+  for (const [incognito, forwarded] of cases) {
+    const response = await fetch(`${base}/api/turn`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ text: "hello", threadRef: "web:alice:incognito", incognito }),
+    });
+    assert.equal(response.status, 202);
+    assert.equal(turns.at(-1)?.incognito, forwarded);
+  }
+});

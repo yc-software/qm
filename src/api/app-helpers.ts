@@ -330,7 +330,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     }
     for (const s of await sessionsForViewer(principalId)) {
       const { kind } = parseScopeId(s.scopeId);
-      if (s.scopeId !== personal && kind !== "channel" && kind !== "group") continue;
+      if (s.incognito || (s.scopeId !== personal && kind !== "channel" && kind !== "group")) continue;
       let ctx = byScope.get(s.scopeId);
       if (!ctx && kind === "group" && (await deps.directory.groupMember(parseScopeId(s.scopeId).ref, principalId))) {
         ctx = { scopeId: s.scopeId, kind: "group", name: s.channelName ?? null, sessionCount: 0, lastActivityAt: null };

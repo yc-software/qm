@@ -17,6 +17,7 @@ import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-st
 import { scopeId, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
+import { assertIncognitoSessionParity } from "./support/incognito-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
 import { byScopeId, rollupsFromSummaries } from "./support/scope-rollup-oracle.ts";
 
@@ -3018,6 +3019,23 @@ test("pg child parentage and spawn metadata survive reopening", { skip }, async 
   );
   await reopened.setParentSession(child.id, null);
   assert.equal((await reopened.get(child.id))?.parentSessionId, undefined);
+});
+
+test("pg incognito is set at creation, immutable, exposed, and hidden from search", { skip }, async () => {
+  await assertIncognitoSessionParity(createPostgresSessionStore(URL!), `pg-incognito-${randomUUID()}`);
+});
+
+test("pg incognito survives reopening the store", { skip }, async () => {
+  const first = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", `incognito-reopen-${randomUUID()}`);
+  const secret = await first.getOrCreateByThread(`web:${randomUUID()}`, "dm", scope, undefined, "web", {
+    incognito: true,
+  });
+  const normal = await first.getOrCreateByThread(`web:${randomUUID()}`, "dm", scope, undefined, "web");
+  const reopened = createPostgresSessionStore(URL!);
+  assert.equal((await reopened.get(secret.id))?.incognito, true);
+  assert.equal((await reopened.getByThread(secret.threadRef))?.incognito, true);
+  assert.equal((await reopened.get(normal.id))?.incognito, undefined);
 });
 
 test("pg personal conversation counts exclude synthetic and inherited chats", { skip }, async () => {

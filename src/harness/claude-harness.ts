@@ -331,7 +331,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const childToolNames = bridged
       .filter((definition) => nativeChildToolAllowed(definition.name))
       .map((definition) => `mcp__qm__${definition.name}`);
-    const allowSubagents = !turn.readOnly && !turn.delegateWork;
+    const allowSubagents = !turn.readOnly && !turn.delegateWork && !turn.incognito;
     const childPolicy = `${turn.systemPrompt}\n\nComplete only the delegated task. Do not contact people, schedule work, change standing configuration, or suppress the parent reply.`;
     const childAgents = {
       research: {

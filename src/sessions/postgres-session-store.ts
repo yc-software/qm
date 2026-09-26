@@ -84,6 +84,7 @@ export function rowToSession(r: Record<string, unknown>): Session {
       : {}),
     ...(r.parent_session_id != null ? { parentSessionId: r.parent_session_id as string } : {}),
     ...(r.spawn_meta != null ? { spawnMeta: JSON.parse(r.spawn_meta as string) as Session["spawnMeta"] } : {}),
+    ...(r.incognito === true ? { incognito: true as const } : {}),
   };
 }
 
@@ -749,6 +750,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            ON CONFLICT DO NOTHING`,
         ],
       },
+      {
+        id: "sessions/store/0024-incognito",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS incognito BOOLEAN NOT NULL DEFAULT FALSE`,
+        ],
+      },
     ],
     [
       {
@@ -832,7 +840,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
   return {
     leaseTtlMs,
-    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface): Promise<Session> {
+    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, opts): Promise<Session> {
       const heal = async (row: Record<string, unknown>): Promise<Session> => {
         const s = rowToSession(row);
         if (channelName && s.channelName !== channelName) {
@@ -857,7 +865,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ...(surface ? { surface } : {}),
       };
       await q(
-        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9) ON CONFLICT (thread_ref) DO NOTHING",
+        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, incognito) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10) ON CONFLICT (thread_ref) DO NOTHING",
         [
           session.id,
           session.type,
@@ -868,6 +876,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           surface ?? null,
           sessionOrigin(threadRef),
           cronIdOf(threadRef),
+          opts?.incognito === true,
         ],
       );
       const rows = await q("SELECT * FROM sessions WHERE thread_ref = $1", [threadRef]);
@@ -1455,6 +1464,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            JOIN participants p ON p.session_id = h.session_id AND p.principal_id = $1
            JOIN sessions s ON s.id = h.session_id
           WHERE h.search_tsv @@ to_tsquery('simple', $2)
+            AND NOT s.incognito
             AND ${withinParticipantWindow("h", "p")}
           ORDER BY h.created_at DESC, h.session_id, h.seq DESC
           LIMIT $3`,

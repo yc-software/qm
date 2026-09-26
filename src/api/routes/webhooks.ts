@@ -82,6 +82,7 @@ const WEBHOOK_ERROR_STATUS: Record<string, number> = {
   bad_request: 400,
   unknown_destination: 400,
   webhook_create_failed: 400,
+  forbidden: 403,
 };
 
 async function createWebhook(ctx: ApiCtx): Promise<void> {
