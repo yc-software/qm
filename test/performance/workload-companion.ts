@@ -347,7 +347,8 @@ export async function createWorkloadCompanion(
       ({ rule, systemSha256 } = reply);
       native = "native" in reply ? reply.native : undefined;
       totals.calls++;
-      const tools = "tools" in reply ? reply.tools : "tool" in reply && reply.tool ? [reply.tool] : [];
+      const singleTool = "tool" in reply && reply.tool ? [reply.tool] : [];
+      const tools = "tools" in reply ? reply.tools : singleTool;
       const content: Array<
         { type: "text"; text: string } | { type: "tool_use"; id: string; name: string; input: unknown }
       > = [

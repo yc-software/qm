@@ -256,7 +256,7 @@ test("cancellation before start, during a quiet interval and with active request
     assert.equal(summary.requests[0]!.completed, requests);
     assert.equal(summary.requests[0]!.active, 0);
     assert.equal(summary.requests[0]!.errors, mode === "active" ? 1 : 0);
-    assert.equal(closed, mode === "active" ? 2 : mode === "quiet" ? 1 : 0);
+    assert.equal(closed, { active: 2, quiet: 1, before: 0 }[mode]);
     assert.equal(records.filter((record) => record.type === "measurement-start").length, mode === "before" ? 0 : 1);
     if (mode === "active") assert.equal(records.find((record) => record.type === "request")?.error, "cancelled");
   }

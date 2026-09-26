@@ -479,11 +479,9 @@ export async function runWorkload(
         }
       }
     } catch (caught) {
-      error = options.signal?.aborted
-        ? "cancelled"
-        : caught instanceof Error && ["TimeoutError", "AbortError"].includes(caught.name)
-          ? "timeout"
-          : "request_failed";
+      if (options.signal?.aborted) error = "cancelled";
+      else if (caught instanceof Error && ["TimeoutError", "AbortError"].includes(caught.name)) error = "timeout";
+      else error = "request_failed";
     } finally {
       const doneClock = performance.now();
       stats.completed++;
