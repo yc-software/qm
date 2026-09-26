@@ -1316,7 +1316,7 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
             ? html`<a
                 class="inbox-session-link"
                 href=${deepLinkPath(UI_BASE, "chats", item.draftSessionId)}
-                title="See how the agent arrived at this draft"
+                aria-description="See how the agent arrived at this draft"
                 @click=${(e: MouseEvent) => openDraftSession(e, item.draftSessionId!)}
               >
                 ${icon(ArrowUpRight, 12)}<span>Open agent session</span>
@@ -1397,7 +1397,7 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
 function reactionChipTpl(name: string): TemplateResult {
   ensureEmojiChips();
   const char = charForName(name);
-  return html`<span class="inbox-reaction-chip" title=${`:${name}:`}>${char ?? `:${name}:`}</span>`;
+  return html`<span class="inbox-reaction-chip" role="img" aria-label=${`:${name}:`}>${char ?? `:${name}:`}</span>`;
 }
 
 function handledStateLabel(item: InboxItem): string {
@@ -1411,7 +1411,9 @@ function itemSideMark(item: InboxItem, handled: boolean): TemplateResult | typeo
   const blocked = blockedReplyStatus(item);
   if (blocked) return html`<span class="inbox-item-state">${blocked}</span>`;
   if (item.draft)
-    return html`<span class="inbox-item-drafted" title="A reply is drafted and ready">${icon(CheckCheck, 12)}</span>`;
+    return html`<span class="inbox-item-drafted" role="img" aria-label="A reply is drafted and ready"
+      >${icon(CheckCheck, 12)}</span
+    >`;
   return nothing;
 }
 
@@ -1481,7 +1483,9 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
           </span>
           <span class="inbox-item-side">
             ${participantsTpl(item)} ${itemSideMark(item, handled)}
-            <span class="inbox-item-time" title=${fmtClock(item.receivedAt)}>${relTime(item.receivedAt)}</span>
+            <span class="inbox-item-time" aria-description=${fmtClock(item.receivedAt)}
+              >${relTime(item.receivedAt)}</span
+            >
             ${icon(expanded ? ChevronDown : ChevronRight, 13)}
           </span>
         </button>
@@ -1700,7 +1704,7 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
                       <button
                         type="button"
                         aria-pressed=${inboxState.filter === filter.id}
-                        title=${filter.description}
+                        aria-description=${filter.description}
                         ?disabled=${inboxState.filterBusy || inboxState.loading}
                         @click=${() => void selectInboxFilter(filter.id)}
                       >
@@ -1830,7 +1834,9 @@ function itemPageTpl(item: InboxItem): TemplateResult {
           <span class="inbox-item-glyph">${sourceGlyph(item)}</span><span>${heading}</span>
           <span class="inbox-item-head-meta">
             ${participantsTpl(item)} ${itemSideMark(item, handled)}
-            <span class="inbox-item-time" title=${fmtClock(item.receivedAt)}>${relTime(item.receivedAt)}</span>
+            <span class="inbox-item-time" aria-description=${fmtClock(item.receivedAt)}
+              >${relTime(item.receivedAt)}</span
+            >
           </span>
         </h1>
         ${sub ? html`<div class="pane-subtitle">${sub}</div>` : nothing}
