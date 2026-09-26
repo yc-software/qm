@@ -89,14 +89,41 @@ test("an unmentioned thread followup QM answers gets the ack reaction added then
   assert.deepEqual(h.posts, ["Staging is green."]);
 });
 
-test("an unmentioned followup QM starts answering posts its early first block like a direct request", async () => {
+test("an answered followup's ack clears as soon as QM posts into the thread", async () => {
   const h = harness(async (hooks) => {
-    hooks.onFirstBlock?.("Checking staging now.");
-    await new Promise((r) => setTimeout(r, 50));
-    return { status: "ok", reply: "Staging is green." };
+    hooks.onReplying?.();
+    await new Promise((r) => setTimeout(r, 2_200));
+    hooks.onSurfacePosted?.();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(h.reactions, ["+eyes@2.000", "-eyes@2.000"]);
+    return { status: "ok", reply: "" };
   });
   await h.handler.handleIncoming(h.followup, h.client);
-  assert.deepEqual(h.posts, ["Checking staging now.", "Staging is green."]);
+  assert.deepEqual(h.reactions, ["+eyes@2.000", "-eyes@2.000"]);
+});
+
+test("an answered followup whose reply post fails still clears its ack", async () => {
+  const h = harness(async (hooks) => {
+    hooks.onReplying?.();
+    await new Promise((r) => setTimeout(r, 2_200));
+    return { status: "ok", reply: "Staging is green." };
+  });
+  h.client.chat.postMessage = async () => {
+    throw new Error("slack 500");
+  };
+  await assert.rejects(h.handler.handleIncoming(h.followup, h.client), /slack 500/);
+  assert.deepEqual(h.reactions, ["+eyes@2.000", "-eyes@2.000"]);
+});
+
+test("synthetic reaction turns never receive ack hooks", async () => {
+  let hooksSeen: string[] = [];
+  const h = harness(async (hooks) => {
+    hooksSeen = Object.keys(hooks).filter((k) => k.startsWith("on") && typeof hooks[k] === "function");
+    return { status: "silent" };
+  });
+  await h.handler.handleIncoming({ ...h.followup, synthetic: true }, h.client);
+  assert.ok(!hooksSeen.includes("onReplying"));
+  assert.ok(!hooksSeen.includes("onFirstBlock"));
   assert.deepEqual(h.reactions, []);
 });
 

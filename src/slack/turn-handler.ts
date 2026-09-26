@@ -745,6 +745,7 @@ export function createTurnHandler(deps: {
           await deliverReply();
         }
       } catch (err) {
+        await settleAck();
         if (queuedRunId) {
           console.error(
             `[slack-plugin] reply post failed after run ${queuedRunId} finished (ch=${inc.channel} ts=${inc.ts}): ${(err as Error).message} — leaving delivery run:${queuedRunId} for the recovery poller`,
