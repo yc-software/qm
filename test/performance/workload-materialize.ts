@@ -68,8 +68,16 @@ export function materializeReply(body: Record<string, unknown>, fixtureId: strin
   workloadCheck(shape && marked.length === 1, "One configured materialization marker required");
   validateMaterializeShape(shape);
   const marker = materializeMarker(fixtureId, shape.runId);
+  const source = marked[0]!.source.trim();
+  const environment = source.slice(marker.length);
+  const environmentBody = environment.slice("\n\n<environment>\n".length, -"\n</environment>".length);
+  const nativeEnvironment =
+    environment.startsWith("\n\n<environment>\n") &&
+    environment.endsWith("\n</environment>") &&
+    environmentBody.trim().length > 0 &&
+    !/<\/?environment>|\[qm-perf-materialize:/.test(environmentBody);
   workloadCheck(
-    body.model === shape.model && marked[0]!.source.trim() === marker,
+    body.model === shape.model && source.startsWith(marker) && (environment === "" || nativeEnvironment),
     "Materialization marker/model mismatch",
   );
   const tool = Array.isArray(body.tools) ? body.tools.find((candidate) => candidate?.name === shape.tool) : undefined;

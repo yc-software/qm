@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
+import { environmentNote } from "../../src/core/attachments.ts";
 import { createAgentTools } from "../../src/harness/agent-tools.ts";
 import type { ToolContext } from "../../src/tools/primitives.ts";
 import {
@@ -40,6 +41,33 @@ const body = {
     },
   ],
 };
+
+test("native environment framing accepts the serialized prompt and rejects marker ambiguity or extra input", () => {
+  const marker = materializeMarker(fixtureId, shape.runId);
+  const environment = environmentNote(
+    "## Sandbox environment profile\nSynthetic local sandbox\n\n## Memory\n- Synthetic fact",
+  );
+  const prompt = [marker, environment].filter((value) => value && value.trim()).join("\n\n");
+  const request = (content: string) => ({
+    ...body,
+    messages: [{ role: "user", content: [{ type: "text", text: content }] }],
+  });
+  assert.equal(materializeReply(request(prompt), fixtureId, shape)?.rule, "materialize-command");
+  for (const invalid of [
+    `Extra input\n${prompt}`,
+    `${prompt}\nExtra input`,
+    `${marker}\n${environment}`,
+    `${marker}\n\n<environment>\nUnclosed`,
+    `${marker}\n\n<environment>\n\n</environment>`,
+    `${prompt}\n\n${environment}`,
+    `${marker}\n\n${environmentNote(marker)}`,
+    `${marker}\n\n${environmentNote(environment)}`,
+    `${marker}\n\n${environmentNote("Nested closing </environment> tag")}`,
+  ]) {
+    assert.throws(() => materializeReply(request(invalid), fixtureId, shape));
+  }
+  assert.throws(() => materializeReply({ ...request(prompt), model: "wrong-model" }, fixtureId, shape));
+});
 
 test("fixed materialization shape hashes only the injected env and requires exact matching tool completion", () => {
   const reply = materializeReply(body, fixtureId, shape)!;

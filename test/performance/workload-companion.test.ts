@@ -8,6 +8,7 @@ import test from "node:test";
 import { stream } from "@earendil-works/pi-ai/api/anthropic-messages";
 import type { Context, Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import { environmentNote } from "../../src/core/attachments.ts";
 import { createPiHarness, oneShot, stableCwd, TITLE_GENERATION_PROMPT } from "../../src/harness/pi-harness.ts";
 import { setProviderBaseUrls } from "../../src/model/provider-endpoints.ts";
 import { auxiliaryModelForProvider, resolveModel } from "../../src/model/pi-models.ts";
@@ -434,7 +435,14 @@ test("installed Pi receives the fixed native sandbox credential call and matchin
       }),
     },
   ];
-  const origin = user(materializeMarker(fixture.fixtureId, shape.runId));
+  const origin = user(
+    [
+      materializeMarker(fixture.fixtureId, shape.runId),
+      environmentNote("## Sandbox environment profile\nSynthetic sandbox"),
+    ]
+      .filter((value) => value && value.trim())
+      .join("\n\n"),
+  );
   try {
     const first = await stream(model, { messages: [origin], tools }, { apiKey: token, maxTokens: 2048 }).result();
     assert.equal(first.stopReason, "toolUse", first.errorMessage);
