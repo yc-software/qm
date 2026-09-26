@@ -39,6 +39,7 @@ import {
 import { UI_MAPS, uiRows } from "./seed-ui.ts";
 import { RESOURCE_MAPS, resourceRows, registerResourceSchemas, seedResourceRelations } from "./seed-resources.ts";
 import { activityTimestampSql, prepareActivityPayloads, activityRunSql, activityChannelSql } from "./seed-activity.ts";
+import { searchPayloads, SEARCH_BINDING_SQL } from "./seed-search.ts";
 
 const MAPS = ["idempotency", "session_mailbox"];
 
@@ -92,6 +93,7 @@ async function bank(client: pg.Client, plan: SeedPlan): Promise<Array<Record<str
   await client.query(
     "CREATE TEMP TABLE perf_payloads(kind text, bucket int, body text, payload jsonb, PRIMARY KEY(kind,bucket))",
   );
+  await client.query(SEARCH_BINDING_SQL);
   const profiles = [
     ...(plan.aggregates.entry_sample ?? []).map((row) => ({ kind: String(row.type), row, key: "payload_bytes" })),
     ...[
@@ -125,7 +127,7 @@ async function bank(client: pg.Client, plan: SeedPlan): Promise<Array<Record<str
       payloadMinimum(kind),
     );
     const shape = plan.aggregates.entry_search_shape?.find((shape) => shape.type === kind);
-    const payloads = visiblePayloads(kind, lengths, shape, ratio);
+    const payloads = searchPayloads(kind, visiblePayloads(kind, lengths, shape, ratio), plan.aggregates);
     if (kind === "user" || kind === "text")
       assert.ok(
         payloads.every((row) => entrySearchText(row.payload)?.trim()),
@@ -346,15 +348,15 @@ export async function seedDatabase(
       await client.query(
         `INSERT INTO session_entries(session_id,seq,parent_seq,type,payload,scope_label,created_at)
         SELECT s.id,e.seq,CASE WHEN e.seq=0 THEN NULL ELSE e.seq-1 END,COALESCE(k.kind,p.kind),
-          CASE WHEN s.id IN (${cases}) AND e.seq=0 THEN jsonb_set(b.payload,'{text}',to_jsonb('QM PERF '||s.id||' first '||COALESCE(b.payload->>'text','')))::text
-               WHEN s.id IN (${cases}) AND e.seq=s.messages-1 THEN jsonb_set(b.payload,'{text}',to_jsonb('QM PERF '||s.id||' last '||COALESCE(b.payload->>'text','')))::text
-               WHEN ${earlier} THEN jsonb_set(b.payload,'{text}',to_jsonb('QM PERF '||s.id||' earlier '||COALESCE(b.payload->>'text','')))::text
-               WHEN COALESCE(k.kind,p.kind) IN ('tool_call','tool_result') THEN jsonb_set(b.payload,'{callId}',to_jsonb(s.id||':'||(row_number() OVER(PARTITION BY s.id,COALESCE(k.kind,p.kind) ORDER BY e.seq))::text))::text ELSE b.payload::text END,
+          CASE WHEN s.id IN (${cases}) AND e.seq=0 THEN jsonb_set(v.payload,'{text}',to_jsonb('QM PERF '||s.id||' first '||COALESCE(v.payload->>'text','')))::text
+               WHEN s.id IN (${cases}) AND e.seq=s.messages-1 THEN jsonb_set(v.payload,'{text}',to_jsonb('QM PERF '||s.id||' last '||COALESCE(v.payload->>'text','')))::text
+               WHEN ${earlier} THEN jsonb_set(v.payload,'{text}',to_jsonb('QM PERF '||s.id||' earlier '||COALESCE(v.payload->>'text','')))::text
+               WHEN COALESCE(k.kind,p.kind) IN ('tool_call','tool_result') THEN jsonb_set(v.payload,'{callId}',to_jsonb(s.id||':'||(row_number() OVER(PARTITION BY s.id,COALESCE(k.kind,p.kind) ORDER BY e.seq))::text))::text ELSE v.payload::text END,
           s.scope,s.at-(s.messages-1-e.seq)*100
         FROM perf_sessions s CROSS JOIN LATERAL generate_series(0,s.messages-1) e(seq)
         CROSS JOIN LATERAL (SELECT CASE WHEN (e.seq=s.messages-1 AND e.seq>0) OR (${earlier}) THEN 'assistant' WHEN e.seq=0 OR floor(e.seq::numeric*s.turns/greatest(1,s.messages-1))>floor((e.seq-1)::numeric*s.turns/greatest(1,s.messages-1)) THEN 'user' END AS kind) k
         LEFT JOIN perf_entry_kinds p ON k.kind IS NULL AND ${mappedOrdinal} BETWEEN p.first AND p.last
-        JOIN perf_payloads b ON b.kind=COALESCE(k.kind,p.kind) AND b.bucket=${bucket} WHERE s.n BETWEEN $1 AND $2`,
+        JOIN perf_payloads b ON b.kind=COALESCE(k.kind,p.kind) AND b.bucket=${bucket} CROSS JOIN LATERAL (SELECT CASE WHEN b.kind IN ('user','assistant','text') THEN pg_temp.perf_bind_search(b.payload,s.id||':'||e.seq) ELSE b.payload END AS payload) v WHERE s.n BETWEEN $1 AND $2`,
         [first, Math.min(sessionCount, first + 499)],
       );
       if (first % 10_000 === 1)
@@ -809,6 +811,7 @@ export async function seedDatabase(
         "Synthetic storage and compression must be compared with production before environment qualification",
         "Native activity payloads use source-conditioned marginal aggregates when supplied; run source frequencies still follow the seeded session mapping, not sampled source proportions",
         "Run attachments and context-field correlations, channel vocabulary across documents and retained index churn require separate parity verification",
+        "Search vocabulary uses a measured shared pool and identity-bound rare tail, not copied source text; full-corpus rare reuse and short-body density remain reconstruction residuals",
         "Generic activity timestamps preserve UTC days and recent-window counts; canonical session/transcript timestamps remain unchanged",
         "Files contain metadata only; opening/downloading files is unsupported",
         "Agent runs, crons, deliveries, jobs and processes are inert; workload replay is separate",
