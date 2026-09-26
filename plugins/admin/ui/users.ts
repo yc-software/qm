@@ -14,7 +14,7 @@ export class UsersView {
   inviteLink = "";
   inviteWarning = "";
   copyLabel = "Copy invite link";
-  counts = new Map<string, number[]>();
+  counts: Map<string, number[]> | null = null;
   pending = new Set<string>();
   refreshRequest = 0;
   message = "";
@@ -30,15 +30,20 @@ export class UsersView {
     this.renderShell();
     this.draw();
     void services
-      .api("GET", "/api/keychain")
+      .api("GET", "/api/keychain?summary=1")
       .then((r: any) => {
-        if (!root.isConnected || !r.ok || r.data?.enabled === false) return;
+        if (!root.isConnected || !r.ok || r.data?.enabled === false || !Array.isArray(r.data?.people)) return;
         this.counts = new Map(
-          (r.data?.people || []).map((p: any) => [p.principalId, [p.credentialCount || 0, p.activeGrantCount || 0]]),
+          r.data.people.map((p: any) => [p.principalId, [p.credentialCount || 0, p.activeGrantCount || 0]]),
         );
         this.draw();
       })
       .catch(() => {});
+  }
+  credentialCount(principalId: string, index: number) {
+    if (!this.counts) return "-";
+    const key = principalId.includes("@") ? principalId.toLowerCase() : principalId;
+    return String(this.counts.get(key)?.[index] ?? 0);
   }
   renderShell() {
     const document = this.root.ownerDocument;
@@ -278,7 +283,7 @@ export class UsersView {
         { text: String(u.sessionCount), cls: "num" },
         { text: String(u.turnCount), cls: "num" },
         ...[0, 1].map((i) => ({
-          text: this.counts.has(u.principalId) ? String(this.counts.get(u.principalId)![i]) : "-",
+          text: this.credentialCount(u.principalId, i),
           cls: "num",
         })),
         {
