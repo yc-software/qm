@@ -38,12 +38,36 @@ test("saved efforts a model does not offer fall back to the nearest lower level"
   assert.equal(supportedThinkingLevel("codex", "gpt-6-luna", "ultra"), "max");
   assert.equal(supportedThinkingLevel("codex", "gpt-6-astra", "ultracode"), "ultra");
   assert.equal(supportedThinkingLevel("pi", "claude-haiku-4-5", "high"), undefined);
+  assert.equal(supportedThinkingLevel("claude", "claude-opus-5-5", "adaptive"), undefined);
   assert.equal(supportedThinkingLevel("pi", "claude-opus-5-5", "auto"), "auto");
   assert.ok(isCronRuntime({ harnessId: "pi", modelId: "claude-opus-5-5", effortLevel: "ultracode" }));
+  assert.ok(isCronRuntime({ harnessId: "codex", modelId: "gpt-6-astra", effortLevel: "ultra" }));
+  assert.ok(!isCronRuntime({ harnessId: "claude", modelId: "claude-opus-5-5", effortLevel: "adaptive" }));
 });
 
 test("Codex receives max and ultra reasoning efforts", () => {
   assert.equal(codexReasoningEffort("max"), "max");
   assert.equal(codexReasoningEffort("ultra"), "ultra");
   assert.equal(codexReasoningEffort("ultracode"), undefined);
+});
+
+test("a saved purpose runtime keeps running when its model no longer offers the saved level", async () => {
+  const { resolveRuntimeChoice } = await import("../src/harness/harness-router.ts");
+  const run = (modelId: string, effortLevel: string) =>
+    resolveRuntimeChoice(
+      {
+        getApprovedHarnesses: () => ["pi"],
+        getRuntimeSelection: () => undefined,
+        getBaseModel: () => undefined,
+        getPurposeRuntime: () => ({ harnessId: "pi", modelId, effortLevel }),
+      } as unknown as Parameters<typeof resolveRuntimeChoice>[0],
+      "org:test" as Parameters<typeof resolveRuntimeChoice>[1],
+      "org:test" as Parameters<typeof resolveRuntimeChoice>[2],
+      { harnessId: "pi", modelId: "claude-opus-5-5" },
+      undefined,
+      "subagent",
+    ).effortLevel;
+  assert.equal(run("claude-haiku-4-5", "low"), undefined);
+  assert.equal(run("claude-opus-5-5", "ultracode"), "max");
+  assert.equal(run("gpt-6-astra", "xhigh"), "xhigh");
 });

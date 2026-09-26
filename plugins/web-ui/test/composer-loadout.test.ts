@@ -262,7 +262,8 @@ test("a saved unset effort stays unset instead of being rewritten to a visible l
   assert.equal(resolveEffort("pi", model, "ultracode", "low"), "high");
   assert.equal(resolveEffort("pi", model, "xhigh"), "high");
   const untiered = { ...model, effortLevelsByHarness: { pi: ["auto", "default"] } };
-  assert.equal(resolveEffort("pi", untiered, "max"), "default");
+  assert.equal(resolveEffort("pi", untiered, "max"), "auto");
+  assert.equal(resolveEffort("pi", untiered, "adaptive"), "default");
   assert.deepEqual(parseLoadout(JSON.stringify([entry("pi:one", "auto")])), [entry("pi:one", "auto")]);
 });
 

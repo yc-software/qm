@@ -7,6 +7,7 @@ import {
   modelSupportedByHarness,
   resolveModel,
   supportedThinkingLevel,
+  TIER_ORDER,
   thinkingLevelsForHarness,
   modelUnavailableReason,
   type HarnessId,
@@ -149,13 +150,14 @@ export function resolveRuntimeChoice(
       choice.effortLevel === undefined
         ? undefined
         : supportedThinkingLevel(choice.harnessId, choice.modelId, choice.effortLevel);
-    if (choice.effortLevel !== undefined && !effortLevel)
+    if (choice.effortLevel !== undefined && !effortLevel && !TIER_ORDER.includes(choice.effortLevel))
       throw new NonRetryableTurnError(
         `${choice.effortLevel} reasoning is not supported by ${choice.harnessId}/${choice.modelId}`,
       );
     if (choice.fastMode && (!harnessSupportsFastMode(choice.harnessId) || !fastModeModelIds().includes(choice.modelId)))
       throw new NonRetryableTurnError(`fast mode is not supported by ${choice.harnessId}/${choice.modelId}`);
-    return { ...choice, harnessId: choice.harnessId, ...(effortLevel ? { effortLevel } : {}) };
+    const { effortLevel: _saved, ...rest } = choice;
+    return { ...rest, harnessId: choice.harnessId, ...(effortLevel ? { effortLevel } : {}) };
   }
   if (purpose === "cron")
     requested = { effortLevel: NON_INTERACTIVE_THINKING_LEVEL, fastMode: NON_INTERACTIVE_FAST_MODE, ...requested };

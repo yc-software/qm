@@ -102,9 +102,9 @@ export function resolveEffort(
   if (effort === "auto" || levels.some(({ value }) => value === effort)) return effort;
   const rank = TIER_ORDER.indexOf(effort);
   const lower = levels
-    .filter(({ value }) => rank >= 0 && TIER_ORDER.indexOf(value) >= 0 && TIER_ORDER.indexOf(value) <= rank)
+    .filter(({ value }) => TIER_ORDER.indexOf(value) >= 0 && TIER_ORDER.indexOf(value) <= rank)
     .at(-1);
-  if (lower) return lower.value;
+  if (rank >= 0) return lower?.value ?? "auto";
   if (fallback && levels.some(({ value }) => value === fallback)) return fallback;
   return levels[0]?.value ?? "auto";
 }

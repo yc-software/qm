@@ -38,7 +38,7 @@ export const THINKING_LEVELS = [
 ] as const;
 const EFFORT_TIERS = ["low", "medium", "high", "xhigh", "max"] as const;
 type EffortTier = (typeof EFFORT_TIERS)[number];
-const TIER_ORDER: readonly string[] = [...EFFORT_TIERS, "ultra", "ultracode"];
+export const TIER_ORDER: readonly string[] = [...EFFORT_TIERS, "ultra", "ultracode"];
 export const HARNESS_IDS = ["pi", "opencode", "codex", "claude", "mock"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 

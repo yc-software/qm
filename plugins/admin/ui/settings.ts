@@ -72,7 +72,7 @@ export class SettingsState extends SettingState {
       const lower = this.efforts.filter(
         (level) => effortTiers.indexOf(level) >= 0 && effortTiers.indexOf(level) <= rank,
       );
-      this.draft.effortLevel = (rank >= 0 ? lower.at(-1) : undefined) ?? this.efforts[0] ?? "auto";
+      this.draft.effortLevel = rank >= 0 ? (lower.at(-1) ?? "auto") : (this.efforts[0] ?? "auto");
     }
     if (!this.fastCapable) this.draft.fastMode = false;
   }

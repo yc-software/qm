@@ -1,6 +1,6 @@
 import type { Cron } from "../types.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
-import { THINKING_LEVELS, isHarnessId } from "../model/pi-models.ts";
+import { TIER_ORDER, isHarnessId, thinkingLevelsForHarness } from "../model/pi-models.ts";
 import { isObj } from "../util/objects.ts";
 
 export function isCronRuntime(value: unknown): value is RuntimeChoice | null | undefined {
@@ -14,7 +14,8 @@ export function isCronRuntime(value: unknown): value is RuntimeChoice | null | u
     (value.effortLevel === undefined ||
       (typeof value.effortLevel === "string" &&
         value.effortLevel !== "auto" &&
-        (THINKING_LEVELS as readonly string[]).includes(value.effortLevel))) &&
+        (TIER_ORDER.includes(value.effortLevel) ||
+          thinkingLevelsForHarness(value.harnessId).includes(value.effortLevel)))) &&
     (value.fastMode === undefined || typeof value.fastMode === "boolean")
   );
 }
