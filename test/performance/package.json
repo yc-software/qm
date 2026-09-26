@@ -9,6 +9,8 @@
     "verify": "node verify.mjs"
   },
   "devDependencies": {
-    "playwright": "1.63.0"
+    "playwright": "1.63.0",
+    "undici": "8.9.0",
+    "ws": "8.21.1"
   }
 }

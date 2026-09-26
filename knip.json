@@ -47,7 +47,8 @@
         "workload-credential.ts",
         "workload-credential-responder.ts",
         "workload-slack.ts",
-        "workload-egress.ts"
+        "workload-egress.ts",
+        "workload-sprites.ts"
       ]
     },
     "desktop": {
