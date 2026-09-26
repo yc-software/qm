@@ -73,8 +73,9 @@ export function createDeploymentMethods(
     deployment: Deployment,
     principalId: string,
     git?: DeploymentGitUrlOptions,
+    permissionFor = (row: Deployment) => principalGitPermission(row, principalId),
   ): Promise<ViewerDeployment | null> {
-    const permission = await principalGitPermission(deployment, principalId);
+    const permission = await permissionFor(deployment);
     if (!permission) return null;
     return {
       ...deploymentView(deployment),
@@ -151,7 +152,8 @@ export function createDeploymentMethods(
     },
     async listDeploymentsForViewer(principalId, git) {
       const deployments = await deps.deploy.listDeployments();
-      const enriched = await Promise.all(deployments.map((d) => viewerDeployment(d, principalId, git)));
+      const permissionFor = h.deploymentPermissionsForViewer(principalId);
+      const enriched = await Promise.all(deployments.map((d) => viewerDeployment(d, principalId, git, permissionFor)));
       return enriched.filter((d): d is ViewerDeployment => d != null);
     },
     async getDeploymentForViewer(idOrName, principalId, git) {

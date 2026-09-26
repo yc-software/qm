@@ -111,7 +111,7 @@ export function createSessionMethods(
     approvalRecordIsCurrent,
     principalCanAccessCurrentScope,
     principalCanWriteScope,
-    principalGitPermission,
+    deploymentPermissionsForViewer,
     principalCanManageScope,
     membershipControlsScope,
     authorizesCapabilityScope,
@@ -708,12 +708,13 @@ export function createSessionMethods(
         cursor = next.nextCursor;
       }
       files.sort((a, b) => b.createdAt - a.createdAt);
+      const permissionFor = deploymentPermissionsForViewer(principalId);
       const deployments = (
         await Promise.all(
           allDeployments
             .filter((d) => d.createdInScope === scope || d.ownerScopeId === scope)
             .map(async (d): Promise<ScopeDeployment | null> => {
-              const permission = await principalGitPermission(d, principalId);
+              const permission = await permissionFor(d);
               return permission
                 ? {
                     id: d.id,

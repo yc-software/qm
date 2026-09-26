@@ -1,5 +1,6 @@
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
+  Grant,
   PendingApproval,
   PendingApprovalRecord,
   Permission,
@@ -531,6 +532,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function principalGitPermission(
     d: Pick<Deployment, "id" | "ownerScopeId" | "createdBy" | "createdInScope">,
     principalId: string,
+    readGrants = (owner: ScopeId, ref: string): Promise<readonly Grant[]> =>
+      deps.acl?.grantsFor(owner, ref) ?? Promise.resolve([]),
   ): Promise<"read" | "write" | null> {
     if (!principalId) return null;
     const { kind } = parseScopeId(d.ownerScopeId);
@@ -538,7 +541,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     if (isManageableCreationScope(d.createdInScope) && (await principalCanWriteScope(principalId, d.createdInScope!)))
       return "write";
     let canRead = kind === "org" && (await principalCanAccessCurrentScope(principalId, d.ownerScopeId));
-    const grants = (await deps.acl?.grantsFor(d.ownerScopeId, encodeRef(deployRef(d.id))).catch(() => [])) ?? [];
+    const grants = await readGrants(d.ownerScopeId, encodeRef(deployRef(d.id))).catch(() => []);
     for (const g of grants) {
       if (g.permission !== "read" && g.permission !== "write") continue;
       if (!(await principalCanAccessCurrentScope(principalId, g.granteeScopeId))) continue;
@@ -547,6 +550,27 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     }
     if (canRead) return "read";
     return (await principalCanAccessCurrentScope(principalId, d.ownerScopeId)) ? "read" : null;
+  }
+
+  function deploymentPermissionsForViewer(principalId: string) {
+    let pending: Promise<Map<string, Grant[]>> | undefined;
+    const readGrants = async (owner: ScopeId, ref: string): Promise<readonly Grant[]> => {
+      pending ??= Promise.resolve()
+        .then(() => deps.acl?.list() ?? [])
+        .then((grants) => {
+          const index = new Map<string, Grant[]>();
+          for (const grant of grants) {
+            const key = JSON.stringify([grant.ownerScopeId, grant.ref]);
+            const bucket = index.get(key) ?? [];
+            bucket.push(grant);
+            index.set(key, bucket);
+          }
+          return index;
+        });
+      return (await pending).get(JSON.stringify([owner, ref])) ?? [];
+    };
+    return (deployment: Parameters<typeof principalGitPermission>[0]) =>
+      principalGitPermission(deployment, principalId, readGrants);
   }
 
   async function syncProjectChannelRoster(project: Project, actorId: string): Promise<void> {
@@ -754,6 +778,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     effectiveDeploymentPermission,
     principalCanReadDeployment,
     principalGitPermission,
+    deploymentPermissionsForViewer,
     refreshSurfaceDirectory,
     reconcileProjectMember,
     syncProjectChannelRoster,
