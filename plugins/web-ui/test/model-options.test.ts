@@ -153,3 +153,16 @@ test("gateway display preserves explicit labels and leaves unknown families alon
   assert.equal(unknownOption?.label, "Special");
   assert.equal(unknownOption?.displayProvider, undefined);
 });
+
+test("models within a provider group are sorted by total cost ascending, unpriced last", () => {
+  const cheap = { ...metadata("cheap", "Cheap Model", "openai"), cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } };
+  const pricey = { ...metadata("pricey", "Pricey Model", "openai"), cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 } };
+  const free = { ...metadata("free", "Free Model", "openai"), cost: undefined as unknown as typeof cheap.cost };
+  const cat = { cheap, pricey, free };
+  const opts = runtimeModelOptions(["pi"], { pi: ["pricey", "cheap", "free"] }, cat);
+  assert.deepEqual(
+    opts.map((o) => o.value),
+    ["pi:cheap", "pi:pricey", "pi:free"],
+    "cheaper model sorts before pricey, unpriced falls last",
+  );
+});
