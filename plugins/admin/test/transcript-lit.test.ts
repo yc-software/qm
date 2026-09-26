@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { buildSync } from "esbuild";
 import { JSDOM } from "jsdom";
@@ -45,6 +46,40 @@ test("transcript grouping pairs tools, folds deliveries and anchors model reques
     result.units[2].llmReqs.map((r: any) => r.step),
     [1, 2],
   );
+});
+test("transcript renders paired, pending and orphaned tool entries", async () => {
+  const dom = setup();
+  try {
+    const shell = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+    const helpers = ["firstLine", "toolName", "toolLabelText", "toolStatusMeta", "toolTextValue", "toolPrimaryText"];
+    dom.window.eval(
+      helpers
+        .map((name) => shell.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n {6}\\}`))![0])
+        .join("\n") +
+        `;window.metaChip=text=>textNode(text);window.stringify=JSON.stringify;
+         Object.assign(services,{${helpers.join(",")},toolCopyText:()=>'',renderToolEntry:()=>({block:document.createElement('div')})});
+         data={entries:[
+           {seq:1,type:'tool_result',payload:{callId:'orphan',tool:'background',action:'status',output:'Earlier result'},createdAt:1},
+           {seq:2,type:'tool_call',payload:{callId:'paired',tool:'read',path:'fixture.txt'},createdAt:2},
+           {seq:3,type:'tool_result',payload:{callId:'paired',output:'File contents'},createdAt:3},
+           {seq:4,type:'tool_call',payload:{callId:'pending',tool:'background',action:'start',command:'Start work'},createdAt:4},
+           {seq:5,type:'tool_result',payload:null,createdAt:5}
+         ]};`,
+    );
+    await dom.window.eval('ui.show("session",60,false,services)');
+    const doc = dom.window.document;
+    assert.deepEqual(
+      [...doc.querySelectorAll(".tool-line .tool-label")].map((node) => node.textContent),
+      ["background status", "read", "background start", "tool"],
+    );
+    assert.match(doc.getElementById("view-data")!.textContent!, /Earlier result/);
+    assert.match(doc.getElementById("view-data")!.textContent!, /fixture\.txt/);
+    assert.match(doc.getElementById("view-data")!.textContent!, /Start work/);
+    assert.equal(doc.querySelectorAll(".tool-line-entry").length, 4);
+    assert.equal(doc.querySelectorAll(".loadingline").length, 0);
+  } finally {
+    dom.window.close();
+  }
 });
 test("transcript controls filter state and preserve disclosure state without rebuilding message nodes", async () => {
   const dom = setup();
