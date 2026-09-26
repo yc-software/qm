@@ -285,18 +285,31 @@ export function createChatSurface(
   };
 
   const inlineSteers = new Map<number, { message: AgentMessage; index: number }>();
+  const steerMessageCache = new WeakMap<WorkBlock["activity"], Array<{ seq: number; message: AgentMessage }>>();
 
   function prepareMessageRows(messages: AgentMessage[]): void {
     inlineSteers.clear();
+    const messageIndices = new Map(
+      messages.map((message, index) => [(message as { entrySeq?: number }).entrySeq, index]),
+    );
     for (const message of messages) {
-      for (const activity of (message as AssistantWork).work?.activity ?? []) {
-        if (activity.type !== "user") continue;
-        const user = userEntryMessage(activity);
-        if (!user?.steered) continue;
-        const index = messages.findIndex((candidate) => (candidate as { entrySeq?: number }).entrySeq === activity.seq);
-        inlineSteers.set(activity.seq, {
-          message: index >= 0 ? messages[index]! : (user as AgentMessage),
-          index: index < 0 ? -1 : index - (chatState.inheritedExpanded ? chatState.inheritedMessages.length : 0),
+      const activity = (message as AssistantWork).work?.activity;
+      if (!activity) continue;
+      let steers = steerMessageCache.get(activity);
+      if (!steers) {
+        steers = activity.flatMap((entry) => {
+          if (entry.type !== "user") return [];
+          const user = userEntryMessage(entry);
+          return user?.steered ? [{ seq: entry.seq, message: user as AgentMessage }] : [];
+        });
+        steerMessageCache.set(activity, steers);
+      }
+      for (const steer of steers) {
+        const index = messageIndices.get(steer.seq);
+        inlineSteers.set(steer.seq, {
+          message: index === undefined ? steer.message : messages[index]!,
+          index:
+            index === undefined ? -1 : index - (chatState.inheritedExpanded ? chatState.inheritedMessages.length : 0),
         });
       }
     }
@@ -1611,8 +1624,10 @@ export function createChatSurface(
     const cacheable =
       !isStreaming &&
       !(message as { subagentMail?: SubagentMailRef }).subagentMail &&
-      !work?.activity.some((activity) =>
-        ["session", "sessions"].includes((activity.payload as ToolPayload | null)?.tool ?? ""),
+      !work?.activity.some(
+        (activity) =>
+          activity.type === "user" ||
+          ["session", "sessions"].includes((activity.payload as ToolPayload | null)?.tool ?? ""),
       ) &&
       (!work || ((work.status === "complete" || work.status === "failed") && !work.pendingApprovals?.length));
     if (!cacheable) return chatMessage(message, index, isStreaming);
@@ -1774,20 +1789,25 @@ export function createChatSurface(
       const showWork =
         shouldShowApprovalWork(msg, work, text) &&
         shouldShowWork(work, isStreaming || msg.stopReason === "error" || msg.stopReason === "aborted" ? "" : text);
-      let workView = showWork
-        ? workBlock(
-            work,
-            isStreaming,
-            msg.stopReason === "aborted" || msg.stopReason === "error" ? "" : text,
-            (msg as AssistantWork).streamingBaseline ?? "",
-          )
-        : nothing;
+      const steeringOnly =
+        !showWork && work ? messageWorkTimeline(work, text).filter((item) => item.kind === "steer") : [];
+      let workView =
+        work && steeringOnly.length ? html`${steeringOnly.map((item) => renderTimelineItem(item, work))}` : nothing;
+      if (showWork) {
+        workView = workBlock(
+          work,
+          isStreaming,
+          msg.stopReason === "aborted" || msg.stopReason === "error" ? "" : text,
+          (msg as AssistantWork).streamingBaseline ?? "",
+        );
+      }
       if (msg.stopReason === "aborted") {
         workView = work ? workBlock(work, false, "", "", true) : html`<div class="stopped-head">You stopped</div>`;
       }
       const deliveredFiles = (msg as AssistantWork).deliveredFiles;
       const hasVisibleContent =
         showWork ||
+        steeringOnly.length > 0 ||
         hasText ||
         Boolean(deliveredFiles?.length) ||
         msg.content.some((chunk) => chunk.type === "thinking" && chunk.thinking.trim());
@@ -2071,7 +2091,6 @@ export function createChatSurface(
     work: WorkBlock | null | undefined,
     text: string,
   ): boolean {
-    if (work?.activity.some((activity) => activity.type === "user")) return true;
     if ((message as AssistantWork & { approvalDecision?: "denied" }).approvalDecision === "denied") return false;
     if (text === "Denied." && work?.activity.some((a) => a.type === "tool_call" || a.type === "approval_request"))
       return false;
@@ -2495,22 +2514,19 @@ export function createChatSurface(
       if (
         timeline.length === 1 &&
         !tail.trim() &&
-        !stopped &&
-        !stopping &&
-        !work.stale &&
-        !(last && work.pendingApprovals?.length)
+        !(last && (stopped || stopping || work.stale || work.pendingApprovals?.length))
       )
         return html`${renderTimelineItem(timeline[0]!, work)}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
       let fold =
         timeline.length || tail.trim() || (last && (active || work.pendingApprovals?.length))
           ? html`<details
-              class=${stopped ? "stopped-work" : `work work-fold work-${work.status}`}
-              ?open=${animating || !!(last && work.pendingApprovals?.length)}
+              class=${stopped && last ? "stopped-work" : `work work-fold work-${work.status}`}
+              ?open=${last && (active || !!work.pendingApprovals?.length)}
             >
-              <summary class=${stopped ? "stopped-head" : "work-head"}>
+              <summary class=${stopped && last ? "stopped-head" : "work-head"}>
                 ${sheenLabel(label, animating)}<span class="activity-chevron">${icon(ChevronRight, 14)}</span>
               </summary>
-              ${stopped ? nothing : html`<div class="work-divider"></div>`}
+              ${stopped && last ? nothing : html`<div class="work-divider"></div>`}
               <div class="work-rows">
                 ${guard(
                   [
@@ -2535,7 +2551,10 @@ export function createChatSurface(
                         const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
                           summary.category
                         ];
-                        return html`<details class="activity-group work-fold" ?open=${animating || summary.attention}>
+                        return html`<details
+                          class="activity-group work-fold"
+                          ?open=${(active && last) || summary.attention}
+                        >
                           <summary class="work-head">
                             ${icon(groupIcon, 15)}<span>${summary.label}</span
                             ><span class="activity-chevron">${icon(ChevronRight, 14)}</span>

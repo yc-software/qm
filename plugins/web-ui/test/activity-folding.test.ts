@@ -98,6 +98,50 @@ test("steering separates tool folds with a visible unlabelled user message", asy
     assert.match(folds[1]!.textContent!, /step-6/);
     assert.ok(folds[0]!.compareDocumentPosition(steer) & Node.DOCUMENT_POSITION_FOLLOWING);
     assert.ok(steer.compareDocumentPosition(folds[1]!) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const conv = h.visibleConversation();
+    const user = conv.state.agent!.state.messages.find(
+      (message) => (message as { entrySeq?: number }).entrySeq === 5,
+    ) as unknown as { speaker: string; edited: boolean; deleted: boolean };
+    (conv.state.agent!.state.messages[0] as unknown as { speaker: string }).speaker = "Requester";
+    user.speaker = "Another person";
+    user.edited = true;
+    conv.drawActiveChat();
+    assert.equal(document.querySelector(".inline-steer .speaker-label")?.textContent, "Another person");
+    assert.equal(document.querySelector(".inline-steer .revision-badge")?.textContent, "(edited)");
+    user.deleted = true;
+    conv.drawActiveChat();
+    assert.equal(document.querySelector(".inline-steer .revision-badge")?.textContent, "(deleted)");
+    (conv.state.agent!.state.messages.at(-1) as unknown as { approvalDecision: string }).approvalDecision = "denied";
+    conv.drawActiveChat();
+    assert.equal(document.querySelectorAll(".tool-expandable").length, 0);
+    assert.equal(document.querySelectorAll(".inline-steer").length, 1);
+  } finally {
+    await h.close();
+  }
+});
+
+test("stopping a steered run preserves earlier singleton tools and labels only its last segment stopped", async () => {
+  const entries = [
+    { seq: 0, type: "user", createdAt: 0, payload: { text: "Original request" } },
+    { seq: 1, type: "tool_call", createdAt: 1000, payload: { tool: "execute", callId: "a", command: "echo before" } },
+    { seq: 2, type: "tool_result", createdAt: 2000, payload: { tool: "execute", callId: "a", code: 0 } },
+    { seq: 3, type: "user", createdAt: 3000, payload: { text: "Change direction", steered: true } },
+    { seq: 4, type: "tool_call", createdAt: 4000, payload: { tool: "execute", callId: "b", command: "echo after" } },
+    { seq: 5, type: "tool_result", createdAt: 5000, payload: { tool: "execute", callId: "b", code: 0 } },
+    { seq: 6, type: "assistant", createdAt: 6000, payload: { text: "(stopped)", stopped: true } },
+  ];
+  const h = await harness({ path: `/s/${SESSION.id}`, listSessions: [SESSION], entries });
+  try {
+    h.releaseSessions();
+    await h.boot();
+    await h.sessionsReady();
+    const tools = [...document.querySelectorAll(".tool-expandable")];
+    assert.equal(tools.length, 2);
+    assert.equal(tools[0]!.closest(".work-fold, .stopped-work"), null);
+    assert.equal(document.querySelectorAll(".stopped-work").length, 1);
+    assert.ok(tools[1]!.closest(".stopped-work"));
+    assert.equal(document.querySelectorAll(".stopped-head").length, 1);
+    assert.equal(document.querySelector(".inline-steer")!.closest("details"), null);
   } finally {
     await h.close();
   }

@@ -6,12 +6,12 @@ const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
 test("live and completed work keep chronological folds split around steering", () => {
-  assert.match(chat, /class=\$\{stopped \? "stopped-work" : `work work-fold work-\$\{work.status\}`\}/);
+  assert.match(chat, /class=\$\{stopped && last \? "stopped-work" : `work work-fold work-\$\{work.status\}`\}/);
   assert.match(chat, /messageWorkTimeline\(work, active \? "" : text\)/);
   assert.match(chat, /let label = last \? workLabel\(work\) : "Worked"/);
   assert.match(chat, /const animating = active && last && !stopping;/);
   assert.match(chat, /sheenLabel\(label, animating\)/);
-  assert.match(chat, /\?open=\$\{animating \|\| !!\(last && work.pendingApprovals\?\.length\)\}/);
+  assert.match(chat, /\?open=\$\{last && \(active \|\| !!work.pendingApprovals\?\.length\)\}/);
   assert.doesNotMatch(chat, /function segmentSummaryLabel/);
 });
 
