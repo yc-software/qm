@@ -1,6 +1,14 @@
 import type { DocumentInput } from "../core/document-inputs.ts";
-import type { RuntimeControl, RuntimeHandoff } from "./runtime-types.ts";
-import type { AttachmentMeta, ConversationTurn, ScopeId, Session, SessionEntry, TurnRequest } from "../types.ts";
+import type { RuntimeControl, HarnessHandoff } from "./runtime-types.ts";
+import type {
+  AttachmentMeta,
+  ClientToolDeclaration,
+  ConversationTurn,
+  ScopeId,
+  Session,
+  SessionEntry,
+  TurnRequest,
+} from "../types.ts";
 import type { HarnessId } from "../model/pi-models.ts";
 import type {
   GapPhases,
@@ -108,12 +116,14 @@ export interface HarnessTurnInput {
   ): Promise<{ text: string; attachments?: AttachmentMeta[]; images?: HarnessImage[]; documents?: DocumentInput[] }>;
   documents?: DocumentInput[];
   runtime?: Partial<RuntimeChoice>;
+  runtimePurpose?: import("../resolution/config-store.ts").RuntimePurpose;
   runtimeControl?: RuntimeControl;
   runtimeActorId?: string;
   readOnly?: boolean;
   surfaceTools?: boolean;
   delegateWork?: boolean;
   surfaceName?: string;
+  clientTools?: readonly ClientToolDeclaration[];
   pollFire?: boolean;
   turnWallClockMs?: number;
   systemPrompt: string;
@@ -144,10 +154,11 @@ export interface HarnessTurnInput {
 }
 
 export interface HarnessTurnResult {
-  runtimeHandoff?: RuntimeHandoff;
+  runtimeHandoff?: HarnessHandoff;
   reply: string;
   silent?: boolean;
   stopped?: true;
+  stoppedByUser?: true;
   stoppedTapeComplete?: true;
   pendingApprovals?: Array<{
     command: string;
@@ -156,6 +167,7 @@ export interface HarnessTurnResult {
     matched?: string;
     purpose?: string;
     approvalKey?: string;
+    grantModes?: { session: boolean; always: boolean };
   }>;
   pausedOnApproval?: boolean;
   modelCalls?: number;

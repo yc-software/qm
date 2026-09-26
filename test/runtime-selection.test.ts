@@ -97,7 +97,7 @@ test("runtime resolution carries reasoning and fast-mode defaults into turns", (
         modelId: "claude-opus-5",
       },
     ),
-    { harnessId: "opencode", modelId: "claude-opus-5", fastMode: false },
+    { harnessId: "opencode", modelId: "claude-opus-5", fastMode: true },
   );
 });
 

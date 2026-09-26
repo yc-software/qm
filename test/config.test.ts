@@ -21,6 +21,19 @@ const productionEnv = {
   SANDBOX_BACKEND: "local",
 } as const;
 
+test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
+  assert.equal(loadConfig({}).spritesSandbox.egressProxyAdditionalUrls, undefined);
+  const config = loadConfig({
+    SPRITES_EGRESS_PROXY_URL: "https://primary.example.com",
+    SPRITES_EGRESS_PROXY_ADDITIONAL_URLS: " https://old.example.com, ,https://next.example.com ",
+  });
+  assert.equal(config.spritesSandbox.egressProxyUrl, "https://primary.example.com");
+  assert.deepEqual(config.spritesSandbox.egressProxyAdditionalUrls, [
+    "https://old.example.com",
+    "https://next.example.com",
+  ]);
+});
+
 test("capability compression is explicitly enabled after verifier rollout", () => {
   assert.equal(loadConfig({}).capabilityTokenCompression, false);
   assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "0" }).capabilityTokenCompression, false);
@@ -944,4 +957,14 @@ test("background ownership requires durable storage and an independent deploymen
   assert.throws(() => loadConfig({ ...env, BACKGROUND_DEPLOYMENT_ID: " " }), /BACKGROUND_DEPLOYMENT_ID/);
   assert.throws(() => loadConfig({ ...env, CORE_SIGNING_SECRET: "short" }), /CORE_SIGNING_SECRET/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
+});
+
+test("screening across postures is explicit and requires an enabled backend", () => {
+  assert.equal(loadConfig({}).securityScreenAllPostures, false);
+  assert.equal(
+    loadConfig({ SECURITY_SCREEN_BACKEND: "model", SECURITY_SCREEN_ALL_POSTURES: "true" }).securityScreenAllPostures,
+    true,
+  );
+  assert.throws(() => loadConfig({ SECURITY_SCREEN_ALL_POSTURES: "true" }), /requires an enabled/);
+  assert.throws(() => loadConfig({ SECURITY_SCREEN_ALL_POSTURES: "typo" }), /SECURITY_SCREEN_ALL_POSTURES/);
 });

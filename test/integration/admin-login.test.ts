@@ -44,18 +44,15 @@ test(
       assert.ok(cookie);
       assert.match(cookie, /HttpOnly/);
       assert.match(cookie, /SameSite=Lax/);
+      const twin = res.headers.getSetCookie().find((value) => value.startsWith("portal_session_x="));
+      assert.ok(twin);
+      assert.equal(twin.split(";")[0], cookie.split(";")[0]!.replace("portal_session=", "portal_session_x="));
       if (publicUrl.startsWith("https:")) {
         assert.match(cookie, /Secure/);
-        const twin = res.headers.getSetCookie().find((value) => value.startsWith("portal_session_x="));
-        assert.ok(twin);
-        if (env.PORTAL_FRAME_SESSION_ENABLED === "1") {
-          assert.match(twin, /SameSite=None/);
-          assert.ok(!twin.startsWith("portal_session_x=;"));
-        } else {
-          assert.match(twin, /^portal_session_x=;/);
-          assert.match(twin, /Max-Age=0/);
-        }
+        assert.match(twin, /SameSite=None/);
         assert.match(twin, /Secure/);
+      } else {
+        assert.match(twin, /SameSite=Lax/);
       }
       return cookie.split(";")[0]!;
     };

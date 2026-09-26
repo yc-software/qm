@@ -96,6 +96,7 @@ interface MessageContext {
   at?: number;
   text: string;
   images?: string[];
+  nearby?: boolean;
 }
 
 function parseImageUrls(v: unknown): string[] | undefined {
@@ -118,7 +119,13 @@ function parseContext(v: unknown): MessageContext[] | undefined {
     if (!author || !text) continue;
     const at = typeof entry.at === "number" && Number.isFinite(entry.at) ? entry.at : undefined;
     const images = parseImageUrls(entry.images);
-    out.push({ author, text, ...(at !== undefined ? { at } : {}), ...(images ? { images } : {}) });
+    out.push({
+      author,
+      text,
+      ...(at !== undefined ? { at } : {}),
+      ...(images ? { images } : {}),
+      ...(entry.nearby === true ? { nearby: true } : {}),
+    });
   }
   return out.length ? out : undefined;
 }

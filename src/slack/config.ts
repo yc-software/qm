@@ -1,3 +1,4 @@
+import { parseExternalSlackAccess, type ExternalSlackAccess } from "./external-access.ts";
 import type { Receiver } from "@slack/bolt";
 import type { EnvelopeStaging } from "./envelope-staging.ts";
 import { botIdentityFromEnv } from "./delivery.ts";
@@ -24,6 +25,7 @@ function parseSlackHistoryLimit(value: string | undefined): number | undefined {
 }
 
 export interface SlackPluginConfig {
+  externalAccess?: ExternalSlackAccess;
   contextSource?: SlackContextSource;
   historyLimit?: number;
   installationId?: string;
@@ -85,6 +87,9 @@ export function slackPluginConfigFromEnv(
   ): Partial<SlackPluginConfig> => (value === undefined ? {} : ({ [key]: value } as Partial<SlackPluginConfig>));
   return {
     botToken: env.SLACK_BOT_TOKEN,
+    ...(env.SLACK_EXTERNAL_ACCESS
+      ? { externalAccess: parseExternalSlackAccess(JSON.parse(env.SLACK_EXTERNAL_ACCESS)) }
+      : {}),
     ...(env.SLACK_CONTEXT_SOURCE ? { contextSource: parseSlackContextSource(env.SLACK_CONTEXT_SOURCE) } : {}),
     ...(receiverFactory ? { receiverFactory } : {}),
     ...opt("historyLimit", parseSlackHistoryLimit(env.SLACK_HISTORY_LIMIT)),
@@ -167,6 +172,7 @@ export function slackAccountConfigsFromEnv(env: Record<string, string | undefine
     out.push({
       ...config,
       accountId: id,
+      ...(a.externalAccess !== undefined ? { externalAccess: parseExternalSlackAccess(a.externalAccess) } : {}),
       coreSingleton: false,
       ...(allowFrom.length ? { allowFrom } : {}),
       ...(denyMessage ? { denyMessage } : {}),

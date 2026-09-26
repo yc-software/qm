@@ -509,6 +509,7 @@ test("scoped command wrappers preserve selected AWS credentials and clear unsele
     input: {},
     connectorEnv: {},
     credentialCutoverServices: ["role-service"],
+    resolution: { layers: [] },
   } as unknown as TurnSandboxContext);
   const { ctx } = routingCtx({
     scopedCommand: boxes.scopedCommand,

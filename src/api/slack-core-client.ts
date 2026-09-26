@@ -1,3 +1,4 @@
+import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import { decideDeploymentAccess } from "../slack/deploy-access.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { ActorAssertion } from "../types.ts";
@@ -42,6 +43,7 @@ import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
 
 interface SlackRunHooks {
+  onReplying?(): void;
   onFirstBlock?(text: string): void;
   onSurfacePosted?(): void;
   onTasks?(tasks: Array<{ id: string; title: string; status: TaskStatus }>): void | Promise<void>;
@@ -90,6 +92,7 @@ interface DirectoryPush {
 }
 
 export interface SlackCoreClient {
+  privateContinuationSource?(runId: string): Promise<TurnRequest | null>;
   decideDeploymentAccess(value: string, actor: ActorAssertion, approve: boolean): Promise<string>;
   keychainApprovals?: KeychainApprovals;
   taskAcknowledgements?: TaskAcknowledgements;
@@ -142,6 +145,7 @@ export interface SlackCoreClient {
     threadTs?: string;
     text?: string;
     senderEmail?: string;
+    isDirectMessage?: boolean;
   }): Promise<void>;
 }
 
@@ -314,13 +318,26 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       await deps.app.ingestSurfaceEvents(events, "slack", self);
     },
 
+    async privateContinuationSource(runId) {
+      const run = await deps.runs.get(runId);
+      if (!run?.request.externalSlack || run.request.origin.kind !== "human" || run.request.actor.type !== "internal")
+        return null;
+      return replayableRequest(run.request);
+    },
+
     submitTurn(body) {
       return deps.app.turn({ ...body, surface: "slack" });
     },
 
     async waitRun(runId, hooks = {}) {
+      let replyingSignaled = false;
       let firstBlockSignaled = false;
       let surfaceSignaled = false;
+      const signalReplying = (): void => {
+        if (replyingSignaled || !deps.turnStream.replying(runId)) return;
+        replyingSignaled = true;
+        hooks.onReplying?.();
+      };
       const signalFirstBlock = (text: string): void => {
         if (firstBlockSignaled || !text.trim()) return;
         firstBlockSignaled = true;
@@ -382,6 +399,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
               if (view?.surfacePosted) signalSurface();
               return (view?.result as TurnResult | null | undefined) ?? null;
             }
+            signalReplying();
             await emitTasks();
             await emitGoal().catch(swallowAs("slack-core-client: goal refresh", undefined));
             const fb = deps.turnStream.firstBlock(runId);
@@ -541,7 +559,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       if (!Number.isFinite(at)) return;
       await deps.inboxEvent?.({
         source: "slack",
-        conversationRef: slackConversationRef(msg.channel, msg.ts, msg.threadTs),
+        conversationRef: slackConversationRef(msg.channel, msg.ts, msg.threadTs, msg.isDirectMessage),
         at,
         ...(msg.text ? { text: msg.text } : {}),
         ...(msg.senderEmail ? { senderEmail: msg.senderEmail } : {}),

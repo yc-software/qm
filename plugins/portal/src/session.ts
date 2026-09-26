@@ -136,12 +136,10 @@ export function clearCookie(name: string, path: string, secure: boolean, domain?
   return parts.join("; ");
 }
 
-export function sessionCookieHeaders(value: string, attrs: CookieOpts, framed = false): string[] {
+export function sessionCookieHeaders(value: string, attrs: CookieOpts): string[] {
   return [
     setCookie("portal_session", value, attrs),
-    framed
-      ? setCookie("portal_session_x", value, { ...attrs, sameSite: "None" })
-      : clearCookie("portal_session_x", attrs.path ?? "/", attrs.secure, attrs.domain),
+    setCookie("portal_session_x", value, { ...attrs, sameSite: "None" }),
     ...(attrs.domain
       ? [
           clearCookie("portal_session", attrs.path ?? "/", attrs.secure),

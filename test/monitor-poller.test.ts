@@ -369,7 +369,7 @@ test("a quiet watch heartbeats and steers the agent toward finish_silently", asy
   assert.equal(h.calls.length, 1);
   assert.match(h.calls[0]?.text ?? "", /still running/);
   assert.match(h.calls[0]?.text ?? "", /Installing collected packages/);
-  assert.match(h.calls[0]?.text ?? "", /End the turn with your silent turn-ender — `stay_silent` or `finish_silently`/);
+  assert.match(h.calls[0]?.text ?? "", /End the turn with `finish_silently`/);
   assert.match(h.calls[0]?.text ?? "", /putting your one-line status in its `reason`/);
   assert.match(
     h.calls[0]?.text ?? "",

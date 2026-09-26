@@ -36,7 +36,7 @@ function jsonbSafe(value: unknown): unknown {
   if (typeof value === "string") return pgTextSafe(value);
   if (Array.isArray(value)) return value.map(jsonbSafe);
   if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
+    const out: Record<string, unknown> = Object.create(null);
     for (const [k, v] of Object.entries(value)) out[pgTextSafe(k)] = jsonbSafe(v);
     return out;
   }
@@ -158,7 +158,11 @@ export function createMemoryMap<T>(): DurableMap<T> {
 
 const VERSIONS_TABLE = "durable_map_versions";
 
-export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
+export function createPostgresMap<T>(
+  pg: PgPool,
+  table: string,
+  indexedFields: readonly Extract<keyof T, string>[] = [],
+): DurableMap<T> {
   if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`invalid table name: ${table}`);
   const migration = {
     id: `durable-map/${table}/0001`,
@@ -167,11 +171,41 @@ export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
       `CREATE TABLE IF NOT EXISTS ${VERSIONS_TABLE} (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)`,
     ],
   };
-  pg.registerMigration(migration);
+  const migrations = [
+    migration,
+    ...indexedFields.flatMap((field) => {
+      if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
+      return [
+        {
+          id: `durable-map/${table}/lookup-${field.toLowerCase()}-drop`,
+          statements: [`SET LOCAL lock_timeout = '3s'`, `DROP INDEX IF EXISTS ${table}_${field.toLowerCase()}_fold`],
+        },
+        {
+          id: `durable-map/${table}/lookup-${field.toLowerCase()}-hash`,
+          statements: [
+            `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_${field.toLowerCase()}_fold
+           ON ${table} USING hash (lower(json->>'${field}'))`,
+          ],
+        },
+        {
+          id: `durable-map/${table}/select-${field.toLowerCase()}`,
+          statements: [
+            `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_${field.toLowerCase()}_fold
+           ON ${table} (lower(json->>'${field}'))`,
+            `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_${field.toLowerCase()}_unicode
+           ON ${table} (id) WHERE json->>'${field}' ~ '[^\\x01-\\x7f]'`,
+          ],
+        },
+      ];
+    }),
+  ];
+  for (const definition of migrations) pg.registerMigration(definition);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
-      readyP = pg.migrate(migration).catch((e) => {
+      readyP = (async () => {
+        for (const definition of migrations) await pg.migrate(definition);
+      })().catch((e) => {
         readyP = null;
         throw e;
       });
@@ -224,7 +258,10 @@ export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
           query.where.field,
           query.where.anyOfFold.map((v) => v.toLowerCase()),
         );
-        sql += ` WHERE (lower(json->>$2) = ANY($3::text[]) OR json->>$2 ~ '[^\\x01-\\x7f]')`;
+        sql += ` WHERE id IN (
+          SELECT id FROM ${table} WHERE lower(json->>$2) = ANY($3::text[])
+          UNION
+          SELECT id FROM ${table} WHERE json->>$2 ~ '[^\\x01-\\x7f]')`;
       }
       if (query.afterId !== undefined) {
         params.push(query.afterId);
@@ -314,11 +351,15 @@ export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
 }
 
 export interface PostgresArtifactMaps {
-  map<T>(table: string): DurableMap<T>;
+  map<T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T>;
   pool: PgPool;
 }
 
 export function createPostgresMapFactory(connectionString: string): PostgresArtifactMaps {
   const pg = createPgPool(connectionString);
-  return { map: <T>(table: string): DurableMap<T> => createPostgresMap<T>(pg, table), pool: pg };
+  return {
+    map: <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
+      createPostgresMap<T>(pg, table, indexedFields),
+    pool: pg,
+  };
 }

@@ -7,7 +7,7 @@ const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 test("transcript top spacing and prompt gap stay compact at every density", () => {
   const values = [...css.matchAll(/--chat-scroll-pad-top: (\d+)px/g)].map((m) => Number(m[1]));
   assert.ok(values.length >= 3 && values.every((v) => v === 8));
-  const prompt = css.match(/\.message-stack \.user-row:not\(:has\(~ \.user-row\)\) \{[^}]*\}/)?.[0] ?? "";
+  const prompt = css.match(/\.message-stack \.user-row\.latest-prompt \{[^}]*\}/)?.[0] ?? "";
   assert.match(prompt, /padding-top: 8px;/);
   assert.match(prompt, /margin-top: -8px;/);
   assert.match(prompt, /margin-bottom: 12px;/);
@@ -54,7 +54,7 @@ test("queued cards tuck beneath the next card just as the queue tucks beneath th
 });
 
 test("collapsed prompt content uses a readable six-line cutoff", () => {
-  const selector = ".message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble > .pin-content";
+  const selector = ".message-stack .user-row.latest-prompt:not(.pin-expanded) .user-bubble > .pin-content";
   const rule = css.slice(css.indexOf(`${selector} {`)).split("}")[0] ?? "";
   assert.match(rule, /display: -webkit-box;/);
   assert.match(rule, /-webkit-box-orient: vertical;/);

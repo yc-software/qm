@@ -20,6 +20,7 @@ import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts
 import { externalMemberActive } from "../identity/external-members.ts";
 import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
+import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../types.ts";
@@ -123,6 +124,8 @@ export function createMessagingMethods(
   | "resolveReachTarget"
 > {
   const { adminBase, resolveReachTargetFor } = h;
+  const openMember = (actorId: string, scope: ScopeId) =>
+    isOpenScopeMember({ actorId, scope, config: deps.config, isCurrentSharedScopeMember: h.principalCanWriteScope });
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests ?? createMemoryMap<SurfaceContextRequest>();
   const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
@@ -133,7 +136,7 @@ export function createMessagingMethods(
   const identityMembers = async (): Promise<DirectoryMember[]> => {
     const [externals, participants] = await Promise.all([
       deps.identity.listExternalMembers(),
-      deps.sessions?.listParticipants() ?? [],
+      deps.sessions?.distinctParticipants() ?? [],
     ]);
     const candidates: DirectoryMember[] = [
       ...(deps.emailAuthMembers ?? []),
@@ -141,8 +144,8 @@ export function createMessagingMethods(
         .filter((member) => externalMemberActive(member))
         .map((member) => ({ principalId: member.email, displayName: member.email, type: "internal" as const })),
       ...participants
-        .filter((w) => deps.identity.classify(w.principalId).type === "internal")
-        .map((w) => ({ principalId: w.principalId, displayName: w.principalId, type: "internal" as const })),
+        .filter((principalId) => deps.identity.classify(principalId).type === "internal")
+        .map((principalId) => ({ principalId, displayName: principalId, type: "internal" as const })),
     ];
     const byKey = new Map<string, DirectoryMember>();
     for (const member of candidates) {
@@ -161,7 +164,8 @@ export function createMessagingMethods(
     assertCronRuntime(cron);
     if (!cron.runtime) return;
     const error =
-      validateRuntimeChoice(cron.runtime) ?? (await availableRuntimeError({ deps }, cron.ownerScopeId, cron.runtime));
+      validateRuntimeChoice(cron.runtime) ??
+      (await availableRuntimeError({ deps }, cron.ownerScopeId, cron.runtime, "cron"));
     if (error) throw new Error(error);
   };
 
@@ -172,7 +176,10 @@ export function createMessagingMethods(
       if (input.runAs === "scopeShared") {
         if (input.ownerScopeId.startsWith("personal:"))
           throw new Error("scopeShared requires a shared (channel/group) scope, not a personal one");
-        if (!input.members?.length) throw new Error("scopeShared requires a member snapshot");
+        const open = await openMember(input.owner, input.ownerScopeId);
+        if (!input.members?.length && !open)
+          throw new Error("scopeShared requires a member snapshot or current Open scope membership");
+        if (open) input = { ...input, ownerResourcesRequireOpen: true };
       }
       const cron = await deps.crons.create(input);
       deps.auditLog.record({
@@ -221,7 +228,10 @@ export function createMessagingMethods(
         if (before.ownerScopeId.startsWith("personal:"))
           throw new Error("scopeShared requires a shared (channel/group) scope, not a personal one");
         const members = patch.members ?? before.members;
-        if (!members?.length) throw new Error("scopeShared requires a member snapshot");
+        const open = await openMember(before.owner, before.ownerScopeId);
+        if (!members?.length && !open)
+          throw new Error("scopeShared requires a member snapshot or current Open scope membership");
+        if (open) patch = { ...patch, ownerResourcesRequireOpen: true };
       }
       const grantsReaffirmed = patch.unattendedGrants !== undefined;
       const guardedPatch =

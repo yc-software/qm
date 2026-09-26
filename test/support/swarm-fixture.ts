@@ -20,6 +20,7 @@ export async function swarmFixture(
     runs?: RunStore;
     lock?: AdvisoryLock;
     backend?: Sandbox;
+    runtime?: Pick<OrchestratorInput, "model" | "harness" | "thinkingLevel" | "fastMode">;
   } = {},
 ) {
   const sessions = options.sessions ?? createMemorySessionStore();
@@ -95,6 +96,7 @@ export async function swarmFixture(
     text: "Start workers",
     surface: "slack",
     deliveryTarget: "private-dm",
+    ...options.runtime,
   };
   const { run } = await runs.enqueue({ sessionId: root.threadRef, request: template });
   const claim = (await runs.claimById(run.id, "swarm-fixture", 60_000))!;

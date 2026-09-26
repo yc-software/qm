@@ -83,7 +83,7 @@ function replyGuidance(ev: MonitorEvent): string {
   if (ev.kind === "quiet") {
     return (
       "Act on this. The user can't see the job, but any final text you write WILL be posted to this conversation as a message — there is no private narration. " +
-      "End the turn with your silent turn-ender — `stay_silent` or `finish_silently`, whichever you have — putting your one-line status in its `reason` (recorded for the audit log, never delivered), unless something changed that they genuinely need to know. "
+      "End the turn with `finish_silently`, putting your one-line status in its `reason` (recorded for the audit log, never delivered), unless something changed that they genuinely need to know. "
     );
   }
   const lead =

@@ -59,7 +59,6 @@ import { contextsState, scopeTitle } from "./contexts";
 import type { DensityTier } from "./density";
 import { appState } from "./shell-state";
 import { renderSidebarTop, switchView, syncDocumentTitle, syncUrlFromState } from "./shell";
-import { sleep } from "./chat";
 import {
   createConversation,
   disposeConversation,
@@ -928,6 +927,7 @@ class PaneContent implements IContentRenderer {
   private loaded = false;
   private disposed = false;
   private redrawOnResize: Array<() => void> = [];
+  private visible = false;
 
   constructor() {
     this.element = document.createElement("div");
@@ -947,13 +947,13 @@ class PaneContent implements IContentRenderer {
       ownsUrl: false,
       container: () => this.chatEl,
       claimContainer: () => this.chatEl,
-      visible: () => splitState.active && appState.currentView === "chats",
+      visible: () => splitState.active && appState.currentView === "chats" && this.visible,
       density: () => this.density,
       onDensityChange: (handler) => this.redrawOnResize.push(handler),
       ensureDeliveryStream,
       onState: (paneState) => {
         notePaneSession(this.panelId, paneState.sessionId, paneState.threadRef);
-        refreshHeaders();
+        notifyPanesChanged();
       },
       onExpand: () => {
         const panel = dockApi?.getPanel(this.panelId);
@@ -965,6 +965,7 @@ class PaneContent implements IContentRenderer {
 
   init(p: GroupPanelPartInitParameters): void {
     this.panelId = p.api.id;
+    this.visible = p.api.isVisible;
     this.panel = p.containerApi.getPanel(p.api.id) ?? null;
     this.params = (p.params ?? {}) as PaneParams;
     this.element.dataset.paneId = this.panelId;
@@ -974,12 +975,14 @@ class PaneContent implements IContentRenderer {
     this.syncZones();
     p.api.onDidDimensionsChange(() => this.syncDensity());
     p.api.onDidVisibilityChange((e) => {
+      this.visible = e.isVisible;
       if (!e.isVisible) return;
       if (!this.loaded) {
         void this.load();
         return;
       }
       this.syncDensity();
+      this.conversation?.redraw();
       this.conversation?.scrollToBottom();
     });
     if (p.api.isVisible) void this.load();
@@ -1021,27 +1024,27 @@ class PaneContent implements IContentRenderer {
       conversation.newChat(context ? { scopeId: context.scopeId, name: context.name ?? null } : undefined);
       return;
     }
-    conversation.mountLoadingPane();
+    const isCurrent = conversation.mountLoadingPane();
     let session = sessionsState.list.find((s) => s.id === wanted);
     if (!session) {
       await sessionsReady();
-      if (this.disposed) return;
+      if (this.disposed || !isCurrent()) return;
       session = sessionsState.list.find((s) => s.id === wanted);
     }
     if (!session) {
       await refreshSessions({ silent: true });
-      if (this.disposed) return;
+      if (this.disposed || !isCurrent()) return;
       session = sessionsState.list.find((s) => s.id === wanted);
     }
     if (!session) {
       const page = await fetchTranscript(wanted, { tailTurns: TAIL_TURNS }).catch(() => null);
-      if (this.disposed) return;
+      if (this.disposed || !isCurrent()) return;
       session = page?.session;
       if (!session) {
-        conversation.mountReadOnly(
-          { id: wanted, threadRef: threadRef ?? "", scopeId: "", title: "" } as CoreSession,
-          [],
-        );
+        conversation.mountLoadError(() => {
+          this.loaded = false;
+          void this.load();
+        });
         return;
       }
       await openSessionInto(conversation, session, Promise.resolve(page));
@@ -1581,26 +1584,7 @@ function notePaneSession(paneId: string, sessionId: string | null, threadRef: st
     ...(threadRef ? { threadRef } : {}),
   });
   persist();
-  if (sessionId) void settlePaneTitle(sessionId);
   refreshHeaders();
-}
-
-async function settlePaneTitle(sessionId: string): Promise<void> {
-  const titled = (): boolean => Boolean(sessionsState.list.find((s) => s.id === sessionId)?.title?.trim());
-  if (!titled()) await settlePoll([0, 1200, 2400, 4000, 6000], titled);
-}
-
-async function settlePoll(delays: number[], done: () => boolean): Promise<void> {
-  for (const delay of delays) {
-    if (delay) await sleep(delay);
-    if (!splitState.active) return;
-    try {
-      await refreshSessions({ silent: true });
-    } catch {
-      void 0;
-    }
-    if (done()) return;
-  }
 }
 
 document.addEventListener("keydown", (e) => {

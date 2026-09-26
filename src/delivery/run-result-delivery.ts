@@ -51,6 +51,9 @@ export function runResultDelivery(
   const destination: Destination = {
     type: surface,
     target,
+    ...(run.request.slackSource
+      ? { slackAccountId: run.request.slackSource.accountId, slackTeamId: run.request.slackSource.teamId }
+      : {}),
     ...(editRef ? { editRef } : {}),
     ...(taskList.length ? { taskList: taskList.map(({ id, title, status }) => ({ id, title, status })) } : {}),
     ...(webTranscript ? { webTranscript } : {}),

@@ -11,8 +11,8 @@ import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from ".
 import { rehydrateOpenGoal } from "./goal.ts";
 import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
-import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
-import { swallow } from "../util/errors.ts";
+import { tapeCheckpointPayload, tapeEntryMirrorRecord, type NewTapeRecord } from "../sessions/session-store.ts";
+import { swallow, swallowAs } from "../util/errors.ts";
 
 export interface HarnessToolPlumbing {
   scratchExec?: boolean;
@@ -36,6 +36,39 @@ export type BridgedTool = {
     args: unknown,
   ): Promise<{ content?: Array<{ type?: string; text?: string }>; terminate?: boolean }>;
 };
+
+export interface SteerIntake {
+  text: string;
+  ts?: string;
+  attachments?: HarnessTurnInput["attachments"];
+  acknowledge?: () => Promise<void>;
+}
+
+export async function recordSteerIntake(
+  turn: HarnessTurnInput,
+  steer: SteerIntake,
+): Promise<Pick<NewTapeRecord, "entrySeq" | "meta">> {
+  const entry = await turn.emit({
+    type: "user",
+    payload: {
+      text: steer.text,
+      ...(steer.ts ? { ts: steer.ts } : {}),
+      steered: true,
+      ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
+    },
+    scopeLabel: turn.scopeLabel,
+  });
+  await steer.acknowledge?.().catch(swallowAs("steer acknowledge", undefined));
+  return {
+    entrySeq: entry.seq,
+    meta: {
+      bareText: steer.text,
+      ...(steer.ts ? { ts: steer.ts } : {}),
+      ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
+      entryCreatedAt: entry.createdAt,
+    },
+  };
+}
 
 export async function tapeReplyCheckpoint(
   turn: Pick<HarnessTurnInput, "tape" | "scopeLabel">,
@@ -105,6 +138,7 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
           surfaceTools: turn.surfaceTools,
           delegateWork: turn.delegateWork,
           surfaceName: turn.surfaceName,
+          ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
         }
       : { surfaceTools: true, surfaceName: "slack" }),
   };

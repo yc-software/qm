@@ -322,25 +322,22 @@ export function createMockHarness(): Harness {
           await turn.emit({ type: "tool_result", payload: { tool: "post", ok: r.ok }, scopeLabel: turn.scopeLabel });
           usedTool = true;
           reply = r.ok ? "(posted)" : `[not sent] ${r.message ?? "failed"}`;
-        } else if (command0.startsWith("!staysilent")) {
-          const reason = cmd.slice(cmd.indexOf("!staysilent") + "!staysilent".length).trim() || "nothing to add";
-          await turn.emit({ type: "tool_call", payload: { tool: "stay_silent" }, scopeLabel: turn.scopeLabel });
-          const r = await turn.tools.staySilent(reason);
-          await turn.emit({
-            type: "tool_result",
-            payload: { tool: "stay_silent", ok: r.ok },
-            scopeLabel: turn.scopeLabel,
-          });
-          usedTool = true;
-          reply = r.message;
         } else if (command0 === "!finish-silent") {
           usedTool = true;
-          silent = turn.pollFire === true;
-          reply = turn.pollFire ? "" : "Nothing to report; ending silently.";
+          silent = turn.pollFire === true || turn.surfaceTools === true;
+          reply = silent ? "" : "Nothing to report; ending silently.";
+          if (silent) {
+            await turn.emit({ type: "tool_call", payload: { tool: "finish_silently" }, scopeLabel: turn.scopeLabel });
+            await turn.emit({
+              type: "tool_result",
+              payload: { tool: "finish_silently", silent: true },
+              scopeLabel: turn.scopeLabel,
+            });
+          }
         } else if (command0 === "!finish-silent-approval") {
           usedTool = true;
-          silent = turn.pollFire === true;
-          reply = turn.pollFire ? "" : "I couldn't finish one check, but nothing to report.";
+          silent = turn.pollFire === true || turn.surfaceTools === true;
+          reply = silent ? "" : "I couldn't finish one check, but nothing to report.";
           collected.push({ command: "gated-check", reason: "requires approval" });
         } else if (command0 === "!cachemiss") {
           reply = "re-prefilled the prefix";
@@ -420,7 +417,7 @@ export function createMockHarness(): Harness {
                 .catch((): ToolResultScreen => ({ outcome: "unscreened" }))
             : ({ outcome: "allow" } as ToolResultScreen);
           if (screen.outcome === "quarantine") {
-            const stub = "[tool output quarantined by Auto security posture]";
+            const stub = "[tool output quarantined by the security screen]";
             await turn.emit({
               type: "tool_result",
               payload: {
@@ -471,7 +468,7 @@ export function createMockHarness(): Harness {
           reply = `about to run it`;
         } else if (command0 === "!finish-silent-paused") {
           usedTool = true;
-          silent = turn.pollFire === true;
+          silent = turn.pollFire === true || turn.surfaceTools === true;
           pausedOnApproval = true;
           collected.push({ command: "gated-check", reason: "requires approval" });
           reply = "";
@@ -499,6 +496,7 @@ export function createMockHarness(): Harness {
               kind: e.kind,
               matched: e.matched,
               ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
+              ...(e.grantModes ? { grantModes: e.grantModes } : {}),
             });
             reply = `[blocked] ${e.approvalReason}`;
           }
@@ -520,6 +518,7 @@ export function createMockHarness(): Harness {
                 kind: e.kind,
                 matched: e.matched,
                 ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
+                ...(e.grantModes ? { grantModes: e.grantModes } : {}),
               });
             }
           }

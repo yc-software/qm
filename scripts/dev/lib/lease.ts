@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { leasesDir, poolStore } from "./pool.ts";
-import { pidAlive } from "./proc.ts";
+import { leasesDir, listSlots, poolStore, portSlotCount, slotPorts } from "./pool.ts";
+import { pidAlive, portAvailable } from "./proc.ts";
 import { fileMtimeEpoch, formatAge, nowEpoch, todayYmd } from "./util.ts";
 import type { LeaseInfo } from "./types.ts";
 
@@ -21,6 +21,31 @@ export function claimSlotLock(slot: string, store = poolStore()): boolean {
   } catch {
     return false;
   }
+}
+
+export async function claimSlotPorts(slot: string, store = poolStore()): Promise<boolean> {
+  const ports = slotPorts(slot);
+  if (!claimSlotLock(slot, store)) return false;
+  let available = false;
+  try {
+    available = (await Promise.all(Object.values(ports).map(portAvailable))).every(Boolean);
+    return available;
+  } finally {
+    if (!available) releaseSlotLock(slot, store);
+  }
+}
+
+export async function claimPortSlot(exclude: Set<string>, store = poolStore()): Promise<string | null> {
+  const configured = new Set(listSlots(store));
+  const capacity = portSlotCount();
+  for (const useConfigured of [false, true]) {
+    for (let num = 1; num <= capacity; num++) {
+      const slot = `pool${num}`;
+      if (configured.has(slot) !== useConfigured || exclude.has(slot)) continue;
+      if (await claimSlotPorts(slot, store)) return slot;
+    }
+  }
+  return null;
 }
 
 export function releaseSlotLock(slot: string, store = poolStore()): void {

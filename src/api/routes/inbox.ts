@@ -1,7 +1,7 @@
 import { migrateInbox } from "../../loops/inbox-migration.ts";
 import { scopeId, type Loop } from "../../types.ts";
 import { ensureDefaultInboxLoops, findInboxLoop } from "../../loops/inbox-loop.ts";
-import { ledgerItemView } from "../../loops/ledger-view.ts";
+import { isResolved, ledgerItemView } from "../../loops/ledger-view.ts";
 import { uiStateId } from "../../surfaces/ui-state.ts";
 import { sendJson } from "../http.ts";
 import { actingPrincipal, canAdministerLoop, loopDeps } from "./loops.ts";
@@ -49,6 +49,18 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   }
   const selected = ids.flatMap((value) => available.filter((loop) => loop.id === value));
   const selectedIds = selected.map((loop) => loop.id);
+  if (ctx.method === "GET" && ctx.deps.inboxSourceRefresh) {
+    const mailLoops = selected.filter(
+      (loop) =>
+        loop.owner === acting.actorId &&
+        (loop.surface === "inbox" || loop.surface?.startsWith("inbox:")) &&
+        (!loop.sources?.length || loop.sources.includes("gmail")),
+    );
+    const mail = (await Promise.all(mailLoops.map((loop) => deps.items.byLoop(loop.id))))
+      .flat()
+      .filter((item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail");
+    await ctx.deps.inboxSourceRefresh(acting.actorId, mail);
+  }
   const summaries = (await deps.items.summaries(selectedIds)).filter(
     (item) => selectedIds.includes(item.loopId) && item.inboxPreview?.sentChat !== true,
   );

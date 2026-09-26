@@ -2144,7 +2144,7 @@ function assertPredeployDbRestorePoint(config: QmConfig): string {
   const instance = awsJson<{
     DBInstances?: Array<{ DBInstanceStatus?: string; BackupRetentionPeriod?: number; LatestRestorableTime?: string }>;
   }>(aws, ["rds", "describe-db-instances", "--db-instance-identifier", database]).DBInstances?.[0];
-  if (instance?.DBInstanceStatus !== "available") {
+  if (instance?.DBInstanceStatus !== "available" && instance?.DBInstanceStatus !== "storage-optimization") {
     throw new CliError(
       `database ${database} is ${instance?.DBInstanceStatus ?? "missing"}; refusing to deploy without an available source for the pre-deploy restore point`,
     );
@@ -4731,7 +4731,7 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
         VpcSecurityGroups?: Array<{ VpcSecurityGroupId?: string }>;
       }>;
     }>(aws, ["rds", "describe-db-instances", "--db-instance-identifier", rdsInstanceIdentifier(aws)]).DBInstances?.[0];
-    if (database?.DBInstanceStatus !== "available")
+    if (database?.DBInstanceStatus !== "available" && database?.DBInstanceStatus !== "storage-optimization")
       throw new Error(`database is ${database?.DBInstanceStatus || "missing"}`);
     const coreService = aws.services.core;
     if (!coreService) throw new Error("aws.services.core is missing");

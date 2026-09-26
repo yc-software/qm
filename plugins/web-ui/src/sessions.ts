@@ -81,14 +81,7 @@ import {
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
 import { transcriptModel } from "./model-options";
-import {
-  appState,
-  closeSidebarOnNarrowView,
-  renderSidebarTop,
-  showMainEmpty,
-  syncDocumentTitle,
-  syncUrlFromState,
-} from "./shell";
+import { appState, closeSidebarOnNarrowView, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
 import { allConversations, isLiveConversation, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {
@@ -171,6 +164,10 @@ const RECENT_CONTEXT_MAX_AGE_MS = 30_000;
 let renameDraft = "";
 const refreshingTitleIds = new Set<string>();
 let showArchived = false;
+const SESSION_BATCH_SIZE = 50;
+let recentLimit = SESSION_BATCH_SIZE;
+let archivedLimit = SESSION_BATCH_SIZE;
+let chatsPageLimit = SESSION_BATCH_SIZE;
 
 let chatsPageScope: string | null = null;
 let chatsPageQuery = "";
@@ -188,6 +185,9 @@ export function resetSessionsState(): void {
   sessionsState.list = [];
   sessionsState.loaded = false;
   listRequestedAt = 0;
+  sessionsRefreshRunning = false;
+  queuedSessionsRefresh = null;
+  sessionRefreshSeq++;
   sessionsState.openMenuId = null;
   sessionsState.renamingId = null;
   sessionsState.openingKey = null;
@@ -195,6 +195,9 @@ export function resetSessionsState(): void {
   renameDraft = "";
   refreshingTitleIds.clear();
   showArchived = false;
+  recentLimit = SESSION_BATCH_SIZE;
+  archivedLimit = SESSION_BATCH_SIZE;
+  chatsPageLimit = SESSION_BATCH_SIZE;
   chatsPageScope = null;
   chatsPageQuery = "";
   chatsPageStatus = "active";
@@ -328,6 +331,20 @@ export function renderList(): void {
   const active = visible.filter((s) => !s.archived);
   const archived = visible.filter((s) => s.archived);
   const { pinned, rest } = splitPinned(active);
+  const keptIds = new Set([
+    ...openConversationIds(),
+    ...selection.ids,
+    selection.anchor,
+    sessionsState.openMenuId,
+    sessionsState.renamingId,
+  ]);
+  const shownThreads = new Set(
+    [
+      ...rest.slice(0, recentLimit),
+      ...archived.slice(0, archivedLimit),
+      ...visible.filter((session) => !session.id || keptIds.has(session.id)),
+    ].map((session) => session.threadRef),
+  );
   const activeItems = recentItemsFor(rest);
   const archivedItems: RecentItem[] = archived.map((session) => ({
     kind: "session",
@@ -353,7 +370,21 @@ export function renderList(): void {
             `
           : nothing
       }
-      ${groupedRows(activeItems)}
+      ${groupedRows(activeItems, shownThreads)}
+      ${
+        rest.some((session) => !shownThreads.has(session.threadRef))
+          ? html`<button
+              class="archived-toggle"
+              type="button"
+              @click=${() => {
+                recentLimit += SESSION_BATCH_SIZE;
+                renderList();
+              }}
+            >
+              Show more conversations
+            </button>`
+          : nothing
+      }
       ${
         archived.length
           ? html`
@@ -362,7 +393,27 @@ export function renderList(): void {
                 <span>Archived</span>
                 <span class="archived-count">${archived.length}</span>
               </button>
-              ${showArchived ? html`<div class="archived-children">${groupedRows(archivedItems)}</div>` : nothing}
+              ${
+                showArchived
+                  ? html`<div class="archived-children">
+                      ${groupedRows(archivedItems, shownThreads)}
+                      ${
+                        archived.some((session) => !shownThreads.has(session.threadRef))
+                          ? html`<button
+                              class="archived-toggle"
+                              type="button"
+                              @click=${() => {
+                                archivedLimit += SESSION_BATCH_SIZE;
+                                renderList();
+                              }}
+                            >
+                              Show more archived conversations
+                            </button>`
+                          : nothing
+                      }
+                    </div>`
+                  : nothing
+              }
             `
           : nothing
       }
@@ -395,7 +446,7 @@ function newChatHint(name: string): string {
   return `Start a new chat in ${name}`;
 }
 
-function recentItem(item: RecentItem): TemplateResult {
+function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): TemplateResult {
   if (item.kind === "session") return sessionRow(item.session);
   const collapsed = sessionsState.collapsedProjectScopes.has(item.scopeId);
   let glyph: IconNode | null = Folder;
@@ -456,11 +507,15 @@ function recentItem(item: RecentItem): TemplateResult {
             </div>`
       }
       <div class="recent-project-children" id=${childrenId} ?hidden=${collapsed}>
-        ${repeat(
-          item.sessions,
-          (session) => session.threadRef,
-          (session) => sessionRow(session, true),
-        )}
+        ${
+          collapsed
+            ? nothing
+            : repeat(
+                item.sessions.filter((session) => shownThreads.has(session.threadRef)),
+                (session) => session.threadRef,
+                (session) => sessionRow(session, true),
+              )
+        }
       </div>
     </section>
   `;
@@ -571,13 +626,28 @@ export function drawChatsPage(): void {
     appState.mainEl.replaceChildren(chatsPageHost);
   }
   const q = chatsPageQuery.trim().toLowerCase();
-  const rows = sidebarSessions(sessionsState.list)
+  const matches = sidebarSessions(sessionsState.list)
     .filter((s) => chatBrowseStatusMatches(s, chatsPageStatus))
     .filter((s) => chatsPageSurface === "all" || surfaceOf(s) === chatsPageSurface)
     .filter((s) => (chatsPageScope ? s.scopeId === chatsPageScope : true))
     .filter((s) => !q || chatMatches(s, q))
-    .sort((a, b) => activityOf(b) - activityOf(a))
-    .map((s) => chatPageRow(s));
+    .sort((a, b) => activityOf(b) - activityOf(a));
+  const rows = matches.slice(0, chatsPageLimit).map((s) => chatPageRow(s));
+  if (matches.length > chatsPageLimit)
+    rows.push(
+      html`<div class="list-footer">
+        <button
+          class="btn"
+          type="button"
+          @click=${() => {
+            chatsPageLimit += SESSION_BATCH_SIZE;
+            drawChatsPage();
+          }}
+        >
+          Show more conversations
+        </button>
+      </div>`,
+    );
   let empty = "No conversations yet. Start a new chat.";
   if (sessionsLoading && sessionsState.list.length === 0) empty = "Loading conversations…";
   else if (chatsPageScope || q || chatsPageStatus !== "active" || chatsPageSurface !== "all") {
@@ -589,6 +659,7 @@ export function drawChatsPage(): void {
       scope: chatsPageScope,
       onScope: (s) => {
         chatsPageScope = s;
+        chatsPageLimit = SESSION_BATCH_SIZE;
         drawChatsPage();
       },
       action: { label: "New chat", onClick: () => startNewChat() },
@@ -597,6 +668,7 @@ export function drawChatsPage(): void {
         placeholder: "Search chats…",
         onInput: (v) => {
           chatsPageQuery = v;
+          chatsPageLimit = SESSION_BATCH_SIZE;
           drawChatsPage();
         },
       },
@@ -617,6 +689,7 @@ export function drawChatsPage(): void {
                 class=${chatsPageStatus === value ? "active" : ""}
                 @click=${() => {
                   chatsPageStatus = value;
+                  chatsPageLimit = SESSION_BATCH_SIZE;
                   drawChatsPage();
                 }}
               >
@@ -632,6 +705,7 @@ export function drawChatsPage(): void {
             ariaLabel: "Filter by surface",
             onSelect: (value) => {
               chatsPageSurface = (value ?? "all") as typeof chatsPageSurface;
+              chatsPageLimit = SESSION_BATCH_SIZE;
               drawChatsPage();
             },
             options: [
@@ -813,19 +887,28 @@ export function bumpSessionActivity(threadRef: string): void {
   renderList();
 }
 
-function groupedRows(list: RecentItem[]): TemplateResult {
+function groupedRows(list: RecentItem[], shownThreads: ReadonlySet<string>): TemplateResult {
   const now = Date.now();
   const items: { key: string; tpl: TemplateResult }[] = [];
   let group: string | null = null;
   for (const item of list) {
+    const key = item.kind === "session" ? item.session.threadRef : projectMenuKey(item.scopeId);
+    if (
+      item.kind === "session"
+        ? !shownThreads.has(item.session.threadRef)
+        : item.sessions.length > 0 &&
+          sessionsState.openMenuId !== key &&
+          sessionsState.renamingId !== key &&
+          !item.sessions.some((session) => shownThreads.has(session.threadRef))
+    )
+      continue;
     const dateless = item.kind === "project" && item.sessions.length === 0;
     const g = recencyGroup(recentItemActivity(item), now);
     if (!dateless && g !== group) {
       group = g;
       items.push({ key: `group:${g}`, tpl: html`<div class="recents-group">${g}</div>` });
     }
-    const key = item.kind === "session" ? item.session.threadRef : `project:${item.scopeId}`;
-    items.push({ key, tpl: recentItem(item) });
+    items.push({ key, tpl: recentItem(item, shownThreads) });
   }
   return html`${repeat(
     items,
@@ -1532,14 +1615,22 @@ function openConversationIds(): string[] {
   return [...opening, ...allConversations().flatMap((conv) => (conv.state.sessionId ? [conv.state.sessionId] : []))];
 }
 
+type SessionsRefreshOptions = {
+  showLoading?: boolean;
+  silent?: boolean;
+  refreshContexts?: boolean;
+  patchEpoch?: number;
+};
 let latestSessionsRefresh: Promise<boolean> | null = null;
+let queuedSessionsRefresh: SessionsRefreshOptions | null = null;
+let sessionsRefreshRunning = false;
 let listRequestedAt = 0;
-let listInFlight = 0;
 let listDiscards = 0;
 const LIST_STALL_MS = 10_000;
 
 export function refreshSessionsOnOpen(): void {
-  const joinable = listInFlight > 0 && Date.now() - listRequestedAt < LIST_STALL_MS ? latestSessionsRefresh : null;
+  const joinable =
+    sessionsRefreshRunning && Date.now() - listRequestedAt < LIST_STALL_MS ? latestSessionsRefresh : null;
   if (!joinable) {
     void refreshSessions({ silent: true });
     return;
@@ -1554,18 +1645,39 @@ export function refreshSessionsOnOpen(): void {
   );
 }
 
-export function refreshSessions(
-  opts: { showLoading?: boolean; silent?: boolean; refreshContexts?: boolean; patchEpoch?: number } = {},
-): Promise<boolean> {
-  const run: Promise<boolean> = runSessionsRefresh(opts, () =>
-    latestSessionsRefresh === run ? null : latestSessionsRefresh,
-  );
+export function refreshSessions(opts: SessionsRefreshOptions = {}): Promise<boolean> {
+  if (sessionsRefreshRunning && Date.now() - listRequestedAt < LIST_STALL_MS && latestSessionsRefresh) {
+    queuedSessionsRefresh = {
+      ...opts,
+      showLoading: queuedSessionsRefresh?.showLoading || opts.showLoading,
+      refreshContexts: queuedSessionsRefresh?.refreshContexts || opts.refreshContexts,
+      silent: queuedSessionsRefresh ? queuedSessionsRefresh.silent && opts.silent : opts.silent,
+    };
+    sessionRefreshSeq++;
+    return latestSessionsRefresh;
+  }
+  sessionsRefreshRunning = true;
+  const isLatest = (): boolean => latestSessionsRefresh === run;
+  const run: Promise<boolean> = (async () => {
+    try {
+      let next: SessionsRefreshOptions | null = opts;
+      let applied: boolean;
+      do {
+        queuedSessionsRefresh = null;
+        applied = await runSessionsRefresh(next, () => (isLatest() ? null : latestSessionsRefresh));
+        next = isLatest() ? queuedSessionsRefresh : null;
+      } while (next);
+      return applied;
+    } finally {
+      if (isLatest()) sessionsRefreshRunning = false;
+    }
+  })();
   latestSessionsRefresh = run;
   return run;
 }
 
 async function runSessionsRefresh(
-  opts: { showLoading?: boolean; silent?: boolean; refreshContexts?: boolean; patchEpoch?: number },
+  opts: SessionsRefreshOptions,
   newerRun: () => Promise<boolean> | null,
 ): Promise<boolean> {
   loadRecentContexts(opts.refreshContexts === true);
@@ -1577,7 +1689,6 @@ async function runSessionsRefresh(
     renderList();
   }
   listRequestedAt = Date.now();
-  listInFlight++;
   try {
     const r = await api<{ sessions: CoreSession[] }>("/api/sessions");
     if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
@@ -1594,7 +1705,6 @@ async function runSessionsRefresh(
     if (!opts.silent) sessionsNotice = errMessage(e, "Failed to load conversations.");
     return false;
   } finally {
-    listInFlight--;
     if (seq === sessionRefreshSeq) {
       listSettled?.();
       listSettled = null;
@@ -1648,7 +1758,8 @@ export async function openSessionInto(
     sessionsState.openingKey = opening;
     renderList();
   }
-  if (isLiveConversation(conv) && (!tracked || sessionsState.openingKey === opening)) conv.mountLoadingPane();
+  if (!isLiveConversation(conv)) return;
+  const isCurrent = conv.mountLoadingPane();
 
   const fetchEntries = (): Promise<TranscriptPage | null> =>
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(() => null);
@@ -1657,7 +1768,7 @@ export async function openSessionInto(
     entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries(),
     continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : Promise.resolve(null),
   ]);
-  if (!isLiveConversation(conv)) return;
+  if (!isLiveConversation(conv) || !isCurrent()) return;
 
   if (tracked) {
     if (sessionsState.openingKey !== opening) return;
@@ -1669,7 +1780,7 @@ export async function openSessionInto(
   }
 
   if (!entriesRes) {
-    if (tracked) showMainEmpty("Couldn't load this conversation. Check your connection and click it again.");
+    conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
     return;
   }

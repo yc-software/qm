@@ -84,6 +84,7 @@ export interface SpawnMeta {
   model?: string;
   harness?: string;
   thinkingLevel?: string;
+  fastMode?: boolean;
 }
 
 export interface SessionStatus {
@@ -199,6 +200,8 @@ export interface TriggerBase {
 }
 
 export interface Destination {
+  slackAccountId?: string;
+  slackTeamId?: string;
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
   commandApprovalId?: string;
@@ -280,6 +283,7 @@ export interface Cron extends TriggerBase {
   loopId?: string;
   createdAt: number;
   runAs?: "owner" | "scopeFloor" | "scopeShared";
+  ownerResourcesRequireOpen?: boolean;
   members?: Principal[];
   unattendedGrants?: string[];
 
@@ -601,10 +605,37 @@ export interface OverheardMessage {
 export type TurnOrigin =
   | { kind: "human"; messageTs?: string; entryTs?: string }
   | { kind: "ambient"; entryTs?: string; live?: boolean }
-  | { kind: "automation"; screenData?: string; destination?: Destination; useOwnerKeychain?: boolean }
+  | {
+      kind: "automation";
+      screenData?: string;
+      destination?: Destination;
+      useOwnerKeychain?: boolean;
+      ownerResourcesRequireOpen?: boolean;
+    }
   | { kind: "direct" };
 
+export interface ClientToolDeclaration {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  timeoutMs?: number;
+}
+
+export interface ClientToolResult {
+  content: string;
+  structured?: unknown;
+  isError?: boolean;
+}
+
 export interface TurnRequest {
+  slackSource?: { accountId: string; teamId: string; userId: string };
+  externalSlack?: {
+    accountId: string;
+    teamId: string;
+    userId: string;
+    companyDomains: string[];
+    serviceCredentials: string[];
+  };
   sessionSenderId?: string;
   privateSessionMessage?: true;
   sessionMessageDepth?: number;
@@ -633,6 +664,7 @@ export interface TurnRequest {
   securityScreenData?: string;
   triggerDestination?: Destination;
   ownerKeychainUnion?: boolean;
+  ownerResourcesRequireOpen?: boolean;
   unprompted?: boolean;
   liveActor?: boolean;
   botActor?: boolean;
@@ -664,6 +696,7 @@ export interface TurnRequest {
   idempotencyKey?: string;
   redeliveryKey?: string;
   async?: boolean;
+  clientTools?: ClientToolDeclaration[];
 }
 
 export interface ActorAssertion {
@@ -689,6 +722,7 @@ export interface PendingApproval {
 }
 
 export interface PendingApprovalRecord {
+  screenedOutput?: { tool: string; text: string; sourceScopeId?: ScopeId };
   sessionId: string;
   command: string;
   createdAt?: number;

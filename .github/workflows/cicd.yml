@@ -48,6 +48,14 @@ jobs:
         run: npm ci
       - name: Build connector SDK
         run: npm run build:connector-sdk
+      - name: Install Helm for chart tests
+        run: |
+          cd "$(mktemp -d)"
+          curl -fsSLO https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz
+          curl -fsSLO https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz.sha256sum
+          sha256sum -c helm-v3.19.0-linux-amd64.tar.gz.sha256sum
+          tar -xzf helm-v3.19.0-linux-amd64.tar.gz
+          sudo install linux-amd64/helm /usr/local/bin/helm
       - name: Verify root test shard plan
         if: matrix.shard == 1
         run: npm run test:root:shard:check

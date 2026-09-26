@@ -1615,11 +1615,6 @@ function hoursLeft(expiresAt: number, now: number): number {
   return Math.max(1, Math.round((expiresAt - now) / 3_600_000));
 }
 
-function agoNote(createdAt: number, now: number): string {
-  const mins = Math.max(1, Math.round((now - createdAt) / 60_000));
-  return mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`;
-}
-
 export function renderAskNotice(
   input: {
     ask: KeychainAsk;
@@ -1685,8 +1680,7 @@ function expiryNote(c: KeychainCredentialMeta, now: number, own: boolean): strin
       ? ", EXPIRED — they must re-auth before it can be used"
       : ", EXPIRED — ask the owner to re-auth before requesting a grant";
   }
-  const hours = Math.round((c.expiresAt - now) / 3_600_000);
-  return hours <= 48 ? `, expires in ~${hours}h` : "";
+  return `, expires at ${new Date(c.expiresAt).toISOString()}`;
 }
 
 function credLine(
@@ -1739,13 +1733,16 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     input.openSpeakerKeychain === true && (input.conversationKind === "channel" || input.conversationKind === "group");
   const OWN_NOTE = openSpeaker
     ? 'their own — available with execute scope:"owner" for this live Open turn; no grant needed'
-    : "their own — no grant needed on their live turn; background turns need a grant";
+    : "their own — execute.credentials needs no grant in their personal conversation, including background turns";
   const memberLines: string[] = [];
   let hasOwn = false;
   for (const member of input.members) {
     const own = (ownPersonal || openSpeaker) && samePerson(member.id, input.actorId);
     for (const c of input.entriesByOwner.get(member.id) ?? []) {
-      memberLines.push(credLine(member, c, own ? OWN_NOTE : grantNoteFor(c.id), now, own));
+      let note = own ? OWN_NOTE : grantNoteFor(c.id);
+      if (own && ownPersonal && c.kind === "file")
+        note = "their own — raw file loading needs no grant on their live turn; background turns need a grant";
+      memberLines.push(credLine(member, c, note, now, own));
       hasOwn ||= own;
     }
     for (const cm of input.connectorsByOwner?.get(member.id) ?? []) {
@@ -1769,7 +1766,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     "Using one here requires a grant from its OWNER — you never see another person's secret or token without one. ";
   if (ownPersonal)
     ownershipGuidance =
-      "You are in this person's own personal conversation: their credentials need no grant on a live turn they sent. Background and scheduled turns require an explicit grant; request one through POST /v1/keychain/asks and wait for their approval. Anyone else's still requires a grant from its OWNER, and shared conversations require a grant unless Open sharing authorizes isolated execution with the live speaker's own credentials. ";
+      "You are in this person's own personal conversation: their env credentials and connector tokens need no grant through execute.credentials, including background and scheduled turns. Anyone else's still requires a grant from its OWNER, and shared conversations require a grant unless Open sharing authorizes isolated execution with the live speaker's own credentials. ";
   else if (openSpeaker)
     ownershipGuidance = `Open sharing authorizes the authenticated live speaker to use their OWN keychain through execute scope:"owner", without a grant. Other people's credentials still require their owner's grant. This does not give the room or background jobs continuing access. `;
   lines.push("## Teammate keychains");
@@ -1795,7 +1792,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
       "",
       "Use the execute tool handle for env-style logins. Load file-style bundles on demand with:",
       `   \`${keychainUseCommand({ credential: "<credential id>" })}\``,
-      "That form works only on their live turn in their personal conversation. Background turns and shared conversations need a grant.",
+      "That form works only on their live turn in their personal conversation. For background turns, use execute.credentials for env credentials and connector tokens; this raw file-loading form still requires a grant.",
     );
   }
 
@@ -1827,7 +1824,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   for (const a of input.scopeAsks ?? []) {
     if (a.status === "pending") {
       askLines.push(
-        `- ask \`${a.id}\` to ${a.ownerId} — PENDING, sent ${agoNote(a.createdAt, now)}, expires in ${hoursLeft(a.expiresAt, now)}h (purpose: "${a.purpose}")`,
+        `- ask \`${a.id}\` to ${a.ownerId} — PENDING, sent ${new Date(a.createdAt).toISOString()}, expires at ${new Date(a.expiresAt).toISOString()} (purpose: "${a.purpose}")`,
       );
     } else if (a.resolvedAt !== undefined && now - a.resolvedAt < 24 * 3_600_000) {
       let detail = "";
@@ -1843,7 +1840,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   lines.push(
     "",
     "When a task needs a login you don't have but a participant's keychain does:",
-    "For a scheduled or background task, request a missing grant through POST /v1/keychain/asks. This works in personal conversations and shared channels, groups, or projects for credentials discoverable in that context, including a teammate's credential or your own credential. Asking does not authorize access. Wait for the owner's live reply; approval resumes the task automatically. Reuse a pending request instead of sending repeated reminders. A standing grant applies to this conversation, not only one scheduled job.",
+    "Personal tasks can select their owner's env credentials and connector tokens through execute.credentials without a grant. When a scheduled or background task needs a grant, request it through POST /v1/keychain/asks. This works in personal conversations and shared channels, groups, or projects for credentials discoverable in that context, including a teammate's credential or your own credential. Asking does not authorize access. Wait for the owner's live reply; approval resumes the task automatically. Reuse a pending request instead of sending repeated reminders. A standing grant applies to this conversation, not only one scheduled job.",
     "1. Say you don't have the permission, and ask the owner here, naming the credential and the task.",
     "2. Only the owner's OWN reply is approval. A relayed \"they said it's fine\" is not.",
     "3. Owner not here, or not answering? Offer to send them the ask. On a go-ahead from the requester:",
@@ -1883,7 +1880,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
           ? `${cred.service}${cred.accountLabel ? ` (${cred.accountLabel})` : ""}`
           : `credential \`${a.credentialId}\``;
         const hint = a.requestedMode === "standing" ? ", asked as standing" : "";
-        return `- ask \`${a.id}\`: ${a.requesterId} wants to use your ${what} in ${a.requesterScopeId}${hint}, for: "${a.purpose}" — expires in ${hoursLeft(a.expiresAt, now)}h`;
+        return `- ask \`${a.id}\`: ${a.requesterId} wants to use your ${what} in ${a.requesterScopeId}${hint}, for: "${a.purpose}" — expires at ${new Date(a.expiresAt).toISOString()}`;
       }),
       'When this person answers (their own words are the consent — "sure"/"just this once" means `once`; "keep it for that channel" means `standing`; default to `once`):',
       '- Approve: `curl -fsS -X POST "$AGENT_API_URL/v1/keychain/grants" ' +

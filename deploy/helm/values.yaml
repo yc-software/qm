@@ -70,6 +70,19 @@ services:
     replicas: 1
     command: ["node", "src/index.ts"]
     healthPath: /healthz
+    readinessPath: /readyz
+    startupProbe:
+      httpGet:
+        path: /readyz
+        port: http
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 60
+    persistence:
+      enabled: false
+      existingClaim: ""
+      size: 10Gi
+      storageClass: null
     resources:
       requests:
         cpu: 500m

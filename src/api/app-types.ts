@@ -1,3 +1,4 @@
+import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { InviteMailer } from "../admin/invite-email.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
@@ -304,6 +305,7 @@ export interface App {
     startedAt: number | null;
     finishedAt: number | null;
   } | null>;
+  getRunToolEntries(runId: string, viewer?: string, afterSeq?: number): Promise<SessionEntry[]>;
   stopConversation(threadRef: string, viewer?: string): Promise<boolean>;
   activeRunForThread(
     threadRef: string,
@@ -401,6 +403,8 @@ export interface App {
   ): Promise<FileListItem | null>;
   listScopeResources(principalId: string, scope: ScopeId): Promise<ScopeResources | null>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
+  isCurrentSharedScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
+  isOpenScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
   membershipControlsScope(scope: ScopeId): Promise<boolean>;
   authorizesCapabilityScope(
     claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
@@ -426,7 +430,7 @@ export interface App {
     scopeId: ScopeId,
     content: string,
     actorId: string,
-    opts?: { allowSharedScope?: boolean },
+    opts?: { allowSharedScope?: boolean; expectedVersion?: number },
   ): Promise<number>;
   createCron(input: CreateCronInput): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
@@ -605,6 +609,7 @@ export interface App {
 }
 
 export interface AppDeps {
+  externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
   resourceSearch?: ResourceSearchStore;
   swarms?: SwarmService;

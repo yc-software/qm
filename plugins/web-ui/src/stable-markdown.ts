@@ -93,11 +93,14 @@ export class StableMarkdown extends ReactiveElement {
         ranges.push({ start: this.renderedText.length, end: text.length, active: true });
     } else this.clearFades();
     offset = 0;
+    let rangeIndex = 0;
     for (const node of nodes) {
       const end = offset + node.length;
       const fragments: Node[] = [];
       let consumed = 0;
-      for (const range of ranges) {
+      while (rangeIndex < ranges.length && ranges[rangeIndex]!.end <= offset) rangeIndex++;
+      for (let i = rangeIndex; i < ranges.length && ranges[i]!.start < end; i++) {
+        const range = ranges[i]!;
         const start = Math.max(offset, range.start) - offset;
         const stop = Math.min(end, range.end) - offset;
         if (stop <= start) continue;

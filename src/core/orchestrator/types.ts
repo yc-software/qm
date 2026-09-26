@@ -1,3 +1,4 @@
+import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
 import type { RuntimeService } from "../../harness/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
@@ -46,6 +47,7 @@ import type { AdminService } from "../../admin/admin-service.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
 import type { MetricsSink } from "../../admin/metrics-sink.ts";
 import type { ToolLedger } from "../../runs/tool-ledger.ts";
+import type { RunSignalStore } from "../../runs/run-signal-store.ts";
 import type { TurnStream } from "../../runs/turn-stream.ts";
 import type { RunActivityStore } from "../../runs/run-activity-store.ts";
 import type { RunStore } from "../../runs/run-store.ts";
@@ -82,6 +84,7 @@ export interface OrchestratorInput extends Omit<
   | "securityScreenData"
   | "triggerDestination"
   | "ownerKeychainUnion"
+  | "ownerResourcesRequireOpen"
   | "unprompted"
   | "liveActor"
 > {
@@ -108,6 +111,7 @@ export interface OrchestratorInput extends Omit<
 }
 
 export interface OrchestratorDeps {
+  externalSlackPolicies?: ExternalSlackPolicies;
   swarms?: SwarmService;
   refreshModels?: () => Promise<void>;
   identity: IdentityService;
@@ -165,6 +169,7 @@ export interface OrchestratorDeps {
   errors?: ErrorLog;
   metrics?: MetricsSink;
   ledger?: ToolLedger;
+  signals?: RunSignalStore;
   turnStream?: TurnStream;
   runActivity?: RunActivityStore;
   runs?: RunStore;
@@ -179,6 +184,7 @@ export interface OrchestratorDeps {
   validateScheduledRuntime?: (
     scope: import("../../types.ts").ScopeId,
     choice: import("../../harness/harness.ts").RuntimeChoice,
+    purpose?: import("../../resolution/config-store.ts").RuntimePurpose,
   ) => Promise<string | null>;
   livenessCache?: LivenessCache;
   connectorTokens?: ConnectorTokenStore;

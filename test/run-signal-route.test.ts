@@ -667,3 +667,270 @@ test("web steering atomically transfers file-only queues and deduplicates retrie
   assert.equal(signals.length, 1);
   assert.deepEqual(signals[0]?.request?.attachments, attachments);
 });
+
+async function coreTurn(body: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
+  const path = "/v1/turns";
+  const raw = JSON.stringify(body);
+  const r = await fetch(`${coreBase}${path}`, {
+    method: "POST",
+    headers: signedHeaders(SECRET, "POST", path, raw),
+    body: raw,
+  });
+  return { status: r.status, json: (await r.json()) as Record<string, unknown> };
+}
+
+const pageTool = (name: string, extra: Record<string, unknown> = {}) => ({
+  name,
+  description: "Read the rows the user has selected",
+  inputSchema: { type: "object", properties: {} },
+  ...extra,
+});
+
+function turnWithTools(clientTools: unknown, threadRef = `web:internal:U1:${crypto.randomUUID()}`): TurnRequest {
+  return {
+    surface: "web",
+    actor: { externalId: "internal:U1" },
+    conversation: { kind: "dm", threadRef },
+    text: "what have I selected?",
+    async: true,
+    clientTools: clientTools as TurnRequest["clientTools"],
+  };
+}
+
+test("core route: malformed clientTools declarations are rejected 400", async () => {
+  const cases: Array<[string, unknown]> = [
+    ["not an array", { name: "ui__x" }],
+    ["core tool name", [pageTool("execute")]],
+    ["missing prefix", [pageTool("get_selection")]],
+    ["uppercase", [pageTool("ui__GetSelection")]],
+    ["too long", [pageTool(`ui__${"a".repeat(61)}`)]],
+    ["too many", Array.from({ length: 33 }, (_, i) => pageTool(`ui__tool_${i}`))],
+    ["duplicate", [pageTool("ui__get_selection"), pageTool("ui__get_selection")]],
+    ["oversize description", [pageTool("ui__x", { description: "d".repeat(2_001) })]],
+    ["empty description", [pageTool("ui__x", { description: " " })]],
+    ["schema not an object type", [pageTool("ui__x", { inputSchema: { type: "string" } })]],
+    ["schema properties not an object", [pageTool("ui__x", { inputSchema: { type: "object", properties: 5 } })]],
+    ["schema required not strings", [pageTool("ui__x", { inputSchema: { type: "object", required: [1] } })]],
+    ["schema properties an array", [pageTool("ui__x", { inputSchema: { type: "object", properties: [] } })]],
+    ["schema combinator", [pageTool("ui__x", { inputSchema: { type: "object", anyOf: [] } })]],
+    ["schema not", [pageTool("ui__x", { inputSchema: { type: "object", not: { required: ["a"] } } })]],
+    [
+      "schema with an unconvertible property",
+      [pageTool("ui__x", { inputSchema: { type: "object", properties: { a: { type: "nonsense" } } } })],
+    ],
+    [
+      "schema with a dangling ref",
+      [pageTool("ui__x", { inputSchema: { type: "object", properties: { a: { $ref: "#/$defs/missing" } } } })],
+    ],
+    ["oversize schema", [pageTool("ui__x", { inputSchema: { type: "object", description: "s".repeat(16_000) } })]],
+    ["timeout too short", [pageTool("ui__x", { timeoutMs: 999 })]],
+    ["timeout too long", [pageTool("ui__x", { timeoutMs: 60_001 })]],
+    ["timeout not an integer", [pageTool("ui__x", { timeoutMs: 1500.5 })]],
+  ];
+  for (const [label, clientTools] of cases) {
+    const r = await coreTurn(turnWithTools(clientTools));
+    assert.equal(r.status, 400, label);
+    assert.equal(r.json.error, "bad_request", label);
+    assert.match(String(r.json.message), /^clientTools/, label);
+  }
+  const timeout = await coreTurn(turnWithTools([pageTool("ui__x"), pageTool("ui__y", { timeoutMs: 999 })]));
+  assert.match(String(timeout.json.message), /^clientTools\.1\.timeoutMs: /, "the message names the failing field");
+});
+
+test("core route: valid clientTools reach the queued run, stripped to the declared fields", async () => {
+  const r = await coreTurn(
+    turnWithTools([
+      { ...pageTool("ui__highlight_rows", { timeoutMs: 60_000 }), smuggled: true },
+      pageTool("ui__get_selection", { timeoutMs: 1_000 }),
+    ]),
+  );
+  assert.equal(r.status, 202);
+  const run = await built.runs.get(r.json.runId as string);
+  assert.deepEqual(run?.request.clientTools, [
+    pageTool("ui__highlight_rows", { timeoutMs: 60_000 }),
+    pageTool("ui__get_selection", { timeoutMs: 1_000 }),
+  ]);
+});
+
+function withPageTools(threadRef: string): OrchestratorInput {
+  return { ...request("hi", threadRef), clientTools: [pageTool("ui__get_selection")] };
+}
+
+test("core route: a client_result is refused for a run that declared no client tools", async () => {
+  const { run } = await built.runs.enqueue({ sessionId: "t-client-none", request: request("hi", "t-client-none") });
+  const r = await coreSignal(run.id, { kind: "client_result", callId: "c1", result: { content: "x" } });
+  assert.equal(r.status, 409);
+  assert.deepEqual(r.json, { accepted: false, reason: "no_client_tools" });
+  assert.deepEqual(await built.signals.takePending(run.id), []);
+});
+
+test("signalRun refuses a client_result from anyone but the run's own actor", async () => {
+  const { run } = await built.runs.enqueue({ sessionId: "t-client-other", request: withPageTools("t-client-other") });
+  const outcome = await built.app.signalRun(
+    run.id,
+    { kind: "client_result", callId: "c1", result: { content: "x" } },
+    "web-eve",
+  );
+  assert.deepEqual(outcome, { accepted: false, reason: "not_found" });
+  assert.deepEqual(await built.signals.takePending(run.id), []);
+});
+
+test("core route: a client_result is accepted once, with a per-call dedupe key", async () => {
+  const { run } = await built.runs.enqueue({ sessionId: "t-client", request: withPageTools("t-client") });
+  const body = {
+    kind: "client_result",
+    callId: "call-1",
+    result: { content: "rows 3-5", structured: { rows: [3, 4, 5] }, isError: false },
+  };
+  const first = await coreSignal(run.id, body);
+  assert.equal(first.status, 200);
+  assert.equal(first.json.accepted, true);
+  const second = await coreSignal(run.id, { ...body, result: { content: "late" } });
+  assert.equal(second.status, 409);
+  assert.deepEqual(second.json, { accepted: false, reason: "duplicate" });
+  const signals = await built.signals.takePending(run.id);
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0]!.kind, "client_result");
+  assert.equal(signals[0]!.callId, "call-1");
+  assert.equal(signals[0]!.dedupeKey, `client:${run.id}:call-1`);
+  assert.deepEqual(signals[0]!.result, body.result);
+});
+
+test("core route: malformed client_result signals are rejected 400", async () => {
+  const { run } = await built.runs.enqueue({ sessionId: "t-client-bad", request: withPageTools("t-client-bad") });
+  for (const body of [
+    { kind: "client_result", result: { content: "x" } },
+    { kind: "client_result", callId: "", result: { content: "x" } },
+    { kind: "client_result", callId: "c".repeat(257), result: { content: "x" } },
+    { kind: "client_result", callId: "c1" },
+    { kind: "client_result", callId: "c1", result: "x" },
+    { kind: "client_result", callId: "c1", result: { content: 5 } },
+    { kind: "client_result", callId: "c1", result: { content: "x", isError: "yes" } },
+  ]) {
+    const r = await coreSignal(run.id, body);
+    assert.equal(r.status, 400, JSON.stringify(body));
+  }
+  assert.deepEqual(await built.signals.takePending(run.id), []);
+  const named = await coreSignal(run.id, { kind: "client_result", callId: "c2", result: { content: ["x"] } });
+  assert.match(String(named.json.message), /^client_result\.result\.content: /);
+});
+
+test("core route: a client_result keeps only the declared result fields", async () => {
+  const { run } = await built.runs.enqueue({ sessionId: "t-client-strip", request: withPageTools("t-client-strip") });
+  const r = await coreSignal(run.id, {
+    kind: "client_result",
+    callId: "c1",
+    result: { content: "ok", smuggled: true },
+    extra: "ignored",
+  });
+  assert.equal(r.status, 200);
+  const [signal] = await built.signals.takePending(run.id);
+  assert.deepEqual(signal?.result, { content: "ok" });
+});
+
+test("core route: client_result for an unknown run is 404 and for a terminal run is 409", async () => {
+  const body = { kind: "client_result", callId: "c1", result: { content: "x" } };
+  assert.equal((await coreSignal("no-such-run", body)).status, 404);
+  const { run } = await built.runs.enqueue({ sessionId: "t-client-done", request: withPageTools("t-client-done") });
+  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
+  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const r = await coreSignal(run.id, body);
+  assert.equal(r.status, 409);
+  assert.deepEqual(r.json, { accepted: false, reason: "terminal" });
+});
+
+async function settleNoReplay(threadRef: string): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(await built.runs.activeForThread(threadRef), null, "no replay turn was started");
+  }
+}
+
+test("orphan replay drops a late client_result instead of starting a turn", async () => {
+  const threadRef = `t-client-orphan-${crypto.randomUUID()}`;
+  const { run } = await built.runs.enqueue({ sessionId: threadRef, request: request("hi", threadRef) });
+  await built.signals.send(run.id, {
+    kind: "client_result",
+    callId: "late",
+    text: "a late page answer",
+    result: { content: "a late page answer" },
+  });
+  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
+  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await built.app.replayOrphanedRunSignals(run.id);
+  await settleNoReplay(threadRef);
+  assert.deepEqual(await built.signals.pending(run.id), [], "the late answer is consumed");
+});
+
+test("orphan replays never carry client tools into the new run", async () => {
+  const requestless = `t-client-replay-${crypto.randomUUID()}`;
+  const { run: first } = await built.runs.enqueue({ sessionId: requestless, request: withPageTools(requestless) });
+  await built.signals.send(first.id, { kind: "steer", text: "carry on", ts: "1712.101" });
+  const firstClaim = await built.runs.claimById(first.id, "test-worker", 5_000);
+  await built.runs.complete(first.id, firstClaim!.leaseToken!, { status: "ok", reply: "done" });
+  await built.app.replayOrphanedRunSignals(first.id);
+  let replayed = await built.runs.activeForThread(requestless);
+  for (let i = 0; !replayed && i < 50; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    replayed = await built.runs.activeForThread(requestless);
+  }
+  assert.ok(replayed, "the requestless steer replays on the dead run's request");
+  assert.equal(replayed!.request.text, "carry on");
+  assert.equal(replayed!.request.clientTools, undefined, "the dead run's client tools are not inherited");
+
+  const threadRef = `web:web-eve:${crypto.randomUUID()}`;
+  const { run: second } = await built.runs.enqueue({
+    sessionId: "t-client-replay-own",
+    request: request("hi", "t-client-replay-own"),
+  });
+  await built.signals.send(second.id, {
+    kind: "steer",
+    text: "and this",
+    ts: "1712.102",
+    request: { ...steererRequest("web-eve", threadRef, "and this"), clientTools: [pageTool("ui__get_selection")] },
+  });
+  const secondClaim = await built.runs.claimById(second.id, "test-worker", 5_000);
+  await built.runs.complete(second.id, secondClaim!.leaseToken!, { status: "ok", reply: "done" });
+  await built.app.replayOrphanedRunSignals(second.id);
+  let own = await built.runs.activeForThread(threadRef);
+  for (let i = 0; !own && i < 50; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    own = await built.runs.activeForThread(threadRef);
+  }
+  assert.ok(own, "the steer replays on its own request");
+  assert.equal(own!.request.text, "and this");
+  assert.equal(own!.request.clientTools, undefined, "the steer's own client tools are not carried into the replay");
+});
+
+test("subagent orphan replay never carries client tools into the new run", async () => {
+  const threadRef = `agent:main:subagent:${crypto.randomUUID()}`;
+  const { run } = await built.runs.enqueue({ sessionId: threadRef, request: withPageTools(threadRef) });
+  await built.signals.send(run.id, { kind: "steer", text: "keep going" });
+  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
+  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await built.app.replayOrphanedRunSignals(run.id);
+  let replayed = await built.runs.activeForThread(threadRef);
+  for (let i = 0; !replayed && i < 50; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    replayed = await built.runs.activeForThread(threadRef);
+  }
+  assert.ok(replayed, "the subagent steer replays on the dead run's request");
+  assert.equal(replayed!.request.text, "keep going");
+  assert.equal(replayed!.request.clientTools, undefined);
+});
+
+test("subagent orphan replay drops a late client_result instead of starting a turn", async () => {
+  const threadRef = `agent:main:subagent:${crypto.randomUUID()}`;
+  const { run } = await built.runs.enqueue({ sessionId: threadRef, request: request("hi", threadRef) });
+  await built.signals.send(run.id, {
+    kind: "client_result",
+    callId: "late",
+    text: "a late page answer",
+    result: { content: "a late page answer" },
+  });
+  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
+  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await built.app.replayOrphanedRunSignals(run.id);
+  await settleNoReplay(threadRef);
+  assert.deepEqual(await built.signals.pending(run.id), [], "the late answer is acknowledged");
+});

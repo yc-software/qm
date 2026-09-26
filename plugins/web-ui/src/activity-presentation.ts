@@ -83,11 +83,18 @@ export function activityLabel(row: ToolRowModel, status: WorkBlock["status"]): s
   const { category, target } = activityDescription(call, result);
   const state = toolRowKind(row, status);
   if (state === "approval") return null;
+  const exit =
+    state === "ok" &&
+    toolCategory({ ...result, ...call }) === "execute" &&
+    typeof result.code === "number" &&
+    result.code !== 0
+      ? ` · exit ${result.code}`
+      : "";
   const purpose = typeof call.purpose === "string" ? call.purpose.trim() : "";
   if (purpose) {
     if (state === "failed") return `${purpose} · Failed`;
     if (state === "attempted") return `${purpose} · Unconfirmed`;
-    return purpose;
+    return purpose + exit;
   }
   if (category === "other") return null;
   const verbs = {
@@ -100,8 +107,8 @@ export function activityLabel(row: ToolRowModel, status: WorkBlock["status"]): s
     },
     execute: { ok: "Ran", running: "Running", failed: "Failed running", attempted: "Tried running" },
   };
-  if (state === "ok" && (category === "read" || category === "execute") && target) return target;
-  return `${verbs[category][state]} ${target || (category === "execute" ? "command" : "file")}`;
+  if (state === "ok" && (category === "read" || category === "execute") && target) return target + exit;
+  return `${verbs[category][state]} ${target || (category === "execute" ? "command" : "file")}${exit}`;
 }
 
 export function activityGroupSummary(

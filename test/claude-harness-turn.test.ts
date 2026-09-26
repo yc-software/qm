@@ -120,9 +120,9 @@ test("a steered turn persists every reply, not only the last result's", async ()
   const runId = "run-steer";
   currentScript = async function* (prompts) {
     const iterator = prompts[Symbol.asyncIterator]();
-    await iterator.next();
+    yield (await iterator.next()).value as unknown as FakeSdkMessage;
     await signals.send(runId, { kind: "steer", text: "now do the other three", ts: "123.456" });
-    await iterator.next();
+    yield (await iterator.next()).value as unknown as FakeSdkMessage;
     yield assistantMessage("msg_A", "The capital of France is Paris.", {
       input_tokens: 3,
       output_tokens: 8,
@@ -154,28 +154,33 @@ test("a steered turn persists every reply, not only the last result's", async ()
   assert.deepEqual(userTexts, ["what is the capital of france?", "now do the other three"]);
 });
 
-test("a user stop that surfaces as a non-success SDK result is a clean stop, and the stop stays pending", async () => {
-  const signals = createMemoryRunSignalStore();
-  const runId = "run-stop-error";
-  currentScript = async function* (prompts) {
-    await prompts[Symbol.asyncIterator]().next();
-    await signals.send(runId, { kind: "abort" });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    yield resultMessage("", { subtype: "error_during_execution", errors: ["turn interrupted"], is_error: true });
-  };
+for (const shutdown of [false, true]) {
+  test(`a user stop stays explicit when shutdown=${shutdown}`, async () => {
+    const cancel = new AbortController();
+    const signals = createMemoryRunSignalStore();
+    const runId = "run-stop-error";
+    currentScript = async function* (prompts) {
+      await prompts[Symbol.asyncIterator]().next();
+      await signals.send(runId, { kind: "abort" });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (shutdown) cancel.abort();
+      yield resultMessage("", { subtype: "error_during_execution", errors: ["turn interrupted"], is_error: true });
+    };
 
-  const harness = createClaudeHarness({ signals });
-  const { turn } = harnessTurn({ runId });
-  const result = await harness.turns.runTurn(turn);
+    const harness = createClaudeHarness({ signals });
+    const { turn } = harnessTurn({ runId, cancel: cancel.signal });
+    const result = await harness.turns.runTurn(turn);
 
-  assert.equal(result.stopped, true, "an interrupted turn the SDK calls an error is still a user stop");
-  assert.equal(result.reply, "");
-  assert.deepEqual(
-    (await signals.takePending(runId)).map((s) => s.kind),
-    ["abort"],
-    "the stop stays pending for the terminal drain",
-  );
-});
+    assert.equal(result.stopped, true, "an interrupted turn the SDK calls an error is still a user stop");
+    assert.equal(result.stoppedByUser, true);
+    assert.equal(result.reply, "");
+    assert.deepEqual(
+      (await signals.takePending(runId)).map((s) => s.kind),
+      ["abort"],
+      "the stop stays pending for the terminal drain",
+    );
+  });
+}
 
 for (const late of [
   { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: " late" } } },
@@ -204,6 +209,7 @@ for (const late of [
     release.resolve();
     const result = await running;
     assert.equal(result.stopped, true);
+    assert.equal(result.stoppedByUser, undefined);
     assert.equal(result.reply, "Visible partial");
     assert.deepEqual(deltas, ["Visible partial"]);
     assert.deepEqual(
@@ -250,6 +256,7 @@ for (const bookkeeping of ["request recording", "thinking persistence"]) {
     release.resolve();
     const result = await running;
     assert.equal(result.stopped, true);
+    assert.equal(result.stoppedByUser, undefined);
     assert.equal(result.reply, "Visible partial");
     assert.deepEqual(
       entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
@@ -525,7 +532,9 @@ test("steering forwards prepared images and file paths while retaining the origi
     const iterator = prompts[Symbol.asyncIterator]();
     await iterator.next();
     await signals.send(runId, { kind: "steer", text: "check this", ts: "files.1", request });
-    injected = (await iterator.next()).value?.message.content;
+    const next = (await iterator.next()).value!;
+    injected = next.message.content;
+    yield next as unknown as FakeSdkMessage;
     yield resultMessage("saw the image");
     yield resultMessage("done");
   };
@@ -642,4 +651,86 @@ test("Claude coordinators expose neither command tools nor native subagents", as
   const allowed = capturedOptions.allowedTools as string[];
   for (const name of ["Agent", "mcp__qm__execute", "mcp__qm__background"]) assert.ok(!allowed.includes(name));
   await harness.turns.close?.();
+});
+
+for (const surfaceTools of [false, true]) {
+  test(`Claude finish_silently suppresses provider closing text (surface=${surfaceTools})`, async () => {
+    currentScript = async function* () {
+      await toolHandlers.get("finish_silently")!({ reason: "nothing new" });
+      yield assistantMessage("quiet", "Nothing to add", {});
+      yield resultMessage("Nothing to add");
+    };
+    const harness = createClaudeHarness();
+    const { turn, entries } = harnessTurn({ pollFire: !surfaceTools, surfaceTools });
+    const result = await harness.turns.runTurn(turn);
+    assert.equal(result.silent, true);
+    assert.equal(result.reply, "");
+    assert.equal(
+      entries.some((entry) => entry.type === "assistant"),
+      false,
+    );
+    assert.ok(entries.some((entry) => entry.type === "tool_result" && (entry.payload as { silent?: boolean }).silent));
+  });
+}
+
+test("Claude emits repeated-text steers only at distinct native user echoes", async () => {
+  const signals = createMemoryRunSignalStore();
+  const tape: unknown[] = [];
+  const { turn, entries } = harnessTurn({
+    runId: "echo-intake",
+    input: "same text",
+    tape: async (row) => {
+      tape.push(row);
+    },
+  });
+  currentScript = async function* (prompts) {
+    const iterator = prompts[Symbol.asyncIterator]();
+    yield (await iterator.next()).value as unknown as FakeSdkMessage;
+    await signals.send("echo-intake", { kind: "steer", text: "same text", ts: "one" });
+    const first = (await iterator.next()).value as unknown as FakeSdkMessage;
+    await signals.send("echo-intake", { kind: "steer", text: "same text", ts: "two" });
+    const second = (await iterator.next()).value as unknown as FakeSdkMessage;
+    assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
+    assert.equal((await signals.pending("echo-intake")).length, 2);
+    yield first;
+    yield first;
+    assert.equal(entries.filter((entry) => entry.type === "user").length, 2);
+    yield {
+      ...second,
+      message: {
+        role: "user",
+        content: [
+          ...(first.message as { content: unknown[] }).content,
+          ...(second.message as { content: unknown[] }).content,
+        ],
+      },
+    };
+    yield resultMessage("first");
+    yield resultMessage("second");
+    yield resultMessage("third");
+  };
+  await createClaudeHarness({ signals }).turns.runTurn(turn);
+  assert.deepEqual(capturedOptions.extraArgs, { "replay-user-messages": null });
+  const users = entries.filter((entry) => entry.type === "user");
+  assert.deepEqual(
+    users.map((entry) => (entry.payload as { ts?: string }).ts),
+    [undefined, "one", "two"],
+  );
+  assert.equal((await signals.pending("echo-intake")).length, 0);
+  assert.equal(tape.filter((row) => (row as { meta?: { ts?: string } }).meta?.ts).length, 2);
+});
+
+test("Claude retains a queued message which the SDK never consumes", async () => {
+  const signals = createMemoryRunSignalStore();
+  const { turn, entries } = harnessTurn({ runId: "no-echo" });
+  currentScript = async function* (prompts) {
+    const iterator = prompts[Symbol.asyncIterator]();
+    yield (await iterator.next()).value as unknown as FakeSdkMessage;
+    await signals.send("no-echo", { kind: "steer", text: "not yet", ts: "pending" });
+    await iterator.next();
+    yield resultMessage("original reply");
+  };
+  await createClaudeHarness({ signals }).turns.runTurn(turn);
+  assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
+  assert.equal((await signals.pending("no-echo"))[0]?.signal.ts, "pending");
 });

@@ -109,7 +109,7 @@ function sourceFacts(config: QmConfig): {
     group.VpcSecurityGroupId ? [group.VpcSecurityGroupId] : [],
   );
   if (
-    db?.DBInstanceStatus !== "available" ||
+    (db?.DBInstanceStatus !== "available" && db?.DBInstanceStatus !== "storage-optimization") ||
     !db.DBInstanceClass ||
     !db.StorageEncrypted ||
     db.PubliclyAccessible ||

@@ -152,15 +152,117 @@ test("a bare entry still mints a new chat once the list lands", async () => {
   }
 });
 
-test("a view deep link still waits for the list and never fetches a transcript", async () => {
-  const h = await harness({ path: "/crons" });
+test("an explicit view opens without the sidebar list or remote canvas", async () => {
+  const h = await harness({ path: "/crons", holdRemoteSplit: true });
+  const booted = h.boot();
   try {
-    const booted = h.boot();
+    for (let i = 0; i < 100 && h.appState.currentView !== "crons"; i++)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(h.appState.currentView, "crons");
+    assert.equal(h.sessionsState.loaded, false);
+    assert.equal(h.requests.filter((p) => p.startsWith(`/api/sessions/${SESSION.id}`)).length, 0);
+  } finally {
+    h.releaseRemoteSplit();
     h.releaseSessions();
     await booted;
-    assert.equal(h.appState.currentView, "crons");
-    assert.equal(h.sessionsState.loaded, true);
-    assert.equal(h.requests.filter((p) => p.startsWith(`/api/sessions/${SESSION.id}`)).length, 0);
+    await h.close();
+  }
+});
+
+test("the sidebar request overlaps runtime settings and paints if it finishes first", async () => {
+  const h = await harness({ path: "/settings", holdRuntimeConfig: true, listSessions: [SESSION] });
+  const booted = h.boot();
+  try {
+    for (let i = 0; i < 100 && !h.requests.includes("/api/sessions"); i++)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.ok(h.requests.includes("/api/sessions"), "the list must start while runtime settings are pending");
+    h.releaseSessions();
+    await h.sessionsReady();
+    h.releaseRuntimeConfig();
+    await booted;
+    assert.equal(h.appState.currentView, "settings");
+    assert.ok(document.querySelector(`[data-session-id="${SESSION.id}"]`));
+  } finally {
+    h.releaseRuntimeConfig();
+    h.releaseSessions();
+    await booted;
+    await h.close();
+  }
+});
+
+test("returning from Settings waits for the saved remote canvas before creating a pane", async () => {
+  const h = await harness({
+    path: "/settings",
+    holdRemoteSplit: true,
+    listSessions: [SESSION],
+    remoteCanvas: {
+      v: 1,
+      active: true,
+      root: {
+        kind: "split",
+        a: { kind: "leaf", sessionId: SESSION.id, threadRef: SESSION.threadRef },
+        b: { kind: "leaf" },
+      },
+    },
+  });
+  try {
+    await h.boot();
+    assert.equal(h.appState.currentView, "settings");
+    h.releaseSessions();
+    await h.sessionsReady();
+    h.switchView("chats");
+    assert.equal(document.querySelectorAll(".split-pane-content").length, 0);
+    assert.equal(localStorage.getItem("web-ui:split-canvas:v1"), null);
+    h.releaseRemoteSplit();
+    for (let i = 0; i < 100 && document.querySelectorAll(".split-pane-content").length !== 2; i++)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(document.querySelectorAll(".split-pane-content").length, 2);
+    assert.equal(h.appState.currentView, "chats");
+    await waitForText(h, /Deep linked chat/);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a delayed legacy canvas waits for its session lookup and respects later navigation", async () => {
+  const h = await harness({
+    path: "/settings",
+    holdRemoteSplit: true,
+    listSessions: [SESSION],
+    remoteCanvas: {
+      v: 1,
+      active: true,
+      root: {
+        kind: "split",
+        a: { kind: "leaf", threadRef: SESSION.threadRef },
+        b: { kind: "leaf" },
+      },
+    },
+  });
+  try {
+    await h.boot();
+    h.switchView("chats");
+    assert.equal(document.querySelector(".settings-page"), null);
+    h.switchView("settings");
+    assert.ok(document.querySelector(".settings-page"));
+    h.switchView("chats");
+    assert.equal(document.querySelector(".settings-page"), null);
+    assert.match(h.mainText(), /Loading conversations/);
+    h.releaseRemoteSplit();
+    for (let i = 0; i < 100 && !localStorage.getItem("web-ui:split-canvas:v1"); i++)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.ok(localStorage.getItem("web-ui:split-canvas:v1"));
+    assert.equal(document.querySelectorAll(".split-pane-content").length, 0);
+    h.switchView("settings");
+    h.releaseSessions();
+    await h.sessionsReady();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(h.appState.currentView, "settings");
+    assert.ok(document.querySelector(".settings-page"));
+    assert.equal(document.querySelectorAll(".split-pane-content").length, 0);
+    h.switchView("chats");
+    assert.equal(document.querySelectorAll(".split-pane-content").length, 2);
+    await waitForText(h, /Deep linked chat/);
   } finally {
     await h.close();
   }

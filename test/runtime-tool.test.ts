@@ -157,3 +157,104 @@ test("cancellation during validation prevents a scope write", async () => {
   assert.deepEqual(result, { ok: false, error: "cancelled" });
   assert.equal(await config.getRuntimeSelectionDurable(claims.scopeId), null);
 });
+
+test("cron fires may change their task runtime without changing saved defaults", async () => {
+  const { service, config } = await setup();
+  const cronClaims = { ...claims, liveActor: false, triggered: true };
+  const result = await service(
+    cronClaims,
+    active,
+    { action: "set", model: "Astra" },
+    undefined,
+    false,
+    undefined,
+    true,
+  );
+  assert.deepEqual(result, { ok: true, handoff: { lifetime: "task", choice: { ...active, modelId: "gpt-6-astra" } } });
+  assert.equal(await config.getRuntimeSelectionDurable(claims.scopeId), null);
+  for (const action of ["set", "inherit"] as const) {
+    assert.deepEqual(
+      await service(
+        cronClaims,
+        active,
+        { action, model: "Astra", lifetime: "scope" },
+        undefined,
+        false,
+        undefined,
+        true,
+      ),
+      { ok: false, error: "live_actor_required" },
+    );
+  }
+  assert.equal(await config.getRuntimeSelectionDurable(claims.scopeId), null);
+});
+
+test("cron task handoffs still enforce actor, access, model and account policy", async () => {
+  const { service, config } = await setup();
+  const cronClaims = { ...claims, liveActor: false, triggered: true };
+  assert.deepEqual(
+    await service(
+      { ...cronClaims, botActor: true },
+      active,
+      { action: "set", model: "Astra" },
+      undefined,
+      false,
+      undefined,
+      true,
+    ),
+    { ok: false, error: "live_actor_required" },
+  );
+  assert.deepEqual(
+    await service(
+      { ...cronClaims, scopeId: "personal:bob" },
+      active,
+      { action: "set", model: "Astra" },
+      undefined,
+      false,
+      undefined,
+      true,
+    ),
+    { ok: false, error: "forbidden" },
+  );
+  const denied = await setup(false);
+  assert.deepEqual(
+    await denied.service(cronClaims, active, { action: "set", model: "Astra" }, undefined, false, undefined, true),
+    { ok: false, error: "forbidden" },
+  );
+  const result = await service(
+    cronClaims,
+    active,
+    { action: "set", model: "Astra" },
+    async () => "unavailable account",
+    true,
+    undefined,
+    true,
+  );
+  assert.equal(result.ok, false);
+  await config.setRuntimeSelectionLatest(claims.scopeId, { ...active, modelId: "gpt-6-astra" });
+  config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
+  await config.flushScope("org:default-org");
+  assert.deepEqual(
+    await service(cronClaims, active, { action: "set", model: "Astra" }, undefined, false, undefined, true),
+    { ok: false, error: "model_not_enabled" },
+  );
+});
+
+test("cron inherit cannot select a saved model removed from policy", async () => {
+  const { service, config } = await setup();
+  await config.setRuntimeSelectionLatest(claims.scopeId, { ...active, modelId: "gpt-6-astra" });
+  config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
+  await config.flushScope("org:default-org");
+  assert.deepEqual(
+    await service(
+      { ...claims, liveActor: false, triggered: true },
+      active,
+      { action: "inherit" },
+      undefined,
+      false,
+      undefined,
+      true,
+    ),
+    { ok: false, error: "model_not_enabled" },
+  );
+});

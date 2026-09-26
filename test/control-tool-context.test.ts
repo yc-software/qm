@@ -13,6 +13,9 @@ import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability
 import type { ToolLedger } from "../src/runs/tool-ledger.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createAgentTools } from "../src/harness/agent-tools.ts";
+import { createMemoryChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
+import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/core/orchestrator/surface-tools.ts";
 
 const SECRET = "control-tool-ctx";
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
@@ -149,6 +152,93 @@ test("createToolContext.soulWrite then soulRead reflect the new SOUL", async () 
   const r = ctx.soulRead();
   assert.ok(!("code" in r) || r.code !== "control_unavailable");
   assert.equal((r as { soul: string | null }).soul, "Be brief.");
+});
+
+for (const scope of ["conversation", "channel"] as const) {
+  test(`concurrent guidance edits at ${scope} scope reject a stale replacement without losing the winner`, async () => {
+    const { control } = build();
+    const channelPolicy = createMemoryChannelPolicyStore();
+    const surface = createSurfaceToolDeps({
+      deps: { deliveries: {}, channelPolicy, auditLog: { record() {} } },
+      input: { surfaceTools: true },
+      actor: { id: "U1" },
+      conversation: { kind: "channel", channelRef: "C1" },
+      session: { id: "S1" },
+      scopeId: "channel:C1",
+      defaultDestination: {},
+    } as unknown as SurfaceToolsContext)!;
+    const ctx = ctxFor({ control, controlClaims: claims("U1"), surface });
+    await ctx.soulWrite("First rule. Second rule.");
+    await ctx.setStandingOrder("First rule. Second rule.");
+    const entries: string[] = [];
+    const tool = createAgentTools(
+      {
+        current: ctx,
+        scopeLabel: scopeId("personal", "U1"),
+        emit: (entry) => {
+          entries.push(entry.type);
+        },
+      },
+      { controlTools: true },
+    ).find((t) => t.name === "guidance")!;
+    const edit = (old: string, next: string) =>
+      tool
+        .execute(old, { action: "edit", scope, old, new: next }, undefined, undefined, {} as never)
+        .then((result) => JSON.stringify(result));
+    const results = await Promise.all([edit("First rule.", "First updated."), edit("Second rule.", "Second updated.")]);
+    assert.equal(results.filter((result) => !result.includes("[error]")).length, 1);
+    assert.equal(entries.filter((type) => type === "tool_result").length, 2);
+    assert.match(
+      results.find((result) => result.includes("[error]"))!,
+      /changed/,
+    );
+    const current =
+      scope === "conversation" ? control.readSoul(claims("U1")).soul : (await channelPolicy.get("C1"))!.orders;
+    assert.ok(current === "First updated. Second rule." || current === "First rule. Second updated.");
+    const retry = current.includes("First updated.")
+      ? await edit("Second rule.", "Second updated.")
+      : await edit("First rule.", "First updated.");
+    assert.doesNotMatch(retry, /\[error\]/);
+    const final =
+      scope === "conversation" ? control.readSoul(claims("U1")).soul : (await channelPolicy.get("C1"))!.orders;
+    assert.equal(final, "First updated. Second updated.");
+  });
+}
+
+test("channel guidance metadata updates preserve intervening edits and initialize missing policies", async () => {
+  const channelPolicy = createMemoryChannelPolicyStore();
+  const surface = createSurfaceToolDeps({
+    deps: { deliveries: {}, channelPolicy, auditLog: { record() {} } },
+    input: { surfaceTools: true },
+    actor: { id: "U1" },
+    conversation: { kind: "channel", channelRef: "C1" },
+    session: { id: "S1" },
+    scopeId: "channel:C1",
+    defaultDestination: {},
+  } as unknown as SurfaceToolsContext)!;
+  const ctx = ctxFor({ surface });
+  const tool = createAgentTools({ current: ctx }, { controlTools: true }).find((t) => t.name === "guidance")!;
+  const replace = (params: Record<string, unknown>) =>
+    tool.execute("metadata", { action: "replace", scope: "channel", ...params }, undefined, undefined, {} as never);
+  await replace({ ambientEnabled: true });
+  assert.equal((await channelPolicy.get("C1"))!.orders, "");
+  assert.equal((await channelPolicy.get("C1"))!.ambientEnabled, true);
+  const read = ctx.getStandingOrder;
+  ctx.getStandingOrder = async () => {
+    const snapshot = await read();
+    await surface.setStandingOrder("Concurrent edit.");
+    return snapshot;
+  };
+  await replace({ ambientEnabled: false, bots: { news: { mode: "ignore" } } });
+  const stored = (await channelPolicy.get("C1"))!;
+  assert.equal(stored.orders, "Concurrent edit.");
+  assert.equal(stored.ambientEnabled, false);
+  assert.deepEqual(stored.bots, { news: { mode: "ignore" } });
+  assert.equal((await channelPolicy.history("C1"))[0]!.orders, stored.orders);
+  await replace({ content: "Explicit replacement." });
+  assert.equal((await channelPolicy.get("C1"))!.orders, "Explicit replacement.");
+  await replace({ content: 42, ambientEnabled: true });
+  assert.equal((await channelPolicy.get("C1"))!.orders, "Concurrent edit.");
 });
 
 test("without control/controlClaims wired, every control method returns CONTROL_UNAVAILABLE", async () => {

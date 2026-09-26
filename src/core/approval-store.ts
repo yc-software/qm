@@ -8,15 +8,27 @@ export function approvalDeliveryKey(id: string, record: Pick<PendingApprovalReco
   return `command-approval:${id}:${record.createdAt ?? 0}`;
 }
 
+export function approvalDeliveryRecipient(actor: { externalId?: string } | undefined): string | undefined {
+  const id = actor?.externalId;
+  return id && !id.startsWith("system:") ? id : undefined;
+}
+
 export function createApprovalStore(
   backing: DurableMap<PendingApprovalRecord>,
   deliveries: Pick<DeliveryStore, "enqueue">,
 ) {
   async function deliver(id: string, record: PendingApprovalRecord): Promise<void> {
     if (record.request?.surface !== "slack") return;
-    const actorId = record.request.actor.externalId;
+    const actorId = approvalDeliveryRecipient(record.request.actor);
+    if (!actorId) return;
     await deliveries.enqueue({
-      destination: { ...principalDestination(actorId, actorId), commandApprovalId: id },
+      destination: {
+        ...principalDestination(actorId, actorId),
+        commandApprovalId: id,
+        ...(record.request.slackSource
+          ? { slackAccountId: record.request.slackSource.accountId, slackTeamId: record.request.slackSource.teamId }
+          : {}),
+      },
       text: `Approval needed: ${record.summary ?? record.command}`,
       idempotencyKey: approvalDeliveryKey(id, record),
     });

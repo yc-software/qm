@@ -284,8 +284,10 @@ The link is available without a remembered browser preference.
 
 The proxy also signs the original authenticated subject as `authenticatedAs`. Core verifies that it still belongs to the canonical person, rejecting stale claims after unlinking. Trusted-entry failures offer retry of that provider without an alternate email sign-in link; invitation authentication remains unchanged.
 
-Framed app sessions require `PORTAL_FRAME_SESSION_ENABLED=1`, which defaults off.
-Enable it only after every serving core and rollback candidate strips
-`portal_session_x` before forwarding requests to deployed apps. Older cores can
-forward that cookie's session bearer to app code. Until then, normal portal
-sessions remain available and login or session refresh clears framed cookies.
+The portal always issues `portal_session_x`, a `SameSite=None` twin of the
+session cookie that lets opted-in apps be framed by named origins. The cores
+serving the portal must include `f75cfd1c` (#1503), which strips
+`portal_session_x` before forwarding requests to deployed apps. Once this portal
+is deployed, do not roll core back below `f75cfd1c` on its own: an older core
+forwards that cookie's session bearer to app code, and cookies already issued
+stay in browsers until they expire (`PORTAL_SESSION_TTL_S`, 7 days by default).

@@ -1,8 +1,35 @@
 import { sendJson } from "../http.ts";
+import type { SessionEntry } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const HEARTBEAT_MS = 15_000;
 const MAX_BUFFER_BYTES = 1_048_576;
+
+function toolEvent(entry: SessionEntry): { id: string; data: Record<string, unknown> } | null {
+  const payload = (entry.payload ?? {}) as Record<string, unknown>;
+  const { tool, callId, ...rest } = payload;
+  if (typeof callId !== "string" || !callId) return null;
+  if (entry.type === "tool_call") {
+    return {
+      id: `tool:${callId}:start`,
+      data: {
+        type: "TOOL_CALL_START",
+        toolCallId: callId,
+        toolCallName: typeof tool === "string" ? tool : "tool",
+        args: rest,
+      },
+    };
+  }
+  return {
+    id: `tool:${callId}:result`,
+    data: {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: callId,
+      content: String(payload.result ?? ""),
+      isError: payload.isError === true,
+    },
+  };
+}
 
 async function streamRun(ctx: ApiCtx): Promise<void> {
   const { app, req, res, actor } = ctx;
@@ -15,6 +42,8 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
   let syncing = false;
   let refreshing = false;
   let refreshAgain = false;
+  const sentToolEvents = new Set<string>();
+  let toolCursor: number | undefined;
   const cleanup = (): void => {
     closed = true;
     clearInterval(heartbeat);
@@ -28,6 +57,16 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
     }
     res.write(`${id === undefined ? "" : `id: ${id}\n`}data: ${JSON.stringify(data)}\n\n`);
   };
+  const drained = (): Promise<void> =>
+    new Promise((resolve) => {
+      const done = (): void => {
+        res.off("drain", done);
+        res.off("close", done);
+        resolve();
+      };
+      res.on("drain", done);
+      res.on("close", done);
+    });
   const sync = (): void => {
     if (syncing || closed) return;
     syncing = true;
@@ -36,16 +75,33 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
       if (!closed) app.syncRunStream(runId, offset);
     });
   };
-  const snapshot = (run: NonNullable<typeof initial>): void => {
+  const sendDrained = async (data: unknown, id?: string): Promise<void> => {
+    if (res.writableNeedDrain) await drained();
+    send(data, id);
+  };
+  const snapshot = async (run: NonNullable<typeof initial>): Promise<void> => {
+    const toolEntries = await app.getRunToolEntries(runId, actor?.p, toolCursor);
+    if (closed) return;
     offset = Math.max(offset, run.partial?.length ?? 0);
-    send({ type: "CUSTOM", name: "run", value: run });
+    for (const entry of toolEntries) {
+      const event = toolEvent(entry);
+      if (event && !sentToolEvents.has(event.id)) {
+        await sendDrained(event.data, event.id);
+        if (closed) return;
+        sentToolEvents.add(event.id);
+      }
+      toolCursor = entry.seq;
+    }
+    await sendDrained({ type: "CUSTOM", name: "run", value: run });
+    if (closed) return;
     if (run.status === "done" || run.status === "failed" || run.result !== null) {
-      send({ type: "RUN_FINISHED", threadId: runId, runId }, "done");
+      await sendDrained({ type: "RUN_FINISHED", threadId: runId, runId }, "done");
+      if (closed) return;
       res.end();
       cleanup();
     }
   };
-  const refresh = async (): Promise<void> => {
+  const refresh = async (hydrated?: typeof initial): Promise<void> => {
     if (closed) return;
     if (refreshing) {
       refreshAgain = true;
@@ -55,13 +111,14 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
     try {
       do {
         refreshAgain = false;
-        const run = await app.getRun(runId, actor?.p);
+        const run = hydrated ?? (await app.getRun(runId, actor?.p));
+        hydrated = undefined;
         if (closed) return;
         if (!run) {
           res.destroy();
           return;
         }
-        snapshot(run);
+        await snapshot(run);
       } while (refreshAgain && !closed);
     } catch {
       res.destroy();
@@ -107,12 +164,8 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
     "x-accel-buffering": "no",
   });
   send({ type: "RUN_STARTED", threadId: runId, runId });
-  snapshot(initial);
-  // Subscribe before the second snapshot so hydration cannot miss a publication.
-  if (!closed) {
-    sync();
-    await refresh();
-  }
+  await refresh(initial);
+  if (!closed) await refresh();
 }
 
 export const runEventRoutes: ReadonlyArray<Route<ApiCtx>> = [

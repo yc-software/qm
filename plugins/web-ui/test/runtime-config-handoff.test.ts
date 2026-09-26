@@ -16,7 +16,7 @@ test("boot hands its runtime config to the composer instead of dropping it", () 
 
 test("composers read the shared boot snapshot without consuming or copying it", () => {
   assert.match(composer, /const activeRuntimeConfig = getRuntimeConfig\(scopeKey\(\)\);/);
-  assert.match(composer, /await loadRuntimeConfig\(key, refresh\)/);
+  assert.match(composer, /await loadRuntimeConfig\(actualScope, refresh, options.runtimeAccount\)/);
   assert.doesNotMatch(composer, /seededRuntime|applyRuntimeOptions|let activeRuntimeConfig/);
 });
 

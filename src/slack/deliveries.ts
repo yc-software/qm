@@ -1,5 +1,6 @@
+import { extractPrivateContinuation } from "./external-access.ts";
 import { deployAccessMessage } from "./deploy-access.ts";
-import { approvalDeliveryKey } from "../core/approval-store.ts";
+import { approvalDeliveryKey, approvalDeliveryRecipient } from "../core/approval-store.ts";
 import { samePerson } from "../directory/person.ts";
 import { approvalMessage } from "./approval-cards.ts";
 import { keychainApprovalMessage, keychainApprovalOrigin } from "./keychain-approvals.ts";
@@ -55,6 +56,9 @@ function mergeSlackApiMs(body: unknown, slackApiMs: number | undefined): unknown
 }
 
 export function createDeliveryPoller(deps: {
+  clientForAccount?: (accountId: string, teamId?: string) => any;
+  externalAccount?: (accountId: string) => boolean;
+  continuePrivate?: (runId: string, task: string) => Promise<void>;
   core: SlackCoreClient;
   webUiPublicUrl?: string;
   flow: TurnFlow;
@@ -183,10 +187,27 @@ export function createDeliveryPoller(deps: {
       );
     };
 
-  async function deliverToConversations(client: any, leaseLost?: () => boolean): Promise<number> {
+  function deliveryClient(defaultClient: any, destination: Delivery["destination"]): any {
+    if (deps.clientForAccount)
+      return deps.clientForAccount(destination.slackAccountId ?? "default", destination.slackTeamId);
+    return destination.slackAccountId ? undefined : defaultClient;
+  }
+
+  async function deliverToConversations(defaultClient: any, leaseLost?: () => boolean): Promise<number> {
     return drainClaimed(
       ["slack", "group"],
       async (d) => {
+        const destinationClient = deliveryClient(defaultClient, d.destination);
+        if (!destinationClient) return;
+        const client = destinationClient;
+        if (
+          deps.externalAccount?.(d.destination.slackAccountId ?? "default") &&
+          !parseDeliveryTarget(d.destination.target).channel.startsWith("D") &&
+          !d.provenance?.sourceThreadRef.startsWith("external-slack:")
+        ) {
+          await ackDelivery(d.id);
+          return;
+        }
         const runId = d.idempotencyKey?.startsWith("run:") ? d.idempotencyKey.slice("run:".length) : undefined;
         if (runId && inFlightRuns.has(runId)) return;
         if (runId && typeof d.createdAt === "number" && Date.now() - d.createdAt < RUN_RECOVERY_GRACE_MS) return;
@@ -197,6 +218,16 @@ export function createDeliveryPoller(deps: {
           post: async () => {
             const tPost = performance.now();
             try {
+              const continuation = extractPrivateContinuation(d.text);
+              if (
+                runId &&
+                continuation.task &&
+                d.provenance?.sourceThreadRef.startsWith("external-slack:") &&
+                deps.continuePrivate
+              ) {
+                await deps.continuePrivate(runId, continuation.task);
+                return undefined;
+              }
               const postClient = d.destination.identity ? clientForIdentity(d.destination.identity) : client;
               const { channel, threadTs } = parseDeliveryTarget(d.destination.target);
               if (d.destination.react) {
@@ -356,10 +387,12 @@ export function createDeliveryPoller(deps: {
     );
   }
 
-  async function deliverToPrincipals(client: any, leaseLost?: () => boolean): Promise<number> {
+  async function deliverToPrincipals(defaultClient: any, leaseLost?: () => boolean): Promise<number> {
     return drainClaimed(
       ["principal"],
       async (d) => {
+        const client = deliveryClient(defaultClient, d.destination);
+        if (!client) return;
         let slackApiMs: number | undefined;
         await deliverWithRetry({
           tracker: deliveryTracker,
@@ -374,12 +407,14 @@ export function createDeliveryPoller(deps: {
               const commandApproval = d.destination.commandApprovalId
                 ? await core.getApproval(d.destination.commandApprovalId)
                 : null;
-              const requester = commandApproval?.request?.actor as { externalId?: string } | undefined;
+              const requester = approvalDeliveryRecipient(
+                commandApproval?.request?.actor as { externalId?: string } | undefined,
+              );
               if (
                 d.destination.commandApprovalId &&
                 (!commandApproval ||
-                  !requester?.externalId ||
-                  !samePerson(requester.externalId, d.destination.target) ||
+                  !requester ||
+                  !samePerson(requester, d.destination.target) ||
                   d.idempotencyKey !== approvalDeliveryKey(d.destination.commandApprovalId, commandApproval))
               )
                 return undefined;

@@ -1472,3 +1472,48 @@ test("AWS ownership control is opt-in and reserves deployment identity allocatio
     assert.throws(() => loadConfigAt(path), /allocated/),
   );
 });
+
+test("deployment screening across postures is validated and rendered", () => {
+  for (const allPostures of [true, false]) {
+    withConfig({ securityScreen: { backend: "model", allPostures } }, ({ path }) => {
+      assert.deepEqual(securityScreenEnv(loadConfigAt(path).config), {
+        SECURITY_SCREEN_BACKEND: "model",
+        SECURITY_SCREEN_ALL_POSTURES: String(allPostures),
+      });
+    });
+  }
+  for (const securityScreen of [
+    { backend: "off", allPostures: true },
+    { backend: "model", allPostures: "true" },
+  ]) {
+    withConfig({ securityScreen }, ({ path }) => assert.throws(() => loadConfigAt(path), /allPostures/));
+  }
+  withConfig({ env: { core: { SECURITY_SCREEN_ALL_POSTURES: "true" } } }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /managed by securityScreen/),
+  );
+});
+
+test("proxy deployment rendering retains the independent posture requirement", () => {
+  withConfig(
+    {
+      securityScreen: {
+        backend: "proxy",
+        provider: "fixture",
+        endpoint: "https://screen.example.test/classify",
+        rollout: "enforce",
+        allPostures: true,
+      },
+      secretEnv: { core: { SECURITY_SCREEN_PROXY_TOKEN: "SCREEN_TOKEN" } },
+    },
+    ({ path }) => {
+      const { config } = loadConfigAt(path);
+      assert.deepEqual(securityScreenEnv(config), {
+        SECURITY_SCREEN_BACKEND: "proxy",
+        SECURITY_SCREEN_ALL_POSTURES: "true",
+        SECURITY_SCREEN_PROXY_PROVIDER: "fixture",
+        SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
+        SECURITY_SCREEN_PROXY_ROLLOUT: "enforce",
+      });
+    },
+  );
+});

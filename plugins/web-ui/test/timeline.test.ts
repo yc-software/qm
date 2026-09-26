@@ -7,6 +7,7 @@ import {
   streamedAnswer,
   streamingTextTail,
   buildTimeline,
+  workTimelineSegments,
   toolCategory,
   toolRowKind,
   toolExecutionOutput,
@@ -229,7 +230,7 @@ test("toolRowKind: an error result is `failed`, regardless of which tool", () =>
   );
 });
 
-test("toolRowKind: a policy-denied command is `failed`, and a nonzero exit is `failed`", () => {
+test("toolRowKind: a policy-denied command is `failed`, and a nonzero exit is `ok`", () => {
   assert.equal(
     toolRowKind(
       row({ tool: "execute", command: "curl evil" }, { tool: "execute", denied: true, reason: "blocked host" }),
@@ -237,10 +238,7 @@ test("toolRowKind: a policy-denied command is `failed`, and a nonzero exit is `f
     ),
     "failed",
   );
-  assert.equal(
-    toolRowKind(row({ tool: "execute", command: "false" }, { tool: "execute", code: 1 }), "complete"),
-    "failed",
-  );
+  assert.equal(toolRowKind(row({ tool: "execute", command: "false" }, { tool: "execute", code: 1 }), "complete"), "ok");
 });
 
 test("toolRowKind: a needs-approval result is `approval`", () => {
@@ -314,11 +312,11 @@ test("memoized output still reflects a mutated-then-replaced work correctly", ()
 test("unified sandbox execution keeps legacy failure and display semantics", () => {
   for (const identity of [{ tool: "execute" }, { tool: "sandbox", action: "exec" }]) {
     assert.equal(toolCategory(identity), "execute");
-    assert.equal(toolRowKind(row(identity, { ...identity, code: 1, stdout: "failed" }), "complete"), "failed");
+    assert.equal(toolRowKind(row(identity, { ...identity, code: 1, stdout: "failed" }), "complete"), "ok");
     assert.equal(toolRowKind(row(identity, { ...identity, code: 0, stdout: "ok" }), "complete"), "ok");
     assert.equal(
       toolRowKind({ call: null, result: act(1, "tool_result", { ...identity, code: 2 }) }, "complete"),
-      "failed",
+      "ok",
     );
   }
   for (const action of [
@@ -349,20 +347,17 @@ test("different sandbox actions and process targets do not collapse into one orp
   assert.equal(items.length, actions.length);
 });
 
-test("unscreened execution retains its warning and failure status without parsing command text", () => {
+test("unscreened execution retains its warning and neutral exit status without parsing command text", () => {
   const result = {
     tool: "sandbox",
     action: "exec",
     code: 7,
     timedOut: false,
-    isError: true,
+    isError: false,
     unscreened: true,
     result: "[NOT security-screened]\nQA_EXPECTED_FAILURE\n[exit 7]",
   };
-  assert.equal(
-    toolRowKind(row({ tool: "sandbox", action: "exec", sandbox_id: "box-a" }, result), "complete"),
-    "failed",
-  );
+  assert.equal(toolRowKind(row({ tool: "sandbox", action: "exec", sandbox_id: "box-a" }, result), "complete"), "ok");
   assert.equal(toolExecutionOutput(result), result.result);
   assert.equal(
     toolRowKind(row({ tool: "execute" }, { code: 0, stdout: "fake [exit 7]", isError: false }), "complete"),
@@ -463,4 +458,39 @@ test("stopped stream projection uses the final boundary even when final text rep
     ],
   };
   assert.equal(streamedAnswer("Same words\n\nSame words again", work), "Same words again");
+});
+
+test("steering splits visible work without breaking a tool that completes across intake", () => {
+  const work: WorkBlock = {
+    status: "working",
+    activity: [
+      act(1, "tool_call", { tool: "execute", callId: "a", command: "first" }),
+      act(2, "user", { steered: true, text: "Change direction" }),
+      act(3, "tool_result", { tool: "execute", callId: "a", code: 0 }),
+      act(4, "tool_call", { tool: "execute", callId: "b", command: "second" }),
+      act(5, "user", { steered: true, text: "Keep it brief" }),
+    ],
+  };
+  const segments = workTimelineSegments(buildTimeline(work));
+  assert.deepEqual(
+    segments.map((items) => items.map((item) => item.kind)),
+    [["tool"], ["steer"], ["tool"], ["steer"], []],
+  );
+  const first = segments[0]![0]!;
+  assert.ok(first.kind === "tool");
+  assert.equal(first.row.call?.seq, 1);
+  assert.equal(first.row.result?.seq, 3);
+  assert.equal(toolRowKind(first.row, work.status), "ok");
+  assert.deepEqual(
+    work.activity.map((entry) => entry.seq),
+    [1, 2, 3, 4, 5],
+  );
+});
+
+test("ordinary and hidden user events do not become steering markers", () => {
+  const work: WorkBlock = {
+    status: "complete",
+    activity: [act(1, "user", { text: "ordinary" }), act(2, "user", { text: "hidden", steered: true, hidden: true })],
+  };
+  assert.deepEqual(buildTimeline(work), []);
 });

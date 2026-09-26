@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { isCronRuntime } from "../../../cron/runtime.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { parseScopeId, type Destination } from "../../../types.ts";
@@ -145,12 +146,13 @@ export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
     });
   }
   const next = destination === null ? undefined : destination;
+  if (isDeepStrictEqual(cron.destination, next))
+    return sendJson(res, 200, { cron: { id: cron.id, destination: cron.destination } });
   const updated = await app.setCronDestination(id, next);
   await notifyOwnerOfCronEdit(app, {
     cron,
     editorId: actor.id,
     changeSummary: ["destination"],
-    editFingerprint: `destination:${next?.target ?? "cleared"}`,
   });
   audit(deps, {
     principalId: actor.id,

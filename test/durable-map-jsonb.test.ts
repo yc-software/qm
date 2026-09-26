@@ -15,7 +15,13 @@ test("a lone high surrogate (emoji cut in half by slice) becomes U+FFFD", () => 
 });
 
 test("well-formed strings, keys, arrays, and nesting pass through untouched", () => {
-  const value = { a: "hello 😀", list: ["x", { deep: "ok" }], n: 3, b: true, z: null };
+  const value = {
+    a: "hello 😀",
+    list: ["x", { deep: "ok", ["__proto__"]: { retained: true } }],
+    n: 3,
+    b: true,
+    z: null,
+  };
   assert.equal(jsonbStringify(value), JSON.stringify(value));
 });
 

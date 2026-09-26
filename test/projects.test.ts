@@ -44,6 +44,44 @@ test("ProjectStore atomically maintains a managed-group roster", async () => {
   assert.equal(await projects.name(projectGroupRef(project.id)), "Launch Cohort");
 });
 
+test("session lists check each project once per request and observe membership changes", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-list-membership-")) }));
+  try {
+    const project = await built.projects.create({ name: "Shared history", ownerId: "owner" });
+    await built.projects.addMember(project.id, "owner", "member");
+    for (let i = 0; i < 50; i++) {
+      const session = await built.sessions.getOrCreateByThread(
+        `web:member:history-${i}`,
+        "group",
+        projectScopeId(project.id),
+      );
+      await built.sessions.addParticipant(session.id, "member", undefined, { includeHistory: true });
+      await built.sessions.updateTitle(session.id, `History ${i}`);
+    }
+    const get = built.projects.get.bind(built.projects);
+    const membership = built.projects.membership.bind(built.projects);
+    let gets = 0;
+    let memberships = 0;
+    built.projects.get = async (id) => {
+      gets++;
+      return get(id);
+    };
+    built.projects.membership = async (ref, principal) => {
+      memberships++;
+      return membership(ref, principal);
+    };
+    assert.equal((await built.app.listSessions("member")).length, 50);
+    assert.equal(gets, 1);
+    assert.equal(memberships, 1);
+    await built.projects.removeMember(project.id, "owner", "member");
+    assert.deepEqual(await built.app.listSessions("member"), []);
+    assert.equal(gets, 2);
+    assert.equal(memberships, 2);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
 test("ProjectStore rename is owner-only and cleans the name", async () => {
   let at = 100;
   const projects = createProjectStore(undefined, { id: () => "pr", now: () => at++ });

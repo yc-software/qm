@@ -8,10 +8,10 @@ test("the transcript renders rows through the settled-row cache", () => {
   assert.match(chat, /messages\.map\(\(m, i\) =>\s*settledChatMessage\(m, i - inheritedOffset,/);
 });
 
-test("live, approval-paused, and subagent rows bypass the cache (their render reads mutable state)", () => {
+test("live, approval-paused, subagent, and steered work rows bypass the cache (their render reads mutable state)", () => {
   assert.match(
     chat,
-    /const cacheable =\s*!isStreaming &&\s*!\(message as \{ subagentMail\?: SubagentMailRef \}\)\.subagentMail &&\s*!work\?\.activity\.some\(\(activity\) =>\s*\["session", "sessions"\]\.includes\(\(activity\.payload as ToolPayload \| null\)\?\.tool \?\? ""\),?\s*\) &&\s*\(!work \|\| \(\(work\.status === "complete" \|\| work\.status === "failed"\) && !work\.pendingApprovals\?\.length\)\)/,
+    /const cacheable =\s*!isStreaming &&\s*!\(message as \{ subagentMail\?: SubagentMailRef \}\)\.subagentMail &&\s*!work\?\.activity\.some\(\s*\(activity\) =>\s*activity.type === "user" \|\|\s*\["session", "sessions"\]\.includes\(\(activity\.payload as ToolPayload \| null\)\?\.tool \?\? ""\),?\s*\) &&\s*\(!work \|\| \(\(work\.status === "complete" \|\| work\.status === "failed"\) && !work\.pendingApprovals\?\.length\)\)/,
   );
   assert.match(chat, /if \(!cacheable\) return chatMessage\(message, index, isStreaming\);/);
 });
@@ -39,4 +39,16 @@ test("the cache key covers every mutable render input of a settled row", () => {
 
 test("prompt expansion is managed by the viewport without invalidating cached templates", () => {
   assert.doesNotMatch(chat, /expandedPrompt|togglePromptExpanded/);
+});
+
+test("canonical steering rows never enter the standalone cache during resume startup", () => {
+  const settled = chat.slice(chat.indexOf("function settledChatMessage"), chat.indexOf("function chatMessage"));
+  const suppression = settled.indexOf("if ((message as { steered?: boolean }).steered) return nothing;");
+  assert.ok(suppression >= 0);
+  assert.ok(suppression < settled.indexOf("settledRowCache.get"));
+});
+
+test("inline steering shows the user message without redundant steering chrome", () => {
+  assert.match(chat, /class="inline-steer"/);
+  assert.doesNotMatch(chat, /steer-label|steered the running task/);
 });

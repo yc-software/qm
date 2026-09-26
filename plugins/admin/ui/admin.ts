@@ -11,6 +11,7 @@ export * as users from "./users.ts";
 export * as userDetail from "./user-detail.ts";
 export * as keychain from "./keychain.ts";
 export * as metrics from "./metrics.ts";
+export * as spend from "./spend.ts";
 export * as transcript from "./transcript.ts";
 export * as design from "./design.ts";
 export * as activity from "./activity.ts";

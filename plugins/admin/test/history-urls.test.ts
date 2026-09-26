@@ -44,6 +44,7 @@ function routerAt(pathname: string, search = "", base = "/admin") {
       "slack",
       "judgments",
       "user",
+      "spend",
     ],
     "history",
     (scopeId: string) => String(scopeId || "").split(":")[0] || "scope",
@@ -60,6 +61,7 @@ function routerAt(pathname: string, search = "", base = "/admin") {
       historyKind: string;
       cron: string | null;
       turn: string | null;
+      range: string | null;
       page: number;
     };
   };
@@ -89,6 +91,18 @@ test("scoped history addresses the scope as a path segment; kind stays a query p
     `/admin/history/scopes/${SCOPE_ENC}?cron=c1&kind=cron&page=2`,
   );
   assert.equal(stateToUrl({ view: "history", scope: "org:acme", session: null }), "/admin/history");
+});
+
+test("the spend window round-trips through the URL so Back restores the prior range", () => {
+  const { stateToUrl } = routerAt("/admin/spend");
+  assert.equal(stateToUrl({ view: "spend", scope: "org:acme", range: "7d" }), "/admin/spend?range=7d");
+  assert.equal(stateToUrl({ view: "spend", scope: "org:acme", range: null }), "/admin/spend");
+  const router = routerAt("/admin/spend", "?range=90d");
+  const st = router.urlToState();
+  assert.equal(st.view, "spend");
+  assert.equal(st.range, "90d");
+  assert.equal(router.stateToUrl(st), "/admin/spend?range=90d");
+  assert.equal(routerAt("/admin/spend").urlToState().range, null);
 });
 
 test("non-history views keep their query-param scope", () => {

@@ -58,7 +58,7 @@ test("simple shell reads and searches get semantic labels, compound commands sta
 test("status labels never report missing or failed results as successful", () => {
   assert.equal(activityLabel(row("npm test", null), "working"), "Running npm test");
   assert.equal(activityLabel(row("npm test", null), "complete"), "Tried running npm test");
-  assert.equal(activityLabel(row("cat missing", { code: 1 }), "complete"), "Failed to read missing");
+  assert.equal(activityLabel(row("cat missing", { code: 1 }), "complete"), "missing · exit 1");
   assert.equal(activityLabel(row("npm test", { blocked: "needs_approval" }), "working"), null);
 });
 
@@ -73,6 +73,9 @@ test("groups describe categories and surface errors and approvals", () => {
     attention: false,
   });
   items.push({ kind: "tool", row: row("false", { code: 1 }) });
+  assert.equal(activityGroupSummary(items, "complete").attention, false);
+  assert.doesNotMatch(activityGroupSummary(items, "complete").label, /failed/);
+  items.push({ kind: "tool", row: row("sleep 60", { code: 124, timedOut: true, isError: true }) });
   assert.equal(activityGroupSummary(items, "complete").attention, true);
   assert.match(activityGroupSummary(items, "complete").label, /1 failed/);
   items.push({ kind: "tool", row: row("run", { blocked: "needs_approval" }) });
@@ -142,6 +145,8 @@ test("purpose takes precedence over commands while retaining failure and incompl
   assert.equal(activityLabel(tool, "working"), "Check the sales totals");
   assert.equal(activityLabel(tool, "complete"), "Check the sales totals · Unconfirmed");
   tool.result = row("", { code: 1 }).result;
+  assert.equal(activityLabel(tool, "complete"), "Check the sales totals · exit 1");
+  tool.result = row("", { code: 124, timedOut: true, isError: true }).result;
   assert.equal(activityLabel(tool, "complete"), "Check the sales totals · Failed");
   tool.result = row("", { blocked: "needs_approval" }).result;
   assert.equal(activityLabel(tool, "working"), null);
@@ -150,4 +155,57 @@ test("purpose takes precedence over commands while retaining failure and incompl
   assert.equal(activityLabel(tool, "working"), "Start the preview server");
   tool.call!.payload = { tool: "execute", command: "cat report.csv", purpose: "  " };
   assert.equal(activityLabel(tool, "working"), "Reading report.csv");
+});
+
+test("ordinary command exits stay neutral while tool errors retain failure labels", () => {
+  for (const identity of [{ tool: "execute" }, { tool: "sandbox", action: "exec" }]) {
+    for (const [command, label] of [
+      ["grep absent file", "Searched for absent in file"],
+      ["[ -d dir ]", "[ -d dir ]"],
+    ]) {
+      const tool = row(command!, { code: 1, isError: false });
+      tool.call!.payload = { ...identity, command };
+      assert.equal(activityLabel(tool, "complete"), `${label} · exit 1`);
+      for (const result of [
+        { code: 1, isError: true },
+        { code: 124, timedOut: true },
+        { error: "provider unavailable" },
+        { denied: true },
+      ]) {
+        tool.result = row(command!, result).result;
+        assert.match(activityLabel(tool, "complete")!, /Failed/);
+        assert.doesNotMatch(activityLabel(tool, "complete")!, /exit/);
+      }
+    }
+  }
+});
+
+test("historical completed nonzero exits do not inherit the old error flag", () => {
+  for (const identity of [{ tool: "execute" }, { tool: "sandbox", action: "exec" }]) {
+    for (const output of [
+      { stdout: "", stderr: "" },
+      { unscreened: true, result: "[NOT security-screened]\n[exit 1]" },
+    ]) {
+      const tool = row("[ -d dir ]", { ...identity, ...output, code: 1, timedOut: false, isError: true });
+      tool.call!.payload = { ...identity, command: "[ -d dir ]", purpose: "Check directory" };
+      assert.equal(activityLabel(tool, "complete"), "Check directory · exit 1");
+      assert.deepEqual(activityGroupSummary([{ kind: "tool", row: tool }], "complete"), {
+        label: "Ran commands",
+        category: "execute",
+        attention: false,
+      });
+      for (const failure of [
+        { timedOut: true },
+        { error: "provider error" },
+        { denied: true },
+        { quarantined: true },
+      ]) {
+        const failed = {
+          ...tool,
+          result: { ...tool.result!, payload: { ...(tool.result!.payload as ToolPayload), ...failure } },
+        };
+        assert.equal(activityLabel(failed, "complete"), "Check directory · Failed");
+      }
+    }
+  }
 });

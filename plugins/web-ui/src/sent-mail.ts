@@ -414,8 +414,8 @@ export function sentEmailPageTpl(
             ${icon(ArrowUpRight, 12)}<span>Open in Gmail</span>
           </a>
         </div>
+        ${aside ?? nothing}
       </div>
     </div>
-    ${aside ? html`<aside class="inbox-item-aside">${aside}</aside>` : nothing}
   `;
 }

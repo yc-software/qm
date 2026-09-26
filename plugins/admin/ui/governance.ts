@@ -34,7 +34,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           .value=${s.value("security-posture")}
           @change=${(event: Event) => changeField(s, "security-posture", event)}
         >
-          <option value="dangerous">Dangerous — no content scans; nothing pauses between tool calls</option>
+          <option value="dangerous">Dangerous — automatic tools; deployment-required screening still applies</option>
           <option value="auto">Auto — use the deployment’s configured screener</option>
           <option value="strict">Strict — approve tool actions</option>
         </select>
@@ -51,7 +51,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
               "Auto",
               "Default. Blocks private-network access. Screens external content when the deployment configures a screener; model screening is off by default.",
             ],
-            ["dangerous", "Dangerous", "No content screening."],
+            ["dangerous", "Dangerous", "No posture-based screening; deployment-required screening still applies."],
             ["strict", "Strict", "Every tool action requires human approval."],
           ],
         )}
@@ -66,8 +66,8 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
       <div class="head">
         <h2>Auto flagger</h2>
         <p>
-          Model and prompt used when the deployment explicitly enables model screening in Auto mode. These settings do
-          not enable screening. The security boundary and required verdict format remain fixed.
+          Model and prompt used when the deployment explicitly enables model screening. These settings do not enable
+          screening. The security boundary and required verdict format remain fixed.
         </p>
       </div>
       <div class="body">

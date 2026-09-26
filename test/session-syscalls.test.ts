@@ -2,7 +2,7 @@ import { wireRunResultDeliveries, runResultDelivery } from "../src/delivery/run-
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { deliveryCandidatesFor } from "../src/core/orchestrator/turn-helpers.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createMemoryMap, jsonbStringify } from "../src/persistence/durable-map.ts";
 import { createSessionMailbox, type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -38,7 +38,10 @@ interface Rig {
   syscallsFor(session: Session): ReturnType<ReturnType<typeof createSessionSyscalls>["forTurn"]>;
 }
 
-async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
+async function rig(opts?: {
+  treeRunCap?: number;
+  prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
+}): Promise<Rig> {
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
   const signals = createMemoryRunSignalStore();
@@ -50,6 +53,7 @@ async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
     signals,
     maxAttempts: 3,
     ...(opts?.treeRunCap !== undefined ? { treeRunCap: opts.treeRunCap } : {}),
+    ...(opts?.prepareRequest ? { prepareRequest: opts.prepareRequest } : {}),
   });
   const room = await sessions.getOrCreateByThread("slack:dm:D1", "dm", scope, undefined, "slack");
   await sessions.updateTitle(room.id, "dm with alex");
@@ -99,6 +103,78 @@ test("open creates a child session with parent pointer, spawn meta, and a queued
   assert.match(request.text, /subagent-task/);
   assert.match(request.text, /build a personal website/);
   assert.equal(out.liveRunsRemaining, SUBAGENT_TREE_RUN_CAP - 1);
+});
+
+for (const explicit of [
+  {},
+  { fastMode: false },
+  { model: "chosen-model", harness: "pi", thinkingLevel: "high", fastMode: false },
+  { model: "chosen-model", fastMode: true },
+]) {
+  test(`child followups preserve only explicit runtime choices: ${JSON.stringify(explicit)}`, async () => {
+    const runtimeKeys = ["model", "harness", "thinkingLevel", "fastMode"] as const;
+    let defaults = { model: "old-default", harness: "codex", thinkingLevel: "low", fastMode: true };
+    const preparedInputs: OrchestratorInput[] = [];
+    const r = await rig({
+      prepareRequest: async (request) => {
+        preparedInputs.push(request);
+        return { ...defaults, ...request };
+      },
+    });
+    const syscalls = r.syscallsFor(r.room);
+    const opened = await syscalls.open({ task: "initial task", ...explicit });
+    assert.ok(opened.ok);
+    const child = await freshSession(r.sessions, opened.sessionId);
+    const first = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+    for (const key of runtimeKeys) {
+      assert.equal(child.spawnMeta?.[key], explicit[key as keyof typeof explicit]);
+      assert.equal(Object.hasOwn(child.spawnMeta!, key), Object.hasOwn(explicit, key));
+      assert.equal(first.request[key], { ...defaults, ...explicit }[key]);
+    }
+    const claimed = await r.runs.claimById(first.id, "worker", 60_000);
+    assert.ok(claimed);
+    await r.runs.complete(first.id, claimed.leaseToken!, { status: "ok", reply: "done" });
+    defaults = { model: "new-default", harness: "claude", thinkingLevel: "medium", fastMode: false };
+    const followup = await syscalls.write({ followup: true, target: child.id, text: "next task" });
+    assert.ok(followup.ok);
+    assert.equal(followup.delivered, "queued_turn");
+    const next = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+    for (const key of runtimeKeys) {
+      assert.equal(Object.hasOwn(preparedInputs[1]!, key), Object.hasOwn(explicit, key));
+      assert.equal(next.request[key], { ...defaults, ...explicit }[key]);
+    }
+    assert.equal((await freshSession(r.sessions, child.id)).parentSessionId, r.room.id);
+  });
+}
+
+test("empty writes name the action and field the caller used", async () => {
+  const r = await rig();
+  const opened = await r.syscallsFor(r.room).open({ task: "work" });
+  assert.ok(opened.ok);
+  const followup = await r.syscallsFor(r.room).write({ followup: true, target: opened.sessionId });
+  assert.ok(!followup.ok);
+  assert.match(followup.message, /^followup_task requires `task`/);
+  const message = await r.syscallsFor(r.room).write({ target: opened.sessionId, text: "  " });
+  assert.ok(!message.ok);
+  assert.match(message.message, /^send_message requires `text`/);
+  const self = await r.syscallsFor(r.room).write({ target: r.room.id, text: "hi" });
+  assert.ok(!self.ok);
+  assert.match(self.message, /cannot message itself/);
+});
+
+test("followup tasks cannot turn an ordinary session into a child", async () => {
+  const r = await rig();
+  const ordinary = await r.sessions.getOrCreateByThread("web:ordinary", "dm", scope, undefined, "web");
+  await r.sessions.addParticipant(ordinary.id, actor.id);
+  await r.runs.enqueue({
+    sessionId: ordinary.threadRef,
+    request: { actor, conversation, surface: "web", origin: { kind: "human" }, text: "hello" },
+  });
+  const out = await r.syscallsFor(r.room).write({ followup: true, target: ordinary.id, text: "new task" });
+  assert.ok(!out.ok);
+  assert.match(out.message, /only target an attached subagent/);
+  assert.equal((await freshSession(r.sessions, ordinary.id)).parentSessionId, undefined);
+  assert.equal((await r.runs.inFlightForThread(ordinary.threadRef)).length, 1);
 });
 
 test("nested sessions share the same tree without an artificial depth limit", async () => {
@@ -578,7 +654,7 @@ test("writes revalidate access even while a target is running", async () => {
   assert.deepEqual(await r.signals.takePending(run!.id), []);
 });
 
-test("completion cannot expand the finished run's audience during roster refresh", async () => {
+test("completion cannot expand the finished run's audience and retries after its return delay", async (t) => {
   const r = await rig();
   const opened = await r.syscallsFor(r.room).open({ task: "private research" });
   assert.ok(opened.ok);
@@ -586,24 +662,52 @@ test("completion cannot expand the finished run's audience during roster refresh
   const [run] = await r.runs.inFlightForThread(child.threadRef);
   const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
   await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "private result" });
-  await assert.rejects(
-    deliverSubagentMail(
-      {
-        mailbox: r.mailbox,
-        sessions: r.sessions,
-        runs: r.runs,
-        maxAttempts: 3,
-        prepareRequest: async (request) => ({
-          ...request,
-          conversation: { ...request.conversation, audience: [actor, { id: "new-member", type: "internal" }] },
-        }),
-      },
-      (await r.runs.get(run!.id))!,
-    ),
-    /audience/,
-  );
+  let expanded = true;
+  let attempts = 0;
+  const recover = async () => {
+    for (const pending of await r.runs.pendingReturns()) {
+      attempts++;
+      try {
+        if (
+          await deliverSubagentMail(
+            {
+              mailbox: r.mailbox,
+              sessions: r.sessions,
+              runs: r.runs,
+              maxAttempts: 3,
+              prepareRequest: async (request) => ({
+                ...request,
+                conversation: {
+                  ...request.conversation,
+                  audience: expanded ? [actor, { id: "new-member", type: "internal" }] : [actor],
+                },
+              }),
+            },
+            pending,
+          )
+        )
+          await r.runs.markReturned(pending.id);
+      } catch (error) {
+        await r.runs.deferReturn(pending.id, 60_000);
+        throw error;
+      }
+    }
+  };
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  await assert.rejects(recover(), /audience/);
   assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
-  assert.equal((await r.runs.pendingReturns()).length, 1);
+  assert.deepEqual(await r.mailbox.pending(r.room.id), []);
+  expanded = false;
+  for (let i = 0; i < 59; i++) {
+    t.mock.timers.tick(1_000);
+    await recover();
+  }
+  assert.equal(attempts, 1);
+  t.mock.timers.tick(1_000);
+  await recover();
+  assert.equal(attempts, 2);
+  assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
+  assert.deepEqual(await r.runs.pendingReturns(), []);
 });
 
 test("private session replies stay read-only, queue behind running work, and do not return to a parent", async () => {
@@ -753,14 +857,14 @@ test("follow-up retries recover the accepted run before checking full capacity",
   const enqueue = r.runs.enqueue.bind(r.runs);
   let first = true;
   t.mock.method(r.runs, "enqueue", async (input: Parameters<RunStore["enqueue"]>[0]) => {
-    const receipt = await enqueue(input);
+    const receipt = await enqueue({ ...input, request: JSON.parse(jsonbStringify(input.request)) });
     if (first) {
       first = false;
       throw new Error("lost receipt");
     }
     return receipt;
   });
-  const request = { target: opened.sessionId, text: "more work", followup: true, requestId: "stable" };
+  const request = { target: opened.sessionId, text: "more\u0000 work\ud800", followup: true, requestId: "stable" };
   assert.equal((await api.write(request)).ok, false);
   assert.equal((await api.write(request)).ok, true);
   assert.equal((await api.write({ ...request, text: "changed" })).ok, false);
@@ -922,7 +1026,7 @@ test("delegated automation retains explicit unattended grants and owner-keychain
       actor,
       conversation,
       surface: "slack",
-      origin: { kind: "automation", useOwnerKeychain: true },
+      origin: { kind: "automation", useOwnerKeychain: true, ownerResourcesRequireOpen: true },
       unattendedGrants: ["admin.sessions.read"],
     },
   });
@@ -933,6 +1037,7 @@ test("delegated automation retains explicit unattended grants and owner-keychain
   assert.deepEqual(queued.request.unattendedGrants, ["admin.sessions.read"]);
   assert.ok(queued.request.origin.kind === "automation");
   assert.equal(queued.request.origin.useOwnerKeychain, true);
+  assert.equal(queued.request.origin.ownerResourcesRequireOpen, true);
   const claimed = await r.runs.claimById(queued.id, "w1", 60000);
   await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
   assert.ok((await api.write({ target: child.id, text: "finish the report", followup: true })).ok);
@@ -940,6 +1045,7 @@ test("delegated automation retains explicit unattended grants and owner-keychain
   assert.deepEqual(followup.request.unattendedGrants, ["admin.sessions.read"]);
   assert.ok(followup.request.origin.kind === "automation");
   assert.equal(followup.request.origin.useOwnerKeychain, true);
+  assert.equal(followup.request.origin.ownerResourcesRequireOpen, true);
 });
 
 test("follow-up tasks cannot inherit a prior caller's automation authority", async () => {
@@ -1369,6 +1475,7 @@ test("nested delegated work retains the reminder destination without exposing su
     scope,
   );
   const control = createControlService({
+    isOpenScopeMember: async () => false,
     createCron: async (input: unknown) => ({ id: "reminder", ...(input as object) }),
   } as never);
   const reminder = await control.createCron(

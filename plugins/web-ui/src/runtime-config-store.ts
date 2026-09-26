@@ -71,14 +71,22 @@ export function subscribeRuntimeConfig(scopeId: string, listener: () => void): (
   };
 }
 
-export async function loadRuntimeConfig(scopeId: string, refresh = false): Promise<RuntimeConfig | null> {
-  const entry = entryFor(scopeId);
+export function runtimeConfigKey(scopeId: string | null, account?: "company"): string | null {
+  return scopeId && account ? `${account}/${scopeId}` : scopeId;
+}
+
+export async function loadRuntimeConfig(
+  scopeId: string,
+  refresh = false,
+  account?: "company",
+): Promise<RuntimeConfig | null> {
+  const entry = entryFor(runtimeConfigKey(scopeId, account)!);
   // Reads started during a save must not race ahead of that save on the server.
   while (entry.write) await entry.write;
   if (!refresh && entry.config && Date.now() - entry.fetchedAt < FRESH_MS) return entry.config;
   if (entry.load) return entry.load;
   const generation = entry.generation;
-  const load = fetchRuntimeConfig(scopeId).then(async (config) => {
+  const load = fetchRuntimeConfig(scopeId, account).then(async (config) => {
     if (generation !== entry.generation) {
       while (entry.write) await entry.write;
       return entry.config;

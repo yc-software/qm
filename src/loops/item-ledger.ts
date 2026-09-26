@@ -54,6 +54,7 @@ interface RecordActionInput {
   result?: string;
   actorId?: string;
   outcome: "actioned" | "dismissed";
+  sourceAt?: number;
 }
 
 export interface LoopItemLedger {
@@ -64,7 +65,11 @@ export interface LoopItemLedger {
     proposal: Omit<LoopProposal, "at">,
     opts?: { expectedAt?: number; expectedClaimToken?: string },
   ): Promise<LoopItem | null>;
-  annotate(id: string, patch: LoopSourcePayload, opts?: { summary?: string }): Promise<LoopItem | null>;
+  annotate(
+    id: string,
+    patch: LoopSourcePayload,
+    opts?: { summary?: string; expectedSourceAt?: number },
+  ): Promise<LoopItem | null>;
   appendThread(id: string, messages: Array<Omit<LoopThreadMessage, "id" | "at">>): Promise<LoopItem | null>;
   recordAction(id: string, input: RecordActionInput): Promise<LoopItem | null>;
   reopen(id: string, opts?: { sentReply?: boolean }): Promise<LoopItem | null>;
@@ -358,6 +363,10 @@ export function createLoopItemLedger(
       const after = await update(id, (item) => {
         applied = true;
         const now = Date.now();
+        if (opts?.expectedSourceAt !== undefined && item.sourceAt !== opts?.expectedSourceAt) {
+          applied = false;
+          return item;
+        }
         return {
           ...item,
           sourcePayload: { ...item.sourcePayload, ...patch },
@@ -389,12 +398,18 @@ export function createLoopItemLedger(
       let applied = false;
       const after = await update(id, (item) => {
         if (item.status === "shipped") return item;
+        if (
+          input.sourceAt !== undefined &&
+          (!Number.isFinite(input.sourceAt) || input.sourceAt <= (item.sourceAt ?? 0) || isResolved(item))
+        )
+          return item;
         applied = true;
         const now = Date.now();
         return {
           ...item,
           status: input.outcome === "actioned" ? "shipped" : "skipped",
           actionKind: input.kind,
+          ...(input.sourceAt !== undefined ? { sourceAt: input.sourceAt } : {}),
           actedAt: now,
           claimedAt: undefined,
           claimToken: undefined,

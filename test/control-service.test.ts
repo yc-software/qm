@@ -589,6 +589,11 @@ test("scopeShared is explicit: shared-scope crons default to owner, while collab
     });
 
   const { built, control } = setup();
+  await built.app.upsertChannels(
+    [{ channelId: "C9", name: "eng", isPrivate: true }],
+    members.map((member) => ({ channelId: "C9", principalId: member.id })),
+  );
+
   const ownerDefault = await control.createCron(
     { title: "private digest", schedule: { everyMs: 3_600_000 }, action: "private digest" },
     chanClaims("U1"),
@@ -659,6 +664,88 @@ test("scopeShared is explicit: shared-scope crons default to owner, while collab
   assert.equal(personal.ok ? "" : personal.code, "bad_request");
 });
 
+test("Open shared crons retain their owner across collaborator edits and re-check membership", async () => {
+  const { built, control } = setup();
+  const room = scopeId("channel", "C9");
+  const members = [
+    { id: "U1", type: "internal" as const },
+    { id: "U2", type: "internal" as const },
+  ];
+  await built.config.setSharingPosture(scopeId("org", "default-org"), "open");
+  await built.app.upsertDirectory([
+    { principalId: "U1", displayName: "Owner", type: "internal" },
+    { principalId: "U2", displayName: "Editor", type: "internal" },
+  ]);
+  const roster = (ids: string[]) =>
+    built.app.upsertChannels(
+      [{ channelId: "C9", name: "eng", isPrivate: false }],
+      ids.map((principalId) => ({ channelId: "C9", principalId })),
+    );
+  await roster(["U1", "U2"]);
+  const roomClaims = (actorId: string) =>
+    claims(actorId, room, {
+      liveActor: true,
+      members,
+      destination: { type: ROOM.type, target: ROOM.target, audienceScopeId: room },
+      destinations: [ROOM],
+      defaultDestinationKey: ROOM.key,
+    });
+  const request = { title: "Team digest", action: "summarize", schedule: { everyMs: 3_600_000 } };
+  const created = await control.createCron(request, roomClaims("U1"));
+  assert.ok(created.ok, JSON.stringify(created));
+  assert.equal(created.cron.runAs, "scopeShared");
+  assert.equal(created.cron.ownerResourcesRequireOpen, true);
+  const id = created.cron.id;
+  const edited = await control.patchCron(id, { action: "summarize changes" }, roomClaims("U2"));
+  assert.ok(edited.ok, JSON.stringify(edited));
+  assert.equal(edited.cron.owner, "U1");
+  assert.equal(edited.cron.createdBy, "U1");
+  assert.equal(edited.cron.runAs, "scopeShared");
+  assert.equal(edited.cron.ownerResourcesRequireOpen, true);
+  const notices = (await built.deliveries.pending("principal")).filter((d) =>
+    d.idempotencyKey.startsWith("cron-edit-notice:"),
+  );
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0]!.destination.target, "U1");
+  assert.match(notices[0]!.text, /Editor.*Team digest.*do something different/);
+  assert.ok((await control.patchCron(id, { title: "Digest v2" }, claims("U2"))).ok);
+  await control.patchCron(id, { action: "summarize" }, roomClaims("U1"));
+  await control.patchCron(id, { action: "summarize changes" }, roomClaims("U2"));
+  const repeatedNotices = (await built.deliveries.pending("principal")).filter((d) =>
+    d.idempotencyKey.startsWith("cron-edit-notice:"),
+  );
+  assert.equal(repeatedNotices.length, 3, "repeating a reverted edit must notify again");
+
+  assert.ok((await control.getCron(id, claims("U1"))).ok);
+  const deniedMode = await control.patchCron(id, { runAs: "scopeFloor" }, roomClaims("U2"));
+  assert.equal(deniedMode.ok, false);
+  const floor = await control.patchCron(id, { runAs: "scopeFloor" }, roomClaims("U1"));
+  assert.ok(floor.ok && floor.cron.runAs === "scopeFloor");
+  const shared = await control.patchCron(id, { runAs: "scopeShared" }, roomClaims("U1"));
+  assert.ok(shared.ok && shared.cron.runAs === "scopeShared");
+  const noRoster = await control.createCron(
+    { ...request, title: "No roster digest" },
+    { ...roomClaims("U1"), members: undefined },
+  );
+  assert.ok(noRoster.ok && noRoster.cron.runAs === "scopeShared", JSON.stringify(noRoster));
+  const noRosterFloor = await control.createCron(
+    { ...request, runAs: "scopeFloor" },
+    { ...roomClaims("U1"), members: undefined },
+  );
+  assert.equal(noRosterFloor.ok, false);
+  const ownerOnly = await control.createCron({ ...request, runAs: "owner" }, roomClaims("U1"));
+  assert.ok(ownerOnly.ok && ownerOnly.cron.runAs !== "scopeShared");
+  const personal = await control.createCron(request, claims("U1"));
+  assert.ok(personal.ok && personal.cron.runAs !== "scopeShared");
+  await roster(["U1"]);
+  assert.equal((await control.patchCron(id, { title: "revoked edit" }, roomClaims("U2"))).ok, false);
+  assert.equal((await control.createCron({ ...request, runAs: "scopeShared" }, roomClaims("U2"))).ok, false);
+  await built.config.setSharingPosture(room, "isolated");
+  assert.ok((await control.setCronEnabled(id, false, claims("U1"))).ok);
+  assert.equal((await control.patchCron(id, { title: "revoked again" }, roomClaims("U2"))).ok, false);
+  assert.equal((await control.createCron({ ...request, runAs: "scopeShared" }, roomClaims("U1"))).ok, false);
+});
+
 test("scopeShared is confined to membership-controlled scopes: a public channel defaults to owner and rejects explicit scopeShared", async () => {
   const { control } = setup();
   const pubScope = scopeId("channel", "C-PUBLIC");
@@ -704,7 +791,7 @@ test("app.createCron/updateCron backstop: scopeShared needs a shared scope + a m
 });
 
 test("a cron's mode (runAs) is editable in place, but only by the owner", async () => {
-  const { control } = setup();
+  const { built, control } = setup();
   const chanScope = scopeId("channel", "C9");
   const members = [
     { id: "U1", type: "internal" as const },
@@ -718,6 +805,11 @@ test("a cron's mode (runAs) is editable in place, but only by the owner", async 
       destinations: [{ ...ROOM, audienceScopeId: chanScope }],
       defaultDestinationKey: ROOM.key,
     });
+
+  await built.app.upsertChannels(
+    [{ channelId: "C9", name: "eng", isPrivate: true }],
+    members.map((member) => ({ channelId: "C9", principalId: member.id })),
+  );
 
   const created = await control.createCron(
     { title: "t", schedule: { everyMs: 3_600_000 }, action: "x", runAs: "scopeShared" },

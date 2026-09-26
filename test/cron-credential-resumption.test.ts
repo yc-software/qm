@@ -216,3 +216,20 @@ test("cron credential approval resumes a disabled one-shot job in its original f
   assert.equal(f.requests[0]!.conversation.threadRef, f.ask.requesterThreadRef);
   assert.equal((await f.deliveries.pending("principal")).length, 1);
 });
+
+test("credential resumption retains the originating cron's Open requirement and rechecks it", async () => {
+  const f = await fixture({ recipientId: "U_BOB", status: "accepted" });
+  await f.crons.update(f.cron.id, {
+    runAs: "scopeShared",
+    ownerResourcesRequireOpen: true,
+    members: [{ id: "U_ALICE", type: "internal" }],
+  });
+  let open = true;
+  f.deps.isOpenScopeMember = async () => open;
+  await fireAskResolution(f.deps, f.ask);
+  assert.equal(f.requests[0]?.ownerResourcesRequireOpen, true);
+  open = false;
+  const out = await fireAskResolution(f.deps, { ...f.ask, id: "revoked-open-ask" });
+  assert.equal(out.authzFailed, true);
+  assert.equal(f.requests.length, 1);
+});

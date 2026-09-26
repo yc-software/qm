@@ -5,7 +5,7 @@ import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Child } from "../scripts/dev/supervisor/children.ts";
-import { portHolders, tcpPortOpen } from "../scripts/dev/lib/proc.ts";
+import { portAvailable, portHolders, tcpPortOpen } from "../scripts/dev/lib/proc.ts";
 import { sleep } from "../scripts/dev/lib/util.ts";
 import type { ChildSpec } from "../scripts/dev/lib/types.ts";
 
@@ -75,29 +75,50 @@ test("a crashed child is auto-restarted with backoff", async () => {
   rmSync(lock, { recursive: true, force: true });
 });
 
-test("start frees a squatted port before spawning (the EADDRINUSE fix)", async () => {
+test("startup leaves occupied ports untouched and retries after they become free", async () => {
   const lock = mkdtempSync(join(tmpdir(), "qm-child-"));
   const port = await freeTcpPort();
-  const squatter = new Child(
-    spec(lock, port, ["--ignoreTerm"]),
-    lock,
-    () => {},
-    () => {},
-  );
-  assert.equal((await squatter.start()).ok, true);
-  squatter.proc?.removeAllListeners("exit");
-
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   const child = new Child(
     spec(lock, port),
     lock,
     () => {},
     () => {},
   );
-  const res = await child.start();
-  assert.equal(res.ok, true, res.detail);
-  assert.equal(await child.probeHealth(), true);
-  await child.stop();
-  rmSync(lock, { recursive: true, force: true });
+  try {
+    assert.equal(await portAvailable(port), false);
+    const res = await child.start();
+    assert.equal(res.ok, false);
+    assert.match(res.detail ?? "", /exited during startup/);
+    assert.equal(child.proc, null);
+    assert.equal(child.status().state, "crashed");
+    assert.equal(server.listening, true);
+    assert.equal(await tcpPortOpen(port), true);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && child.state !== "healthy") await sleep(100);
+    assert.equal(child.state, "healthy");
+    assert.ok(child.restarts >= 1);
+  } finally {
+    if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+    await child.stop();
+    rmSync(lock, { recursive: true, force: true });
+  }
+});
+
+test("port availability rejects IPv6 listeners", async () => {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen({ port: 0, host: "::1", ipv6Only: true }, resolve);
+  });
+  try {
+    assert.equal(await portAvailable((server.address() as { port: number }).port), false);
+    assert.equal(server.listening, true);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test("stop escalates to SIGKILL for a TERM-ignoring child", async () => {

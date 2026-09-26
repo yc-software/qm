@@ -15,7 +15,7 @@ import type { ApiCtx } from "../src/api/routes/route.ts";
 import { ensureDefaultInboxLoops, ensureInboxLoop } from "../src/loops/inbox-loop.ts";
 import { migrateInbox } from "../src/loops/inbox-migration.ts";
 
-function world(enabled = true) {
+function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
   const deps = {
     store: createLoopStore(),
     items: createLoopItemLedger(),
@@ -36,7 +36,12 @@ function world(enabled = true) {
         url: new URL(`http://local/v1/inbox?${query}`),
         actor: { p: actor },
         capability: null,
-        deps: { loops: deps, uiState, featureFlags: { enabled: async () => enabled } },
+        deps: {
+          loops: deps,
+          uiState,
+          inboxSourceRefresh: sourceRefresh,
+          featureFlags: { enabled: async () => enabled },
+        },
         app: {
           samePerson: async (a: string, b: string) => a === b,
           membershipControlsScope: async () => false,
@@ -377,4 +382,36 @@ test("completed repair keeps conflicting drafts visible while moving unrelated i
     assert.equal(result.data.selected.find((loop: any) => loop.id === defaults[0]!.id).count, 2);
     assert.equal((await w.deps.items.byLoop(legacy.id))[0]!.proposal!.data.body, "Human draft");
   }
+});
+
+test("the inbox feed reconciles selected owner Gmail loops before counting summaries", async () => {
+  const refreshed: string[] = [];
+  const w = world(true, async (owner, items) => {
+    assert.equal(owner, "alice");
+    for (const item of items) {
+      refreshed.push(item.id);
+      await w.deps.items.recordAction(item.id, { kind: "replied", outcome: "dismissed", sourceAt: 2000 });
+    }
+  });
+  const loops = await ensureDefaultInboxLoops(w.deps.store, "alice");
+  const mail = loops.find((loop) => loop.sources?.includes("gmail"))!;
+  await w.deps.items.ingest([
+    {
+      loopId: mail.id,
+      dedupeKey: "waiting",
+      source: "gmail",
+      sourceAt: 1000,
+      sourcePayload: { gmail: { threadId: "t1" } },
+      proposal: { by: "agent", data: { body: "Draft" } },
+    },
+  ]);
+  const item = (await w.deps.items.byLoop(mail.id))[0]!;
+  const feed = await w.call();
+  assert.deepEqual(refreshed, [item.id]);
+  assert.equal(feed.data.total, 0);
+  assert.deepEqual(feed.data.items, []);
+  refreshed.length = 0;
+  await w.call("PUT", { loopIds: [] });
+  await w.call();
+  assert.deepEqual(refreshed, []);
 });

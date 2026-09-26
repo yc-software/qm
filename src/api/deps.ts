@@ -1,8 +1,10 @@
+import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { BackgroundOwnershipStore } from "../runs/background-ownership.ts";
 import type { LoopIngressService } from "../loops/ingress.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
 import type { ManagedSlack } from "../surfaces/slack-managed.ts";
+import type { InboxSourceRefresh } from "../loops/inbox-source-refresh.ts";
 import type { BrokerSessionStore } from "../auth/broker-sessions.ts";
 import type { DirectFileUploads } from "../files/direct-file-upload.ts";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
@@ -77,6 +79,8 @@ import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 
 export interface ServerDeps {
+  externalSlackPolicies?: ExternalSlackPolicies;
+  checkReadiness?: (signal: AbortSignal) => Promise<void>;
   slackAccounts?: DurableMap<SlackAccountLink>;
   composioReturns?: DurableMap<ComposioReturn>;
   composioFetch?: typeof fetch;
@@ -169,6 +173,7 @@ export interface ServerDeps {
   channelPolicy?: ChannelPolicyStore;
   uiState?: UiStateStore;
   loopSourceTokens?: ConnectorTokenSource;
+  inboxSourceRefresh?: InboxSourceRefresh;
   loopSlackClient?: (token: string) => SlackUserClient;
   sessionShares?: SessionShareStore;
   sessionShareBytes?: DurableByteStore;

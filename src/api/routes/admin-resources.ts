@@ -201,7 +201,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     kind: "custom",
     target: "org",
     clearable: true,
-    label: "The model and classification rubric used to screen external content while Auto posture is active.",
+    label:
+      "The model and classification rubric used to screen external content when the deployment enables model screening.",
     readKey: "autoFlagger",
     get: (deps) => deps.config!.getAutoFlaggerConfig(),
     apply: async (ctx, _actor, scope) => {
@@ -622,31 +623,46 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       return { ok: true };
     },
   },
-  {
-    id: "runtime",
+  ...([undefined, "cron", "subagent"] as const).map((purpose): AdminResource => ({
+    id: purpose ? `${purpose}-runtime` : "runtime",
     kind: "custom",
-    target: "any",
+    target: purpose ? "org" : "any",
     clearable: true,
-    readKey: "runtime",
-    get: (deps, scope) => deps.config!.getRuntimeSelection(scope),
+    readKey: purpose ? `${purpose}Runtime` : "runtime",
+    get: async (deps, scope) =>
+      purpose
+        ? ((await deps.config!.getPurposeRuntimeDurable(purpose)) ?? null)
+        : deps.config!.getRuntimeSelection(scope),
     apply: async (ctx, _actor, scope) => {
-      if ((ctx.body as { inherit?: unknown }).inherit === true) {
-        await ctx.deps.config!.setRuntimeSelectionLatest(scope, null);
+      if (purpose) {
+        const bad = orgOnly(scope, `${purpose} runtime defaults are org-wide`);
+        if (bad) return bad;
+      }
+      if ((ctx.body as { inherit?: unknown } | null)?.inherit === true || (purpose && ctx.body === null)) {
+        if (purpose) await ctx.deps.config!.clearPurposeRuntime(purpose);
+        else await ctx.deps.config!.setRuntimeSelectionLatest(scope, null);
         return { ok: true };
       }
       const harnessId = (ctx.body as { harnessId?: unknown }).harnessId;
       const modelId = (ctx.body as { modelId?: unknown }).modelId;
-      const effortLevel = (ctx.body as { effortLevel?: unknown }).effortLevel ?? "auto";
-      const fastMode = (ctx.body as { fastMode?: unknown }).fastMode ?? false;
+      const effortLevel = (ctx.body as { effortLevel?: unknown }).effortLevel ?? (purpose ? undefined : "auto");
+      const fastMode = (ctx.body as { fastMode?: unknown }).fastMode ?? (purpose ? undefined : false);
       if (!isHarnessId(harnessId)) return { error: `runtime requires harnessId (${HARNESS_IDS.join(" | ")})` };
       const approved = (await ctx.deps.config!.getApprovedHarnessesDurable()) ?? [ctx.deps.harnessId ?? "pi"];
       if (!approved.includes(harnessId)) return { error: `harness ${harnessId} is not approved` };
       if (typeof modelId !== "string" || !modelSupportedByHarness(modelId, harnessId))
         return { error: `model ${String(modelId)} is not supported by ${harnessId}` };
-      const thinkingLevels = thinkingLevelsForHarness(harnessId);
-      if (typeof effortLevel !== "string" || !thinkingLevels.includes(effortLevel))
+      const thinkingLevels = thinkingLevelsForHarness(harnessId, modelId);
+      if (effortLevel !== undefined && (typeof effortLevel !== "string" || !thinkingLevels.includes(effortLevel)))
         return { error: `runtime requires effortLevel (${thinkingLevels.join(" | ")}) for ${harnessId}` };
-      if (typeof fastMode !== "boolean") return { error: "runtime requires fastMode (boolean)" };
+      if (fastMode !== undefined && typeof fastMode !== "boolean")
+        return { error: "runtime requires fastMode (boolean)" };
+      if (
+        purpose &&
+        fastMode === true &&
+        (!harnessSupportsFastMode(harnessId) || !fastModeModelIds().includes(modelId))
+      )
+        return { error: `fast mode is not supported by ${harnessId} with ${modelId}` };
       const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
       const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
       if (!modelServiceable(modelId, modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys)))
@@ -656,13 +672,16 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const choice = {
         harnessId,
         modelId,
-        effortLevel,
-        fastMode: fastMode && harnessSupportsFastMode(harnessId) && fastModeModelIds().includes(modelId),
+        ...(typeof effortLevel === "string" ? { effortLevel } : {}),
+        ...(typeof fastMode === "boolean"
+          ? { fastMode: fastMode && harnessSupportsFastMode(harnessId) && fastModeModelIds().includes(modelId) }
+          : {}),
       };
-      await ctx.deps.config!.setRuntimeSelectionLatest(scope, choice);
+      if (purpose) await ctx.deps.config!.setPurposeRuntime(purpose, choice);
+      else await ctx.deps.config!.setRuntimeSelectionLatest(scope, choice);
       return { ok: true };
     },
-  },
+  })),
   {
     id: "approved-harnesses",
     kind: "string-list",

@@ -860,10 +860,7 @@ function sessionCookieSet(value: string, sub: string): string[] {
     secure: SECURE_COOKIES,
     ...(COOKIE_DOMAIN ? { domain: COOKIE_DOMAIN } : {}),
   };
-  return [
-    ...sessionCookieHeaders(value, attrs, process.env.PORTAL_FRAME_SESSION_ENABLED === "1"),
-    ...loginProviderCookie(sub),
-  ];
+  return [...sessionCookieHeaders(value, attrs), ...loginProviderCookie(sub)];
 }
 
 function setSession(res: ServerResponse, headers: string[]): void {

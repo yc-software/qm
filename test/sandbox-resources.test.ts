@@ -70,7 +70,8 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
     backends: { local: backend },
     defaultBackend: "local",
     lock: createMemoryAdvisoryLock(),
-    canUseScope: async (actor: string, scope: string) => actor === "admin" || scope === `personal:${actor}`,
+    canUseScope: async (actor: string, scope: string) =>
+      actor === "admin" || scope === `personal:${actor}` || (actor === "alice" && scope === "channel:team"),
   } satisfies Parameters<typeof createSandboxResources>[0];
   const resources = createSandboxResources(options);
   const router = createSandboxRouter({ routes, backends: { local: backend }, defaultBackend: "local", resources });
@@ -925,4 +926,25 @@ test("Modal provisioning and destructive cleanup wait for active operations", { 
   }
   assert.equal(provisioned, true);
   assert.equal(destroyed, true);
+});
+
+test("a verified live turn can create only its own new scope computer without directory mutations", async () => {
+  const { resources, router } = fixture(undefined, []);
+  const scope = "channel:external-slack:T1:policy:C1";
+  await resources.initialize();
+  assert.equal(await resources.resolve(scope), null);
+  await assert.rejects(resources.create("alice", scope, "local"), /permission/);
+  let current = true;
+  const turn = resources.forTurn({ actorId: "alice", scopeId: scope, isCurrent: async () => current });
+  const computer = await turn.create("alice", scope, "local", "external work");
+  await turn.setDefault("alice", scope, computer.id);
+  const handle = await router.provision([{ scopeId: scope, mode: "rw", mountPath: "" }]);
+  assert.equal(handle.scopeId, scope);
+  await router.writeFile(handle, "result", "safe-output");
+  assert.equal(await router.readFile(handle, "result"), "safe-output");
+  await assert.rejects(turn.create("bob", scope, "local"), /permission/);
+  await assert.rejects(turn.create("alice", "personal:bob", "local"), /permission/);
+  current = false;
+  await assert.rejects(turn.access("alice", computer.id), /permission/);
+  await assert.rejects(turn.setDefault("alice", scope, computer.id), /permission/);
 });

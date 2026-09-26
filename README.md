@@ -105,7 +105,11 @@ can only tighten:
 - **Auto** (default) — blocks private-network access and uses a content screener when
   the deployment configures one. Model screening is off by default; deployments can
   use an external proxy or explicitly opt into the built-in model classifier.
-- **Dangerous** — no content screening, no pauses between tool calls.
+- **Dangerous** — no posture-based content screening or tool approval gates.
+
+Deployments can set `securityScreen.allPostures: true` to require external-content
+screening under every posture, including Dangerous and Strict, without changing tool
+approvals or private-network policy. Flagged content still requires release approval.
 
 The predeclared command policy — approval rules and hard denials for things like
 recursive deletes or destructive SQL — applies in every posture, Dangerous included.
@@ -125,11 +129,19 @@ Sharing posture is independent:
 
 The organization value is a ceiling, and personal and room scopes can opt out; Isolated
 wins. “Follow organization” removes a personal or room override. Disabled memory recall
-and writable-only recall still apply. Open does not mount a personal workspace into a room, carry credentials or message
-history, widen writes, run in automation or ambient turns, cross organizations, add a
-teammate's entitlement, or weaken screening, command approvals, or egress. It can still
-reveal private information in a shared reply, so cross-context reads are provenance-labelled
-and audited.
+and writable-only recall still apply. Authenticated human-authored ambient turns use the same
+Open access as direct requests. The speaker can use their own connections on an isolated
+owner-auth computer and target their authorized sandboxes across conversations.
+Open shared crons can retain the owner's resource access and allow member edits, with a brief
+private notification to the owner. Membership and posture are rechecked rather than treating
+a saved conversation reference as permanent access. Scheduled owner access authorized through
+Open stops when Open is withdrawn; changing a job's text does not reset that requirement.
+
+Open does not mount a personal workspace into the shared computer, expose credentials to
+other participants, carry message history, cross organizations, or weaken screening, command
+approvals, or egress. File read/write and publication retain their own permissions.
+It can still reveal private information in a shared reply, so cross-context reads are
+provenance-labelled and audited.
 
 [`SECURITY.md`](./SECURITY.md) has the threat model, the operator assumptions, and the
 known limitations.

@@ -55,7 +55,7 @@ test("each posture resolves to exactly one mechanism", () => {
 test("the posture prompt names the active mechanism", () => {
   assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("dangerous")), /Dangerous/);
   assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("dangerous")), /Predeclared command approvals/);
-  assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("auto")), /Auto/);
+  assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("auto")), /External-content screening/);
   assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("strict")), /Strict/);
   assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("strict")), /Every harness tool except the no-effect/);
   assert.match(

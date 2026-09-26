@@ -136,3 +136,24 @@ test("disabling screening preserves strict tool approvals and scoped posture", a
   });
   assert.equal(await config.getSecurityPostureDurable(scopeId("personal", "U1")), "strict");
 });
+
+for (const posture of ["dangerous", "auto", "strict"] as const) {
+  test(`deployment screening preserves ${posture} permissions across scope overrides`, async () => {
+    const config = createMemoryConfigStore("default-org", { defaultSecurityPosture: "dangerous" });
+    await config.setSecurityPosture(scopeId("personal", "U1"), posture);
+    const baseline = createResolutionService("default-org", config, createAclStore());
+    const required = createResolutionService("default-org", config, createAclStore(), true, true);
+    const disabled = createResolutionService("default-org", config, createAclStore(), false, true);
+    const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
+    const original = (await baseline.resolve(conv, actor)).securityPolicy;
+    assert.deepEqual((await required.resolve(conv, actor)).securityPolicy, {
+      ...original,
+      inboundScreening: "external",
+    });
+    assert.deepEqual((await disabled.resolve(conv, actor)).securityPolicy, {
+      ...original,
+      inboundScreening: "off",
+    });
+    assert.equal(await config.getSecurityPostureDurable(scopeId("personal", "U1")), posture);
+  });
+}

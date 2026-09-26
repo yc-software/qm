@@ -1,7 +1,7 @@
 import test from "node:test";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +9,7 @@ import {
   createOpenCodeHarness,
   latestAssistantParts,
   openCodeHarnessConfigOptions,
+  openCodeMessageId,
 } from "../src/harness/opencode-harness.ts";
 import type { OpencodeClient } from "@opencode-ai/sdk";
 import type { Config } from "../src/config.ts";
@@ -440,6 +441,31 @@ test("OpenCode advertises aliases only for tools available on the turn", async (
   }
 });
 
+const NATIVE_OPENCODE_MESSAGE_IDS = [
+  { id: "msg_0db05f98c001fMdjYWHxM9sh5P", created: 1790380997004 },
+  { id: "msg_0db05f9bd001g2O0sXZ8G8uRZ0", created: 1790380997053 },
+  { id: "msg_0db05f9df001L0AWD5YFiFs5Wr", created: 1790380997087 },
+];
+
+function nativeOpenCodeTimestamp(id: string): number {
+  return Number(BigInt("0x" + id.slice("msg_".length, "msg_".length + 12)) / 4096n);
+}
+
+test("OpenCode steer message IDs sort against IDs minted by native OpenCode 1.18.31", () => {
+  for (const native of NATIVE_OPENCODE_MESSAGE_IDS) {
+    const before = openCodeMessageId(native.created - 1);
+    const after = openCodeMessageId(native.created + 1);
+    assert.match(before, /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
+    assert.equal(before.length, native.id.length);
+    assert.ok(before < native.id, `${before} must sort before native ${native.id}`);
+    assert.ok(native.id < after, `${after} must sort after native ${native.id}`);
+    assert.equal(nativeOpenCodeTimestamp(after), nativeOpenCodeTimestamp(native.id) + 1);
+  }
+  const first = openCodeMessageId(1790380997200);
+  const second = openCodeMessageId(1790380997200);
+  assert.ok(first < second, "IDs minted in the same millisecond keep creation order");
+});
+
 test("OpenCode includes steered PDF and extracted documents without copying echoed contents into tape", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-opencode-steer-doc-"));
   const capturePath = join(dir, "steered.json");
@@ -456,11 +482,16 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
     if (req.method === "POST" && message) {
       process.qaInitial = JSON.parse(await readBody(req));
       while (!process.qaSteered) await new Promise(resolve => setTimeout(resolve, 10));
+      while (!require("node:fs").existsSync(${JSON.stringify(capturePath + ".release")})) await new Promise(resolve => setTimeout(resolve, 5));
+      await capture("ses_main", { messages: [
+        { info: { id: "initial", role: "user" }, parts: process.qaInitial.parts },
+        { info: { id: process.qaSteered.messageID, role: "user" }, parts: process.qaSteered.parts },
+      ] });
       return json(res, ${okAssistant});
     }
     if (req.method === "GET" && message) return json(res, [
       { info: { id: "initial", role: "user" }, parts: process.qaInitial.parts },
-      { info: { id: "steered", role: "user" }, parts: process.qaSteered.parts },
+      { info: { id: process.qaSteered.messageID, role: "user" }, parts: process.qaSteered.parts },
       ${okAssistant},
     ]);
   `,
@@ -474,7 +505,8 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
   const pdf = readFileSync(new URL("./fixtures/documents/sample.pdf", import.meta.url)).toString("base64");
   const docx = readFileSync(new URL("./fixtures/documents/sample.docx", import.meta.url)).toString("base64");
   const tape: unknown[] = [];
-  const turn = turnInput([], []);
+  const entries: SessionEntry[] = [];
+  const turn = turnInput(entries, []);
   turn.runId = "opencode-steer-docs";
   turn.tape = async (row) => {
     tape.push(row);
@@ -499,7 +531,26 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
     ],
   });
   await signals.send(turn.runId, { kind: "steer", text: "read the documents", ts: "doc.1" });
-  await harness.turns.runTurn(turn);
+  const steerWindowStart = Date.now();
+  const running = harness.turns.runTurn(turn);
+  const deadline = Date.now() + 8_000;
+  while (!existsSync(capturePath)) {
+    if (Date.now() > deadline) throw new Error("mock OpenCode did not receive steer");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  const steerWindowEnd = Date.now();
+  const steeredMessageId = (JSON.parse(readFileSync(capturePath, "utf8")) as { messageID: string }).messageID;
+  assert.match(steeredMessageId, /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
+  const steeredAt = nativeOpenCodeTimestamp(steeredMessageId);
+  assert.ok(
+    steeredAt >= steerWindowStart % 2 ** 36 && steeredAt <= steerWindowEnd % 2 ** 36,
+    "the queued steer carries a native OpenCode time-ordered message ID",
+  );
+  assert.equal(entries.filter((entry) => entry.type === "user").length, 1, "queued input is not model intake");
+  writeFileSync(capturePath + ".release", "continue");
+  await running;
+  assert.equal(entries.filter((entry) => entry.type === "user").length, 2);
+  assert.equal((await signals.pending(turn.runId)).length, 0);
   const sent = readFileSync(capturePath, "utf8");
   assert.ok(sent.includes(pdf));
   assert.ok(!sent.includes("OUTSIDE-BUDGET-492"));
@@ -508,3 +559,165 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
   assert.ok(!JSON.stringify(tape).includes(pdf));
   assert.ok(!JSON.stringify(tape).includes("DOCX-QUARTZ-731"));
 });
+
+for (const [modelId, fastMode, expected] of [
+  ["claude-opus-5", true, { speed: "fast" }],
+  ["gpt-5.6-sol", true, { serviceTier: "priority" }],
+  ["claude-opus-5", false, {}],
+  ["claude-sonnet-5", true, {}],
+  ["unknown-model", true, {}],
+] as const) {
+  test(`OpenCode bridge resolves fast options for ${modelId} with fast=${fastMode}`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-fast-"));
+    const harness = createOpenCodeHarness({
+      binaryPath: fakeSidecar(
+        dir,
+        "fast-options",
+        `
+        if (req.method === "GET" && message) return json(res, []);
+        if (req.method === "POST" && message) {
+          await readBody(req);
+          const context = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + message[1] + "/context?model=${modelId}", {
+            headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET },
+          }).then(r => r.json());
+          const assistant = ${okAssistant};
+          assistant.parts[0].text = JSON.stringify(context.modelOptions);
+          return json(res, assistant);
+        }
+      `,
+      ),
+    });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const turn = turnInput([], []);
+    turn.runtime = { modelId: "claude-opus-5", fastMode };
+    const result = await harness.turns.runTurn(turn);
+    assert.deepEqual(JSON.parse(result.reply), expected);
+  });
+}
+
+test("OpenCode child requests inherit fast mode and a reused runtime honors switching it off", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-fast-child-"));
+  const harness = createOpenCodeHarness({
+    binaryPath: fakeSidecar(
+      dir,
+      "child-fast",
+      `
+      if (req.method === "GET" && url.pathname === "/session/ses_child") return json(res, { id: "ses_child", parentID: "ses_main" });
+      if (req.method === "GET" && message) return json(res, []);
+      if (req.method === "POST" && message) {
+        await readBody(req);
+        const options = [];
+        for (const model of ["gpt-5.6-sol", "claude-sonnet-5"]) {
+          const context = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/ses_child/context?model=" + model, {
+            headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET },
+          }).then(r => r.json());
+          if (context.history !== undefined || context.systemPrompt !== undefined) throw new Error("child borrowed parent prompt");
+          options.push(context.modelOptions);
+        }
+        const assistant = ${okAssistant};
+        assistant.parts[0].text = JSON.stringify(options);
+        return json(res, assistant);
+      }
+    `,
+    ),
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  for (const fastMode of [true, false]) {
+    const turn = turnInput([], []);
+    turn.runtime = { modelId: "claude-opus-5", fastMode };
+    const result = await harness.turns.runTurn(turn);
+    assert.deepEqual(JSON.parse(result.reply), [fastMode ? { serviceTier: "priority" } : {}, {}]);
+  }
+});
+
+for (const mechanism of ["signal", "cancel", "both"] as const) {
+  test(`OpenCode preserves explicit Stop provenance via ${mechanism}`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-stop-"));
+    const signals = createMemoryRunSignalStore();
+    const cancel = new AbortController();
+    const harness = createOpenCodeHarness({
+      binaryPath: fakeSidecar(
+        dir,
+        "stop",
+        `
+        if (req.method === "POST" && message) {
+          await readBody(req);
+          globalThis.pendingPrompt = res;
+          require("node:fs").writeFileSync(${JSON.stringify(join(dir, "started"))}, "1");
+          return;
+        }
+        if (req.method === "POST" && url.pathname.endsWith("/abort")) {
+          if (globalThis.pendingPrompt) { json(globalThis.pendingPrompt, { info: {}, parts: [] }); globalThis.pendingPrompt = null; }
+          return json(res, true);
+        }
+        if (req.method === "GET" && message) return json(res, []);
+      `,
+      ),
+      signals,
+      turnWallClockMs: 5_000,
+    });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const running = harness.turns.runTurn({ ...turnInput([], []), runId: "stop", cancel: cancel.signal });
+    const deadline = Date.now() + 4_000;
+    while (!existsSync(join(dir, "started"))) {
+      if (Date.now() > deadline) throw new Error("mock OpenCode never started");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (mechanism !== "cancel") await signals.send("stop", { kind: "abort" });
+    if (mechanism !== "signal") cancel.abort();
+    const result = await running;
+    assert.equal(result.stoppedByUser, mechanism === "cancel" ? undefined : true);
+    if (mechanism !== "cancel") assert.equal(result.stopped, true);
+  });
+}
+
+for (const surfaceTools of [false, true]) {
+  test(`OpenCode finish_silently suppresses provider closing text (surface=${surfaceTools})`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-silent-"));
+    const harness = createOpenCodeHarness({
+      binaryPath: fakeSidecar(
+        dir,
+        "silent",
+        `
+        if (req.method === "POST" && message) {
+          await readBody(req);
+          const result = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + message[1] + "/tool", {
+            method: "POST",
+            headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET, "content-type": "application/json" },
+            body: JSON.stringify({ tool: "finish_silently", callID: "quiet", args: { reason: "nothing new" } }),
+          }).then((r) => r.json());
+          if (!result.terminate) throw new Error("silence did not terminate");
+          return json(res, ${okAssistant});
+        }
+        if (req.method === "GET" && message) return json(res, [${okAssistant}]);
+      `,
+      ),
+    });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const entries: SessionEntry[] = [];
+    const result = await harness.turns.runTurn({
+      ...turnInput(entries, []),
+      pollFire: !surfaceTools,
+      surfaceTools,
+    });
+    assert.equal(result.silent, true);
+    assert.equal(result.reply, "");
+    assert.equal(
+      entries.some((entry) => entry.type === "assistant"),
+      false,
+    );
+    assert.ok(entries.some((entry) => entry.type === "tool_result" && (entry.payload as { silent?: boolean }).silent));
+  });
+}

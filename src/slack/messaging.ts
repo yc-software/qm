@@ -1,3 +1,4 @@
+import { extractPrivateContinuation } from "./external-access.ts";
 import {
   type ActorAssertion,
   type AgentRequestDirective,
@@ -60,7 +61,7 @@ export function cleanAgentReplyForSlack(text: string): {
   const extractedReactions = extractReactions(text);
   const extractedRequests = extractAgentRequests(extractedReactions.text);
   return {
-    text: extractedRequests.text,
+    text: extractPrivateContinuation(extractedRequests.text).text,
     reactions: extractedReactions.reactions,
     agentRequests: extractedRequests.requests,
   };
@@ -71,7 +72,7 @@ export function slackSurfaceInstructions(kind: SlackConversationKind): string {
 }
 
 export function stripSlackDirectives(text: string): string {
-  return stripAgentRequestDirectives(stripReactionDirectives(text));
+  return extractPrivateContinuation(stripAgentRequestDirectives(stripReactionDirectives(text))).text;
 }
 
 export async function applyAndLogReactions(

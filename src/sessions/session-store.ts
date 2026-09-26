@@ -249,7 +249,7 @@ export async function appendEntryOutsideTurn(
 
 export const TAPE_IMPORT_MAX_ENTRIES = 500;
 
-export interface TapeMeta {
+interface TapeMeta {
   bareText?: string;
   ts?: string;
   changeTime?: string;
@@ -334,6 +334,19 @@ export interface ScopeSessionStats {
   byTypeAll: Record<string, number>;
   totalByCategory: Record<SessionCategory | "all", number>;
   crons: number;
+}
+
+export interface SpendRow {
+  day: number;
+  model: string | null;
+  scopeId: ScopeId;
+  origin: SessionOrigin;
+  calls: number;
+  costUsd: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
 }
 
 export interface LlmCallUsage {
@@ -715,6 +728,7 @@ export interface SessionStore {
   append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
   getTranscriptEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
+  canReadTranscriptSuffix(sessionId: string, beforeSeq: number): Promise<boolean>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
   latestEntrySeq(sessionId: string): Promise<number>;
@@ -788,6 +802,12 @@ export interface SessionStore {
   ): Promise<ScopeSessionStats>;
 
   attributedTurns(): Promise<AttributedTurn[]>;
+
+  spendRollup(range: { from: number; to: number }): Promise<SpendRow[]>;
+
+  spendReport?(range: { from: number; to: number }): Promise<{ rows: SpendRow[]; asOf?: number }>;
+
+  refreshSpendRollup?(): Promise<void>;
 
   listParticipants(): Promise<ParticipantWindow[]>;
 

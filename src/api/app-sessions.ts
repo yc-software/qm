@@ -18,6 +18,7 @@ import { samePerson } from "../directory/person.ts";
 import { AdminError } from "../admin/admin-service.ts";
 import { type ArtifactHome } from "./artifact-share.ts";
 import { randomUUID } from "node:crypto";
+import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/attachments.ts";
 import { projectIdFromGroupRef, projectScopeId } from "../projects/project-store.ts";
 
@@ -74,6 +75,8 @@ export function createSessionMethods(
   | "setProjectSlackChannel"
   | "listScopeResources"
   | "managesScope"
+  | "isOpenScopeMember"
+  | "isCurrentSharedScopeMember"
   | "membershipControlsScope"
   | "authorizesCapabilityScope"
   | "updateSession"
@@ -209,7 +212,7 @@ export function createSessionMethods(
       if (!session) return null;
       let limit = tailWindowLimit(window);
       const [initialRead, pinRecords] = await Promise.all([
-        transcripts.forRender(sessionId, { limit, beforeSeq: window?.beforeSeq }),
+        transcripts.forRender(sessionId, { limit, beforeSeq: window?.beforeSeq, sinceSeq: window?.sinceSeq }),
         deps.sessions.listPins(sessionId),
       ]);
       let read = initialRead;
@@ -254,7 +257,11 @@ export function createSessionMethods(
       if (!session) return null;
       let limit = tailWindowLimit(window);
       const [initialRead, pinRecords] = await Promise.all([
-        transcripts.forViewer(sessionId, principalId, { limit, beforeSeq: window?.beforeSeq }),
+        transcripts.forViewer(sessionId, principalId, {
+          limit,
+          beforeSeq: window?.beforeSeq,
+          sinceSeq: window?.sinceSeq,
+        }),
         deps.sessions.listPins(sessionId),
       ]);
       let read = initialRead;
@@ -729,6 +736,22 @@ export function createSessionMethods(
       return principalCanManageScope(principalId, scope);
     },
 
+    isCurrentSharedScopeMember(principalId, scope) {
+      const { kind } = parseScopeId(scope);
+      return kind === "channel" || kind === "group"
+        ? principalCanWriteScope(principalId, scope)
+        : Promise.resolve(false);
+    },
+
+    isOpenScopeMember(principalId, scope) {
+      return isOpenScopeMember({
+        actorId: principalId,
+        scope,
+        config: deps.config,
+        isCurrentSharedScopeMember: principalCanWriteScope,
+      });
+    },
+
     membershipControlsScope(scope) {
       return membershipControlsScope(scope);
     },
@@ -1107,7 +1130,11 @@ export function createSessionMethods(
         try {
           await deps.config.refreshScope(scopeIdValue);
           snapshot = await deps.config.captureSoulSnapshot(scopeIdValue);
-          const version = await deps.config.setSoulLatest(scopeIdValue, content, actorId);
+          const version =
+            opts?.expectedVersion === undefined
+              ? await deps.config.setSoulLatest(scopeIdValue, content, actorId)
+              : await deps.config.setSoulIfVersion(scopeIdValue, opts.expectedVersion, content, actorId);
+          if (version === null) throw new Error("Guidance changed; read it and retry the edit.");
           deps.auditLog.record({
             at: Date.now(),
             principalId: actorId,
@@ -1118,6 +1145,7 @@ export function createSessionMethods(
           return version;
         } catch (error) {
           if (snapshot !== undefined) deps.config.restoreSoulCacheSnapshot(scopeIdValue, snapshot);
+          if (opts?.expectedVersion !== undefined) await deps.config.refreshScope(scopeIdValue);
           throw error;
         }
       };

@@ -24,6 +24,7 @@ interface TurnHooks {
   deferDeliveryAck?: boolean;
   onQueued?: (runId: string) => void | Promise<void>;
   onSteered?: (runId: string) => void | Promise<void>;
+  onReplying?: () => void;
   onFirstBlock?: (text: string) => void;
   onSurfacePosted?: () => void;
   onTasks?: (tasks: RunTaskView[]) => void;
@@ -110,6 +111,7 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
     let result: TurnResult | null;
     try {
       result = await core.waitRun(runId, {
+        ...(hooks.onReplying ? { onReplying: hooks.onReplying } : {}),
         ...(hooks.onFirstBlock ? { onFirstBlock: hooks.onFirstBlock } : {}),
         ...(hooks.onSurfacePosted ? { onSurfacePosted: hooks.onSurfacePosted } : {}),
         ...(hooks.onTasks ? { onTasks: hooks.onTasks } : {}),

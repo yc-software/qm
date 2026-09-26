@@ -493,3 +493,17 @@ test("floor cap policy: a stall clears when progress resumes", () => {
   h.advance(GOAL_FLOOR_RECHECK_MS);
   assert.equal(h.policy.extendMs(), GOAL_FLOOR_RECHECK_MS, "resumed progress re-arms the unmet floor");
 });
+
+test("rehydration honors the newest goal receipt, including terminal and paused updates", () => {
+  const goal = createGoalRecord({ objective: "survive a restart", floor: { minMs: 32_400_000 }, source: "tool" });
+  const snapshot = { type: "system", payload: { kind: "goal", goal } };
+  const receipt = (status: GoalRecord["status"]) => ({
+    type: "tool_result",
+    payload: { tool: "goal", action: "update", goal: { ...goal, status, tokensUsed: 42 } },
+  });
+  assert.equal(rehydrateOpenGoal([receipt("active")])?.tokensUsed, 42);
+  assert.equal(rehydrateOpenGoal([snapshot, receipt("paused")])?.status, "paused");
+  assert.equal(rehydrateOpenGoal([snapshot, receipt("complete")]), null);
+  assert.equal(rehydrateOpenGoal([snapshot, receipt("blocked")]), null);
+  assert.equal(rehydrateOpenGoal([receipt("complete"), snapshot])?.status, "active");
+});
