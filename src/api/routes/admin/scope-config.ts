@@ -2,7 +2,7 @@ import { parseScopeId } from "../../../types.ts";
 import { encodeRef, serviceCredRef } from "../../../acl/resource-ref.ts";
 import { computeRetention } from "../../../admin/retention.ts";
 import {
-  FAST_MODE_MODEL_IDS,
+  fastModeModelIds,
   harnessSupportsFastMode,
   HARNESS_IDS,
   selectableBaseModels,
@@ -420,7 +420,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     thinkingLevelsByHarness: Object.fromEntries(
       HARNESS_IDS.filter((id) => id !== "mock").map((id) => [id, thinkingLevelsForHarness(id)]),
     ),
-    fastModeModelIds: FAST_MODE_MODEL_IDS,
+    fastModeModelIds: fastModeModelIds(),
     fastModeHarnessIds: HARNESS_IDS.filter(harnessSupportsFastMode),
     autoFlaggerDefault: defaultAutoFlaggerConfig(deps),
     browseModelOptions: selectableBaseModels().filter((m) =>
