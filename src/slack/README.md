@@ -62,7 +62,7 @@ monitor poller. Raw commands and monitor instructions are never included in card
 messages and edits are excluded from conversation history and the event mirror.
 
 After more than five minutes from the first engagement, including waits and resumptions,
-a small **Follow in QM** context link is appended to the same card. It opens the exact
+a small **Follow via QM Web** context link is appended to the same card. It opens the exact
 web session, retains normal web authorization, and stays on the final card. No separate
 message or button is created. Without a configured public web URL the link is omitted.
 A minute sweep means the link or background transition can take up to a minute to appear.

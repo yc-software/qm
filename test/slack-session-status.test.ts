@@ -450,7 +450,7 @@ test("one card persists through background waiting, restart, monitor wake, and t
   await f.reconcile();
   assert.deepEqual(card(f)[1], {
     type: "context",
-    elements: [{ type: "mrkdwn", text: "<https://qm.example.test/web-ui/s/canonical-uuid|Follow in QM>" }],
+    elements: [{ type: "mrkdwn", text: "<https://qm.example.test/web-ui/s/canonical-uuid|Follow via QM Web>" }],
   });
   const resumed = f.add("resumed");
   resumed.deliveryState = { replying: true };

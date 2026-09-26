@@ -171,7 +171,10 @@ export function createSlackSessionStatus(
             { type: "task_card", task_id: `${SLACK_STATUS_TASK_PREFIX}${state.cardId}`, title, status: cardStatus },
           ];
           if (state.followUrl)
-            blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `<${state.followUrl}|Follow in QM>` }] });
+            blocks.push({
+              type: "context",
+              elements: [{ type: "mrkdwn", text: `<${state.followUrl}|Follow via QM Web>` }],
+            });
           const content = JSON.stringify(blocks);
           try {
             let cardError: unknown;
