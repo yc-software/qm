@@ -470,3 +470,14 @@ test(
     assert.equal(await store.groupMember("G-idem", "U-alice"), true);
   },
 );
+
+test("pg live channel observations survive older snapshots but yield to later removal", { skip }, async () => {
+  const { directoryObservationCases } = await import("./support/directory-observation-cases.ts");
+  const store = createPostgresDirectoryStore(URL!);
+  await store.replaceChannels([], [], Date.now());
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: URL! });
+  await pool.query("UPDATE directory_sync SET channels_synced_at = NULL, channels_hash = NULL");
+  await pool.end();
+  await directoryObservationCases(store);
+});
