@@ -519,7 +519,10 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   };
   const requestNames = new WeakMap<IncomingMessage, string>();
   const server = createHttpServer((req, res) => {
-    const finishTiming = req.url === "/healthz" ? undefined : startTiming("http.server", `${req.method ?? "GET"} /*`);
+    const finishTiming =
+      req.url === "/healthz" || req.url === "/readyz"
+        ? undefined
+        : startTiming("http.server", `${req.method ?? "GET"} /*`);
     if (finishTiming)
       res.once("close", () =>
         finishTiming({

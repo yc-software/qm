@@ -80,6 +80,7 @@ import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 
 export interface ServerDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
+  checkReadiness?: (signal: AbortSignal) => Promise<void>;
   slackAccounts?: DurableMap<SlackAccountLink>;
   composioReturns?: DurableMap<ComposioReturn>;
   composioFetch?: typeof fetch;

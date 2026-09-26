@@ -460,6 +460,7 @@ export function stopWithBackstop(
 }
 
 export interface BuiltApp {
+  checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: { store: BackgroundOwnershipStore; instanceId: string; deploymentId: string };
   suggestedActivityMaintenance: Sweeper;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
@@ -2732,6 +2733,9 @@ export function buildApp(
 
   return {
     app,
+    checkReadiness: async (signal) => {
+      await pgArtifactMap?.pool.q("SELECT 1", [], { signal });
+    },
     ...(screenSecurity ? { screenSecurity } : {}),
     deploymentLayer,
     deploymentLayerStore,
@@ -2844,6 +2848,7 @@ export function serverDeps(
   return {
     externalSlackPolicies: config.externalSlackPolicies,
     production: config.production,
+    checkReadiness: built.checkReadiness,
     ...(built.backgroundOwnership
       ? {
           backgroundOwnership: built.backgroundOwnership,
