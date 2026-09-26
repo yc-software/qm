@@ -1364,6 +1364,10 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
     adminTurn({ text: "!sysprompt", conversation: { kind: "dm", threadRef: "dm:admin-alice:t2" } }),
   );
   assert.match(adminPrompt.reply ?? "", /## Acting for an org admin/);
+  assert.match(adminPrompt.reply ?? "", /System administration is not limited to the admin dashboard/);
+  assert.match(adminPrompt.reply ?? "", /including resources owned by other users/);
+  assert.match(adminPrompt.reply ?? "", /Ordinary resource-owner restrictions do not by themselves prohibit/);
+  assert.match(adminPrompt.reply ?? "", /admin grant changes and impersonation are portal-only/);
   assert.match(
     adminPrompt.reply ?? "",
     /private-content reads require a DM or an Open conversation on a live admin turn/,
@@ -1380,7 +1384,7 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
   assert.equal(userClaims!.memory!.orgWrite, undefined, "a non-admin turn must not carry org write");
 
   const userPrompt = await app.turn(dm("!sysprompt"));
-  assert.doesNotMatch(userPrompt.reply ?? "", /## Acting for an org admin/);
+  assert.doesNotMatch(userPrompt.reply ?? "", /## Acting for an org admin|System administration is not limited/);
   assert.match(userPrompt.reply ?? "", /v1\/apis/, "every turn learns the discoverable self-API surface");
 });
 
@@ -1419,7 +1423,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
     conversation: { kind: "dm", threadRef: "dm:admin-alice:auto2" },
     text: "!sysprompt",
   });
-  assert.doesNotMatch(autoPrompt.reply ?? "", /## Acting for an org admin/);
+  assert.doesNotMatch(autoPrompt.reply ?? "", /## Acting for an org admin|System administration is not limited/);
 
   captured = undefined;
   assert.equal(
@@ -1458,6 +1462,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
     unprompted: true,
   });
   assert.match(threadPrompt.reply ?? "", /## Acting for an org admin/);
+  assert.match(threadPrompt.reply ?? "", /System administration is not limited to the admin dashboard/);
 
   assert.equal(
     claims!.liveActor,
