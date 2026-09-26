@@ -1272,14 +1272,9 @@ async function listDeployments(ctx: ApiCtx): Promise<void> {
   const { res, app, url, secret, capability, actor } = ctx;
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 200, { deployments: (await app.listDeployments()).map(deploymentView) });
-  const visible = await app.listDeploymentsForViewer(principalId);
-  const baseUrl = gitUrlBase(ctx);
-  const deployments = await Promise.all(
-    visible.map(async (d) => {
-      if (!secret) return d;
-      const git = await app.deploymentGitUrlFor(d.id, principalId, { secret, baseUrl });
-      return git ? { ...d, gitUrl: git.url } : d;
-    }),
+  const deployments = await app.listDeploymentsForViewer(
+    principalId,
+    secret ? { secret, baseUrl: gitUrlBase(ctx) } : undefined,
   );
   return sendJson(res, 200, { deployments });
 }
@@ -1359,15 +1354,17 @@ export async function getDeployment(ctx: ApiCtx): Promise<void> {
   const id = params.id!;
   let deployment;
   if (principalId) {
-    deployment = (await app.listDeploymentsForViewer(principalId)).find((d) => d.id === id || d.name === id);
+    deployment = await app.getDeploymentForViewer(
+      id,
+      principalId,
+      secret ? { secret, baseUrl: gitUrlBase(ctx) } : undefined,
+    );
   } else {
-    const stored = (await app.listDeployments()).find((d) => d.id === id || d.name === id);
-    deployment = stored ? deploymentView(stored) : undefined;
+    const stored = await app.getDeployment(id);
+    deployment = stored ? deploymentView(stored) : null;
   }
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
-  if (!principalId || !secret) return sendJson(res, 200, { deployment });
-  const git = await app.deploymentGitUrlFor(deployment.id, principalId, { secret, baseUrl: gitUrlBase(ctx) });
-  return sendJson(res, 200, { deployment: git ? { ...deployment, gitUrl: git.url } : deployment });
+  return sendJson(res, 200, { deployment });
 }
 
 async function rollbackDeployment(ctx: ApiCtx): Promise<void> {
