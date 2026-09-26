@@ -164,7 +164,11 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
             (run) =>
               run.sessionId === threadRef &&
               !(opts?.excludePrivateMessages && run.request.privateSessionMessage) &&
-              (!opts?.replyingOnly || run.deliveryState?.replying === true),
+              (!opts?.statusUpdatesOnly ||
+                run.deliveryState?.replying === true ||
+                (run.request.surface === "monitor" &&
+                  (run.status === "failed" ||
+                    (run.status === "done" && ["failed", "refused"].includes(run.result?.status ?? ""))))),
           )
           .sort((a, b) => b.createdAt - a.createdAt)
           .at(0) ?? null

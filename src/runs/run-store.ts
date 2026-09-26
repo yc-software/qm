@@ -84,7 +84,7 @@ export interface RunStore {
 
   latestForThread(
     threadRef: string,
-    opts?: { excludePrivateMessages?: boolean; replyingOnly?: boolean },
+    opts?: { excludePrivateMessages?: boolean; statusUpdatesOnly?: boolean },
   ): Promise<Run | null>;
   pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;

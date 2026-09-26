@@ -22,13 +22,17 @@ function fixture() {
     get: async (id: string) => records.get(id) ?? null,
     inFlightForThread: async (sessionId: string) =>
       [...records.values()].filter((run) => run.sessionId === sessionId && ["pending", "running"].includes(run.status)),
-    latestForThread: async (threadRef: string, opts?: { replyingOnly?: boolean }) =>
+    latestForThread: async (threadRef: string, opts?: { statusUpdatesOnly?: boolean }) =>
       [...records.values()]
         .filter(
           (run) =>
             run.sessionId === threadRef &&
             !run.request.privateSessionMessage &&
-            (!opts?.replyingOnly || run.deliveryState?.replying === true),
+            (!opts?.statusUpdatesOnly ||
+              run.deliveryState?.replying === true ||
+              (run.request.surface === "monitor" &&
+                (run.status === "failed" ||
+                  (run.status === "done" && ["failed", "refused"].includes(run.result?.status ?? ""))))),
         )
         .sort((a, b) => b.createdAt - a.createdAt)[0] ?? null,
   };
@@ -643,3 +647,27 @@ test("late card receipt after lease loss retains its timestamp for reconciliatio
   assert.equal(f.cards.filter((call) => call.method === "chat.postMessage").length, 1);
   assert.equal(card(f)[0]?.title, "Finished");
 });
+
+for (const outcome of ["failed", "refused"] as const) {
+  test(`a monitor ${outcome} before engagement is reported without a processing spinner`, async () => {
+    const f = fixture();
+    await f.enable();
+    const initial = f.add("initial");
+    await f.start(initial.id);
+    initial.status = "done";
+    background(f);
+    await f.reconcile();
+    f.advance(100);
+    const wake = f.add("wake");
+    wake.request = { ...wake.request, surface: "monitor" };
+    wake.status = "done";
+    wake.result = { status: outcome };
+    f.advance(100);
+    f.add("quiet-after-wake").status = "done";
+    f.jobs.length = 0;
+    await f.reconcile();
+    assert.equal(card(f)[0]?.title, outcome === "failed" ? "Failed" : "Could not proceed");
+    assert.notEqual(card(f)[0]?.status, "in_progress");
+    assert.equal(f.calls.filter((call) => call.status === "processing").length, 1);
+  });
+}

@@ -2022,8 +2022,16 @@ test("pg run store: delivery state round-trips; onTerminal fires once with it", 
 
     const quiet = (await runs.enqueue({ sessionId: "sDeliver", request: turn("quiet") })).run;
     assert.equal((await runs.latestForThread("sDeliver"))?.id, quiet.id);
-    assert.equal((await runs.latestForThread("sDeliver", { replyingOnly: true }))?.id, r.id);
-    assert.equal(await runs.latestForThread("other-thread", { replyingOnly: true }), null);
+    assert.equal((await runs.latestForThread("sDeliver", { statusUpdatesOnly: true }))?.id, r.id);
+    assert.equal(await runs.latestForThread("other-thread", { statusUpdatesOnly: true }), null);
+    await runs.withdraw(quiet.id);
+    const monitor = (await runs.enqueue({ sessionId: "sDeliver", request: { ...turn("monitor"), surface: "monitor" } }))
+      .run;
+    const monitorClaim = await runs.claimById(monitor.id, "monitor-worker", 5_000);
+    await runs.complete(monitor.id, monitorClaim!.leaseToken!, { status: "refused" });
+    await runs.enqueue({ sessionId: "sDeliver", request: turn("quiet after monitor") });
+    assert.equal((await runs.latestForThread("sDeliver", { statusUpdatesOnly: true }))?.id, monitor.id);
+    seen.pop();
 
     const parked = (await runs.enqueue({ sessionId: "sPark", request: turn("y"), maxAttempts: 1 })).run;
     const c = await runs.claimById(parked.id, "w2", 5_000);

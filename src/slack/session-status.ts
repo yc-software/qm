@@ -101,15 +101,16 @@ export function createSlackSessionStatus(
           let anchor = await runs.get(state.anchorRunId ?? state.runIds.at(-1)!);
           const inflight = anchor?.sessionId ? ((await runs.inFlightForThread?.(anchor.sessionId)) ?? []) : [];
           const recent = anchor?.sessionId
-            ? await runs.latestForThread?.(anchor.sessionId, { excludePrivateMessages: true, replyingOnly: true })
+            ? await runs.latestForThread?.(anchor.sessionId, { excludePrivateMessages: true, statusUpdatesOnly: true })
             : null;
-          const engaged = [...inflight, ...(recent ? [recent] : [])].filter(
+          const engaged = inflight.filter(
             (run) =>
               run.deliveryState?.replying &&
               !run.request.privateSessionMessage &&
               run.createdAt >= (anchor?.createdAt ?? 0),
           );
-          const latest = engaged.sort((a, b) => b.createdAt - a.createdAt)[0];
+          const candidates = [...engaged, ...(recent && recent.createdAt >= (anchor?.createdAt ?? 0) ? [recent] : [])];
+          const latest = candidates.sort((a, b) => b.createdAt - a.createdAt)[0];
           if (latest) anchor = latest;
           state = {
             ...state,

@@ -11,7 +11,8 @@ export function isOwnStatusCard(
   const own = (botUserId && message.user === botUserId) || (ownBotId && message.bot_id === ownBotId);
   return Boolean(
     own &&
-    message.blocks?.some(
+    Array.isArray(message.blocks) &&
+    message.blocks.some(
       (block) =>
         isObj(block) &&
         block.type === "task_card" &&

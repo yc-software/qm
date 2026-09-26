@@ -1808,6 +1808,16 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
     await f.app.emitMessage({
       channel: "C1",
       channel_type: "channel",
+      user: "UBOT",
+      bot_id: "BBOT",
+      text: "ordinary malformed blocks",
+      ts: "201.3",
+      blocks: { unexpected: true },
+    });
+    assert.equal(f.core.ingests.flat().find((event: any) => event.ts === "201.3")?.text, "ordinary malformed blocks");
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
       ...status,
       user: "U1",
       bot_id: undefined,
