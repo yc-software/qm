@@ -41,6 +41,12 @@ Set `LIVE_E2E_OBSERVATIONAL=1` to report completed catalog failures (and alert w
 configured) without a nonzero exit; runner, setup, event-pump, and required-alert failures
 remain blocking.
 
+For a paired document-editing comparison, use the manual
+[document revision scenario](fixtures/document-revision/scenario.md). It includes a
+reproducible synthetic PDF builder, ten fixed Slack turns, and artifact/transport
+checks. Run it through Firefox against two real dev instances; it is separate from
+the catalog runner and keeps generated files and evidence outside the checkout.
+
 ## Arga twin backend (no shared test workspace, no pool app, fully parallel)
 
 With an Arga API key the same catalog runs against an **isolated Slack digital-twin

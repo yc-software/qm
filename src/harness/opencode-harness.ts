@@ -32,6 +32,7 @@ import { NonRetryableTurnError } from "../core/turn-error.ts";
 import {
   defineHarness,
   promptEnvelopeWithoutHistory,
+  stripDataUrls,
   type Harness,
   type HarnessTurnInput,
   type HarnessTurnResult,
@@ -209,17 +210,6 @@ export function modelRef(id: string): { providerID: string; modelID: string } {
   if (slash > 0) return { providerID: id.slice(0, slash), modelID: id.slice(slash + 1) };
   const resolved = resolveModel(id);
   return { providerID: String(resolved?.provider ?? (id.startsWith("gpt-") ? "openai" : "anthropic")), modelID: id };
-}
-
-function stripDataUrls(message: unknown): unknown {
-  if (Array.isArray(message)) return message.map(stripDataUrls);
-  if (!message || typeof message !== "object") return message;
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(message)) {
-    if (key === "url" && typeof value === "string" && value.startsWith("data:")) result.omitted = true;
-    else result[key] = stripDataUrls(value);
-  }
-  return result;
 }
 
 function replayMessages(

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { zstdDecompressSync } from "node:zlib";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
+import { convertMessages as convertCompletionsMessages } from "@earendil-works/pi-ai/api/openai-completions";
 import {
   buildDetectionPrompt,
   createPiHarness,
@@ -804,6 +805,43 @@ test("trimPayloadToByteBudget trims Responses image tool output from the install
   assert.equal(newest.output[1]?.type, "input_image");
   assert.ok(Buffer.byteLength(JSON.stringify(out)) <= 18_000_000);
   assert.equal(original.output[1]?.type, "input_image");
+});
+
+test("trimPayloadToByteBudget trims Completions image tool output from the installed adapter", () => {
+  const data = "AAAA".repeat(1_600_000);
+  const payload = {
+    messages: convertCompletionsMessages(
+      getBuiltinModel("groq", "meta-llama/llama-4-scout-17b-16e-instruct"),
+      {
+        messages: Array.from({ length: 3 }, (_, index) => ({
+          role: "toolResult" as const,
+          toolCallId: `read-${index}`,
+          toolName: "files",
+          content: [
+            { type: "text" as const, text: "[image: preview.png]" },
+            { type: "image" as const, data, mimeType: "image/png" },
+          ],
+          isError: false,
+          timestamp: index,
+        })),
+      },
+      {} as Parameters<typeof convertCompletionsMessages>[2],
+    ),
+  };
+  const original = payload.messages.find((message) => message.role === "user");
+  assert.ok(original && Array.isArray(original.content));
+  assert.equal(original.content.filter((block) => block.type === "image_url").length, 3);
+  const out = trimPayloadToByteBudget(payload) as typeof payload;
+  const images = out.messages.find((message) => message.role === "user");
+  assert.ok(images && Array.isArray(images.content));
+  assert.equal(images.content.filter((block) => block.type === "image_url").length, 2);
+  assert.ok(images.content.some((block) => block.type === "text" && /image removed/.test(block.text)));
+  assert.deepEqual(
+    out.messages.filter((message) => message.role === "tool"),
+    payload.messages.filter((message) => message.role === "tool"),
+  );
+  assert.ok(Buffer.byteLength(JSON.stringify(out)) <= 18_000_000);
+  assert.equal(original.content.filter((block) => block.type === "image_url").length, 3);
 });
 
 test("trimPayloadToByteBudget keeps a shed image block's cache_control breakpoint", () => {

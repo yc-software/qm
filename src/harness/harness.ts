@@ -62,6 +62,17 @@ export function promptEnvelopeWithoutHistory(payload: unknown): unknown {
   return envelope;
 }
 
+export function stripDataUrls(message: unknown): unknown {
+  if (Array.isArray(message)) return message.map(stripDataUrls);
+  if (!message || typeof message !== "object") return message;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(message)) {
+    if (key === "url" && typeof value === "string" && value.startsWith("data:")) result.omitted = true;
+    else result[key] = stripDataUrls(value);
+  }
+  return result;
+}
+
 export interface HarnessLlmRequestRecord {
   turnSeq: number | null;
   step: number;
