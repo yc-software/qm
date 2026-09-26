@@ -262,3 +262,167 @@ test("per-user connectors select an explicit account slot without falling back t
   await users.deleteConnectorToken(host, "internal:alice", "company");
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
 });
+
+test("tool schemas inline local refs without rewriting values or no-ref schemas", async (t) => {
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const literal = { $ref: "literal", $defs: { untouched: true } };
+  const native = {
+    type: "object",
+    patternProperties: { "^x": { type: "string" } },
+    unevaluatedProperties: false,
+  };
+  const tools = [
+    {
+      name: "normalized",
+      inputSchema: {
+        type: "object",
+        $defs: {
+          count: { type: "integer", minimum: 5 },
+          "a/b": { type: "string", minLength: 1 },
+          "space name": { type: "boolean" },
+        },
+        properties: {
+          count: { $ref: "#/$defs/count", maximum: 10, description: "bounded" },
+          alias: { $ref: "#/properties/count" },
+          slash: { $ref: "#/$defs/a~1b" },
+          space: { $ref: "#/$defs/space%20name" },
+          literal: { type: "object", const: literal },
+          $ref: { type: "string" },
+        },
+        required: ["count"],
+      },
+    },
+    { name: "native", inputSchema: native },
+  ];
+  const service = createMcpToolService({
+    servers: store,
+    fetchImpl: async (_url, init) => {
+      const request = JSON.parse(init.body) as { id: number };
+      return jsonResponse({ jsonrpc: "2.0", id: request.id, result: { tools } });
+    },
+  });
+  t.after(() => service.close());
+  await store.put(server());
+  await service.refresh();
+  const normalized = service.toolDefs().find((tool) => tool.remoteName === "normalized")!.inputSchema;
+  const properties = normalized.properties as Record<string, unknown>;
+  const count = { type: "integer", minimum: 5, maximum: 10, description: "bounded" };
+  assert.deepEqual(properties, {
+    count,
+    alias: count,
+    slash: { type: "string", minLength: 1 },
+    space: { type: "boolean" },
+    literal: { type: "object", const: literal },
+    $ref: { type: "string" },
+  });
+  assert.equal(Object.hasOwn(normalized, "$defs"), false);
+  assert.deepEqual(service.toolDefs().find((tool) => tool.remoteName === "native")!.inputSchema, native);
+});
+
+test("tool schema failures omit only the unsafe tool and bound ref expansion", async (t) => {
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const defs: Record<string, unknown> = { leaf: { type: "string" } };
+  for (let level = 1; level <= 7; level += 1) {
+    const child = level === 1 ? "#/$defs/leaf" : `#/$defs/level${level - 1}`;
+    defs[`level${level}`] = {
+      type: "object",
+      properties: Object.fromEntries(Array.from({ length: 6 }, (_, field) => [`f${field}`, { $ref: child }])),
+    };
+  }
+  const description = "x".repeat(10_000);
+  const wide = {
+    type: "object",
+    $defs: { value: { type: "string", description } },
+    properties: Object.fromEntries(Array.from({ length: 200 }, (_, index) => [`f${index}`, { $ref: "#/$defs/value" }])),
+  };
+  const nestedResourceRef = {
+    type: "object",
+    $defs: { value: { type: "string" } },
+    properties: {
+      nested: {
+        $id: "nested",
+        type: "object",
+        $defs: { value: { type: "integer" } },
+        properties: { value: { $ref: "#/$defs/value" } },
+      },
+    },
+  };
+  const schemas = [
+    { type: "object", properties: { value: { $ref: "#/$defs/missing" } } },
+    { type: "object", properties: { value: { $ref: "https://example.com/schema.json" } } },
+    { type: "object", properties: { value: { $ref: "#/properties/value" } } },
+    {
+      type: "object",
+      $defs: { value: { type: "integer", minimum: 5 } },
+      properties: { value: { $ref: "#/$defs/value", minimum: 1 } },
+    },
+    {
+      type: "object",
+      $defs: { closed: { type: "object", additionalProperties: false } },
+      properties: {
+        value: { $ref: "#/$defs/closed", properties: { allowed: { type: "string" } } },
+      },
+    },
+    {
+      type: "object",
+      $defs: { anchored: { $anchor: "value", type: "string" } },
+      properties: { one: { $ref: "#/$defs/anchored" }, two: { $ref: "#/$defs/anchored" } },
+    },
+    {
+      type: "object",
+      properties: { dynamic: { $dynamicRef: "#value" } },
+    },
+    {
+      type: "object",
+      properties: { recursive: { $recursiveRef: "#" } },
+    },
+    { type: "object", $defs: defs, properties: { value: { $ref: "#/$defs/level7" } } },
+    wide,
+    nestedResourceRef,
+    { type: "string" },
+  ];
+  const service = createMcpToolService({
+    servers: store,
+    fetchImpl: async (_url, init) => {
+      const request = JSON.parse(init.body) as { id: number };
+      const tools = [
+        ...schemas.map((inputSchema, index) => ({ name: `unsafe${index}`, inputSchema })),
+        { name: "good", inputSchema: { type: "object", properties: { ok: { type: "boolean" } } } },
+      ];
+      return jsonResponse({ jsonrpc: "2.0", id: request.id, result: { tools } });
+    },
+  });
+  t.after(() => service.close());
+  await store.put(server());
+  await service.refresh();
+  assert.deepEqual(
+    service.toolDefs().map((tool) => tool.remoteName),
+    ["good"],
+  );
+});
+
+test("tool schema refresh budget skips overflow without consuming later capacity", async (t) => {
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const description = "x".repeat(680_000);
+  const tools = [
+    ...Array.from({ length: 3 }, (_, index) => ({
+      name: `large${index}`,
+      inputSchema: { type: "object", description, properties: {} },
+    })),
+    { name: "small", inputSchema: { type: "object", properties: {} } },
+  ];
+  const service = createMcpToolService({
+    servers: store,
+    fetchImpl: async (_url, init) => {
+      const request = JSON.parse(init.body) as { id: number };
+      return jsonResponse({ jsonrpc: "2.0", id: request.id, result: { tools } });
+    },
+  });
+  t.after(() => service.close());
+  await store.put(server());
+  await service.refresh();
+  assert.deepEqual(
+    service.toolDefs().map((tool) => tool.remoteName),
+    ["large0", "large1", "small"],
+  );
+});
