@@ -2020,6 +2020,11 @@ test("pg run store: delivery state round-trips; onTerminal fires once with it", 
     await runs.complete(r.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
     assert.deepEqual(seen, [`${r.id}:done:171.002`], "terminal listener sees the checkpointed state");
 
+    const quiet = (await runs.enqueue({ sessionId: "sDeliver", request: turn("quiet") })).run;
+    assert.equal((await runs.latestForThread("sDeliver"))?.id, quiet.id);
+    assert.equal((await runs.latestForThread("sDeliver", { replyingOnly: true }))?.id, r.id);
+    assert.equal(await runs.latestForThread("other-thread", { replyingOnly: true }), null);
+
     const parked = (await runs.enqueue({ sessionId: "sPark", request: turn("y"), maxAttempts: 1 })).run;
     const c = await runs.claimById(parked.id, "w2", 5_000);
     await runs.fail(parked.id, c!.leaseToken!, "boom", { retry: true });

@@ -376,8 +376,8 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
 
     async latestForThread(threadRef, opts) {
       const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true') ORDER BY created_at DESC, seq DESC LIMIT 1",
-        [threadRef, Boolean(opts?.excludePrivateMessages)],
+        "SELECT * FROM runs WHERE session_id = $1 AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true') AND (NOT $3::boolean OR delivery_state::jsonb->>'replying' = 'true') ORDER BY created_at DESC, seq DESC LIMIT 1",
+        [threadRef, Boolean(opts?.excludePrivateMessages), Boolean(opts?.replyingOnly)],
       );
       return rows[0] ? rowToRun(rows[0]) : null;
     },

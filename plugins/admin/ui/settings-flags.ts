@@ -146,7 +146,7 @@ function template() {
           <span class="hint"
             >${
               state.feature === "slack_loading_indicator"
-                ? "Shows Slack’s Working indicator in threads and adds them to Slack’s session list. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing session entries."
+                ? "Shows Slack’s Working indicator and a task card in threads, including background waits. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards and session entries."
                 : "Persistent subagents are available for personal scopes only."
             }</span
           >

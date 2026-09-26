@@ -1,4 +1,25 @@
+import { isObj } from "../util/objects.ts";
 import { LRUCache } from "lru-cache";
+
+export const SLACK_STATUS_TASK_PREFIX = "qm_status:";
+
+export function isOwnStatusCard(
+  message: { user?: string; bot_id?: string; blocks?: unknown[] },
+  botUserId: string,
+  ownBotId = "",
+): boolean {
+  const own = (botUserId && message.user === botUserId) || (ownBotId && message.bot_id === ownBotId);
+  return Boolean(
+    own &&
+    message.blocks?.some(
+      (block) =>
+        isObj(block) &&
+        block.type === "task_card" &&
+        typeof block.task_id === "string" &&
+        block.task_id.startsWith(SLACK_STATUS_TASK_PREFIX),
+    ),
+  );
+}
 
 export function mentionsBot(text: string, botUserId: string): boolean {
   return botUserId ? text.includes(`<@${botUserId}>`) : false;

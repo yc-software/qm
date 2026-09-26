@@ -1767,3 +1767,54 @@ test("top-level DM replies remain top-level and never start native thread status
     await f.stop();
   }
 });
+
+test("own task-card status events never enter the mirror, but ordinary bot edits remain", async () => {
+  const f = await fixture();
+  const status = {
+    user: "UBOT",
+    bot_id: "BBOT",
+    text: "Working",
+    ts: "200.1",
+    blocks: [{ type: "task_card", task_id: "qm_status:test", title: "Working", status: "in_progress" }],
+  };
+  try {
+    await f.app.emitMessage({ channel: "C1", channel_type: "channel", ...status });
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
+      subtype: "message_changed",
+      message: { ...status, text: "Finished" },
+      previous_message: status,
+      ts: "200.2",
+    });
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
+      subtype: "message_deleted",
+      previous_message: status,
+      deleted_ts: status.ts,
+      ts: "200.3",
+    });
+    assert.equal(f.core.ingests.flat().filter((event: any) => event.ts === status.ts).length, 0);
+    assert.equal(f.core.turns.length, 0);
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
+      subtype: "message_changed",
+      message: { user: "UBOT", bot_id: "BBOT", text: "Updated answer", ts: "201.1" },
+      ts: "201.2",
+    });
+    assert.equal(f.core.ingests.flat().find((event: any) => event.ts === "201.1")?.text, "Updated answer");
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
+      ...status,
+      user: "U1",
+      bot_id: undefined,
+      ts: "202.1",
+    });
+    assert.ok(f.core.ingests.flat().some((event: any) => event.ts === "202.1"));
+  } finally {
+    await f.stop();
+  }
+});

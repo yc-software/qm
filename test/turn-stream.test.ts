@@ -453,3 +453,22 @@ test("goalViewFromEntry extracts goal snapshots from tool results and system ent
     null,
   );
 });
+
+test("monitor wakes persist engagement after the reply gate", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ts-monitor-")), workers: 1 }));
+  built.runtime.start();
+  try {
+    const ack = await built.app.turn({
+      surface: "monitor",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "t-monitor" },
+      text: "!preamble Checking background results.",
+      async: true,
+    });
+    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    assert.equal(finished.status, "done");
+    assert.equal(finished.deliveryState?.replying, true);
+  } finally {
+    await built.runtime.stop();
+  }
+});

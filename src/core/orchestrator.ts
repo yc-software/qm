@@ -2432,7 +2432,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         if (input.runId) {
-          if (input.surface === "slack" && input.runLeaseToken) {
+          if ((input.surface === "slack" || input.surface === "monitor") && input.runLeaseToken) {
             await deps.runs
               ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
               .catch(swallowAs("orchestrator: persist reply engagement", false));

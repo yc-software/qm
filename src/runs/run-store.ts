@@ -82,7 +82,10 @@ export interface RunStore {
 
   noteTurnUserSeq(runId: string, seq: number): Promise<boolean>;
 
-  latestForThread(threadRef: string, opts?: { excludePrivateMessages?: boolean }): Promise<Run | null>;
+  latestForThread(
+    threadRef: string,
+    opts?: { excludePrivateMessages?: boolean; replyingOnly?: boolean },
+  ): Promise<Run | null>;
   pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;
   deferReturn(runId: string, delayMs: number): Promise<void>;

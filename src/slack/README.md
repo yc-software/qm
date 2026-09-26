@@ -48,26 +48,44 @@ not a personal settings toggle. Leave it disabled on apps subscribed to
 is unchanged. The app must be declared as an agent in Slack and have `chat:write`.
 
 The plugin calls [`agents.sessions.setStatus`](https://docs.slack.dev/reference/methods/agents.sessions.setstatus)
-with `processing` only after core commits to answering. Slack shows its native Working
-indicator in the existing reply thread. No custom text, titles or extra status messages are
-posted; reactions and replies remain unchanged. Unthreaded DMs stay unthreaded and have no
-native indicator. Quiet ambient turns show nothing.
+with `processing` only after core commits to answering. One ordinary native
+[`task_card`](https://docs.slack.dev/reference/block-kit/blocks/task-card-block) message
+is posted in the existing reply thread and updated in place. Quiet ambient turns show
+nothing; unthreaded DMs stay unthreaded and have no indicator or card.
 
-This creates Slack session entries, visible to everyone in shared threads. Disabling the
-flag clears working status but does not remove those entries or stop ongoing work.
-Completion, failure and cancellation return the session to `active`, never `closed`.
-Active means the run finished, not that every queued delivery succeeded; pending approvals
-are not modeled as a separate native status.
+The card distinguishes live work, registered background jobs, and active process watches
+in this conversation. Waiting cards survive the live turn and core restarts. Recurring
+crons, other conversations' jobs, and agent prose do not create waiting state. Job status
+uses the same durable registry as the web UI: unwatched exits become visible when the
+job is checked, reconciled during sandbox setup, or expires. Watches use the existing
+monitor poller. Raw commands and monitor instructions are never included in cards. Own status-card
+messages and edits are excluded from conversation history and the event mirror.
 
-Reply engagement is recorded in the existing run delivery state so a Slack receiver can
-observe work on another worker without relying on an in-process stream. A durable,
-account-and-thread-scoped record tracks engaged runs. A minute sweep uses the
-existing run store to recover cleanup after restart, and refreshes live processing every
-30 minutes because Slack expires it after one hour. Expired run leases are not refreshed.
-Status calls use a separate client with a five-second timeout and no retries, and never
-block replies. Transient failures are retried by reconciliation; unsupported installs are
-suppressed until core restarts. If Slack remains unreachable, its one-hour expiry is the
-last cleanup fallback. See [Slack agent sessions](https://docs.slack.dev/ai/agent-sessions).
+After more than five minutes from the first engagement, including waits and resumptions,
+a small **Follow in QM** context link is appended to the same card. It opens the exact
+web session, retains normal web authorization, and stays on the final card. No separate
+message or button is created. Without a configured public web URL the link is omitted.
+A minute sweep means the link or background transition can take up to a minute to appear.
+
+Completion, failure, refusal, approval waits and cancellation get explicit labels. A
+terminal card has no spinner. **Finished** describes the recorded work lifecycle, not
+successful task completion or transport delivery. The transient native session status
+returns to `active` when live work ends, even while background waiting remains visible.
+Disabling the flag settles cards and clears native working status without stopping work
+or deleting Slack messages and session-list entries. Shared-thread cards are visible to
+everyone in that thread.
+
+Reply engagement is recorded in run delivery state, including monitor wakes, so receivers
+can observe another worker. The existing durable map and leader lease retain one card's
+message timestamp, original start time, and update state per account and thread. Processing
+refreshes every 30 minutes, before Slack's one-hour expiry. Expired run leases are not
+shown as active processing. A separate five-second-timeout client keeps status failures
+out of reply delivery; reconciliation retries transient failures. Unsupported native
+session methods do not block task cards, and card failures do not block native status.
+Slack does not offer conditional writes: late writes are repaired on reconciliation,
+and an ambiguous initial post can still duplicate if Slack does not deduplicate its
+persisted `client_msg_id`. If Slack stays unreachable, card updates cannot be guaranteed;
+only its native session indicator has a one-hour expiry.
 
 > **Running locally alongside another developer? Each dev needs their OWN app.**
 > See [Local dev with multiple developers](#local-dev-with-multiple-developers)

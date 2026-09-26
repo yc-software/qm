@@ -1,6 +1,7 @@
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import {
   createSlackSessionStatus,
+  type SlackStatusActivity,
   type SlackSessionStatus,
   type SlackSessionStatusState,
 } from "../slack/session-status.ts";
@@ -174,6 +175,7 @@ export interface SlackCoreClientDeps {
   keychainApprovals?: KeychainApprovals;
   taskAcknowledgements?: DurableMap<TaskAckState>;
   sessionStatus?: DurableMap<SlackSessionStatusState>;
+  statusActivity?: SlackStatusActivity;
   featureFlags?: FeatureFlagStore;
   app: App;
   config: ScopedConfigStore;
@@ -255,7 +257,16 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       ? { taskAcknowledgements: createTaskAcknowledgements(deps.taskAcknowledgements, lease, deps) }
       : {}),
     ...(deps.sessionStatus && deps.featureFlags
-      ? { sessionStatus: createSlackSessionStatus(deps.sessionStatus, lease, deps.runs, deps.featureFlags) }
+      ? {
+          sessionStatus: createSlackSessionStatus(
+            deps.sessionStatus,
+            lease,
+            deps.runs,
+            deps.featureFlags,
+            Date.now,
+            deps.statusActivity,
+          ),
+        }
       : {}),
     async externalSlackParticipants() {
       return (await deps.config.getExternalSlackParticipantsDurable(orgScope)) === true;

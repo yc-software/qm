@@ -368,6 +368,10 @@ for (const backend of backends) {
     await runs.complete(r.id, claimed?.leaseToken ?? "", { status: "ok", reply: "done" });
     assert.deepEqual(seen, [`${r.id}:done:171.003`], "terminal listener sees the checkpointed state");
     assert.equal((await runs.get(r.id))?.deliveryState?.editRef, "171.003");
+    const quiet = (await runs.enqueue({ sessionId: "s1", request: turn("quiet") })).run;
+    assert.equal((await runs.latestForThread("s1"))?.id, quiet.id);
+    assert.equal((await runs.latestForThread("s1", { replyingOnly: true }))?.id, r.id);
+    assert.equal(await runs.latestForThread("t1", { replyingOnly: true }), null);
   });
 
   test(`[${backend.name}] onTerminal fires once per terminal transition, including a parked fail`, async () => {
