@@ -175,3 +175,89 @@ test("recorded arrivals preserve quiet time and bursts independently of response
   );
   assert.ok(calls.every((record) => Number(record.startedAt) >= Number(record.scheduledAt)));
 });
+
+test("cancellation before start, during a quiet interval and with active requests retains a failed actual cutoff", async () => {
+  for (const mode of ["before", "quiet", "active"] as const) {
+    const abort = new AbortController();
+    const records: Record<string, unknown>[] = [];
+    let requests = 0;
+    let closed = 0;
+    if (mode === "before") abort.abort();
+    const profile: WorkloadProfile = {
+      schemaVersion: 1,
+      baseUrl: "http://127.0.0.1:9999",
+      fixtureId: fixture.fixtureId,
+      isolated: true,
+      externalEffectsDisabled: true,
+      mode: "diagnostic",
+      condition: "cancel-" + mode,
+      durationMs: 10_000,
+      requestTimeoutMs: 20_000,
+      maxConcurrency: 2,
+      maxStartDelayMs: 100,
+      streamConnectTimeoutMs: 1000,
+      requests: [
+        {
+          name: "read",
+          method: "GET",
+          path: "/read",
+          ratePerSecond: 0,
+          arrivalOffsetsMs: mode === "quiet" ? [5000] : [0, 5000],
+        },
+      ],
+      streams: [{ name: "events", path: "/events", connections: 1 }],
+    };
+    const before = Date.now();
+    const summary = await runWorkload(profile, fixture, {
+      signal: abort.signal,
+      emit(record) {
+        records.push(record);
+        if (record.type === "measurement-start" && mode === "quiet") setTimeout(() => abort.abort(), 20);
+      },
+      async fetcher(url, options) {
+        assert.equal(options?.signal?.aborted, false);
+        if (String(url).endsWith("/events"))
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                options!.signal!.addEventListener(
+                  "abort",
+                  () => {
+                    closed++;
+                    controller.error(new DOMException("Stopped", "AbortError"));
+                  },
+                  { once: true },
+                );
+              },
+            }),
+            { headers: { "content-type": "text/event-stream" } },
+          );
+        requests++;
+        return new Promise((_resolve, reject) => {
+          options!.signal!.addEventListener(
+            "abort",
+            () => {
+              closed++;
+              reject(new DOMException("Stopped", "AbortError"));
+            },
+            { once: true },
+          );
+          setTimeout(() => abort.abort(), 20);
+        });
+      },
+    });
+    assert.ok(Date.now() - before < 1000, "Cancellation waited for the planned interval or request timeout");
+    assert.equal(summary.pass, false);
+    assert.equal(summary.measurementComplete, false);
+    assert.ok(summary.cancelledAt !== null);
+    assert.ok(summary.finishedAt < summary.plannedFinishAt);
+    assert.equal(summary.requests[0]!.offered, mode === "active" ? 1 : 0);
+    assert.equal(summary.requests[0]!.started, requests);
+    assert.equal(summary.requests[0]!.completed, requests);
+    assert.equal(summary.requests[0]!.active, 0);
+    assert.equal(summary.requests[0]!.errors, mode === "active" ? 1 : 0);
+    assert.equal(closed, mode === "active" ? 2 : mode === "quiet" ? 1 : 0);
+    assert.equal(records.filter((record) => record.type === "measurement-start").length, mode === "before" ? 0 : 1);
+    if (mode === "active") assert.equal(records.find((record) => record.type === "request")?.error, "cancelled");
+  }
+});

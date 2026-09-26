@@ -14,6 +14,7 @@ import {
 } from "./workload-provider.ts";
 import type { WorkloadFixture } from "./workload.ts";
 import { materializeReply, validateMaterializeShape, type MaterializeShape } from "./workload-materialize.ts";
+import { nativeReply, validateNativeShapes, type NativeShape } from "./workload-native.ts";
 
 interface ResponsePacing {
   delayMs: number;
@@ -30,6 +31,7 @@ export interface CompanionProfile {
   utilities: Array<ResponsePacing & { name: string; model: string; systemSha256: string; response: string }>;
   loop?: ResponsePacing & { model: string; shipAction: string };
   materialize?: MaterializeShape;
+  nativeShapes?: NativeShape[];
 }
 
 export function promptSha256(text: string): string {
@@ -68,6 +70,8 @@ export function companionReply(body: Record<string, unknown>, profile: Companion
     );
     return { rule: utility.name, systemSha256, text: utility.response, pacing: utility };
   }
+  const native = nativeReply(body, profile.fixtureId, profile.nativeShapes);
+  if (native) return { ...native, systemSha256 };
   const materialize = materializeReply(body, profile.fixtureId, profile.materialize);
   if (materialize)
     return { ...materialize, systemSha256, pacing: { delayMs: 0, chunkCharacters: 1024, chunkIntervalMs: 0 } };
@@ -191,6 +195,7 @@ function validateCompanion(
     );
   }
   if (profile.materialize) validateMaterializeShape(profile.materialize);
+  if (profile.nativeShapes) validateNativeShapes(profile.nativeShapes);
   if (profile.loop) workloadCheck(/^[a-zA-Z0-9_-]+$/.test(profile.loop.shipAction), "Safe loop ship action required");
   for (const rule of [...profile.utilities, ...(profile.loop ? [profile.loop] : [])]) {
     workloadCheck(typeof rule.model === "string" && rule.model.length > 0, "Rule model required");
@@ -269,6 +274,7 @@ export async function createWorkloadCompanion(
           ...profile.utilities.map((rule) => rule.model),
           ...(profile.loop ? [profile.loop.model] : []),
           ...(profile.materialize ? [profile.materialize.model] : []),
+          ...(profile.nativeShapes?.map((shape) => shape.model) ?? []),
         ]),
       ];
       res.setHeader("content-type", "application/json");
@@ -291,6 +297,7 @@ export async function createWorkloadCompanion(
     let requestSha256: string | null = null;
     let error: string | null = null;
     let streaming = false;
+    let native: Record<string, unknown> | undefined;
     totals.active++;
     totals.maxActive = Math.max(totals.maxActive, totals.active);
     try {
@@ -338,19 +345,32 @@ export async function createWorkloadCompanion(
         return;
       }
       ({ rule, systemSha256 } = reply);
+      native = "native" in reply ? reply.native : undefined;
       totals.calls++;
+      const tools = "tools" in reply ? reply.tools : "tool" in reply && reply.tool ? [reply.tool] : [];
+      const content: Array<
+        { type: "text"; text: string } | { type: "tool_use"; id: string; name: string; input: unknown }
+      > = [
+        ...(tools.length === 0 || native ? [{ type: "text" as const, text: reply.text }] : []),
+        ...tools.map((tool) => ({ type: "tool_use" as const, ...tool })),
+      ];
       const usage = {
         input_tokens: Math.ceil(requestBytes / 4),
-        output_tokens: Math.ceil(Buffer.byteLength(reply.text) / 4),
+        output_tokens: Math.ceil(
+          content.reduce(
+            (bytes, block) =>
+              bytes + Buffer.byteLength(block.type === "text" ? block.text : JSON.stringify(block.input)),
+            0,
+          ) / 4,
+        ),
       };
-      const tool = "tool" in reply ? reply.tool : undefined;
-      const stopReason = tool ? "tool_use" : "end_turn";
+      const stopReason = tools.length ? "tool_use" : "end_turn";
       const message = {
         id: `msg_perf_${requestSha256.slice(0, 24)}`,
         type: "message",
         role: "assistant",
         model: body.model,
-        content: tool ? [{ type: "tool_use", ...tool }] : [{ type: "text", text: reply.text }],
+        content,
         stop_reason: stopReason,
         stop_sequence: null,
         usage,
@@ -373,25 +393,24 @@ export async function createWorkloadCompanion(
       send("message_start", {
         message: { ...message, content: [], stop_reason: null, usage: { ...usage, output_tokens: 0 } },
       });
-      send("content_block_start", {
-        index: 0,
-        content_block: tool ? { type: "tool_use", ...tool, input: {} } : { type: "text", text: "" },
-      });
-      const characters = [...reply.text];
-      for (let offset = 0; offset < characters.length; offset += reply.pacing.chunkCharacters) {
-        if (offset) await sleep(reply.pacing.chunkIntervalMs, undefined, { signal: abort.signal });
-        firstDeltaAt ??= Date.now();
-        send("content_block_delta", {
-          index: 0,
-          delta: tool
-            ? {
-                type: "input_json_delta",
-                partial_json: characters.slice(offset, offset + reply.pacing.chunkCharacters).join(""),
-              }
-            : { type: "text_delta", text: characters.slice(offset, offset + reply.pacing.chunkCharacters).join("") },
+      for (const [index, block] of content.entries()) {
+        const tool = block.type === "tool_use";
+        send("content_block_start", {
+          index,
+          content_block: tool ? { ...block, input: {} } : { type: "text", text: "" },
         });
+        const characters = [...(tool ? JSON.stringify(block.input) : block.text)];
+        for (let offset = 0; offset < characters.length; offset += reply.pacing.chunkCharacters) {
+          if (offset) await sleep(reply.pacing.chunkIntervalMs, undefined, { signal: abort.signal });
+          firstDeltaAt ??= Date.now();
+          const chunk = characters.slice(offset, offset + reply.pacing.chunkCharacters).join("");
+          send("content_block_delta", {
+            index,
+            delta: tool ? { type: "input_json_delta", partial_json: chunk } : { type: "text_delta", text: chunk },
+          });
+        }
+        send("content_block_stop", { index });
       }
-      send("content_block_stop", { index: 0 });
       send("message_delta", {
         delta: { stop_reason: stopReason, stop_sequence: null },
         usage: { output_tokens: usage.output_tokens },
@@ -418,6 +437,7 @@ export async function createWorkloadCompanion(
         systemSha256,
         requestSha256,
         streaming,
+        ...(native ? { native } : {}),
         startedAt,
         finishedAt: Date.now(),
         firstDeltaAt,

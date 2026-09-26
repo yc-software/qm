@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, openSync, readFileSync, writeSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { setTimeout as sleep } from "node:timers/promises";
 
 export interface WorkloadFixture {
   schemaVersion: number;
@@ -75,6 +76,9 @@ export interface WorkloadSummary {
   startedAt: number;
   finishedAt: number;
   drainedAt: number;
+  plannedFinishAt: number;
+  cancelledAt: number | null;
+  measurementComplete: boolean;
   schedulerEndLatenessMs: number;
   maxConcurrency: number;
   requests: Array<
@@ -264,7 +268,13 @@ export function validateWorkload(
 export async function runWorkload(
   profile: WorkloadProfile,
   fixture: WorkloadFixture,
-  options: { emit: Emit; fetcher?: typeof fetch; env?: NodeJS.ProcessEnv; dispatchTurn?: typeof fetch },
+  options: {
+    emit: Emit;
+    fetcher?: typeof fetch;
+    env?: NodeJS.ProcessEnv;
+    dispatchTurn?: typeof fetch;
+    signal?: AbortSignal;
+  },
 ): Promise<WorkloadSummary> {
   const env = options.env ?? process.env;
   const base = validateWorkload(profile, fixture, env, Boolean(options.dispatchTurn));
@@ -290,6 +300,16 @@ export async function runWorkload(
   let measuring = false;
   let stopping = false;
   const abortStreams = new AbortController();
+  let cancelledAt: number | null = null;
+  let cancelledClock = Infinity;
+  const cancel = () => {
+    cancelledAt ??= Date.now();
+    cancelledClock = Math.min(cancelledClock, performance.now());
+    stopping = true;
+    abortStreams.abort();
+  };
+  if (options.signal?.aborted) cancel();
+  else options.signal?.addEventListener("abort", cancel, { once: true });
   const streams = {
     expected: profile.streams.reduce((sum, plan) => sum + plan.connections, 0),
     opened: 0,
@@ -316,7 +336,7 @@ export async function runWorkload(
   }));
   const streamTasks: Promise<void>[] = [];
   const readiness: Promise<boolean>[] = [];
-  for (const plan of profile.streams)
+  for (const plan of options.signal?.aborted ? [] : profile.streams)
     for (let connection = 0; connection < plan.connections; connection++) {
       const ready = Promise.withResolvers<boolean>();
       readiness.push(ready.promise);
@@ -405,10 +425,10 @@ export async function runWorkload(
         })(),
       );
     }
-  const connected = (await Promise.all(readiness)).every(Boolean) && activeStreams === streams.expected;
+  const connected =
+    (await Promise.all(readiness)).every(Boolean) && activeStreams === streams.expected && !options.signal?.aborted;
   const pending = new Set<Promise<void>>();
   const next = profile.requests.map(() => 0);
-  const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, Math.max(0, ms)));
   async function request(
     plan: RequestPlan,
     stats: RequestStats,
@@ -442,7 +462,10 @@ export async function runWorkload(
             ? undefined
             : JSON.stringify(replaceValues(plan.body, fixture, runId, sequence, false)),
         redirect: "manual",
-        signal: AbortSignal.timeout(profile.requestTimeoutMs),
+        signal: AbortSignal.any([
+          AbortSignal.timeout(profile.requestTimeoutMs),
+          ...(options.signal ? [options.signal] : []),
+        ]),
       });
       status = response.status;
       headersMs = performance.now() - requestStart;
@@ -456,12 +479,15 @@ export async function runWorkload(
         }
       }
     } catch (caught) {
-      error =
-        caught instanceof Error && ["TimeoutError", "AbortError"].includes(caught.name) ? "timeout" : "request_failed";
+      error = options.signal?.aborted
+        ? "cancelled"
+        : caught instanceof Error && ["TimeoutError", "AbortError"].includes(caught.name)
+          ? "timeout"
+          : "request_failed";
     } finally {
       const doneClock = performance.now();
       stats.completed++;
-      if (doneClock - measurementClock <= profile.durationMs) stats.completedInWindow++;
+      if (doneClock - measurementClock <= profile.durationMs && doneClock <= cancelledClock) stats.completedInWindow++;
       if (error) stats.errors++;
       else stats.succeeded++;
       active--;
@@ -497,12 +523,13 @@ export async function runWorkload(
     gauge();
     const gaugeTimer = setInterval(gauge, 1000);
     try {
-      for (;;) {
+      while (!options.signal?.aborted) {
         let earliest = profile.durationMs;
         for (let i = 0; i < profile.requests.length; i++) {
+          if (options.signal?.aborted) break;
           const plan = profile.requests[i]!;
           const stats = requestStats[i]!;
-          for (;;) {
+          while (!options.signal?.aborted) {
             const scheduledMs = arrivalOffsetMs(plan, next[i]!);
             if (scheduledMs >= profile.durationMs) break;
             const nowMs = performance.now() - measurementClock;
@@ -540,27 +567,41 @@ export async function runWorkload(
         }
         const elapsed = performance.now() - measurementClock;
         if (elapsed >= profile.durationMs) break;
-        await sleep(earliest - elapsed);
+        try {
+          await sleep(Math.max(0, earliest - elapsed), undefined, { signal: options.signal });
+        } catch (error) {
+          if (!options.signal?.aborted) throw error;
+        }
       }
     } finally {
       clearInterval(gaugeTimer);
       schedulerEndLatenessMs = Math.max(0, performance.now() - measurementClock - profile.durationMs);
-      finishedAt = startedAt + profile.durationMs;
+      finishedAt = Math.min(startedAt + profile.durationMs, cancelledAt ?? Infinity);
       measuring = false;
-      emit({ type: "measurement-end", startedAt, finishedAt, actualStoppedAt: Date.now(), schedulerEndLatenessMs });
+      emit({
+        type: "measurement-end",
+        startedAt,
+        finishedAt,
+        plannedFinishAt: startedAt + profile.durationMs,
+        cancelledAt,
+        actualStoppedAt: Date.now(),
+        schedulerEndLatenessMs,
+      });
       gauge();
     }
   }
   stopping = true;
   abortStreams.abort();
   await Promise.all([...streamTasks, ...pending]);
-  const seconds = profile.durationMs / 1000;
+  options.signal?.removeEventListener("abort", cancel);
+  const seconds = (finishedAt - startedAt) / 1000;
   const summary: WorkloadSummary = {
     ...identity,
     type: "summary",
     mode: profile.mode,
     qualified: fixture.qualified,
     pass:
+      cancelledAt === null &&
       connected &&
       schedulerEndLatenessMs <= profile.maxStartDelayMs &&
       streams.errors === 0 &&
@@ -569,18 +610,21 @@ export async function runWorkload(
     startedAt,
     finishedAt,
     drainedAt: Date.now(),
+    plannedFinishAt: startedAt + profile.durationMs,
+    cancelledAt,
+    measurementComplete: cancelledAt === null && connected && finishedAt === startedAt + profile.durationMs,
     schedulerEndLatenessMs,
     maxConcurrency,
     requests: requestStats.map((stats, i) => ({
       ...stats,
       name: profile.requests[i]!.name,
       targetRate: profile.requests[i]!.arrivalOffsetsMs
-        ? profile.requests[i]!.arrivalOffsetsMs!.length / seconds
+        ? profile.requests[i]!.arrivalOffsetsMs!.length / (profile.durationMs / 1000)
         : profile.requests[i]!.ratePerSecond,
-      offeredRate: stats.offered / seconds,
-      startedRate: stats.started / seconds,
-      successfulRate: stats.succeeded / seconds,
-      completedRate: stats.completedInWindow / seconds,
+      offeredRate: seconds > 0 ? stats.offered / seconds : 0,
+      startedRate: seconds > 0 ? stats.started / seconds : 0,
+      successfulRate: seconds > 0 ? stats.succeeded / seconds : 0,
+      completedRate: seconds > 0 ? stats.completedInWindow / seconds : 0,
     })),
     streams,
   };
