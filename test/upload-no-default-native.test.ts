@@ -65,10 +65,8 @@ test("without a default sandbox, native images and documents still reach the har
     assert.equal(await built.sandboxResources.resolve("channel:C1"), null);
     assert.equal(Buffer.from(seen!.images![0]!.dataBase64, "base64").length > 0, true);
     assert.equal(Buffer.from(seen!.documents![0]!.dataBase64, "base64").toString(), "SYNTHETIC-42");
-    const ids = [seen!.images![0]!.artifactId!, seen!.documents![0]!.artifactId!].filter(Boolean);
-    assert.ok(ids.length >= 1);
-    const saved = await Promise.all(ids.map((id) => artifactText(built, id)));
-    assert.ok(saved.some((b) => b.equals(PNG)) || saved.some((b) => b.toString() === "SYNTHETIC-42"));
+    assert.deepEqual(await artifactText(built, seen!.images![0]!.artifactId!), PNG);
+    assert.equal((await artifactText(built, seen!.documents![0]!.artifactId!)).toString(), "SYNTHETIC-42");
   } finally {
     exercise = undefined;
   }
