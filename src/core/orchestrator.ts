@@ -2781,7 +2781,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           input.attachments?.length && !strictReadOnly
             ? await materializeInbound(
                 deps.sandbox,
-                await provision(),
+                provision,
                 input.attachments,
                 blobTransfer,
                 fileRegistration,
@@ -2798,7 +2798,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   : undefined,
               )
             : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] };
-        const manifest = inboundManifest(inbound.metas, turnInboxDir);
+        const manifest = inboundManifest(inbound.metas, turnInboxDir, inbound.unstaged);
         const inboundIssues = inboundIssueList({
           tooMany: inbound.tooMany,
           unavailable: inbound.unavailable,
@@ -3444,7 +3444,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ? { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] }
                 : await materializeInbound(
                     deps.sandbox,
-                    await provision(),
+                    provision,
                     request.attachments,
                     blobTransfer,
                     { ...fileRegistration, seed },
@@ -3488,7 +3488,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               return {
                 text: [
                   text,
-                  inboundManifest(received.metas, inboxDir),
+                  inboundManifest(received.metas, inboxDir, received.unstaged),
                   ...steeredDocuments.notices,
                   issues.length ? fileEventPayload("in", issues).text : "",
                   securityPolicy.inboundScreening === "external" &&
