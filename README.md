@@ -116,30 +116,7 @@ Sharing posture is independent:
 
 - **Isolated** (default) — resources stay in their scope unless explicitly shared.
 - **Open** — on a live authenticated internal human turn, the speaker's opted-in personal
-  files, artifacts, skills, and memory may be read in an opted-in shared room. In the
-  speaker's DM, files and skills from up to 25 recent shared contexts where they are still
-  a member are available. Included memories are loaded into the prompt in full with source-scope
-  labels and are also searchable; relevance ranking is not applied.
-  The candidate window is limited to 100 recent sessions and file discovery to 200 files.
-  Binary files still require explicit sharing before entering another conversation's computer.
-  Cross-context memory search is available only through the active turn's memory tool;
-  reusable sandbox API tokens retain their original memory scope.
-
-The organization value is a ceiling, and personal and room scopes can opt out; Isolated
-wins. “Follow organization” removes a personal or room override. Disabled memory recall
-and writable-only recall still apply. Authenticated human-authored ambient turns use the same
-Open access as direct requests. The speaker can use their own connections on an isolated
-owner-auth computer and target their authorized sandboxes across conversations.
-Open shared crons can retain the owner's resource access and allow member edits, with a brief
-private notification to the owner. Membership and posture are rechecked rather than treating
-a saved conversation reference as permanent access. Scheduled owner access authorized through
-Open stops when Open is withdrawn; changing a job's text does not reset that requirement.
-
-Open does not mount a personal workspace into the shared computer, expose credentials to
-other participants, carry message history, cross organizations, or weaken screening, command
-approvals, or egress. File read/write and publication retain their own permissions.
-It can still reveal private information in a shared reply, so cross-context reads are
-provenance-labelled and audited.
+  files, artifacts, skills, and memory may be read in an opted-in shared room.
 
 [`SECURITY.md`](./SECURITY.md) has the threat model, the operator assumptions, and the
 known limitations.
@@ -244,8 +221,6 @@ upstream source history to merge.
 
 ## Going deeper
 
-- [`docs/swarms.md`](./docs/swarms.md) — durable agent pools, scoped messages, and blank Modal workers
-- [`docs/model-gateway.md`](./docs/model-gateway.md) — discover and route models through a gateway
 - [`docs/getting-started.md`](./docs/getting-started.md) — first run, end to end
 - [`cli/README.md`](./cli/README.md) — the `qm` CLI and the deployment directory contract
 - [`docs/deploy-directory.md`](./docs/deploy-directory.md) — the deployment directory in full
@@ -253,51 +228,10 @@ upstream source history to merge.
 - [`docs/porter.md`](./docs/porter.md) — running qm on Porter
 - [`docs/superserve.md`](./docs/superserve.md) — using Superserve for agent sandboxes
 - [`.env.example`](./.env.example) — every knob, documented in place
+- [`docs/swarms.md`](./docs/swarms.md) — durable agent pools, scoped messages, and blank Modal workers
+- [`docs/model-gateway.md`](./docs/model-gateway.md) — discover and route models through a gateway
 - [`plugins/`](./plugins) — the surfaces (Slack, web UI, admin, portal)
 
 ## License
 
 Except where otherwise noted, QM is available under the [MIT License](./LICENSE).
-
-### Managed Slack installation
-
-A hosting provider can set `QM_SLACK_SERVICE_URL` (HTTPS),
-`QM_SLACK_SERVICE_TOKEN` (unique per deployment) on core. Optionally set
-`QM_SLACK_APP_ID` to pin a pre-existing app; otherwise the authenticated service
-assigns its app ID during installation. Events must match the stored app identity.
-Set `QM_SLACK_SERVICE_URL` on the admin/web service as well so its browser policy allows the installation form.
-The admin Slack card then offers **Add to Slack** through that service. Core calls
-`POST /install/start` with the deployment bearer credential and expects `{ "url":
-"https://<service>/..." }`. The browser submits a POST form to that URL; the service must validate its Origin against the company URL. The service owns browser-bound OAuth state, Slack
-signature verification, workspace ownership, and app credentials.
-
-The portal forwards only `POST /v1/slack/managed/installation`, `DELETE` on that
-same path, and `POST /v1/slack/managed/events` without a browser session. Core
-requires the deployment bearer credential on each request. Installation takes
-`botToken`, `appId`, `teamId`, `installId`, `installedAt` (epoch milliseconds), and
-optional `teamName`. Repeat the same installation request until it returns 200
-with `ready: true`; 202 means the encrypted token is saved but the runtime has
-not started. Older installation generations and conflicting workspaces fail
-closed. Deletion takes `installId` and only disables that generation.
-
-Delivery takes `{ installId, body, retryNum?, retryReason? }`, where `body` is the
-verified Slack event or decoded interaction payload. Core checks its workspace
-and app before passing it to the existing Slack runtime and acknowledgment
-machinery. There is no shared queue: unavailable core instances return failures,
-and the hosting service must relay those failures to Slack. The service must
-process lifecycle events and ignore revocations older than the installation.
-
-Managed deployments also support an administrator-provided Slack app through the same
-Slack settings card. Saving its validated bot and Socket Mode tokens replaces the
-managed runtime and rejects subsequent managed installation callbacks. To return to
-the managed app, disconnect the administrator-provided app in QM, then explicitly
-choose **Add to Slack**. Disconnecting alone does not permit old managed callbacks to
-restore an installation.
-
-Use the same Slack workspace when replacing the managed app, so existing conversations
-and memberships remain associated with that workspace. Invite the new bot to the
-channels it should serve; Slack does not transfer the old bot's memberships. Once
-replacement is verified, remove the old managed app from Slack to avoid two visible
-QM identities. QM rejects deliveries for the old installation as soon as the new
-credentials are saved. The replacement uses Socket Mode even if the deployment's
-environment previously selected HTTP events.
