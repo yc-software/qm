@@ -202,6 +202,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     void refreshRuntimeSelection(ctx.chat.state.scopeId, ctx.chat.state.agent ?? undefined, true);
   };
   window.addEventListener("model-account-changed", refreshAccount);
+  const revalidateRuntime = () => {
+    if (document.visibilityState === "visible")
+      void refreshRuntimeSelection(ctx.chat.state.scopeId, ctx.chat.state.agent ?? undefined, true);
+  };
+  document.addEventListener("visibilitychange", revalidateRuntime);
   let runtimeRequest = 0;
   let runtimeIdentity = "";
   let unsubscribeRuntime: (() => void) | undefined;
@@ -371,6 +376,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
               )
             ) {
               restoredLoadout = undefined;
+              followDefault(defaults);
             }
             defaults = next;
             syncRuntimeSelection(ctx.chat.state.agent ?? undefined);
@@ -385,6 +391,18 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       loadoutRestored = true;
     }
     syncRuntimeSelection(agent);
+  }
+
+  function followDefault(previous: { harnessId: string; modelId: string } | undefined): void {
+    const threadRef = ctx.chat.state.threadRef;
+    const pick = threadRef ? threadModelPicks.get(threadRef) : undefined;
+    const picked = pick ? modelOptionFor(pick, scopeKey()) : undefined;
+    if (!threadRef || !previous || !picked) return;
+    if (picked.harnessId !== previous.harnessId || picked.model.id !== previous.modelId) return;
+    forgetThreadPick(threadRef);
+    effortOverride = undefined;
+    fastModeOverride = undefined;
+    loadoutRestored = false;
   }
 
   function restoreLoadoutSelection(): void {
@@ -1942,6 +1960,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function dispose(): void {
     window.removeEventListener("model-account-changed", refreshAccount);
+    document.removeEventListener("visibilitychange", revalidateRuntime);
     modelPicker.dispose();
     unsubscribeRuntime?.();
     ++runtimeRequest;
