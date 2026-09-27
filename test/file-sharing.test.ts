@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { NoDefaultSandboxError } from "../src/sandbox/sandbox-routing.ts";
 import type { GrantedHandle, IncomingAttachment } from "../src/types.ts";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
@@ -626,4 +627,51 @@ test("a binary file round-trips through the sandbox (base64-over-exec) without u
   await sandbox.writeFileBytes(handle, "keep.bin", raw);
   const read = await sandbox.readFileBytes(handle, "keep.bin");
   assert.deepEqual(new Uint8Array(read!), raw);
+});
+
+test("materializeInbound keeps uploads registered when the scope has no default sandbox", async () => {
+  const { sandbox, files } = fakeSandbox();
+  const transfer = createMemoryBlobTransferStore();
+  const put = async () => ({ created: true });
+  const register = { seed: "s", ownerScopeId: "channel:C1", createdBy: "U1", store: { put } } as never;
+  const noComputer = () => Promise.reject(new NoDefaultSandboxError());
+  const got = await materializeInbound(
+    sandbox,
+    noComputer,
+    [await inFile(transfer, "a b.txt", "hi")],
+    transfer,
+    register,
+  );
+  assert.equal(files.size, 0);
+  assert.equal(got.metas.length, 1);
+  assert.ok(got.unstaged?.has("a b.txt"));
+  const manifest = inboundManifest(got.metas, "inbox", got.unstaged);
+  assert.match(manifest, new RegExp(`/v1/files/${got.metas[0]!.artifactId}/content`));
+  assert.doesNotMatch(manifest, /available in/);
+});
+
+test("materializeInbound drops an unstaged upload it could not register, and rethrows other provision failures", async () => {
+  const { sandbox } = fakeSandbox();
+  const transfer = createMemoryBlobTransferStore();
+  const put = async () => {
+    throw new Error("store down");
+  };
+  const register = { seed: "s", ownerScopeId: "channel:C1", createdBy: "U1", store: { put } } as never;
+  const got = await materializeInbound(
+    sandbox,
+    () => Promise.reject(new NoDefaultSandboxError()),
+    [await inFile(transfer, "a.txt", "hi")],
+    transfer,
+    register,
+  );
+  assert.deepEqual([got.metas.length, got.unavailable], [0, ["a.txt"]]);
+  await assert.rejects(
+    materializeInbound(
+      sandbox,
+      () => Promise.reject(new Error("provider down")),
+      [await inFile(transfer, "b.txt", "x")],
+      transfer,
+    ),
+    /provider down/,
+  );
 });
