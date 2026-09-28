@@ -124,12 +124,26 @@ test("a steer claiming a thread the user does not own is refused before reaching
   assert.equal(calls.length, before, "nothing is forwarded to core");
 });
 
-test("a steer without a threadRef and an abort still forward the bare signal", async () => {
-  for (const body of [{ kind: "steer", text: "louder" }, { kind: "abort" }]) {
+test("steering requires conversation context while abort still forwards a bare signal", async () => {
+  for (const body of [
+    { kind: "steer", text: "louder" },
+    { kind: "steer", text: "louder", threadRef: "" },
+    { kind: "steer", text: "louder", threadRef: "invalid" },
+    { kind: "steer", threadRef: "web:alice:inbox" },
+  ]) {
+    const before = calls.length;
     const r = await fetch(`${base}/api/runs/r1/signal`, { method: "POST", headers, body: JSON.stringify(body) });
-    assert.equal(r.status, 200);
-    assert.deepEqual(calls.at(-1)?.body, body);
+    assert.equal(r.status, 400);
+    assert.equal((await r.json()).error, "invalid_steer_context");
+    assert.equal(calls.length, before);
   }
+  const r = await fetch(`${base}/api/runs/r1/signal`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ kind: "abort" }),
+  });
+  assert.equal(r.status, 200);
+  assert.deepEqual(calls.at(-1)?.body, { kind: "abort" });
 });
 
 test("routes that historically tolerated an empty body still do", async () => {

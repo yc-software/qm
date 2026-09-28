@@ -305,15 +305,19 @@ test("core route: a terminal run rejects signals with reason=terminal", async ()
 });
 
 test("web proxy: the submitting user can signal their run; others (and token-less strangers) cannot", async () => {
+  const threadRef = `web:alice:${crypto.randomUUID()}`;
   const submit = (await (
-    await fetch(`${webBase}/api/turn`, asUser("alice", { method: "POST", body: JSON.stringify({ text: "queue me" }) }))
+    await fetch(
+      `${webBase}/api/turn`,
+      asUser("alice", { method: "POST", body: JSON.stringify({ text: "queue me", threadRef }) }),
+    )
   ).json()) as { runId?: string; runToken?: string };
   assert.ok(submit.runId, "async turn returns a runId");
   assert.equal(submit.runToken, undefined, "no bearer credential is exposed to browser code or URLs");
 
   const ok = await fetch(
     `${webBase}/api/runs/${encodeURIComponent(submit.runId!)}/signal`,
-    asUser("alice", { method: "POST", body: JSON.stringify({ kind: "steer", text: "louder" }) }),
+    asUser("alice", { method: "POST", body: JSON.stringify({ kind: "steer", text: "louder", threadRef }) }),
   );
   assert.equal(ok.status, 200);
   assert.equal(((await ok.json()) as { accepted?: boolean }).accepted, true);

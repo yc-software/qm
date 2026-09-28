@@ -4,7 +4,7 @@ import { api, type CoreSession } from "./core-bridge";
 import type { Conversation } from "./conv-types";
 import { createConversation, disposeConversation, ensureDeliveryStream } from "./conversations";
 import { openSessionInto } from "./sessions";
-import { appState } from "./shell-state";
+import { appState, can } from "./shell-state";
 import type { AssistantSidebarContext } from "./assistant-sidebar";
 import { brandName } from "./ui";
 
@@ -34,7 +34,7 @@ class InboxChat extends LitElement {
 
   private async load(): Promise<void> {
     const user = appState.me?.user;
-    if (!user || !this.element || !this.isConnected || this.conversation) return;
+    if (!user || !can("inbox") || !this.element || !this.isConnected || this.conversation) return;
     const conversation = createConversation(
       {
         pane: true,

@@ -7,12 +7,21 @@ import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/po
 const turns: Record<string, unknown>[] = [];
 const inboxRequests: string[] = [];
 let inboxAvailable = true;
+let inboxAccessStatus = 200;
+let inboxAccessBody = JSON.stringify({ enabled: true });
+const accessRequests: string[] = [];
 let inboxPages = 1;
 let longPreview = false;
 const core = createServer((req: IncomingMessage, res) => {
   let raw = "";
   req.on("data", (chunk) => (raw += chunk));
   req.on("end", () => {
+    if (req.url?.startsWith("/v1/inbox/access?")) {
+      accessRequests.push(req.url);
+      res.writeHead(inboxAccessStatus, { "content-type": "application/json" });
+      res.end(inboxAccessBody);
+      return;
+    }
     if (req.url?.startsWith("/v1/inbox?")) {
       inboxRequests.push(req.url);
       const page = Number(new URL(req.url, "http://core").searchParams.get("cursor") ?? 0);
@@ -233,4 +242,43 @@ test("inbox steering refreshes the caller's inbox context", async () => {
   const request = turns.at(-1)?.request as Record<string, unknown>;
   assert.equal(request.text, "Prioritize");
   assert.match(String(request.conversationHeader), /Review the proposal/);
+});
+
+test("inbox turns and steering fail closed when the existing feature flag is off or unavailable", async () => {
+  try {
+    for (const [status, body] of [
+      [200, JSON.stringify({ enabled: false })],
+      [200, JSON.stringify({})],
+      [200, "invalid json"],
+      [503, JSON.stringify({ enabled: true })],
+    ] as const) {
+      inboxAccessStatus = status;
+      inboxAccessBody = body;
+      const reads = inboxRequests.length;
+      const submitted = turns.length;
+      for (const path of ["/api/turn", "/api/runs/run-1/signal"]) {
+        const response = await fetch(`${base}${path}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ kind: "steer", text: "Summarize", threadRef: "web:alice:inbox" }),
+        });
+        assert.equal(response.status, 403);
+        assert.equal((await response.json()).error, "feature_disabled");
+        assert.equal(new URL(accessRequests.at(-1)!, "http://core").searchParams.get("principalId"), "alice");
+      }
+      assert.equal(inboxRequests.length, reads);
+      assert.equal(turns.length, submitted);
+      const accessCount = accessRequests.length;
+      const ordinary = await fetch(`${base}/api/turn`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ text: "Hello", threadRef: "web:alice:ordinary" }),
+      });
+      assert.equal(ordinary.status, 202);
+      assert.equal(accessRequests.length, accessCount);
+    }
+  } finally {
+    inboxAccessStatus = 200;
+    inboxAccessBody = JSON.stringify({ enabled: true });
+  }
 });

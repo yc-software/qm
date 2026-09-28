@@ -932,7 +932,12 @@ export function createChatSurface(
     initialRun?: RunPoll,
     onStarted?: () => void,
   ): Promise<boolean> {
-    if (agent !== chatState.agent || !ctx.visible() || agent.state.isStreaming) return false;
+    if (
+      agent !== chatState.agent ||
+      (ctx.inbox ? !ctx.visible() : appState.currentView !== "chats") ||
+      agent.state.isStreaming
+    )
+      return false;
     await refreshTranscriptFromEntries(agent);
     if (agent !== chatState.agent || agent.state.isStreaming) return false;
     if (!initialRun) initialRun = await api<RunPoll>(`/api/runs/${encodeURIComponent(runId)}`);
@@ -1430,7 +1435,8 @@ export function createChatSurface(
   ctx.onDensityChange(() => drawActiveChat());
 
   function drawActiveChat(agent = chatState.agent, opts: { forceScroll?: boolean } = {}): void {
-    if (!agent || agent !== chatState.agent || !chatState.host) return;
+    if (!agent || agent !== chatState.agent || !chatState.host || (!ctx.inbox && appState.currentView !== "chats"))
+      return;
     adoptActiveSessionFromList(agent);
     if (!ctx.visible()) {
       postCurrentPaneState();

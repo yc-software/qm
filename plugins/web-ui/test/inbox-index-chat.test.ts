@@ -7,7 +7,7 @@ test("inbox sidebar restores its conversation and releases it on native navigati
   try {
     await vite.ssrLoadModule("/src/shell.ts");
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
-    appState.me = { user: "taylor@example.com" };
+    appState.me = { user: "taylor@example.com", permissions: ["inbox"] };
     appState.currentView = "inbox";
     const { inboxChat } = await vite.ssrLoadModule("/src/inbox-chat.ts");
     const { allConversations } = await vite.ssrLoadModule("/src/conversations.ts");
@@ -31,6 +31,22 @@ test("inbox sidebar restores its conversation and releases it on native navigati
       if (path.includes("/runs")) return Response.json({ runs: [] });
       return Response.json({});
     };
+    appState.me.permissions = [];
+    const { mountInboxPane, routeInboxHistory } = await vite.ssrLoadModule("/src/inbox.ts");
+    const before = allConversations().length;
+    routeInboxHistory("sent");
+    const pane = mountInboxPane({ host, viewId: "all", density: () => "full", onDensityChange: () => {} });
+    assert.equal(host.textContent, "");
+    pane.dispose();
+    render(inboxChat(), host);
+    const deniedSidebar = host.querySelector("qm-inbox-chat") as HTMLElement & { updateComplete: Promise<boolean> };
+    await deniedSidebar.updateComplete;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(deniedSidebar.querySelector("textarea"), null);
+    assert.equal(allConversations().length, before);
+    assert.equal(requests.length, 0);
+    render(null, host);
+    appState.me.permissions = ["inbox"];
     render(inboxChat(), host);
     await until(() => Boolean(host.querySelector("textarea")));
     const sidebar = host.querySelector("qm-inbox-chat")!;

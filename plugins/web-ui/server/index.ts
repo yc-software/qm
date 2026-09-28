@@ -339,12 +339,12 @@ function conversationForScope(
   return { kind, channelRef: ref, threadRef, ...(channelName ? { channelName } : {}) };
 }
 
-function resolveWebConversation(
+async function resolveWebConversation(
   user: string,
   threadRef: string,
   scope: string | undefined,
   channelName: string | undefined,
-): { conversation: WebConversation } | { error: string; message: string } {
+): Promise<{ conversation: WebConversation } | { error: string; message: string }> {
   if (
     !threadRef.startsWith(`web:${user}:`) &&
     !threadRef.startsWith(SUBAGENT_THREAD_PREFIX) &&
@@ -361,6 +361,8 @@ function resolveWebConversation(
       message: "you can only chat in your personal context or a shared context you're in",
     };
   }
+  if (threadRef === `web:${user}:inbox` && !(await hasInboxLoopPreview(user)))
+    return { error: "feature_disabled", message: "inbox access is not enabled for this user" };
   return { conversation };
 }
 
@@ -2502,7 +2504,7 @@ const apiRoutes: readonly WebRoute[] = [
       if (!text.trim() && attachments.length === 0 && !approval && !proactiveOpener)
         return json(res, 400, { error: "empty message" });
 
-      const resolved = resolveWebConversation(user, threadRef, scope, channelName);
+      const resolved = await resolveWebConversation(user, threadRef, scope, channelName);
       if ("error" in resolved) return json(res, 403, resolved);
 
       const turn = {
@@ -2624,11 +2626,12 @@ const apiRoutes: readonly WebRoute[] = [
           ? p.threadRef
           : "";
       let steerFields: { request: Awaited<ReturnType<typeof webTurnBase>> } | undefined;
-      if (kind === "steer" && text !== undefined && threadRef) {
+      if (kind === "steer") {
+        if (text === undefined || !threadRef) return json(res, 400, { error: "invalid_steer_context" });
         const scope = typeof p.scopeId === "string" && p.scopeId ? p.scopeId : undefined;
         const channelName =
           typeof p.channelName === "string" && p.channelName.trim() ? p.channelName.trim().slice(0, 200) : undefined;
-        const resolved = resolveWebConversation(user, threadRef, scope, channelName);
+        const resolved = await resolveWebConversation(user, threadRef, scope, channelName);
         if ("error" in resolved) return json(res, 403, resolved);
         steerFields = { request: await webTurnBase(req, user, resolved.conversation, threadRef, text) };
       }

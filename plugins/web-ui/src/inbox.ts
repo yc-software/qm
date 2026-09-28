@@ -1837,6 +1837,10 @@ function keepingChatLogsPinned(host: HTMLElement, draw: () => void): void {
 }
 
 function drawSurface(surface: InboxSurface): void {
+  if (!can("inbox")) {
+    render(nothing, surface.host);
+    return;
+  }
   if (!surface.host.isConnected && surface.pane) return;
   keepingChatLogsPinned(surface.host, () => render(surfaceTpl(surface), surface.host));
   const selected = inboxState.items.find((item) => item.id === surface.selectedId);
@@ -1864,7 +1868,7 @@ async function loadDeepLink(id: string): Promise<void> {
 }
 
 function drawFull(): void {
-  if (appState.currentView !== "inbox" || !appState.mainEl) return;
+  if (!can("inbox") || appState.currentView !== "inbox" || !appState.mainEl) return;
   if (!fullSurface || !fullSurface.host.isConnected || fullSurface.host.parentElement !== appState.mainEl) {
     const host = document.createElement("div");
     host.className = "pane inbox-page content-wide-page";
@@ -1951,6 +1955,7 @@ function closeInboxItem(): void {
 }
 
 export function routeInboxHistory(segment: string | null): void {
+  if (!can("inbox")) return;
   resetActiveInboxItem();
   const viewId = inboxViewIdForSegment(segment);
   if (viewId) {
