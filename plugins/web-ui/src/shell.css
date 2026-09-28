@@ -3646,7 +3646,6 @@ qm-markdown .tok-in {
 }
 .runtime-upgrade {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin: 0 0 9px;
@@ -3657,9 +3656,7 @@ qm-markdown .tok-in {
   font-size: 12px;
 }
 .runtime-upgrade span {
-  flex: 1 1 220px;
-  min-width: 0;
-  overflow-wrap: anywhere;
+  flex: 1;
 }
 .runtime-upgrade button,
 .runtime-default-btn {
@@ -3672,10 +3669,6 @@ qm-markdown .tok-in {
   font-size: 12px;
   white-space: nowrap;
   cursor: pointer;
-}
-.runtime-upgrade button {
-  max-width: 100%;
-  white-space: normal;
 }
 .runtime-upgrade button:hover,
 .runtime-default-btn:hover {
@@ -6161,6 +6154,7 @@ a.connector-widget:focus-visible {
   }
   .runtime-upgrade {
     align-items: flex-start;
+    flex-wrap: wrap;
   }
   .harness-control,
   .model-control {
@@ -10301,6 +10295,18 @@ h3.ambient-field-label {
   color: var(--working-dot, #2f81f7);
 }
 
+:is(.inbox-index-chat, .inbox-item-aside) .runtime-upgrade {
+  flex-wrap: wrap;
+}
+:is(.inbox-index-chat, .inbox-item-aside) .runtime-upgrade span {
+  flex: 1 1 220px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+:is(.inbox-index-chat, .inbox-item-aside) .runtime-upgrade button {
+  max-width: 100%;
+  white-space: normal;
+}
 .inbox-chat-composer {
   flex: 0 0 auto;
   min-width: 0;
