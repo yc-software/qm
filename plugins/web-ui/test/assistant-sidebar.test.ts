@@ -41,7 +41,6 @@ test("shared sidebar prompts follow thread state and whole inbox context", async
         host,
       );
       assert.equal(host.querySelector(".inbox-chat-text")!.textContent, "Keep it short.\nTwo lines.");
-      assert.equal(host.querySelectorAll(".inbox-runtime-note").length, 1);
       host.querySelector<HTMLButtonElement>(".inbox-chat-suggestion")!.click();
       assert.deepEqual(clicked, [assistantPrompts(context)[0]]);
       classes.push([...new Set([...host.querySelectorAll("[class]")].map((element) => element.className))].join("|"));

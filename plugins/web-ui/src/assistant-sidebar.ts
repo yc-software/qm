@@ -91,9 +91,7 @@ export function assistantSidebar(options: {
             </div>`
           : nothing
       }
-      <div class="inbox-chat-composer">
-        ${options.composer}<small class="inbox-runtime-note">Uses the company model account</small>
-      </div>
+      <div class="inbox-chat-composer">${options.composer}</div>
     </div>
   </div>`;
 }

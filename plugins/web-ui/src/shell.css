@@ -12976,13 +12976,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   padding: 8px 0;
 }
 
-.inbox-runtime-note {
-  display: block;
-  margin-top: 6px;
-  color: var(--muted-foreground);
-  font-size: 11px;
-}
-
 .inline-steer {
   margin-block: 16px;
 }
