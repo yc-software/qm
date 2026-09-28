@@ -882,7 +882,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ],
             {
               description:
-                'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and authorized logins; recovery depends on the provider) or "scratch" (blank, instant, credential-free, nothing persists — prefer for heavy self-contained runs needing no logins, workspace files, or follow-up).',
+                'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and authorized logins; recovery depends on the provider) or "scratch" (blank filesystem for this turn, scoped API capabilities and explicitly requested credentials; no resident workspace or cached logins).',
             },
           ),
         ),
