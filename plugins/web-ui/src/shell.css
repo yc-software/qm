@@ -10228,6 +10228,7 @@ h3.ambient-field-label {
   width: 100%;
   max-width: none;
   margin: 0;
+  box-shadow: none;
 }
 .inbox-suggest-chip {
   display: inline-flex;
