@@ -16,25 +16,7 @@ class InboxChat extends LitElement {
   }
 
   render(): TemplateResult {
-    return html` <div class="inbox-draft-head"><span class="inbox-draft-label">Ask ${brandName()}</span></div>
-      <div class="inbox-edit-suggestions">
-        ${["Summarize my inbox", "What needs my attention in my inbox?"].map(
-          (prompt) =>
-            html`<button
-              type="button"
-              class="inbox-suggest-chip"
-              @click=${() => {
-                const conversation = this.conversation;
-                if (conversation?.state.agent)
-                  conversation.composer.fillSuggestedPrompt(prompt, conversation.state.agent);
-              }}
-            >
-              ${prompt}
-            </button>`,
-        )}
-      </div>
-      <div class="inbox-index-conversation" ${ref(this.bind)}></div>
-      <small class="inbox-runtime-note">Uses the company model account</small>`;
+    return html`<div class="inbox-index-conversation" ${ref(this.bind)}></div>`;
   }
 
   private bind = (element: Element | undefined): void => {
@@ -55,7 +37,7 @@ class InboxChat extends LitElement {
         density: () => "full",
         onDensityChange: () => {},
         ensureDeliveryStream,
-        emptyState: () => html`<p class="muted">Summarize your inbox, prioritize messages, or plan follow-ups.</p>`,
+        inbox: { prompts: ["Summarize my inbox", "What needs my attention?"] },
       },
       { placeholder: `Ask ${brandName()} about your inbox`, runtimeAccount: "company" },
     );

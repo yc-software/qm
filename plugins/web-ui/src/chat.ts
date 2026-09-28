@@ -605,7 +605,7 @@ export function createChatSurface(
     scopeId: string | null,
     messages: ReturnType<typeof entriesToMessages>,
   ): boolean {
-    if (ctx.emptyState || appState.me?.welcomeCohort || appEditSlug(threadRef, appState.me?.user)) return false;
+    if (ctx.inbox || appState.me?.welcomeCohort || appEditSlug(threadRef, appState.me?.user)) return false;
     if (
       !shouldStartProactiveOpener({
         started: proactiveOpenerStarted,
@@ -1448,7 +1448,7 @@ export function createChatSurface(
     const isNewUser = sessionsState.list.filter((s) => s.id).length === 0;
     const editingApp = appEditSlug(chatState.threadRef, appState.me?.user);
     const showWelcome =
-      !ctx.emptyState &&
+      !ctx.inbox &&
       !editingApp &&
       (appState.me?.welcomeCohort
         ? isWelcomeConversation(sessionsState.list, appState.me.user, chatState.threadRef, chatState.scopeId)
@@ -1464,7 +1464,7 @@ export function createChatSurface(
     const glanceTier = tier === "card" || tier === "strip" ? tier : null;
     const emptyChat = !messages.length && (showWelcome || !chatState.forkSession);
     const showSuggestions =
-      !ctx.emptyState &&
+      !ctx.inbox &&
       emptyChat &&
       !editingApp &&
       !(isNewUser && appState.me?.welcomeCohort) &&
@@ -1485,8 +1485,8 @@ export function createChatSurface(
     render(
       html`
         <div
-          class="custom-chat-shell ${editingApp ? "app-edit-chat" : ""} ${ctx.pane ? "in-pane" : ""} ${ctx.composer.state.dragging ? "dragging" : ""} ${
-            emptyChat && !glanceTier && !editingApp ? "empty-chat" : ""
+          class="custom-chat-shell ${ctx.inbox ? "inbox-chat" : ""} ${editingApp ? "app-edit-chat" : ""} ${ctx.pane ? "in-pane" : ""} ${ctx.composer.state.dragging ? "dragging" : ""} ${
+            emptyChat && !ctx.inbox && !glanceTier && !editingApp ? "empty-chat" : ""
           }"
           @dragenter=${(e: DragEvent) => ctx.composer.onDragEnter(e)}
           @dragover=${(e: DragEvent) => ctx.composer.onDragOver(e)}
@@ -1504,19 +1504,39 @@ export function createChatSurface(
           ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
           <section class="chat-scroll" tabindex="0" aria-label="Conversation">
             ${pinnedStrip()}
-            <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
+            <div
+              class="message-stack ${ctx.inbox ? "inbox-chat-log" : ""} ${!ctx.inbox && emptyChat ? "empty-stack" : ""}"
+            >
               ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
               ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
               ${glanceTier ? nothing : liveWorkStatus(agent)}
-              ${emptyChat && ctx.emptyState ? ctx.emptyState() : nothing}
-              ${emptyChat && !ctx.emptyState && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
+              ${emptyChat && !ctx.inbox && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
               ${ctx.pane ? suggestions : nothing}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>
           </section>
           <div class="chat-bottom-dock">
             ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${backgroundActivityStrip()}
-            ${ctx.composer.composerForm(agent)} ${ctx.pane ? nothing : suggestions}
+            ${
+              ctx.inbox
+                ? html` ${
+                      !messages.length
+                        ? html`<div class="inbox-chat-suggestions">
+                            <div class="inbox-edit-suggestions">
+                              ${ctx.inbox.prompts.map((prompt) => html`<button class="inbox-suggest-chip inbox-chat-suggestion" type="button" ?disabled=${agent.state.isStreaming} @click=${() => ctx.composer.fillSuggestedPrompt(prompt, agent)}>${prompt}</button>`)}
+                            </div>
+                          </div>`
+                        : nothing
+                    }
+                    <div class="inbox-chat-composer">
+                      <div class="embedded-composer">
+                        ${ctx.composer.composerForm(agent)}
+                        <small class="inbox-runtime-note">Uses the company model account</small>
+                      </div>
+                    </div>`
+                : ctx.composer.composerForm(agent)
+            }
+            ${ctx.pane ? nothing : suggestions}
           </div>
         </div>
       `,
@@ -1713,24 +1733,32 @@ export function createChatSurface(
       const edited = !deleted && Boolean((message as { edited?: boolean }).edited);
       return html`
         <article
-          class="message-row user-row ${steered ? "steered-row" : ""}"
+          class="${ctx.inbox ? "message-row inbox-chat-msg human" : "message-row user-row"} ${steered ? "steered-row" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message).join(" ")}
         >
           ${speaker ? html`<div class="speaker-label">${speaker}</div>` : nothing}
           ${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}
-          <div
-            class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}"
-            ?hidden=${!messageText(message).trim() && !edited && !deleted}
-          >
-            <div class="pin-content">
-              ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
-              ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
-            </div>
-            <button class="pin-toggle" type="button" hidden aria-expanded="false">
-              <span class="pin-toggle-label">Show more</span>${icon(ChevronDown, 14)}
-            </button>
-          </div>
+          ${
+            ctx.inbox
+              ? html`<span
+                  class="inbox-chat-text ${deleted ? "deleted-bubble" : ""}"
+                  ?hidden=${!messageText(message).trim() && !edited && !deleted}
+                  >${messageText(message)}${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}</span
+                >`
+              : html`<div
+                  class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}"
+                  ?hidden=${!messageText(message).trim() && !edited && !deleted}
+                >
+                  <div class="pin-content">
+                    ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
+                    ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
+                  </div>
+                  <button class="pin-toggle" type="button" hidden aria-expanded="false">
+                    <span class="pin-toggle-label">Show more</span>${icon(ChevronDown, 14)}
+                  </button>
+                </div>`
+          }
           ${
             sendFailure
               ? html`<div class="send-failure">
@@ -1817,7 +1845,7 @@ export function createChatSurface(
       if (!hasVisibleContent && msg.stopReason !== "error" && msg.stopReason !== "aborted") return nothing;
       return html`
         <article
-          class="message-row assistant-row ${isStreaming ? "streaming" : ""}"
+          class="${ctx.inbox ? "message-row inbox-chat-msg agent" : "message-row assistant-row"} ${isStreaming ? "streaming" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message)
             .filter((seq) => !inlineSteers.has(seq))

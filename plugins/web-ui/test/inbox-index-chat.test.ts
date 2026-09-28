@@ -47,6 +47,14 @@ test("inbox sidebar restores its conversation and releases it on native navigati
     )!;
     suggestion.click();
     assert.equal(sidebar.querySelector<HTMLTextAreaElement>("textarea")!.value, "Summarize my inbox");
+    assert.ok(suggestion.closest(".chat-bottom-dock"));
+    const text = "Summarize this inbox\nKeep it brief.";
+    conversation.state.agent.state.messages = [{ role: "user", content: text, timestamp: 100 }];
+    conversation.redraw();
+    assert.equal(sidebar.querySelector(".inbox-chat-msg.human .inbox-chat-text")?.textContent, text);
+    assert.equal(sidebar.querySelector(".user-row, .pin-toggle"), null);
+    assert.ok(sidebar.querySelector('[aria-label="Copy message"]'));
+    assert.ok(sidebar.querySelector(".inbox-chat-composer .composer-wrap"));
     const count = allConversations().length;
     host.replaceChildren();
     assert.equal(allConversations().length, count - 1);

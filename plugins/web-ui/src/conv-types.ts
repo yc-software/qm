@@ -28,7 +28,7 @@ export interface ConvHost {
   density(): DensityTier;
   onDensityChange(handler: () => void): void;
   ensureDeliveryStream(): void;
-  emptyState?(): TemplateResult;
+  inbox?: { prompts: readonly string[] };
   onState?(state: PaneState): void;
   onExpand?(): void;
 }

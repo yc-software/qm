@@ -1935,11 +1935,16 @@ function drawFull(): void {
     );
   } else
     page = html`
-      <div class="pane-head">
-        <h1 class="pane-title">Inbox</h1>
-        <div class="pane-head-actions">${syncLineTpl(surface)}</div>
+      <div class="inbox-index-layout">
+        <div class="inbox-index-feed">
+          <div class="pane-head">
+            <h1 class="pane-title">Inbox</h1>
+            <div class="pane-head-actions">${syncLineTpl(surface)}</div>
+          </div>
+          ${surfaceTpl(surface)}
+        </div>
+        ${inboxChat()}
       </div>
-      <div class="inbox-index-layout">${surfaceTpl(surface)} ${inboxChat()}</div>
     `;
   keepingChatLogsPinned(host, () => render(page, host));
   if (openItem) ensureItemSource(openItem);
