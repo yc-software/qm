@@ -3070,6 +3070,14 @@ qm-markdown .tok-in {
 .empty-chat:has(.suggested-activities) .chat-cta {
   transform: translateY(8px);
 }
+/* In panes the suggestions sit at the foot of the transcript, directly above the composer:
+   drop the transcript's bottom breathing room so the list hugs the input. */
+.custom-chat-shell.in-pane.empty-chat:has(.suggested-activities) > .chat-scroll {
+  padding-bottom: 0;
+}
+.message-stack > .suggested-activities {
+  margin-bottom: 6px;
+}
 @media (prefers-reduced-motion: reduce) {
   .suggested-activities,
   .suggested-activities.is-collapsed {
