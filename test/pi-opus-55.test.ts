@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { buildModelRuntime, probeModel } from "../src/harness/pi-harness.ts";
-import { getRequiredModel } from "../src/model/pi-models.ts";
+import { getRequiredModel, modelSupportsFastMode } from "../src/model/pi-models.ts";
 
 const bindingBeta = "thinking-binding-controls-2026-08-01";
 const context = { messages: [{ role: "user" as const, content: "Reply OK.", timestamp: 0 }] };
 
-test("Opus 5.5 wire requests preserve mandatory thinking, caller hooks and beta headers across Pi entry points", async (t) => {
+for (const modelId of ["claude-opus-5-5", "claude-sonnet-5-5"])
+  test(`${modelId} wire requests keep mandatory thinking, caller hooks and beta headers across Pi entry points`, (t) =>
+    assertMandatoryThinkingWire(t, modelId));
+
+async function assertMandatoryThinkingWire(t: TestContext, modelId: string): Promise<void> {
   const originalFetch = globalThis.fetch;
   t.after(() => {
     globalThis.fetch = originalFetch;
@@ -21,7 +25,7 @@ test("Opus 5.5 wire requests preserve mandatory thinking, caller hooks and beta 
           id: "msg_test",
           type: "message",
           role: "assistant",
-          model: "claude-opus-5-5",
+          model: modelId,
           content: [],
           usage: { input_tokens: 1, output_tokens: 0 },
         },
@@ -36,7 +40,7 @@ test("Opus 5.5 wire requests preserve mandatory thinking, caller hooks and beta 
       headers: { "content-type": "text/event-stream" },
     });
   }) as typeof fetch;
-  const model = { ...getRequiredModel("claude-opus-5-5", false), headers: { "anthropic-beta": "prior-beta" } };
+  const model = { ...getRequiredModel(modelId, false), headers: { "anthropic-beta": "prior-beta" } };
   const runtime = await buildModelRuntime({ anthropic: "sk-offline-test-key" });
   for (const effort of [undefined, "low", "xhigh", "max"] as const) {
     const response = await runtime
@@ -65,11 +69,12 @@ test("Opus 5.5 wire requests preserve mandatory thinking, caller hooks and beta 
     display: "summarized",
     block_binding: { prefix_mismatch_behavior: "drop_block" },
   });
-  await probeModel(model, { anthropic: "sk-offline-test-key" }, AbortSignal.timeout(10_000), true);
-  assert.equal(requests.at(-1)!.body.speed, "fast");
+  const fast = modelSupportsFastMode(modelId);
+  await probeModel(model, { anthropic: "sk-offline-test-key" }, AbortSignal.timeout(10_000), fast);
+  assert.equal(requests.at(-1)!.body.speed, fast ? "fast" : undefined);
   const betas = requests.at(-1)!.headers.get("anthropic-beta")!.split(",");
   assert.equal(betas.filter((beta) => beta === bindingBeta).length, 1);
-  assert.ok(betas.includes("fast-mode-2026-02-01"));
+  assert.equal(betas.includes("fast-mode-2026-02-01"), fast);
   assert.deepEqual(model.headers, { "anthropic-beta": "prior-beta" });
 
   const gateway = await buildModelRuntime(
@@ -94,4 +99,4 @@ test("Opus 5.5 wire requests preserve mandatory thinking, caller hooks and beta 
   const haiku = requests.at(-1)!;
   assert.ok(!haiku.headers.get("anthropic-beta")?.includes(bindingBeta));
   assert.ok(haiku.headers.get("anthropic-beta")?.includes("interleaved-thinking"));
-});
+}

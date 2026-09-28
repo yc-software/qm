@@ -104,6 +104,7 @@ test("auto resets a reused Anthropic session to its interactive default", () => 
 
 const ASTRA = getRequiredModel("gpt-6-astra", false) as Model<Api>;
 const OPUS_55 = getRequiredModel("claude-opus-5-5", false);
+const SONNET_55 = getRequiredModel("claude-sonnet-5-5", false);
 const OPUS = getRequiredModel("claude-opus-5", false) as Model<Api>;
 const ASTRA_TOKENS = { input: 10_000, output: 2_000, cacheRead: 50_000, cacheWrite: 4_000, totalTokens: 66_000 };
 
@@ -131,6 +132,7 @@ const pricingCases: Array<[string, Model<Api>, Partial<Usage>, number]> = [
   ],
   ["Opus 5.5 cache reads", OPUS_55, { cacheRead: 100_000 }, 0.02],
   ["Opus 5.5 1h writes", OPUS_55, { cacheWrite: 4_000, cacheWrite1h: 4_000 }, 0.032],
+  ["Sonnet 5.5 1h writes", SONNET_55, { cacheWrite: 4_000, cacheWrite1h: 4_000 }, 0.016],
   ["all 1h writes", OPUS, { cacheWrite: 4_000, cacheWrite1h: 4_000 }, 0.04],
   ["clamped 1h writes", OPUS, { cacheWrite: 4_000, cacheWrite1h: 40_000 }, 0.04],
 ];

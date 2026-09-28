@@ -109,6 +109,7 @@ test("the curated catalog contains only current model families", () => {
       "claude-fable-5",
       "claude-opus-5",
       "claude-opus-4-8",
+      "claude-sonnet-5-5",
       "claude-sonnet-5",
       "claude-haiku-4-5",
       "gpt-5.6-sol",
@@ -219,6 +220,10 @@ test("context token budget is half of each model's real input room", () => {
   assert.equal(String(opus55.provider), "anthropic");
   assert.deepEqual(opus55.cost, { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, tiers: undefined });
   assert.equal(contextTokenBudgetForModel("claude-opus-5-5"), 150_000);
+  const sonnet55 = getRequiredModel("claude-sonnet-5-5");
+  assert.equal(sonnet55.contextWindow, 1_000_000);
+  assert.equal(sonnet55.maxTokens, 128_000);
+  assert.deepEqual(sonnet55.cost, { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5, tiers: undefined });
   assert.equal(getRequiredModel("claude-fable-5").contextWindow, 1_000_000);
   assert.equal(contextTokenBudgetForModel("claude-fable-5"), 150_000);
   assert.equal(contextTokenBudgetForModel("gpt-5.6-sol"), 150_000);
