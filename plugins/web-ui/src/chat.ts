@@ -605,7 +605,7 @@ export function createChatSurface(
     scopeId: string | null,
     messages: ReturnType<typeof entriesToMessages>,
   ): boolean {
-    if (appState.me?.welcomeCohort || appEditSlug(threadRef, appState.me?.user)) return false;
+    if (ctx.emptyState || appState.me?.welcomeCohort || appEditSlug(threadRef, appState.me?.user)) return false;
     if (
       !shouldStartProactiveOpener({
         started: proactiveOpenerStarted,
@@ -931,7 +931,7 @@ export function createChatSurface(
     initialRun?: RunPoll,
     onStarted?: () => void,
   ): Promise<boolean> {
-    if (agent !== chatState.agent || appState.currentView !== "chats" || agent.state.isStreaming) return false;
+    if (agent !== chatState.agent || !ctx.visible() || agent.state.isStreaming) return false;
     await refreshTranscriptFromEntries(agent);
     if (agent !== chatState.agent || agent.state.isStreaming) return false;
     if (!initialRun) initialRun = await api<RunPoll>(`/api/runs/${encodeURIComponent(runId)}`);
@@ -1429,7 +1429,7 @@ export function createChatSurface(
   ctx.onDensityChange(() => drawActiveChat());
 
   function drawActiveChat(agent = chatState.agent, opts: { forceScroll?: boolean } = {}): void {
-    if (!agent || agent !== chatState.agent || !chatState.host || appState.currentView !== "chats") return;
+    if (!agent || agent !== chatState.agent || !chatState.host) return;
     adoptActiveSessionFromList(agent);
     if (!ctx.visible()) {
       postCurrentPaneState();
@@ -1448,6 +1448,7 @@ export function createChatSurface(
     const isNewUser = sessionsState.list.filter((s) => s.id).length === 0;
     const editingApp = appEditSlug(chatState.threadRef, appState.me?.user);
     const showWelcome =
+      !ctx.emptyState &&
       !editingApp &&
       (appState.me?.welcomeCohort
         ? isWelcomeConversation(sessionsState.list, appState.me.user, chatState.threadRef, chatState.scopeId)
@@ -1463,6 +1464,7 @@ export function createChatSurface(
     const glanceTier = tier === "card" || tier === "strip" ? tier : null;
     const emptyChat = !messages.length && (showWelcome || !chatState.forkSession);
     const showSuggestions =
+      !ctx.emptyState &&
       emptyChat &&
       !editingApp &&
       !(isNewUser && appState.me?.welcomeCohort) &&
@@ -1506,7 +1508,8 @@ export function createChatSurface(
               ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
               ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
               ${glanceTier ? nothing : liveWorkStatus(agent)}
-              ${emptyChat && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
+              ${emptyChat && ctx.emptyState ? ctx.emptyState() : nothing}
+              ${emptyChat && !ctx.emptyState && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
               ${ctx.pane ? suggestions : nothing}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>

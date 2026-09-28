@@ -49,6 +49,7 @@ import { registerPaneKind } from "./pane-kinds";
 import { exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
 import { brandName, fieldSelect, icon, initials, relTime, workingWave } from "./ui";
+import { inboxChat } from "./inbox-chat";
 
 export type InboxSource = "gmail" | "slack" | "generic";
 
@@ -1938,7 +1939,7 @@ function drawFull(): void {
         <h1 class="pane-title">Inbox</h1>
         <div class="pane-head-actions">${syncLineTpl(surface)}</div>
       </div>
-      ${surfaceTpl(surface)}
+      <div class="inbox-index-layout">${surfaceTpl(surface)} ${inboxChat()}</div>
     `;
   keepingChatLogsPinned(host, () => render(page, host));
   if (openItem) ensureItemSource(openItem);
