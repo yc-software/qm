@@ -10096,9 +10096,9 @@ h3.ambient-field-label {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 14px;
+  box-sizing: border-box;
+  border: 0;
+  padding: 16px;
 }
 .inbox-chat-suggestions,
 .inbox-edit-suggestions {
