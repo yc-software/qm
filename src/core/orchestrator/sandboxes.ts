@@ -125,12 +125,39 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     materializeMs?: number;
   } = { handle: null, pending: null, used: false };
   const scratchBox: { handle: SandboxHandle | null; provisionMs?: number } = { handle: null };
+  let scratchProvisionInFlight: Promise<SandboxHandle> | null = null;
+  const scratchKey = () => `turn:${session.id}:${transferId}`;
+  let scratchStartedAt: number | undefined;
+  let scratchReadyAt: number | undefined;
+  const recordScratchLifecycle = (
+    action: string,
+    handle?: SandboxHandle,
+    timing?: { releasedAt: number; cleanupMs: number },
+  ): void => {
+    deps.auditLog?.record({
+      at: Date.now(),
+      principalId: actor.id,
+      action: `sandbox.scratch.${action}`,
+      resource: scratchKey(),
+      scopeLabel: scopeId,
+      detail: JSON.stringify({
+        runId: input.runId,
+        sessionId: session.id,
+        backend: handle?.backend,
+        sandboxId: handle?.id,
+        startedAt: scratchStartedAt,
+        readyAt: scratchReadyAt,
+        provisionMs: scratchBox.provisionMs,
+        ...timing,
+      }),
+    });
+  };
   const ownerAuthBox: { handle: SandboxHandle | null; pending: SandboxHandle | null; provisionMs?: number } = {
     handle: null,
     pending: null,
   };
   let ownerAuthProvisionInFlight: Promise<SandboxHandle> | null = null;
-  const destroyOwnerAuthHandle = async (handle: SandboxHandle): Promise<void> => {
+  const destroyEphemeralHandle = async (handle: SandboxHandle): Promise<void> => {
     let lastError: unknown;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
@@ -181,7 +208,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   let provisionInFlight: Promise<SandboxHandle> | null = null;
   const provision = (eager = false): Promise<SandboxHandle> => {
     if (!eager) box.used = true;
-    provisionInFlight ??= doProvision(eager ? () => {} : emitGapWork).catch((err) => {
+    provisionInFlight ??= doProvision(eager ? () => {} : emitGapWork, eager).catch((err) => {
       provisionInFlight = null;
       throw err;
     });
@@ -291,7 +318,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       perf.credsMs += Date.now() - deviceFlowStart;
     }
   };
-  const doProvision = async (emit: typeof emitGapWork): Promise<SandboxHandle> => {
+  const doProvision = async (emit: typeof emitGapWork, eager: boolean): Promise<SandboxHandle> => {
     const provisionStart = Date.now();
     if (input.externalSlack) {
       const resource = await deps.sandboxResources?.resolve(memoryScopeId);
@@ -308,6 +335,22 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     box.pending = handle;
     emit("provision", provisionStart, Date.now());
     box.provisionMs = Date.now() - provisionStart;
+    deps.auditLog?.record({
+      at: Date.now(),
+      principalId: actor.id,
+      action: "sandbox.scoped.provision_ready",
+      resource: scratchKey(),
+      scopeLabel: scopeId,
+      detail: JSON.stringify({
+        runId: input.runId,
+        sessionId: session.id,
+        backend: handle.backend,
+        sandboxId: handle.id,
+        provisionMs: box.provisionMs,
+        coldStart: handle.coldStart,
+        eager,
+      }),
+    });
     await prepareCredentials(handle, emit);
     const dirCleanupStart = Date.now();
     await prepareTurnFiles(handle);
@@ -486,22 +529,34 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     return provisioned;
   };
 
-  const provisionScratch = async (): Promise<SandboxHandle> => {
-    if (scratchBox.handle) return scratchBox.handle;
-    const provisionStart = Date.now();
-    const handle = await deps.sandbox.provision(
-      resolution.layers.filter((l) => l.mode === "ro" && l.mountPath === "global"),
-      {
-        egress: resolution.egress,
-        ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
-        scratch: { key: memoryScopeId },
-        routeScopeId: memoryScopeId,
-        ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
-      },
-    );
-    scratchBox.provisionMs = Date.now() - provisionStart;
-    scratchBox.handle = handle;
-    return handle;
+  const provisionScratch = (): Promise<SandboxHandle> => {
+    if (scratchBox.handle) return Promise.resolve(scratchBox.handle);
+    scratchProvisionInFlight ??= (async () => {
+      const provisionStart = Date.now();
+      scratchStartedAt = provisionStart;
+      recordScratchLifecycle("provision_started");
+      const handle = await deps.sandbox.provision(
+        resolution.layers.filter((l) => l.mode === "ro" && l.mountPath === "global"),
+        {
+          env: connectorEnv,
+          egress: resolution.egress,
+          ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
+          scratch: { key: scratchKey() },
+          routeScopeId: memoryScopeId,
+          ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
+        },
+      );
+      scratchBox.provisionMs = Date.now() - provisionStart;
+      scratchBox.handle = handle;
+      scratchReadyAt = Date.now();
+      recordScratchLifecycle("provision_ready", handle);
+      return handle;
+    })().catch((error) => {
+      scratchProvisionInFlight = null;
+      recordScratchLifecycle("provision_failed");
+      throw error;
+    });
+    return scratchProvisionInFlight;
   };
   const provisionOwnerAuth = ownerAuthAvailable
     ? async (): Promise<SandboxHandle> => {
@@ -576,7 +631,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
                   scrubErr,
                 );
               });
-              await destroyOwnerAuthHandle(pendingHandle);
+              await destroyEphemeralHandle(pendingHandle);
               if (ownerAuthBox.pending === pendingHandle) ownerAuthBox.pending = null;
             } catch (cleanupErr) {
               deps.errors?.record(
@@ -658,6 +713,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
   const reclaimBox = async (): Promise<void> => {
     let ownerCleanupError: unknown;
+    let scratchCleanupError: unknown;
     if (ownerAuthProvisionInFlight) await ownerAuthProvisionInFlight.catch(() => {});
     ownerAuthProvisionInFlight = null;
     const reachEntries = [...reachBoxes.entries()];
@@ -695,7 +751,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
             scrubErr,
           );
         });
-        await destroyOwnerAuthHandle(ownerHandle);
+        await destroyEphemeralHandle(ownerHandle);
         ownerAuthBox.handle = null;
         ownerAuthBox.pending = null;
       } catch (err) {
@@ -712,11 +768,35 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         );
       }
     }
+    if (scratchProvisionInFlight) await scratchProvisionInFlight.catch(() => {});
+    scratchProvisionInFlight = null;
     const scratchHandle = scratchBox.handle;
-    scratchBox.handle = null;
     if (scratchHandle) {
-      await clearTurnFiles(scratchHandle);
-      await deps.sandbox.teardown(scratchHandle).catch(() => {});
+      const cleanupStart = Date.now();
+      try {
+        await destroyEphemeralHandle(scratchHandle);
+        scratchBox.handle = null;
+        recordScratchLifecycle("released", scratchHandle, {
+          releasedAt: Date.now(),
+          cleanupMs: Date.now() - cleanupStart,
+        });
+      } catch (err) {
+        scratchCleanupError = err;
+        recordScratchLifecycle("release_failed", scratchHandle, {
+          releasedAt: Date.now(),
+          cleanupMs: Date.now() - cleanupStart,
+        });
+        deps.errors?.record(
+          {
+            category: "sandbox",
+            code: "scratch_destroy_failed",
+            message: errMessage(err),
+            scopeLabel: scopeId,
+            sessionId: session.id,
+          },
+          err,
+        );
+      }
     }
     await Promise.allSettled(resourcePending.values());
     const released = new Set<string>();
@@ -751,6 +831,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     box.pending = null;
     if (!handle) {
       if (ownerCleanupError) throw ownerCleanupError;
+      if (scratchCleanupError) throw scratchCleanupError;
       return;
     }
     await clearTurnFiles(handle);
@@ -768,6 +849,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ...(box.used ? {} : { homeUnchanged: true }),
     });
     if (ownerCleanupError) throw ownerCleanupError;
+    if (scratchCleanupError) throw scratchCleanupError;
   };
 
   return {

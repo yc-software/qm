@@ -1253,7 +1253,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       turnContextBlocks.push(computerBlock);
       if (!external && deps.scratchExec) {
         systemPrompt +=
-          '\n\nSelect a sandbox explicitly or use a stored default. The opt-in scratch box (scope:"scratch") is separate: same OS and tooling, org-global files only, no logins or tokens, wiped after the turn — prefer it for heavy self-contained runs that need no logins, workspace files, or follow-up; it keeps this computer responsive.';
+          '\n\nSelect a sandbox explicitly or use a stored default. The opt-in scratch box (scope:"scratch") is separate: same OS/tooling, read-only org-global files, this conversation\'s scoped Files/API capabilities, and credentials explicitly requested per execute call. Its local files are wiped after the turn, and resident workspace files and cached CLI logins are not restored. Use it for self-contained commands and API work; publish needed outputs to Files and verify success. Use scoped execution for existing workspace state or work that must continue locally.';
       }
       if (!external && deps.deploymentLayer?.hints.length) {
         systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;

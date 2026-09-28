@@ -745,11 +745,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const SCRATCH_DURABLE_ERROR =
     '[error] a scratch box cannot be made durable yet — use scope:"scoped" for work that must survive future turns, or drop `durable`.';
   const SCOPED_EPHEMERAL_ERROR =
-    '[error] the scoped computer is always durable today — re-run with durable:true (or omit `durable`), or use scope:"scratch" for a run that leaves no trace.';
+    '[error] the scoped computer is always durable today — re-run with durable:true (or omit `durable`), or use scope:"scratch" for disposable local working files.';
   const FILE_SEND_GUIDANCE =
     "The files and apps tools use the default sandbox; execute and background can target sandbox_id. To send a file, write it to a workspace path and name that path to whichever tool sends: the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
   const DURABLE_PARAM_DESC =
-    "Retain working state for later turns within provider recovery limits? Scoped retains working state; scratch and owner are invocation-only. Publish durable code to git and artifacts to Files.";
+    "Retain working state for later turns within provider recovery limits? Scoped retains working state; scratch lasts for the turn; owner is invocation-only. Publish durable code to git and artifacts to Files.";
 
   const reachScopeDescription =
     (scratchExec ? '"scoped" (default) | "scratch" | ' : '"scoped" (default) | ') +
@@ -759,7 +759,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     "Run a shell command and return its stdout/stderr/exit code. Pick where it runs with `scope`:\n" +
     '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, cached logins, and $AGENT_API_* tokens; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
     (scratchExec
-      ? '- "scratch": a blank, instant box. Same OS/runtimes/CLIs, shared org files & skills at ./global (read-only), firewalled network — but NO logins, NO credentials or capability tokens, and NOTHING persists past this turn. Prefer it for heavy self-contained work (crunching fetched material, throwaway experiments, parallel or disk-hungry runs needing no workspace files) — it keeps the sandbox responsive; if the run needs logins, workspace files, or its writes must survive, use scope:"scoped".\n'
+      ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, cached logins, or local work that must continue later.\n'
       : "") +
     (ownerAuthExec
       ? "- \"owner\": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner's credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner's login without putting it on the shared computer.\n"
@@ -778,7 +778,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ? '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner\'s credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for credential-using commands without putting personal logins on the shared computer.\n'
       : "") +
     (scratchExec
-      ? '- "scratch": a blank, instant box. Same OS/runtimes/CLIs, shared org files & skills at ./global (read-only), firewalled network — but NO logins, NO credentials or capability tokens ($AGENT_API_TOKEN etc. are absent), and NOTHING persists past this turn. Prefer it for heavy self-contained work — crunching or analyzing material you can fetch onto it, throwaway experiments, checks against public code, anything parallel or disk-hungry whose only product is the answer — because it keeps this conversation\'s computer responsive for everything else. Work on THIS conversation\'s workspace (its checkouts, uncommitted changes) and anything needing logins stays scoped; if a scratch run turns out to need those, re-run it with scope:"scoped".\n'
+      ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, cached logins, or local work that must continue later.\n'
       : "") +
     "`durable` defaults to true on scoped and false on invocation-only boxes; scoped cannot discard writes, and invocation-only boxes cannot be made durable.\n" +
     FILE_SEND_GUIDANCE +

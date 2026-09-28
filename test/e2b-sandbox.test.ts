@@ -701,3 +701,25 @@ test("repeated destroy teardown never targets an unrelated default scope", async
   assert.deepEqual(await store.get("default"), defaultRecord);
   assert.equal(await store.get(scope), null);
 });
+
+test("forced scratch destruction surfaces failure and retries the same live session", async () => {
+  let kills = 0;
+  const client = {
+    ...fake.client,
+    async create(opts: Parameters<typeof fake.client.create>[0]) {
+      const session = await fake.client.create(opts);
+      return {
+        ...session,
+        async kill() {
+          if (kills++ === 0) throw new Error("transient delete failure");
+          await session.kill();
+        },
+      };
+    },
+  };
+  const box = make({ client });
+  const handle = await box.provision(layers, { scratch: { key: "destroy-retry" } });
+  await assert.rejects(box.teardown(handle, { destroy: true }), /transient delete failure/);
+  await box.teardown(handle, { destroy: true });
+  assert.equal(kills, 2);
+});

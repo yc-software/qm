@@ -769,8 +769,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const scratch = execOpts?.scratch === true;
         const ownerAuth = execOpts?.ownerAuth === true;
         const requestedCredentials = execOpts?.credentials ?? [];
-        if (requestedCredentials.length && (scratch || execOpts?.reachTarget !== undefined || !writableScopeId)) {
-          throw new Error("command credentials are available only on the scoped or owner computer");
+        if (requestedCredentials.length && (execOpts?.reachTarget !== undefined || !writableScopeId)) {
+          throw new Error("command credentials are available only on scoped, scratch, or owner computers");
         }
         const availableCredentials = new Map(
           (

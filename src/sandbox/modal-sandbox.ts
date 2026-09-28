@@ -903,8 +903,11 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           }
           activeScratch.delete(handle.id);
           const session = sessionByName.get(handle.id);
+          if (session) {
+            if (tdOpts?.destroy) await session.terminate();
+            else await session.terminate().catch(swallowAs("modal-sandbox: scratch terminate", undefined));
+          }
           sessionByName.delete(handle.id);
-          if (session) await session.terminate().catch(swallowAs("modal-sandbox: scratch terminate", undefined));
         });
       }
       if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;

@@ -622,8 +622,11 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
           }
           activeScratch.delete(handle.id);
           const session = sessionByName.get(handle.id);
+          if (session) {
+            if (tdOpts?.destroy) await session.kill();
+            else await session.kill().catch(swallowAs("e2b-sandbox: scratch kill", undefined));
+          }
           sessionByName.delete(handle.id);
-          if (session) await session.kill().catch(swallowAs("e2b-sandbox: scratch kill", undefined));
         });
       }
       if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;
