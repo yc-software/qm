@@ -3341,8 +3341,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "and only back to each channel's coverage date, so it can miss both very recent and older messages. " +
             "`slack` runs Slack's own full-history search AS THE ASKING PERSON, via their connected Slack login — it sees " +
             "exactly what they can see, including their own DMs and private channels (never anyone else's). Retry with " +
-            "`slack` whenever the mirror comes up empty; if the asker hasn't connected Slack, the result says where they " +
-            "can connect it themselves. A message neither lens can see may still exist — say what you couldn't search, don't declare it nonexistent. " +
+            "`slack` when the mirror and this conversation's own history both come up empty; reading the conversation needs no personal login. " +
+            "A message neither lens can see may still exist — say what you couldn't search, don't declare it nonexistent. " +
             "In a channel or group, hits from the asker's DMs or private channels are for their eyes: don't quote that content to the room — acknowledge you found it and take it to their DM.",
         }),
       ),

@@ -199,6 +199,18 @@ export function createSlackHistoryReader(deps: {
     }
   }
 
+  async function remember(channel: string, messages: SlackHistoryMessage[]): Promise<void> {
+    if (!messages.length || !deps.core.rememberSurfaceHistory) return;
+    await deps.core
+      .rememberSurfaceHistory(
+        messages
+          .filter((m) => m.ts)
+          .map((m) => slackMessageToIngestEvent({ ...m, channel }, deps.ids, { handled: true })),
+      )
+      .catch((error) => swallow("slack: history mirror ingest", error));
+  }
+
+  const backfilled = new Set<string>();
   let shadowPending = false;
   return async (client, channel, threadTs, before, expandThreads) => {
     if (deps.source !== "mirror") {
@@ -212,7 +224,9 @@ export function createSlackHistoryReader(deps: {
       return live;
     }
     const historyClient = deps.historyClient ?? client;
+    const key = threadTs ? `${channel}:${threadTs}` : channel;
     let mirrored: SlackHistoryMessage[] = [];
+    let mirrorResult: SlackHistoryPage | undefined;
     const deleted = new Set<string>();
     if (deps.core.readSurfaceMessages) {
       try {
@@ -242,7 +256,7 @@ export function createSlackHistoryReader(deps: {
               : {}),
           }));
         if (mirrored.length && (!threadTs || rows.some((m) => m.ts === threadTs) || before)) {
-          return {
+          mirrorResult = {
             raw: mirrored,
             hasMore: mirrorPage.hasMore,
             ...(mirrorPage.truncatedExpansions !== undefined
@@ -250,26 +264,37 @@ export function createSlackHistoryReader(deps: {
               : {}),
             note: MIRROR_CONTEXT_NOTE,
           };
+          if (before) return mirrorResult;
         }
       } catch (error) {
         swallow("slack: mirror context read", error);
       }
     }
+    if (!before && backfilled.has(key))
+      return mirrorResult ?? { raw: mirrored, hasMore: true, note: MIRROR_CONTEXT_NOTE };
     try {
+      const parentPending = Boolean(threadTs && !before && !backfilled.has(channel));
+      if (!before) backfilled.add(key);
+      if (parentPending) backfilled.add(channel);
       const paging = { channel, limit, ...(before ? { latest: before, inclusive: false } : {}) };
       const page = parseMessageList(
         threadTs
           ? await historyClient.conversations.replies({ ...paging, ts: threadTs })
           : await historyClient.conversations.history(paging),
       );
-      if (page.messages.length && deps.core.rememberSurfaceHistory) {
-        await deps.core
-          .rememberSurfaceHistory(
-            page.messages
-              .filter((m) => m.ts)
-              .map((m) => slackMessageToIngestEvent({ ...m, channel }, deps.ids, { handled: true })),
-          )
-          .catch((error) => swallow("slack: history mirror ingest", error));
+      await remember(channel, page.messages);
+      if (parentPending) {
+        try {
+          const parent = await historyClient.conversations.history({
+            channel,
+            limit,
+            latest: threadTs,
+            inclusive: true,
+          });
+          await remember(channel, parseMessageList(parent).messages);
+        } catch (error) {
+          swallow("slack: parent history backfill", error);
+        }
       }
       if (deps.core.readSurfaceMessages && page.messages.length) {
         const stored = await deps.core.readSurfaceMessages(channel, {
@@ -291,6 +316,11 @@ export function createSlackHistoryReader(deps: {
     } catch (error) {
       if (!mirrored.length) throw error;
       swallow("slack: incomplete mirror history fallback", error);
+      if (mirrorResult)
+        return {
+          ...mirrorResult,
+          note: [MIRROR_CONTEXT_NOTE, slackHistoryRateLimitMessage(error, deps)].filter(Boolean).join(" "),
+        };
       return {
         raw: mirrored,
         hasMore: true,
