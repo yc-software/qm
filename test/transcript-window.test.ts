@@ -224,6 +224,7 @@ test("GET /v1/sessions/:id honors tailTurns/sinceSeq and reports earlierEntries"
     const { truncated, ...shown } = fullBody.entries[0] as SessionEntry & { truncated?: true };
     assert.equal(truncated, true, "the view marks a user entry whose model-only context it left out");
     assert.equal((shown.payload as { environment?: unknown }).environment, undefined);
+    assert.equal((shown.payload as { memoryRecall?: unknown }).memoryRecall, undefined);
     assert.equal(typeof (oneBody.entry.payload as { environment?: unknown }).environment, "string");
     assert.deepEqual(
       { ...oneBody.entry, payload: { ...(oneBody.entry.payload as object), environment: undefined } },
@@ -278,7 +279,10 @@ test("windowedTranscript: a deeply nested payload cannot smuggle bytes past the 
   }
   const w = windowedTranscript(log, { tailTurns: 1 });
   const shipped = JSON.stringify(w.entries).length;
-  assert.ok(shipped < 100_000, `a nested subtree must be charged its real size, shipped ${shipped}`);
+  assert.ok(
+    shipped < 7 * 2 * ENTRY_STRING_BUDGET,
+    `a nested subtree must be charged its real size, shipped ${shipped}`,
+  );
 });
 
 test("windowedTranscript: a sinceSeq re-read is never trimmed — it refreshes what the client already holds", () => {
@@ -310,6 +314,16 @@ test("a user entry carrying huge model-only context no longer hides the turns be
     assert.equal(user.truncated, true, "the full entry is one lazy fetch away");
   }
   assert.ok(JSON.stringify(w.entries).length < 10_000);
+});
+
+test("thinking entries keep their text but not the provider's signature", () => {
+  const log = [
+    entry(0, "user"),
+    { ...entry(1, "thinking"), payload: { thinking: "weighing it", thinkingSignature: "s".repeat(50_000) } },
+  ];
+  const thought = windowedTranscript(log, { tailTurns: 1 }).entries[1]!;
+  assert.deepEqual(thought.payload, { thinking: "weighing it" });
+  assert.equal(thought.truncated, true);
 });
 
 test("paging is by turns alone, however large the turns are", () => {

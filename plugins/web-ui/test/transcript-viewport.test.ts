@@ -258,6 +258,26 @@ test("a transcript too short to fill the viewport keeps loading earlier pages un
   }
 });
 
+test("a page that fails to load is not retried by auto-fill until the reader asks", () => {
+  const f = fixture();
+  try {
+    f.fit();
+    const button = f.s.ownerDocument.createElement("button");
+    button.className = "earlier-messages-btn";
+    f.s.querySelector(".message-stack")!.prepend(button);
+    let loads = 0;
+    button.onclick = () => loads++;
+    f.viewport.sync(f.s);
+    f.resize(30, 50);
+    f.viewport.sync(f.s);
+    assert.equal(loads, 1, "no growth since the last automatic load means no automatic retry");
+    f.wheelUp();
+    assert.equal(loads, 2, "the reader can still ask for it");
+  } finally {
+    f.close();
+  }
+});
+
 test("a hidden pane never pulls history just because it has no height", () => {
   const dom = new JSDOM('<section class="chat-scroll"><div class="message-stack"></div></section>');
   const s = dom.window.document.querySelector<HTMLElement>("section")!;

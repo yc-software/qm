@@ -582,7 +582,10 @@ export const ENTRY_STRING_BUDGET = 2_000;
 export type TranscriptEntry = SessionEntry & { truncated?: true };
 
 const PROJECTED_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["tool_call", "tool_result"]);
-const MODEL_ONLY_USER_FIELDS: ReadonlySet<string> = new Set(["environment", "memoryRecall"]);
+const MODEL_ONLY_FIELDS: Partial<Record<EntryType, ReadonlySet<string>>> = {
+  user: new Set(["environment", "memoryRecall"]),
+  thinking: new Set(["thinkingSignature"]),
+};
 const WALK_DEPTH = 8;
 
 function shortenStrings(value: unknown, depth: number): { value: unknown; truncated: boolean } {
@@ -620,16 +623,16 @@ function postsToTheConversation(entry: SessionEntry): boolean {
   return entry.type === "tool_call" && p?.action === "post";
 }
 
-function withoutModelContext(entry: SessionEntry): TranscriptEntry {
+function withoutModelContext(entry: SessionEntry, fields: ReadonlySet<string>): TranscriptEntry {
   const payload = entry.payload;
-  if (!payload || typeof payload !== "object" || !Object.keys(payload).some((k) => MODEL_ONLY_USER_FIELDS.has(k)))
-    return entry;
-  const visible = Object.fromEntries(Object.entries(payload).filter(([k]) => !MODEL_ONLY_USER_FIELDS.has(k)));
+  if (!payload || typeof payload !== "object" || !Object.keys(payload).some((k) => fields.has(k))) return entry;
+  const visible = Object.fromEntries(Object.entries(payload).filter(([k]) => !fields.has(k)));
   return { ...entry, payload: visible, truncated: true };
 }
 
 function projectEntry(entry: SessionEntry): TranscriptEntry {
-  if (entry.type === "user") return withoutModelContext(entry);
+  const modelOnly = MODEL_ONLY_FIELDS[entry.type];
+  if (modelOnly) return withoutModelContext(entry, modelOnly);
   if (!PROJECTED_TYPES.has(entry.type) || postsToTheConversation(entry)) return entry;
   const walked = shortenStrings(entry.payload, 0);
   return walked.truncated ? { ...entry, payload: walked.value, truncated: true } : entry;

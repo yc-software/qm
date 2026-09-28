@@ -50,6 +50,7 @@ export function createTranscriptViewport() {
   let contentMax = "";
   let collapseDistance = 0;
   let geometryDistance: number | null = null;
+  let filledAtHeight: number | null = null;
   const contentUpdates = new Set<Promise<void>>();
 
   function setFollowing(value: boolean): void {
@@ -227,8 +228,10 @@ export function createTranscriptViewport() {
 
   function fillViewport(): void {
     const button = earlierButton();
-    if (!button || !scroller || scroller.clientHeight === 0) return;
-    if (scroller.scrollHeight - scroller.clientHeight <= NEAR_TOP) button.click();
+    if (!button || !scroller || scroller.clientHeight === 0 || scroller.scrollHeight === filledAtHeight) return;
+    if (scroller.scrollHeight - scroller.clientHeight > NEAR_TOP) return;
+    filledAtHeight = scroller.scrollHeight;
+    button.click();
   }
 
   function beforeRender(): void {
@@ -282,6 +285,7 @@ export function createTranscriptViewport() {
     scroller = pins = prompt = stack = content = null;
     lastTop = 0;
     following = false;
+    filledAtHeight = null;
     contentUpdates.clear();
   }
 
