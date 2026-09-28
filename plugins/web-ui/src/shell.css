@@ -12993,6 +12993,17 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   font-size: 12px;
   padding: 8px 0;
 }
+.inbox-earlier {
+  align-self: center;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.inbox-earlier:hover {
+  color: var(--foreground);
+}
 
 .inline-steer {
   margin-block: 16px;

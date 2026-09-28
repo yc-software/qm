@@ -16,6 +16,7 @@ import {
 } from "./sent-mail";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
+import { ref } from "lit/directives/ref.js";
 import {
   Archive,
   ArrowUpRight,
@@ -1156,6 +1157,36 @@ function itemImagesTpl(item: InboxItem, urls: string[] | undefined, ctxIndex: nu
   </div>`;
 }
 
+export const CONTEXT_TAIL = 6;
+const CONTEXT_PAGE = 20;
+const revealedContext = new Map<string, number>();
+
+function revealEarlier(item: InboxItem, marker: Element): void {
+  const scroller = marker.closest<HTMLElement>(".inbox-scroll");
+  const before = scroller ? scroller.scrollHeight - scroller.scrollTop : 0;
+  revealedContext.set(item.id, (revealedContext.get(item.id) ?? 0) + CONTEXT_PAGE);
+  drawAll();
+  if (scroller) scroller.scrollTop = scroller.scrollHeight - before;
+}
+
+const watchedEarlier = new WeakSet<Element>();
+
+function watchEarlier(item: InboxItem, el: Element | undefined): void {
+  const scroller = el?.closest<HTMLElement>(".inbox-scroll");
+  if (!el || !scroller || watchedEarlier.has(el) || typeof IntersectionObserver === "undefined") return;
+  watchedEarlier.add(el);
+  let userScrolled = false;
+  const markScrolled = (): void => void (userScrolled = true);
+  scroller.addEventListener("wheel", markScrolled, { passive: true });
+  scroller.addEventListener("touchmove", markScrolled, { passive: true });
+  const observer = new IntersectionObserver((entries) => {
+    if (!el.isConnected) return observer.disconnect();
+    if (!userScrolled || !entries.some((entry) => entry.isIntersecting)) return;
+    revealEarlier(item, el);
+  });
+  observer.observe(el);
+}
+
 export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
   const context = (item.context ?? []).map((message, index) => ({ ...message, imageIndex: index }));
   const rows = item.sourceContextFetched
@@ -1172,10 +1203,22 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
           nearby: false,
         },
       ];
+  const hidden = Math.max(0, rows.length - CONTEXT_TAIL - (revealedContext.get(item.id) ?? 0));
   return html`<div class="inbox-context">
+    ${
+      hidden
+        ? html`<button
+            class="inbox-source-notice inbox-earlier"
+            ${ref((el) => watchEarlier(item, el))}
+            @click=${(event: MouseEvent) => revealEarlier(item, event.currentTarget as Element)}
+          >
+            ${hidden === 1 ? "1 earlier message" : `${hidden} earlier messages`}
+          </button>`
+        : nothing
+    }
     ${item.sourceRefreshError ? html`<div class="inbox-source-notice" role="status">${item.sourceRefreshError}</div>` : nothing}
     ${item.sourceContextPartial ? html`<div class="inbox-source-notice">Showing part of this conversation. Open in Slack for the full history.</div>` : nothing}
-    ${rows.map((m) => {
+    ${rows.slice(hidden).map((m) => {
       const name = participantName(m.author) || m.author;
       return html`
         <div class="inbox-context-msg ${m.reply ? "inbox-thread-reply" : ""} ${m.nearby ? "inbox-nearby-context" : ""}">
