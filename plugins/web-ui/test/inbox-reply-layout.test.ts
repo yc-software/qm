@@ -17,7 +17,7 @@ test("the loaded conversation renders one assistant beside the source thread", (
 test("desktop threads use a CSS-sized sticky assistant in the second column", () => {
   assert.doesNotMatch(inbox, /sizeAside|ASIDE_MIN_HEIGHT|ASIDE_MAX_HEIGHT/);
   assert.match(css, /@media \(min-width: 1100px\) \{\s*\.inbox-thread-page/);
-  assert.match(css, /grid-template-columns: minmax\(0, var\(--content-primary-width\)\) var\(--content-aside-width\);/);
+  assert.match(css, /grid-template-columns: minmax\(0, 1fr\) var\(--content-aside-width\);/);
   assert.match(css, /\.inbox-item-aside \{[^}]*grid-area: 1 \/ 2 \/ span 2;[^}]*position: sticky;/);
   assert.match(css, /\.inbox-item-aside \.inbox-chat-log \{[^}]*flex: 1;[^}]*min-height: 0;[^}]*overflow-y: auto;/);
 });
