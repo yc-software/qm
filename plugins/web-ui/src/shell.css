@@ -9921,8 +9921,16 @@ h3.ambient-field-label {
     top: 0;
     align-self: start;
     width: 100%;
-    height: calc(100dvh - 68px);
-    margin: 0;
+  }
+  .inbox-index-chat,
+  .inbox-item-aside {
+    top: -28px;
+    box-sizing: border-box;
+    min-height: 0;
+    height: 100dvh;
+    margin: -28px 0 -40px;
+    padding: 28px 0 40px;
+    border-left: 1px solid var(--border);
   }
   .inbox-item-aside > .inbox-chat {
     box-sizing: border-box;
@@ -10098,7 +10106,6 @@ h3.ambient-field-label {
   gap: 14px;
   box-sizing: border-box;
   border: 0;
-  border-left: 1px solid var(--border);
   padding: 16px;
 }
 .inbox-chat-suggestions,
