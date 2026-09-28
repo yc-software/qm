@@ -1,3 +1,4 @@
+import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
@@ -749,4 +750,22 @@ test("scratch allocation is deleted when resource initialization fails", async (
   fake.failNext(400, { match: (call) => call.path.endsWith("/policy/resources") });
   await assert.rejects(box.provision(layers, { scratch: { key: "partial-allocation" } }));
   assert.ok(!fake.names().some((name) => name.includes("scratch")));
+});
+
+test("failed scratch initialization and deletion retain a safe retryable identity", async () => {
+  const box = make({ memoryMb: 4096 });
+  fake.failNext(400, { match: (call) => call.path.endsWith("/policy/resources") });
+  fake.failNext(400, { match: (call) => call.method === "DELETE" });
+  let pending: import("../src/sandbox/sandbox.ts").SandboxHandle | undefined;
+  await assert.rejects(box.provision(layers, { scratch: { key: "failed-rollback" } }), (error: Error) => {
+    assert.ok(error instanceof SandboxProvisionCleanupError);
+    pending = error.handle;
+    assert.equal(pending.backend, "sprites");
+    assert.ok(fake.names().includes(pending.id));
+    assert.equal(error.cause, undefined);
+    return true;
+  });
+  assert.ok(pending);
+  await box.teardown(pending, { destroy: true });
+  assert.ok(!fake.names().includes(pending.id));
 });

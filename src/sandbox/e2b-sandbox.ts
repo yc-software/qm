@@ -1,3 +1,4 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -464,7 +465,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
         return handle;
       } catch (err) {
-        await sandbox.teardown(handle).catch(swallowAs("e2b-sandbox: teardown after failed provision", undefined));
+        await cleanupFailedProvision(sandbox, handle);
         throw err;
       }
     },

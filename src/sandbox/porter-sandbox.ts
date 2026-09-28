@@ -1,3 +1,4 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import { NotFoundError } from "porter-sandbox";
 import type { WorkspaceLayer } from "../types.ts";
@@ -333,7 +334,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
 
         return handle;
       } catch (err) {
-        await sandbox.teardown(handle).catch(swallowAs("porter-sandbox: teardown after failed provision", undefined));
+        await cleanupFailedProvision(sandbox, handle);
         throw err;
       }
     },

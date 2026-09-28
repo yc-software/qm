@@ -3,7 +3,7 @@ import { personalScope } from "../../types.ts";
 import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
-import { type SandboxHandle, supportsProcessSessions } from "../../sandbox/sandbox.ts";
+import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
 import type { SandboxAccessPlan } from "../../sandbox/sandbox-resources.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
 import {
@@ -124,7 +124,10 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     provisionMs?: number;
     materializeMs?: number;
   } = { handle: null, pending: null, used: false };
-  const scratchBox: { handle: SandboxHandle | null; provisionMs?: number } = { handle: null };
+  const scratchBox: { handle: SandboxHandle | null; pending: SandboxHandle | null; provisionMs?: number } = {
+    handle: null,
+    pending: null,
+  };
   let scratchProvisionInFlight: Promise<SandboxHandle> | null = null;
   const scratchKey = () => `turn:${session.id}:${transferId}`;
   let scratchStartedAt: number | undefined;
@@ -158,17 +161,15 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
   let ownerAuthProvisionInFlight: Promise<SandboxHandle> | null = null;
   const destroyEphemeralHandle = async (handle: SandboxHandle): Promise<void> => {
-    let lastError: unknown;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         await deps.sandbox.teardown(handle, { destroy: true });
         return;
-      } catch (err) {
-        lastError = err;
+      } catch {
         if (attempt < 3) await sleep(50 * attempt);
       }
     }
-    throw lastError;
+    throw new Error("Disposable sandbox destruction failed");
   };
   const scrubOwnerAuthHandle = async (handle: SandboxHandle): Promise<void> => {
     if (!deps.keychain || !isolateOwnerKeychain) return;
@@ -530,6 +531,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
 
   const provisionScratch = (): Promise<SandboxHandle> => {
+    if (scratchBox.pending)
+      return Promise.reject(new Error("Disposable sandbox initialization cleanup is still pending"));
     if (scratchBox.handle) return Promise.resolve(scratchBox.handle);
     scratchProvisionInFlight ??= (async () => {
       const provisionStart = Date.now();
@@ -553,7 +556,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       return handle;
     })().catch((error) => {
       scratchProvisionInFlight = null;
-      recordScratchLifecycle("provision_failed");
+      if (error instanceof SandboxProvisionCleanupError) scratchBox.pending = error.handle;
+      recordScratchLifecycle("provision_failed", scratchBox.pending ?? undefined);
       throw error;
     });
     return scratchProvisionInFlight;
@@ -616,6 +620,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           return handle;
         })().catch(async (err) => {
           ownerAuthProvisionInFlight = null;
+          if (err instanceof SandboxProvisionCleanupError) ownerAuthBox.pending = err.handle;
           const pendingHandle = ownerAuthBox.pending;
           if (pendingHandle) {
             try {
@@ -770,12 +775,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     }
     if (scratchProvisionInFlight) await scratchProvisionInFlight.catch(() => {});
     scratchProvisionInFlight = null;
-    const scratchHandle = scratchBox.handle;
+    const scratchHandle = scratchBox.handle ?? scratchBox.pending;
     if (scratchHandle) {
       const cleanupStart = Date.now();
       try {
         await destroyEphemeralHandle(scratchHandle);
         scratchBox.handle = null;
+        scratchBox.pending = null;
         recordScratchLifecycle("released", scratchHandle, {
           releasedAt: Date.now(),
           cleanupMs: Date.now() - cleanupStart,

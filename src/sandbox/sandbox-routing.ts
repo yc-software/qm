@@ -4,6 +4,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import {
   CapabilityUnsupportedError,
+  SandboxProvisionCleanupError,
   supportsBlobStaging,
   supportsProcessSessions,
   type AgentComputerProfile,
@@ -182,7 +183,14 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
         return { ...handle, backend: resource.backend, scopeId: resource.ownerScopeId, resourceId: resource.id };
       }
       const { name, sandbox } = await pick(scope);
-      const handle = await sandbox.provision(layers, provOpts);
+      let handle: SandboxHandle;
+      try {
+        handle = await sandbox.provision(layers, provOpts);
+      } catch (error) {
+        if (error instanceof SandboxProvisionCleanupError)
+          throw new SandboxProvisionCleanupError({ ...error.handle, backend: name });
+        throw error;
+      }
       const resourceId =
         !provOpts?.scratch && scope ? await opts.resources?.recordLegacy(scope, name, handle) : undefined;
       return { ...handle, backend: name, ...(scope ? { scopeId: scope } : {}), ...(resourceId ? { resourceId } : {}) };

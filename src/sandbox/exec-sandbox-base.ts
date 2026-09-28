@@ -1,3 +1,4 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -84,7 +85,10 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
           await deps.recreateScratch(name);
         } catch (error) {
           deps.forgetInstance?.(name);
-          await deps.deleteInstance(name);
+          await cleanupFailedProvision(
+            { teardown: () => deps.deleteInstance(name) },
+            { id: name, rootDir: workspaceDir, scratch: true, backend: label },
+          );
           scratchKeyByName.delete(name);
           throw error;
         }
@@ -202,7 +206,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
 
       return handle;
     } catch (err) {
-      await teardown(handle).catch(swallowAs(`${label}-sandbox: teardown after failed provision`, undefined));
+      await cleanupFailedProvision({ teardown }, handle);
       throw err;
     }
   }

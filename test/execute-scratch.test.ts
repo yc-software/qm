@@ -1,3 +1,4 @@
+import { SandboxProvisionCleanupError, cleanupFailedProvision } from "../src/sandbox/sandbox.ts";
 import { execFileSync } from "node:child_process";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
@@ -703,3 +704,41 @@ test("failed scratch provisioning is audited safely and can retry", async () => 
   );
   assert.ok(!JSON.stringify(events).includes("sentinel-secret"));
 });
+
+for (const recovers of [true, false]) {
+  test(`failed scratch initialization preserves safe cleanup identity; recovery=${recovers}`, async () => {
+    let destroys = 0;
+    const partial = { ...scratchHandle, backend: "local", env: { TOKEN: "sentinel-secret" } };
+    const sandbox: Partial<Sandbox> = {
+      async provision() {
+        await cleanupFailedProvision({ teardown: sandbox.teardown! }, partial);
+        throw new Error("initialization failed");
+      },
+      async teardown(handle, opts) {
+        assert.equal(handle.id, partial.id);
+        assert.equal(opts?.destroy, true);
+        if (destroys++ === 0 || !recovers) throw new Error("sentinel-secret");
+      },
+    };
+    const { boxes, events, errors } = turnBoxes(sandbox);
+    await assert.rejects(boxes.provisionScratch(), (error: Error) => {
+      assert.ok(error instanceof SandboxProvisionCleanupError);
+      assert.equal(error.handle.id, partial.id);
+      assert.equal(error.handle.env, undefined);
+      assert.equal(error.cause, undefined);
+      assert.ok(!JSON.stringify(error).includes("sentinel-secret"));
+      return true;
+    });
+    await assert.rejects(boxes.provisionScratch(), /cleanup is still pending/);
+    assert.equal(boxes.scratchBox.handle, null);
+    assert.equal(boxes.scratchBox.pending?.id, partial.id);
+    if (recovers) await boxes.reclaimBox();
+    else await assert.rejects(boxes.reclaimBox(), /Disposable sandbox destruction failed/);
+    const failure = events.find((event) => event.action === "sandbox.scratch.provision_failed")!;
+    assert.equal(JSON.parse(failure.detail!).sandboxId, partial.id);
+    assert.equal(JSON.parse(failure.detail!).backend, "local");
+    assert.equal(events.at(-1)?.action, `sandbox.scratch.${recovers ? "released" : "release_failed"}`);
+    assert.ok(!JSON.stringify({ events, errors }).includes("sentinel-secret"));
+    assert.equal(boxes.scratchBox.pending === null, recovers);
+  });
+}

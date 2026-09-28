@@ -1,3 +1,4 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { orgId as configOrgId } from "../config.ts";
 import { arch } from "node:os";
@@ -431,7 +432,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
 
         return handle;
       } catch (err) {
-        await sandbox.teardown(handle).catch(swallowAs("local-sandbox: teardown after failed provision", undefined));
+        await cleanupFailedProvision(sandbox, handle);
         throw err;
       }
     },

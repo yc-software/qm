@@ -1,3 +1,4 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -745,7 +746,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
 
         return handle;
       } catch (err) {
-        await sandbox.teardown(handle).catch(swallowAs("modal-sandbox: teardown after failed provision", undefined));
+        await cleanupFailedProvision(sandbox, handle);
         throw err;
       }
     },

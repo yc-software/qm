@@ -1,3 +1,4 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
@@ -622,10 +623,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
             ? provisionQueue(`scratch:${scratch.key}`, provisionAndPrepare)
             : provisionQueue(scope, () => advisoryLock.withLock(lockKey(scope), provisionAndPrepare)));
         } catch (err) {
-          if (pendingHandle)
-            await sandbox
-              .teardown(pendingHandle)
-              .catch(swallowAs("superserve-sandbox: teardown after failed provision", undefined));
+          if (pendingHandle) await cleanupFailedProvision(sandbox, pendingHandle);
           throw err;
         }
       });

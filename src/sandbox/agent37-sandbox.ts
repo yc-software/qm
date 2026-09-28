@@ -1,3 +1,4 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -553,7 +554,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
 
         return handle;
       } catch (err) {
-        await sandbox.teardown(handle).catch(swallowAs("agent37-sandbox: teardown after failed provision", undefined));
+        await cleanupFailedProvision(sandbox, handle);
         throw err;
       }
     },
