@@ -2266,8 +2266,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "action=patch edits IN PLACE (rename via `title`, change `schedule`/`task`/`text`, `enabled:false` " +
       "pauses, `enabled:true` resumes, `archived:true` archives). `task` is the standing instructions every " +
       "fire receives — patch it only to change what future fires are told to do; durable run-state (notes, " +
-      "workarounds, checkpoints a future fire needs) lives in files on the cron's workspace disk, not in " +
-      "`task`. action=delete removes it for good; " +
+      "workarounds, checkpoints a future fire needs) belongs in this conversation's durable Files via the available Files API, not in " +
+      "`task` or only on sandbox disk. Confirm publication succeeds, use a cron-specific filename, and leave the file ID in action=note for retrieval with GET /v1/files/:id/content. Small progress state can live directly in the note; never store credentials there. If publication is unavailable, report it and retain needed local state on a scoped computer. Keep tasks that need existing workspace files on that computer until their state has been migrated and verified. action=delete removes it for good; " +
       "action=run fires it once now (no effect on a paused cron) and is refused while a fire of that cron is " +
       "still running — repeating it never double-fires; action=disable pauses it.\n" +
       "action=note (id + note, running inside a cron fire) leaves a short shift-change note the NEXT fire " +
