@@ -24,10 +24,10 @@ Slack  ⇄ (WebSocket)  slack surface (in core)  ── direct calls ──▶  
 ### Slack Agents (top-bar pin)
 
 The manifest enables Slack's [Agents & AI Apps](https://docs.slack.dev/ai/developing-agents)
-feature (`agent_view`) for one reason: users can pin the app to the Slack top bar and open
-it anywhere. Conversations in the resulting split pane are ordinary DM thread messages and
-flow through the normal DM machinery unchanged — none of the extra agent UI (status
-indicators, thread titles, context passing, suggested prompts) is implemented.
+feature (`agent_view`) so users can pin the app to the Slack top bar and open it anywhere.
+Conversations in the resulting split pane are ordinary DM thread messages and flow through
+the normal DM machinery unchanged. Thread titles, context passing and suggested prompts
+are not implemented. Activity cards are experimental and off by default.
 
 Two caveats:
 
@@ -38,6 +38,37 @@ Two caveats:
   `assistant_thread_context_changed` events (Slack requires both to enable the feature;
   the plugin acknowledges them as no-ops). Installs that don't update keep working
   exactly as before.
+
+### Optional activity cards
+
+In Admin → Customize → Feature flags, enable **Slack loading indicator (experimental)**
+for selected people or conversation scopes. It is off by default. The Slack app must
+support [`task_card`](https://docs.slack.dev/reference/block-kit/blocks/task-card-block)
+blocks and have `chat:write`.
+
+After QM commits to answering, one card is posted in the existing reply thread and
+updated in place: **Working**, **Waiting to resume**, **Background work**, **Monitoring**,
+or **No active work**. This describes recorded activity, not success, failure or delivery.
+Quiet ambient turns and unthreaded DMs do not create cards. Cards are visible to everyone
+in their thread; own status cards and edits are excluded from conversation history.
+
+Waiting cards survive turns and restarts. Only this conversation's registered background
+jobs and enabled, unexpired process monitors count, not recurring crons or agent prose.
+Unwatched exits become visible when checked, reconciled during sandbox setup, or expired.
+Commands and monitor instructions are never rendered. After more than five minutes,
+including waits, a subtle **Follow via QM Web** link opens the exact web conversation
+with normal authorization. Without a configured web URL, the link is omitted.
+
+A minute sweep refreshes activity and retries transient failures. Durable receipts and
+per-thread leases preserve card identity across workers; expired run leases are shown as
+waiting, not working. Slack has no conditional writes: late updates are repaired, and an
+ambiguous initial post can duplicate if Slack does not deduplicate `client_msg_id`.
+An outage can leave a stale card until recovery. Status calls have a separate five-second
+timeout and never delay reply delivery.
+
+Once no activity remains, the card settles without a spinner and is no longer tracked.
+Later work creates a fresh card. Disabling the flag settles existing cards without
+stopping work or deleting messages. Native session status and Stop events are not used.
 
 > **Running locally alongside another developer? Each dev needs their OWN app.**
 > See [Local dev with multiple developers](#local-dev-with-multiple-developers)

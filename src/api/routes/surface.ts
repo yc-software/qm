@@ -1,3 +1,4 @@
+import { conversationWebUrl } from "../../util/conversation-links.ts";
 import { isSessionStatus } from "../../sessions/session-status.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeFallback, runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
@@ -58,19 +59,6 @@ function sharedSkillCreateBlock(capability: ApiCtx["capability"]): string | null
 
 function isConversationColor(value: unknown): value is string | null {
   return value === null || (typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value));
-}
-
-function conversationWebUrl(publicWebUrl: string | undefined, sessionId: string): string | undefined {
-  const raw = publicWebUrl?.trim();
-  if (!raw || !/^https?:\/\//i.test(raw) || /[?#]/.test(raw)) return undefined;
-  try {
-    const base = new URL(raw);
-    if ((base.protocol !== "http:" && base.protocol !== "https:") || base.username || base.password) return undefined;
-    base.pathname = `${base.pathname.replace(/\/+$/, "")}/s/${encodeURIComponent(sessionId)}`;
-    return base.toString();
-  } catch {
-    return undefined;
-  }
 }
 
 async function regenerateSessionTitle(ctx: ApiCtx): Promise<void> {

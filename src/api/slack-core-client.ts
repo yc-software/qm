@@ -1,4 +1,11 @@
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
+import {
+  createSlackSessionStatus,
+  type SlackStatusActivity,
+  type SlackSessionStatus,
+  type SlackSessionStatusState,
+} from "../slack/session-status.ts";
+import type { FeatureFlagStore } from "../feature-flags.ts";
 import { decideDeploymentAccess } from "../slack/deploy-access.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { ActorAssertion } from "../types.ts";
@@ -96,6 +103,7 @@ export interface SlackCoreClient {
   decideDeploymentAccess(value: string, actor: ActorAssertion, approve: boolean): Promise<string>;
   keychainApprovals?: KeychainApprovals;
   taskAcknowledgements?: TaskAcknowledgements;
+  sessionStatus?: SlackSessionStatus;
   externalSlackParticipants(): Promise<boolean>;
   internalMemberOverrides(): Promise<string[]>;
   ackEmojiOverride(): Promise<string[] | null>;
@@ -166,6 +174,9 @@ export interface SlackCoreClientDeps {
   identity: IdentityService;
   keychainApprovals?: KeychainApprovals;
   taskAcknowledgements?: DurableMap<TaskAckState>;
+  sessionStatus?: DurableMap<SlackSessionStatusState>;
+  statusActivity?: SlackStatusActivity;
+  featureFlags?: FeatureFlagStore;
   app: App;
   config: ScopedConfigStore;
   runtimeFallback: RuntimeChoice;
@@ -244,6 +255,18 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     ...(deps.keychainApprovals ? { keychainApprovals: deps.keychainApprovals } : {}),
     ...(deps.taskAcknowledgements
       ? { taskAcknowledgements: createTaskAcknowledgements(deps.taskAcknowledgements, lease, deps) }
+      : {}),
+    ...(deps.sessionStatus && deps.featureFlags
+      ? {
+          sessionStatus: createSlackSessionStatus(
+            deps.sessionStatus,
+            lease,
+            deps.runs,
+            deps.featureFlags,
+            Date.now,
+            deps.statusActivity,
+          ),
+        }
       : {}),
     async externalSlackParticipants() {
       return (await deps.config.getExternalSlackParticipantsDurable(orgScope)) === true;
@@ -333,8 +356,8 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       let replyingSignaled = false;
       let firstBlockSignaled = false;
       let surfaceSignaled = false;
-      const signalReplying = (): void => {
-        if (replyingSignaled || !deps.turnStream.replying(runId)) return;
+      const signalReplying = (durable = false): void => {
+        if (replyingSignaled || !(durable || deps.turnStream.replying(runId))) return;
         replyingSignaled = true;
         hooks.onReplying?.();
       };
@@ -399,7 +422,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
               if (view?.surfacePosted) signalSurface();
               return (view?.result as TurnResult | null | undefined) ?? null;
             }
-            signalReplying();
+            signalReplying(run.deliveryState?.replying === true);
             await emitTasks();
             await emitGoal().catch(swallowAs("slack-core-client: goal refresh", undefined));
             const fb = deps.turnStream.firstBlock(runId);
