@@ -9359,6 +9359,7 @@ h3.ambient-field-label {
   min-height: 0;
 }
 .inbox-index-conversation > .custom-chat {
+  min-width: 0;
   container: none;
 }
 .inbox-chat .message-row {
