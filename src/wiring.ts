@@ -31,6 +31,8 @@ import {
   deliverSubagentMail,
   sessionTreeRoot,
   sessionTreeRunCount,
+  sessionTreeWorking,
+  stoppableAncestors,
   SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
@@ -1473,13 +1475,21 @@ export function buildApp(
           throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
         const participants = known ? await sessions.participantsOf(known.id) : [];
         const result = await runStore.runs.enqueue(input);
-        if (!result.deduped)
+        if (result.deduped) return result;
+        sessionStateBus.emit({
+          threadRef: input.sessionId,
+          ...(known ? { sessionId: known.id } : {}),
+          state: "working",
+          at: result.run.createdAt,
+          participants: participants.length ? participants : [input.request.actor.id],
+        });
+        for (const ancestor of known?.parentSessionId ? await stoppableAncestors(sessions, known) : [])
           sessionStateBus.emit({
-            threadRef: input.sessionId,
-            ...(known ? { sessionId: known.id } : {}),
+            threadRef: ancestor.threadRef,
+            sessionId: ancestor.id,
             state: "working",
             at: result.run.createdAt,
-            participants: participants.length ? participants : [input.request.actor.id],
+            participants: await sessions.participantsOf(ancestor.id),
           });
         return result;
       };
@@ -2199,20 +2209,29 @@ export function buildApp(
   });
   runs.onTerminal((run) => {
     void (async () => {
-      const uuid = (await sessions.getByThread(run.sessionId))?.id;
-      const rows = uuid ? await approvals.entries() : [];
-      const awaiting = rows.some(
-        ([, r]) => r.sessionId === uuid && r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor),
-      );
-      const participants = uuid ? await sessions.participantsOf(uuid) : [];
-      if (await runs.activeForThread(run.sessionId)) return;
-      sessionStateBus.emit({
-        threadRef: run.sessionId,
-        ...(uuid ? { sessionId: uuid } : {}),
-        state: awaiting ? "awaiting_approval" : "idle",
-        at: run.finishedAt ?? Date.now(),
-        ...(participants.length ? { participants } : {}),
-      });
+      const session = await sessions.getByThread(run.sessionId);
+      const at = run.finishedAt ?? Date.now();
+      if (!session) {
+        if (!(await runs.activeForThread(run.sessionId)))
+          sessionStateBus.emit({ threadRef: run.sessionId, state: "idle", at });
+        return;
+      }
+      const rows = await approvals.entries();
+      for (const target of [session, ...(await stoppableAncestors(sessions, session))]) {
+        if (await sessionTreeWorking(sessions, runs, target)) return;
+        const awaiting = rows.some(
+          ([, r]) =>
+            r.sessionId === target.id && r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor),
+        );
+        const participants = await sessions.participantsOf(target.id);
+        sessionStateBus.emit({
+          threadRef: target.threadRef,
+          sessionId: target.id,
+          state: awaiting ? "awaiting_approval" : "idle",
+          at,
+          ...(participants.length ? { participants } : {}),
+        });
+      }
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
   let lastSignalPrune = 0;

@@ -279,3 +279,39 @@ test("a settle frame is stamped with the run's durable finishedAt — a later en
   const row = await built.runs.get(run.id);
   assert.equal(second!.at, row!.finishedAt, "the settle frame carries the run's durable finishedAt");
 });
+
+test("a parent stays working while a subagent runs after its own turn ends — push and snapshot agree", async () => {
+  const built = freshApp();
+  const parentThread = "web:U1:parent";
+  const childThread = "web:U1:parent-child";
+  const parent = await built.app.turn(dm("hello", parentThread));
+  const child = await built.app.turn(dm("hello", childThread));
+  await built.sessions.setParentSession(child.sessionId!, parent.sessionId!);
+  const got = record(built.sessionStateBus);
+  const { run: parentRun } = await built.runs.enqueue({
+    sessionId: parentThread,
+    request: resolvedDm("delegate", parentThread),
+    maxAttempts: 3,
+  });
+  const { run: childRun } = await built.runs.enqueue({
+    sessionId: childThread,
+    request: resolvedDm("work", childThread),
+    maxAttempts: 3,
+  });
+  const leasedParent = await built.runs.claimById(parentRun.id, "w1", 30_000);
+  await built.runs.complete(parentRun.id, leasedParent!.leaseToken!, { status: "ok", reply: "delegated" });
+  await new Promise((r) => setTimeout(r, 150));
+  assert.deepEqual(statesFor(got, parentThread), ["working", "working"], "the subagent keeps its parent working");
+  const working = (await built.app.listSessions("U1")).find((s) => s.id === parent.sessionId);
+  assert.equal(working?.working, true, "the sidebar snapshot shows the parent working too");
+
+  const leasedChild = await built.runs.claimById(childRun.id, "w1", 30_000);
+  await built.runs.complete(childRun.id, leasedChild!.leaseToken!, { status: "ok", reply: "done" });
+  assert.ok(
+    await waitFor(() => statesFor(got, parentThread).includes("idle")),
+    "the last subagent run settles the parent",
+  );
+  assert.deepEqual(statesFor(got, childThread), ["working", "idle"]);
+  const settled = (await built.app.listSessions("U1")).find((s) => s.id === parent.sessionId);
+  assert.ok(!settled?.working, "the snapshot settles with the push");
+});

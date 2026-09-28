@@ -1,6 +1,11 @@
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
-import { sessionTreeRoot, sessionTreeRunCount, SUBAGENT_TREE_RUN_CAP } from "../sessions/session-syscalls.ts";
+import {
+  sessionTreeRoot,
+  sessionTreeRunCount,
+  SUBAGENT_TREE_RUN_CAP,
+  workingSessionThreadRefs,
+} from "../sessions/session-syscalls.ts";
 import { isSessionStatus } from "../sessions/session-status.ts";
 import type { PendingApprovalRecord } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
@@ -396,7 +401,7 @@ export function createSessionMethods(
     },
 
     async listSessions(principalId) {
-      const workingThreadRefs = new Set(await deps.runs.activeSessionIds());
+      const workingThreadRefs = await workingSessionThreadRefs(deps.sessions, deps.runs);
       const all = await sessionsForViewer(principalId);
       const visibleById = new Map(all.map((session) => [session.id, session]));
       const approvalRows: PendingApprovalRecord[] = [];
