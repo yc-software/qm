@@ -9368,17 +9368,24 @@ h3.ambient-field-label {
   left: auto;
   right: 0;
 }
-.custom-chat-shell.inbox-chat {
+.assistant-sidebar {
   --chat-font-size: 13.5px;
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
   display: flex;
 }
 .inbox-chat > .chat-scroll {
+  container-type: normal;
+  max-height: none;
   flex: 1;
   padding: 0;
   scrollbar-width: none;
   scrollbar-gutter: auto;
 }
 .inbox-chat .message-stack {
+  gap: 14px;
   width: 100%;
   min-height: 0;
   max-height: none;
@@ -9389,7 +9396,7 @@ h3.ambient-field-label {
   font-size: inherit;
   line-height: 1.55;
 }
-.custom-chat-shell.inbox-chat > .chat-bottom-dock {
+.assistant-sidebar > .chat-bottom-dock {
   display: flex;
   flex-direction: column;
   gap: 14px;

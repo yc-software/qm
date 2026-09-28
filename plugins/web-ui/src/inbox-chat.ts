@@ -5,9 +5,17 @@ import type { Conversation } from "./conv-types";
 import { createConversation, disposeConversation, ensureDeliveryStream } from "./conversations";
 import { openSessionInto } from "./sessions";
 import { appState } from "./shell-state";
+import type { AssistantSidebarContext } from "./assistant-sidebar";
 import { brandName } from "./ui";
 
 class InboxChat extends LitElement {
+  static properties = { context: { attribute: false } };
+  declare context: AssistantSidebarContext;
+
+  protected updated(): void {
+    this.conversation?.redraw();
+  }
+
   private element: HTMLElement | null = null;
   private conversation: Conversation | null = null;
 
@@ -37,7 +45,7 @@ class InboxChat extends LitElement {
         density: () => "full",
         onDensityChange: () => {},
         ensureDeliveryStream,
-        inbox: { prompts: ["Summarize my inbox", "What needs my attention?"] },
+        inbox: { context: () => this.context },
       },
       { placeholder: `Ask ${brandName()} about your inbox`, runtimeAccount: "company" },
     );
@@ -77,8 +85,11 @@ class InboxChat extends LitElement {
 
 if (!customElements.get("qm-inbox-chat")) customElements.define("qm-inbox-chat", InboxChat);
 
-export function inboxChat(): TemplateResult {
+export function inboxChat(
+  context: AssistantSidebarContext = { kind: "inbox", hasEmail: false, hasSlack: false, hasDrafts: false },
+): TemplateResult {
   return html`<qm-inbox-chat
+    .context=${context}
     class="inbox-index-chat"
     role="complementary"
     aria-label="Inbox assistant"

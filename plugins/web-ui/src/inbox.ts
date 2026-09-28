@@ -26,7 +26,6 @@ import {
   MoreHorizontal,
   Plus,
   RefreshCw,
-  Send,
   Undo2,
   X,
 } from "lucide";
@@ -49,6 +48,7 @@ import { registerPaneKind } from "./pane-kinds";
 import { exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
 import { brandName, fieldSelect, icon, initials, relTime, workingWave } from "./ui";
+import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { inboxChat } from "./inbox-chat";
 
 export type InboxSource = "gmail" | "slack" | "generic";
@@ -217,7 +217,6 @@ export const inboxState = {
   syncBusy: false,
 };
 
-const DRAFT_SUGGESTIONS = ["Make it shorter", "Make it more friendly", "Remove the salutations"];
 const draftConflicts = new Map<string, number>();
 const draftEdits = new Map<string, InboxDraft & { basedOnAt?: number }>();
 const acting = new Set<string>();
@@ -1200,75 +1199,45 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
 
 export function chatTpl(item: InboxItem, compact = false): TemplateResult {
   const busy = chatting.has(item.id);
-  let suggestions = DRAFT_SUGGESTIONS;
-  if (item.sentChat) suggestions = ["Summarize this email", "What should I follow up on?"];
-  else if (item.source === "generic") suggestions = ["Explain the proposal", "What needs my input?"];
   const submit = (event: MouseEvent, instruction: string): void => {
     const composer = (event.currentTarget as HTMLElement).closest(".inbox-chat")?.querySelector(".embedded-composer");
     composer?.dispatchEvent(new CustomEvent("composer-submit", { detail: instruction }));
   };
-  const empty = item.thread.length === 0;
-  return html`
-    <div class="inbox-chat">
-      <div class="inbox-chat-log">
-        ${item.thread.map(
-          (m) => html`<div class="inbox-chat-msg ${m.role}"><span class="inbox-chat-text">${m.text}</span></div>`,
-        )}
-      </div>
-      ${busy ? html`<div class="inbox-chat-working">${workingWave()}<span>Thinking…</span></div>` : nothing}
-      ${
-          item.status === "open"
-            ? html`<div class="inbox-chat-suggestions">
-                ${
-                  !usesOutputReview(item) && (!item.sentChat || item.draft)
-                    ? html`<button
-                        class="inbox-suggest-chip primary"
-                        type="button"
-                        ?disabled=${busy || acting.has(item.id)}
-                        ${tip("Send the draft with your instructions")}
-                        @click=${(e: MouseEvent) => submit(e, "Send it")}
-                      >
-                        ${icon(Send, 12)}<span>Send it</span>
-                      </button>`
-                    : nothing
-                }
-                <div class="inbox-edit-suggestions">
-                  ${(empty ? suggestions : []).map(
-                    (prompt) =>
-                      html`<button
-                        class="inbox-suggest-chip inbox-chat-suggestion"
-                        type="button"
-                        ?disabled=${busy}
-                        @click=${(e: MouseEvent) => submit(e, prompt)}
-                      >
-                        ${prompt}
-                      </button>`,
-                  )}
-                </div>
-              </div>`
-            : nothing
-        }
-      <div class="inbox-chat-composer">
-        ${embeddedComposer(
-          `inbox:${appState.me?.user ?? "anon"}:${item.loopId}:${item.id}`,
-          {
-            placeholder: `Ask ${brandName()} for something`,
-            prepareSubmit: () => {
-              const snapshot = {
-                draft: effectiveDraft(inboxItemById(item.id) ?? item),
-                conflictRevision: draftConflicts.get(item.id) ?? 0,
-              };
-              return async (text, options) => {
-                if (!(await askAgent(item, text, options, snapshot)))
-                  throw new Error("Could not complete the request. Your message has been kept.");
-              };
-            },
-          },
-          compact,
-        )}
-      </div>
-    </div>
-  `;
+  return assistantSidebar({
+    context: {
+      kind: "thread",
+      source: item.source,
+      hasDraft: Boolean(item.draft),
+      sent: Boolean(item.sentChat),
+      resolved: Boolean(item.probablyResolved),
+    },
+    messages: html`${item.thread.map((message) => assistantMessage({ role: message.role, text: message.text }))}`,
+    busy,
+    status: busy ? html`<div class="inbox-chat-working">${workingWave()}<span>Thinking…</span></div>` : nothing,
+    showPrompts: item.status === "open" && item.thread.length === 0,
+    send:
+      item.status === "open" && !usesOutputReview(item) && (!item.sentChat || item.draft)
+        ? { disabled: busy || acting.has(item.id), run: (event) => submit(event, "Send it") }
+        : undefined,
+    onPrompt: (prompt, event) => submit(event, prompt),
+    composer: embeddedComposer(
+      `inbox:${appState.me?.user ?? "anon"}:${item.loopId}:${item.id}`,
+      {
+        placeholder: `Ask ${brandName()} for something`,
+        prepareSubmit: () => {
+          const snapshot = {
+            draft: effectiveDraft(inboxItemById(item.id) ?? item),
+            conflictRevision: draftConflicts.get(item.id) ?? 0,
+          };
+          return async (text, options) => {
+            if (!(await askAgent(item, text, options, snapshot)))
+              throw new Error("Could not complete the request. Your message has been kept.");
+          };
+        },
+      },
+      compact,
+    ),
+  });
 }
 
 export function draftMessageTpl(item: InboxItem): TemplateResult | typeof nothing {
@@ -1943,7 +1912,12 @@ function drawFull(): void {
           </div>
           ${surfaceTpl(surface)}
         </div>
-        ${inboxChat()}
+        ${inboxChat({
+          kind: "inbox",
+          hasEmail: inboxState.selected.some((loop) => loop.sources?.includes("gmail") || loop.source === "gmail"),
+          hasSlack: inboxState.selected.some((loop) => loop.sources?.includes("slack") || loop.source === "slack"),
+          hasDrafts: inboxState.items.some((item) => Boolean(item.draft) && item.status === "open"),
+        })}
       </div>
     `;
   keepingChatLogsPinned(host, () => render(page, host));

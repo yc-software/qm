@@ -1,3 +1,4 @@
+import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "./app-edit";
@@ -1483,63 +1484,66 @@ export function createChatSurface(
         )
       : nothing;
     render(
-      html`
-        <div
-          class="custom-chat-shell ${ctx.inbox ? "inbox-chat" : ""} ${editingApp ? "app-edit-chat" : ""} ${ctx.pane ? "in-pane" : ""} ${ctx.composer.state.dragging ? "dragging" : ""} ${
-            emptyChat && !ctx.inbox && !glanceTier && !editingApp ? "empty-chat" : ""
-          }"
-          @dragenter=${(e: DragEvent) => ctx.composer.onDragEnter(e)}
-          @dragover=${(e: DragEvent) => ctx.composer.onDragOver(e)}
-          @dragleave=${(e: DragEvent) => ctx.composer.onDragLeave(e)}
-          @drop=${(e: DragEvent) => void ctx.composer.onDrop(e, agent)}
-        >
-          ${
-            ctx.composer.state.dragging
+      ctx.inbox
+        ? assistantSidebar({
+            context: ctx.inbox.context(),
+            messages: html`${pinnedStrip()} ${inheritedHeader()}
+            ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
+            ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}`,
+            status: liveWorkStatus(agent),
+            busy: agent.state.isStreaming,
+            showPrompts: !messages.length,
+            toolbar: html`${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${backgroundActivityStrip()}`,
+            composer: ctx.composer.composerForm(agent),
+            onPrompt: (prompt) => ctx.composer.fillSuggestedPrompt(prompt, agent),
+            onDragEnter: (event) => ctx.composer.onDragEnter(event),
+            onDragOver: (event) => ctx.composer.onDragOver(event),
+            onDragLeave: (event) => ctx.composer.onDragLeave(event),
+            onDrop: (event) => void ctx.composer.onDrop(event, agent),
+            overlay: ctx.composer.state.dragging
               ? html`<div class="drop-overlay">
                   <div class="drop-overlay-card">${icon(Files, 30)}<span>Drop files or folders to attach</span></div>
                 </div>`
-              : nothing
-          }
-          ${glanceTier || ctx.pane || editingApp ? nothing : sessionTopbar()}
-          ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
-          <section class="chat-scroll" tabindex="0" aria-label="Conversation">
-            ${pinnedStrip()}
+              : nothing,
+          })
+        : html`
             <div
-              class="message-stack ${ctx.inbox ? "inbox-chat-log" : ""} ${!ctx.inbox && emptyChat ? "empty-stack" : ""}"
+              class="custom-chat-shell ${editingApp ? "app-edit-chat" : ""} ${ctx.pane ? "in-pane" : ""} ${ctx.composer.state.dragging ? "dragging" : ""} ${
+                emptyChat && !ctx.inbox && !glanceTier && !editingApp ? "empty-chat" : ""
+              }"
+              @dragenter=${(e: DragEvent) => ctx.composer.onDragEnter(e)}
+              @dragover=${(e: DragEvent) => ctx.composer.onDragOver(e)}
+              @dragleave=${(e: DragEvent) => ctx.composer.onDragLeave(e)}
+              @drop=${(e: DragEvent) => void ctx.composer.onDrop(e, agent)}
             >
-              ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
-              ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
-              ${glanceTier ? nothing : liveWorkStatus(agent)}
-              ${emptyChat && !ctx.inbox && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
-              ${ctx.pane ? suggestions : nothing}
-              ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
-            </div>
-          </section>
-          <div class="chat-bottom-dock">
-            ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${backgroundActivityStrip()}
-            ${
-              ctx.inbox
-                ? html` ${
-                      !messages.length
-                        ? html`<div class="inbox-chat-suggestions">
-                            <div class="inbox-edit-suggestions">
-                              ${ctx.inbox.prompts.map((prompt) => html`<button class="inbox-suggest-chip inbox-chat-suggestion" type="button" ?disabled=${agent.state.isStreaming} @click=${() => ctx.composer.fillSuggestedPrompt(prompt, agent)}>${prompt}</button>`)}
-                            </div>
-                          </div>`
-                        : nothing
-                    }
-                    <div class="inbox-chat-composer">
-                      <div class="embedded-composer">
-                        ${ctx.composer.composerForm(agent)}
-                        <small class="inbox-runtime-note">Uses the company model account</small>
+              ${
+                ctx.composer.state.dragging
+                  ? html`<div class="drop-overlay">
+                      <div class="drop-overlay-card">
+                        ${icon(Files, 30)}<span>Drop files or folders to attach</span>
                       </div>
                     </div>`
-                : ctx.composer.composerForm(agent)
-            }
-            ${ctx.pane ? nothing : suggestions}
-          </div>
-        </div>
-      `,
+                  : nothing
+              }
+              ${glanceTier || ctx.pane || editingApp ? nothing : sessionTopbar()}
+              ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
+              <section class="chat-scroll" tabindex="0" aria-label="Conversation">
+                ${pinnedStrip()}
+                <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
+                  ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
+                  ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
+                  ${glanceTier ? nothing : liveWorkStatus(agent)}
+                  ${emptyChat && !ctx.inbox && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
+                  ${ctx.pane ? suggestions : nothing}
+                  ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
+                </div>
+              </section>
+              <div class="chat-bottom-dock">
+                ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${backgroundActivityStrip()}
+                ${ctx.composer.composerForm(agent)} ${ctx.pane ? nothing : suggestions}
+              </div>
+            </div>
+          `,
       chatState.host,
     );
     transcriptViewport.afterRender();
@@ -1731,34 +1735,43 @@ export function createChatSurface(
       const speaker = speakerLabelFor(message);
       const deleted = Boolean((message as { deleted?: boolean }).deleted);
       const edited = !deleted && Boolean((message as { edited?: boolean }).edited);
+      if (ctx.inbox)
+        return assistantMessage({
+          role: "human",
+          text: `${messageText(message)}${edited || deleted ? ` (${deleted ? "deleted" : "edited"})` : ""}`,
+          index,
+          entrySeqs: messageEntrySeqs(message).join(" "),
+          before: html`${speaker ? html`<div class="speaker-label">${speaker}</div>` : nothing}${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}`,
+          after: sendFailure
+            ? html`<div class="send-failure">
+                <span>${sendFailure}</span
+                ><button class="btn compact" type="button" @click=${() => void retryFailedSend(message, index)}>
+                  ${icon(RefreshCw, 12)} Retry
+                </button>
+              </div>`
+            : nothing,
+          meta: messageMeta(message, index),
+        });
       return html`
         <article
-          class="${ctx.inbox ? "message-row inbox-chat-msg human" : "message-row user-row"} ${steered ? "steered-row" : ""}"
+          class="message-row user-row ${steered ? "steered-row" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message).join(" ")}
         >
           ${speaker ? html`<div class="speaker-label">${speaker}</div>` : nothing}
           ${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}
-          ${
-            ctx.inbox
-              ? html`<span
-                  class="inbox-chat-text ${deleted ? "deleted-bubble" : ""}"
-                  ?hidden=${!messageText(message).trim() && !edited && !deleted}
-                  >${messageText(message)}${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}</span
-                >`
-              : html`<div
-                  class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}"
-                  ?hidden=${!messageText(message).trim() && !edited && !deleted}
-                >
-                  <div class="pin-content">
-                    ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
-                    ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
-                  </div>
-                  <button class="pin-toggle" type="button" hidden aria-expanded="false">
-                    <span class="pin-toggle-label">Show more</span>${icon(ChevronDown, 14)}
-                  </button>
-                </div>`
-          }
+          <div
+            class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}"
+            ?hidden=${!messageText(message).trim() && !edited && !deleted}
+          >
+            <div class="pin-content">
+              ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
+              ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
+            </div>
+            <button class="pin-toggle" type="button" hidden aria-expanded="false">
+              <span class="pin-toggle-label">Show more</span>${icon(ChevronDown, 14)}
+            </button>
+          </div>
           ${
             sendFailure
               ? html`<div class="send-failure">
@@ -1843,9 +1856,21 @@ export function createChatSurface(
         Boolean(deliveredFiles?.length) ||
         msg.content.some((chunk) => chunk.type === "thinking" && chunk.thinking.trim());
       if (!hasVisibleContent && msg.stopReason !== "error" && msg.stopReason !== "aborted") return nothing;
+      if (ctx.inbox)
+        return assistantMessage({
+          role: "agent",
+          index,
+          entrySeqs: messageEntrySeqs(message)
+            .filter((seq) => !inlineSteers.has(seq))
+            .join(" "),
+          streaming: isStreaming,
+          content: html`${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
+          ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}`,
+          meta: isStreaming ? nothing : messageMeta(msg, index),
+        });
       return html`
         <article
-          class="${ctx.inbox ? "message-row inbox-chat-msg agent" : "message-row assistant-row"} ${isStreaming ? "streaming" : ""}"
+          class="message-row assistant-row ${isStreaming ? "streaming" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message)
             .filter((seq) => !inlineSteers.has(seq))

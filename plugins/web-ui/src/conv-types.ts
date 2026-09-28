@@ -1,3 +1,4 @@
+import type { AssistantSidebarContext } from "./assistant-sidebar";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { TemplateResult, nothing } from "lit";
 import type { DensityTier } from "./density";
@@ -28,7 +29,7 @@ export interface ConvHost {
   density(): DensityTier;
   onDensityChange(handler: () => void): void;
   ensureDeliveryStream(): void;
-  inbox?: { prompts: readonly string[] };
+  inbox?: { context(): AssistantSidebarContext };
   onState?(state: PaneState): void;
   onExpand?(): void;
 }

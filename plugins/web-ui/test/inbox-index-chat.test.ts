@@ -48,6 +48,14 @@ test("inbox sidebar restores its conversation and releases it on native navigati
     suggestion.click();
     assert.equal(sidebar.querySelector<HTMLTextAreaElement>("textarea")!.value, "Summarize my inbox");
     assert.ok(suggestion.closest(".chat-bottom-dock"));
+    render(inboxChat({ kind: "inbox", hasEmail: true, hasSlack: false, hasDrafts: false }), host);
+    await until(() => sidebar.textContent!.includes("Summarize my recent emails"));
+    assert.equal(
+      allConversations().find((entry: { state: { threadRef: string } }) => entry.state.threadRef === session.threadRef),
+      conversation,
+    );
+    render(inboxChat({ kind: "inbox", hasEmail: true, hasSlack: true, hasDrafts: true }), host);
+    await until(() => sidebar.textContent!.includes("Which drafts should I review first?"));
     const text = "Summarize this inbox\nKeep it brief.";
     conversation.state.agent.state.messages = [{ role: "user", content: text, timestamp: 100 }];
     conversation.redraw();

@@ -54,8 +54,12 @@ test("email items edit like an email; slack items like slack", () => {
   assert.match(inbox, /<span>To<\/span>/);
   assert.match(inbox, /<span>Subject<\/span>/);
   assert.match(inbox, /Send it/, "send is a suggested action");
-  assert.match(inbox, /inbox-chat-suggest/, "suggested actions render beside edit prompts");
-  assert.match(inbox, /submit\(e, "Send it"\)/);
+  assert.match(
+    readFileSync(new URL("../src/assistant-sidebar.ts", import.meta.url), "utf8"),
+    /inbox-chat-suggest/,
+    "suggested actions render beside edit prompts",
+  );
+  assert.match(inbox, /submit\(event, "Send it"\)/);
   assert.match(inbox, /rows=\$\{gmail \? 7 : 3\}/, "email drafts get a taller editor than slack replies");
 });
 
