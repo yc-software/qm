@@ -227,6 +227,37 @@ test("upward wheel loads history even when the transcript cannot scroll", () => 
   }
 });
 
+test("a transcript too short to fill the viewport keeps loading earlier pages until it does", () => {
+  const f = fixture();
+  try {
+    f.fit();
+    const button = f.s.ownerDocument.createElement("button");
+    button.className = "earlier-messages-btn";
+    f.s.querySelector(".message-stack")!.prepend(button);
+    let loads = 0;
+    button.onclick = () => {
+      loads++;
+      button.disabled = true;
+    };
+    f.viewport.sync(f.s);
+    assert.equal(loads, 1, "no scroll or wheel is needed when there is nothing to scroll");
+    f.viewport.sync(f.s);
+    assert.equal(loads, 1, "a page already loading is not requested twice");
+    f.grow();
+    button.disabled = false;
+    f.resize(30, 50);
+    assert.equal(loads, 2, "still short after a page arrives, so the next page loads");
+    for (let i = 0; i < 6; i++) f.grow();
+    button.disabled = false;
+    f.resize(30, 50);
+    f.viewport.sync(f.s);
+    assert.equal(loads, 2, "once the content overflows well past the top, loading waits for the reader");
+    button.remove();
+  } finally {
+    f.close();
+  }
+});
+
 test("a bottom-pinned stream follows growth instantly and coalesces frames", () => {
   const f = fixture();
   try {

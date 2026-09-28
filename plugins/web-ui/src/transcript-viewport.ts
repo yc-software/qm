@@ -27,6 +27,7 @@ export function preserveTranscriptScroll(root: HTMLElement): () => void {
 }
 
 const CONDENSED_LINES = 2;
+const NEAR_TOP = 400;
 
 export function createTranscriptViewport() {
   let scroller: HTMLElement | null = null;
@@ -212,12 +213,21 @@ export function createTranscriptViewport() {
     if (movingUp) loadEarlier();
   }
 
+  function earlierButton(): HTMLButtonElement | null {
+    return scroller?.querySelector<HTMLButtonElement>(".earlier-messages-btn:not(:disabled)") ?? null;
+  }
+
   function loadEarlier(): void {
-    if (!scroller || scroller.scrollTop > 400) return;
-    const button = scroller.querySelector<HTMLButtonElement>(".earlier-messages-btn:not(:disabled)");
+    if (!scroller || scroller.scrollTop > NEAR_TOP) return;
+    const button = earlierButton();
     if (!button) return;
     cancelFollow();
     button.click();
+  }
+
+  function fillViewport(): void {
+    const button = earlierButton();
+    if (button && scroller && scroller.scrollHeight - scroller.clientHeight <= NEAR_TOP) button.click();
   }
 
   function beforeRender(): void {
@@ -293,6 +303,7 @@ export function createTranscriptViewport() {
           beforeRender();
           syncSticky();
           follow();
+          fillViewport();
         });
         if (scroller) observer.observe(scroller);
       }
@@ -331,6 +342,7 @@ export function createTranscriptViewport() {
       if (content) observer?.observe(content);
     }
     if (changed) syncSticky();
+    fillViewport();
   }
 
   function follow(force = false): void {
