@@ -1,3 +1,4 @@
+import { isProjectGroupRef } from "../projects/project-store.ts";
 import { buildMemoryContextSnapshot } from "../memory/context-boundary.ts";
 import { disclosedMemory, type MemoryDisclosure } from "../memory/disclosure.ts";
 import type { AclStore } from "../acl/acl-store.ts";
@@ -168,9 +169,10 @@ export async function resolveTurnContext(input: ContextInput) {
         complete: heads.every(({ head }) => !!head.records),
         snapshot: buildMemoryContextSnapshot({
           targetScope: input.targetScope,
-          audience:
-            (await input.currentScopeMembers?.(input.targetScope)) ??
-            (parseScopeId(input.targetScope).kind === "channel" ? [] : input.audience),
+          audience: isProjectGroupRef(parseScopeId(input.targetScope).ref ?? "")
+            ? []
+            : ((await input.currentScopeMembers?.(input.targetScope)) ??
+              (parseScopeId(input.targetScope).kind === "channel" ? [] : input.audience)),
         }),
       };
     },
