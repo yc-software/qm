@@ -346,9 +346,10 @@ async function resolveWebConversation(
   channelName: string | undefined,
 ): Promise<{ conversation: WebConversation } | { error: string; message: string }> {
   if (
-    !threadRef.startsWith(`web:${user}:`) &&
-    !threadRef.startsWith(SUBAGENT_THREAD_PREFIX) &&
-    !(scope?.startsWith("channel:") || scope?.startsWith("group:"))
+    (/^web:.+:inbox$/.test(threadRef) && threadRef !== `web:${user}:inbox`) ||
+    (!threadRef.startsWith(`web:${user}:`) &&
+      !threadRef.startsWith(SUBAGENT_THREAD_PREFIX) &&
+      !(scope?.startsWith("channel:") || scope?.startsWith("group:")))
   ) {
     return { error: "forbidden_thread", message: "this conversation can only be continued from its own context" };
   }
@@ -2626,8 +2627,7 @@ const apiRoutes: readonly WebRoute[] = [
           ? p.threadRef
           : "";
       let steerFields: { request: Awaited<ReturnType<typeof webTurnBase>> } | undefined;
-      if (kind === "steer") {
-        if (text === undefined || !threadRef) return json(res, 400, { error: "invalid_steer_context" });
+      if (kind === "steer" && text !== undefined && threadRef) {
         const scope = typeof p.scopeId === "string" && p.scopeId ? p.scopeId : undefined;
         const channelName =
           typeof p.channelName === "string" && p.channelName.trim() ? p.channelName.trim().slice(0, 200) : undefined;
