@@ -93,7 +93,7 @@ class InboxChat extends LitElement {
   }
 }
 
-customElements.define("qm-inbox-chat", InboxChat);
+if (!customElements.get("qm-inbox-chat")) customElements.define("qm-inbox-chat", InboxChat);
 
 export function inboxChat(): TemplateResult {
   return html`<qm-inbox-chat
