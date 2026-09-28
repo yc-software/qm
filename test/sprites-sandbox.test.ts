@@ -743,3 +743,10 @@ test("failed hydration and failed deletion remain pending across adapters withou
   assert.equal(await b.readFile(restored, "ledger"), "saved");
   assert.equal(await initializationStore.get(h.id), null);
 });
+
+test("scratch allocation is deleted when resource initialization fails", async () => {
+  const box = make({ memoryMb: 4096 });
+  fake.failNext(400, { match: (call) => call.path.endsWith("/policy/resources") });
+  await assert.rejects(box.provision(layers, { scratch: { key: "partial-allocation" } }));
+  assert.ok(!fake.names().some((name) => name.includes("scratch")));
+});

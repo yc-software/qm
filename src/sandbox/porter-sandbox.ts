@@ -435,9 +435,13 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
               if (e instanceof NotFoundError) return null;
               throw e;
             }));
-          if (!target) return;
+          if (!target) {
+            scratchSlugByName.delete(handle.id);
+            return;
+          }
           if (tdOpts?.destroy) await retirePorterBody(target, false);
           else await retirePorterBody(target, false).catch(swallowAs("porter-sandbox: scratch terminate", undefined));
+          scratchSlugByName.delete(handle.id);
         });
       }
       if (!tdOpts?.destroy) return;

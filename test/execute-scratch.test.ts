@@ -559,24 +559,29 @@ test("scratch credentials are selected per command and masked before returning",
 
 function turnBoxes(sandbox: Partial<Sandbox>, transferId = "turn-a") {
   const events: import("../src/audit/audit-log.ts").AuditEvent[] = [];
+  const errors: unknown[] = [];
   const boxes = createTurnSandboxes({
-    deps: { sandbox, auditLog: { record: (event) => events.push(event) } },
+    deps: {
+      sandbox,
+      auditLog: { record: (event: import("../src/audit/audit-log.ts").AuditEvent) => events.push(event) },
+      errors: { record: (...args: unknown[]) => errors.push(args) },
+    },
     input: { runId: "run-1" },
     actor: { id: "U1" },
     session: { id: "session-1" },
     transferId,
-    scopeId: scopeId("slack-channel", "C1"),
-    memoryScopeId: scopeId("slack-channel", "C1"),
+    scopeId: scopeId("channel", "C1"),
+    memoryScopeId: scopeId("channel", "C1"),
     connectorEnv: { AGENT_API_TOKEN: "scope-capability" },
     credentialCutoverServices: [],
     resolution: {
       layers: [
-        { scopeId: scopeId("slack-channel", "C1"), mode: "rw", mountPath: "" },
-        { scopeId: scopeId("global", "org"), mode: "ro", mountPath: "global" },
+        { scopeId: scopeId("channel", "C1"), mode: "rw", mountPath: "" },
+        { scopeId: scopeId("org", "global"), mode: "ro", mountPath: "global" },
       ],
     },
   } as unknown as TurnSandboxContext);
-  return { boxes, events };
+  return { boxes, events, errors };
 }
 
 test("scratch provisioning is singleflight within a turn and isolated across turns", async () => {
@@ -647,7 +652,7 @@ test("reclaim waits for in-flight scratch creation before destroying its handle"
 test("scratch destruction failures remain visible and retain the handle for retry", async () => {
   let attempts = 0;
   let fail = true;
-  const { boxes, events } = turnBoxes({
+  const { boxes, events, errors } = turnBoxes({
     async provision() {
       return scratchHandle;
     },
@@ -657,12 +662,18 @@ test("scratch destruction failures remain visible and retain the handle for retr
     },
   });
   await boxes.provisionScratch();
-  await assert.rejects(boxes.reclaimBox(), /sentinel-secret/);
+  await assert.rejects(boxes.reclaimBox(), (error: Error) => {
+    assert.equal(error.message, "Disposable sandbox destruction failed");
+    assert.equal(error.cause, undefined);
+    assert.ok(!error.stack?.includes("sentinel-secret"));
+    return true;
+  });
   assert.equal(attempts, 3);
   assert.equal(boxes.scratchBox.handle, scratchHandle);
   assert.equal(events.filter((event) => event.action === "sandbox.scratch.release_failed").length, 1);
   assert.equal(events.filter((event) => event.action === "sandbox.scratch.released").length, 0);
-  assert.ok(!JSON.stringify(events).includes("sentinel-secret"));
+  assert.ok(!JSON.stringify({ events, errors }).includes("sentinel-secret"));
+  assert.equal(errors.length, 1);
   fail = false;
   await boxes.reclaimBox();
   assert.equal(boxes.scratchBox.handle, null);

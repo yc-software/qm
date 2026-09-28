@@ -780,8 +780,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           releasedAt: Date.now(),
           cleanupMs: Date.now() - cleanupStart,
         });
-      } catch (err) {
-        scratchCleanupError = err;
+      } catch {
+        scratchCleanupError = new Error("Disposable sandbox destruction failed");
         recordScratchLifecycle("release_failed", scratchHandle, {
           releasedAt: Date.now(),
           cleanupMs: Date.now() - cleanupStart,
@@ -790,11 +790,11 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           {
             category: "sandbox",
             code: "scratch_destroy_failed",
-            message: errMessage(err),
+            message: "Disposable sandbox destruction failed",
             scopeLabel: scopeId,
             sessionId: session.id,
           },
-          err,
+          scratchCleanupError,
         );
       }
     }

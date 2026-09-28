@@ -264,6 +264,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
   async function withSession<T>(name: string, action: (session: E2bSession) => Promise<T>): Promise<T> {
     const scratchKey = scratchKeyByName.get(name);
+    if (scratchKey === undefined && !scopeByName.has(name)) throw new Error("sandbox handle has been released");
 
     const reviveScratch = async (): Promise<E2bSession> => {
       const session = await client.create({ metadata: { name, scratch: "true" }, autoPause: false });
@@ -627,6 +628,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
             else await session.kill().catch(swallowAs("e2b-sandbox: scratch kill", undefined));
           }
           sessionByName.delete(handle.id);
+          scratchKeyByName.delete(handle.id);
         });
       }
       if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;

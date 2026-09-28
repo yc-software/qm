@@ -723,3 +723,9 @@ test("forced scratch destruction surfaces failure and retries the same live sess
   await box.teardown(handle, { destroy: true });
   assert.equal(kills, 2);
 });
+
+test("released scratch handles cannot recreate a persistent sandbox", async () => {
+  const handle = await sandbox.provision(layers, { scratch: { key: "released-handle" } });
+  await sandbox.teardown(handle, { destroy: true });
+  await assert.rejects(sandbox.run(handle, "true"), /handle has been released/);
+});

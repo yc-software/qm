@@ -732,7 +732,10 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
           }
           activeScratch.delete(handle.id);
           const live = liveByName.get(handle.id);
-          if (!live) return;
+          if (!live) {
+            scratchKeyByName.delete(handle.id);
+            return;
+          }
           try {
             await live.session.kill();
           } catch (err) {
@@ -740,6 +743,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
             swallowAs("superserve-sandbox: scratch kill", undefined)(err);
           }
           dropLive(handle.id, live.session.id);
+          scratchKeyByName.delete(handle.id);
         });
       }
       if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;

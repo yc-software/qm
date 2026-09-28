@@ -405,6 +405,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
 
   async function withSessionUnlocked<T>(name: string, action: (session: ModalSession) => Promise<T>): Promise<T> {
     const scratchKey = scratchKeyByName.get(name);
+    if (scratchKey === undefined && !scopeByName.has(name)) throw new Error("sandbox handle has been released");
     const reviveScratch = async (): Promise<ModalSession> => {
       const session = await client.create({ tags: tags("scratch") });
       sessionByName.set(name, session);
@@ -908,6 +909,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
             else await session.terminate().catch(swallowAs("modal-sandbox: scratch terminate", undefined));
           }
           sessionByName.delete(handle.id);
+          scratchKeyByName.delete(handle.id);
         });
       }
       if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;

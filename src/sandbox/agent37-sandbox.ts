@@ -616,6 +616,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
           activeScratch.delete(handle.id);
           if (tdOpts?.destroy) await deleteInstance(handle.id);
           else await deleteInstance(handle.id).catch(swallowAs("agent37-sandbox: scratch delete", undefined));
+          scratchKeyByName.delete(handle.id);
         });
       }
       if (!tdOpts?.destroy) return;
