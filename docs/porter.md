@@ -377,17 +377,72 @@ install the iptables rule that blocks the cloud metadata endpoint. Without the c
 it logs `could not install metadata firewall ... NET_ADMIN missing?` and keeps serving, so
 grep for that line rather than assuming the container's own metadata block is in place.
 
+## How an agent computer persists
+
+Each scope owns one Porter disk volume, `<prefix>-<scope>-home`, mounted at `$HOME` of
+whichever sandbox ("body") currently serves the scope. Bodies rotate — on restart, on the
+first egress-locked turn, when the idle sweep retires them, and when the lifetime cap
+below kills them — and the volume carries `$HOME` (including `~/workspace`) across every
+rotation.
+
+**Files under `$HOME` move through Porter's volume file API**, not through the sandbox
+shell: core reads and writes them by volume id (`GET`/`PUT /v1/volume/<id>/files/content`),
+so a 20 MB import or export is one request instead of hundreds of base64 exec chunks. Porter
+documents the write as atomic ("the file appears at its path only after the last byte
+lands"), reads as ranged, a single write as capped at 1 GiB, and a request from outside the
+cluster as having to finish within 30 seconds (docs.porter.run/sandboxes/volumes). Reads
+page in 8 MiB ranges to stay under that limit; a write that cannot fit falls back to the
+exec path for that call. The files API also needs the cluster's sandbox-volumes mount
+configured on the control plane; a cluster without it answers with a client error, and core
+then uses the exec path for that volume for the rest of the process. Files outside `$HOME`
+(`/tmp`, `/app`) and scratch bodies, which mount no volume, always use the exec path.
+
+**Files outside `$HOME` survive rotation through a filesystem snapshot.** Porter's snapshot
+captures "the image it started from plus every file written since", pausing the sandbox for a
+few milliseconds, and a sandbox can be started from it with `snapshot_id` in place of
+`image` (docs.porter.run/sandboxes/cli, sdk/typescript/reference). Core snapshots a scope's
+body before it retires it — restart, egress rotation, idle reaping — and refreshes a
+snapshot older than thirty minutes during the idle sweep when the scope has been active since.
+The next body for the scope starts from that snapshot, so `apt` installs, `/opt` toolchains
+and anything else written outside the volume are back after a rotation. One snapshot is kept
+per scope; a superseded one is deleted after its replacement is ready, and `destroy` removes
+it with the volume. A snapshot taken from a different `PORTER_SANDBOX_IMAGE` is ignored, and
+one that Porter can no longer start from is forgotten with a `porter_snapshot_unusable` error
+and the body comes from the image. What a snapshot cannot cover is a body killed by the
+lifetime cap between sweeps: installs made since the last snapshot are lost then, which is
+why the cap is a cost ceiling rather than the lifecycle.
+
+**Lifecycle.** `PORTER_SANDBOX_TTL_SEC` (default 28800, eight hours) is Porter's
+`ttl_seconds`, "counted from creation" and enforced by the platform even against a body that
+is mid-command; it is the cost cap. Idle reaping is core's: the deep-idle sweep
+(`DEEP_IDLE_MACHINE_MS`) retires a scope's body once the scope has been inactive that long
+and no process session is still running, after snapshotting it, and leaves the volume in
+place. The next turn provisions a fresh body from the snapshot with `coldStart: false`. The
+`sandbox status` tool shows the cap as `machine expires` and the snapshot as
+`recovery strategy: provider_snapshot`; when the last body for a scope ended in `failed`, it
+also shows the tail of that body's logs (`sandbox.logs()`, which Porter keeps after
+termination) so an OOM kill or a crashed entrypoint is visible without a dashboard.
+
+**Client timeouts.** The SDK's default request timeout is 30 seconds (sdk/typescript/reference).
+Core raises it to 120 seconds for the whole client, because `snapshots.create` resolves only
+once the capture completes and sandbox creation can queue; volume file requests get 60
+seconds so the platform's own 30-second limit surfaces as a server error rather than a client
+abort. `exec` keeps the SDK's documented behaviour — no timeout unless one is passed, and
+never retried, "since the command may still be running server-side" — and core passes the
+command's own timeout plus a grace period.
+
 ## Other knobs
 
-| Variable                                           | Meaning                                                                                                        |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `PORTER_DEPLOY_URL`                                | Porter API host, when it isn't `https://dashboard.porter.run`                                                  |
-| `PORTER_SANDBOX_IMAGE`                             | Image agent computers boot from                                                                                |
-| `PORTER_DEPLOY_RUNNER_IMAGE`                       | Image published apps boot from (defaults to the sandbox image)                                                 |
-| `PORTER_SANDBOX_EGRESS_PROXY_URL`                  | Forces sandbox traffic through the egress proxy; unset means no egress enforcement (see the constraints below) |
-| `PORTER_SANDBOX_NAME_PREFIX`                       | Prefix for sandbox and app names on the cluster                                                                |
-| `PORTER_DEPLOY_VISIBILITY`                         | `public` puts a published app on public ingress; default is private                                            |
-| `PORTER_DEPLOY_TTL_SEC` / `PORTER_SANDBOX_TTL_SEC` | Reap bodies after this long                                                                                    |
+| Variable                                           | Meaning                                                                                                                        |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `PORTER_DEPLOY_URL`                                | Porter API host, when it isn't `https://dashboard.porter.run`                                                                  |
+| `PORTER_SANDBOX_IMAGE`                             | Image agent computers boot from                                                                                                |
+| `PORTER_DEPLOY_RUNNER_IMAGE`                       | Image published apps boot from (defaults to the sandbox image)                                                                 |
+| `PORTER_SANDBOX_EGRESS_PROXY_URL`                  | Forces sandbox traffic through the egress proxy; unset means no egress enforcement (see the constraints below)                 |
+| `PORTER_SANDBOX_NAME_PREFIX`                       | Prefix for sandbox and app names on the cluster                                                                                |
+| `PORTER_CPUS` / `PORTER_MEMORY_MB`                 | `resources.cpu` / `resources.memory` for agent computers (e.g. `2` and `4096`); unset keeps the cluster's default sandbox size |
+| `PORTER_DEPLOY_VISIBILITY`                         | `public` puts a published app on public ingress; default is private                                                            |
+| `PORTER_DEPLOY_TTL_SEC` / `PORTER_SANDBOX_TTL_SEC` | Porter `ttl_seconds`: the platform terminates a body this long after creation, busy or not                                     |
 
 To QA a branch against a real Porter cluster before deploying it, the dev instance takes
 the same backend:

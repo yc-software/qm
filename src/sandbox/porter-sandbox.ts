@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { NotFoundError } from "porter-sandbox";
+import { LRUCache } from "lru-cache";
+import { NotFoundError, type SandboxSpec } from "porter-sandbox";
 import type { WorkspaceLayer } from "../types.ts";
+import { orgId as configOrgId } from "../config.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import {
@@ -11,11 +14,14 @@ import {
   ensurePorterVolume,
   listPorterSandboxes,
   porterPhaseSettled,
+  porterSandboxById,
   porterSlug,
   retirePorterBody,
   waitPorterRunning,
   type PorterClientLike,
   type PorterSandboxLike,
+  type PorterSandboxStatus,
+  type PorterVolumeMount,
 } from "./porter-client.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
@@ -42,17 +48,32 @@ import type {
 } from "./sandbox.ts";
 
 const WORKSPACE_BASENAME = "workspace";
+const EXPORT_SCRATCH_BASENAME = ".qm-export";
 const RO_LAYERS_TAR = ".ro-layers.tar";
 const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const GUEST_PROBE_TIMEOUT_SEC = 10;
+const FAILED_BODY_LOG_LINES = 5;
 const EGRESS_TAG = "qm-egress";
 const SCOPE_TAG = "qm-scope";
 const KIND_TAG = "qm-kind";
 const DEFAULT_PORTER_SANDBOX_IMAGE = "ghcr.io/porter-dev/qm-sandbox:latest";
+const DEFAULT_TTL_SEC = 28_800;
+const DEFAULT_SNAPSHOT_INTERVAL_MS = 30 * 60_000;
+const BODY_CACHE_MAX = 1000;
 
 interface BodyEntry {
   name: string;
   sb: PorterSandboxLike;
+}
+
+export interface StoredPorterScope {
+  sandboxId?: string;
+  name?: string;
+  lastActivityMs: number;
+  snapshotId?: string;
+  snapshotImage?: string;
+  snapshotAtMs?: number;
+  orgId?: string;
 }
 
 export interface PorterSandboxOptions {
@@ -62,7 +83,10 @@ export interface PorterSandboxOptions {
   namePrefix?: string;
   homeDir?: string;
   ttlSec?: number;
+  cpus?: number;
+  memoryMb?: number;
   defaultTimeoutSec?: number;
+  snapshotIntervalMs?: number;
   egressProxyUrl?: string;
   blobTransfer?: BlobTransferStore;
   signingSecret?: string;
@@ -71,6 +95,7 @@ export interface PorterSandboxOptions {
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   advisoryLock?: AdvisoryLock;
+  store?: DurableMap<StoredPorterScope>;
   client?: PorterClientLike;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
@@ -83,12 +108,22 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
   const image = opts.image ?? DEFAULT_PORTER_SANDBOX_IMAGE;
   const prefix = opts.namePrefix ?? "qm";
   const homeDir = opts.homeDir ?? "/root";
-  const ttlSec = opts.ttlSec ?? 28_800;
+  const ttlSec = opts.ttlSec ?? DEFAULT_TTL_SEC;
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
+  const snapshotIntervalMs = opts.snapshotIntervalMs ?? DEFAULT_SNAPSHOT_INTERVAL_MS;
   const workspaceDir = `${homeDir}/${WORKSPACE_BASENAME}`;
+  const exportScratchDir = `${homeDir}/${EXPORT_SCRATCH_BASENAME}`;
   const provisionQueue = createKeyedQueue<string>();
   const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
+  const store = opts.store ?? createMemoryMap<StoredPorterScope>();
   const egressProxyHost = opts.egressProxyUrl ? new URL(opts.egressProxyUrl).hostname : undefined;
+  const resources: SandboxSpec["resources"] | undefined =
+    opts.cpus !== undefined || opts.memoryMb !== undefined
+      ? {
+          ...(opts.cpus !== undefined ? { cpu: String(opts.cpus) } : {}),
+          ...(opts.memoryMb !== undefined ? { memory: `${opts.memoryMb}Mi` } : {}),
+        }
+      : undefined;
 
   const client: PorterClientLike =
     opts.client ??
@@ -98,11 +133,63 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
     });
 
   const bodies = new Map<string, BodyEntry>();
+  const bodyCache = new LRUCache<string, BodyEntry>({ max: BODY_CACHE_MAX });
+  const volumeByBody = new LRUCache<string, PorterVolumeMount>({ max: BODY_CACHE_MAX });
   const scopeByBody = new Map<string, string>();
   const scratchSlugByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
 
-  async function liveBody(slug: string): Promise<BodyEntry | null> {
+  const reportError = (category: string, code: string, message: string, scope?: string): void =>
+    opts.onError?.({ category, code, message, ...(scope ? { scopeLabel: scope } : {}) });
+
+  function noteBody(entry: BodyEntry, status?: PorterSandboxStatus): void {
+    bodyCache.set(entry.name, entry);
+    const volumeId = status?.volume_mounts?.[homeDir];
+    if (volumeId) volumeByBody.set(entry.name, { volumeId, mountPath: homeDir });
+  }
+
+  async function remember(scope: string, patch: Partial<StoredPorterScope>): Promise<void> {
+    const merged = await store.merge(scope, patch);
+    if (!merged) {
+      await store.put(scope, { ...patch, lastActivityMs: patch.lastActivityMs ?? Date.now(), orgId: configOrgId() });
+    }
+  }
+
+  const snapshotDue = (rec: StoredPorterScope | null): boolean => !!rec && rec.lastActivityMs > (rec.snapshotAtMs ?? 0);
+
+  const usableSnapshotId = (rec: StoredPorterScope | null): string | undefined =>
+    rec?.snapshotId && rec.snapshotImage === image ? rec.snapshotId : undefined;
+
+  async function captureSnapshot(scope: string, sb: PorterSandboxLike): Promise<void> {
+    const before = await store.get(scope);
+    const snap = await client.snapshots.create(sb.id);
+    if (snap.status !== "ready") {
+      throw new Error(
+        `porter snapshot of ${sb.id} ${snap.status}${snap.failure_reason ? `: ${snap.failure_reason}` : ""}`,
+      );
+    }
+    await remember(scope, {
+      snapshotId: snap.id,
+      snapshotImage: image,
+      snapshotAtMs: snap.t_ready_unix_ms ?? Date.now(),
+    });
+    if (before?.snapshotId && before.snapshotId !== snap.id) {
+      await client.snapshots
+        .delete(before.snapshotId)
+        .catch(swallowAs("porter-sandbox: drop superseded snapshot", undefined));
+    }
+  }
+
+  async function retireScopeBody(scope: string, sb: PorterSandboxLike, drain: boolean): Promise<void> {
+    if (sb.phase === "running" && snapshotDue(await store.get(scope))) {
+      await captureSnapshot(scope, sb).catch((e) =>
+        reportError("sandbox_snapshot", "porter_snapshot_failed", errMessage(e), scope),
+      );
+    }
+    await retirePorterBody(sb, drain);
+  }
+
+  async function liveBody(slug: string, attachedTo: string[] = []): Promise<BodyEntry | null> {
     const cached = bodies.get(slug);
     if (cached) {
       await cached.sb.refresh().catch((e) => {
@@ -112,32 +199,39 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
       if (bodies.has(slug) && cached.sb.phase === "running") return cached;
       bodies.delete(slug);
     }
-    const found = await listPorterSandboxes(client, { [SCOPE_TAG]: slug });
-    const live =
+    const attached = (await Promise.all(attachedTo.map((id) => porterSandboxById(client, id)))).filter(
+      (b): b is PorterSandboxLike => b !== null,
+    );
+    const pick = (found: PorterSandboxLike[]) =>
       found.find((b) => b.phase === "running") ?? found.find((b) => b.phase === "creating" || b.phase === "queued");
+    const live = pick(attached) ?? pick(await listPorterSandboxes(client, { [SCOPE_TAG]: slug }));
     if (!live) return null;
-    const name = (await live.refresh()).name;
-    await waitPorterRunning(name, live);
-    const entry = { name, sb: live };
+    const status = await live.refresh();
+    await waitPorterRunning(status.name, live);
+    const entry = { name: status.name, sb: live };
     bodies.set(slug, entry);
+    noteBody(entry, status);
     return entry;
   }
 
   async function createBody(
     slug: string,
     egressMode: "proxy" | "open",
-    volume?: { mountPath: string; id: string },
+    volume?: PorterVolumeMount,
     kind: "scope" | "scratch" = "scope",
+    snapshotId?: string,
   ): Promise<BodyEntry> {
     const name = bodyName(slug);
     const sb = await client.sandboxes
       .create({
-        image,
+        image: snapshotId ? "" : image,
+        ...(snapshotId ? { snapshot_id: snapshotId } : {}),
         name,
         command: ["sleep", "infinity"],
         tags: { [SCOPE_TAG]: slug, [EGRESS_TAG]: egressMode, [KIND_TAG]: kind },
-        ...(volume ? { volume_mounts: { [volume.mountPath]: volume.id } } : {}),
+        ...(volume ? { volume_mounts: { [volume.mountPath]: volume.volumeId } } : {}),
         ...(egressMode === "proxy" && egressProxyHost ? { egress: { allowed_destinations: [egressProxyHost] } } : {}),
+        ...(resources ? { resources } : {}),
         ttl_seconds: ttlSec,
       })
       .catch((e) => {
@@ -157,7 +251,33 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
     }
     const entry = { name, sb };
     bodies.set(slug, entry);
+    noteBody(entry);
+    if (volume) volumeByBody.set(name, volume);
     return entry;
+  }
+
+  async function createScopeBody(
+    scope: string,
+    slug: string,
+    egressMode: "proxy" | "open",
+    volume: PorterVolumeMount,
+  ): Promise<BodyEntry> {
+    const snapshotId = usableSnapshotId(await store.get(scope));
+    let ref: BodyEntry;
+    if (snapshotId) {
+      try {
+        ref = await createBody(slug, egressMode, volume, "scope", snapshotId);
+      } catch (e) {
+        reportError("sandbox_provision", "porter_snapshot_unusable", errMessage(e), scope);
+        await remember(scope, { snapshotId: undefined, snapshotImage: undefined, snapshotAtMs: undefined });
+        ref = await createBody(slug, egressMode, volume);
+      }
+    } else {
+      ref = await createBody(slug, egressMode, volume);
+    }
+    scopeByBody.set(ref.name, scope);
+    await remember(scope, { sandboxId: ref.sb.id, name: ref.name, lastActivityMs: Date.now() });
+    return ref;
   }
 
   async function ensureScopeBody(
@@ -169,30 +289,28 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
     return provisionQueue(scope, () =>
       advisoryLock.withLock(`porter-provision:${scope}`, async () => {
         const volumeName = `${slug}-home`;
-        let volume: { id: string; created: boolean };
+        let volume: { id: string; created: boolean; attachedTo: string[] };
         try {
           volume = await ensurePorterVolume(client, volumeName);
         } catch (e) {
           throw new Error(`porter volume ${volumeName}: ${errMessage(e)}`, { cause: e });
         }
-        const existing = await liveBody(slug);
+        const existing = await liveBody(slug, volume.attachedTo);
         if (existing) {
+          scopeByBody.set(existing.name, scope);
+          await remember(scope, { sandboxId: existing.sb.id, name: existing.name, lastActivityMs: Date.now() });
           const wantProxy = egressMode === "proxy";
           const hasProxy = existing.sb.tags?.[EGRESS_TAG] === "proxy";
-          if (!wantProxy || hasProxy) {
-            scopeByBody.set(existing.name, scope);
-            return { name: existing.name, coldStart: false };
-          }
+          if (!wantProxy || hasProxy) return { name: existing.name, coldStart: false };
           bodies.delete(slug);
-          await retirePorterBody(existing.sb, true);
+          await retireScopeBody(scope, existing.sb, true);
         }
         try {
           onStatus?.("Starting your computer…");
         } catch (error) {
           void error;
         }
-        const ref = await createBody(slug, egressMode, { mountPath: homeDir, id: volume.id });
-        scopeByBody.set(ref.name, scope);
+        const ref = await createScopeBody(scope, slug, egressMode, { mountPath: homeDir, volumeId: volume.id });
         return { name: ref.name, coldStart: volume.created };
       }),
     );
@@ -219,17 +337,30 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
     });
   }
 
-  async function refFor(id: string): Promise<BodyEntry> {
-    for (const entry of bodies.values()) if (entry.name === id) return entry;
+  async function bodyByName(id: string): Promise<BodyEntry | null> {
+    const cached = bodyCache.get(id);
+    if (cached) return cached;
     const fetched = await client.sandboxes.get(id).catch((e) => {
       if (e instanceof NotFoundError) return null;
       throw e;
     });
-    if (!fetched) throw new Error(`porter sandbox ${id} not found`);
-    return { name: id, sb: fetched };
+    if (!fetched) return null;
+    const entry = { name: id, sb: fetched };
+    noteBody(entry, await fetched.refresh());
+    return entry;
   }
 
-  const { execRaw, writeAbsBytes, readAbsBytes } = createPorterExec(client, async (id) => (await refFor(id)).sb.id);
+  async function refFor(id: string): Promise<BodyEntry> {
+    const entry = await bodyByName(id);
+    if (!entry) throw new Error(`porter sandbox ${id} not found`);
+    return entry;
+  }
+
+  const { execRaw, writeAbsBytes, readAbsBytes } = createPorterExec(
+    client,
+    async (id) => (await refFor(id)).sb.id,
+    (id) => volumeByBody.get(id),
+  );
 
   const profile: AgentComputerProfile = {
     backend: "porter",
@@ -237,7 +368,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
     processSessions: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
-      os: "Debian 12 container on Porter Sandboxes — $HOME persists on a volume; paths outside $HOME reset when the sandbox rotates",
+      os: "Debian 12 container on Porter Sandboxes — $HOME persists on a volume; paths outside $HOME are carried across sandbox rotation by a filesystem snapshot taken before each rotation and during idle sweeps, so installs there made since the last sweep can be lost if the sandbox is killed by its lifetime cap",
       runtimes: ["Node 24", "Python 3"],
       get tools() {
         return visibleTools(["git", "curl", "wget", "jq", "unzip", "python3", "gh", "aws", ...(opts.extraTools ?? [])]);
@@ -245,6 +376,8 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
       get notInstalled() {
         return visibleNotInstalled(["gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
       },
+      ...(opts.cpus !== undefined ? { cpus: opts.cpus } : {}),
+      ...(opts.memoryMb !== undefined ? { memoryMb: opts.memoryMb } : {}),
       homeDir,
       workdir: workspaceDir,
     },
@@ -272,7 +405,10 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
     readAbsBytes,
     defaultHomeDir: homeDir,
     ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
+    archiveDir: () => exportScratchDir,
   });
+
+  const handleFor = (name: string): SandboxHandle => ({ id: name, rootDir: workspaceDir, homeDir, coldStart: false });
 
   const sandbox: Sandbox = {
     profile,
@@ -378,14 +514,36 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
 
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
       const slug = porterScopeSlug(prefix, scopeId);
+      const rec = await store.get(scopeId);
+      const recovery: ComputerStatus["recovery"] = rec?.snapshotId
+        ? {
+            strategy: "provider_snapshot",
+            checkpointId: rec.snapshotId,
+            ...(rec.snapshotAtMs !== undefined ? { checkpointAtMs: rec.snapshotAtMs } : {}),
+            checkpointExpiresAtMs: null,
+          }
+        : undefined;
       let machine = "no computer";
       let name: string | undefined;
+      let expiresAtMs: number | undefined;
+      let probeError: string | undefined;
       try {
         const found = await listPorterSandboxes(client, { [SCOPE_TAG]: slug });
         const live = found.find((b) => b.phase === "running") ?? found.find((b) => !porterPhaseSettled(b.phase));
+        const last = rec?.sandboxId ? found.find((b) => b.id === rec.sandboxId) : undefined;
         if (live) {
           machine = live.phase ?? "unknown";
-          if (machine === "running") name = (await live.refresh()).name;
+          if (machine === "running") {
+            const status = await live.refresh();
+            name = status.name;
+            noteBody({ name, sb: live }, status);
+            if (status.started_at) expiresAtMs = Date.parse(status.started_at) + ttlSec * 1000;
+          }
+        } else if (last?.phase === "failed") {
+          machine = "failed";
+          const lines = await last.logs({ limit: FAILED_BODY_LOG_LINES }).catch(() => []);
+          const tail = lines.map((l) => l.line).join(" | ");
+          probeError = `last body ${last.id} failed${tail ? `; last log: ${tail.slice(0, 300)}` : ""}`;
         }
       } catch (e) {
         machine = `check failed: ${errMessage(e)}`;
@@ -395,10 +553,16 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
         try {
           guestResponsive = (await execRaw(name, "true", GUEST_PROBE_TIMEOUT_SEC)).code === 0;
         } catch (e) {
-          void e;
+          probeError = errMessage(e);
         }
       }
-      return { machine, guestResponsive };
+      return {
+        machine,
+        guestResponsive,
+        ...(expiresAtMs !== undefined ? { expiresAtMs } : {}),
+        ...(recovery ? { recovery } : {}),
+        ...(probeError ? { probeError } : {}),
+      };
     },
 
     async restartComputer(scopeId: string): Promise<void> {
@@ -409,10 +573,9 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
           const live = found.filter((b) => !porterPhaseSettled(b.phase));
           const egressMode = live.some((b) => b.tags?.[EGRESS_TAG] === "proxy") ? "proxy" : "open";
           bodies.delete(slug);
-          for (const b of live) await retirePorterBody(b, true);
+          for (const b of live) await retireScopeBody(scopeId, b, true);
           const volume = await ensurePorterVolume(client, `${slug}-home`);
-          const ref = await createBody(slug, egressMode, { mountPath: homeDir, id: volume.id });
-          scopeByBody.set(ref.name, scopeId);
+          await createScopeBody(scopeId, slug, egressMode, { mountPath: homeDir, volumeId: volume.id });
         }),
       );
     },
@@ -427,44 +590,80 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
             return;
           }
           activeScratch.delete(slug);
-          const ref = bodies.get(slug);
+          const ref = bodies.get(slug) ?? (await bodyByName(handle.id));
           bodies.delete(slug);
-          const target =
-            ref?.sb ??
-            (await client.sandboxes.get(handle.id).catch((e) => {
-              if (e instanceof NotFoundError) return null;
-              throw e;
-            }));
-          if (!target) return;
-          if (tdOpts?.destroy) await retirePorterBody(target, false);
-          else await retirePorterBody(target, false).catch(swallowAs("porter-sandbox: scratch terminate", undefined));
+          if (!ref) return;
+          if (tdOpts?.destroy) await retirePorterBody(ref.sb, false);
+          else await retirePorterBody(ref.sb, false).catch(swallowAs("porter-sandbox: scratch terminate", undefined));
         });
       }
-      if (!tdOpts?.destroy) return;
       const scope = scopeByBody.get(handle.id) ?? handle.scopeId;
+      if (!tdOpts?.destroy) {
+        if (scope)
+          await remember(scope, { lastActivityMs: Date.now() }).catch(
+            swallowAs("porter-sandbox: note activity", undefined),
+          );
+        return;
+      }
       return provisionQueue(scope ?? handle.id, async () => {
         const cachedSlug = scope ? porterScopeSlug(prefix, scope) : undefined;
         const ref = cachedSlug ? bodies.get(cachedSlug) : undefined;
         if (cachedSlug) bodies.delete(cachedSlug);
         try {
-          const target =
-            ref?.sb ??
-            (await client.sandboxes.get(handle.id).catch((e) => {
-              if (e instanceof NotFoundError) return null;
-              throw e;
-            }));
-          const slug = target?.tags?.[SCOPE_TAG] ?? cachedSlug;
-          if (target) await retirePorterBody(target, true);
+          const target = ref ?? (await bodyByName(handle.id));
+          const slug = target?.sb.tags?.[SCOPE_TAG] ?? cachedSlug;
+          if (target) await retirePorterBody(target.sb, true);
           if (slug) await client.volumes.delete(`${slug}-home`);
+          if (scope) {
+            const rec = await store.take(scope);
+            if (rec?.snapshotId) await client.snapshots.delete(rec.snapshotId);
+          }
         } catch (e) {
-          opts.onError?.({
-            category: "sandbox_teardown",
-            code: "porter_destroy_failed",
-            message: errMessage(e),
-            ...(scope ? { scopeLabel: scope } : {}),
-          });
+          reportError("sandbox_teardown", "porter_destroy_failed", errMessage(e), scope);
         }
       });
+    },
+
+    async reapDeepIdle(idleMs): Promise<{ reaped: number }> {
+      if (!(idleMs > 0)) return { reaped: 0 };
+      const cutoff = Date.now() - idleMs;
+      let reaped = 0;
+      for (const [scope, candidate] of await store.entries()) {
+        if (candidate.orgId && candidate.orgId !== configOrgId()) continue;
+        if (!candidate.sandboxId) continue;
+        const slug = porterScopeSlug(prefix, scope);
+        reaped += await provisionQueue(scope, () =>
+          advisoryLock.withLock(`porter-provision:${scope}`, async (): Promise<number> => {
+            const rec = await store.get(scope);
+            if (!rec?.sandboxId || !rec.name || rec.sandboxId !== candidate.sandboxId) return 0;
+            const idle = rec.lastActivityMs < cutoff;
+            const due = snapshotDue(rec) && Date.now() - (rec.snapshotAtMs ?? 0) > snapshotIntervalMs;
+            if (!idle && !due) return 0;
+            try {
+              const sb = await porterSandboxById(client, rec.sandboxId);
+              if (sb?.phase !== "running") return 0;
+              if (idle) {
+                const live = await procSessions.listProcesses(handleFor(rec.name));
+                if (live.some((p) => p.status.state === "running")) return 0;
+                bodies.delete(slug);
+                await retireScopeBody(scope, sb, false);
+                return 1;
+              }
+              await captureSnapshot(scope, sb);
+              return 0;
+            } catch (e) {
+              reportError(
+                "sandbox_reap",
+                idle ? "deep_idle_reap_failed" : "periodic_snapshot_failed",
+                errMessage(e),
+                scope,
+              );
+              return 0;
+            }
+          }),
+        );
+      }
+      return { reaped };
     },
   };
 
