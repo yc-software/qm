@@ -229,8 +229,9 @@ export function createTranscriptViewport() {
   function fillViewport(): void {
     const button = earlierButton();
     if (!button || !scroller || scroller.clientHeight === 0) return;
+    if (scroller.scrollHeight - scroller.clientHeight > NEAR_TOP) return;
     const size = (stack ?? scroller).getElementsByTagName("*").length;
-    if (size === filledAtSize || scroller.scrollHeight - scroller.clientHeight > NEAR_TOP) return;
+    if (size === filledAtSize) return;
     filledAtSize = size;
     button.click();
   }
@@ -317,6 +318,7 @@ export function createTranscriptViewport() {
     const nextStack = scroller?.querySelector<HTMLElement>(".message-stack") ?? null;
     if (stack !== nextStack) {
       changed = true;
+      filledAtSize = null;
       if (stack) observer?.unobserve(stack);
       stack = nextStack;
       if (stack) observer?.observe(stack);
