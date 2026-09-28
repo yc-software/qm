@@ -68,3 +68,26 @@ test("the working flag clears once the in-flight run settles", async () => {
     "the flag clears once the run is terminal",
   );
 });
+
+test("listSessions flags a subagent whose latest turn failed, and only while it stays failed", async () => {
+  const { app, runs, sessions } = freshApp();
+  const parent = await app.turn(dm("parent", "web:U1:parent"));
+  const child = await app.turn(dm("child", "web:U1:child"));
+  const loose = await app.turn(dm("loose", "web:U1:loose"));
+  await sessions.setParentSession(child.sessionId!, parent.sessionId!);
+
+  for (const thread of ["web:U1:child", "web:U1:loose"]) {
+    await runs.enqueue({ sessionId: thread, request: enqueueRequest() });
+    const claimed = await runs.claim("w1", 5_000);
+    await runs.complete(claimed!.id, claimed!.leaseToken ?? "", { status: "failed", reason: "boom" });
+  }
+
+  const list = await app.listSessions("U1");
+  assert.equal(list.find((s) => s.id === child.sessionId)?.lastTurnFailed, true);
+  assert.ok(!list.find((s) => s.id === loose.sessionId)?.lastTurnFailed, "only subagents carry the flag");
+
+  await runs.enqueue({ sessionId: "web:U1:child", request: enqueueRequest() });
+  const retry = await runs.claim("w1", 5_000);
+  await runs.complete(retry!.id, retry!.leaseToken ?? "", { status: "ok", reply: "fine" });
+  assert.ok(!(await app.listSessions("U1")).find((s) => s.id === child.sessionId)?.lastTurnFailed);
+});

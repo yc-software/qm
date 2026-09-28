@@ -7,6 +7,7 @@ import {
   Archive,
   ArrowUpLeft,
   Binoculars,
+  Bot,
   Box,
   Brain,
   Clock3,
@@ -1231,7 +1232,7 @@ class PaneTab implements ITabRenderer {
             ? html`<span class="bg-chip" aria-label=${background.label} ${tip(background.label)}
                 >${background.jobs > 0 ? icon(Cog, 11) : nothing}${
                   background.watches > 0 ? icon(Binoculars, 11) : nothing
-                }${background.crons > 0 ? icon(Clock3, 11) : nothing}</span
+                }${background.crons > 0 ? icon(Clock3, 11) : nothing}${background.subagents > 0 ? icon(Bot, 11) : nothing}</span
               >`
             : nothing
         }

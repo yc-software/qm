@@ -936,9 +936,12 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     `;
   }
 
-  function composerApprovalPanel(approvals: PendingApproval[]): TemplateResult {
+  function composerApprovalPanel(
+    approvals: PendingApproval[],
+    resolve: (decision: ApprovalDecision) => void = ctx.chat.resolveCommandApproval,
+  ): TemplateResult {
     const decide = (decision: ApprovalDecision): void => {
-      if (!ctx.chat.state.resolvingApprovals.has(decision.requestId)) ctx.chat.resolveCommandApproval(decision);
+      if (!ctx.chat.state.resolvingApprovals.has(decision.requestId)) resolve(decision);
     };
     return html`<div class="composer-approval-panel" role="group" aria-label="Command approval">
       ${approvals.map(

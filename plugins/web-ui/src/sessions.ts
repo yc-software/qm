@@ -8,6 +8,7 @@ import {
   Archive,
   Ban,
   Binoculars,
+  Bot,
   ArchiveRestore,
   ChevronDown,
   ChevronRight,
@@ -756,7 +757,7 @@ function sessionWorking(s: CoreSession): boolean {
 }
 
 function statusMarks(s: CoreSession): TemplateResult {
-  const ind = rowIndicators(s, liveThreads());
+  const ind = rowIndicators(s, liveThreads(), sessionsState.list);
   return html`${ind.working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}${
     ind.awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing
   }${
@@ -771,7 +772,7 @@ function statusMarks(s: CoreSession): TemplateResult {
           @keydown=${(e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && openBackgroundInspector(e, s)}
           >${ind.background.jobs > 0 ? icon(Cog, 11) : nothing}${
             ind.background.watches > 0 ? icon(Binoculars, 11) : nothing
-          }${ind.background.crons > 0 ? icon(Clock3, 11) : nothing}</span
+          }${ind.background.crons > 0 ? icon(Clock3, 11) : nothing}${ind.background.subagents > 0 ? icon(Bot, 11) : nothing}</span
         >`
       : nothing
   }`;

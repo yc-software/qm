@@ -430,9 +430,16 @@ export function createSessionMethods(
         if (!c.enabled || c.archived || !c.destination) continue;
         cronCounts.set(c.destination.target, (cronCounts.get(c.destination.target) ?? 0) + 1);
       }
+      const failedChildren = new Set<string>();
+      for (const s of sessions) {
+        if (!s.parentSessionId || workingThreadRefs.has(s.threadRef) || waiting.has(s.id)) continue;
+        const run = await deps.runs.latestForThread(s.threadRef);
+        if (run?.status === "failed" || run?.result?.status === "failed") failedChildren.add(s.id);
+      }
       if (
         workingThreadRefs.size === 0 &&
         waiting.size === 0 &&
+        failedChildren.size === 0 &&
         jobCounts.size === 0 &&
         watchCounts.size === 0 &&
         cronCounts.size === 0
@@ -442,6 +449,7 @@ export function createSessionMethods(
         ...s,
         ...(workingThreadRefs.has(s.threadRef) ? { working: true } : {}),
         ...(waiting.has(s.id) ? { awaitingInput: true } : {}),
+        ...(failedChildren.has(s.id) ? { lastTurnFailed: true } : {}),
         ...(jobCounts.has(s.threadRef) ? { backgroundJobs: jobCounts.get(s.threadRef)! } : {}),
         ...(watchCounts.has(s.threadRef) ? { watches: watchCounts.get(s.threadRef)! } : {}),
         ...(cronCounts.has(s.threadRef) ? { crons: cronCounts.get(s.threadRef)! } : {}),

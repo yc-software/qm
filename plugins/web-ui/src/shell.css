@@ -3271,6 +3271,102 @@ qm-markdown .tok-in {
   transform: rotate(90deg);
 }
 
+.subagent-activity.has-failed > .bg-activity-strip {
+  color: var(--destructive, #c0392b);
+}
+.subagent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.subagent-list.bg-panel {
+  margin-top: 6px;
+}
+.subagent-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding-left: calc(var(--subagent-depth, 0) * 14px);
+  border-radius: 8px;
+}
+.subagent-row.peeking {
+  background: color-mix(in srgb, var(--muted-foreground) 8%, transparent);
+}
+.subagent-row-head {
+  appearance: none;
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.subagent-row-head:hover,
+.subagent-row-action:hover {
+  color: var(--foreground);
+}
+.subagent-row-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--foreground);
+}
+.subagent-row-meta {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+.subagent-row.failed .subagent-row-meta,
+.subagent-failed-mark {
+  display: inline-flex;
+  color: var(--destructive, #c0392b);
+}
+.subagent-row-action {
+  appearance: none;
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.subagent-peek {
+  flex: 1 0 100%;
+  margin: 0;
+  padding: 2px 8px 6px 26px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+.subagent-peek-line {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+}
+.subagent-peek-line > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subagent-peek-line.tool {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+
 .bg-panel {
   margin-top: 6px;
   border: 1px solid var(--border);
@@ -10546,7 +10642,7 @@ h3.ambient-field-label {
 .loop-health-failing,
 .loop-health-quarantined {
   background: color-mix(in srgb, var(--destructive) 12%, var(--background));
-  color: var(--destructive);
+  color: var(--destructive, #c0392b);
 }
 .loop-health-reason {
   color: var(--muted-foreground, #667085);
@@ -10703,7 +10799,7 @@ h3.ambient-field-label {
   color: var(--muted-foreground, #667085);
 }
 .loop-item-failed {
-  color: var(--destructive);
+  color: var(--destructive, #c0392b);
 }
 .loop-item-shipped {
   color: var(--success);

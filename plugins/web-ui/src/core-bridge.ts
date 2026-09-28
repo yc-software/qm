@@ -139,6 +139,7 @@ export interface CoreSession {
   lastActivityAt?: number;
   working?: boolean;
   awaitingInput?: boolean;
+  lastTurnFailed?: boolean;
   backgroundJobs?: number;
   watches?: number;
   crons?: number;

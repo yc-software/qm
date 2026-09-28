@@ -1,4 +1,5 @@
 import { sharedContextLabel, type CoreContext, type CoreProject, type CoreSession } from "./core-bridge.ts";
+import { subagentCounts } from "./subagent-activity.ts";
 import { relTime } from "./ui.ts";
 
 type ProjectAwareContext = CoreContext & { project?: CoreProject };
@@ -179,31 +180,41 @@ export function applySessionState(
 export interface RowIndicators {
   working: boolean;
   awaiting: boolean;
-  background: { jobs: number; watches: number; crons: number; label: string } | null;
+  background: BackgroundCounts | null;
 }
 
-export function backgroundLabel(
-  jobs: number,
-  watches: number,
-  crons: number,
-): { jobs: number; watches: number; crons: number; label: string } | null {
+export interface BackgroundCounts {
+  jobs: number;
+  watches: number;
+  crons: number;
+  subagents: number;
+  label: string;
+}
+
+export function backgroundLabel(jobs: number, watches: number, crons: number, subagents = 0): BackgroundCounts | null {
   const parts: string[] = [];
+  if (subagents > 0) parts.push(`${subagents} subagent${subagents === 1 ? "" : "s"} running`);
   if (jobs > 0) parts.push(`${jobs} background job${jobs === 1 ? "" : "s"} running`);
   if (watches > 0) parts.push(`${watches} watch${watches === 1 ? "" : "es"} armed`);
   if (crons > 0) parts.push(`${crons} cron${crons === 1 ? "" : "s"} scheduled here`);
-  return parts.length ? { jobs, watches, crons, label: parts.join(" · ") } : null;
+  return parts.length ? { jobs, watches, crons, subagents, label: parts.join(" · ") } : null;
 }
 
 export function watchActivityLabel(w: { lastFiredAt?: number }): string {
   return w.lastFiredAt ? `still watching · last check ${relTime(w.lastFiredAt)}` : "still watching";
 }
 
-export function rowIndicators(s: CoreSession, liveThreads: ReadonlySet<string> | string | null): RowIndicators {
+export function rowIndicators(
+  s: CoreSession,
+  liveThreads: ReadonlySet<string> | string | null,
+  list: readonly CoreSession[] = [],
+): RowIndicators {
   const live = typeof liveThreads === "string" ? new Set([liveThreads]) : (liveThreads ?? new Set<string>());
+  const children = subagentCounts(list, s.id);
   return {
     working: Boolean(s.working) || (Boolean(s.threadRef) && live.has(s.threadRef)),
-    awaiting: Boolean(s.awaitingInput),
-    background: backgroundLabel(s.backgroundJobs ?? 0, s.watches ?? 0, s.crons ?? 0),
+    awaiting: Boolean(s.awaitingInput) || children.waiting > 0,
+    background: backgroundLabel(s.backgroundJobs ?? 0, s.watches ?? 0, s.crons ?? 0, children.running),
   };
 }
 
@@ -213,7 +224,7 @@ export function conversationBackground(
   threadRef: string | null,
 ): RowIndicators["background"] {
   const row = list.find((s) => (sessionId ? s.id === sessionId : Boolean(threadRef) && s.threadRef === threadRef));
-  return row ? rowIndicators(row, null).background : null;
+  return row ? rowIndicators(row, null, list).background : null;
 }
 
 export function shouldStartProactiveOpener(state: {
