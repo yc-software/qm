@@ -336,3 +336,26 @@ test("a parent parked on a blocking approval keeps awaiting while its subagent r
   await new Promise((r) => setTimeout(r, 100));
   assert.deepEqual(statesFor(got, parentThread), ["working", "awaiting_approval", "awaiting_approval"]);
 });
+
+test("a parent whose own turn parks on an approval while its subagent runs settles awaiting at once", async () => {
+  const built = freshApp();
+  const parentThread = "web:U1:parks-mid-tree";
+  const childThread = "web:U1:parks-mid-tree-child";
+  const parent = await built.app.turn(dm("hello", parentThread));
+  const child = await built.app.turn(dm("hello", childThread));
+  await built.sessions.setParentSession(child.sessionId!, parent.sessionId!);
+  const { run } = await built.runs.enqueue({
+    sessionId: childThread,
+    request: resolvedDm("work", childThread),
+    maxAttempts: 3,
+  });
+  const got = record(built.sessionStateBus);
+  const parked = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, parentThread));
+  assert.equal(parked.status, "pending_approval");
+  assert.ok(await waitFor(() => statesFor(got, parentThread).includes("awaiting_approval")));
+  const row = (await built.app.listSessions("U1")).find((s) => s.id === parent.sessionId);
+  assert.equal(row?.awaitingInput, true);
+  assert.ok(!row?.working, "the snapshot ranks the pending approval above subagent work, like the push");
+  const leased = await built.runs.claimById(run.id, "w1", 30_000);
+  await built.runs.complete(run.id, leased!.leaseToken!, { status: "ok", reply: "done" });
+});

@@ -401,7 +401,6 @@ export function createSessionMethods(
     },
 
     async listSessions(principalId) {
-      const workingThreadRefs = await workingSessionThreadRefs(deps.sessions, deps.runs);
       const all = await sessionsForViewer(principalId);
       const visibleById = new Map(all.map((session) => [session.id, session]));
       const approvalRows: PendingApprovalRecord[] = [];
@@ -410,6 +409,7 @@ export function createSessionMethods(
         if (session && (await approvalRecordIsCurrent(record, session))) approvalRows.push(record);
       }
       const waiting = new Set(approvalRows.filter((r) => r.blocksInput !== false).map((r) => r.sessionId));
+      const workingThreadRefs = await workingSessionThreadRefs(deps.sessions, deps.runs, waiting);
       const sessions = all.filter(
         (s) =>
           s.hasEntries !== false || Boolean(s.title?.trim()) || workingThreadRefs.has(s.threadRef) || waiting.has(s.id),

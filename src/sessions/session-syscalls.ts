@@ -374,6 +374,7 @@ export async function sessionTreeWorking(
 export async function workingSessionThreadRefs(
   sessions: Pick<SessionStore, "get" | "getByThread">,
   runs: Pick<RunStore, "activeSessionIds">,
+  awaitingSessionIds: ReadonlySet<string>,
 ): Promise<Set<string>> {
   const active = await runs.activeSessionIds();
   const working = new Set(active);
@@ -382,7 +383,8 @@ export async function workingSessionThreadRefs(
       .map(async (threadRef) => {
         const session = await sessions.getByThread(threadRef);
         if (!session?.parentSessionId) return;
-        for (const ancestor of await stoppableAncestors(sessions, session)) working.add(ancestor.threadRef);
+        for (const ancestor of await stoppableAncestors(sessions, session))
+          if (!awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
       })
       .map((lookup) => lookup.catch(swallowAs("session list: working ancestors", undefined))),
   );
