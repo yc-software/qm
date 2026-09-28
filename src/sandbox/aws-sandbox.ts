@@ -434,6 +434,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         ...(env ? { env } : {}),
       };
 
+      activeByMicrovm.set(id, (activeByMicrovm.get(id) ?? 0) + 1);
       try {
         const prepared = await execRaw(
           id,
@@ -457,7 +458,6 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
           { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "aws" },
         );
 
-        activeByMicrovm.set(id, (activeByMicrovm.get(id) ?? 0) + 1);
         return handle;
       } catch (error) {
         await cleanupFailedProvision(sandbox, handle);
