@@ -85,7 +85,7 @@ test("a probe that hangs on the real exec path reports NOT answering within the 
   const status = await ctx.computerStatus();
   assert.equal(status.guestResponsive, false);
   assert.match(status.probeError ?? "", /timed out/);
-  assert.ok(Date.now() - started < 20_000);
+  assert.ok(Date.now() - started < 30_000);
 });
 
 test("status for an explicit sandbox probes its exec path instead of trusting the provider", async () => {

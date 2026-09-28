@@ -672,7 +672,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           const code = await withTimeout(
             async () =>
               (await deps.sandbox.run(await provision(), "true", { timeoutMs: COMMAND_PATH_PROBE_TIMEOUT_MS })).code,
-            COMMAND_PATH_PROBE_TIMEOUT_MS,
+            COMMAND_PATH_PROBE_TIMEOUT_MS * 2,
             "command probe",
           );
           return { ...status, guestResponsive: code === 0 };
