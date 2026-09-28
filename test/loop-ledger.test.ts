@@ -405,7 +405,11 @@ test("email classification projection is opt-in, scoped, and never changes store
     assert.deepEqual(query.where, { field: "loopId", anyOfFold: [LOOP] });
     assert.ok(query.omit?.includes("proposal"));
     assert.ok(query.omit?.includes("thread"));
-    return originalSelect(query);
+    if (!query.omit?.includes("sourcePayload"))
+      assert.deepEqual(query.pickNested, { sourcePayload: ["source", "automated"] });
+    const rows = await originalSelect(query);
+    for (const row of rows) assert.equal((row as LoopItem).sourcePayload?.privateDetail, undefined);
+    return rows;
   });
   const before = await ledger.summaries([LOOP]);
   assert.equal(before.length, 1);
@@ -417,4 +421,15 @@ test("email classification projection is opt-in, scoped, and never changes store
   for (const key of ["sourcePayload", "proposal", "thread", "agentDrafts"]) assert.ok(!(key in classified[0]!));
   assert.deepEqual(await ledger.summaries([LOOP]), before);
   assert.deepEqual(await ledger.get(loopItemId(LOOP, "gmail:thread-1")), stored);
+});
+
+test("flagged summaries classify payload-only legacy email without changing stored records", async () => {
+  const ledger = createLoopItemLedger();
+  await ledger.ingest([entry({ source: undefined, sourcePayload: { source: "gmail", automated: true } })]);
+  const before = await ledger.summaries([LOOP]);
+  const [classified] = await ledger.summaries([LOOP], { includeEmailClassification: true });
+  assert.equal(classified!.source, "gmail");
+  assert.equal(classified!.inboxPreview!.automated, true);
+  assert.deepEqual(await ledger.summaries([LOOP]), before);
+  assert.equal((await ledger.byLoop(LOOP))[0]!.source, undefined);
 });

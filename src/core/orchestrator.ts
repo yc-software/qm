@@ -3437,6 +3437,31 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return deps.harness.turns.runTurn({
             session,
             prepareSteer: async (text, request) => {
+              const refreshedInbox =
+                input.surface === "web" &&
+                conversation.kind === "dm" &&
+                /^web:.+:inbox$/.test(conversation.threadRef) &&
+                request?.conversation.threadRef === conversation.threadRef
+                  ? request.conversationHeader?.trim()
+                  : undefined;
+              if (refreshedInbox) {
+                let allowed = true;
+                if (securityPolicy.inboundScreening === "external") {
+                  for (const chunk of securityScreenChunks("conversation-header", refreshedInbox)) {
+                    const verdict = await classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
+                      hook: "user_input",
+                      request: text,
+                      surface: "steer",
+                      origin: input.origin.kind,
+                    });
+                    if (verdict?.decision !== "auto" || verdict.unscreened) {
+                      allowed = false;
+                      break;
+                    }
+                  }
+                }
+                text = `${text}\n\n${allowed ? refreshedInbox : "Updated inbox context was withheld by the security screen."}`;
+              }
               if (!request?.attachments?.length) return { text };
               const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
               const inboxDir = `${turnInboxDir}/${randomUUID()}`;

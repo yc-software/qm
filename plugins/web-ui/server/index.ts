@@ -864,7 +864,7 @@ interface CoreApprovalRecord {
   request?: {
     surface?: string;
     actor?: { externalId?: unknown };
-    conversation?: { threadRef?: unknown };
+    conversation?: { threadRef?: unknown; kind?: unknown };
     text?: unknown;
   } & Record<string, unknown>;
 }
@@ -2411,6 +2411,11 @@ const apiRoutes: readonly WebRoute[] = [
       const actor = typeof record.request?.actor?.externalId === "string" ? record.request.actor.externalId : "";
       if ((!threadRef.startsWith("web:") && !threadRef.startsWith("swarm:")) || actor !== user || !record.request) {
         return json(res, 404, { error: "not_found" });
+      }
+      if (/^web:.+:inbox$/.test(threadRef)) {
+        const resolved = await resolveWebConversation(user, threadRef, undefined, undefined);
+        if ("error" in resolved) return json(res, 403, resolved);
+        if (record.request.conversation?.kind !== "dm") return json(res, 403, { error: "forbidden_scope" });
       }
       if (!threadRef.startsWith(`web:${user}:`)) {
         const sessionId = typeof record.sessionId === "string" ? record.sessionId : "";

@@ -300,13 +300,18 @@ export function createLoopItemLedger(
       const items = await backing.select({
         where: { field: "loopId", anyOfFold: loopIds },
         omit: ["proposal", "agentDrafts", "thread"],
+        pickNested: { sourcePayload: ["source", "automated"] },
       });
-      return items.map(({ sourcePayload, ...item }) => ({
-        ...item,
-        ...(item.source === "gmail"
-          ? { inboxPreview: { ...item.inboxPreview, automated: sourcePayload?.automated === true } }
-          : {}),
-      }));
+      return items.map(({ sourcePayload, ...item }) => {
+        const source = item.source ?? (typeof sourcePayload?.source === "string" ? sourcePayload.source : undefined);
+        return {
+          ...item,
+          ...(source !== undefined ? { source } : {}),
+          ...(source === "gmail"
+            ? { inboxPreview: { ...item.inboxPreview, automated: sourcePayload?.automated === true } }
+            : {}),
+        };
+      });
     },
     async ingest(entries) {
       const outcome: IngestOutcome = { created: 0, updated: 0, skipped: 0 };
