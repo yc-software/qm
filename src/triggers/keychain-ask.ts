@@ -16,9 +16,9 @@ function resolutionInput(ask: KeychainAsk, grant?: KeychainGrant): string {
       `Keychain ask \`${ask.id}\` was approved by its owner (${ask.ownerId}): ${once ? "one-time" : "standing"} ` +
       `grant \`${ask.grantId}\` for this conversation (the owner's consent, verbatim: "${grant?.purpose ?? ask.purpose}" — act within it; ` +
       `originally asked for: "${ask.purpose}"). Tell the requester and resume ` +
-      `the task it was for — load the credential with ` +
+      `the task it was for — on isolated computers request the granted credential handle in execute.credentials; on legacy computers load file credentials with ` +
       `\`${keychainUseCommand({ grant: String(ask.grantId) })}\` ` +
-      `and run the task in that same shell${once ? " (the grant is single-use)" : ""}.`
+      `when executing the task${once ? " (the grant is single-use)" : ""}.`
     );
   }
   if (ask.status === "declined") {
@@ -127,7 +127,7 @@ export interface DropResolution {
 function dropResolutionInput(drop: DropResolution): string {
   const waiting = !!drop.pendingSiblings?.length;
   const where = drop.granted
-    ? `now in the keychain and granted to this conversation — load it with \`${keychainUseCommand({ grant: String(drop.grantId) })}\`${waiting ? " when the task runs" : " and run the task in that same shell"}`
+    ? `now in the keychain and granted to this conversation — on isolated computers request its handle in execute.credentials; on legacy computers load file credentials with \`${keychainUseCommand({ grant: String(drop.grantId) })}\`${waiting ? " when the task runs" : " when executing the task"}`
     : `now in your keychain and available here`;
   const next = waiting
     ? `Heads-up: other drop links from this conversation (${drop.pendingSiblings!.map((s) => `\`${s}\``).join(", ")}) haven't been filled yet — ` +

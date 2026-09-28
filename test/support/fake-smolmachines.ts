@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { realpathSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -69,7 +69,7 @@ export interface FakeSmolmachines {
 export const FAKE_SMOLMACHINES_TOKEN = "test-token";
 
 export function installFakeSmolmachines(): FakeSmolmachines {
-  const root = mkdtempSync(join(tmpdir(), "fake-smol-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "fake-smol-")));
   const machines = new Map<string, FakeMachine>();
   const execScripts: string[] = [];
   const calls: SmolCall[] = [];

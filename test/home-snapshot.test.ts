@@ -11,6 +11,7 @@ import {
   chmodSync,
   symlinkSync,
   readlinkSync,
+  realpathSync,
   statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -43,7 +44,7 @@ const io: HomeSnapshotSessionIo<Box> = {
 };
 
 function box(): Box & { home: string; tar: string } {
-  const root = mkdtempSync(join(tmpdir(), "home-snap-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "home-snap-")));
   const home = join(root, "home");
   mkdirSync(home);
   return { root, home, tar: join(root, "home.tar") };
@@ -365,3 +366,24 @@ for (const size of [0, -1, NaN, Infinity, 1.5]) {
     assert.equal(existsSync(b.tar), false);
   });
 }
+
+test("isolated recovery restores workspace data without executing or restoring privileged home files", async () => {
+  const source = box();
+  fill(source.home, "workspace/kept.txt", 32);
+  fill(source.home, ".bash_profile", 64);
+  fill(source.home, ".local/bin/python3", 64);
+  symlinkSync("/etc", join(source.home, "workspace/escape"));
+  const store = createMemorySnapshotStore();
+  await ops(source, store).snapshotHome("scope", source);
+  const original = await store.open("scope");
+  const originalBytes = Buffer.concat(await Array.fromAsync(original!.parts));
+  const target = box();
+  await ops(target, store, { executionModeForScope: async () => "isolated" }).hydrateHome("scope", target);
+  assert.ok(existsSync(join(target.home, "workspace/kept.txt")));
+  assert.equal(existsSync(join(target.home, ".bash_profile")), false);
+  assert.equal(existsSync(join(target.home, ".local")), false);
+  assert.equal(existsSync(join(target.home, "workspace/escape")), false);
+  assert.equal(await store.open("scope/pre-supervisor-home"), null);
+  const retained = await store.open("scope");
+  assert.deepEqual(Buffer.concat(await Array.fromAsync(retained!.parts)), originalBytes);
+});

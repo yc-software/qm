@@ -1,3 +1,5 @@
+import type { SandboxExecutionModeOptions } from "./sandbox.ts";
+import { createSupervisorTransport, SUPERVISOR_TRUST_VERSION } from "./supervisor-transport.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -64,6 +66,7 @@ const DEFAULT_KEEP_WARM_SEC = 3600;
 const DEFAULT_NATIVE_SNAPSHOT_INTERVAL_MS = 5 * 60_000;
 
 export interface StoredE2bSandbox {
+  supervisorVersion?: string;
   sandboxId: string;
   nativePause?: boolean;
   preservationState?: "running" | "paused" | "pause_failed";
@@ -75,7 +78,7 @@ export interface StoredE2bSandbox {
   homeDirty?: boolean;
 }
 
-export interface E2bSandboxOptions extends BlobStagingOptions {
+export interface E2bSandboxOptions extends BlobStagingOptions, SandboxExecutionModeOptions {
   client: E2bClient;
   namePrefix?: string;
   defaultTimeoutSec?: number;
@@ -109,6 +112,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
   const snapshots = opts.snapshots ?? createMemorySnapshotStore();
   const provisionQueue = createKeyedQueue<string>();
 
+  const supervisorFresh = new Set<string>();
   const sessionByName = new Map<string, E2bSession>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
@@ -119,6 +123,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
   };
 
   const homeSnapshots = createHomeSnapshotOps<E2bSession>({
+    executionModeForScope: opts.executionModeForScope,
     label: "e2b",
     homeDir: HOME_DIR,
     homeTarPath: HOME_TAR,
@@ -187,7 +192,9 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         }
       }
 
+      const isolated = (await opts.executionModeForScope?.(scope)) === "isolated";
       if (stored?.nativePause) {
+        if (isolated) throw new Error("Native E2B recovery is unavailable for isolated computers");
         if (!stored.recoverySnapshotId)
           throw new Error("e2b sandbox is gone; explicitly import a recovery snapshot before replacing its home");
         try {
@@ -223,7 +230,8 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       } catch (error) {
         void error;
       }
-      const session = await client.create({ metadata: { name }, autoPause: true });
+      const session = await client.create({ metadata: { name }, autoPause: !isolated });
+      if (isolated) supervisorFresh.add(session.sandboxId);
       sessionByName.set(name, session);
       await store.put(scope, {
         sandboxId: session.sandboxId,
@@ -242,7 +250,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
           cause: e,
         });
       }
-      await store.merge(scope, { nativePause: client.nativePause });
+      await store.merge(scope, { nativePause: isolated ? false : client.nativePause });
       noteInfo(await client.info?.(session.sandboxId).catch(() => undefined));
       return { session, coldStart: !hydrated };
     });
@@ -255,6 +263,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       const active = activeScratch.get(name) ?? 0;
       if (active === 0 && !sessionByName.has(name)) {
         const session = await client.create({ metadata: { name, scratch: "true" }, autoPause: false });
+        supervisorFresh.add(session.sandboxId);
         sessionByName.set(name, session);
       }
       activeScratch.set(name, active + 1);
@@ -267,6 +276,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
     const reviveScratch = async (): Promise<E2bSession> => {
       const session = await client.create({ metadata: { name, scratch: "true" }, autoPause: false });
+      supervisorFresh.add(session.sandboxId);
       sessionByName.set(name, session);
       return session;
     };
@@ -303,7 +313,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     processSessions: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
-      os: "Linux — E2B Firecracker sandbox (provider pause preserves state; publish durable work to git or Files)",
+      os: "Linux — E2B Firecracker sandbox (provider pause preserves legacy state; isolated computers retain workspace snapshots)",
       runtimes: ["Node", "Python 3"],
       get tools() {
         return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);
@@ -395,6 +405,47 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
   }
 
   const sandbox: Sandbox = {
+    supervisorTransport: createSupervisorTransport(
+      {
+        async acceptTrusted(handle) {
+          const scope = scopeByName.get(handle.id);
+          const session = sessionByName.get(handle.id);
+          if (!scope || !session) return;
+          if (!store.update) throw new Error("Supervisor provenance requires an atomic durable store");
+          const accepted = await store.update(scope, (stored) => {
+            if (stored.sandboxId !== session.sandboxId) throw new Error("Supervisor trust generation changed");
+            return {
+              ...stored,
+              supervisorVersion: SUPERVISOR_TRUST_VERSION,
+              nativePause: false,
+            };
+          });
+          if (!accepted) throw new Error("Supervisor trust generation disappeared");
+        },
+        async writeBytes(handle, path, data) {
+          const session = sessionByName.get(handle.id);
+          if (!session) throw new Error("Sandbox session unavailable");
+          await session.writeFileBytes(path, data, "root");
+        },
+        async identity(handle) {
+          const session = sessionByName.get(handle.id);
+          if (!session) throw new Error("Sandbox session is unavailable; provision before supervised execution");
+          return session.sandboxId;
+        },
+        async run(handle, command, options) {
+          const session = sessionByName.get(handle.id);
+          if (!session) throw new Error("Sandbox session is unavailable; provision before supervised execution");
+          const result = await session.runCommand(command, { user: "root", timeoutMs: options?.timeoutMs ?? 600_000 });
+          return {
+            stdout: result.stdout,
+            stderr: result.stderr,
+            code: result.exitCode,
+            timedOut: result.exitCode === 124,
+          };
+        },
+      },
+      supervisorFresh,
+    ),
     destroyScope(scopeId: string): Promise<void> {
       return provisionQueue(scopeId, () => destroyStoredScope(scopeId));
     },
@@ -440,7 +491,10 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       };
 
       try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
+        const credLinks =
+          scratch || provOpts?.executionMode === "isolated"
+            ? ""
+            : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
         const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
         if (prep.code !== 0)
           throw new Error(`e2b provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
@@ -638,15 +692,16 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     if (!session) return;
 
     const stored = await store.get(scope);
+    const isolated = (await opts.executionModeForScope?.(scope)) === "isolated";
     if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
-    if (!stored?.nativePause && snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
+    if ((isolated || !stored?.nativePause) && snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
       try {
         await snapshotHome(scope, session);
       } catch (e) {
         reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
       }
     }
-    if (tdOpts?.keepWarm) {
+    if (isolated || tdOpts?.keepWarm) {
       try {
         await session.keepAlive(keepWarmMs);
       } catch (e) {

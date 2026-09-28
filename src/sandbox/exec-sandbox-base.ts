@@ -163,7 +163,11 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
         ...(forceEgress ? forceThroughProxyEnv(deps.egressProxyUrl!, provOpts!.egressToken!) : {}),
       };
       if (Object.keys(env).length) handle.env = env;
-      const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, deps.credentialPaths)}`;
+
+      const credLinks =
+        scratch || provOpts?.executionMode === "isolated"
+          ? ""
+          : ` && ${ephemeralCredLinkScript(homeDir, deps.credentialPaths)}`;
       const prepare = `mkdir -p ${shq(workspaceDir)}${credLinks}`;
       const toolIo = {
         exec: (script: string, t: number) => deps.exec(name, script, t),

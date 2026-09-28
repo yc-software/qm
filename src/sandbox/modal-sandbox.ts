@@ -1,3 +1,5 @@
+import type { SandboxExecutionModeOptions } from "./sandbox.ts";
+import { createSupervisorTransport, SUPERVISOR_TRUST_VERSION } from "./supervisor-transport.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -10,7 +12,7 @@ import { collectBlob } from "../persistence/blob-transfer.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
-import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
+import { createExecProcessSessions, SUPERVISOR_PROCESS_ROOT, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
@@ -63,6 +65,7 @@ const swallowGone = (error: unknown): void => {
 const SNAPSHOT_PRUNE = ["./.qm-hydrated", ...HOME_SNAPSHOT_PRUNE];
 
 export interface StoredModalSandbox {
+  supervisorVersion?: string;
   sandboxId: string;
   hydrationPending?: boolean;
   nativeSnapshotId?: string;
@@ -78,7 +81,7 @@ export interface StoredModalSandbox {
   orgId?: string;
 }
 
-export interface ModalSandboxOptions extends BlobStagingOptions {
+export interface ModalSandboxOptions extends BlobStagingOptions, SandboxExecutionModeOptions {
   client: ModalClient;
   advisoryLock?: AdvisoryLock;
   namePrefix?: string;
@@ -135,6 +138,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   const provisionQueue = <T>(scope: string, action: () => Promise<T>): Promise<T> =>
     localQueue(scope, () => advisoryLock.withLock(`modal-provision:${scope}`, action));
 
+  const supervisorFresh = new Set<string>();
   const sessionByName = new Map<string, ModalSession>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
@@ -145,6 +149,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   };
 
   const homeSnapshots = createHomeSnapshotOps<ModalSession>({
+    executionModeForScope: opts.executionModeForScope,
     label: "modal",
     homeDir: HOME_DIR,
     homeTarPath: HOME_TAR,
@@ -223,6 +228,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     let session: ModalSession;
     try {
       session = await client.create({ name, tags: tags("scope") });
+      supervisorFresh.add(session.sandboxId);
     } catch (err) {
       if (!(err instanceof ModalNameConflictError)) throw err;
       const adopted = await client.fromName(name);
@@ -255,7 +261,16 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     let hydrated: boolean;
     try {
       if (previous?.nativeSnapshotId) {
-        if (!session.restoreHome) throw new Error("native Modal home restore is not supported by this client");
+        if (
+          (await opts.executionModeForScope?.(scope)) === "isolated" &&
+          previous.supervisorVersion !== SUPERVISOR_TRUST_VERSION
+        ) {
+          supervisorFresh.delete(session.sandboxId);
+          throw new Error(
+            "Modal native checkpoint recovery requires workspace-only migration before supervised execution; the recovery snapshot is preserved",
+          );
+        }
+        if (!session.restoreHome) throw new Error("Native Modal checkpoint restore is unavailable");
         await session.restoreHome(previous.nativeSnapshotId);
         hydrated = true;
       } else {
@@ -396,6 +411,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       const active = activeScratch.get(name) ?? 0;
       if (active === 0 && !sessionByName.has(name)) {
         const session = await client.create({ tags: tags("scratch") });
+        supervisorFresh.add(session.sandboxId);
         sessionByName.set(name, session);
       }
       activeScratch.set(name, active + 1);
@@ -407,6 +423,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     const scratchKey = scratchKeyByName.get(name);
     const reviveScratch = async (): Promise<ModalSession> => {
       const session = await client.create({ tags: tags("scratch") });
+      supervisorFresh.add(session.sandboxId);
       sessionByName.set(name, session);
       return session;
     };
@@ -676,6 +693,37 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   }
 
   const sandbox: Sandbox = {
+    supervisorTransport: createSupervisorTransport(
+      {
+        async acceptTrusted(handle) {
+          const scope = scopeByName.get(handle.id);
+          const session = sessionByName.get(handle.id);
+          if (!scope || !session) return;
+          if (!store.update) throw new Error("Supervisor provenance requires an atomic durable store");
+          const accepted = await store.update(scope, (stored) => {
+            if (stored.sandboxId !== session.sandboxId) throw new Error("Supervisor trust generation changed");
+            return { ...stored, supervisorVersion: SUPERVISOR_TRUST_VERSION };
+          });
+          if (!accepted) throw new Error("Supervisor trust generation disappeared");
+        },
+        async writeBytes(handle, path, data) {
+          const session = sessionByName.get(handle.id);
+          if (!session) throw new Error("Sandbox session unavailable");
+          await session.writeFileBytes(path, data);
+        },
+        async identity(handle) {
+          const session = sessionByName.get(handle.id);
+          if (!session) throw new Error("Sandbox session is unavailable; provision before supervised execution");
+          return session.sandboxId;
+        },
+        async run(handle, command, options) {
+          const session = sessionByName.get(handle.id);
+          if (!session) throw new Error("Sandbox session is unavailable; provision before supervised execution");
+          return runTimed(session, command, Math.ceil((options?.timeoutMs ?? 600_000) / 1000));
+        },
+      },
+      supervisorFresh,
+    ),
     destroyScope(scopeId: string): Promise<void> {
       return provisionQueue(scopeId, () => destroyStoredScope(scopeId));
     },
@@ -721,7 +769,10 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       };
 
       try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
+        const credLinks =
+          scratch || provOpts?.executionMode === "isolated"
+            ? ""
+            : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
         await installLayerTools(
           {
             exec: (script, t) => execRaw(name, script, t),
@@ -964,7 +1015,10 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           let busy: boolean;
           try {
             const handle: SandboxHandle = { id: name, rootDir: workspaceDir, homeDir: HOME_DIR, coldStart: false };
-            const live = await createExecProcessSessions(directProcIo(session)).listProcesses(handle);
+            const live = await createExecProcessSessions(
+              directProcIo(session),
+              (await opts.executionModeForScope?.(scope)) === "isolated" ? SUPERVISOR_PROCESS_ROOT : undefined,
+            ).listProcesses(handle);
             busy = live.some((p) => p.status.state === "running");
           } catch (e) {
             if (e instanceof ModalSandboxGoneError) {

@@ -1,3 +1,5 @@
+import type { SandboxExecutionModeOptions } from "./sandbox.ts";
+import { createSupervisorTransport } from "./supervisor-transport.ts";
 import { randomUUID } from "node:crypto";
 import { NotFoundError } from "porter-sandbox";
 import type { WorkspaceLayer } from "../types.ts";
@@ -55,7 +57,7 @@ interface BodyEntry {
   sb: PorterSandboxLike;
 }
 
-export interface PorterSandboxOptions {
+export interface PorterSandboxOptions extends SandboxExecutionModeOptions {
   image?: string;
   token?: string;
   baseUrl?: string;
@@ -84,6 +86,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
   const prefix = opts.namePrefix ?? "qm";
   const homeDir = opts.homeDir ?? "/root";
   const ttlSec = opts.ttlSec ?? 28_800;
+  const supervisorFresh = new Set<string>();
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const workspaceDir = `${homeDir}/${WORKSPACE_BASENAME}`;
   const provisionQueue = createKeyedQueue<string>();
@@ -155,6 +158,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
       await sb.terminate().catch(swallowAs("porter-sandbox: abandon half-created body", undefined));
       throw e;
     }
+    supervisorFresh.add(sb.id);
     const entry = { name, sb };
     bodies.set(slug, entry);
     return entry;
@@ -275,6 +279,19 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
   });
 
   const sandbox: Sandbox = {
+    supervisorTransport: createSupervisorTransport(
+      {
+        async writeBytes() {
+          throw new Error(
+            "Porter supervisor execution requires a private binary sandbox upload transport; this provider cannot safely stage credentials",
+          );
+        },
+        identity: async (handle) => (await refFor(handle.id)).sb.id,
+        run: (handle, command, options) =>
+          execRaw(handle.id, command, Math.ceil((options?.timeoutMs ?? 600_000) / 1000)),
+      },
+      supervisorFresh,
+    ),
     profile,
     startProcess: procSessions.startProcess,
     readProcess: procSessions.readProcess,
@@ -314,7 +331,10 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
       };
 
       try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, opts.credentialPaths ?? [])}`;
+        const credLinks =
+          scratch || provOpts?.executionMode === "isolated"
+            ? ""
+            : ` && ${ephemeralCredLinkScript(homeDir, opts.credentialPaths ?? [])}`;
         const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
         if (prep.code !== 0)
           throw new Error(`porter provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);

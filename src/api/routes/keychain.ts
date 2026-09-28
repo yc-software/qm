@@ -1,6 +1,7 @@
 import {
   KeychainError,
   isBackendCredential,
+  credentialHandle,
   renderAskNotice,
   renderUseScript,
   type CredentialFieldInput,
@@ -15,8 +16,8 @@ import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
 import { swallow, swallowAs } from "../../util/errors.ts";
-import { cronIdOf } from "../../sessions/session-store.ts";
 import { keychainUseCommand } from "../contract.ts";
+import { cronIdOf } from "../../sessions/session-store.ts";
 
 const CONSENT_ON_TRIGGERED_TURN =
   "consent can only be recorded on a turn its owner themself sent — this turn was fired by a trigger, not a person";
@@ -159,7 +160,12 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
     }
 
     if (method === "GET" && pathname === "/v1/keychain/credentials") {
-      return sendJson(res, 200, { credentials: await kc.listByOwner(actorId) });
+      return sendJson(res, 200, {
+        credentials: (await kc.listByOwner(actorId)).map((credential) => ({
+          ...credential,
+          ...(credential.credentialHandle ? { credentialHandle: credential.credentialHandle } : {}),
+        })),
+      });
     }
 
     if (method === "GET" && pathname === "/v1/keychain/overview") {
@@ -171,7 +177,16 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         ...grants.map((grant) => grant.audienceScopeId),
         ...asks.map((ask) => ask.requesterScopeId),
       ]);
-      return sendJson(res, 200, { credentials, connectorCredentials, grants, asks, scopeNames });
+      return sendJson(res, 200, {
+        credentials: credentials.map((credential) => ({
+          ...credential,
+          ...(credential.credentialHandle ? { credentialHandle: credential.credentialHandle } : {}),
+        })),
+        connectorCredentials,
+        grants: grants.map((grant) => ({ ...grant, credentialHandle: credentialHandle(grant.credentialId) })),
+        asks,
+        scopeNames,
+      });
     }
 
     if (method === "DELETE" && pathname.startsWith("/v1/keychain/credentials/")) {
@@ -211,13 +226,17 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
             note: "Composio keys stay in the backend. Use the composio skill and /v1/composio through the authenticated agent API.",
           };
         return {
-          command: keychainUseCommand({ grant: grant.id }),
+          command:
+            capability.executionMode === "isolated" && credential?.credentialHandle
+              ? `execute.credentials: ${JSON.stringify([credential.credentialHandle])}`
+              : keychainUseCommand({ grant: grant.id }),
           ...(credential?.credentialHandle
             ? { credentialHandle: credential.credentialHandle, credentials: [credential.credentialHandle] }
             : {}),
-          note: credential?.credentialHandle
-            ? "Pass credentials to execute for the command needing this credential. This handle is available immediately; no keychain/use call is needed."
-            : "Run the task in that same shell. Do not echo or print the credential files.",
+          note:
+            credential?.credentialHandle && (credential.kind === "env" || capability.executionMode === "isolated")
+              ? "Pass credentials to execute for the command needing this credential. This handle is available immediately; no keychain/use call is needed."
+              : "Run the task in that same shell. Do not echo or print the credential files.",
         };
       };
       if (typeof b.ask === "string") {
@@ -299,7 +318,12 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       const mine = await kc.listGrants({ ownerId: actorId });
       const here = await kc.listGrants({ audienceScopeId: capability.scopeId });
       const byId = new Map([...mine, ...here].map((g) => [g.id, g]));
-      return sendJson(res, 200, { grants: [...byId.values()] });
+      return sendJson(res, 200, {
+        grants: [...byId.values()].map((grant) => ({
+          ...grant,
+          credentialHandle: credentialHandle(grant.credentialId),
+        })),
+      });
     }
 
     if (method === "POST" && pathname.startsWith("/v1/keychain/grants/") && pathname.endsWith("/revoke")) {
@@ -423,6 +447,34 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
     }
 
     if (method === "POST" && pathname === "/v1/keychain/use") {
+      let isolated = capability.executionMode === "isolated";
+      if (
+        capability.executionMode !== undefined &&
+        capability.executionMode !== "legacy" &&
+        capability.executionMode !== "isolated"
+      )
+        return sendJson(res, 403, { error: "forbidden", message: "invalid sandbox execution mode" });
+      if (capability.sandboxId !== undefined) {
+        if (typeof capability.sandboxId !== "string" || !capability.sandboxId || !deps.sandboxResources)
+          return sendJson(res, 403, { error: "forbidden", message: "sandbox binding cannot be verified" });
+        const resource = await deps.sandboxResources.get(capability.sandboxId).catch(() => null);
+        if (!resource || resource.ownerScopeId !== capability.scopeId || resource.state === "retired")
+          return sendJson(res, 403, { error: "forbidden", message: "sandbox binding is unavailable" });
+        isolated ||= resource.executionMode === "isolated";
+      } else if (deps.sandbox?.executionModeFor) {
+        try {
+          isolated ||= (await deps.sandbox.executionModeFor(capability.scopeId)) === "isolated";
+        } catch {
+          return sendJson(res, 403, { error: "forbidden", message: "sandbox binding cannot be verified" });
+        }
+      }
+      if (isolated)
+        return sendJson(res, 410, {
+          error: "execute_credentials_required",
+          message:
+            "Isolated computers receive credentials only through execute.credentials; this endpoint does not release secrets or consume grants.",
+        });
+
       const b = body as { grant?: unknown; credential?: unknown };
       if (typeof b.grant !== "string" && typeof b.credential !== "string") {
         return sendJson(res, 400, {

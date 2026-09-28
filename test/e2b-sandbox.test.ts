@@ -701,3 +701,42 @@ test("repeated destroy teardown never targets an unrelated default scope", async
   assert.deepEqual(await store.get("default"), defaultRecord);
   assert.equal(await store.get(scope), null);
 });
+
+test("even a pause-capable provider uses portable snapshots and kill-on-expiry allocations", async () => {
+  const portable = instrumentedSnapshotStore();
+  const options: Array<Parameters<typeof fake.client.create>[0]> = [];
+  let paused = 0;
+  let captured = 0;
+  const client = {
+    ...fake.client,
+    nativePause: true,
+    async create(input: Parameters<typeof fake.client.create>[0]) {
+      options.push(input);
+      const session = await fake.client.create(input);
+      return {
+        ...session,
+        async pause() {
+          paused++;
+        },
+        async createSnapshot() {
+          captured++;
+          return { snapshotId: "unexpected" };
+        },
+      };
+    },
+  };
+  const adapter = make({ client, snapshots: portable.store, executionModeForScope: async () => "isolated" });
+  const handle = await adapter.provision(layers, { executionMode: "isolated" });
+  await adapter.writeFile(handle, "work.txt", "workspace survives");
+  await adapter.teardown(handle);
+  assert.equal(options[0]?.autoPause, false);
+  assert.equal(paused, 0);
+  assert.equal(captured, 0);
+  assert.equal(portable.puts(), 1);
+  assert.equal(fake.current(handle.id)?.state, "running");
+  fake.pause(handle.id);
+  fake.pause(scopeName());
+  fake.expirePaused();
+  const restored = await adapter.provision(layers, { executionMode: "isolated" });
+  assert.equal(await adapter.readFile(restored, "work.txt"), "workspace survives");
+});

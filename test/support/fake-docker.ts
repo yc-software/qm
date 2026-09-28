@@ -2,6 +2,7 @@ import type { DockerExec } from "../../src/sandbox/local-sandbox.ts";
 
 export interface FakeContainer {
   name: string;
+  id?: string;
   imageId: string;
   running: boolean;
   labels: Record<string, string>;
@@ -26,6 +27,7 @@ export interface FakeDocker {
 export function installFakeDocker(daemonPort: number): FakeDocker {
   const containers = new Map<string, FakeContainer>();
   const volumes = new Set<string>();
+  const trustedVolumes = new Set<string>();
   const networks = new Set<string>();
   const connections = new Set<string>();
   const self: FakeDocker = {
@@ -75,6 +77,7 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
         const name = rest[rest.length - 1]!;
         const c = containers.get(name);
         if (!c) return fail(`Error: No such object: ${name}`);
+        if (rest.includes("{{.Id}}")) return ok(c.id ?? "0".repeat(64));
         return ok(`${c.running} ${c.imageId}`);
       }
       case "network": {
@@ -98,9 +101,15 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
         return fail(`unknown network subcommand ${sub}`);
       }
       case "volume": {
-        const [sub, name] = rest as [string, string];
-        if (sub === "inspect") return volumes.has(name) ? ok(name) : fail(`Error: no such volume: ${name}`);
+        const sub = rest[0];
+        const name = rest.at(-1)!;
+        if (sub === "inspect") {
+          if (!volumes.has(name)) return fail(`Error: no such volume: ${name}`);
+          if (rest.includes("-f")) return ok(trustedVolumes.has(name) ? "1" : "");
+          return ok(name);
+        }
         if (sub === "create") {
+          if (!volumes.has(name) && rest.includes("qm.supervisor=1")) trustedVolumes.add(name);
           volumes.add(name);
           return ok(name);
         }
@@ -117,7 +126,8 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
         if (containers.has(c.name)) return fail(`Conflict. The container name "/${c.name}" is already in use`);
         containers.set(c.name, c);
         self.runCount++;
-        return ok("deadbeef");
+        c.id = self.runCount.toString(16).padStart(64, "0");
+        return ok(c.id);
       }
       case "start": {
         const c = containers.get(rest[0]!);

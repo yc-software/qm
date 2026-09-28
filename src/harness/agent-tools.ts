@@ -619,9 +619,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ),
 
     credentials: Type.Optional(
-      Type.Array(Type.String(), {
+      Type.Array(Type.String({ minLength: 1 }), {
         description:
-          "Exact authorized credential handles to materialize for this command only. Newly granted handles are accepted.",
+          "Exact credential handles to expose to this command only. Available at turn start: " +
+          (ref.current?.commandCredentialHandles?.join(", ") || "none") +
+          ". Credentials saved or granted during this turn are also accepted after authorization.",
       }),
     ),
   };
@@ -1702,16 +1704,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       `watch) disarms it. Each job has a hard time-to-live (default ${bgTtlMin} minutes, max ${bgTtlMaxMin}) after which ` +
       "it's stopped automatically (a watch survives just long enough to tell you) — for anything " +
       `that finishes within ${execCeilingSec}s, just use \`execute\`. Available on the default sandbox or an authorized explicit sandbox_id; ` +
-      "elsewhere, use `execute`. A background job carries the same environment a foreground `execute` " +
-      `does — $AGENT_API_URL, $AGENT_API_TOKEN and $AGENT_CREDENTIAL_TOKEN all work, so self-API calls and shared-credential broker calls run fine from background work. Two limits: those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — checkpoint your progress to the workspace and continue from a later turn or a cron), and a background job cannot deliver a file itself, so write results to ordinary workspace paths and attach them from a live turn after polling.\n` +
+      "elsewhere, use `execute`. Background jobs receive core API routing tokens, but credentials and shared-credential broker tokens must be requested through execute.credentials. Two limits: " +
+      `those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — checkpoint your progress to the workspace and continue from a later turn or a cron), and a background job cannot deliver a file itself, so write results to ordinary workspace paths and attach them from a live turn after polling.\n` +
       "INTERACTIVE LOGINS: device-flow logins (`gh auth login`, " +
       "`glab auth login`, `gcloud auth login`, and anything that prints a verification URL/code then " +
       "blocks waiting on a human) belong here, NOT in `execute`. Run them with action=start, read the " +
       "URL/code from the returned output and relay it to the user, then `watch` (or `poll`) until the " +
       "command exits — that's when the login is done. If a prompt needs an answer typed in, use " +
       "action=send_input. Never run a login with `execute` (it blocks the whole turn) and never `stop`/kill a " +
-      "login mid-flight — that throws away the pending approval and wedges it. The platform captures the " +
-      "resulting credential into your keychain automatically; you don't save anything yourself.",
+      "login mid-flight — that throws away the pending approval and wedges it. On isolated computers include a POST to /v1/keychain/credentials " +
+      "with the selected login files in the same command after login succeeds, before its private HOME is removed. " +
+      "On isolated computers there is no automatic capture after the command ends. Legacy computers retain automatic login capture.",
     parameters: Type.Object({
       action: Type.Union(
         [
@@ -3769,6 +3772,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "register_login",
     label: "register_login",
     description:
+      "On isolated computers, POST selected file contents to /v1/keychain/credentials in the same command before its private HOME is removed; this tool refuses isolated computers. On legacy computers: " +
       "After you complete a browser/device-code login for a CLI whose files are NOT already backed up automatically " +
       "(the common ones — gh, glab, gcloud, aws, ssh — already are), call this so the login survives this machine being " +
       'rebuilt. Pass the service name and the file(s) or directory it wrote under $HOME (e.g. { service: "kaggle", ' +
@@ -3805,7 +3809,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           text(
             result.captured
               ? `Registered ${result.service} and captured its login — it will survive a machine rebuild.`
-              : `Registered ${result.service}. Nothing was captured yet; complete the login, then it is captured automatically next turn.`,
+              : `No login was captured for ${result.service}. Register selected file contents in the same execute call as the login.`,
           ),
         );
       } catch (error) {

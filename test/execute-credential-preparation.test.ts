@@ -241,3 +241,55 @@ test("replay returns cached masked bytes without resolving a consumed single-use
   assert.equal(resolutions, 1);
   assert.deepEqual(events, []);
 });
+
+test("isolated credentials use private payloads and retain exact output and error masking", async () => {
+  const events: string[] = [];
+  const isolated = { ...handle, executionMode: "isolated" as const };
+  let shouldThrow = false;
+  const { ctx } = context(
+    events,
+    [
+      credential(events, "selected", {
+        env: [{ key: "TOKEN", value: "synthetic-value" }],
+        files: [{ path: ".config/cli/token", data: Buffer.from("file-value") }],
+      }),
+    ],
+    {
+      provision: async () => isolated,
+      sandbox: {
+        async run(target: SandboxHandle, _command: string, options?: ExecOptions) {
+          assert.equal(target.env?.TOKEN, undefined);
+          assert.equal(options?.credentials?.env.TOKEN, "synthetic-value");
+          assert.equal(Buffer.from(options!.credentials!.files![0]!.data).toString(), "file-value");
+          if (shouldThrow) throw new Error("failure synthetic-value");
+          return { code: 7, stdout: "synthetic-value", stderr: "synthetic-value", timedOut: false };
+        },
+      } as Sandbox,
+    },
+  );
+  const result = await ctx.execute("true", { credentials: ["selected"] });
+  assert.equal(result.code, 7);
+  assert.equal(result.stdout, "<redacted:credential>");
+  assert.equal(result.stderr, "<redacted:credential>");
+  shouldThrow = true;
+  await assert.rejects(ctx.execute("true", { credentials: ["selected"] }), /failure <redacted:credential>/);
+});
+
+test("legacy file credentials and conflicting isolated files fail before grant consumption", async () => {
+  for (const isolated of [false, true]) {
+    const events: string[] = [];
+    const entries = [
+      credential(events, "first", { singleUse: true, files: [{ path: ".token", data: Buffer.from("one") }] }),
+    ];
+    if (isolated) entries.push(credential(events, "second", { files: [{ path: ".token", data: Buffer.from("two") }] }));
+    const { ctx, runs } = context(events, entries, {
+      provision: async () => ({ ...handle, executionMode: isolated ? "isolated" : "legacy" }),
+    });
+    await assert.rejects(
+      ctx.execute("true", { credentials: entries.map((entry) => entry.handle) }),
+      isolated ? /conflicting file/ : /file credential requests require an isolated/,
+    );
+    assert.equal(runs.length, 0);
+    assert.ok(events.every((event) => !event.startsWith("commit:")));
+  }
+});

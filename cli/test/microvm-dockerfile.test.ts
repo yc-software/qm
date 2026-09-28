@@ -11,7 +11,8 @@ test("the canonical and packaged MicroVM Dockerfiles stay snapshot-safe and exec
     readFileSync(new URL("../../aws/microvm-agent/agent.mjs", import.meta.url), "utf8"),
   );
   assert.match(canonical, /^FROM public\.ecr\.aws\/lambda\/microvms:al2023-minimal@sha256:[a-f0-9]{64}$/m);
-  assert.match(canonical, /dnf install -y[\s\\]+curl-minimal\b/);
+  for (const dependency of ["curl-minimal", "bubblewrap", "util-linux", "libseccomp", "python3"])
+    assert.match(canonical, new RegExp(`dnf install -y[^&;]*\\b${dependency}\\b`));
   assert.doesNotMatch(canonical, /cli\.github\.com\/packages\/rpm/);
   assert.doesNotMatch(canonical, /dnf install -y gh-/);
   assert.match(canonical, /GH_VERSION=\d+\.\d+\.\d+/);

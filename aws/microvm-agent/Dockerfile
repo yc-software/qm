@@ -1,6 +1,6 @@
 FROM public.ecr.aws/lambda/microvms:al2023-minimal@sha256:05cb9b38d841e7ff1b693dc9e894909612f340bf99ec97d426e8000a5bbe96c3
 
-RUN dnf install -y \
+RUN dnf install -y bubblewrap util-linux libseccomp \
       curl-minimal findutils tar git wget jq unzip \
       python3 python3-pip nodejs24 nodejs24-npm \
   && dnf clean all \

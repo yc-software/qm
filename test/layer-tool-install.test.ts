@@ -69,7 +69,7 @@ test("a stale machine gets every file staged under a shared nonce, chmodded, mov
   assert.equal(lib!.abs, `/usr/local/lib/acme/lib.mjs.staged-${nonce}`);
   assert.equal(bin!.data, SCRIPT);
   assert.equal(lib!.data, LIB);
-  assert.equal(io.scripts[1], "mkdir -p '/usr/local/bin' '/usr/local/lib/acme'");
+  assert.equal(io.scripts[2], "mkdir -p '/usr/local/bin' '/usr/local/lib/acme'");
   const commit = io.scripts.at(-1)!;
   assert.ok(commit.includes(`chmod 0755 '${bin!.abs}' && mv -f '${bin!.abs}' '/usr/local/bin/acme'`));
   assert.ok(commit.includes(`chmod 0644 '${lib!.abs}' && mv -f '${lib!.abs}' '/usr/local/lib/acme/lib.mjs'`));
@@ -144,4 +144,13 @@ test("a timed-out combined preparation fails without writing deployment tools", 
   io.exec = async () => ({ code: 124, stdout: "", stderr: "timeout" });
   await assert.rejects(createLayerToolInstaller(() => FILES)(io, "sleep 100"), /provision prep failed/);
   assert.equal(io.writes.length, 0);
+});
+
+test("unsafe destination rejection occurs before any tool bytes are transferred", async () => {
+  const io = fakeIo({ probe: 1 });
+  const exec = io.exec;
+  io.exec = async (script, timeout) =>
+    script.startsWith("python3 -I") ? { code: 1, stdout: "", stderr: "unsafe" } : exec(script, timeout);
+  await assert.rejects(createLayerToolInstaller(() => FILES)(io), /unsafe destination/);
+  assert.deepEqual(io.writes, []);
 });

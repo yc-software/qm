@@ -1134,8 +1134,8 @@ describe("/v1/keychain routes (capability-authed)", () => {
       );
       assert.equal(response.status, 200);
       const granted = (await response.json()) as any;
-      assert.equal(granted.use.credentialHandle, undefined);
-      assert.equal(granted.use.credentials, undefined);
+      assert.equal(granted.use.credentialHandle, backend ? undefined : credentialHandle(saved.credential.id));
+      assert.deepEqual(granted.use.credentials, backend ? undefined : [credentialHandle(saved.credential.id)]);
       if (backend) {
         assert.equal(granted.use.command, undefined);
         assert.match(granted.use.note, /\/v1\/composio/);

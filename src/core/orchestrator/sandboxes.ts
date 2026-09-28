@@ -44,8 +44,9 @@ export interface TurnSandboxContext {
   turnSessionDir: string;
   turnFilesDir: string;
   connectorEnv: Record<string, string>;
+  bindControlToken?: (handle: SandboxHandle) => Promise<void>;
   egressTokenForTurn: string | undefined;
-  egressTokenForPolicy?: (policy: Resolution["egress"]) => Promise<string | undefined>;
+  egressTokenForPolicy?: (policy: Resolution["egress"], isolated?: boolean) => Promise<string | undefined>;
   isolateOwnerKeychain: boolean;
   openSpeakerKeychain?: boolean;
   openResourceAccess?: boolean;
@@ -73,6 +74,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     turnSessionDir,
     turnFilesDir,
     connectorEnv,
+    bindControlToken,
     egressTokenForTurn,
     egressTokenForPolicy,
     isolateOwnerKeychain,
@@ -89,6 +91,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     perf,
   } = ctx;
 
+  const executionOptions = async (scope: ScopeId, sandboxId?: string, egress = resolution.egress) => {
+    const executionMode = (await deps.sandbox.executionModeFor?.(scope, sandboxId)) ?? "legacy";
+    const egressToken = egressTokenForPolicy
+      ? await egressTokenForPolicy(egress, executionMode === "isolated")
+      : egressTokenForTurn;
+    return { executionMode, ...(egressToken ? { egressToken } : {}) };
+  };
   let ownerAuthCommand: ((command: string, env?: Record<string, string>) => string) | undefined;
   const brokerEnvKeys = [
     "AWS_ACCESS_KEY_ID",
@@ -179,12 +188,22 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const resourcePendingHandles = new Map<string, SandboxHandle>();
   const resourcePending = new Map<string, Promise<SandboxHandle>>();
   let provisionInFlight: Promise<SandboxHandle> | null = null;
+  let provisioningEagerly = false;
   const provision = (eager = false): Promise<SandboxHandle> => {
     if (!eager) box.used = true;
-    provisionInFlight ??= doProvision(eager ? () => {} : emitGapWork).catch((err) => {
-      provisionInFlight = null;
-      throw err;
-    });
+    if (!eager && provisionInFlight && provisioningEagerly)
+      return provisionInFlight.catch((error) => {
+        if (box.pending) throw error;
+        return provision();
+      });
+    if (!provisionInFlight) {
+      provisioningEagerly = eager;
+      provisionInFlight = doProvision(eager ? () => {} : emitGapWork).catch((err) => {
+        provisionInFlight = null;
+        provisioningEagerly = false;
+        throw err;
+      });
+    }
     return provisionInFlight;
   };
   const prepareCredentials = async (
@@ -192,6 +211,35 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     emit: typeof emitGapWork,
     credentialScopeId = memoryScopeId,
   ): Promise<void> => {
+    if (credentialScopeId === memoryScopeId) await bindControlToken?.(handle);
+    if (handle.executionMode === "isolated") {
+      if (input.externalSlack || !deps.keychain) return;
+      const start = Date.now();
+      for (const ownerId of new Set([
+        deviceFlowCredOwner(credentialScopeId, actor.id),
+        ...(credentialScopeId === memoryScopeId ? [actor.id] : []),
+      ])) {
+        const records = await deps.keychain.listByOwner(ownerId);
+        const services = [
+          ...new Set([
+            ...records.filter((record) => record.kind === "file").map((record) => record.service),
+            ...credentialTools.map((tool) => tool.service),
+          ]),
+        ];
+        await removeDeviceFlowLogins({
+          sandbox: deps.sandbox,
+          handle,
+          keychain: deps.keychain,
+          ownerId,
+          services,
+          allOrigins: true,
+          canonicalRoots: credentialTools.flatMap((tool) => tool.roots),
+        });
+      }
+      emit("creds", start, Date.now());
+      perf.credsMs += Date.now() - start;
+      return;
+    }
     if (!input.externalSlack && deps.keychain) {
       const deviceFlowStart = Date.now();
       const crossScope = credentialScopeId !== memoryScopeId;
@@ -302,7 +350,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ...(swarmBinding?.sandboxId ? { sandboxId: swarmBinding.sandboxId } : {}),
       env: connectorEnv,
       egress: resolution.egress,
-      ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
+      ...(await executionOptions(memoryScopeId, swarmBinding?.sandboxId)),
       ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
     });
     box.pending = handle;
@@ -461,13 +509,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         : resolution.layers;
       if (crossScope && egressTokenForTurn && !egressTokenForPolicy)
         throw new Error("target sandbox egress authorization unavailable");
-      const egressToken = crossScope ? await egressTokenForPolicy?.(egress) : egressTokenForTurn;
+
       const handle = await deps.sandbox.provision(layers, {
         sandboxId: id,
         ...(!crossScope ? { env: connectorEnv } : {}),
         ...(access.env ? { env: { ...access.env } } : {}),
         egress,
-        ...(egressToken ? { egressToken } : {}),
+        ...(await executionOptions(resource.ownerScopeId, id, egress)),
       });
       resourcePendingHandles.set(id, handle);
       if (credentialScopeId) await prepareCredentials(handle, emitGapWork, credentialScopeId);
@@ -493,7 +541,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       resolution.layers.filter((l) => l.mode === "ro" && l.mountPath === "global"),
       {
         egress: resolution.egress,
-        ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
+        ...(await executionOptions(memoryScopeId)),
         scratch: { key: memoryScopeId },
         routeScopeId: memoryScopeId,
         ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
@@ -522,7 +570,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
             resolution.layers.filter((l) => l.mode === "ro" && l.mountPath === "global"),
             {
               egress: resolution.egress,
-              ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
+              ...(await executionOptions(memoryScopeId)),
               scratch: { key: `owner-auth:${session.id}:${transferId}` },
               routeScopeId: memoryScopeId,
               ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
@@ -530,7 +578,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           );
           ownerAuthBox.pending = handle;
           ownerAuthBox.provisionMs = Date.now() - provisionStart;
-          if (deps.keychain && isolateOwnerKeychain) {
+          if (handle.executionMode !== "isolated" && deps.keychain && isolateOwnerKeychain) {
             const restoredServices = await materializeDeviceFlowLogins({
               sandbox: deps.sandbox,
               handle,
@@ -607,7 +655,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ],
       {
         egress: resolution.egress,
-        ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
+        ...(await executionOptions(target)),
         ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
       },
     );

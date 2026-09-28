@@ -1,7 +1,6 @@
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
 import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { createDeviceFlowCutoverStore } from "../src/credentials/device-flow-cutover.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -16,7 +15,7 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
-function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
+function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"], isolated = false) {
   const records = createMemoryMap<SandboxResource>();
   const defaults = createMemoryMap<SandboxDefault>();
   const routes = createMemoryMap<SandboxRoute>();
@@ -60,6 +59,7 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
     },
   };
   configure?.(backend);
+  const executionBindings = createMemoryMap<import("../src/sandbox/sandbox-routing.ts").SandboxExecutionBinding>();
   const options = {
     enabled: true,
     rollout,
@@ -68,13 +68,16 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
     defaults,
     routes,
     backends: { local: backend },
+    ...(isolated
+      ? { isolatedBackends: { local: backend }, executionBindings, canCreateIsolated: async () => true }
+      : {}),
     defaultBackend: "local",
     lock: createMemoryAdvisoryLock(),
     canUseScope: async (actor: string, scope: string) =>
       actor === "admin" || scope === `personal:${actor}` || (actor === "alice" && scope === "channel:team"),
   } satisfies Parameters<typeof createSandboxResources>[0];
   const resources = createSandboxResources(options);
-  const router = createSandboxRouter({ routes, backends: { local: backend }, defaultBackend: "local", resources });
+  const router = createSandboxRouter({ ...options, routes, resources });
   const layers = [{ scopeId: "personal:alice", mode: "rw" as const, mountPath: "/" }];
   return { records, defaults, routes, resources, router, provisioned, layers, backend, options, rollout };
 }
@@ -199,6 +202,9 @@ test("turn default changes invalidate cached provisioning while explicit calls d
     turnSessionDir: "turn/s",
     turnFilesDir: "turn/s/t",
     connectorEnv: { AGENT_API_TOKEN: "scope-token" },
+    legacyEnvironment: async () => ({}),
+    bindControlToken: async () => {},
+    credentialTools: [],
     ownerAuthAvailable: false,
     credentialCutoverServices: [],
     visibleSkills: [],
@@ -347,11 +353,10 @@ for (const fail of [false, true])
   });
 
 for (const shared of [false, true])
-  test(`explicit target receives the same credential cleanup and restore as default (${shared ? "isolated shared automation" : "personal"})`, async () => {
+  test(`explicit target removes resident credentials without restoring secrets like the default (${shared ? "isolated shared automation" : "personal"})`, async () => {
     const scripts: Array<{ id: string; script: string }> = [];
     const restoredTars: Array<{ id: string; bytes: Uint8Array }> = [];
     const scope = shared ? "channel:team" : "personal:alice";
-    const owner = shared ? scope : "alice";
     let failCleanupFor: string | undefined;
     const { resources, router } = fixture(
       (backend) => {
@@ -368,13 +373,14 @@ for (const shared of [false, true])
         };
       },
       [scope],
+      true,
     );
-    const record = await resources.create("admin", scope, "local");
+    const defaultRecord = await resources.create("admin", scope, "local", undefined, undefined, {
+      executionMode: "isolated",
+    });
+    await resources.setDefault("admin", scope, defaultRecord.id);
+    const record = await resources.create("admin", scope, "local", undefined, undefined, { executionMode: "isolated" });
     const owners: string[] = [];
-    const resetMarks: unknown[][] = [];
-    const cutover = createDeviceFlowCutoverStore(createMemoryMap(), { resets: createMemoryMap() });
-    await cutover.set(scope, "aws", "ephemeral_only", "admin");
-    await cutover.set(scope, "aws", "legacy", "admin");
     const turn = createTurnSandboxes({
       deps: {
         sandbox: router,
@@ -387,33 +393,7 @@ for (const shared of [false, true])
               { kind: "file", service: "gh", origin: "device-flow-auto-capture", targets: [".config/gh/hosts.yml"] },
             ];
           },
-          materializeOwnFiles: async (id: string) => {
-            owners.push(id);
-            return [
-              {
-                service: "aws",
-                origin: "device-flow-auto-capture",
-                files: [{ path: ".aws/config", contentBase64: Buffer.from("allowed-token").toString("base64") }],
-              },
-              {
-                service: "gh",
-                origin: "device-flow-auto-capture",
-                files: [
-                  {
-                    path: ".config/gh/hosts.yml",
-                    contentBase64: Buffer.from("quarantined-token").toString("base64"),
-                  },
-                ],
-              },
-            ];
-          },
-        },
-        deviceFlowCutover: {
-          ...cutover,
-          markResidentReset: async (...args: Parameters<typeof cutover.markResidentReset>) => {
-            resetMarks.push(args);
-            await cutover.markResidentReset(...args);
-          },
+          materializeOwnFiles: async () => assert.fail("provisioning cannot decrypt saved file credentials"),
         },
       },
       input: { origin: shared ? { kind: "automation", useOwnerKeychain: true } : { kind: "user" } },
@@ -426,6 +406,8 @@ for (const shared of [false, true])
       turnSessionDir: "turn/s",
       turnFilesDir: "turn/s/t",
       connectorEnv: {},
+      legacyEnvironment: async () => ({}),
+      bindControlToken: async () => {},
       isolateOwnerKeychain: shared,
       ownerAuthAvailable: false,
       credentialTools: [
@@ -442,7 +424,7 @@ for (const shared of [false, true])
       perf: { credsMs: 0 },
     } as unknown as TurnSandboxContext);
     if (shared) {
-      failCleanupFor = scope;
+      failCleanupFor = defaultRecord.backingScopeId;
       await assert.rejects(turn.provision(), /quarantine failed/);
       turn.invalidateProvision();
     }
@@ -452,8 +434,8 @@ for (const shared of [false, true])
     await assert.rejects(turn.provisionResource(record.id), /quarantine failed/);
     const explicit = await turn.provisionResource(record.id);
     assert.ok(owners.length >= 6);
-    assert.ok(owners.every((id) => id === owner));
-    assert.equal(resetMarks.length, 2);
+    assert.deepEqual(new Set(owners), new Set(shared ? [scope, "alice"] : ["alice"]));
+    assert.equal(restoredTars.length, 0, "provisioning must not materialize any saved credential");
     for (const handle of [defaultHandle, explicit]) {
       assert.ok(
         scripts.some(
@@ -464,10 +446,6 @@ for (const shared of [false, true])
             script.includes(".aws"),
         ),
       );
-      const tar = restoredTars.find(({ id }) => id === handle.id);
-      assert.ok(tar);
-      assert.ok(Buffer.from(tar.bytes).includes(Buffer.from("allowed-token")));
-      assert.ok(!Buffer.from(tar.bytes).includes(Buffer.from("quarantined-token")));
     }
   });
 
@@ -948,3 +926,43 @@ test("a verified live turn can create only its own new scope computer without di
   await assert.rejects(turn.access("alice", computer.id), /permission/);
   await assert.rejects(turn.setDefault("alice", scope, computer.id), /permission/);
 });
+
+for (const defaultMode of ["legacy", "isolated"] as const) {
+  test(`swarm-bound computer mode wins over ${defaultMode} scope default`, async () => {
+    const scope = "personal:alice";
+    const { resources, router, layers } = fixture(undefined, [scope], true);
+    const primary = await resources.create("alice", scope, "local", undefined, undefined, {
+      executionMode: defaultMode,
+    });
+    const boundMode = defaultMode === "legacy" ? "isolated" : "legacy";
+    const bound = await resources.create("alice", scope, "local", undefined, undefined, { executionMode: boundMode });
+    await resources.setDefault("alice", scope, primary.id);
+    const turn = createTurnSandboxes({
+      deps: {
+        sandbox: router,
+        sandboxResources: resources,
+        swarms: { binding: async () => ({ sandboxId: bound.id }) },
+      },
+      input: { origin: { kind: "user" } },
+      actor: { id: "alice", type: "internal" },
+      session: { id: "s" },
+      resolution: { layers },
+      scopeId: scope,
+      memoryScopeId: scope,
+      transferId: "t",
+      turnSessionDir: "turn/s",
+      turnFilesDir: "turn/s/t",
+      connectorEnv: {},
+      credentialTools: [],
+      ownerAuthAvailable: false,
+      credentialCutoverServices: [],
+      visibleSkillsForTurn: async () => [],
+      emitGapWork: () => {},
+      perf: { credsMs: 0 },
+    } as unknown as TurnSandboxContext);
+    const handle = await turn.provision();
+    assert.equal(handle.resourceId, bound.id);
+    assert.equal(handle.executionMode, boundMode);
+    assert.equal((await resources.list("alice", scope)).defaultSandboxId, primary.id);
+  });
+}

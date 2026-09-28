@@ -1,3 +1,4 @@
+import type { SandboxExecutionModeOptions } from "./sandbox.ts";
 import { basename } from "node:path/posix";
 import {
   AbortMultipartUploadCommand,
@@ -16,6 +17,37 @@ import { sleep, withTimeout } from "../util/async.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 import { displacedPruneGlobs } from "../credentials/resident-paths.ts";
 import type { TeardownOptions } from "./sandbox.ts";
+
+const RESTORE_WORKSPACE = [
+  "import os,pathlib,shutil,stat,sys,tarfile,tempfile",
+  "home=pathlib.Path(sys.argv[1])",
+  "archive=sys.argv[2]",
+  "for parent in [home,*home.parents]:",
+  " info=parent.lstat()",
+  " assert stat.S_ISDIR(info.st_mode) and info.st_uid in (0,os.geteuid()) and (not info.st_mode & 0o022 or str(parent) in ['/tmp','/private/tmp']), 'Unsafe snapshot home'",
+  "stage=pathlib.Path(tempfile.mkdtemp(prefix='.qm-workspace-restore-',dir=home))",
+  "try:",
+  " with tarfile.open(archive,'r:') as tar:",
+  "  for item in tar:",
+  "   path=pathlib.PurePosixPath(item.name)",
+  "   if path.is_absolute() or '..' in path.parts: raise ValueError('Unsafe snapshot member')",
+  "   if not path.parts or path.parts[0]!='workspace': continue",
+  "   relative=path.parts[1:]",
+  "   if not relative: continue",
+  "   destination=stage.joinpath(*relative)",
+  "   if item.isdir(): destination.mkdir(parents=True,exist_ok=True); continue",
+  "   if not item.isfile(): continue",
+  "   destination.parent.mkdir(parents=True,exist_ok=True)",
+  "   with tar.extractfile(item) as source, open(destination,'wb') as output: shutil.copyfileobj(source,output)",
+  "   destination.chmod(item.mode & 0o777 & ~0o022)",
+  " target=home/'workspace'",
+  " if target.exists() or target.is_symlink():",
+  "  assert target.is_dir() and not target.is_symlink() and not any(target.iterdir()), 'Workspace already populated; refusing snapshot overwrite'",
+  "  target.rmdir()",
+  " os.replace(stage,target)",
+  "finally:",
+  " if stage.exists(): shutil.rmtree(stage)",
+].join("\n");
 
 const SNAPSHOT_PART_BYTES = 64 * 1024 * 1024;
 const SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
@@ -217,7 +249,7 @@ export interface HomeSnapshotSessionIo<S> {
   writeFileBytes(session: S, absPath: string, data: Uint8Array): Promise<void>;
 }
 
-export interface HomeSnapshotOpsOptions<S> {
+export interface HomeSnapshotOpsOptions<S> extends SandboxExecutionModeOptions {
   label: string;
   homeDir: string;
   homeTarPath: string;
@@ -367,6 +399,7 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
       if (!stored) return false;
       if (!Number.isSafeInteger(stored.size) || stored.size <= 0)
         throw new Error(`${label} hydrate: invalid snapshot size ${stored.size}`);
+      const isolated = (await opts.executionModeForScope?.(scope)) === "isolated";
       try {
         const started = await run(session, `mkdir -p ${shq(homeDir)} && : > ${shq(homeTarPath)}`, 30_000, left);
         if (started.exitCode !== 0)
@@ -389,7 +422,9 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
           throw new Error(`${label} hydrate archive invalid: ${validated.stderr.slice(0, 200)}`);
         const r = await run(
           session,
-          `cd ${shq(homeDir)} && tar -xf ${shq(homeTarPath)}; rc=$?; rm -f ${shq(homeTarPath)}; exit $rc`,
+          isolated
+            ? `python3 -I -c ${shq(RESTORE_WORKSPACE)} ${shq(homeDir)} ${shq(homeTarPath)}`
+            : `cd ${shq(homeDir)} && tar -xf ${shq(homeTarPath)}; rc=$?; rm -f ${shq(homeTarPath)}; exit $rc`,
           180_000,
           left,
         );

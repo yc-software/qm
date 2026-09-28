@@ -1,6 +1,13 @@
 import type { EgressPolicy, WorkspaceLayer } from "../types.ts";
 
+export type SandboxExecutionMode = "legacy" | "isolated";
+
+export interface SandboxExecutionModeOptions {
+  executionModeForScope?: (scopeId: string) => Promise<SandboxExecutionMode>;
+}
+
 export interface SandboxHandle {
+  executionMode?: SandboxExecutionMode;
   resourceId?: string;
   providerSandboxId?: string;
   id: string;
@@ -63,6 +70,7 @@ export function visibleTools(tools: readonly string[]): string[] {
 }
 
 export interface ProvisionOptions {
+  executionMode?: SandboxExecutionMode;
   sandboxId?: string;
   env?: Record<string, string>;
   egress?: EgressPolicy;
@@ -87,6 +95,7 @@ export interface ExecResult {
 }
 
 export interface ExecOptions {
+  credentials?: { env: Record<string, string>; files: Array<{ path: string; data: Uint8Array }> };
   timeoutMs?: number;
   signal?: AbortSignal;
 }
@@ -184,7 +193,19 @@ export interface TeardownOptions {
   homeUnchanged?: boolean;
 }
 
+export interface SupervisorTransport {
+  acceptTrusted?(handle: SandboxHandle): Promise<void>;
+  processStarted?(handle: SandboxHandle, processId: string): Promise<void>;
+  ensureDependencies(handle: SandboxHandle): Promise<void>;
+  identity(handle: SandboxHandle): Promise<string>;
+  isFresh(handle: SandboxHandle): Promise<boolean>;
+  run(handle: SandboxHandle, command: string, opts?: ExecOptions): Promise<ExecResult>;
+  writeFile(handle: SandboxHandle, absPath: string, data: Uint8Array): Promise<void>;
+}
+
 export interface Sandbox {
+  executionModeFor?(scopeId: string, sandboxId?: string): Promise<SandboxExecutionMode>;
+  readonly supervisorTransport?: SupervisorTransport;
   readonly profile: AgentComputerProfile;
   profileFor?(scopeId: string, sandboxId?: string): Promise<AgentComputerProfile>;
   provision(layers: WorkspaceLayer[], opts?: ProvisionOptions): Promise<SandboxHandle>;

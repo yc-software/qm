@@ -183,6 +183,7 @@ export interface CommandCredential {
     commit?: () => Promise<void>;
     singleUse?: boolean;
     env: Array<{ key: string; value: string; secret?: boolean }>;
+    files?: Array<{ path: string; data: Uint8Array }>;
   }>;
 }
 
@@ -851,6 +852,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         return timed("exec", async () => {
           execOpts?.signal?.throwIfAborted();
           const commandEnv: Record<string, string> = {};
+          const commandFiles: Array<{ path: string; data: Uint8Array }> = [];
           const prepared: Array<{
             commit?: () => Promise<void>;
             singleUse?: boolean;
@@ -859,6 +861,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           for (const credential of new Set(requested)) {
             const materialized = credential.resolve ? await credential.resolve() : { env: credential.env ?? [] };
             prepared.push(materialized);
+            for (const file of materialized.files ?? []) {
+              const prior = commandFiles.find((entry) => entry.path === file.path);
+              if (prior && !Buffer.from(prior.data).equals(file.data))
+                throw new Error(`requested credentials provide conflicting file: ${file.path}`);
+              if (!prior) commandFiles.push(file);
+            }
             for (const { key, value } of materialized.env) {
               if (key in commandEnv && commandEnv[key] !== value)
                 throw new Error(`requested credentials provide conflicting environment key: ${key}`);
@@ -873,6 +881,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             });
           }
           execOpts?.signal?.throwIfAborted();
+          const isolated = handle.executionMode === "isolated";
+          if (!isolated && commandFiles.length)
+            throw new Error(
+              "file credential requests require an isolated computer; use the legacy login flow on this computer",
+            );
           const singleUse = prepared.filter((credential) => credential.singleUse);
           if (singleUse.length > 1) throw new Error("An execution may use at most one single-use grant");
           for (const credential of prepared.filter((credential) => !credential.singleUse)) await credential.commit?.();
@@ -881,17 +894,20 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           const sandboxCommand = ownerAuth
             ? (deps.ownerAuthCommand?.(command, commandEnv) ?? command)
             : (deps.scopedCommand?.(command, { ...handle.env, ...commandEnv }) ?? command);
-          const commandHandle = Object.keys(commandEnv).length
-            ? { ...handle, env: { ...handle.env, ...commandEnv } }
-            : handle;
+          const commandHandle =
+            !isolated && Object.keys(commandEnv).length ? { ...handle, env: { ...handle.env, ...commandEnv } } : handle;
           const secretEnv = executionSecretEnv(
-            commandHandle.env,
+            { ...handle.env, ...commandEnv },
             prepared.flatMap((credential) => credential.env),
           );
           const mask = createExactSecretValueMasker(Object.values(secretEnv));
           let r: ExecResult;
           try {
-            const result = await deps.sandbox.run(commandHandle, sandboxCommand, opts);
+            const result = await deps.sandbox.run(
+              commandHandle,
+              sandboxCommand,
+              isolated && requested.length ? { ...opts, credentials: { env: commandEnv, files: commandFiles } } : opts,
+            );
             r = { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
           } catch (error) {
             const message = errMessage(error);

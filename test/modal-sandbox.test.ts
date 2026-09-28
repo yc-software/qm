@@ -1,3 +1,4 @@
+import { createExecProcessSessions, SUPERVISOR_PROCESS_ROOT } from "../src/sandbox/exec-process-session.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
@@ -1143,4 +1144,50 @@ test("untracked scope sandboxes are terminated after a grace period while scratc
   for await (const id of fake.client.listRunning!({})) running.add(id);
   assert.deepEqual(running, new Set([tracked, scratch, foreign]));
   assert.equal(running.has(orphan), false);
+});
+
+test("native recovery accepts a checkpoint whose durable generation has supervisor provenance", async () => {
+  fake.cleanup();
+  fake = installFakeModal({ native: true });
+  const store = createMemoryMap<StoredModalSandbox>();
+  const first = make({ store, executionModeForScope: async () => "isolated" });
+  const handle = await first.provision(layers, { executionMode: "isolated" });
+  await first.supervisorTransport!.acceptTrusted!(handle);
+  await first.writeFile(handle, "trusted.txt", "preserved workspace");
+  await first.teardown(handle);
+  fake.terminate(scopeName());
+  const replacement = make({ store, executionModeForScope: async () => "isolated" });
+  const restored = await replacement.provision(layers, { executionMode: "isolated" });
+  assert.equal(await replacement.readFile(restored, "trusted.txt"), "preserved workspace");
+  assert.equal(await replacement.supervisorTransport!.isFresh(restored), true);
+});
+
+test("deep idle reaping protects a live job recorded in the supervisor process root", async () => {
+  const store = createMemoryMap<StoredModalSandbox>();
+  const adapter = make({ store, executionModeForScope: async () => "isolated" });
+  const handle = await adapter.provision(layers, { executionMode: "isolated" });
+  assert.ok(supportsProcessSessions(adapter));
+  if (!supportsProcessSessions(adapter)) return;
+  const started = await createExecProcessSessions(
+    { run: adapter.supervisorTransport!.run },
+    SUPERVISOR_PROCESS_ROOT,
+  ).startProcess(handle, "sleep 30");
+  try {
+    await store.merge(scope, { lastActivityMs: 1 });
+    const before = fake.execScripts().length;
+    assert.equal((await adapter.reapDeepIdle!(1)).reaped, 0);
+    assert.ok(
+      fake
+        .execScripts()
+        .slice(before)
+        .some((script) => script.includes('B="/run/qm-supervisor/processes"')),
+    );
+    assert.equal(fake.current(scopeName())?.sandboxId, (await store.get(scope))?.sandboxId);
+  } finally {
+    await createExecProcessSessions({ run: adapter.supervisorTransport!.run }, SUPERVISOR_PROCESS_ROOT).signalProcess(
+      handle,
+      started.processId,
+      "KILL",
+    );
+  }
 });

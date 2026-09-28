@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { realpathSync, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -42,7 +42,7 @@ export interface FakeE2b {
 }
 
 export function installFakeE2b(): FakeE2b {
-  const root = mkdtempSync(join(tmpdir(), "fake-e2b-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "fake-e2b-")));
   const records = new Map<string, FakeRecord>();
   const snapshots = new Map<string, string>();
   const execScripts: string[] = [];

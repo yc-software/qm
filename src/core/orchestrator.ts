@@ -1455,8 +1455,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       };
       const resolvedCredential = (materialized: import("../credentials/keychain.ts").MaterializedCred) => {
-        if (materialized.kind !== "env") throw new Error("File credentials require the supervised execution route");
-        return { env: materialized.env };
+        return materialized.kind === "env"
+          ? { env: materialized.env }
+          : {
+              env: [],
+              files: materialized.files.map((file) => ({
+                path: file.path,
+                data: Buffer.from(file.contentBase64, "base64"),
+              })),
+            };
       };
       const addCredentialToCatalog = (
         credential: CommandCredential,
@@ -1478,7 +1485,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (external || strictReadOnly || !deps.keychain) return;
         const keychain = deps.keychain;
         for (const { grant, credential } of await keychain.grantsForScope(scopeId)) {
-          if (credential.kind !== "env" || isBackendCredential(credential)) continue;
+          if (isBackendCredential(credential)) continue;
           addCredential(
             {
               handle: credentialHandle(credential.id),
@@ -1501,7 +1508,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true);
         if (ownAllowed) {
           for (const credential of await keychain.listByOwner(actor.id)) {
-            if (credential.kind !== "env" || isBackendCredential(credential)) continue;
+            if (isBackendCredential(credential)) continue;
             addCredential(
               {
                 handle: credentialHandle(credential.id),
@@ -1517,6 +1524,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               credential.id,
             );
           }
+        }
+        for (const credential of await keychain.listByOwner(memoryScopeId)) {
+          if (isBackendCredential(credential)) continue;
+          addCredential(
+            {
+              handle: credentialHandle(credential.id),
+              resolve: async () =>
+                resolvedCredential(await keychain.materializeComputerOwned(memoryScopeId, credential.id)),
+            },
+            `${credential.service}, computer ${memoryScopeId}`,
+            credential.id,
+          );
         }
       };
       await registerKeychainCredentials(addCredentialToCatalog);
@@ -1745,13 +1764,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       }
       const egressSecret = deps.capabilitySecret ?? deps.signingSecret;
-      const egressTokenForPolicy = async (egress: EgressPolicy): Promise<string | undefined> => {
+      const egressTokenForPolicy = async (egress: EgressPolicy, isolated = false): Promise<string | undefined> => {
         if (strictReadOnly || !egressSecret) return undefined;
         return mintCapabilityToken(
           {
             ...scopeAttestation,
             aud: EGRESS_PROXY_AUD,
-            egress: egressClaimAllowingControlPlane(egress, deps.apiBaseUrl ?? "", securityPolicy.denyPrivateNetworks),
+            egress: isolated
+              ? {
+                  allowedHosts: [],
+                  ...egressClaimAllowingControlPlane(egress, deps.apiBaseUrl ?? "", true),
+                  denyPrivateNetworks: true,
+                  privateNetworkAllowedHosts: [],
+                }
+              : egressClaimAllowingControlPlane(egress, deps.apiBaseUrl ?? "", securityPolicy.denyPrivateNetworks),
             exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
           },
           egressSecret,
@@ -1759,6 +1785,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
       };
       const egressTokenForTurn = await egressTokenForPolicy(resolution.egress);
+      const bindControlToken = async (handle: import("../sandbox/sandbox.ts").SandboxHandle): Promise<void> => {
+        if (!controlClaims || !deps.signingSecret) return;
+        handle.env = {
+          ...handle.env,
+          AGENT_API_TOKEN: await mintCapabilityToken(
+            {
+              ...controlClaims,
+              executionMode: handle.executionMode ?? "legacy",
+              ...(handle.resourceId ? { sandboxId: handle.resourceId } : {}),
+            },
+            deps.capabilitySecret ?? deps.signingSecret,
+            deps.capabilityTokenCompression,
+          ),
+        };
+      };
       const registerServiceCredentials = async (
         addCredential: typeof addCredentialToCatalog,
         requestedHandles: readonly string[],
@@ -1972,6 +2013,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         turnSessionDir,
         turnFilesDir,
         connectorEnv,
+        bindControlToken,
         egressTokenForTurn,
         egressTokenForPolicy,
         isolateOwnerKeychain,
@@ -2710,10 +2752,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(external || strictReadOnly || !deps.keychain
             ? {}
             : {
-                registerLogin: async (service: string, paths: readonly CredentialPathSpec[]) =>
-                  registerLoginPaths({
+                registerLogin: async (service: string, paths: readonly CredentialPathSpec[]) => {
+                  const handle = await provision();
+                  if (handle.executionMode === "isolated")
+                    throw new Error(
+                      "Login files exist only inside their execution. POST selected files to /v1/keychain/credentials in the same execute call before it exits.",
+                    );
+                  return registerLoginPaths({
                     sandbox: deps.sandbox,
-                    handle: await provision(),
+                    handle,
                     keychain: deps.keychain!,
                     ownerId: deviceFlowCredOwner(memoryScopeId, actor.id),
                     service,
@@ -2726,7 +2773,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                         scopeLabel: scopeId,
                         sessionId: session.id,
                       }),
-                  }),
+                  });
+                },
               }),
           memory: deps.memory,
           memoryScopeId,
@@ -4154,7 +4202,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           try {
             const writable = resolution.layers.find((l) => l.mode === "rw");
             const writtenHandle = box.used ? box.handle : null;
-            if (writable && writtenHandle) {
+            if (writable && writtenHandle && writtenHandle.executionMode !== "isolated") {
               if (!external && deps.keychain) {
                 try {
                   await captureDeviceFlowLogins({

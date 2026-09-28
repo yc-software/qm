@@ -208,11 +208,12 @@ function startupCancellationCodexBinary(dir: string): string {
     path,
     `#!${process.execPath}
 const fs = require("node:fs");
-fs.appendFileSync(${JSON.stringify(join(dir, "starts"))}, "start\\n");
 process.on("SIGTERM", () => {
-  fs.writeFileSync(${JSON.stringify(join(dir, "closed"))}, "closed");
+  fs.writeFileSync(${JSON.stringify(join(dir, "closed.tmp"))}, "closed");
+  fs.renameSync(${JSON.stringify(join(dir, "closed.tmp"))}, ${JSON.stringify(join(dir, "closed"))});
   process.exit(0);
 });
+fs.appendFileSync(${JSON.stringify(join(dir, "starts"))}, "start\\n");
 process.stdin.resume();
 `,
   );
@@ -236,7 +237,8 @@ rl.on("line", (line) => {
   if (msg.method === "thread/start") fs.writeFileSync(${JSON.stringify(join(dir, "thread-started"))}, "started");
 });
 process.on("SIGTERM", () => {
-  fs.writeFileSync(${JSON.stringify(join(dir, "closed"))}, "closed");
+  fs.writeFileSync(${JSON.stringify(join(dir, "closed.tmp"))}, "closed");
+  fs.renameSync(${JSON.stringify(join(dir, "closed.tmp"))}, ${JSON.stringify(join(dir, "closed"))});
   process.exit(0);
 });
 `,
@@ -262,7 +264,8 @@ rl.on("line", (line) => {
   if (msg.method === "turn/start") fs.writeFileSync(${JSON.stringify(join(dir, "turn-started"))}, "started");
 });
 process.on("SIGTERM", () => {
-  fs.writeFileSync(${JSON.stringify(join(dir, "closed"))}, "closed");
+  fs.writeFileSync(${JSON.stringify(join(dir, "closed.tmp"))}, "closed");
+  fs.renameSync(${JSON.stringify(join(dir, "closed.tmp"))}, ${JSON.stringify(join(dir, "closed"))});
   process.exit(0);
 });
 `,

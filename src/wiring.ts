@@ -1,5 +1,6 @@
 import { availableRuntimeError } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
+import { createSupervisedSandbox, type SupervisorTrust } from "./sandbox/supervised-sandbox.ts";
 import { createKeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
 import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
@@ -238,9 +239,10 @@ import {
   ROUTE_CACHE_TTL_MS,
   type SandboxBackendName,
   type SandboxRoute,
+  type SandboxExecutionBinding,
 } from "./sandbox/sandbox-routing.ts";
 import { createSandboxMigrationRunner, type SandboxMigrationRunner } from "./sandbox/sandbox-migration-runner.ts";
-import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
+import { effectiveEgressEnforcement, type Sandbox, type SandboxExecutionMode } from "./sandbox/sandbox.ts";
 import { withOperatorTokenFallback } from "./credentials/connector-token.ts";
 import {
   createAwsSecretsManagerSource,
@@ -844,14 +846,23 @@ export function buildApp(
       message: e.message,
       scopeLabel: (e.scopeLabel ?? "unknown") as ScopeId,
     });
+  const sandboxResourceRecords = artifactMap<SandboxResource>("sandbox_resources");
+  const sandboxExecutionBindings = artifactMap<SandboxExecutionBinding>("sandbox_execution_bindings");
+  const executionModeForScope = async (backingScopeId: string): Promise<SandboxExecutionMode> => {
+    if (!backingScopeId.startsWith("sandbox-")) return "legacy";
+    const record = await sandboxResourceRecords.get(backingScopeId.slice("sandbox-".length));
+    return record?.backingScopeId === backingScopeId ? (record.executionMode ?? "legacy") : "legacy";
+  };
   const buildLocal = (): Sandbox =>
     createLocalSandbox(workspace, {
+      executionModeForScope,
       ...config.localSandbox,
       onError: sandboxOnError,
     });
   const buildSprites = (): Sandbox => {
     const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;
     return createSpritesSandbox(workspace, {
+      executionModeForScope,
       ...sprites,
       initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
       advisoryLock,
@@ -873,6 +884,7 @@ export function buildApp(
   const buildSmolmachines = (): Sandbox => {
     const { snapshotS3Bucket, snapshotIntervalSec, ...smol } = config.smolmachinesSandbox;
     return createSmolmachinesSandbox(workspace, {
+      executionModeForScope,
       ...smol,
       ...(snapshotIntervalSec !== undefined ? { snapshotIntervalMs: snapshotIntervalSec * 1000 } : {}),
       blobTransfer,
@@ -897,6 +909,7 @@ export function buildApp(
     const e2b = config.e2bSandbox;
     if (!e2b.apiKey) throw new Error("SANDBOX_BACKEND=e2b requires E2B_API_KEY");
     return createE2bSandbox(workspace, {
+      executionModeForScope,
       client: createSdkE2bClient({
         apiKey: e2b.apiKey,
         ...(e2b.templateId ? { templateId: e2b.templateId } : {}),
@@ -932,6 +945,7 @@ export function buildApp(
     if (!modal.tokenId || !modal.tokenSecret)
       throw new Error("SANDBOX_BACKEND=modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET");
     return createModalSandbox(workspace, {
+      executionModeForScope,
       advisoryLock,
       client: createSdkModalClient({
         tokenId: modal.tokenId,
@@ -974,6 +988,7 @@ export function buildApp(
   };
   const buildAgent37 = (): Sandbox =>
     createAgent37Sandbox(workspace, {
+      executionModeForScope,
       ...config.agent37Sandbox,
       advisoryLock,
       blobTransfer,
@@ -1009,6 +1024,7 @@ export function buildApp(
       .digest("hex")
       .slice(0, 32);
     return createSuperserveSandbox(workspace, {
+      executionModeForScope,
       configEpoch:
         ss.configGeneration ??
         (pgArtifactMap ? createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock) : 0),
@@ -1041,6 +1057,7 @@ export function buildApp(
   const buildAws = (): Sandbox => {
     if (!config.awsSandbox.s3Bucket) throw new Error("SANDBOX_BACKEND=aws requires AWS_SANDBOX_S3_BUCKET");
     return createAwsSandbox(workspace, {
+      executionModeForScope,
       ...config.awsSandbox,
       s3Bucket: config.awsSandbox.s3Bucket,
       advisoryLock,
@@ -1056,6 +1073,7 @@ export function buildApp(
   };
   const buildPorter = (): Sandbox =>
     createPorterSandbox(workspace, {
+      executionModeForScope,
       ...config.porterSandbox,
       advisoryLock,
       blobTransfer,
@@ -1084,12 +1102,26 @@ export function buildApp(
   for (const name of Object.keys(buildBackend) as Array<Config["sandboxBackend"]>) {
     if (name !== config.sandboxBackend && enabledBackends.has(name)) sandboxBackends[name] = buildBackend[name]();
   }
+  const supervisorTrust = artifactMap<SupervisorTrust>("sandbox_supervisor_trust");
+  const isolatedSandboxBackends: Partial<Record<SandboxBackendName, Sandbox>> = {};
+  for (const name of Object.keys(sandboxBackends) as SandboxBackendName[]) {
+    isolatedSandboxBackends[name] = createSupervisedSandbox(sandboxBackends[name]!, {
+      workspace,
+      trust: supervisorTrust,
+      lock: advisoryLock,
+      blobTransfer,
+      apiBaseUrl: config.apiBaseUrl,
+      signingSecret: config.signingSecret,
+      capabilitySecret: config.capabilitySecret,
+    });
+  }
   for (const backend of Object.values(config.sandboxScopeDefaults ?? {})) {
     if (backend && !sandboxBackends[backend]) throw new Error(`Scope sandbox backend ${backend} is not configured`);
   }
   const sandboxRoutes = artifactMap<SandboxRoute>("sandbox_routing");
   const sandboxResources = createSandboxResources({
     enabled: config.sandboxResourcesEnabled,
+    canCreateIsolated: (scope) => featureFlags.enabled("command_scoped_credentials", scope),
     rollout: artifactMap<SandboxResourceRollout>("sandbox_resource_rollout"),
     legacyScopes: async () => (await sessions.distinctScopes()).map((scope) => scope.scopeId),
     legacySandboxes: async () => {
@@ -1110,10 +1142,12 @@ export function buildApp(
         })),
       ];
     },
-    records: artifactMap<SandboxResource>("sandbox_resources"),
+    records: sandboxResourceRecords,
     defaults: artifactMap<SandboxDefault>("sandbox_defaults"),
     routes: sandboxRoutes,
     backends: sandboxBackends,
+    isolatedBackends: isolatedSandboxBackends,
+    executionBindings: sandboxExecutionBindings,
     defaultBackend: config.sandboxBackend,
     scopeDefaults: config.sandboxScopeDefaults,
     lock: advisoryLock,
@@ -1152,6 +1186,8 @@ export function buildApp(
   const sandbox: Sandbox = createSandboxRouter({
     resources: sandboxResources,
     backends: sandboxBackends,
+    isolatedBackends: isolatedSandboxBackends,
+    executionBindings: sandboxExecutionBindings,
     routes: sandboxRoutes,
     defaultBackend: config.sandboxBackend,
     scopeDefaults: config.sandboxScopeDefaults,

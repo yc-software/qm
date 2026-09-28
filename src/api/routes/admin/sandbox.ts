@@ -122,11 +122,15 @@ export async function manageSandboxResources(ctx: ApiCtx): Promise<void> {
     }
     if (input.action !== "create" || typeof input.backend !== "string")
       throw new Error("choose create with backend, or default with sandboxId");
+    if (input.executionMode !== undefined && input.executionMode !== "legacy" && input.executionMode !== "isolated")
+      throw new Error("executionMode must be legacy or isolated");
     const record = await resources.create(
       actor.id,
       scopeId,
       input.backend,
       typeof input.name === "string" ? input.name : undefined,
+      undefined,
+      input.executionMode !== undefined ? { executionMode: input.executionMode } : undefined,
     );
     audit(ctx.deps, { principalId: actor.id, action: "sandbox.create", resource: record.id, scopeLabel: scopeId });
     return sendJson(ctx.res, 201, record);
