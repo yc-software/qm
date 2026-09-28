@@ -6,7 +6,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import { filterHistoryForAudience } from "../resolution/context-filter.ts";
 import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
@@ -378,11 +378,13 @@ export async function workingSessionThreadRefs(
   const active = await runs.activeSessionIds();
   const working = new Set(active);
   await Promise.all(
-    active.map(async (threadRef) => {
-      const session = await sessions.getByThread(threadRef);
-      if (!session?.parentSessionId) return;
-      for (const ancestor of await stoppableAncestors(sessions, session)) working.add(ancestor.threadRef);
-    }),
+    active
+      .map(async (threadRef) => {
+        const session = await sessions.getByThread(threadRef);
+        if (!session?.parentSessionId) return;
+        for (const ancestor of await stoppableAncestors(sessions, session)) working.add(ancestor.threadRef);
+      })
+      .map((lookup) => lookup.catch(swallowAs("session list: working ancestors", undefined))),
   );
   return working;
 }

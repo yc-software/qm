@@ -131,6 +131,7 @@ import type {
   ShipGrant,
   PendingApprovalRecord,
   ScopeId,
+  Session,
   SurfaceContextRequest,
   Webhook,
 } from "./types.ts";
@@ -1460,6 +1461,22 @@ export function buildApp(
     runStoreKind === "postgres"
       ? createPostgresRunStore(requireDbUrl("RUN_STORE"), { maxClaims: config.maxClaims })
       : createMemoryRunStore({ maxClaims: config.maxClaims });
+  const blockingApprovalSessions = async (): Promise<Set<string>> =>
+    new Set(
+      (await approvals.entries())
+        .filter(([, r]) => r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor))
+        .map(([, r]) => r.sessionId),
+    );
+  const workingAncestors = async (session: Session) => {
+    const awaiting = await blockingApprovalSessions();
+    const ancestors = (await stoppableAncestors(sessions, session)).filter((ancestor) => !awaiting.has(ancestor.id));
+    return Promise.all(
+      ancestors.map(async (ancestor) => ({
+        session: ancestor,
+        participants: await sessions.participantsOf(ancestor.id),
+      })),
+    );
+  };
   const runs: RunStore = {
     ...runStore.runs,
     async enqueue(input) {
@@ -1474,6 +1491,7 @@ export function buildApp(
         )
           throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
         const participants = known ? await sessions.participantsOf(known.id) : [];
+        const ancestors = known?.parentSessionId ? await workingAncestors(known) : [];
         const result = await runStore.runs.enqueue(input);
         if (result.deduped) return result;
         sessionStateBus.emit({
@@ -1483,13 +1501,13 @@ export function buildApp(
           at: result.run.createdAt,
           participants: participants.length ? participants : [input.request.actor.id],
         });
-        for (const ancestor of known?.parentSessionId ? await stoppableAncestors(sessions, known) : [])
+        for (const ancestor of ancestors)
           sessionStateBus.emit({
-            threadRef: ancestor.threadRef,
-            sessionId: ancestor.id,
+            threadRef: ancestor.session.threadRef,
+            sessionId: ancestor.session.id,
             state: "working",
             at: result.run.createdAt,
-            participants: await sessions.participantsOf(ancestor.id),
+            participants: ancestor.participants,
           });
         return result;
       };
@@ -2216,22 +2234,23 @@ export function buildApp(
           sessionStateBus.emit({ threadRef: run.sessionId, state: "idle", at });
         return;
       }
-      const rows = await approvals.entries();
-      for (const target of [session, ...(await stoppableAncestors(sessions, session))]) {
-        if (await sessionTreeWorking(sessions, runs, target)) return;
-        const awaiting = rows.some(
-          ([, r]) =>
-            r.sessionId === target.id && r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor),
-        );
+      const awaiting = await blockingApprovalSessions();
+      const settle = async (target: Session): Promise<boolean> => {
+        if (await runs.activeForThread(target.threadRef)) return false;
+        const waiting = awaiting.has(target.id);
+        if (!waiting && (await sessionTreeWorking(sessions, runs, target))) return false;
         const participants = await sessions.participantsOf(target.id);
         sessionStateBus.emit({
           threadRef: target.threadRef,
           sessionId: target.id,
-          state: awaiting ? "awaiting_approval" : "idle",
+          state: waiting ? "awaiting_approval" : "idle",
           at,
           ...(participants.length ? { participants } : {}),
         });
-      }
+        return true;
+      };
+      if (!(await settle(session))) return;
+      for (const ancestor of await stoppableAncestors(sessions, session)) if (!(await settle(ancestor))) return;
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
   let lastSignalPrune = 0;

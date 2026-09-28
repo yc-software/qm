@@ -315,3 +315,24 @@ test("a parent stays working while a subagent runs after its own turn ends — p
   const settled = (await built.app.listSessions("U1")).find((s) => s.id === parent.sessionId);
   assert.ok(!settled?.working, "the snapshot settles with the push");
 });
+
+test("a parent parked on a blocking approval keeps awaiting while its subagent runs", async () => {
+  const built = freshApp();
+  const parentThread = "web:U1:parked-parent";
+  const childThread = "web:U1:parked-child";
+  const child = await built.app.turn(dm("hello", childThread));
+  const got = record(built.sessionStateBus);
+  const parent = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, parentThread));
+  assert.equal(parent.status, "pending_approval");
+  await built.sessions.setParentSession(child.sessionId!, parent.sessionId!);
+  const { run } = await built.runs.enqueue({
+    sessionId: childThread,
+    request: resolvedDm("work", childThread),
+    maxAttempts: 3,
+  });
+  const leased = await built.runs.claimById(run.id, "w1", 30_000);
+  await built.runs.complete(run.id, leased!.leaseToken!, { status: "ok", reply: "done" });
+  assert.ok(await waitFor(() => statesFor(got, childThread).includes("idle")));
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(statesFor(got, parentThread), ["working", "awaiting_approval", "awaiting_approval"]);
+});
