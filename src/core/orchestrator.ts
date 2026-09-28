@@ -1709,8 +1709,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             if (slugs.length > 0) {
               const usable = records.filter((r) => slugs.includes(r.slug));
               const lines = usable.map((r) => {
-                const methods = r.allowedMethods?.length ? r.allowedMethods.join("/") : "GET";
-                const paths = r.allowedPathPrefixes?.length ? `paths ${r.allowedPathPrefixes.join(", ")}` : "any path";
+                const methods = r.allowedMethods?.length ? r.allowedMethods.toSorted().join("/") : "GET";
+                const paths = r.allowedPathPrefixes?.length
+                  ? `paths ${r.allowedPathPrefixes.toSorted().join(", ")}`
+                  : "any path";
                 return `- \`${r.slug}\` (${r.name}; shared org credential) → ${r.host} (${methods}; ${paths})`;
               });
               sharedCredsBlock =
@@ -1737,7 +1739,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 "If the intended account is unclear before a write, clarify it rather than silently switching accounts. " +
                 "A non-2xx `status` is the UPSTREAM service's own answer (e.g. a bad query or its auth), not a broker " +
                 "error. Use ONLY these (slug → host; allowed methods; allowed paths):\n" +
-                lines.join("\n");
+                lines.sort().join("\n");
             }
           }
         }
@@ -2250,7 +2252,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (credentialDescriptions.length)
           systemPrompt +=
             "\n\n## Execution credentials\nRequest exact handles in execute.credentials:\n" +
-            credentialDescriptions.join("\n");
+            credentialDescriptions.sort().join("\n");
         systemPrompt += sharedCredsBlock;
         if (actorIsOrgAdmin) {
           systemPrompt +=

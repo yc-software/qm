@@ -5,7 +5,8 @@ export function renderGatewayContext(surface: string | undefined, ctx?: GatewayC
   const location = ctx?.location?.trim();
   const details = Object.entries(ctx?.details ?? {})
     .map(([k, v]) => [k.trim(), String(v).trim()] as const)
-    .filter(([k, v]) => k && v);
+    .filter(([k, v]) => k && v)
+    .sort(([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv));
   const instructions = ctx?.instructions?.trim();
   if (!gateway && !location && details.length === 0 && !instructions) return "";
 

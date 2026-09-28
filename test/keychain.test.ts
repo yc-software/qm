@@ -910,7 +910,7 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
     detectedByOwner: new Map([["U1", ["GitHub", "AWS SSO"]]]),
   });
   assert.match(detected, /Detected but NOT registered/);
-  assert.match(detected, /Alice \(U1\): GitHub, AWS SSO — signed in on their own computer/);
+  assert.match(detected, /Alice \(U1\): AWS SSO, GitHub — signed in on their own computer/);
 
   const k = kc();
   const cred = await k.save(GH);
@@ -1836,4 +1836,84 @@ test("manifest timestamps stay stable until credentials and pending asks actuall
     k.materializeOwnById("U1", credential.id, "personal:U1"),
     (e: KeychainError) => e.status === 410,
   );
+});
+
+test("manifest inventories are canonical across discovery order without mutating inputs", async () => {
+  const k = kc();
+  for (const ownerId of ["U2", "U1"]) {
+    await k.save({ ...GH, ownerId });
+    await k.save({
+      ownerId,
+      service: "files",
+      files: [
+        { path: ".config/z", contentBase64: "eg==" },
+        { path: ".config/a", contentBase64: "YQ==" },
+      ],
+    });
+    await k.save({
+      ownerId,
+      service: "custom",
+      fields: [
+        { envKey: "Z_KEY", value: "z" },
+        { envKey: "A_KEY", value: "a" },
+      ],
+    });
+    await k.setConnectorToken("github.com", ownerId, { accessToken: "token" });
+    await k.setConnectorToken("gmail.googleapis.com", ownerId, { accessToken: "token" });
+  }
+  for (const credential of await k.listByOwner("U1")) {
+    await k.createAsk({
+      credentialId: credential.id,
+      requesterId: "U2",
+      requesterScopeId: "channel:C1",
+      purpose: "access",
+    });
+  }
+  const input: Parameters<typeof renderKeychainManifest>[0] = {
+    scopeId: "personal:U1",
+    conversationKind: "dm",
+    actorId: "U1",
+    members: [{ id: "U2" }, { id: "U1" }],
+    entriesByOwner: await k.listByOwners(["U2", "U1"]),
+    connectorsByOwner: await k.listConnectorsByOwners(["U2", "U1"]),
+    scopeGrants: [],
+    injected: ["z", "a"].map((id) => ({
+      credentialId: id,
+      ownerId: "U1",
+      service: id,
+      env: [
+        { key: "Z", value: "z" },
+        { key: "A", value: "a" },
+      ],
+    })),
+    detectedByOwner: new Map([
+      ["U1", ["zsh", "aws"]],
+      ["U2", ["gcloud", "aws"]],
+    ]),
+    scopeAsks: await k.listAsks({ requesterScopeId: "channel:C1" }),
+    ownerAsks: await k.listAsks({ ownerId: "U1" }),
+  };
+  const before = structuredClone(input);
+  const first = renderKeychainManifest(input, 1000);
+  const reversed = structuredClone(input);
+  reversed.members.reverse();
+  reversed.injected.reverse();
+  for (const entry of reversed.injected) entry.env.reverse();
+  for (const entries of reversed.entriesByOwner.values()) {
+    entries.reverse();
+    for (const entry of entries) {
+      entry.fields?.reverse();
+      entry.targets?.reverse();
+    }
+  }
+  for (const entries of reversed.connectorsByOwner!.values()) entries.reverse();
+  for (const entries of reversed.detectedByOwner!.values()) entries.reverse();
+  reversed.scopeAsks!.reverse();
+  reversed.ownerAsks!.reverse();
+  assert.equal(renderKeychainManifest(reversed, 1000), first);
+  assert.deepEqual(input, before);
+  assert.match(first, /PENDING/);
+  assert.match(first, /Asks waiting on you/);
+  reversed.connectorsByOwner!.get("U1")![0]!.needsReconnect = true;
+  assert.notEqual(renderKeychainManifest(reversed, 1000), first);
 });
