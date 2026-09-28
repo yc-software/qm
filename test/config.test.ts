@@ -63,6 +63,14 @@ test("AUTH_ALLOWED_EMAILS becomes a normalized email-auth principal set", () => 
   );
 });
 
+test("QM_CORE_CONTAINER reaches the local sandbox config (#1674)", () => {
+  assert.equal(loadConfig({ SANDBOX_BACKEND: "local" }).localSandbox.coreContainer, undefined);
+  assert.equal(
+    loadConfig({ SANDBOX_BACKEND: "local", QM_CORE_CONTAINER: "qm-core" }).localSandbox.coreContainer,
+    "qm-core",
+  );
+});
+
 test("store kinds default to memory and accept postgres", () => {
   const def = loadConfig({});
   assert.equal(def.sessionStore, "memory");
