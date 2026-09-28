@@ -1657,3 +1657,52 @@ for (const surface of ["slack", "web"] as const) {
     });
   }
 }
+
+test("children of a Slack group turn keep its source so external-workspace policy admits them", async () => {
+  const { externalSlackRequestAllowed } = await import("../src/resolution/external-slack.ts");
+  const { externalSlackNamespace } = await import("../src/slack/external-access.ts");
+  const access = { companyDomains: ["partner.example"], serviceCredentials: ["search"] };
+  const policies = { ext: access };
+  const admitted = (request: OrchestratorInput) =>
+    externalSlackRequestAllowed({ ...request, surface: request.surface ?? "" }, policies);
+  const sessions = createMemorySessionStore();
+  const { runs } = createMemoryRunStore();
+  const factory = createSessionSyscalls({
+    mailbox: createSessionMailbox(createMemoryMap<SessionMessage>()),
+    sessions,
+    runs,
+    signals: createMemoryRunSignalStore(),
+    maxAttempts: 3,
+  });
+  const cases = [
+    {
+      threadRef: "slack:group:G1",
+      request: { slackSource: { accountId: "staff", teamId: "T1", userId: "U1" } },
+    },
+    {
+      threadRef: `${externalSlackNamespace("T2", access)}:C2`,
+      request: { externalSlack: { accountId: "ext", teamId: "T2", userId: "U1", ...access } },
+    },
+  ];
+  for (const c of cases) {
+    const group: Conversation = { kind: "group", threadRef: c.threadRef, channelRef: c.threadRef, audience: [actor] };
+    const room = await sessions.getOrCreateByThread(c.threadRef, "group", scope, undefined, "slack");
+    await sessions.addParticipant(room.id, actor.id);
+    const syscalls = factory.forTurn({
+      session: room,
+      scopeId: scope,
+      request: { surface: "slack", conversation: group, actor, ...c.request },
+    });
+    const opened = await syscalls.open({ task: "look into it" });
+    assert.ok(opened.ok);
+    const child = await freshSession(sessions, opened.sessionId);
+    const [run] = await runs.inFlightForThread(child.threadRef);
+    assert.ok(admitted(run!.request));
+    assert.deepEqual(run!.request.externalSlack, "externalSlack" in c.request ? c.request.externalSlack : undefined);
+    const followed = await syscalls.write({ target: child.id, text: "more", followup: true });
+    assert.ok(followed.ok, JSON.stringify(followed));
+    const latest = (await runs.inFlightForThread(child.threadRef)).at(-1)!;
+    assert.ok(admitted(latest.request));
+    assert.deepEqual(latest.request.externalSlack, run!.request.externalSlack);
+  }
+});

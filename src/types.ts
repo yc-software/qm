@@ -68,6 +68,8 @@ export interface Conversation {
 export type SessionType = "dm" | "channel" | "group";
 
 export interface SpawnMeta {
+  slackSource?: TurnRequest["slackSource"];
+  externalSlack?: TurnRequest["externalSlack"];
   surfaceTools?: boolean;
   deliveryCandidates?: TurnRequest["deliveryCandidates"];
   origin?: TurnOrigin;
