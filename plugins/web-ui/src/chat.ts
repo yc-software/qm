@@ -1489,69 +1489,68 @@ export function createChatSurface(
           ),
         )
       : nothing;
-    render(
-      ctx.inbox
-        ? assistantSidebar({
-            context: ctx.inbox.context(),
-            messages: html`${pinnedStrip()} ${inheritedHeader()}
-            ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
-            ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}`,
-            status: liveWorkStatus(agent),
-            busy: agent.state.isStreaming,
-            showPrompts: !messages.length,
-            toolbar: html`${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${backgroundActivityStrip()}`,
-            composer: ctx.composer.composerForm(agent),
-            onPrompt: (prompt) => ctx.composer.fillSuggestedPrompt(prompt, agent),
-            onDragEnter: (event) => ctx.composer.onDragEnter(event),
-            onDragOver: (event) => ctx.composer.onDragOver(event),
-            onDragLeave: (event) => ctx.composer.onDragLeave(event),
-            onDrop: (event) => void ctx.composer.onDrop(event, agent),
-            overlay: ctx.composer.state.dragging
+    let content: TemplateResult;
+    if (ctx.inbox) {
+      content = assistantSidebar({
+        context: ctx.inbox.context(),
+        messages: html`${pinnedStrip()} ${inheritedHeader()}
+        ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
+        ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}`,
+        status: liveWorkStatus(agent),
+        busy: agent.state.isStreaming,
+        showPrompts: !messages.length,
+        toolbar: html`${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${backgroundActivityStrip()}`,
+        composer: ctx.composer.composerForm(agent),
+        onPrompt: (prompt) => ctx.composer.fillSuggestedPrompt(prompt, agent),
+        onDragEnter: (event) => ctx.composer.onDragEnter(event),
+        onDragOver: (event) => ctx.composer.onDragOver(event),
+        onDragLeave: (event) => ctx.composer.onDragLeave(event),
+        onDrop: (event) => void ctx.composer.onDrop(event, agent),
+        overlay: ctx.composer.state.dragging
+          ? html`<div class="drop-overlay">
+              <div class="drop-overlay-card">${icon(Files, 30)}<span>Drop files or folders to attach</span></div>
+            </div>`
+          : nothing,
+      });
+    } else {
+      content = html`
+        <div
+          class="custom-chat-shell ${editingApp ? "app-edit-chat" : ""} ${ctx.pane ? "in-pane" : ""} ${ctx.composer.state.dragging ? "dragging" : ""} ${
+            emptyChat && !glanceTier && !editingApp ? "empty-chat" : ""
+          }"
+          @dragenter=${(e: DragEvent) => ctx.composer.onDragEnter(e)}
+          @dragover=${(e: DragEvent) => ctx.composer.onDragOver(e)}
+          @dragleave=${(e: DragEvent) => ctx.composer.onDragLeave(e)}
+          @drop=${(e: DragEvent) => void ctx.composer.onDrop(e, agent)}
+        >
+          ${
+            ctx.composer.state.dragging
               ? html`<div class="drop-overlay">
                   <div class="drop-overlay-card">${icon(Files, 30)}<span>Drop files or folders to attach</span></div>
                 </div>`
-              : nothing,
-          })
-        : html`
-            <div
-              class="custom-chat-shell ${editingApp ? "app-edit-chat" : ""} ${ctx.pane ? "in-pane" : ""} ${ctx.composer.state.dragging ? "dragging" : ""} ${
-                emptyChat && !ctx.inbox && !glanceTier && !editingApp ? "empty-chat" : ""
-              }"
-              @dragenter=${(e: DragEvent) => ctx.composer.onDragEnter(e)}
-              @dragover=${(e: DragEvent) => ctx.composer.onDragOver(e)}
-              @dragleave=${(e: DragEvent) => ctx.composer.onDragLeave(e)}
-              @drop=${(e: DragEvent) => void ctx.composer.onDrop(e, agent)}
-            >
-              ${
-                ctx.composer.state.dragging
-                  ? html`<div class="drop-overlay">
-                      <div class="drop-overlay-card">
-                        ${icon(Files, 30)}<span>Drop files or folders to attach</span>
-                      </div>
-                    </div>`
-                  : nothing
-              }
-              ${glanceTier || ctx.pane || editingApp ? nothing : sessionTopbar()}
-              ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
-              <section class="chat-scroll" tabindex="0" aria-label="Conversation">
-                ${pinnedStrip()}
-                <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
-                  ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
-                  ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
-                  ${glanceTier ? nothing : liveWorkStatus(agent)}
-                  ${emptyChat && !ctx.inbox && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
-                  ${ctx.pane ? suggestions : nothing}
-                  ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
-                </div>
-              </section>
-              <div class="chat-bottom-dock">
-                ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${backgroundActivityStrip()}
-                ${ctx.composer.composerForm(agent)} ${ctx.pane ? nothing : suggestions}
-              </div>
+              : nothing
+          }
+          ${glanceTier || ctx.pane || editingApp ? nothing : sessionTopbar()}
+          ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
+          <section class="chat-scroll" tabindex="0" aria-label="Conversation">
+            ${pinnedStrip()}
+            <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
+              ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
+              ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
+              ${glanceTier ? nothing : liveWorkStatus(agent)}
+              ${emptyChat && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
+              ${ctx.pane ? suggestions : nothing}
+              ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>
-          `,
-      chatState.host,
-    );
+          </section>
+          <div class="chat-bottom-dock">
+            ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${backgroundActivityStrip()}
+            ${ctx.composer.composerForm(agent)} ${ctx.pane ? nothing : suggestions}
+          </div>
+        </div>
+      `;
+    }
+    render(content, chatState.host);
     transcriptViewport.afterRender();
     const host = chatState.host;
     requestAnimationFrame(() => {

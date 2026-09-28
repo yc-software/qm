@@ -1,30 +1,16 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { readFileSync } from "node:fs";
-import { JSDOM, VirtualConsole } from "jsdom";
-import { createServer } from "vite";
+import { VirtualConsole } from "jsdom";
+import { createInboxFixture, until } from "./inbox-composer-fixture.ts";
 
 async function inboxUi(t: TestContext) {
   const errors: Error[] = [];
   const virtualConsole = new VirtualConsole();
   virtualConsole.on("jsdomError", (error) => errors.push(error));
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main><div id="inbox"></div>', {
-    url: "http://localhost/web-ui/",
-    virtualConsole,
+  const { dom, vite, host, close } = await createInboxFixture({
+    dom: { url: "http://localhost/web-ui/", virtualConsole },
   });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  for (const key of ["window", "document", "location", "history", "localStorage", "navigator", "HTMLElement", "Node"])
-    Object.defineProperty(globalThis, key, {
-      configurable: true,
-      value: key === "window" ? dom.window : dom.window[key as keyof typeof dom.window],
-    });
-  Object.defineProperty(globalThis, "getComputedStyle", {
-    configurable: true,
-    value: dom.window.getComputedStyle.bind(dom.window),
-  });
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   const stylesheet = document.createElement("style");
   stylesheet.textContent = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
   document.head.append(stylesheet);
@@ -34,8 +20,7 @@ async function inboxUi(t: TestContext) {
   t.after(async () => {
     pane?.dispose();
     reset();
-    await vite.close();
-    dom.window.close();
+    await close();
     assert.deepEqual(errors, []);
   });
   await vite.ssrLoadModule("/src/shell.ts");
@@ -43,7 +28,6 @@ async function inboxUi(t: TestContext) {
   appState.me = { user: "alice", org: "test", permissions: ["inbox"] };
   const inbox = await vite.ssrLoadModule("/src/inbox.ts");
   reset = inbox.resetInboxState;
-  const host = document.querySelector<HTMLElement>("#inbox")!;
   const mount = (options = {}) => {
     pane?.dispose();
     pane = inbox.mountInboxPane({ host, viewId: "all", density: () => "full", onDensityChange() {}, ...options });
@@ -108,13 +92,7 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
     return Response.json({});
   };
   mount();
-  const settled = async () => {
-    for (let n = 0; n < 100; n++) {
-      if (!inboxState.loading && !inboxState.filterBusy) return;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    assert.fail("inbox did not settle");
-  };
+  const settled = () => until(() => !inboxState.loading && !inboxState.filterBusy);
   const filterSelect = () => host.querySelector<HTMLSelectElement>('select[aria-label="Email filter"]')!;
   const chooseFilter = (value: string) => {
     const select = filterSelect();
