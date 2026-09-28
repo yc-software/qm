@@ -341,19 +341,3 @@ test("resolvePrincipal preserves deployment-only admission and fails closed for 
     { sub: "guest@partner.test", appOnly: true },
   );
 });
-
-test("resolvePrincipal does not ask core to reauthorize an env-permitted email", async () => {
-  let asked = false;
-  assert.deepEqual(
-    await resolvePrincipal(
-      { claim: "email", allowedEmails: ["admin@example.com"], requireCoreAdmission: true },
-      { sub: "idp-subject", claims: {}, userinfo: { email: "admin@example.com", email_verified: true } },
-      async () => {
-        asked = true;
-        return { allowed: false };
-      },
-    ),
-    { sub: "admin@example.com" },
-  );
-  assert.equal(asked, false);
-});

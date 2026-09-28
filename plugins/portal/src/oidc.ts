@@ -167,8 +167,7 @@ export async function resolvePrincipal(
   if (verified !== true && verified !== "true") throw new Error("email is not verified by the identity provider");
   const email = rawEmail.trim().toLowerCase();
   const refusal = envRefusal(rule, email, args);
-  const envPermitted = !refusal && Boolean(rule.allowedEmails?.length || rule.allowedEmailDomain);
-  if (refusal || (rule.requireCoreAdmission && !envPermitted)) {
+  if (refusal || rule.requireCoreAdmission) {
     const admission = await invited(email);
     if (!admission.allowed) throw new Error(refusal ?? "account is not permitted");
     return {
