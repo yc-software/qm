@@ -191,13 +191,23 @@ export interface BackgroundCounts {
   label: string;
 }
 
-export function backgroundLabel(jobs: number, watches: number, crons: number, subagents = 0): BackgroundCounts | null {
+export function backgroundLabel(
+  jobs: number,
+  watches: number,
+  crons: number,
+  subagents = 0,
+  subagentsWaiting = 0,
+): BackgroundCounts | null {
   const parts: string[] = [];
   if (subagents > 0) parts.push(`${subagents} subagent${subagents === 1 ? "" : "s"} running`);
+  if (subagentsWaiting > 0)
+    parts.push(`${subagentsWaiting} subagent${subagentsWaiting === 1 ? " needs" : "s need"} you`);
   if (jobs > 0) parts.push(`${jobs} background job${jobs === 1 ? "" : "s"} running`);
   if (watches > 0) parts.push(`${watches} watch${watches === 1 ? "" : "es"} armed`);
   if (crons > 0) parts.push(`${crons} cron${crons === 1 ? "" : "s"} scheduled here`);
-  return parts.length ? { jobs, watches, crons, subagents, label: parts.join(" · ") } : null;
+  return parts.length
+    ? { jobs, watches, crons, subagents: subagents + subagentsWaiting, label: parts.join(" · ") }
+    : null;
 }
 
 export function watchActivityLabel(w: { lastFiredAt?: number }): string {
@@ -214,7 +224,13 @@ export function rowIndicators(
   return {
     working: Boolean(s.working) || (Boolean(s.threadRef) && live.has(s.threadRef)),
     awaiting: Boolean(s.awaitingInput) || children.waiting > 0,
-    background: backgroundLabel(s.backgroundJobs ?? 0, s.watches ?? 0, s.crons ?? 0, children.running),
+    background: backgroundLabel(
+      s.backgroundJobs ?? 0,
+      s.watches ?? 0,
+      s.crons ?? 0,
+      children.running,
+      children.waiting,
+    ),
   };
 }
 
