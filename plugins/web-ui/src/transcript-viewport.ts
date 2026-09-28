@@ -227,7 +227,8 @@ export function createTranscriptViewport() {
 
   function fillViewport(): void {
     const button = earlierButton();
-    if (button && scroller && scroller.scrollHeight - scroller.clientHeight <= NEAR_TOP) button.click();
+    if (!button || !scroller || scroller.clientHeight === 0) return;
+    if (scroller.scrollHeight - scroller.clientHeight <= NEAR_TOP) button.click();
   }
 
   function beforeRender(): void {

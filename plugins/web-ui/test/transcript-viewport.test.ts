@@ -258,6 +258,29 @@ test("a transcript too short to fill the viewport keeps loading earlier pages un
   }
 });
 
+test("a hidden pane never pulls history just because it has no height", () => {
+  const dom = new JSDOM('<section class="chat-scroll"><div class="message-stack"></div></section>');
+  const s = dom.window.document.querySelector<HTMLElement>("section")!;
+  Object.defineProperties(s, { clientHeight: { value: 0 }, scrollHeight: { value: 0 } });
+  const button = dom.window.document.createElement("button");
+  button.className = "earlier-messages-btn";
+  s.querySelector(".message-stack")!.prepend(button);
+  let loads = 0;
+  button.onclick = () => loads++;
+  const viewport = createTranscriptViewport();
+  const saved = Object.getOwnPropertyDescriptor(globalThis, "getComputedStyle");
+  Object.assign(globalThis, { getComputedStyle: dom.window.getComputedStyle.bind(dom.window) });
+  try {
+    viewport.sync(s);
+    assert.equal(loads, 0);
+  } finally {
+    viewport.dispose();
+    if (saved) Object.defineProperty(globalThis, "getComputedStyle", saved);
+    else Reflect.deleteProperty(globalThis, "getComputedStyle");
+    dom.window.close();
+  }
+});
+
 test("a bottom-pinned stream follows growth instantly and coalesces frames", () => {
   const f = fixture();
   try {
