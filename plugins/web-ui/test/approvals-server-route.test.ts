@@ -65,6 +65,26 @@ const core = createServer((req: IncomingMessage, res) => {
       );
       return;
     }
+    if (url.startsWith("/v1/approvals/a-sub")) {
+      let sessionId = "child";
+      if (url.includes("hidden")) sessionId = "hidden";
+      if (url.includes("mismatch")) sessionId = "child-mismatch";
+      res.end(
+        JSON.stringify({
+          sessionId,
+          request: { ...storedRequest, conversation: { kind: "dm", threadRef: "agent:main:subagent:c1" } },
+        }),
+      );
+      return;
+    }
+    if (url.startsWith("/v1/sessions/child-mismatch")) {
+      res.end(JSON.stringify({ session: { id: "child-mismatch", threadRef: "agent:main:subagent:other" } }));
+      return;
+    }
+    if (url.startsWith("/v1/sessions/child")) {
+      res.end(JSON.stringify({ session: { id: "child", threadRef: "agent:main:subagent:c1" } }));
+      return;
+    }
     if (url.startsWith("/v1/sessions/hidden")) {
       res.statusCode = 403;
       res.end(JSON.stringify({ error: "forbidden" }));
@@ -201,6 +221,33 @@ test("worker approvals still require session visibility", async () => {
 
 test("worker replay rejects a mismatched thread or non-worker session", async () => {
   for (const id of ["a-swarm-mismatch", "a-swarm-wrong-surface"]) {
+    const before = calls.length;
+    const response = await fetch(`${base}/api/approvals/${id}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ approved: true }),
+    });
+    assert.equal(response.status, 404);
+    assert.equal(turnPosts(before).length, 0);
+  }
+});
+
+test("a visible subagent approval replays onto the child thread so the parent can unblock it", async () => {
+  const before = calls.length;
+  const r = await fetch(`${base}/api/approvals/a-sub`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ approved: true, scope: "once" }),
+  });
+  assert.equal(r.status, 200);
+  const posts = turnPosts(before);
+  assert.equal(posts.length, 1);
+  assert.equal((posts[0]!.body.conversation as { threadRef: string }).threadRef, "agent:main:subagent:c1");
+  assert.deepEqual(posts[0]!.body.approval, { requestId: "a-sub", approved: true, scope: "once" });
+});
+
+test("subagent approvals require the child session to be visible and on the same thread", async () => {
+  for (const id of ["a-sub-hidden", "a-sub-mismatch"]) {
     const before = calls.length;
     const response = await fetch(`${base}/api/approvals/${id}`, {
       method: "POST",

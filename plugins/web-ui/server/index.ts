@@ -2409,7 +2409,8 @@ const apiRoutes: readonly WebRoute[] = [
       const threadRef =
         typeof record.request?.conversation?.threadRef === "string" ? record.request.conversation.threadRef : "";
       const actor = typeof record.request?.actor?.externalId === "string" ? record.request.actor.externalId : "";
-      if ((!threadRef.startsWith("web:") && !threadRef.startsWith("swarm:")) || actor !== user || !record.request) {
+      const delegated = threadRef.startsWith("swarm:") || threadRef.startsWith(SUBAGENT_THREAD_PREFIX);
+      if ((!threadRef.startsWith("web:") && !delegated) || actor !== user || !record.request) {
         return json(res, 404, { error: "not_found" });
       }
       if (/^web:.+:inbox$/.test(threadRef)) {
@@ -2426,10 +2427,10 @@ const apiRoutes: readonly WebRoute[] = [
             )
           : null;
         if (visible?.status !== 200) return json(res, 404, { error: "not_found" });
-        if (threadRef.startsWith("swarm:")) {
+        if (delegated) {
           const session = (JSON.parse(visible.text) as { session?: { threadRef?: string; surface?: string } }).session;
-          if (session?.surface !== "swarm" || session.threadRef !== threadRef)
-            return json(res, 404, { error: "not_found" });
+          const surfaceOk = threadRef.startsWith("swarm:") ? session?.surface === "swarm" : true;
+          if (!surfaceOk || session?.threadRef !== threadRef) return json(res, 404, { error: "not_found" });
         }
       }
 
