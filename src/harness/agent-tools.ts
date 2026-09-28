@@ -592,7 +592,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     "the `background` tool to run it detached and poll for the result across turns. " +
     "Always start servers with the background tool, not shell ampersand: inherited output streams can keep execute waiting even after its shell exits. " +
     "If commands hang or fail with transport errors that nothing you ran explains, the computer itself may be " +
-    "wedged — use sandbox action=status to inspect it out-of-band and action=restart to recover it.";
+    "wedged — use sandbox action=status to inspect it out-of-band and action=restart to recover it. If a restart or two does not bring the shell back, stop restarting: create a fresh sandbox, set it as the default, and retry there, recovering work from git or Files.";
 
   const executeBaseParams = {
     command: Type.String({ description: "The shell command to run." }),
@@ -982,7 +982,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         const verdictLine =
           verdict === "wedged"
-            ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer"
+            ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer; if it is still wedged after a restart or two, create a fresh sandbox, set it as the default, and retry there"
             : "";
         return recordResult(
           callId,
