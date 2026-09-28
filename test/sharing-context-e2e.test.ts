@@ -184,7 +184,7 @@ test("sharing e2e: room file and memory access is revoked on the next DM turn", 
   await b.memory.capture("channel:C1", ["ROOM_MEMORY"], Date.now(), "U1");
   await b.turn("hello", true);
   assert.equal(await b.turn("!read shared/open-channel-C1/plan.txt"), "ROOM_FILE");
-  assert.doesNotMatch(await b.turn("!memorysearch ROOM_MEMORY"), /ROOM_MEMORY/);
+  assert.match(await b.turn("!memorysearch ROOM_MEMORY"), /ROOM_MEMORY/);
   await b.config.setSharingPosture("channel:C1", "isolated");
   assert.match(await b.turn("!read shared/open-channel-C1/plan.txt"), /no file/);
   assert.doesNotMatch(await b.turn("!memorysearch ROOM_MEMORY"), /ROOM_MEMORY/);

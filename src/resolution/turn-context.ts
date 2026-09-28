@@ -11,7 +11,7 @@ import type { AuditLog } from "../audit/audit-log.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
 import { recallMemoryScopes, writableMemoryScope, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
-import type { Resolution, ScopeId, Principal } from "../types.ts";
+import { parseScopeId, type Resolution, type ScopeId, type Principal } from "../types.ts";
 import { carriedFileHandles, sharingSourcesForTurn } from "./sharing-access.ts";
 
 import type { CurrentScopeMembers } from "./scope-membership.ts";
@@ -168,7 +168,9 @@ export async function resolveTurnContext(input: ContextInput) {
         complete: heads.every(({ head }) => !!head.records),
         snapshot: buildMemoryContextSnapshot({
           targetScope: input.targetScope,
-          audience: (await input.currentScopeMembers?.(input.targetScope)) ?? input.audience,
+          audience:
+            (await input.currentScopeMembers?.(input.targetScope)) ??
+            (parseScopeId(input.targetScope).kind === "channel" ? [] : input.audience),
         }),
       };
     },

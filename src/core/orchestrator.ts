@@ -1330,8 +1330,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         await deps.sessions.latestEntrySeq(session.id),
       );
       let memoryContextChanged =
-        !initialMemoryContext ||
-        candidateMemoryContext.throughSeq > memoryContextPayload(initialMemoryContext)!.throughSeq;
+        candidateMemoryContext.throughSeq >
+        (initialMemoryContext ? memoryContextPayload(initialMemoryContext)!.throughSeq : -1);
       const recordedTurn = isRetry && !memoryContextChanged ? await recordedTurnForRun() : null;
       if (recordedTurn?.answer) {
         const recordedAnswer = recordedTurn.answer;
@@ -2060,7 +2060,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await deps.sessions.latestEntrySeq(session.id),
         );
         memoryContextChanged =
-          !latestMemoryContext || nextContext.throughSeq > memoryContextPayload(latestMemoryContext)!.throughSeq;
+          nextContext.throughSeq > (latestMemoryContext ? memoryContextPayload(latestMemoryContext)!.throughSeq : -1);
         const memoryHistoryReset = nextContext.throughSeq >= 0;
         const captureDependencies = () => [
           ...memoryView.records,
@@ -2082,7 +2082,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ]
             : []),
         ];
-        if (memoryContextChanged && memoryHistoryReset) {
+        if (memoryContextChanged) {
           await deps.harness.turns.resetSession?.(session.id);
           await deps.sessions.append(lease, { type: "system", scopeLabel: scopeId, payload: nextContext });
         }

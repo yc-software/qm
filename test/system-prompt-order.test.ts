@@ -367,7 +367,7 @@ test("Open labels and audits a carried personal skill without granting it to the
   assert.deepEqual(await acl.list(), []);
 });
 
-test("Open loads included memories in both directions with provenance and capture stays in the room", async () => {
+test("Open keeps unclassified personal memory out of rooms, loads room memory in DMs, and capture stays in the room", async () => {
   let member = true;
   const { orchestrator, config, memory, workspace } = buildOrchestrator({
     sandbox: readSandbox(),
@@ -394,7 +394,7 @@ test("Open loads included memories in both directions with provenance and captur
   });
   assert.match(prompt.reply ?? "", /Sharing posture: Open/);
   assert.match(prompt.reply ?? "", /can reveal private information in a shared reply/);
-  assert.match(prompt.reply ?? "", /### personal:U1[\s\S]*PERSONAL_OPEN_MEMORY/);
+  assert.doesNotMatch(prompt.reply ?? "", /PERSONAL_OPEN_MEMORY/);
 
   await orchestrator.handleTurn({
     surface: "test",

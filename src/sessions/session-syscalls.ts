@@ -473,7 +473,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           const all = await deps.sessions.getEntries(target.id);
           const last = all.findLast((entry) => memoryContextPayload(entry));
           const next = nextMemoryContext(all, binding.memoryContext, all.at(-1)?.seq ?? -1);
-          if (!last || next.throughSeq > memoryContextPayload(last)!.throughSeq) return [];
+          if (next.throughSeq > (last ? memoryContextPayload(last)!.throughSeq : -1)) return [];
           if (next.throughSeq < 0) readableTitles.add(target.id);
           const visible = new Set(memoryBoundedEntries(all).map((entry) => entry.seq));
           for (let i = 0; i < views.length; i++) views[i] = views[i]!.filter((entry) => visible.has(entry.seq));
@@ -533,7 +533,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 if (binding.memoryContext) {
                   const history = await visibleHistory(sender);
                   if (
-                    message.sourceEntrySeq === undefined ||
+                    message.sourceEntrySeq !== undefined &&
                     !history.some((entry) => entry.seq === message.sourceEntrySeq)
                   )
                     continue;

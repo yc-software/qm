@@ -110,8 +110,9 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
     },
     async allows(home: ScopeId, record: RecordEntry): Promise<boolean> {
       try {
-        if ((record.sourceUnknown || record.sensitivity === "unknown") && !(await narrow(home))) return false;
-        if (!record.sources.length) return record.sourceUnknown && (await narrow(home));
+        const homeAllowed = async () => (await narrow(home)) || (await sourceAllowed(home, "unknown"));
+        if ((record.sourceUnknown || record.sensitivity === "unknown") && !(await homeAllowed())) return false;
+        if (!record.sources.length) return record.sourceUnknown && (await homeAllowed());
         return (
           await Promise.all(record.sources.map((source) => sourceAllowed(source.scopeId, record.sensitivity)))
         ).every(Boolean);
@@ -203,8 +204,7 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
       return (await memoryDisclosurePolicy(access).narrow(scope)) ? memory.recall(scope, context) : "";
     },
     async query(scope, query, limit = 20, context) {
-      const snapshot = await memory.readHead?.(scope);
-      if (snapshot?.records) return queryBullets((await filtered(scope, snapshot)).content, query, limit);
+      if (memory.readHead) return queryBullets((await head(scope)).content, query, limit);
       return (await memoryDisclosurePolicy(access).narrow(scope)) ? memory.query(scope, query, limit, context) : [];
     },
     async history(scope, limit) {

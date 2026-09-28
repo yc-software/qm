@@ -54,17 +54,7 @@ export function nextMemoryContext(
 ): MemoryContext {
   const previous = entries.findLast((entry) => memoryContextPayload(entry));
   const payload = previous && memoryContextPayload(previous);
-  const compatible = payload && payload.snapshot.audience === snapshot.audience;
-  const hasPriorContext =
-    !!payload ||
-    entries.some(
-      (entry) =>
-        entry.type === "assistant" ||
-        entry.type === "tool_result" ||
-        !!(entry.payload as { environment?: unknown } | null)?.environment ||
-        (entry.type === "system" && (entry.payload as { kind?: string })?.kind === "context_summary"),
-    );
-  let throughSeq = hasPriorContext ? latestSeq : -1;
-  if (compatible) throughSeq = payload.throughSeq;
+  let throughSeq = -1;
+  if (payload) throughSeq = payload.snapshot.audience === snapshot.audience ? payload.throughSeq : latestSeq;
   return { kind: "memory_context", fingerprint: memoryContextFingerprint(snapshot), snapshot, throughSeq };
 }
