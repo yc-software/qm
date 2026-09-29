@@ -6,9 +6,10 @@ import { getRequiredModel } from "../src/model/pi-models.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 
 // Exercise the real AgentSession and SDK serializer, not just the effort setter.
-for (const [modelId, upper, allowed] of [
-  ["gpt-5.4", "xhigh", ["none", "low", "medium", "high", "xhigh"]],
-  ["gpt-5", "high", ["minimal", "low", "medium", "high"]],
+for (const [modelId, upper, allowed, off, minimal] of [
+  ["gpt-5.4", "xhigh", ["none", "low", "medium", "high", "xhigh"], "none", "low"],
+  ["gpt-5", "high", ["minimal", "low", "medium", "high"], "minimal", "minimal"],
+  ["gpt-6.1-sol", "max", ["low", "medium", "high", "xhigh", "max"], "low", "low"],
 ] as const) {
   test(`Pi sends supported reasoning through HTTP for ${modelId}`, async (t) => {
     const bodies: Array<{
@@ -124,9 +125,9 @@ for (const [modelId, upper, allowed] of [
       ["medium", "medium"],
       ["low", "low"],
       ["high", "high"],
-      ["minimal", modelId === "gpt-5" ? "minimal" : "low"],
-      ["off", modelId === "gpt-5" ? "minimal" : "none"],
-      ["xhigh", upper],
+      ["minimal", minimal],
+      ["off", off],
+      ["xhigh", (allowed as readonly string[]).includes("xhigh") ? "xhigh" : upper],
       ["auto", "medium"],
       ["default", undefined],
     ]) {
