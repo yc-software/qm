@@ -235,8 +235,11 @@ function hasCronPatchField(req: CronPatchRequest): boolean {
   );
 }
 
-function liveSessionRef(capability: Pick<CapabilityClaims, "threadRef" | "triggered">): string | undefined {
-  return capability.triggered ? undefined : capability.threadRef;
+function liveSessionRef(
+  capability: Pick<CapabilityClaims, "threadRef" | "triggered" | "scopeId">,
+  cronScopeId: string,
+): string | undefined {
+  return capability.triggered || capability.scopeId !== cronScopeId ? undefined : capability.threadRef;
 }
 
 function cronPatchChanges(before: Cron, patch: CronPatch): boolean {
@@ -322,12 +325,16 @@ async function patchFromCronPatchRequest(
       message: "unfurlLinks can only be set on a cron with a delivery destination",
     };
   }
-  const sessionRef = req.session ? liveSessionRef(capability) : undefined;
+  const sessionRef = req.session ? liveSessionRef(capability, before.ownerScopeId) : undefined;
   if (req.session && !sessionRef) {
-    return { ok: false, code: "bad_request", message: "session:true needs a live conversation to tie the cron to" };
+    return {
+      ok: false,
+      code: "bad_request",
+      message: "session:true needs a live conversation in the cron's own scope to tie it to",
+    };
   }
   return {
-    ...(req.session !== undefined ? { sessionRef: sessionRef ?? null } : {}),
+    ...(req.session !== undefined && sessionRef !== before.sessionRef ? { sessionRef: sessionRef ?? null } : {}),
     ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
     ...(req.title !== undefined ? { title: req.title } : {}),
     ...(req.action !== undefined ? { action: req.action } : {}),
@@ -556,7 +563,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         ...(runAs === "scopeShared" && openShared ? { ownerResourcesRequireOpen: true } : {}),
         ...(req.unattendedGrants !== undefined ? { unattendedGrants: req.unattendedGrants } : {}),
       };
-      const sessionRef = req.session === false ? undefined : liveSessionRef(capability);
+      const sessionRef = req.session === false ? undefined : liveSessionRef(capability, ownerScopeId);
       if (sessionRef) input.sessionRef = sessionRef;
       try {
         const cron = await app.createCron(input);

@@ -74,9 +74,17 @@ test("session:false and triggered turns leave a cron untied, and patch ties or u
   const { built, control } = await setup();
   const untied = await control.createCron({ ...watch, session: false }, claims());
   assert.ok(untied.ok && untied.cron.sessionRef === undefined);
+  const elsewhere = await control.patchCron(
+    untied.cron.id,
+    { session: true },
+    claims({ scopeId: scopeId("channel", "C9") }),
+  );
+  assert.equal(elsewhere.ok ? "" : elsewhere.code, "bad_request", "a cron only ties to sessions in its own scope");
   const fromFire = await control.createCron({ ...watch, title: "Fire child" }, claims({ triggered: true }));
   assert.ok(fromFire.ok && fromFire.cron.sessionRef === undefined);
 
+  const noop = await control.patchCron(untied.cron.id, { session: false }, claims());
+  assert.ok(noop.ok && noop.cron.sessionRef === undefined);
   const tied = await control.patchCron(untied.cron.id, { session: true }, claims());
   assert.ok(tied.ok && tied.cron.sessionRef === THREAD);
   const refused = await control.patchCron(untied.cron.id, { session: true }, claims({ threadRef: undefined }));
