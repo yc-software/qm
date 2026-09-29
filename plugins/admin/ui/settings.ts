@@ -162,7 +162,7 @@ const harnessLabels: Record<string, string> = {
   claude: "Claude Code",
 };
 const effortLabels: Record<string, string> = {
-  auto: "Legacy default",
+  auto: "Default",
   adaptive: "Auto",
   default: "Provider default",
   low: "Low",

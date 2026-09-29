@@ -295,7 +295,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       </button>
       ${
         effort
-          ? effortLevelsForHarness(selected.harnessId, selected.model, composerState.effortLevel).map(
+          ? effortLevelsForHarness(selected.harnessId, selected.model).map(
               (level) =>
                 html` <button
                   class="loadout-effort"

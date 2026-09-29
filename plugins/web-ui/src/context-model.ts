@@ -106,10 +106,9 @@ function selectedValue(config: RuntimeConfig): string {
 function effortLevelsFor(
   harnessId: string,
   model?: ModelOption["model"],
-  effort?: string,
 ): Array<{ value: EffortLevel; label: string }> {
   if (!harnessSupportsEffort(harnessId)) return [];
-  return effortLevelsForHarness(harnessId, model, effort);
+  return effortLevelsForHarness(harnessId, model);
 }
 
 function selectedEffort(config: RuntimeConfig): string {
@@ -148,7 +147,7 @@ async function choose(scope: string, value: string, effort?: string, fast = fals
             harnessId,
             modelId: value.slice(sep + 1),
             fastMode: fast && harnessSupportsFastMode(harnessId) && modelSupportsFastMode(scope, value.slice(sep + 1)),
-            ...(effort && effortLevelsFor(harnessId, model, effort).some((o) => o.value === effort)
+            ...(effort && effortLevelsFor(harnessId, model).some((o) => o.value === effort)
               ? { effortLevel: effort }
               : {}),
           },
@@ -189,7 +188,7 @@ function contextPicker(scopeId: string) {
     if (contextModelState.saving) return;
     const option = options().find((option) => option.value === entry.value);
     if (!option) return;
-    const levels = effortLevelsForHarness(option.harnessId, option.model, entry.effort);
+    const levels = effortLevelsForHarness(option.harnessId, option.model);
     const normalized = {
       ...entry,
       effort: levels.some((level) => level.value === entry.effort) ? entry.effort : levels[0]!.value,

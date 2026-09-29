@@ -92,7 +92,6 @@ export function reconcileLoadout(
 export function effortLevelsForHarness(
   harnessId: string,
   model?: Model<Api>,
-  selectedEffort?: string,
 ): Array<{ value: EffortLevel; label: string }> {
   const advertised = (model as ModelMetadata | undefined)?.effortLevelsByHarness?.[harnessId];
   const levels = EFFORT_LEVELS.filter(({ value }) => {
@@ -104,9 +103,7 @@ export function effortLevelsForHarness(
     if (harnessId === "codex") return value !== "max" && value !== "ultracode";
     return false;
   });
-  return selectedEffort === "auto" || !levels.length
-    ? [EFFORT_LEVELS.find(({ value }) => value === "auto")!, ...levels]
-    : levels;
+  return [EFFORT_LEVELS.find(({ value }) => value === "auto")!, ...levels];
 }
 
 export function compatibleHarnessOptions<T extends { harnessId: string; model: { id: string } }>(

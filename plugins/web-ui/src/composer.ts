@@ -256,7 +256,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         (restoredLoadout?.value === selected?.value ? restoredLoadout?.effort : undefined) ??
         (getRuntimeConfig(scopeKey())?.effective.effortLevel as EffortLevel | undefined) ??
         defaultEffortForModel(selected?.model);
-      const levels = effortLevelsForHarness(selected?.harnessId ?? "", selected?.model, effort);
+      const levels = effortLevelsForHarness(selected?.harnessId ?? "", selected?.model);
       return levels.some((level) => level.value === effort) ? effort : levels[0]!.value;
     },
     set effortLevel(value: EffortLevel) {
@@ -1034,7 +1034,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function normalizeLoadoutEntry(entry: LoadoutEntry, option: ModelOption): LoadoutEntry {
-    const levels = effortLevelsForHarness(option.harnessId, option.model, entry.effort);
+    const levels = effortLevelsForHarness(option.harnessId, option.model);
     const defaultEffort = defaultEffortForModel(option.model);
     const fallbackEffort = levels.some((level) => level.value === defaultEffort) ? defaultEffort : levels[0]!.value;
     return {
@@ -1887,9 +1887,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const selected = currentModelOption();
     if (
       !selected ||
-      !effortLevelsForHarness(selected.harnessId, selected.model, composerState.effortLevel).some(
-        (option) => option.value === level,
-      )
+      !effortLevelsForHarness(selected.harnessId, selected.model).some((option) => option.value === level)
     )
       return;
     composerState.effortLevel = level;
