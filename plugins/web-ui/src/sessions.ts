@@ -1794,6 +1794,7 @@ export async function openSessionInto(
   if (continuable) {
     attachPendingApprovals(messages, approvalsRes?.approvals ?? [], transcriptModel());
     conv.mountContinuable(s.threadRef, s.id, s.scopeId, messages, s.channelName ?? null, s, inheritedMessages);
+    conv.composer.adoptRuntime(entriesRes.runtime);
     conv.setTranscriptWindow(anchorSeq, earlier, (entriesRes.earlierEntries ?? 0) > 0);
   } else {
     conv.mountReadOnly(s, messages, earlier, anchorSeq, inheritedMessages);

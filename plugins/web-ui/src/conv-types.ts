@@ -141,7 +141,8 @@ export interface ComposerSurface {
   sendSuggestedPrompt(prompt: string, agent: Agent): Promise<void>;
   resizeComposer(): void;
   currentModelOption(): ModelOption | undefined;
-  carryModelPick(fromThreadRef: string | null, toThreadRef: string): void;
+  selectedRuntime(): import("./core-bridge").RuntimeConfig["effective"] | undefined;
+  adoptRuntime(runtime: import("./core-bridge").RuntimeConfig["effective"] | undefined): void;
   refreshRuntimeSelection(scopeId: string | null, agent?: Agent, refresh?: boolean): Promise<void>;
   onDragEnter(e: DragEvent): void;
   onDragOver(e: DragEvent): void;

@@ -33,6 +33,7 @@ import {
   type CoreAttachment,
   type PendingApproval,
   type QueuedRun,
+  type RuntimeConfig,
 } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { browserRenderableImage, fieldSelect, icon } from "./ui";
@@ -89,6 +90,7 @@ function loadThreadPicks(): Map<string, ModelOptionValue> {
 }
 
 let threadModelPicks = loadThreadPicks();
+const unsentRuntimeThreads = new Set<string>();
 function runtimeScopeKey(scopeId: string | null): string | null {
   if (scopeId) return scopeId;
   const user = appState.me?.user;
@@ -115,11 +117,6 @@ function forgetThreadPick(threadRef: string): void {
   threadModelPicks = loadThreadPicks();
   threadModelPicks.delete(threadRef);
   persistPreference(THREAD_PICKS_STORAGE_KEY, JSON.stringify([...threadModelPicks]));
-}
-
-export function carryModelPick(fromThreadRef: string | null, toThreadRef: string): void {
-  const pick = fromThreadRef ? threadModelPicks.get(fromThreadRef) : undefined;
-  if (pick) rememberThreadPick(toThreadRef, pick);
 }
 
 function modelOptionFor(value: ModelOptionValue, scopeKey?: string | null): ModelOption | undefined {
@@ -215,6 +212,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   let restoredLoadout: LoadoutEntry | undefined;
   let loadoutRestored = false;
   let modelSelectionRevision = 0;
+  let adoptedRuntime: RuntimeConfig["effective"] | undefined;
   let effortSelectionRevision = 0;
   let fastSelectionRevision = 0;
 
@@ -257,6 +255,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       return levels.some((level) => level.value === effort) ? effort : levels[0]!.value;
     },
     set effortLevel(value: EffortLevel) {
+      markRuntimeUnsent();
       ++effortSelectionRevision;
       effortOverride = value;
     },
@@ -273,6 +272,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       );
     },
     set fastMode(value: boolean | undefined) {
+      markRuntimeUnsent();
       ++fastSelectionRevision;
       fastModeOverride = value;
     },
@@ -356,6 +356,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const identity = `${key}:${ctx.chat.state.threadRef}`;
     const changedIdentity = identity !== runtimeIdentity;
     if (changedIdentity) {
+      adoptedRuntime = undefined;
       effortOverride = undefined;
       fastModeOverride = undefined;
       restoredLoadout = undefined;
@@ -386,6 +387,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const config = actualScope === null ? null : await loadRuntimeConfig(actualScope, refresh, options.runtimeAccount);
     if (request !== runtimeRequest) return;
     if (!config) composerState.error = "Could not load runtime settings.";
+    if (config) applyAdoptedRuntime();
     if (config && !loadoutRestored) {
       restoreLoadoutSelection();
       loadoutRestored = true;
@@ -428,6 +430,46 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     } else {
       restoredLoadout = normalized;
     }
+  }
+
+  function selectedRuntime(): RuntimeConfig["effective"] | undefined {
+    const selected = currentModelOption();
+    if (!selected) return undefined;
+    return {
+      harnessId: selected.harnessId,
+      modelId: selected.model.id,
+      effortLevel: composerState.effortLevel,
+      fastMode: composerState.fastMode === true,
+    };
+  }
+
+  function markRuntimeUnsent(): void {
+    if (ctx.chat.state.threadRef) unsentRuntimeThreads.add(ctx.chat.state.threadRef);
+  }
+
+  function adoptRuntime(runtime: RuntimeConfig["effective"] | undefined): void {
+    const threadRef = ctx.chat.state.threadRef;
+    if (!threadRef || !runtime || unsentRuntimeThreads.has(threadRef)) return;
+    adoptedRuntime = runtime;
+    if (getRuntimeConfig(scopeKey())) applyAdoptedRuntime();
+  }
+
+  function applyAdoptedRuntime(): void {
+    const runtime = adoptedRuntime;
+    const threadRef = ctx.chat.state.threadRef;
+    adoptedRuntime = undefined;
+    const option = runtime && modelOptionFor(`${runtime.harnessId}:${runtime.modelId}`, scopeKey());
+    if (!runtime || !threadRef || !option) return;
+    ++modelSelectionRevision;
+    ++effortSelectionRevision;
+    ++fastSelectionRevision;
+    rememberThreadPick(threadRef, option.value);
+    effortOverride = effortLevelsForHarness(option.harnessId, option.model).find(
+      (level) => level.value === runtime.effortLevel,
+    )?.value;
+    fastModeOverride = runtime.fastMode;
+    restoredLoadout = undefined;
+    syncRuntimeSelection(ctx.chat.state.agent ?? undefined);
   }
 
   function syncRuntimeSelection(agent?: Agent): void {
@@ -1526,6 +1568,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
           : {}),
       };
       submitting = true;
+      const sentFromThread = ctx.chat.state.threadRef;
       clearActiveDraft();
       resetComposer();
       ctx.chat.drawActiveChat(agent);
@@ -1533,6 +1576,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         const { uploaded, skipped } = await uploadAttachments(attachments);
         if (skipped.length) throw new Error(skipped.map((file) => file.note).join(" "));
         await submit(text, { ...selection, ...(uploaded.length ? { attachments: uploaded } : {}) });
+        if (sentFromThread) unsentRuntimeThreads.delete(sentFromThread);
       } catch (error) {
         restoreStagedOnFailure(text, attachments, errMessage(error, "Could not send message."));
         persistDraft();
@@ -1558,6 +1602,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       if (ctx.chat.state.normalStreamFn) agent.streamFn = ctx.chat.state.normalStreamFn;
       ctx.chat.scrollToBottom();
       await agent.prompt(userSendMessage(text, attachments.length ? attachments : undefined));
+      if (sentFromThread) unsentRuntimeThreads.delete(sentFromThread);
       restoreBlockedSend(agent, sentFromThread, text, attachments);
       restoreFailedAttachments(agent, text, attachments);
     } catch (err) {
@@ -1859,6 +1904,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const option = getModelOptions(scopeKey()).find((candidate) => candidate.value === value);
     if (!option) return;
     ++modelSelectionRevision;
+    markRuntimeUnsent();
     const previousDefaultEffort = defaultEffortForModel(currentModelOption()?.model);
     if (ctx.chat.state.threadRef) rememberThreadPick(ctx.chat.state.threadRef, option.value);
     agent.state.model = option.model;
@@ -2005,7 +2051,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     },
     resizeComposer,
     currentModelOption,
-    carryModelPick,
+    selectedRuntime,
+    adoptRuntime,
     refreshRuntimeSelection,
     onDragEnter,
     onDragOver,

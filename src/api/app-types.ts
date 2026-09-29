@@ -337,7 +337,13 @@ export interface App {
     sessionId: string,
     principalId: string,
     window?: TranscriptWindow,
-  ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number; pins?: SessionPinView[] } | null>;
+  ): Promise<{
+    session: Session;
+    entries: TranscriptEntry[];
+    earlierEntries?: number;
+    pins?: SessionPinView[];
+    runtime?: RuntimeChoice;
+  } | null>;
   canViewSessionSnapshot(
     sessionId: string,
     principalId: string,

@@ -162,7 +162,9 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
           .reverse()
           .filter(
             (run) =>
-              run.sessionId === threadRef && !(opts?.excludePrivateMessages && run.request.privateSessionMessage),
+              run.sessionId === threadRef &&
+              !(opts?.excludePrivateMessages && run.request.privateSessionMessage) &&
+              !(opts?.webHumanOnly && (run.request.surface !== "web" || run.request.origin?.kind !== "human")),
           )
           .sort((a, b) => b.createdAt - a.createdAt)
           .at(0) ?? null
