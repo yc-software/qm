@@ -196,8 +196,15 @@ test("desktop density tokens keep original touch sizes and a 12px floor", () => 
     assert.equal(before.get(name), original);
     assert.equal(after.get(name), compact);
   }
-  assert.match(shellCss, /\.thinking \{[^}]*font-size: calc\(var\(--chat-font-size\) - 2px\);/);
-  assert.match(shellCss, /\.thinking-summary \{[^}]*font-size: calc\(var\(--chat-font-size\) - 1px\);/);
-  assert.match(shellCss, /\.thinking-body \{[^}]*font-size: calc\(var\(--chat-font-size\) - 1px\);/);
-  assert.match(shellCss, /\.work-message \{[^}]*font-size: calc\(var\(--chat-font-size\) - 1px\);/);
+  const scaled = (offset: string) =>
+    `font-size: max(min(12px, calc(var(--chat-font-size) - ${offset})), calc((var(--chat-font-size) - ${offset}) * var(--text-scale)));`;
+  for (const [selector, offset] of [
+    [".thinking", "2px"],
+    [".thinking-summary", "1px"],
+    [".thinking-body", "1px"],
+    [".work-message", "1px"],
+  ]) {
+    const block = shellCss.match(new RegExp(`\\n${selector.replace(".", "\\.")} \\{([^}]*)\\}`))?.[1] ?? "";
+    assert.ok(block.includes(scaled(offset)), selector);
+  }
 });
