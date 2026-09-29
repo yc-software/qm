@@ -66,3 +66,8 @@ OpenAI currently makes Astra Ultrafast broadly available with separate rate
 limits. Sol Ultrafast remains a preview and is not enabled by this choice.
 See [Ultrafast availability](https://developers.openai.com/api/docs/guides/ultrafast-mode)
 and [pricing](https://developers.openai.com/api/docs/pricing?latest-pricing=ultrafast).
+
+In the web picker, select Astra and use the Ultrafast switch. The picker shows a
+distinct active badge and the 6× cost before enabling it. Fast and Ultrafast are
+mutually exclusive, and both speeds share one Astra preset. The internal model
+ID above preserves routing, authorization, pricing, and saved selections.

@@ -11,6 +11,8 @@ import {
 } from "./model-options";
 import { createModelPicker } from "./model-picker";
 import {
+  ULTRAFAST_MODEL_ID,
+  ultrafastChoice,
   loadLoadout,
   saveLoadout,
   reconcileLoadout,
@@ -218,7 +220,11 @@ function contextPicker(scopeId: string) {
         compatibleHarnessOptions(options(), selected.model.id).find((option) => option.harnessId === harnessId);
       if (target) apply({ ...current(), value: target.value });
     },
-    toggleFastMode: () => apply({ ...current(), fast: !current().fast }),
+    toggleFastMode: () => {
+      const selected = options().find((option) => option.value === current().value);
+      const target = selected?.model.id === ULTRAFAST_MODEL_ID ? ultrafastChoice(options(), selected) : undefined;
+      apply({ ...current(), ...(target ? { value: target.value } : {}), fast: !current().fast });
+    },
     effectiveFastMode: () => current().fast,
     changeDefault: () => choose(scopeId, INHERIT),
     showDefaultAction: false,

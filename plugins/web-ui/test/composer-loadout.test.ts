@@ -246,3 +246,13 @@ test("native reasoning choices require model and harness metadata while legacy s
   const saved = [entry("pi:one", "adaptive"), entry("pi:two", "default"), entry("pi:three", "auto")];
   assert.deepEqual(parseLoadout(JSON.stringify(saved)), saved);
 });
+
+test("Astra speed variants share a preset and preserve a saved tier", () => {
+  const base = option("pi:gpt-6-astra");
+  const ultra = option("pi:gpt-6-astra-ultrafast");
+  const saved = entry(ultra.value, "high");
+  assert.deepEqual(modelLoadoutOptions([ultra, base], [], "pi"), [base]);
+  assert.deepEqual(modelLoadoutOptions([base, ultra], [saved], "pi"), [ultra]);
+  assert.deepEqual(modelLoadoutOptions([ultra], [], "pi"), [ultra]);
+  assert.deepEqual(upsertLoadout([entry(base.value)], saved), [saved]);
+});

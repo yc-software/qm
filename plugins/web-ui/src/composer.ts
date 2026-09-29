@@ -56,6 +56,9 @@ import { tip } from "./tooltip";
 import { isPhone } from "./viewport";
 import {
   LOADOUT_CAP,
+  ULTRAFAST_MODEL_ID,
+  presetModelId,
+  ultrafastChoice,
   loadLoadout,
   saveLoadout,
   reconcileLoadout,
@@ -411,7 +414,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const threadRef = ctx.chat.state.threadRef;
     if (selected && threadRef && !threadModelPicks.has(threadRef)) {
       const preferred = modelLoadoutOptions(getModelOptions(scopeKey()), loadout, selected.harnessId).find(
-        (option) => option.model.id === selected!.model.id,
+        (option) => presetModelId(option.value) === presetModelId(selected!.value),
       );
       if (preferred && preferred.value !== selected.value) {
         rememberThreadPick(threadRef, preferred.value);
@@ -1898,6 +1901,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   function toggleFastMode(agent: Agent): void {
     const selected = currentModelOption();
     if (ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0) return;
+    if (selected?.model.id === ULTRAFAST_MODEL_ID) {
+      const target = ultrafastChoice(getModelOptions(scopeKey()), selected);
+      if (target) applyLoadout({ ...activeLoadoutEntry(selected), value: target.value, fast: true }, agent);
+      return;
+    }
     if (
       !selected ||
       !harnessSupportsFastMode(selected.harnessId) ||

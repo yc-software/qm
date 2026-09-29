@@ -33,6 +33,7 @@
   /* Height reserved at the bottom of every chat message for its own hover footer; it doubles
      as the rhythm between message blocks. */
   --meta-lane: 24px;
+  --ultrafast-accent: #7540bd;
   --brand-accent: #4f46e5;
   --dev-accent: #8a5a00;
   --markdown-link: #2563b8;
@@ -87,6 +88,7 @@
 }
 
 .dark {
+  --ultrafast-accent: #ceadff;
   --markdown-link: #4c8edb;
   --cta: oklch(0.42 0.085 250);
   --cta-hover: oklch(0.48 0.09 250);
@@ -13187,4 +13189,26 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 
 .inline-steer .user-row .message-meta {
   justify-content: flex-end;
+}
+
+.loadout-ultrafast-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--ultrafast-accent);
+  font-size: 10px;
+  font-weight: 600;
+}
+.loadout-button.ultrafast-active {
+  background: color-mix(in srgb, var(--ultrafast-accent) 14%, var(--background));
+  border-color: color-mix(in srgb, var(--ultrafast-accent) 45%, var(--background));
+}
+.loadout-ultrafast .loadout-setting-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.loadout-setting.loadout-ultrafast .loadout-toggle.on,
+.loadout-setting.loadout-ultrafast:not(:disabled):hover .loadout-toggle.on {
+  background: var(--ultrafast-accent);
 }
