@@ -3227,6 +3227,17 @@ qm-markdown .tok-in {
   border-radius: 14px 14px 10px 10px;
   background: color-mix(in srgb, var(--background) 88%, var(--secondary));
 }
+.chat-bottom-dock > .bg-activity:has(+ .bg-activity) {
+  margin-bottom: 0;
+  padding-bottom: 6px;
+  border-bottom: none;
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.chat-bottom-dock > .bg-activity + .bg-activity {
+  border-top-right-radius: 0;
+  border-top-left-radius: 0;
+}
 .chat-bottom-dock > .bg-activity > .bg-activity-strip {
   min-height: 20px;
   padding: 0;
@@ -3313,6 +3324,18 @@ qm-markdown .tok-in {
 .subagent-row-action:hover {
   color: var(--foreground);
 }
+.subagent-row-head {
+  border-radius: 6px;
+}
+.subagent-row-head:focus,
+.subagent-row-action:focus {
+  outline: none;
+}
+.subagent-row-head:focus-visible,
+.subagent-row-action:focus-visible {
+  outline: 1px solid var(--muted-foreground);
+  outline-offset: -1px;
+}
 .subagent-row-title {
   min-width: 0;
   overflow: hidden;
@@ -3343,6 +3366,7 @@ qm-markdown .tok-in {
 }
 .subagent-peek {
   flex: 1 0 100%;
+  min-width: 0;
   margin: 0;
   padding: 2px 8px 6px 26px;
   list-style: none;
@@ -3358,6 +3382,7 @@ qm-markdown .tok-in {
   min-width: 0;
 }
 .subagent-peek-line > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
