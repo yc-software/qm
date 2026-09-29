@@ -162,7 +162,7 @@ export function activityGroupSummary(
 export function thinkingPresentation(text: string): { title: string; body: string } {
   const trimmed = text.trim();
   const heading = /^(?:#{1,6} +([^\n]+)|\*\*([^\n]+?)\*\*|__([^\n]+?)__)(?:\r?\n|$)/.exec(trimmed);
-  if (!heading) return { title: "Thought process", body: trimmed };
+  if (!heading) return { title: "Thinking", body: trimmed };
   const title = (heading[1] ?? heading[2] ?? heading[3]!).replace(/ +#+$/, "").trim();
   return { title, body: trimmed.slice(heading[0].length).trim() };
 }

@@ -2585,7 +2585,7 @@ qm-markdown .tok-in {
   border-left: 2px solid var(--border);
   padding-left: 10px;
   color: var(--muted-foreground);
-  font-size: calc(var(--chat-font-size) - 2px);
+  font-size: max(min(12px, calc(var(--chat-font-size) - 2px)), calc((var(--chat-font-size) - 2px) * var(--text-scale)));
 }
 .thinking summary {
   cursor: pointer;
@@ -2602,7 +2602,7 @@ qm-markdown .tok-in {
 }
 .work-message {
   color: color-mix(in srgb, var(--muted-foreground) 85%, var(--foreground));
-  font-size: calc(var(--chat-font-size) - 1px);
+  font-size: max(min(12px, calc(var(--chat-font-size) - 1px)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));
   line-height: 1.6;
 }
 .sheen-label {
@@ -2742,7 +2742,7 @@ qm-markdown .tok-in {
   list-style: none;
   cursor: default;
   color: var(--muted-foreground);
-  font-size: calc(var(--chat-font-size) - 1px);
+  font-size: max(min(12px, calc(var(--chat-font-size) - 1px)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));
   line-height: 1.35;
 }
 .thinking-summary::-webkit-details-marker {
@@ -2760,7 +2760,7 @@ qm-markdown .tok-in {
   padding-left: 10px;
   border-left: 2px solid var(--border);
   color: var(--muted-foreground);
-  font-size: calc(var(--chat-font-size) - 1px);
+  font-size: max(min(12px, calc(var(--chat-font-size) - 1px)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));
   line-height: 1.55;
 }
 .thinking-title {
