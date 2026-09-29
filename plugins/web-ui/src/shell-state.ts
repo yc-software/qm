@@ -5,6 +5,7 @@ export type AuthMode = "portal" | "dev";
 export interface Me {
   browserErrors?: { dsn: string; release?: string; tracesSampleRate?: number };
   analytics?: { apiKey: string; host: string };
+  build?: { version?: string; sha?: string };
   companyName?: string | null;
   welcomeCohort?: string;
   suggestedActivities?: SuggestedActivity[];

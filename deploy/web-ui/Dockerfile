@@ -28,6 +28,8 @@ COPY --from=build /app/dist-web ./dist-web
 
 ARG GIT_SHA=
 ENV GIT_SHA=$GIT_SHA
+ARG QM_VERSION=
+ENV QM_VERSION=$QM_VERSION
 ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080
