@@ -805,10 +805,13 @@ export function drawCanvas(): void {
 
 function computeHeaderSignature(): string {
   return (dockApi?.panels ?? [])
-    .map(
-      (p) =>
-        `${p.id}|${paneSession(p)?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${JSON.stringify(paneSession(p)?.status ?? null)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}|${paneSession(p)?.parentSessionId ?? ""}|${sessionsState.list.find((row) => row.id === paneSession(p)?.parentSessionId)?.title ?? ""}`,
-    )
+    .map((p) => {
+      const session = paneSession(p);
+      const parent = session?.parentSessionId
+        ? sessionsState.list.find((row) => row.id === session.parentSessionId)
+        : undefined;
+      return `${p.id}|${session?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${JSON.stringify(session?.status ?? null)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}|${session?.parentSessionId ?? ""}|${parent?.title ?? ""}`;
+    })
     .join("~");
 }
 
