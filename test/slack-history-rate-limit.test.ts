@@ -100,7 +100,7 @@ for (const source of ["live", "shadow", "mirror"] as const) {
       });
       const channel = await reader(client, "C1", undefined, "10.0", true);
       const thread = await reader(client, "C1", "1.0");
-      assert.equal(calls.length, 3);
+      assert.equal(calls.length, source === "mirror" ? 2 : 3);
       assert.ok(calls.some((call) => call.method === "history"));
       assert.ok(calls.some((call) => call.method === "replies"));
       assert.ok(calls.every((call) => call.args.limit === (managed ? 15 : (historyLimit ?? 200))));

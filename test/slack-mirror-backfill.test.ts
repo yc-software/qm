@@ -19,7 +19,7 @@ function fixture(fail?: Error) {
   const historyClient = {
     conversations: {
       history: async (args: any) => {
-        calls.push(`history:${args.latest ?? ""}`);
+        calls.push(`history:${args.latest ?? ""}:${args.limit}`);
         if (fail) throw fail;
         return {
           messages: [
@@ -29,7 +29,7 @@ function fixture(fail?: Error) {
         };
       },
       replies: async (args: any) => {
-        calls.push(`replies:${args.ts}`);
+        calls.push(`replies:${args.ts}:${args.limit}`);
         if (fail) throw fail;
         return {
           messages: [
@@ -51,16 +51,18 @@ async function joinedLate(cache: ReturnType<typeof createMemorySurfaceCache>) {
   ]);
 }
 
-test("a late-joined mirror backfills the thread and earlier channel history once", async () => {
+test("a late-joined thread backfills its last 15 replies once", async () => {
   const { cache, calls, readHistory } = fixture();
   await joinedLate(cache);
   const thread = await readHistory({}, "C1", "20.000000", undefined, true);
   assert.deepEqual(thread.raw.map((m) => m.ts).sort(), ["20.000000", "21.000000"]);
-  assert.deepEqual(calls, ["replies:20.000000", "history:20.000000"]);
+  assert.deepEqual(calls, ["replies:20.000000:15"]);
+  await readHistory({}, "C1", "20.000000", undefined, true);
+  assert.equal(calls.length, 1);
   const channel = await readHistory({}, "C1");
   assert.ok(channel.raw.some((m) => m.text === "earlier plan"));
-  await readHistory({}, "C1", "20.000000", undefined, true);
-  assert.equal(calls.length, 2);
+  await readHistory({}, "C1");
+  assert.deepEqual(calls, ["replies:20.000000:15", "history::15"]);
 });
 
 test("a failed backfill is not retried and falls back to the mirror", async () => {
@@ -72,10 +74,9 @@ test("a failed backfill is not retried and falls back to the mirror", async () =
   await joinedLate(cache);
   const first = await readHistory({}, "C1", "20.000000", undefined, true);
   assert.deepEqual(first.raw.map((m) => m.ts).sort(), ["20.000000", "21.000000"]);
-  assert.deepEqual(calls, ["replies:20.000000"]);
+  assert.deepEqual(calls, ["replies:20.000000:15"]);
   const again = await readHistory({}, "C1", "20.000000", undefined, true);
   assert.deepEqual(again.raw.map((m) => m.ts).sort(), ["20.000000", "21.000000"]);
-  await readHistory({}, "C1");
   assert.equal(calls.length, 1);
 });
 
@@ -90,7 +91,7 @@ test("a thread read before its root is mirrored still fetches only once", async 
     again.raw.map((m) => m.ts),
     ["21.000000"],
   );
-  assert.deepEqual(calls, ["replies:20.000000"]);
+  assert.deepEqual(calls, ["replies:20.000000:200"]);
 });
 
 test("an older-page read does not use up the latest-page backfill", async () => {
@@ -98,5 +99,5 @@ test("an older-page read does not use up the latest-page backfill", async () => 
   await joinedLate(cache);
   await readHistory({}, "C1", undefined, "15.000000");
   await readHistory({}, "C1");
-  assert.deepEqual(calls, ["history:15.000000", "history:"]);
+  assert.deepEqual(calls, ["history:15.000000:200", "history::15"]);
 });

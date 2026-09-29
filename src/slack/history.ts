@@ -276,26 +276,19 @@ export function createSlackHistoryReader(deps: {
     if (!before && backfilled.has(key))
       return mirrorResult ?? { raw: mirrored, hasMore: true, note: MIRROR_CONTEXT_NOTE };
     try {
-      const parentPending = Boolean(threadTs && !before && !backfilled.has(channel));
       if (!before) backfilled.add(key);
-      if (parentPending) backfilled.add(channel);
-      const paging = { channel, limit, ...(before ? { latest: before, inclusive: false } : {}) };
+      const paging = {
+        channel,
+        limit: mirrorResult ? Math.min(limit, SHARED_SLACK_HISTORY_LIMIT) : limit,
+        ...(before ? { latest: before, inclusive: false } : {}),
+      };
       const page = parseMessageList(
         threadTs
           ? await historyClient.conversations.replies({ ...paging, ts: threadTs })
           : await historyClient.conversations.history(paging),
       );
       page.messages = page.messages.filter((m) => !isOwnStatusCard(m, deps.ids.botUserId, deps.ids.ownBotId));
-      page.messages = page.messages.filter((m) => !isOwnStatusCard(m, deps.ids.botUserId, deps.ids.ownBotId));
-      if (page.messages.length && deps.core.rememberSurfaceHistory) {
-        await deps.core
-          .rememberSurfaceHistory(
-            page.messages
-              .filter((m) => m.ts)
-              .map((m) => slackMessageToIngestEvent({ ...m, channel }, deps.ids, { handled: true })),
-          )
-          .catch((error) => swallow("slack: history mirror ingest", error));
-      }
+      await remember(channel, page.messages);
       if (deps.core.readSurfaceMessages && page.messages.length) {
         const stored = await deps.core.readSurfaceMessages(channel, {
           timestamps: page.messages.flatMap((m) => (m.ts ? [m.ts] : [])),
