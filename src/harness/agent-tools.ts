@@ -2243,7 +2243,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "{everyMs} is ONLY for genuine sub-day polling where wall-clock time does not matter (first run one " +
       "interval from now, not immediately; an everyMs of 24h+ is rejected — use {cron,timezone} instead), or " +
       '{firstFireAt} (epoch ms; fires once then auto-cancels — use Date.now() for "send now").\n' +
-      "DELIVERY: by default a cron posts back to this conversation. To deliver elsewhere, set `recipient` " +
+      "DELIVERY: by default a cron posts back to this conversation — the surface where you are talking now (a web session, Slack DM, or thread). " +
+      "Keep that default for watches and follow-ups on work started here (including delegated sessions) unless the person names another destination; don't pick a DM just because it is a DM. " +
+      "To deliver elsewhere, set `recipient` " +
       "(a teammate's name → a DM; core resolves the name and the result echoes who it matched), `channel` " +
       "(a channel name → that channel), `participants` (a list of member ids → a group DM, which has no name; " +
       "you're added automatically; the group must already exist — post to it once with the slack tool's " +
