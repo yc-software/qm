@@ -1019,8 +1019,12 @@ export function providerRefusalError(session: AssistantTextSession, messagesBefo
 
 export const REFUSAL_FALLBACK_MODEL_IDS = ["claude-opus-5", "claude-sonnet-5"] as const;
 
-export function refusalFallbackModelId(fromId: string, configuredId?: string): string | undefined {
-  if (configuredId && configuredId !== fromId) return configuredId;
+export function refusalFallbackModelId(
+  fromId: string,
+  configuredId?: string,
+  usable: (id: string) => boolean = () => true,
+): string | undefined {
+  if (configuredId && configuredId !== fromId && usable(configuredId)) return configuredId;
   return REFUSAL_FALLBACK_MODEL_IDS.find((id) => id !== fromId);
 }
 
@@ -2219,7 +2223,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (userAborted || turn.cancel?.aborted) return false;
             const fromId = (entry.agentSession.model as { id?: string } | undefined)?.id;
             const configured = opts?.resolveFallbackRuntime?.();
-            const fallbackId = fromId ? refusalFallbackModelId(fromId, configured?.modelId) : undefined;
+            const fallbackId = fromId
+              ? refusalFallbackModelId(fromId, configured?.modelId, (id) => !!resolveModel(id, !turn.providerKeys))
+              : undefined;
             const fallback = fallbackId ? resolveModel(fallbackId, !turn.providerKeys) : undefined;
             if (!fallbackId || !fallback) return false;
             const capMs = raceCapMs();
@@ -2554,7 +2560,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         try {
           return await summarize(primaryId);
         } catch (error) {
-          const fallbackId = refusalFallbackModelId(primaryId, opts?.resolveFallbackRuntime?.()?.modelId);
+          const fallbackId = refusalFallbackModelId(
+            primaryId,
+            opts?.resolveFallbackRuntime?.()?.modelId,
+            (id) => !!resolveModel(id),
+          );
           if (
             !(error instanceof Error) ||
             !isProviderRefusal(error.message) ||
