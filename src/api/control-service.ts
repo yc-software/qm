@@ -361,6 +361,7 @@ const UNATTENDED_GRANTS = new Set([
   "admin.metrics.read",
   "admin.egress.read",
   "admin.files.read",
+  "conversations.create",
 ]);
 
 function validateUnattendedGrants(grants: string[]): string | null {

@@ -113,11 +113,11 @@ async function spawnAgentConversation(ctx: ApiCtx): Promise<void> {
   if (!capability) {
     return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
   }
-  if (!livePersonCapability(capability)) {
+  if (!livePersonCapability(capability) && !capability.grants?.includes("conversations.create")) {
     return sendJson(res, 403, {
       error: "human_attended_only",
       message:
-        "starting a fresh conversation requires a turn a person is attending — not a cron, trigger, or other automation",
+        "starting a fresh conversation requires a human-attended turn or the explicit conversations.create unattended grant",
     });
   }
   const b = isObj(body) ? body : {};

@@ -22,9 +22,21 @@ describe("agent conversations self-API", async () => {
   let mineId: string;
   let theirsId: string;
 
-  const capFor = (actorId: string, scope = scopeId("personal", actorId), live = true) =>
+  const capFor = (
+    actorId: string,
+    scope = scopeId("personal", actorId),
+    live = true,
+    grants?: string[],
+  ) =>
     mintCapabilityToken(
-      { actorId, scopeId: scope, aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS, liveActor: live },
+      {
+        actorId,
+        scopeId: scope,
+        aud: CONTROL_PLANE_AUD,
+        exp: Date.now() + CAPABILITY_TTL_MS,
+        liveActor: live,
+        ...(grants ? { grants } : {}),
+      },
       SECRET,
     );
 
@@ -242,10 +254,18 @@ describe("agent conversations self-API", async () => {
     assert.equal((await post("/v1/conversations", { text: "  " }, await capFor("U1"))).status, 400);
   });
 
-  it("spawn refuses an unattended (automation) turn", async () => {
+  it("spawn refuses an unattended (automation) turn without an explicit grant", async () => {
     const token = await capFor("U1", scopeId("personal", "U1"), false);
     const res = await post("/v1/conversations", { text: "cron trying to spawn" }, token);
     assert.equal(res.status, 403);
+  });
+
+  it("spawn allows an unattended turn with the explicit session-create grant", async () => {
+    const token = await capFor("U1", scopeId("personal", "U1"), false, ["conversations.create"]);
+    const res = await post("/v1/conversations", { text: "authorized internal review" }, token);
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { session: { id: string } };
+    assert.ok(body.session.id);
   });
 
   it("spawn refuses a scope the actor doesn't own", async () => {
