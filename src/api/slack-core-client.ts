@@ -30,6 +30,7 @@ import type {
   TurnResult,
 } from "../types.ts";
 import { scopeId } from "../types.ts";
+import type { MemoryService } from "../memory/memory-service.ts";
 import type { CachedMessage, ReadMessagesOpts, SurfaceCache, IngestEvent } from "../surface-cache/surface-cache.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.ts";
@@ -116,6 +117,7 @@ export interface SlackCoreClient {
   readBlob(blobId: string): Promise<Buffer>;
   readFileArtifact(artifactId: string, viewerId: string): Promise<Buffer>;
   rememberSurfaceHistory?(events: IngestEvent[]): Promise<void>;
+  noteSurfaceHistoryGap?(container: string, note: string): Promise<void>;
   readSurfaceMessages?(container: string, opts?: ReadMessagesOpts): Promise<CachedMessage[]>;
   ingestSurfaceEvents(events: IngestEvent[], self?: { name?: string; mentionId?: string }): Promise<void>;
   submitTurn(body: Omit<TurnRequest, "surface">): Promise<TurnResult>;
@@ -195,6 +197,7 @@ export interface SlackCoreClientDeps {
   leaderLease?: LeaderLease;
   stagedEnvelopes?: DurableMap<StagedEnvelope>;
   surfaceCache?: SurfaceCache;
+  memory?: MemoryService;
   inboxEvent?(event: ConversationEvent): Promise<void>;
 }
 
@@ -330,6 +333,12 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     async rememberSurfaceHistory(events) {
       await deps.surfaceCache?.ingest(events);
+    },
+
+    async noteSurfaceHistoryGap(container, note) {
+      if (!deps.memory) return;
+      const kind = (await deps.surfaceCache?.containerState(container))?.kind;
+      await deps.memory.capture(scopeId(kind === "group" ? "group" : "channel", container), [note], Date.now());
     },
 
     async readSurfaceMessages(container, opts) {

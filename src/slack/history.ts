@@ -307,6 +307,13 @@ export function createSlackHistoryReader(deps: {
         ...(page.hasMore ? { note: "Slack history is truncated; older messages may be absent." } : {}),
       };
     } catch (error) {
+      if (!before && slackHistoryRateLimitMessage(error) && deps.core.noteSurfaceHistoryGap)
+        await deps.core
+          .noteSurfaceHistoryGap(
+            channel,
+            `Slack rate-limited the initial history pull for ${threadTs ? `thread ${threadTs} in ` : ""}this channel, so messages from before QM joined were not loaded.`,
+          )
+          .catch((noteError) => swallow("slack: history gap memory note", noteError));
       if (!mirrored.length) throw error;
       swallow("slack: incomplete mirror history fallback", error);
       if (mirrorResult)

@@ -2,14 +2,19 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorySurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
-import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
+import { createSlackCoreClient, type SlackCoreClient } from "../src/api/slack-core-client.ts";
+import { createTurnStream } from "../src/runs/turn-stream.ts";
 import type { BotIdentity } from "../src/slack/directory.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
 
 function fixture(fail?: Error) {
   const cache = createMemorySurfaceCache();
+  const notes: string[] = [];
   const core = {
+    noteSurfaceHistoryGap: async (container: string, note: string) => {
+      notes.push(`${container}:${note}`);
+    },
     readSurfaceMessages: cache.readMessages,
     rememberSurfaceHistory: async (events) => {
       await cache.ingest(events);
@@ -41,7 +46,7 @@ function fixture(fail?: Error) {
     },
   };
   const readHistory = createSlackHistoryReader({ core, ids, source: "mirror", historyClient });
-  return { cache, calls, readHistory };
+  return { cache, calls, notes, readHistory };
 }
 
 async function joinedLate(cache: ReturnType<typeof createMemorySurfaceCache>) {
@@ -100,4 +105,44 @@ test("an older-page read does not use up the latest-page backfill", async () => 
   await readHistory({}, "C1", undefined, "15.000000");
   await readHistory({}, "C1");
   assert.deepEqual(calls, ["history:15.000000:200", "history::15"]);
+});
+
+test("a rate-limited backfill notes the gap in the channel's memory once", async () => {
+  const limited = Object.assign(new Error("rate limited"), { code: "slack_webapi_rate_limited_error" });
+  const { cache, notes, readHistory } = fixture(limited);
+  await joinedLate(cache);
+  await readHistory({}, "C1", "20.000000", undefined, true);
+  await readHistory({}, "C1", "20.000000", undefined, true);
+  assert.equal(notes.length, 1);
+  assert.match(notes[0]!, /^C1:Slack rate-limited the initial history pull/);
+});
+
+test("a non-rate-limit backfill failure writes no memory note", async () => {
+  const { cache, notes, readHistory } = fixture(new Error("boom"));
+  await joinedLate(cache);
+  await readHistory({}, "C1", "20.000000", undefined, true);
+  assert.deepEqual(notes, []);
+});
+
+test("the history gap note lands in the conversation's own scope memory", async () => {
+  const cache = createMemorySurfaceCache();
+  await cache.ingest([
+    { container: "C1", ts: "1.000000", text: "hi", authorId: "U1", kind: "channel" },
+    { container: "G1", ts: "1.000000", text: "hi", authorId: "U1", kind: "group" },
+  ]);
+  const captured: string[] = [];
+  const client = createSlackCoreClient({
+    surfaceCache: cache,
+    memory: {
+      capture: async (scope: string, facts: string[]) => {
+        captured.push(`${scope}=${facts.join()}`);
+        return facts.length;
+      },
+    },
+    turnStream: createTurnStream(),
+    runs: { onTerminal() {} },
+  } as any);
+  await client.noteSurfaceHistoryGap!("C1", "gap");
+  await client.noteSurfaceHistoryGap!("G1", "gap");
+  assert.deepEqual(captured, ["channel:C1=gap", "group:G1=gap"]);
 });

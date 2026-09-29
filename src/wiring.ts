@@ -2182,6 +2182,7 @@ export function buildApp(
   });
   const slackCore = createSlackCoreClient({
     identity,
+    memory,
     ...(keychain
       ? {
           keychainApprovals: createKeychainApprovals({
