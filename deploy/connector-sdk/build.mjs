@@ -3,6 +3,7 @@ import { mkdir, writeFile, readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const output = process.argv[2]
@@ -22,6 +23,8 @@ const data = result.outputFiles[0].contents;
 const sha = createHash("sha256").update(data).digest("hex");
 await mkdir(output, { recursive: true });
 await writeFile(`${output}/sdk.cjs`, data);
+if (typeof createRequire(import.meta.url)(`${output}/sdk.cjs`).Composio !== "function")
+  throw new Error("Connector SDK bundle does not export Composio");
 await writeFile(`${output}/sha256`, `${sha}\n`);
 console.log(`Connector SDK: ${data.length} bytes, sha256 ${sha}`);
 
