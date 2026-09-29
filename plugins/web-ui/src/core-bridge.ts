@@ -980,7 +980,7 @@ export function makeRunResumeStreamFn(
   return fn as unknown as StreamFn;
 }
 
-export async function resolveApproval(decision: ApprovalDecision): Promise<string> {
+export async function resolveApproval(decision: ApprovalDecision): Promise<string | null> {
   if (decision.requestId.startsWith("keychain:")) {
     const id = decision.requestId.slice("keychain:".length);
     let choice = "deny";
@@ -994,7 +994,11 @@ export async function resolveApproval(decision: ApprovalDecision): Promise<strin
   const submit = await api<{ runId?: string }>(`/api/approvals/${encodeURIComponent(decision.requestId)}`, {
     method: "POST",
     body: JSON.stringify({ approved: decision.approved, ...(decision.scope ? { scope: decision.scope } : {}) }),
+  }).catch((err: unknown) => {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
   });
+  if (!submit) return null;
   if (!submit.runId) throw new Error("Could not continue after the approval.");
   return submit.runId;
 }

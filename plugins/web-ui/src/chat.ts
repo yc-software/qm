@@ -1834,7 +1834,9 @@ export function createChatSurface(
         data-index=${index}
         data-entry-seqs=${messageEntrySeqs(message).join(" ")}
       >
-        <div class="system-note">${label}: <code>${decision.command}</code></div>
+        <div class="system-note approval-decision">
+          ${label}<code class="approval-cmd approval-cmd-full">${decision.command}</code>
+        </div>
       </article>`;
     }
     if (role === "system-note") {

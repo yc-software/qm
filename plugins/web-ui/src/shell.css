@@ -1812,6 +1812,14 @@ a.chat-row-open {
   text-align: center;
   padding: 2px 10px;
 }
+.approval-decision {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+}
 .system-note-text {
   font-style: italic;
 }
