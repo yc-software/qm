@@ -131,7 +131,9 @@ agent workspace files outside `artifacts/` (including files shared from there) a
 pending ChatGPT device logins. The chart sets no session affinity, so these can be
 unavailable from another replica and are lost on pod replacement. Switching an
 existing volume-backed install to S3 does not migrate bytes already under `/data`;
-copy them into the bucket first or they become unreadable.
+copy `/data/docstore/` to the bucket under `S3_PREFIX` and `/data/session-shares/`
+under `<S3_PREFIX>session-shares/` first, or existing uploads and shares become
+unreadable.
 
 **Local volume (single replica).** Without an object store, core writes file bytes
 under `/data`, and they are lost when the pod is replaced even with Postgres
