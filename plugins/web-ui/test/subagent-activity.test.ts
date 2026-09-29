@@ -50,6 +50,35 @@ test("descendants roll grandchildren up to the top-level parent", () => {
   );
 });
 
+test("descendant traversal reads parent links once across deep history and preserves breadth-first list order", () => {
+  let reads = 0;
+  const chain = Array.from({ length: 512 }, (_, index) => ({
+    id: `chain-${index}`,
+    get parentSessionId() {
+      reads++;
+      return index ? `chain-${index - 1}` : undefined;
+    },
+  }));
+  const descendants = descendantsOf(chain, "chain-0");
+  assert.equal(descendants.length, 511);
+  assert.deepEqual(
+    descendants.map(({ depth }) => depth),
+    Array.from({ length: 511 }, (_, i) => i + 1),
+  );
+  assert.ok(reads <= chain.length, `Traversal read ${reads} parent links for ${chain.length} sessions`);
+  assert.deepEqual(
+    descendantsOf([row("a", "root"), row("b1", "b"), row("b", "root"), row("a1", "a")], "root").map(
+      ({ session, depth }) => [session.id, depth],
+    ),
+    [
+      ["a", 1],
+      ["b", 1],
+      ["b1", 2],
+      ["a1", 2],
+    ],
+  );
+});
+
 test("running and waiting counts feed the sidebar and tab badge", () => {
   assert.deepEqual(subagentCounts(list, "root"), { running: 2, waiting: 1 });
   assert.deepEqual(subagentCounts(list, "other"), { running: 0, waiting: 0 });
@@ -110,4 +139,44 @@ test("peek shows the latest tool steps and message", () => {
     { kind: "text", text: "Tests pass. Opening PR" },
     { kind: "tool", text: "github" },
   ]);
+});
+
+test("authoritative root summaries beat incomplete or stale loaded descendants including explicit zero", () => {
+  const root = row("root", undefined, { subagents: { running: 2, waiting: 1 } });
+  assert.deepEqual(rowIndicators(root, null).background, {
+    jobs: 0,
+    watches: 0,
+    crons: 0,
+    subagents: 3,
+    label: "2 subagents running · 1 subagent needs you",
+  });
+  assert.equal(rowIndicators(root, null).awaiting, true);
+  const idle = { ...root, subagents: { running: 0, waiting: 0 } };
+  assert.equal(rowIndicators(idle, null, list).background, null);
+  assert.equal(rowIndicators(idle, null, list).awaiting, false);
+  assert.equal(rowIndicators(row("root"), null, list).background?.subagents, 3);
+});
+
+test("the strip crosses inactive ancestors and retains only the deep failed leaf for acknowledgement", () => {
+  const chain = Array.from({ length: 7 }, (_, depth) =>
+    row(`deep-${depth}`, depth ? `deep-${depth - 1}` : undefined, { lastTurnFailed: depth === 6 }),
+  );
+  const rows = subagentRows(chain, "deep-0");
+  assert.deepEqual(
+    rows.map((value) => [value.depth, value.state]),
+    [
+      [1, "done"],
+      [2, "done"],
+      [3, "done"],
+      [4, "done"],
+      [5, "done"],
+      [6, "failed"],
+    ],
+  );
+  assert.deepEqual(subagentCounts(chain, "deep-0"), { running: 0, waiting: 0 });
+  assert.deepEqual(
+    visibleSubagents(rows, new Set()).map((value) => value.session.id),
+    ["deep-6"],
+  );
+  assert.deepEqual(visibleSubagents(rows, new Set([ackKey(rows.at(-1)!)])), []);
 });

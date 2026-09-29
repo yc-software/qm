@@ -18,6 +18,10 @@ export async function assertParticipantSessionParity(store: SessionStore, prefix
   const [owner, guest, stranger] = [`${prefix}-owner`, `${prefix}-guest`, `${prefix}-stranger`];
   const personal = scopeId("personal", owner);
   const channel = scopeId("channel", `${prefix}-C1`);
+  const emptyScope = scopeId("group", `${prefix}-empty`);
+  const unclaimedScope = scopeId("channel", `${prefix}-unclaimed`);
+  const literalPrincipal = `${prefix}-principal' OR '1'='1`;
+  const literalScope = scopeId("channel", `${prefix}-room' OR '1'='1`);
 
   const owned = await store.getOrCreateByThread(`${prefix}:owned`, "dm", personal);
   await store.addParticipant(owned.id, owner);
@@ -33,6 +37,8 @@ export async function assertParticipantSessionParity(store: SessionStore, prefix
     archived: true,
     color: "#ff0000",
   });
+  assert.equal(await store.participantHasScope(owner, personal), true);
+  assert.deepEqual(await store.scopesForParticipant(owner), [personal]);
 
   const shared = await store.getOrCreateByThread(`${prefix}:shared`, "channel", channel);
   await store.addParticipant(shared.id, owner);
@@ -45,15 +51,52 @@ export async function assertParticipantSessionParity(store: SessionStore, prefix
   const foreign = await store.getOrCreateByThread(`${prefix}:foreign`, "dm", scopeId("personal", guest));
   await store.addParticipant(foreign.id, guest);
 
-  const empty = await store.getOrCreateByThread(`${prefix}:empty`, "dm", personal);
+  const empty = await store.getOrCreateByThread(`${prefix}:empty`, "group", emptyScope);
   await store.addParticipant(empty.id, owner);
+  await store.addParticipant(empty.id, guest);
+  await store.removeParticipant(empty.id, guest);
 
-  const unclaimed = await store.getOrCreateByThread(`${prefix}:unclaimed`, "channel", channel);
+  const duplicate = await store.getOrCreateByThread(`${prefix}:duplicate`, "dm", personal);
+  await store.addParticipant(duplicate.id, owner);
+  await store.addParticipant(duplicate.id, owner);
+  await store.addParticipant(`${prefix}-does-not-exist`, owner);
 
-  const ids = [owned.id, shared.id, foreign.id, empty.id, unclaimed.id, `${prefix}-does-not-exist`];
+  const unclaimed = await store.getOrCreateByThread(`${prefix}:unclaimed`, "channel", unclaimedScope);
+  const literal = await store.getOrCreateByThread(`${prefix}:literal`, "channel", literalScope);
+  await store.addParticipant(literal.id, literalPrincipal);
 
-  for (const principalId of [owner, guest, stranger]) {
+  const ids = [
+    owned.id,
+    shared.id,
+    foreign.id,
+    empty.id,
+    duplicate.id,
+    unclaimed.id,
+    literal.id,
+    `${prefix}-does-not-exist`,
+  ];
+  const scopes = [
+    personal,
+    channel,
+    scopeId("personal", guest),
+    emptyScope,
+    unclaimedScope,
+    literalScope,
+    scopeId("channel", `${prefix}-%`),
+  ];
+
+  for (const principalId of [owner, guest, stranger, literalPrincipal, owner.toUpperCase(), `${owner}' OR TRUE --`]) {
     const list = await store.listByParticipant(principalId);
+    assert.deepEqual(
+      await store.scopesForParticipant(principalId),
+      [...new Set(list.map((session) => session.scopeId))].sort(),
+    );
+    for (const scope of scopes) {
+      assert.equal(
+        await store.participantHasScope(principalId, scope),
+        list.some((session) => session.scopeId === scope),
+      );
+    }
     let matched = 0;
     for (const id of ids) {
       const expected = list.find((session) => session.id === id) ?? null;
@@ -98,6 +141,23 @@ export async function assertParticipantSessionParity(store: SessionStore, prefix
     );
   }
 
+  assert.equal(await store.participantHasScope(owner, personal), true);
+  assert.equal(await store.participantHasScope(guest, channel), true);
+  assert.equal(await store.participantHasScope(guest, emptyScope), true);
+  assert.equal(await store.participantHasScope(owner, unclaimedScope), false);
+  assert.equal(await store.participantHasScope(literalPrincipal, literalScope), true);
+  assert.equal(await store.participantHasScope(owner, literalScope), false);
+  assert.deepEqual(await store.scopesForParticipant(stranger), []);
+
   await store.deleteSession(owned.id);
   assert.equal(await store.getForParticipant(owned.id, owner), null, "a deleted session stops being readable");
+  assert.equal(await store.participantHasScope(owner, personal), true);
+  await store.deleteSession(duplicate.id);
+  assert.equal(await store.participantHasScope(owner, personal), false);
+  assert.ok(!(await store.scopesForParticipant(owner)).includes(personal));
+  await store.deleteSession(empty.id);
+  for (const principalId of [owner, guest]) {
+    assert.equal(await store.participantHasScope(principalId, emptyScope), false);
+    assert.ok(!(await store.scopesForParticipant(principalId)).includes(emptyScope));
+  }
 }

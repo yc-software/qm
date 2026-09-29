@@ -35,6 +35,8 @@ test("session refresh bursts share one trailing read and observe its fresh list"
   };
   const pending: Array<(r: Response) => void> = [];
   globalThis.fetch = async (input) => {
+    if (String(input).startsWith("/api/session-navigation"))
+      return Response.json({ error: "not found" }, { status: 404 });
     const path = String(input);
     if (path === "/api/sessions") return new Promise<Response>((resolve) => pending.push(resolve));
     if (path === "/api/contexts") return Response.json({ contexts: [] });
@@ -45,6 +47,7 @@ test("session refresh bursts share one trailing read and observe its fresh list"
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { sessionsState, sessionsReady, refreshSessions } = await vite.ssrLoadModule("/src/sessions.ts");
+    await (await vite.ssrLoadModule("/src/session-navigation.ts")).fetchNavigation({});
     appState.me = { user: "alex", org: "acme" };
     const boot = refreshSessions({ silent: true });
     const pane1 = (async () => {
@@ -58,9 +61,11 @@ test("session refresh bursts share one trailing read and observe its fresh list"
       ready = true;
     });
 
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(pending.length, 1, "a burst must not run overlapping session reads");
     pending[0]!(Response.json({ sessions: [] }));
     await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(pending.length, 2, "one trailing read observes changes newer than the first snapshot");
     assert.equal(ready, false, "sessionsReady() must wait for the fresh read");
     pending[1]!(Response.json({ sessions: [sessionA] }));
@@ -100,12 +105,15 @@ test("a failed lone refresh still settles sessionsReady and reports the error pa
   }))
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   globalThis.fetch = async (input) => {
+    if (String(input).startsWith("/api/session-navigation"))
+      return Response.json({ error: "not found" }, { status: 404 });
     if (String(input) === "/api/contexts") return Response.json({ contexts: [] });
     throw new Error("network down");
   };
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
     const { sessionsReady, refreshSessions } = await vite.ssrLoadModule("/src/sessions.ts");
+    await (await vite.ssrLoadModule("/src/session-navigation.ts")).fetchNavigation({});
     assert.equal(await refreshSessions({ silent: true }), false);
     await sessionsReady();
   } finally {
@@ -143,6 +151,8 @@ test("opening a conversation joins the list refresh already in flight instead of
   const dom = jsdomGlobals();
   const pending: Array<(r: Response) => void> = [];
   globalThis.fetch = async (input) => {
+    if (String(input).startsWith("/api/session-navigation"))
+      return Response.json({ error: "not found" }, { status: 404 });
     const path = String(input);
     if (path === "/api/sessions") return new Promise<Response>((resolve) => pending.push(resolve));
     if (path === "/api/contexts") return Response.json({ contexts: [] });
@@ -152,9 +162,11 @@ test("opening a conversation joins the list refresh already in flight instead of
   const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
   try {
     const { refreshSessions, refreshSessionsOnOpen, sessionsReady } = await vite.ssrLoadModule("/src/sessions.ts");
+    await (await vite.ssrLoadModule("/src/session-navigation.ts")).fetchNavigation({});
     const first = refreshSessions({ showLoading: true });
     refreshSessionsOnOpen();
     refreshSessionsOnOpen();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(pending.length, 1, "the first list load answers every conversation opened while it runs");
 
     pending[0]!(Response.json({ sessions: [] }));
@@ -167,6 +179,7 @@ test("opening a conversation joins the list refresh already in flight instead of
 
     refreshSessionsOnOpen();
     refreshSessionsOnOpen();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(pending.length, 2, "…and panes restored together still share one refresh, loaded list or not");
     pending[1]!(Response.json({ sessions: [] }));
   } finally {
@@ -179,6 +192,8 @@ test("a failed list load does not lock out the next conversation open", async ()
   const dom = jsdomGlobals();
   let hits = 0;
   globalThis.fetch = async (input) => {
+    if (String(input).startsWith("/api/session-navigation"))
+      return Response.json({ error: "not found" }, { status: 404 });
     const path = String(input);
     if (path === "/api/contexts") return Response.json({ contexts: [] });
     hits++;
@@ -188,6 +203,7 @@ test("a failed list load does not lock out the next conversation open", async ()
   const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
   try {
     const { refreshSessions, refreshSessionsOnOpen, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
+    await (await vite.ssrLoadModule("/src/session-navigation.ts")).fetchNavigation({});
     assert.equal(await refreshSessions({ showLoading: true }), false);
     assert.equal(sessionsState.loaded, false);
     refreshSessionsOnOpen();
@@ -203,6 +219,8 @@ test("an open that joined a refresh whose answer was discarded asks again itself
   const dom = jsdomGlobals();
   const pending: Array<(r: Response) => void> = [];
   globalThis.fetch = async (input) => {
+    if (String(input).startsWith("/api/session-navigation"))
+      return Response.json({ error: "not found" }, { status: 404 });
     const path = String(input);
     if (path === "/api/sessions") return new Promise<Response>((resolve) => pending.push(resolve));
     if (path === "/api/contexts") return Response.json({ contexts: [] });
@@ -212,9 +230,11 @@ test("an open that joined a refresh whose answer was discarded asks again itself
   const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
   try {
     const { refreshSessions, refreshSessionsOnOpen, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
+    await (await vite.ssrLoadModule("/src/session-navigation.ts")).fetchNavigation({});
     const stale = refreshSessions({ silent: true, patchEpoch: -1 });
     refreshSessionsOnOpen();
     refreshSessionsOnOpen();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(pending.length, 1, "both opens join the refresh already running");
 
     pending[0]!(Response.json({ sessions: [{ id: "b", threadRef: "web:alex:b", scopeId: "personal:alex" }] }));
@@ -222,6 +242,7 @@ test("an open that joined a refresh whose answer was discarded asks again itself
     assert.equal(sessionsState.list.length, 0, "so the list it fetched never reaches the sidebar");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(pending.length, 2, "the opens that joined it ask again — once between them, not once each");
     pending[1]!(Response.json({ sessions: [{ id: "b", threadRef: "web:alex:b", scopeId: "personal:alex" }] }));
   } finally {
@@ -236,6 +257,8 @@ test("an open that joined a refresh that simply failed does not double the load"
   let fail = (): void => {};
   const failed = new Promise<void>((resolve) => (fail = resolve));
   globalThis.fetch = async (input) => {
+    if (String(input).startsWith("/api/session-navigation"))
+      return Response.json({ error: "not found" }, { status: 404 });
     const path = String(input);
     if (path === "/api/contexts") return Response.json({ contexts: [] });
     hits++;
@@ -246,6 +269,7 @@ test("an open that joined a refresh that simply failed does not double the load"
   const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
   try {
     const { refreshSessions, refreshSessionsOnOpen } = await vite.ssrLoadModule("/src/sessions.ts");
+    await (await vite.ssrLoadModule("/src/session-navigation.ts")).fetchNavigation({});
     const doomed = refreshSessions({ silent: true });
     refreshSessionsOnOpen();
     refreshSessionsOnOpen();
@@ -263,15 +287,19 @@ test("queued refreshes recover a failed read and retain the latest patch epoch",
   const dom = jsdomGlobals();
   const pending: Array<(r: Response) => void> = [];
   globalThis.fetch = async (input) => {
+    if (String(input).startsWith("/api/session-navigation"))
+      return Response.json({ error: "not found" }, { status: 404 });
     if (String(input) === "/api/contexts") return Response.json({ contexts: [] });
     return new Promise<Response>((resolve) => pending.push(resolve));
   };
   const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
   try {
     const { refreshSessions, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
+    await (await vite.ssrLoadModule("/src/session-navigation.ts")).fetchNavigation({});
     const first = refreshSessions({ silent: true });
     const outdated = refreshSessions({ silent: true, patchEpoch: -1 });
     const current = refreshSessions({ silent: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(pending.length, 1);
     pending[0]!(Response.json({ error: "unavailable" }, { status: 503 }));
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -283,6 +311,7 @@ test("queued refreshes recover a failed read and retain the latest patch epoch",
 
     const started = refreshSessions({ silent: true });
     const stale = refreshSessions({ silent: true, patchEpoch: -1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     pending[2]!(Response.json({ sessions: [] }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     pending[3]!(Response.json({ sessions: [{ ...session, title: "Stale" }] }));
@@ -298,29 +327,35 @@ test("a stalled refresh can be replaced without old requests trapping later refr
   const dom = jsdomGlobals();
   const pending: Array<(r: Response) => void> = [];
   globalThis.fetch = async (input) => {
+    if (String(input).startsWith("/api/session-navigation"))
+      return Response.json({ error: "not found" }, { status: 404 });
     if (String(input) === "/api/contexts") return Response.json({ contexts: [] });
     return new Promise<Response>((resolve) => pending.push(resolve));
   };
   const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
   try {
     const { refreshSessions, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
+    await (await vite.ssrLoadModule("/src/session-navigation.ts")).fetchNavigation({});
     let now = Date.now();
     t.mock.method(Date, "now", () => now);
     const stalled = refreshSessions({ silent: true });
     const queued = refreshSessions({ silent: true });
     now += 10_001;
     const replacement = refreshSessions({ silent: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(pending.length, 2, "a stalled request must not hold every caller indefinitely");
     const session = { id: "s", threadRef: "web:alex:s", scopeId: "personal:alex", title: "Replacement" };
     pending[1]!(Response.json({ sessions: [session] }));
     assert.equal(await replacement, true);
     const fresh = refreshSessions({ silent: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(pending.length, 3, "the stalled request cannot make a finished replacement look active");
     pending[2]!(Response.json({ sessions: [{ ...session, title: "Fresh" }] }));
     assert.equal(await fresh, true);
     pending[0]!(Response.json({ sessions: [] }));
     assert.deepEqual(await Promise.all([stalled, queued]), [true, true]);
     assert.equal(sessionsState.list[0]?.title, "Fresh");
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(pending.length, 3, "the abandoned queued refresh must not run after its replacement");
   } finally {
     await vite.close();

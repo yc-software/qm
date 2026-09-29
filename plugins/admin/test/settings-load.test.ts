@@ -20,6 +20,7 @@ test("settings navigation never starts the all-scopes history scan", () => {
     let settings = 0;
     const node = { classList: { toggle() {} } };
     const context = vm.createContext({
+      dataReq: 0,
       governanceUI: { transcript: { cancel() {} } },
       transcriptObserver: null,
       adminPreviewTheme: null,
@@ -50,6 +51,183 @@ test("settings navigation never starts the all-scopes history scan", () => {
     vm.runInContext(`render({view:${JSON.stringify(view)}, scope:"org:example"})`, context);
     assert.equal(scans, view === "history" ? 1 : 0, view);
     assert.equal(settings, view === "history" ? 0 : 1, view);
+  }
+});
+
+test("scope labels repaint loaded lists without repeating or invalidating their data request", async () => {
+  for (const view of ["memory", "files"]) {
+    for (const directoryFirst of [false, true]) {
+      const f = litFixture();
+      try {
+        const directory = Promise.withResolvers<unknown>();
+        const data = Promise.withResolvers<unknown>();
+        const requests: string[] = [];
+        let paints = 0;
+        const context = vm.createContext({
+          view,
+          scope: "org:test",
+          scopeDir: null,
+          dataReq: 0,
+          dataCache: new Map(),
+          viewLoadedAt: {},
+          SCOPED: new Set([view]),
+          ORG_WIDE: new Set(),
+          ENDPOINT: {},
+          VIEW_TITLE: {},
+          $: () => f.root,
+          document: f.document,
+          urlToState: () => ({}),
+          orgWideView: () => true,
+          historyIsIndex: () => false,
+          defaultShell() {},
+          api: (_method: string, path: string) => {
+            requests.push(path);
+            return path === "/api/scopes" ? directory.promise : data.promise;
+          },
+          paintData: () => {
+            paints++;
+          },
+        });
+        vm.runInContext(
+          extract("function renderCurrentData", "function hasGovernanceDraft") +
+            extract("async function loadScopeDirectory", "function dirLabel") +
+            extract("async function renderData", "function kpis"),
+          context,
+        );
+        const pending = vm.runInContext("renderData()", context);
+        const labels = vm.runInContext("loadScopeDirectory()", context);
+        const finishDirectory = async () => {
+          directory.resolve({ ok: true, data: { scopes: [{ scopeId: "org:test", label: "Test" }] } });
+          await labels;
+        };
+        if (directoryFirst) await finishDirectory();
+        data.resolve({ ok: true, data: { scopes: [], files: [] } });
+        await pending;
+        if (!directoryFirst) await finishDirectory();
+        assert.equal(requests.length, 2, `${view}: one list request and one directory request`);
+        assert.equal(paints, directoryFirst ? 1 : 2);
+        await vm.runInContext("renderData()", context);
+        assert.equal(requests.length, 3, "Explicit refresh still fetches fresh data");
+      } finally {
+        f.dom.window.close();
+      }
+    }
+  }
+});
+
+test("failed cached data refreshes evict the snapshot and display the error until a successful retry", async () => {
+  for (const status of [0, 401, 403, 500]) {
+    const f = litFixture();
+    try {
+      const path = "/api/files?scope=org%3Atest";
+      const cached = { label: "Previously authorized files" };
+      const dataCache = new Map([[path, cached]]);
+      const pending = Promise.withResolvers<unknown>();
+      const viewLoadedAt = { files: 1 };
+      const context = vm.createContext({
+        view: "files",
+        scope: "org:test",
+        dataReq: 0,
+        dataCache,
+        viewLoadedAt,
+        ORG_WIDE: new Set(),
+        ENDPOINT: {},
+        VIEW_TITLE: {},
+        $: () => f.root,
+        document: f.document,
+        api: () => pending.promise,
+        paintData: (_root: unknown, data: { label: string }) => {
+          f.root.textContent = data.label;
+        },
+      });
+      vm.runInContext(extract("async function renderData", "function kpis"), context);
+      const refresh = vm.runInContext("renderData()", context);
+      assert.equal(f.root.textContent, cached.label);
+      pending.resolve({ ok: false, status, data: { message: "Refresh failed." } });
+      await refresh;
+      const message = status === 403 ? "You don't administer this scope." : "Refresh failed.";
+      assert.equal(f.root.textContent, message);
+      assert.equal(dataCache.has(path), false);
+      assert.equal(viewLoadedAt.files, 1);
+      await vm.runInContext("renderData(false)", context);
+      assert.equal(f.root.textContent, message);
+      context.api = async () => ({ ok: true, status: 200, data: { label: "Current files" } });
+      await vm.runInContext("renderData()", context);
+      assert.equal(f.root.textContent, "Current files");
+      assert.equal(dataCache.get(path)?.label, "Current files");
+      assert.ok(viewLoadedAt.files > 1);
+    } finally {
+      f.dom.window.close();
+    }
+  }
+});
+
+test("list responses cannot replace a detail page opened while the refresh was pending", async () => {
+  for (const destination of [
+    { view: "history", session: "session-b" },
+    { view: "history", session: "session-b", turn: 2 },
+    { view: "user", principal: "person-b" },
+    { view: "slack" },
+  ]) {
+    for (const status of [200, 403]) {
+      const f = litFixture();
+      try {
+        const path = "/api/sessions?scope=org%3Atest&limit=50&offset=0&category=conversation";
+        const cached = { label: "Cached sessions" };
+        const dataCache = new Map([[path, cached]]);
+        const pending = Promise.withResolvers<unknown>();
+        const showDetail = () => {
+          f.root.textContent = "Current detail page";
+        };
+        const context = vm.createContext({
+          view: "history",
+          scope: "org:test",
+          page: 1,
+          historyKind: "conversation",
+          dataReq: 0,
+          dataCache,
+          viewLoadedAt: {},
+          ORG_WIDE: new Set(),
+          ENDPOINT: { history: "sessions" },
+          VIEW_TITLE: {},
+          HISTORY_PAGE_SIZE: 50,
+          historyCategory: (kind: string) => kind,
+          urlToState: () => ({}),
+          $: () => f.root,
+          document: f.document,
+          api: () => pending.promise,
+          paintData: (_root: unknown, data: { label: string }) => {
+            f.root.textContent = data.label;
+          },
+          governanceUI: { transcript: { cancel() {} } },
+          transcriptObserver: null,
+          governanceReadyScope: null,
+          setGovernancePending() {},
+          isGovLike: () => false,
+          scopeDir: {},
+          defaultShell() {},
+          renderTabs() {},
+          showTranscript: showDetail,
+          showContextPage: showDetail,
+          showUserDetail: showDetail,
+          renderSlackMirror: showDetail,
+        });
+        vm.runInContext(
+          extract("function render(st) {", "const GOV_LIKE =") + extract("async function renderData", "function kpis"),
+          context,
+        );
+        const refresh = vm.runInContext("renderData()", context);
+        assert.equal(f.root.textContent, cached.label);
+        vm.runInContext(`render(${JSON.stringify({ ...destination, scope: "org:test" })})`, context);
+        assert.equal(f.root.textContent, "Current detail page");
+        pending.resolve({ ok: status === 200, status, data: { label: "Old list response" } });
+        await refresh;
+        assert.equal(f.root.textContent, "Current detail page", `${destination.view}, ${status}`);
+        assert.equal(dataCache.get(path), cached);
+      } finally {
+        f.dom.window.close();
+      }
+    }
   }
 });
 

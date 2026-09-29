@@ -168,6 +168,10 @@ import {
   dropPendingSession,
   groupDmTitle,
   refreshSessions,
+  resolveSessionReference,
+  resolveSessionTarget,
+  readSessionWindow,
+  mergeSessionPages,
   renderList,
   sessionsState,
   sessionSlackUrl,
@@ -191,11 +195,13 @@ import {
   ackKey,
   peekLines,
   subagentRows,
+  subagentRow,
   subagentSummary,
   visibleSubagents,
   type PeekLine,
   type SubagentRow,
 } from "./subagent-activity";
+import type { SessionPageResult } from "../../chassis/src/session-navigation.ts";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { createForkOriginController, forkOriginView } from "./fork-origin";
 import { base64ToBytes } from "./paste-text";
@@ -377,13 +383,24 @@ export function createChatSurface(
   });
 
   async function openSessionById(sourceId: string): Promise<void> {
+    const seq = appState.viewRenderSeq;
+    const generation = transcriptRefreshGeneration;
+    const threadRef = chatState.threadRef;
+    const current = () =>
+      appState.currentView === "chats" &&
+      appState.viewRenderSeq === seq &&
+      generation === transcriptRefreshGeneration &&
+      threadRef === chatState.threadRef;
+    if (!current()) return;
     try {
       const listed = sessionsState.list.find((session) => session.id === sourceId);
       const page = await transcriptFetcher(sourceId, { tailTurns: TAIL_TURNS });
+      if (!current()) return;
       const source = listed ?? page.session;
       if (!source) throw new Error("missing session");
       await sessionOpener(source, Promise.resolve(page));
     } catch {
+      if (!current()) return;
       ctx.composer.state.error = "Couldn't open that session.";
       redrawTranscript();
     }
@@ -410,6 +427,7 @@ export function createChatSurface(
   function teardownActiveChat(): void {
     transcriptViewport.dispose();
     transcriptRefreshGeneration++;
+    resetSubagentPage();
     readOnlyView = null;
     readonlyApprove = null;
     preserveOutgoingWorkingDot(null);
@@ -631,6 +649,7 @@ export function createChatSurface(
         messageCount: messages.length,
         loaded: sessionsState.loaded,
         sessions: sessionsState.list,
+        hasNonCronSessions: sessionsState.navigation?.startup.hasNonCronSessions,
       })
     )
       return false;
@@ -1028,7 +1047,7 @@ export function createChatSurface(
       await sleep(delay);
       if (agent !== chatState.agent || chatState.threadRef !== threadRef) return;
       try {
-        await refreshSessions({ silent: true });
+        await resolveSessionReference({ kind: "thread", value: threadRef });
       } catch {
         void 0;
       }
@@ -1478,13 +1497,21 @@ export function createChatSurface(
       ? [...chatState.inheritedMessages, ...currentMessages]
       : currentMessages;
     prepareMessageRows(messages);
-    const isNewUser = sessionsState.list.filter((s) => s.id).length === 0;
+    const isNewUser = sessionsState.navigation
+      ? !sessionsState.navigation.startup.hasSessions
+      : sessionsState.list.filter((s) => s.id).length === 0;
     const editingApp = appEditSlug(chatState.threadRef, appState.me?.user);
     const showWelcome =
       !ctx.inbox &&
       !editingApp &&
       (appState.me?.welcomeCohort
-        ? isWelcomeConversation(sessionsState.list, appState.me.user, chatState.threadRef, chatState.scopeId)
+        ? isWelcomeConversation(
+            sessionsState.list,
+            appState.me.user,
+            chatState.threadRef,
+            chatState.scopeId,
+            sessionsState.navigation?.startup.oldestPersonalThreadRef,
+          )
         : isNewUser && !messages.length);
     let messageContent: Array<TemplateResult | typeof nothing> | TemplateResult | typeof nothing = nothing;
     const inheritedOffset = chatState.inheritedExpanded ? chatState.inheritedMessages.length : 0;
@@ -2296,7 +2323,11 @@ export function createChatSurface(
           (row.watches ?? 0) !== d.watches.length ||
           (row.crons ?? 0) !== d.crons.length)
       ) {
-        await refreshSessions({ silent: true });
+        try {
+          await resolveSessionReference({ kind: "id", value: row.id });
+        } catch {
+          return;
+        }
         redrawBackgroundPanel();
       }
     }
@@ -2438,6 +2469,12 @@ export function createChatSurface(
 
   const SUBAGENT_ACK_KEY = "qm.subagentAck";
   const subagentUi = {
+    rootId: null as string | null,
+    snapshot: undefined as typeof sessionsState.navigation | undefined,
+    page: null as SessionPageResult<CoreSession> | null,
+    controller: null as AbortController | null,
+    legacy: false,
+    notice: "",
     expanded: false,
     peekId: null as string | null,
     peek: null as PeekLine[] | null,
@@ -2455,6 +2492,72 @@ export function createChatSurface(
       })(),
     ),
   };
+
+  function resetSubagentPage(): void {
+    subagentUi.controller?.abort();
+    subagentUi.controller = null;
+    subagentUi.rootId = null;
+    subagentUi.snapshot = undefined;
+    subagentUi.page = null;
+    subagentUi.legacy = false;
+    subagentUi.notice = "";
+    subagentUi.ticking = false;
+    subagentUi.approvalsKey = "";
+    subagentUi.approvals.clear();
+    stopSubagentPeek();
+  }
+
+  async function loadSubagentPage(append = false): Promise<void> {
+    const rootId = chatState.sessionId;
+    if (!rootId || !ctx.visible() || (append && subagentUi.controller)) return;
+    const previous = subagentUi.page;
+    const cursor = append ? previous?.nextCursor : null;
+    if (append && !cursor) return;
+    subagentUi.controller?.abort();
+    const controller = new AbortController();
+    const seq = appState.viewRenderSeq;
+    subagentUi.controller = controller;
+    subagentUi.rootId = rootId;
+    subagentUi.snapshot = sessionsState.navigation;
+    subagentUi.notice = "";
+    const current = () =>
+      !controller.signal.aborted &&
+      subagentUi.controller === controller &&
+      chatState.sessionId === rootId &&
+      appState.viewRenderSeq === seq &&
+      ctx.visible();
+    try {
+      const page = await readSessionWindow(
+        { parentSessionId: rootId, children: true, actionable: true, ...(cursor ? { cursor } : {}) },
+        append ? 50 : (previous?.items.length ?? 50),
+        controller.signal,
+      );
+      if (!current()) return;
+      if (!page) {
+        subagentUi.legacy = true;
+        subagentUi.page = null;
+        if (sessionsState.navigation) await refreshSessions({ silent: true });
+      } else {
+        if (cursor && page.nextCursor === cursor) throw new Error("Session cursor did not advance");
+        subagentUi.page = append && previous ? mergeSessionPages(previous, page) : page;
+        renderList();
+      }
+    } catch (error) {
+      if (current()) subagentUi.notice = errMessage(error, "Couldn't load subagents.");
+    } finally {
+      if (subagentUi.controller === controller) {
+        if (!current()) subagentUi.snapshot = undefined;
+        subagentUi.controller = null;
+        if (
+          !controller.signal.aborted &&
+          chatState.sessionId === rootId &&
+          appState.viewRenderSeq === seq &&
+          ctx.visible()
+        )
+          drawActiveChat();
+      }
+    }
+  }
 
   function stopSubagentPeek(): void {
     if (subagentUi.timer) clearInterval(subagentUi.timer);
@@ -2543,6 +2646,8 @@ export function createChatSurface(
     return html`<div
       class="subagent-row ${row.state} ${peeking ? "peeking" : ""}"
       style=${`--subagent-depth:${row.depth - 1}`}
+      data-session-id=${row.session.id}
+      data-depth=${row.depth}
     >
       <button
         type="button"
@@ -2594,17 +2699,38 @@ export function createChatSurface(
   function subagentStrip(): TemplateResult | typeof nothing {
     const rootId = chatState.sessionId;
     if (!rootId) return nothing;
-    const rows = visibleSubagents(subagentRows(sessionsState.list, rootId), subagentUi.acknowledged);
+    if (subagentUi.rootId !== rootId) resetSubagentPage();
+    if (!subagentUi.legacy && (subagentUi.rootId !== rootId || subagentUi.snapshot !== sessionsState.navigation))
+      void loadSubagentPage();
+    const page = subagentUi.page;
+    const rows = visibleSubagents(
+      subagentUi.legacy
+        ? subagentRows(sessionsState.list, rootId)
+        : (page?.items.map((row, index) => subagentRow(row, page.actionable!.depths[index]!)) ?? []),
+      subagentUi.acknowledged,
+    );
+    const more = Boolean(page?.nextCursor);
+    const loading = Boolean(subagentUi.controller);
     if (subagentUi.peekId && !rows.some((row) => row.session.id === subagentUi.peekId)) stopSubagentPeek();
     syncSubagentApprovals(rows);
     subagentUi.ticking = rows.some((row) => row.state === "working" || row.state === "waiting");
     syncWorkTicker();
-    if (!rows.length) return nothing;
-    const single = rows.length === 1;
+    if (!rows.length && !more && !loading && !subagentUi.notice) return nothing;
+    const single = rows.length === 1 && !more;
     const expanded = single || subagentUi.expanded || rows.some((row) => row.state === "waiting");
     const failed = rows.some((row) => row.state === "failed");
+    const summary = subagentSummary(rows, page?.actionable?.parentSubagents ?? undefined, more);
+    let pageState = loading ? "loading" : "ready";
+    if (subagentUi.notice) pageState = "error";
     return html`
-      <section class="bg-activity subagent-activity ${expanded ? "expanded" : ""} ${failed ? "has-failed" : ""}">
+      <section
+        class="bg-activity subagent-activity ${expanded ? "expanded" : ""} ${failed ? "has-failed" : ""}"
+        data-parent-session-id=${rootId}
+        data-session-page-state=${pageState}
+        data-loaded=${page?.items.length ?? rows.length}
+        data-total=${page?.total ?? rows.length}
+        aria-busy=${String(loading)}
+      >
         ${
           single
             ? nothing
@@ -2618,11 +2744,29 @@ export function createChatSurface(
                   drawActiveChat();
                 }}
               >
-                ${icon(Bot, 13)}<span class="bg-activity-label">${subagentSummary(rows)}</span>
+                ${icon(Bot, 13)}<span class="bg-activity-label">${summary || "Subagents"}</span>
                 <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
               </button>`
         }
         ${expanded ? html`<div class="subagent-list ${single ? "single" : "bg-panel"}">${rows.map(subagentRowTpl)}</div>` : nothing}
+        ${loading ? html`<div class="bg-panel-note" role="status">Loading subagents…</div>` : nothing}
+        ${subagentUi.notice ? html`<div class="bg-panel-note" role="alert">${subagentUi.notice}<button type="button" class="btn" @click=${() => void loadSubagentPage()}>Retry</button></div>` : nothing}
+        ${
+          more
+            ? html`<button
+                type="button"
+                class="btn"
+                data-session-page="subagents"
+                ?disabled=${loading}
+                @click=${() => {
+                  void loadSubagentPage(true);
+                  drawActiveChat();
+                }}
+              >
+                Show more subagents
+              </button>`
+            : nothing
+        }
       </section>
     `;
   }
@@ -2959,14 +3103,43 @@ export function createChatSurface(
     refused: "was refused",
   };
 
-  function subagentChip(title: string, sessionId?: string): TemplateResult {
+  function subagentChip(title: string, sessionId?: string, target?: string): TemplateResult {
     const session = sessionsState.list.find((row) => row.id === sessionId);
     const inner = html`<span dir="auto">${session?.title || title}</span>`;
-    if (!sessionId) return html`<span class="subagent-chip">${inner}</span>`;
+    const resolve = () => {
+      if (!session && sessionId)
+        void resolveSessionReference({ kind: "id", value: sessionId })
+          .then(() => drawActiveChat())
+          .catch(() => undefined);
+    };
+    if (!sessionId && !target) return html`<span class="subagent-chip">${inner}</span>`;
+    const activate = async () => {
+      if (sessionId) return openSessionById(sessionId);
+      const seq = appState.viewRenderSeq;
+      const generation = transcriptRefreshGeneration;
+      const threadRef = chatState.threadRef;
+      const current = () =>
+        appState.currentView === "chats" &&
+        appState.viewRenderSeq === seq &&
+        generation === transcriptRefreshGeneration &&
+        threadRef === chatState.threadRef;
+      try {
+        const selected = await resolveSessionTarget(target!);
+        if (!current()) return;
+        if (!selected) throw new Error("missing session");
+        await openSessionById(selected.id);
+      } catch {
+        if (!current()) return;
+        ctx.composer.state.error = "Couldn't open that session.";
+        redrawTranscript();
+      }
+    };
     return html`<button
       class="subagent-chip"
       type="button"
       title="Open subagent · Drag to the sidebar to make a top-level session"
+      @pointerenter=${resolve}
+      @focus=${resolve}
       draggable=${session ? "true" : "false"}
       @dragstart=${(e: DragEvent) => {
         if (session) onSessionDragStart(e, session);
@@ -2976,7 +3149,7 @@ export function createChatSurface(
       @click=${(e: Event) => {
         e.preventDefault();
         e.stopPropagation();
-        void openSessionById(sessionId);
+        void activate();
       }}
     >
       ${inner}
@@ -3150,7 +3323,7 @@ export function createChatSurface(
       : { search: Search, read: BookOpen, execute: meta.icon, other: meta.icon }[description.category];
     const classes = ["tool-row", `tool-${kind}`].join(" ");
     const head = html`<span class="tool-icon">${icon(rowIcon, 15)}</span>
-      ${session ? html`<span class="session-action">${session.label}</span>${sessionView?.chipTitle ? subagentChip(sessionView.chipTitle, sessionView.sessionId) : nothing}${sessionDetail ? html`<span class="tool-label session-message" title=${sessionDetail}>${sessionDetail}</span>` : nothing}` : html`<span class="tool-label" title=${detail ? `${label}: ${detail}` : label}>${visible}</span>`}`;
+      ${session ? html`<span class="session-action">${session.label}</span>${sessionView?.chipTitle ? subagentChip(sessionView.chipTitle, sessionView.sessionId, sessionView.target) : nothing}${sessionDetail ? html`<span class="tool-label session-message" title=${sessionDetail}>${sessionDetail}</span>` : nothing}` : html`<span class="tool-label" title=${detail ? `${label}: ${detail}` : label}>${visible}</span>`}`;
     if (!row.call && !row.result) return html`<div class="${classes}">${head}</div>`;
     const renderDisclosure = (details: HTMLDetailsElement): void => {
       const host = details.querySelector<HTMLElement>(".tool-disclosure-host");

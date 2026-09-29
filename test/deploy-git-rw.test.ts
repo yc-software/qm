@@ -1,8 +1,9 @@
-import { execFile } from "node:child_process";
+import childProcess, { execFile } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -71,7 +72,7 @@ async function gitUrl(base: string, deploymentId: string, permission: "read" | "
   return url.toString();
 }
 
-async function pushStatus(url: string): Promise<number> {
+async function pushStatus(url: string, body = Buffer.alloc(0)): Promise<number> {
   const parsed = new URL(url);
   const authorization = `Basic ${Buffer.from(`${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`).toString("base64")}`;
   parsed.username = "";
@@ -81,7 +82,7 @@ async function pushStatus(url: string): Promise<number> {
     await fetch(parsed, {
       method: "POST",
       headers: { authorization, "content-type": "application/x-git-receive-pack-request" },
-      body: Buffer.alloc(0),
+      body,
     })
   ).status;
 }
@@ -156,6 +157,51 @@ test("a write token can push, and the push registers a new immutable version", a
     assert.equal(v2.commit, pushedSha.trim());
     assert.equal(v2.entrypoint, "node server.js");
   } finally {
+    await f.close();
+  }
+});
+
+test("an early Git backend stdin close fails the push without registering a version", async (t) => {
+  const f = fixture();
+  try {
+    const d = await f.app.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "node server.js",
+      files: [{ path: "server.js", data: "console.log('v1')" }],
+    });
+    const originalSpawn = childProcess.spawn;
+    let backendCalls = 0;
+    let backendClosed = false;
+    t.mock.method(childProcess, "spawn", (...args: Parameters<typeof originalSpawn>) => {
+      if (args[0] !== "git" || !args[1].includes("http-backend")) return originalSpawn(...args);
+      backendCalls++;
+      const child = originalSpawn(
+        process.execPath,
+        [
+          "-e",
+          String.raw`require("node:fs").closeSync(0); process.stdout.write("Status: 200 OK\r\nContent-Type: text/plain\r\n\r\nclosed");`,
+        ],
+        args[2],
+      );
+      child.once("close", () => {
+        backendClosed = true;
+      });
+      return child;
+    });
+    syncBuiltinESMExports();
+
+    assert.equal(await pushStatus(await gitUrl(f.base, d.id, "write"), Buffer.alloc(1024 * 1024, 120)), 500);
+    assert.equal(backendClosed, true);
+    assert.equal(backendCalls, 1);
+    const fresh = (await f.deploy.listDeployments())[0]!;
+    assert.equal(fresh.versions.length, 1);
+    assert.equal(fresh.currentVersion, 1);
+    assert.equal(await pushStatus(await gitUrl(f.base, d.id, "read")), 403);
+    assert.equal(backendCalls, 1);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
     await f.close();
   }
 });

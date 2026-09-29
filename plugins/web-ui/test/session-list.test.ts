@@ -551,6 +551,12 @@ test("sidebar excludes attached subagents including pinned and orphaned children
   assert.deepEqual(sidebarSessions([parent, child, pinned, orphan, detached]), [parent, detached]);
 });
 
+test("proactive startup uses the complete fact instead of an empty visible page", () => {
+  const state = { started: false, sessionId: null, scopeId: null, messageCount: 0, loaded: true, sessions: [] };
+  assert.equal(shouldStartProactiveOpener({ ...state, hasNonCronSessions: true }), false);
+  assert.equal(shouldStartProactiveOpener({ ...state, hasNonCronSessions: false }), true);
+});
+
 test("cronRowMeta shows the next fire and the last result of a session's cron", () => {
   const now = Date.now();
   assert.equal(cronRowMeta({ id: "c", nextFireAt: now + 10 * 60_000 + 1_000 }), "next fire in 10m");

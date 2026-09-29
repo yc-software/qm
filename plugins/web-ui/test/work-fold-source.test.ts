@@ -99,7 +99,7 @@ test("stopped work shares posted reply rendering and shows one status without ac
 test("session rows preserve aggregate details and only render named target chips", () => {
   assert.match(
     chat,
-    /sessionView\?\.chipTitle \? subagentChip\(sessionView.chipTitle, sessionView.sessionId\) : nothing/,
+    /sessionView\?\.chipTitle \? subagentChip\(sessionView.chipTitle, sessionView.sessionId, sessionView.target\) : nothing/,
   );
   assert.match(chat, /const sessionDetail = \[sessionView\?\.detail, session\?\.preview\]/);
 });

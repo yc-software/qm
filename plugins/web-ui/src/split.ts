@@ -71,8 +71,7 @@ import type { Conversation } from "./conv-types";
 import {
   openSession,
   openSessionInto,
-  refreshSessions,
-  sessionsReady,
+  resolveSessionReference,
   renderList,
   sessionsState,
   sessionTitle,
@@ -81,14 +80,7 @@ import {
 } from "./sessions";
 import { conversationBackground, rowIndicators, type RowIndicators } from "./session-list";
 import { scopeToolCount, setScopedSession, type SessionTool } from "./session-scope";
-import {
-  fetchTranscript,
-  fetchUiState,
-  putUiState,
-  TAIL_TURNS,
-  type CoreSession,
-  type UiStateRecord,
-} from "./core-bridge";
+import { fetchUiState, putUiState, type CoreSession, type UiStateRecord } from "./core-bridge";
 import { isPhone, onPhoneChange } from "./viewport";
 
 export const splitState = {
@@ -118,6 +110,7 @@ let dockApi: DockviewApi | null = null;
 let toastEl: HTMLElement | null = null;
 let lastLayout: SerializedDockview | null = null;
 let pendingSeed: PendingSeed | null = null;
+let restoringLayout = false;
 const paneContents = new Map<string, PaneContent>();
 const paneTabs = new Set<PaneTab>();
 const groupActions = new Set<GroupActions>();
@@ -304,6 +297,7 @@ function ensureCanvas(): boolean {
   dockApi = buildDock();
   const seed = pendingSeed;
   pendingSeed = null;
+  restoringLayout = true;
   try {
     if (lastLayout) {
       dockApi.fromJSON(lastLayout);
@@ -317,7 +311,10 @@ function ensureCanvas(): boolean {
     canvasHost.replaceChildren();
     lastLayout = null;
     dockApi = buildDock();
+  } finally {
+    restoringLayout = false;
   }
+  for (const pane of paneContents.values()) void pane.load();
   ensureDeliveryStream();
   splitState.focusedId = dockApi.activePanel?.id ?? dockApi.panels[0]?.id ?? null;
   syncDocumentTitle();
@@ -635,12 +632,20 @@ export function startNewChatInCanvas(scopeId?: string, threadRef?: string): Conv
   const tile = !replace && dockApi.groups.length === 2;
   const { width, height } = target.group.element.getBoundingClientRect();
   const direction = width >= height ? "right" : "below";
-  const fresh = addPane(
-    { ...(scopeId ? { scopeId } : {}), ...(threadRef ? { threadRef } : {}) },
-    { referencePanel: target.id, direction: tile ? direction : "within" },
-  );
-  if (replace) dockApi.removePanel(target);
-  fresh.api.setActive();
+  const wasRestoring = restoringLayout;
+  restoringLayout = true;
+  let fresh: IDockviewPanel;
+  try {
+    fresh = addPane(
+      { ...(scopeId ? { scopeId } : {}), ...(threadRef ? { threadRef } : {}) },
+      { referencePanel: target.id, direction: tile ? direction : "within" },
+    );
+    if (replace) dockApi.removePanel(target);
+    fresh.api.setActive();
+  } finally {
+    restoringLayout = wasRestoring;
+  }
+  void paneContents.get(fresh.id)?.load(true);
   persist();
   return paneContents.get(fresh.id)?.conversation ?? null;
 }
@@ -1003,8 +1008,9 @@ class PaneContent implements IContentRenderer {
     for (const handler of this.redrawOnResize) handler();
   }
 
-  private async load(): Promise<void> {
-    if (this.loaded || this.disposed) return;
+  async load(newChat = false): Promise<void> {
+    if (restoringLayout) return;
+    if (this.loaded || this.disposed || !this.visible) return;
     this.loaded = true;
     this.syncDensity();
     const { sessionId, threadRef, scopeId } = this.params;
@@ -1019,8 +1025,20 @@ class PaneContent implements IContentRenderer {
       return;
     }
     const conversation = this.ensureConversation();
-    const wanted =
-      sessionId ?? (threadRef ? (sessionsState.list.find((s) => s.threadRef === threadRef)?.id ?? null) : null);
+    let wanted = sessionId;
+    if (!wanted && threadRef && !newChat) {
+      try {
+        wanted = (await resolveSessionReference({ kind: "thread", value: threadRef }))?.id;
+      } catch {
+        if (!this.disposed)
+          conversation.mountLoadError(() => {
+            this.loaded = false;
+            void this.load();
+          });
+        return;
+      }
+      if (this.disposed) return;
+    }
     if (!wanted) {
       if (threadRef) {
         conversation.mountContinuable(threadRef, null, scopeId ?? null, []);
@@ -1030,35 +1048,8 @@ class PaneContent implements IContentRenderer {
       conversation.newChat(context ? { scopeId: context.scopeId, name: context.name ?? null } : undefined);
       return;
     }
-    const isCurrent = conversation.mountLoadingPane();
-    let session = sessionsState.list.find((s) => s.id === wanted);
-    if (!session) {
-      await sessionsReady();
-      if (this.disposed || !isCurrent()) return;
-      session = sessionsState.list.find((s) => s.id === wanted);
-    }
-    if (!session) {
-      await refreshSessions({ silent: true });
-      if (this.disposed || !isCurrent()) return;
-      session = sessionsState.list.find((s) => s.id === wanted);
-    }
-    if (!session) {
-      const page = await fetchTranscript(wanted, { tailTurns: TAIL_TURNS }).catch(() => null);
-      if (this.disposed || !isCurrent()) return;
-      session = page?.session;
-      if (!session) {
-        conversation.mountLoadError(() => {
-          this.loaded = false;
-          void this.load();
-        });
-        return;
-      }
-      await openSessionInto(conversation, session, Promise.resolve(page));
-      if (this.disposed) return;
-      refreshHeaders();
-      return;
-    }
-    await openSessionInto(conversation, session);
+    const session = sessionsState.list.find((s) => s.id === wanted);
+    await openSessionInto(conversation, session ?? wanted);
     if (this.disposed) return;
     refreshHeaders();
   }

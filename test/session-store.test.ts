@@ -1,4 +1,5 @@
 import { assertPersonalConversationParity } from "./support/personal-conversation-parity.ts";
+import { assertLlmRequestCounts } from "./support/llm-request-counts.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
@@ -164,6 +165,10 @@ test("acquireLeaseWithin bails immediately on holders the caller will not wait f
 });
 
 const backends: Array<[string, () => SessionStore]> = [["memory", () => createMemorySessionStore()]];
+
+test("memory: LLM request counts preserve page lower bounds and exact context keys", async () => {
+  await assertLlmRequestCounts(createMemorySessionStore(), "memory-llm-counts");
+});
 
 for (const [name, make] of backends) {
   test(`${name}: fork provenance is available through get and participant lists`, async () => {
@@ -728,7 +733,7 @@ for (const [name, make] of backends) {
     assert.equal((await store.listByParticipant("U2")).length, 1);
   });
 
-  test(`${name}: getForParticipant returns exactly the row listByParticipant returns`, async () => {
+  test(`${name}: participant session and scope projections preserve historical membership`, async () => {
     const store = make();
     await assertParticipantSessionParity(store, `parity-${name}-a`);
     await assertParticipantSessionParity(store, `parity-${name}-b`);

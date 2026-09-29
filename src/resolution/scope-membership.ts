@@ -25,7 +25,7 @@ export interface ScopeMembershipDeps {
   identity?: {
     classify(externalId: string, isExternalGuest?: boolean): { type?: string; teamIds?: readonly string[] };
   };
-  sessions?: { listByParticipant(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
+  sessions?: { participantHasScope(principalId: string, scope: ScopeId): Promise<boolean> };
 }
 
 function activePrincipal(deps: ScopeMembershipDeps, principalId: string): boolean {
@@ -80,9 +80,7 @@ async function memberOfSharedScope(
 ): Promise<boolean> {
   const current = await sharedScopeMembership(deps, kind, ref, principalId);
   if (current !== undefined) return current;
-  return (
-    (await deps.sessions?.listByParticipant(principalId).catch(() => []))?.some((s) => s.scopeId === fullScope) === true
-  );
+  return (await deps.sessions?.participantHasScope(principalId, fullScope).catch(() => false)) === true;
 }
 
 export type CanReadScope = (principalId: string, targetScope: ScopeId) => Promise<boolean>;

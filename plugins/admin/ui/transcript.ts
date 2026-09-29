@@ -22,27 +22,23 @@ const brain = html`<svg
   <path d="M14.8 9.2c-.9.1-1.6.6-2 1.4" />
   <path d="M12 10.7v7.8" />
 </svg>`;
-export function prepare(data: Row, requests: Row[]) {
+export function prepare(data: Row) {
   const entries: Row[] = data.entries || [],
     events: Row[] = data.deliveryEvents || [],
-    llm = new Map<any, Row[]>(),
+    counts: Row[] = data.llmRequestCounts || [],
     byEntry = new Map<any, Row[]>(),
+    unplaced: Row[] = [],
     dur = new Map<number, number>();
-  for (const req of requests) {
-    const key = req.turnSeq ?? "_orphan";
-    if (!llm.has(key)) llm.set(key, []);
-    llm.get(key)!.push(req);
-  }
   for (let i = 1; i < entries.length; i++) {
     const delta = (entries[i].createdAt || 0) - (entries[i - 1].createdAt || 0);
     if (delta >= 0) dur.set(entries[i].seq, delta);
   }
   const seqIndex = new Map(entries.map((e, i) => [e.seq, i]));
-  for (const [turn, reqs] of llm) {
-    if (turn === "_orphan" || turn < (entries[0]?.seq || 0)) continue;
-    const start = seqIndex.get(turn);
+  for (const count of counts) {
+    if (count.turnSeq === null) continue;
+    const start = seqIndex.get(count.turnSeq);
     if (start === undefined) {
-      llm.set("_orphan", [...(llm.get("_orphan") || []), ...reqs]);
+      if (count.turnSeq >= (entries[0]?.seq || 0)) unplaced.push(count);
       continue;
     }
     let stop = entries.findIndex((e, i) => i > start && e.type === "user");
@@ -53,10 +49,7 @@ export function prepare(data: Row, requests: Row[]) {
         anchor = i;
         break;
       }
-    byEntry.set(entries[anchor].seq, [
-      ...(byEntry.get(entries[anchor].seq) || []),
-      ...reqs.slice().sort((a, b) => (a.step || 0) - (b.step || 0)),
-    ]);
+    byEntry.set(entries[anchor].seq, [...(byEntry.get(entries[anchor].seq) || []), count]);
   }
   const results = new Map<any, Row>(),
     outbound = new Map<any, Row>(),
@@ -85,15 +78,17 @@ export function prepare(data: Row, requests: Row[]) {
       const deliveryId = (e.type === "tool_result" ? e : paired)?.payload?.deliveryId,
         delivery = outbound.get(deliveryId);
       if (delivery) merged.add(deliveryId);
-      units.push({ kind: "tool", primary: e, paired, delivery, llmReqs: byEntry.get(e.seq) });
-    } else units.push({ kind: "entry", entry: e, llmReqs: byEntry.get(e.seq) });
+      units.push({ kind: "tool", primary: e, paired, delivery, llmCounts: byEntry.get(e.seq) });
+    } else units.push({ kind: "entry", entry: e, llmCounts: byEntry.get(e.seq) });
   }
   for (const event of events)
     if (!event.deliveryId || !merged.has(event.deliveryId)) units.push({ kind: "delivery_event", event });
   units.sort(
     (a, b) => ((a.primary || a.entry || a.event)?.createdAt || 0) - ((b.primary || b.entry || b.event)?.createdAt || 0),
   );
-  if (llm.get("_orphan")?.length) units.push({ kind: "llm", reqs: llm.get("_orphan") });
+  const orphanCount = counts.find((count) => count.turnSeq === null)?.count;
+  for (const count of unplaced) units.push({ kind: "llm", turn: count.turnSeq, count: count.count });
+  if (orphanCount) units.push({ kind: "llm", turn: "orphan", count: orphanCount });
   return {
     units,
     dur,
@@ -275,10 +270,6 @@ export async function show(sessionId: string, limit: number | undefined, expand:
   }
   controls();
   draw(html`<div class="detail">Loading…</div>`);
-  const llmPromise = s.api(
-    "GET",
-    "/api/sessions/" + encodeURIComponent(sessionId) + "/llm?scope=" + encodeURIComponent(s.scope),
-  );
   const result = await s.api(
     "GET",
     "/api/sessions/" + encodeURIComponent(sessionId) + "?scope=" + encodeURIComponent(s.scope) + "&limit=" + reqLimit,
@@ -292,6 +283,23 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     session = data.session || {},
     origin = data.origin,
     owner = session.scopeId?.startsWith("personal:") ? session.scopeId.slice(9) : null;
+  if (!Object.hasOwn(data, "llmRequestCounts")) {
+    const legacy = await s.api(
+      "GET",
+      "/api/sessions/" + encodeURIComponent(sessionId) + "/llm?scope=" + encodeURIComponent(s.scope),
+    );
+    if (!current()) return;
+    if (!legacy.ok)
+      return draw(
+        html`<div class="detail">${legacy.data?.message || `Failed to load model context (${legacy.status}).`}</div>`,
+      );
+    const counts = new Map<number | null, number>();
+    for (const request of legacy.data.requests || []) {
+      const turn = request.turnSeq ?? null;
+      counts.set(turn, (counts.get(turn) || 0) + 1);
+    }
+    data.llmRequestCounts = [...counts].map(([turnSeq, count]) => ({ turnSeq, count }));
+  }
   s.pageShell({
     back: { label: "← Conversations", onClick: back(session.scopeId) },
     title: origin?.label || "Conversation",
@@ -299,15 +307,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
       s.shortName(session.scopeId || s.scope) + (session.createdAt ? " · created " + s.relTime(session.createdAt) : ""),
     actions: owner ? [s.webUiAsButton(owner)] : [],
   });
-  let requests: Row[] = [];
-  try {
-    const llm = await llmPromise;
-    if (llm.ok) requests = llm.data.requests || [];
-  } catch {
-    requests = [];
-  }
-  if (!current()) return;
-  const { units, dur, principalIds, originPromptSeq } = prepare(data, requests),
+  const { units, dur, principalIds, originPromptSeq } = prepare(data),
     open = new Set<Row>(),
     bodyNodes = new Map<Row, Node>(),
     toolNodes = new Map<Row, Row>(),
@@ -342,6 +342,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     >
       ${brain}
     </button>`;
+  const contextButtons = (counts: Row[]) => html`${counts.map((count) => contextButton(count.turnSeq, count.count))}`;
   const timing = (unit: Row) => {
     const call = unit.primary.type === "tool_call" ? unit.primary : null,
       res = unit.primary.type === "tool_result" ? unit.primary : unit.paired;
@@ -361,7 +362,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
         s.renderToolEntry(
           call,
           res,
-          unit.llmReqs?.length ? node(contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length)) : null,
+          unit.llmCounts?.length ? node(contextButtons(unit.llmCounts)) : null,
           s.stepDurEl(timing(unit)),
           unit.delivery || null,
         ),
@@ -396,7 +397,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
   function unitTemplate(unit: Row) {
     if (unit.kind === "llm")
       return html`<div class="entry llm">
-        <div class="who">${contextButton("orphan", unit.reqs.length)}<span class="role">captured context</span></div>
+        <div class="who">${contextButton(unit.turn, unit.count)}<span class="role">captured context</span></div>
       </div>`;
     if (unit.kind === "tool") {
       const e = unit.primary,
@@ -410,9 +411,9 @@ export async function show(sessionId: string, limit: number | undefined, expand:
       const hidden = s.entryHidden(types, !!unit.delivery),
         full = fullTool(unit);
       full.classList.toggle("filtered", hidden);
-      if (unit.delivery || unit.llmReqs?.length) return full;
-      const cp = call?.payload,
-        rp = res?.payload,
+      if (unit.delivery || unit.llmCounts?.length) return full;
+      const cp = call?.payload ?? {},
+        rp = res?.payload ?? {},
         name = s.toolName(cp, rp),
         toggle = () => {
           if (open.has(unit)) open.delete(unit);
@@ -542,7 +543,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
       class=${classMap({ entry: true, noise, collapsed: noise && !open.has(unit), "thinking-entry": e.type === "thinking", "message-entry": e.type === "user" || e.type === "assistant", "user-entry": e.type === "user", "assistant-entry": e.type === "assistant", "cron-prompt-entry": !!isOrigin, "system-entry": e.type === "soul" || e.type === "system", filtered: s.entryHidden([e.type], false) })}
     >
       <div class="who">
-        ${unit.llmReqs?.length ? contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length) : nothing}${noise ? html`<button type="button" class="disclosure" aria-expanded=${String(open.has(unit))} aria-label=${open.has(unit) ? "Collapse entry" : "Expand entry"} title=${open.has(unit) ? "Collapse entry" : "Expand entry"} @click=${toggle}>${open.has(unit) ? "▾" : "▸"}</button>` : nothing}<span
+        ${unit.llmCounts?.length ? contextButtons(unit.llmCounts) : nothing}${noise ? html`<button type="button" class="disclosure" aria-expanded=${String(open.has(unit))} aria-label=${open.has(unit) ? "Collapse entry" : "Expand entry"} title=${open.has(unit) ? "Collapse entry" : "Expand entry"} @click=${toggle}>${open.has(unit) ? "▾" : "▸"}</button>` : nothing}<span
           class=${"entry-label" + (isOrigin ? " important" : "")}
           >${label}</span
         >${isOrigin ? cronLink(origin, session.scopeId) : nothing}${e.type !== "user" ? s.stepDurEl([[dur.get(e.seq)]]) : nothing}<span

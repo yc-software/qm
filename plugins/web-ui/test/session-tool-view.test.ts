@@ -20,10 +20,11 @@ test("checked badges resolve target IDs to current session names", () => {
   assert.equal(view.chipTitle, "bug 1");
 });
 
-test("unknown targets stay unlinked and do not display raw IDs", () => {
+test("unknown targets remain lazy targets and do not display raw IDs", () => {
   const view = sessionToolView({ action: "read", target: "unknown-id" }, {}, sessions);
   assert.equal(view.sessionId, undefined);
   assert.equal(view.chipTitle, "Subagent");
+  assert.equal(view.target, "unknown-id");
 });
 
 test("reading the child list renders a count without a target badge", () => {
@@ -53,4 +54,20 @@ test("sibling messaging resolves title targets into clickable badges", () => {
   assert.equal(view.sessionId, sessions[0]!.id);
   assert.equal(view.chipTitle, sessions[0]!.title);
   assert.equal(view.detail, "");
+});
+
+test("historical created badges retain exact IDs when the child is outside loaded pages", () => {
+  const view = sessionToolView(
+    { action: "open", name: "Original" },
+    { unscreened: true, result: 'Opened subagent "Original" (sessionId child-123). It is working now.' },
+    [],
+  );
+  assert.equal(view.sessionId, "child-123");
+  assert.equal(view.chipTitle, "Original");
+});
+
+test("off-page exact title targets remain activatable without eager resolution", () => {
+  const view = sessionToolView({ action: "read", target: "Exact title" }, {}, []);
+  assert.equal(view.sessionId, undefined);
+  assert.equal(view.target, "Exact title");
 });

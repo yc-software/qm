@@ -1,4 +1,5 @@
 import { assertPersonalConversationParity } from "./support/personal-conversation-parity.ts";
+import { assertLlmRequestCounts } from "./support/llm-request-counts.ts";
 import "./run-availability.ts";
 import { migrateTranscriptPage } from "../scripts/lib/transcript-tape-migration.ts";
 import { test, before } from "node:test";
@@ -69,8 +70,16 @@ test("pg session store: fork provenance survives a store restart", { skip }, asy
   assert.equal(loaded?.forkBoundarySeq, 4);
 });
 
-test("pg session store: getForParticipant returns exactly the row listByParticipant returns", { skip }, async () => {
-  await assertParticipantSessionParity(createPostgresSessionStore(URL!), `pg-parity-${randomUUID()}`);
+test(
+  "pg session store: participant session and scope projections preserve historical membership",
+  { skip },
+  async () => {
+    await assertParticipantSessionParity(createPostgresSessionStore(URL!), `pg-parity-${randomUUID()}`);
+  },
+);
+
+test("pg session store: LLM request counts preserve page lower bounds and exact context keys", { skip }, async () => {
+  await assertLlmRequestCounts(createPostgresSessionStore(URL!), `pg-llm-counts-${randomUUID()}`);
 });
 
 test("pg participant activity uses the latest user entry, including overheard entries", { skip }, async () => {
@@ -966,6 +975,67 @@ test("pg scopeSessionSummaries: counts via aggregate, not per-transcript reads",
   assert.equal(backgroundStats.total, 1);
   assert.equal(backgroundStats.byType.cron, 1);
   assert.deepEqual(backgroundStats.totalByCategory, { conversation: 2, background: 2, all: 4 });
+});
+
+test("pg lastUserMessages reads one indexed row per requested session despite long histories", { skip }, async (t) => {
+  const store = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", `preview-bounds-${randomUUID()}`);
+  const sessions = await Promise.all(
+    ["a", "b"].map((suffix) => store.getOrCreateByThread(`${scope}:${suffix}`, "dm", scope)),
+  );
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  const execute = pg.Pool.prototype.query;
+  let query = "";
+  t.mock.method(pg.Pool.prototype, "query", function (this: InstanceType<typeof pg.Pool>, ...args: unknown[]) {
+    if (typeof args[0] === "string" && args[0].includes("AS last_user")) query = args[0];
+    return Reflect.apply(execute, this, args);
+  });
+  try {
+    const ids = sessions.map((session) => session.id);
+    await raw.query(
+      `INSERT INTO session_entries(session_id, seq, type, payload, scope_label, created_at)
+       SELECT id, n, 'user', json_build_object('text', 'question ' || n)::text, $2, n
+       FROM unnest($1::text[]) id CROSS JOIN generate_series(1, 2000) n`,
+      [ids, scope],
+    );
+    await raw.query(
+      `INSERT INTO session_entries(session_id, seq, type, payload, scope_label, created_at)
+       SELECT id, n, CASE WHEN n % 2 = 0 THEN 'text' ELSE 'user' END,
+              '{"text":"not a preview","overheard":true}', $2, n
+       FROM unnest($1::text[]) id CROSS JOIN generate_series(2001, 12000) n`,
+      [ids, scope],
+    );
+    await raw.query("ANALYZE session_entries");
+    const previews = await store.lastUserMessages(ids);
+    assert.deepEqual([...previews.values()], ["question 2000", "question 2000"]);
+    assert.ok(query);
+    const explained = await raw.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${query}`, [ids]);
+    type Plan = {
+      Plans?: Plan[];
+      "Relation Name"?: string;
+      "Actual Rows"?: number;
+      "Actual Loops"?: number;
+      "Rows Removed by Filter"?: number;
+    };
+    const plans = (plan: Plan): Plan[] => [plan, ...(plan.Plans ?? []).flatMap(plans)];
+    const reads = plans(explained.rows[0]["QUERY PLAN"][0].Plan).filter(
+      (plan) => plan["Relation Name"] === "session_entries",
+    );
+    assert.ok(reads.length);
+    assert.equal(
+      reads.reduce(
+        (total, plan) =>
+          total + ((plan["Actual Rows"] ?? 0) + (plan["Rows Removed by Filter"] ?? 0)) * (plan["Actual Loops"] ?? 1),
+        0,
+      ),
+      ids.length,
+      "previews must not read and discard historical user turns",
+    );
+  } finally {
+    for (const session of sessions) await store.deleteSession(session.id);
+    await raw.end();
+  }
 });
 
 test("pg scopeCronGroups: one aggregated row per cron; cronId page filters one cron's fires", { skip }, async () => {

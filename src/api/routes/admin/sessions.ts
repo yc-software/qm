@@ -338,6 +338,7 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
     session,
     transcriptEntries(hasMore ? raw.slice(raw.length - limit) : raw),
   );
+  const llmRequestCounts = (await deps.sessions?.llmRequestCounts(id, entries[0]?.seq ?? 0)) ?? [];
   const recipientDeliveries = deps.deliveries
     ? await deps.deliveries.listByRecipientThread(session.threadRef, { limit: 100 })
     : [];
@@ -384,6 +385,7 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, {
     session,
     entries,
+    llmRequestCounts,
     deliveryEvents,
     hasMore,
     limit,

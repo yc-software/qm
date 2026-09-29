@@ -740,12 +740,15 @@ export interface SessionStore {
 
   recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
+  llmRequestCounts(sessionId: string, fromSeq: number): Promise<{ turnSeq: number | null; count: number }[]>;
   /** The most recent security screenings across every scope, newest first. */
   listScreenSamples(limit: number): Promise<ScreenSample[]>;
 
   addParticipant(sessionId: string, principalId: string, title?: string, opts?: AddParticipantOptions): Promise<void>;
   removeParticipant(sessionId: string, principalId: string): Promise<void>;
   listByParticipant(principalId: string, opts?: { limit: number }): Promise<Session[]>;
+  participantHasScope(principalId: string, scope: ScopeId): Promise<boolean>;
+  scopesForParticipant(principalId: string): Promise<ScopeId[]>;
   getForParticipant(sessionId: string, principalId: string): Promise<Session | null>;
 
   deleteSession(sessionId: string): Promise<void>;

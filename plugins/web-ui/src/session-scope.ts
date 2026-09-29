@@ -5,6 +5,7 @@ import { ArrowUpLeft, Box, Brain, Clock3, Ellipsis, Files, GitFork, KeyRound, Ro
 import { api } from "./core-bridge";
 import { closeFormMenus, icon, toggleFormMenu } from "./ui";
 import { tip } from "./tooltip";
+import { appState } from "./shell";
 
 /** A session's context carried into the crons/files/memory views so the whole
  * view stays scoped to that project and keeps the session top bar. */
@@ -227,18 +228,26 @@ export function scopedViewTopbar(current: SessionTool, redraw: () => void): Temp
     activeTool: current,
     toolCount: (t) => scopeToolCount(t, active.scopeId, redraw),
     onTitle: () => {
-      setScopedSession(null);
-      void Promise.all([import("./shell"), import("./sessions")]).then(
-        ([{ appState, renderSidebarTop }, { sessionsState, openSession }]) => {
-          const s = sessionsState.list.find(
-            (row) => (active.sessionId && row.id === active.sessionId) || row.threadRef === active.threadRef,
+      const seq = appState.viewRenderSeq;
+      const view = appState.currentView;
+      const current = () =>
+        appState.viewRenderSeq === seq && appState.currentView === view && scopedSession.active === active;
+      void import("./sessions")
+        .then(async ({ resolveSessionReference, openSession }) => {
+          if (!current()) return;
+          const s = await resolveSessionReference(
+            active.sessionId
+              ? { kind: "id", value: active.sessionId }
+              : { kind: "thread", value: active.threadRef ?? "" },
           );
-          if (!s) return;
-          appState.currentView = "chats";
-          renderSidebarTop();
+          if (!current() || !s) return;
+          setScopedSession(null);
           void openSession(s);
-        },
-      );
+        })
+        .catch(() => {
+          if (!current()) return;
+          redraw();
+        });
     },
     onTool: (t) => {
       if (t === current) return;

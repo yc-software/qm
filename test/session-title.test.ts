@@ -140,6 +140,41 @@ test("the title is generated ONCE — a later turn does not rewrite it", async (
   assert.equal((await app.getSession(sid))?.session.title, first);
 });
 
+test("turn audit records title prestate without exporting title text for human and automated turns", async () => {
+  const { app, auditLog, runs } = freshApp();
+  for (const automated of [false, true]) {
+    const thread = `web:U1:title-prestate-${automated}`;
+    for (const hadTitle of [false, true]) {
+      const startedAt = Date.now();
+      const result = await app.turn({
+        ...dm("Private title input must not enter audit detail", thread),
+        ...(automated ? { origin: { kind: "automation" as const } } : {}),
+      });
+      const finishedAt = Date.now();
+      assert.equal(result.status, "ok");
+      const session = await app.getSession(result.sessionId!);
+      assert.ok(session?.session.title);
+      const run = await runs.latestForThread(thread);
+      assert.equal(run?.status, "done");
+      const user = session.entries.find((entry) => entry.type === "user" && entry.seq === run?.turnUserSeq);
+      assert.ok(user && run?.startedAt);
+      const events = (await auditLog.events()).filter((event) => event.action === "turn" && event.resource === thread);
+      assert.equal(events.length, hadTitle ? 2 : 1);
+      const event = events.at(-1)!;
+      assert.equal(event.principalId, "U1");
+      assert.equal(event.scopeLabel, "personal:U1");
+      assert.ok(event.at >= startedAt && event.at <= finishedAt);
+      assert.ok(event.at >= run.startedAt && event.at <= user.createdAt);
+      assert.deepEqual(JSON.parse(event.detail!), {
+        kind: "title-prestate-v1",
+        runId: run.id,
+        sessionId: result.sessionId,
+        hadTitle,
+      });
+    }
+  }
+});
+
 test("the title ignores assembled-turn boilerplate (conversation header / manifests)", async () => {
   const { app } = freshApp();
   const r = await app.turn({

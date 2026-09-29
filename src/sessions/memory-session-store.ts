@@ -443,6 +443,17 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       });
     },
 
+    async llmRequestCounts(sessionId, fromSeq) {
+      const counts = new Map<number | null, number>();
+      for (const { turnSeq } of llmRequests.get(sessionId) ?? []) {
+        if (turnSeq !== null && turnSeq < fromSeq) continue;
+        counts.set(turnSeq, (counts.get(turnSeq) ?? 0) + 1);
+      }
+      return [...counts]
+        .map(([turnSeq, count]) => ({ turnSeq, count }))
+        .sort((a, b) => (a.turnSeq ?? Infinity) - (b.turnSeq ?? Infinity));
+    },
+
     async listScreenSamples(limit) {
       const wanted = Math.max(0, Math.trunc(limit));
       if (!wanted) return [];
@@ -524,6 +535,23 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
             .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt))
             .slice(0, Math.max(0, Math.floor(opts.limit)))
         : out;
+    },
+
+    async participantHasScope(principalId, scope) {
+      for (const id of participants.get(principalId) ?? []) {
+        const session = sessions.get(id);
+        if (session && session.scopeId === scope) return true;
+      }
+      return false;
+    },
+
+    async scopesForParticipant(principalId) {
+      const scopes = new Set<ScopeId>();
+      for (const id of participants.get(principalId) ?? []) {
+        const scope = sessions.get(id)?.scopeId;
+        if (scope !== undefined) scopes.add(scope);
+      }
+      return [...scopes].sort();
     },
 
     async getForParticipant(sessionId, principalId) {

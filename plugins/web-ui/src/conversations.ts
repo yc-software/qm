@@ -96,6 +96,7 @@ export function ensureDeliveryStream(): void {
       if (matched) {
         sessionsState.list = list;
         renderList();
+        if (sessionsState.navigation) void refreshSessions({ silent: true });
         const parentId = list.find((session) => session.threadRef === event.threadRef)?.parentSessionId;
         if (parentId) for (const conv of live) if (conv.state.sessionId === parentId) conv.redraw();
       } else {

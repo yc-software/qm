@@ -39,7 +39,7 @@ function appWithFakeRuntime() {
     sessions,
     identity: createIdentityService(),
   } as unknown as Parameters<typeof createApp>[0]);
-  return { app, acl, directory, sessions };
+  return { app, acl, directory, sessions, deploy };
 }
 
 test("reachDeployment: org → any non-empty principal; personal → owner only; empty/unknown → denied", async () => {
@@ -249,7 +249,7 @@ test("HTTP: /v1/deployments?principalId= filters through viewer authz", async ()
 });
 
 test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ingress is configured", async () => {
-  const { app, acl, directory } = appWithFakeRuntime();
+  const { app, acl, directory, deploy } = appWithFakeRuntime();
   const shared = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -267,6 +267,23 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
     [{ channelId: "C1", name: "eng", isPrivate: true }],
     [{ channelId: "C1", principalId: "U2" }],
   );
+  await app.renameDeployment(shared.id, "shared-list-test");
+  const reads = { get: 0, grants: 0, list: 0 };
+  const get = deploy.getDeployment;
+  deploy.getDeployment = async (id) => {
+    reads.get++;
+    return get(id);
+  };
+  const list = acl.list;
+  acl.list = async () => {
+    reads.list++;
+    return list();
+  };
+  const grantsFor = acl.grantsFor;
+  acl.grantsFor = async (...args) => {
+    reads.grants++;
+    return grantsFor(...args);
+  };
   const secret = "deployments-list-secret".repeat(3);
   const server = createServer(app, {
     signingSecret: secret,
@@ -291,6 +308,32 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
     assert.ok(gitUrl.password.length > 0);
     const access = await verifyDeployGitAccess(secret, gitUrl.password);
     assert.equal(access?.deploymentId, shared.id);
+    assert.equal(access?.principalId, "U2");
+    assert.equal(access?.permission, "read");
+    assert.deepEqual(reads, { get: 0, grants: 0, list: 1 });
+    deploy.listDeployments = async () => {
+      throw new Error("Single deployment lookup must not list deployments");
+    };
+    const detailPath = "/v1/deployments/shared-list-test?principalId=U2";
+    const detail = await fetch(`${base}${detailPath}`, {
+      headers: signedRequestHeaders(secret, "GET", detailPath, "", {}) as Record<string, string>,
+    });
+    assert.equal(detail.status, 200);
+    const detailBody = (await detail.json()) as { deployment: { id: string; permission: string; gitUrl: string } };
+    assert.equal(detailBody.deployment.id, shared.id);
+    assert.equal(detailBody.deployment.permission, "read");
+    assert.equal(
+      (await verifyDeployGitAccess(secret, new URL(detailBody.deployment.gitUrl).password))?.principalId,
+      "U2",
+    );
+    assert.deepEqual(reads, { get: 1, grants: 1, list: 1 });
+    assert.equal(await app.deploymentGitPermissionFor("shared-list-test", "U2"), "read");
+    await acl.revoke(scopeId("personal", "U1"), `deployment:${shared.id}`, scopeId("channel", "C1"), "U1");
+    assert.equal(await app.authorizesDeploymentGitAccess(shared.id, "U2", "read"), false);
+    const denied = await fetch(`${base}${detailPath}`, {
+      headers: signedRequestHeaders(secret, "GET", detailPath, "", {}) as Record<string, string>,
+    });
+    assert.equal(denied.status, 404);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

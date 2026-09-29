@@ -1,4 +1,5 @@
 import { recordSteerIntake, type SteerIntake } from "./harness-shared.ts";
+import { EMPTY_ENDING_NOTE } from "./empty-ending-note.ts";
 import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
 import { gatewayModelsJson, gatewayModelsVersion } from "../model/gateway-models.ts";
 import { Type } from "typebox";
@@ -1039,8 +1040,7 @@ export type TurnWallClockOutcome = "ok" | "aborted" | "abandoned";
 const TURN_ABORT_GRACE_MS = 30_000;
 
 export const EMPTY_ENDING_MIN_BUDGET_MS = 30_000;
-export const EMPTY_ENDING_NOTE =
-  "[system] The turn ended with an empty message. If the work above is unfinished, continue it — without redoing steps that already succeeded; otherwise reply with your answer now.";
+export { EMPTY_ENDING_NOTE } from "./empty-ending-note.ts";
 
 export function emptyEndingNote(opts: {
   wallClock: TurnWallClockOutcome;

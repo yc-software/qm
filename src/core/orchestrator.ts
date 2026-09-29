@@ -1342,6 +1342,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         action: "turn",
         resource: conversation.threadRef,
         scopeLabel: scopeId,
+        detail: JSON.stringify({
+          kind: "title-prestate-v1",
+          runId: input.runId ?? null,
+          sessionId: session.id,
+          hadTitle: Boolean(session.title),
+        }),
       });
 
       let releasedToolOutput: PendingApprovalRecord["screenedOutput"];

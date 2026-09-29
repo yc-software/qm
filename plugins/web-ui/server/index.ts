@@ -784,7 +784,7 @@ async function postTurnAndMint(
 async function userPermissions(): Promise<string[]> {
   if (!CORE_SIGNING_SECRET) return [];
   try {
-    const r = await coreFetchCap("GET", "/v1/admin/whoami");
+    const r = await coreFetch("GET", "/v1/admin/whoami");
     if (r.status !== 200) return [];
     const j = JSON.parse(r.text) as { permissions?: unknown };
     return Array.isArray(j.permissions) ? j.permissions.filter((p): p is string => typeof p === "string") : [];
@@ -1147,7 +1147,39 @@ async function serveFileContent(c: WebCtx, playground = false): Promise<unknown>
   return Readable.fromWeb(r.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
 }
 
+async function readSessionNavigation(c: WebCtx, suffix: string): Promise<unknown> {
+  const body = await readJson<Record<string, unknown>>(c.req, c.res, false);
+  if (!body) return;
+  if (Array.isArray(body)) return json(c.res, 400, { error: "bad_request" });
+  if (c.res.destroyed || c.res.writableEnded) return;
+  const cancel = new AbortController();
+  const onClose = () => cancel.abort();
+  c.res.once("close", onClose);
+  try {
+    const portalTok = portalTokenStore.getStore();
+    const result = await fetchCoreText({
+      origin: CORE,
+      secret: CORE_SIGNING_SECRET,
+      method: "POST",
+      path: `/v1/session-navigation${suffix}`,
+      body: JSON.stringify({ ...body, principalId: c.user }),
+      headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+      signal: AbortSignal.any([cancel.signal, AbortSignal.timeout(30_000)]),
+    });
+    if (!cancel.signal.aborted) return relay(c.res, result);
+  } catch (error) {
+    if (!cancel.signal.aborted) throw error;
+  } finally {
+    c.res.off("close", onClose);
+  }
+}
+
 const apiRoutes: readonly WebRoute[] = [
+  ...["", "/page", "/resolve"].map((suffix): WebRoute => ({
+    method: "POST",
+    path: `/api/session-navigation${suffix}`,
+    handle: (c) => readSessionNavigation(c, suffix),
+  })),
   {
     method: "GET",
     path: "/api/files/by-name/content",
@@ -1353,17 +1385,19 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { req, res, user } = c;
       res.setHeader("set-cookie", sessionCookie(user));
-      const [allPermissions, workspaceUrl, authStatus, activityConfig, companyBranding] = await Promise.all([
-        userPermissions(),
-        slackWorkspaceUrl(),
-        coreFetch("GET", `/v1/user-model-auth/status?principalId=${encodeURIComponent(user)}`, "", 5_000).catch(
-          () => null,
-        ),
-        coreFetch("GET", "/v1/suggested-activities", "", 2_000)
-          .then((response) => response.status === 200 && JSON.parse(response.text).enabled === true)
-          .catch(() => false),
-        brandingCache.forRender(),
-      ]);
+      const [allPermissions, workspaceUrl, authStatus, activityConfig, companyBranding, inboxPreview] =
+        await Promise.all([
+          userPermissions(),
+          slackWorkspaceUrl(),
+          coreFetch("GET", `/v1/user-model-auth/status?principalId=${encodeURIComponent(user)}`, "", 5_000).catch(
+            () => null,
+          ),
+          coreFetch("GET", "/v1/suggested-activities", "", 2_000)
+            .then((response) => response.status === 200 && JSON.parse(response.text).enabled === true)
+            .catch(() => false),
+          brandingCache.forRender(),
+          hasInboxLoopPreview(user),
+        ]);
       if (authStatus === null || authStatus.status !== 200) {
         return json(res, 503, {
           error: "unavailable",
@@ -1376,7 +1410,7 @@ const apiRoutes: readonly WebRoute[] = [
         connections?: { provider: string }[];
       };
       const permissions = allPermissions.filter((permission) => permission !== "loops" && permission !== "inbox");
-      if (await hasInboxLoopPreview(user)) {
+      if (inboxPreview) {
         if (isLoopsUser(user)) permissions.push("loops");
         if (isInboxUser(user)) permissions.push("inbox");
       }

@@ -213,7 +213,7 @@ export function createTranscriptViewport() {
   }
 
   function loadEarlier(): void {
-    if (!scroller || scroller.scrollTop > 400) return;
+    if (!scroller || scroller.clientHeight === 0 || scroller.scrollTop > 400) return;
     const button = scroller.querySelector<HTMLButtonElement>(".earlier-messages-btn:not(:disabled)");
     if (!button) return;
     cancelFollow();

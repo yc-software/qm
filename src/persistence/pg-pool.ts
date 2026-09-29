@@ -526,6 +526,7 @@ export function createPgPool(
       client.release(new Error("Postgres query cancelled"));
     };
     options.signal.addEventListener("abort", cancel, { once: true });
+    if (options.signal.aborted) cancel();
     try {
       if (released) throw new Error("Postgres query cancelled");
       return await withStatementTimeout(client, options.timeoutMs, async () => {

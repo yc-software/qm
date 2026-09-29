@@ -230,6 +230,52 @@ test("earlier pages bound canonical reads, widen for dense turns, and match full
   }
 });
 
+test("tail reads stop widening when older entries cannot fit the transcript byte budget", async () => {
+  const built = freshApp();
+  try {
+    const { session, narration } = await coarseForeignSession(built.sessions);
+    await built.app.pinConversationItem(session.threadRef, "U1", { entrySeq: narration.seq });
+    const { lease } = await built.sessions.acquireLease(session.id);
+    for (let i = 0; i < 100; i++)
+      await built.sessions.append(lease!, {
+        type: "text",
+        payload: { text: `detail ${i} ${"x".repeat(12_000)}` },
+        scopeLabel: session.scopeId,
+      });
+    await built.sessions.releaseLease(lease!);
+    const full = (await built.app.getSession(session.id))!;
+    const canonical = built.sessions.getTranscriptEntries.bind(built.sessions);
+    const calls: Array<{ limit?: number; beforeSeq?: number } | undefined> = [];
+    built.sessions.getTranscriptEntries = async (id, opts) => {
+      calls.push(opts);
+      return canonical(id, opts);
+    };
+    for (const beforeSeq of [undefined, 90]) {
+      const window = { tailTurns: 1, beforeSeq };
+      const expected = windowedTranscript(full.entries as SessionEntry[], window);
+      assert.ok(expected.earlier > 0);
+      assert.ok(expected.entries.length < 40);
+      for (const read of [
+        () => built.app.getSession(session.id, window),
+        () => built.app.getSessionForViewer(session.id, "U1", window),
+      ]) {
+        calls.length = 0;
+        const page = (await read())!;
+        assert.deepEqual(page.entries, expected.entries);
+        assert.equal(page.earlierEntries, expected.earlier);
+        assert.equal(page.pins![0]!.preview, "queue narration detail");
+        assert.deepEqual(
+          calls.map((opts) => opts?.limit),
+          [40],
+        );
+        assert.ok(calls.every((opts) => opts?.beforeSeq === beforeSeq));
+      }
+    }
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
 test("earlier pages retain tape fallback and viewer tenure boundaries", async () => {
   const built = freshApp();
   try {

@@ -1,4 +1,5 @@
 import { browserModelRoutes } from "./browser-model.ts";
+import { sessionNavigationRoutes } from "./session-navigation.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { backgroundWorkRoutes } from "./background-work.ts";
 import { composioRoutes } from "./composio.ts";
@@ -100,6 +101,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...adminRoutes,
   ...skillPackRoutes,
   ...surfaceRoutes,
+  ...sessionNavigationRoutes,
   ...fileUploadRoutes,
   ...projectRoutes,
   ...contextPolicyRoutes,

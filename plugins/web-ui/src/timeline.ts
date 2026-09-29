@@ -261,13 +261,13 @@ export function sessionToolView(
   call: ToolPayload,
   result: ToolPayload,
   sessions: readonly { id: string; title?: string | null }[],
-): { action: string; chipTitle?: string; sessionId?: string; detail: string } {
+): { action: string; chipTitle?: string; sessionId?: string; target?: string; detail: string } {
   const action = call.interrupt === true ? "interrupt" : (call.action ?? result.action ?? "");
   const target = result.sessionId ?? call.target;
   const session =
     sessions.find((row) => row.id === target || row.title === target) ??
     sessions.find((row) => result.result?.includes(`(sessionId ${row.id})`));
-  const sessionId = session?.id ?? result.sessionId;
+  const sessionId = session?.id ?? result.sessionId ?? result.result?.match(/\(sessionId ([^\s()]{1,512})\)/u)?.[1];
   let chipTitle = session?.title || result.title || call.name || "Subagent";
   let detail = "";
   if (action === "wait") return { action, detail: "for agent messages" };
@@ -287,7 +287,7 @@ export function sessionToolView(
     };
     detail = result.delivered ? (verbs[result.delivered] ?? result.delivered) : "";
   } else if (action === "read") detail = result.status ?? "";
-  return { action, chipTitle, ...(sessionId ? { sessionId } : {}), detail };
+  return { action, chipTitle, ...(sessionId ? { sessionId } : { target }), detail };
 }
 
 export function currentTextPhase(work: WorkBlock): {

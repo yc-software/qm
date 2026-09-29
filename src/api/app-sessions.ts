@@ -1,3 +1,12 @@
+import {
+  projectSessionNavigation,
+  projectSessionPage,
+  resolveSessionReferences,
+  validateNavigationCursor,
+  validateSessionPageCursor,
+  InvalidSessionNavigationRequest,
+  SESSION_REFERENCE_LIMIT,
+} from "./session-navigation.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
 import {
@@ -7,7 +16,7 @@ import {
   workingSessionThreadRefs,
 } from "../sessions/session-syscalls.ts";
 import { isSessionStatus } from "../sessions/session-status.ts";
-import type { PendingApprovalRecord } from "../types.ts";
+import type { PendingApprovalRecord, Session } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
@@ -69,6 +78,9 @@ export function createSessionMethods(
   | "uploadFileForViewer"
   | "openFileForViewer"
   | "listSessions"
+  | "sessionNavigation"
+  | "sessionPage"
+  | "resolveSessions"
   | "searchSessions"
   | "sessionBackground"
   | "readSessionBackgroundOutput"
@@ -117,13 +129,90 @@ export function createSessionMethods(
     approvalRecordIsCurrent,
     principalCanAccessCurrentScope,
     principalCanWriteScope,
-    principalGitPermission,
+    deploymentPermissionsForViewer,
     principalCanManageScope,
     membershipControlsScope,
     authorizesCapabilityScope,
     principalManagesArtifactHome,
     artifactAuthor,
   } = h;
+  async function sessionSnapshot(
+    principalId: string,
+    signal?: AbortSignal,
+    selected?: Session[],
+  ): Promise<{ raw: Session[]; visible: Session[] }> {
+    signal?.throwIfAborted();
+    const all = selected ?? (await sessionsForViewer(principalId));
+    signal?.throwIfAborted();
+    const visibleById = new Map(all.map((session) => [session.id, session]));
+    const approvalRows: PendingApprovalRecord[] = [];
+    const approvalEntries = (await deps.approvals?.entries()) ?? [];
+    signal?.throwIfAborted();
+    for (const [, record] of approvalEntries) {
+      const session = visibleById.get(record.sessionId);
+      if (!session) continue;
+      const current = await approvalRecordIsCurrent(record, session);
+      signal?.throwIfAborted();
+      if (current) approvalRows.push(record);
+    }
+    const waiting = new Set(approvalRows.filter((r) => r.blocksInput !== false).map((r) => r.sessionId));
+    const workingThreadRefs = await workingSessionThreadRefs(deps.sessions, deps.runs, waiting);
+    signal?.throwIfAborted();
+    const sessions = all.filter(
+      (s) =>
+        s.hasEntries !== false || Boolean(s.title?.trim()) || workingThreadRefs.has(s.threadRef) || waiting.has(s.id),
+    );
+    const now = Date.now();
+    const jobCounts = new Map<string, number>();
+    for (const rec of (await deps.processes?.listLive(now)) ?? []) {
+      if (rec.kind !== "background" || !rec.sessionRef) continue;
+      jobCounts.set(rec.sessionRef, (jobCounts.get(rec.sessionRef) ?? 0) + 1);
+    }
+    signal?.throwIfAborted();
+    const watchCounts = new Map<string, number>();
+    for (const m of (await deps.monitors?.enabled()) ?? []) {
+      if (m.expiresAt <= now) continue;
+      watchCounts.set(m.threadRef, (watchCounts.get(m.threadRef) ?? 0) + 1);
+    }
+    signal?.throwIfAborted();
+    const cronCounts = new Map<string, number>();
+    for (const c of await deps.crons.list()) {
+      if (!cronIsActive(c)) continue;
+      for (const ref of new Set([c.destination?.target, c.sessionRef])) {
+        if (ref) cronCounts.set(ref, (cronCounts.get(ref) ?? 0) + 1);
+      }
+    }
+    signal?.throwIfAborted();
+    const failedChildren = await deps.runs.latestFailedThreads(
+      sessions
+        .filter((s) => s.parentSessionId && !workingThreadRefs.has(s.threadRef) && !waiting.has(s.id))
+        .map((s) => s.threadRef),
+      signal,
+    );
+    signal?.throwIfAborted();
+    if (
+      workingThreadRefs.size === 0 &&
+      waiting.size === 0 &&
+      failedChildren.size === 0 &&
+      jobCounts.size === 0 &&
+      watchCounts.size === 0 &&
+      cronCounts.size === 0
+    )
+      return { raw: all, visible: sessions };
+    return {
+      raw: all,
+      visible: sessions.map((s) => ({
+        ...s,
+        ...(workingThreadRefs.has(s.threadRef) ? { working: true } : {}),
+        ...(waiting.has(s.id) ? { awaitingInput: true } : {}),
+        ...(failedChildren.has(s.threadRef) ? { lastTurnFailed: true } : {}),
+        ...(jobCounts.has(s.threadRef) ? { backgroundJobs: jobCounts.get(s.threadRef)! } : {}),
+        ...(watchCounts.has(s.threadRef) ? { watches: watchCounts.get(s.threadRef)! } : {}),
+        ...(cronCounts.has(s.threadRef) ? { crons: cronCounts.get(s.threadRef)! } : {}),
+      })),
+    };
+  }
+
   const transcripts = createTranscriptSource(deps.sessions);
   const pinView = (
     rec: { id: string; text?: string; entrySeq?: number; addedBy: string; createdAt: number },
@@ -223,12 +312,13 @@ export function createSessionMethods(
       ]);
       let read = initialRead;
       let all = transcriptEntries(read.entries);
-      while (limit !== undefined && read.earlier > 0 && !coversTailWindow(all, window!.tailTurns!)) {
+      let w = windowedTranscript(all, window);
+      while (limit !== undefined && read.earlier > 0 && w.earlier === 0 && !coversTailWindow(all, window!.tailTurns!)) {
         limit *= 2;
         read = await transcripts.forRender(sessionId, { limit, beforeSeq: window?.beforeSeq });
         all = transcriptEntries(read.entries);
+        w = windowedTranscript(all, window);
       }
-      const w = windowedTranscript(all, window);
       const earlier = w.earlier + read.earlier;
       const pins = await decoratedPins(pinRecords, all, (seq) => storedEntryAt(sessionId, seq));
       return {
@@ -272,12 +362,18 @@ export function createSessionMethods(
       ]);
       let read = initialRead;
       let visible = transcriptEntries(read.entries);
-      while (limit !== undefined && read.earlier > 0 && !coversTailWindow(visible, window!.tailTurns!)) {
+      let w = windowedTranscript(visible, window);
+      while (
+        limit !== undefined &&
+        read.earlier > 0 &&
+        w.earlier === 0 &&
+        !coversTailWindow(visible, window!.tailTurns!)
+      ) {
         limit *= 2;
         read = await transcripts.forViewer(sessionId, principalId, { limit, beforeSeq: window?.beforeSeq });
         visible = transcriptEntries(read.entries);
+        w = windowedTranscript(visible, window);
       }
-      const w = windowedTranscript(visible, window);
       const earlier = w.earlier + read.earlier;
       const pins = await decoratedPins(pinRecords, visible, (seq) => viewerStoredEntryAt(sessionId, principalId, seq));
       return {
@@ -402,61 +498,52 @@ export function createSessionMethods(
     },
 
     async listSessions(principalId) {
-      const all = await sessionsForViewer(principalId);
-      const visibleById = new Map(all.map((session) => [session.id, session]));
-      const approvalRows: PendingApprovalRecord[] = [];
-      for (const [, record] of (await deps.approvals?.entries()) ?? []) {
-        const session = visibleById.get(record.sessionId);
-        if (session && (await approvalRecordIsCurrent(record, session))) approvalRows.push(record);
+      return (await sessionSnapshot(principalId)).visible;
+    },
+
+    async sessionNavigation(principalId, request = {}, signal) {
+      validateNavigationCursor(request);
+      if ((request.references?.length ?? 0) > SESSION_REFERENCE_LIMIT)
+        throw new InvalidSessionNavigationRequest("too many session references");
+      // ponytail: Enumerate participant history; use an indexed projection if loaded latency requires it.
+      const snapshot = await sessionSnapshot(principalId, signal);
+      const contexts = await contextsFor(principalId, snapshot.raw);
+      signal?.throwIfAborted();
+      return projectSessionNavigation(snapshot.visible, snapshot.raw, contexts, principalId, request);
+    },
+
+    async sessionPage(principalId, request = {}, signal) {
+      validateSessionPageCursor(request);
+      const snapshot = await sessionSnapshot(principalId, signal);
+      const contexts = await contextsFor(principalId, snapshot.raw);
+      signal?.throwIfAborted();
+      return projectSessionPage(snapshot.visible, contexts, request, snapshot.raw);
+    },
+
+    async resolveSessions(principalId, references, signal) {
+      if (references.length > SESSION_REFERENCE_LIMIT)
+        throw new InvalidSessionNavigationRequest("too many session references");
+      signal?.throwIfAborted();
+      if (references.length === 0) return { references: [] };
+      const threads = [...new Set(references.filter((ref) => ref.kind === "thread").map((ref) => ref.value))];
+      const candidates = threads.length ? await deps.sessions.sessionsByThreadRefs(threads) : [];
+      signal?.throwIfAborted();
+      const ids = new Set([
+        ...references.filter((ref) => ref.kind === "id").map((ref) => ref.value),
+        ...candidates.map((candidate) => candidate.id),
+      ]);
+      const selected: Session[] = [];
+      for (const id of ids) {
+        signal?.throwIfAborted();
+        const session = await sessionForViewer(id, principalId);
+        if (session) selected.push(session);
       }
-      const waiting = new Set(approvalRows.filter((r) => r.blocksInput !== false).map((r) => r.sessionId));
-      const workingThreadRefs = await workingSessionThreadRefs(deps.sessions, deps.runs, waiting);
-      const sessions = all.filter(
-        (s) =>
-          s.hasEntries !== false || Boolean(s.title?.trim()) || workingThreadRefs.has(s.threadRef) || waiting.has(s.id),
+      const snapshot = await sessionSnapshot(principalId, signal, selected);
+      const byId = new Map(snapshot.visible.map((session) => [session.id, session]));
+      return resolveSessionReferences(
+        snapshot.raw.map((session) => byId.get(session.id) ?? session),
+        references,
       );
-      const now = Date.now();
-      const jobCounts = new Map<string, number>();
-      for (const rec of (await deps.processes?.listLive(now)) ?? []) {
-        if (rec.kind !== "background" || !rec.sessionRef) continue;
-        jobCounts.set(rec.sessionRef, (jobCounts.get(rec.sessionRef) ?? 0) + 1);
-      }
-      const watchCounts = new Map<string, number>();
-      for (const m of (await deps.monitors?.enabled()) ?? []) {
-        if (m.expiresAt <= now) continue;
-        watchCounts.set(m.threadRef, (watchCounts.get(m.threadRef) ?? 0) + 1);
-      }
-      const cronCounts = new Map<string, number>();
-      for (const c of await deps.crons.list()) {
-        if (!cronIsActive(c)) continue;
-        for (const ref of new Set([c.destination?.target, c.sessionRef])) {
-          if (ref) cronCounts.set(ref, (cronCounts.get(ref) ?? 0) + 1);
-        }
-      }
-      const failedChildren = new Set<string>();
-      for (const s of sessions) {
-        if (!s.parentSessionId || workingThreadRefs.has(s.threadRef) || waiting.has(s.id)) continue;
-        const run = await deps.runs.latestForThread(s.threadRef);
-        if (run?.status === "failed" || run?.result?.status === "failed") failedChildren.add(s.id);
-      }
-      if (
-        workingThreadRefs.size === 0 &&
-        waiting.size === 0 &&
-        failedChildren.size === 0 &&
-        jobCounts.size === 0 &&
-        watchCounts.size === 0 &&
-        cronCounts.size === 0
-      )
-        return sessions;
-      return sessions.map((s) => ({
-        ...s,
-        ...(workingThreadRefs.has(s.threadRef) ? { working: true } : {}),
-        ...(waiting.has(s.id) ? { awaitingInput: true } : {}),
-        ...(failedChildren.has(s.id) ? { lastTurnFailed: true } : {}),
-        ...(jobCounts.has(s.threadRef) ? { backgroundJobs: jobCounts.get(s.threadRef)! } : {}),
-        ...(watchCounts.has(s.threadRef) ? { watches: watchCounts.get(s.threadRef)! } : {}),
-        ...(cronCounts.has(s.threadRef) ? { crons: cronCounts.get(s.threadRef)! } : {}),
-      }));
     },
 
     async searchSessions(principalId, query, limit = SEARCH_HIT_LIMIT): Promise<SessionSearchHit[]> {
@@ -723,12 +810,13 @@ export function createSessionMethods(
         cursor = next.nextCursor;
       }
       files.sort((a, b) => b.createdAt - a.createdAt);
+      const permissionFor = deploymentPermissionsForViewer(principalId);
       const deployments = (
         await Promise.all(
           allDeployments
             .filter((d) => d.createdInScope === scope || d.ownerScopeId === scope)
             .map(async (d): Promise<ScopeDeployment | null> => {
-              const permission = await principalGitPermission(d, principalId);
+              const permission = await permissionFor(d);
               return permission
                 ? {
                     id: d.id,

@@ -94,11 +94,11 @@ test("/v1/admin/keychain returns metadata, grants, and asks without secrets; non
   }
 });
 
-test("credentials-page summary avoids unrelated history and exposes counts only", async (t) => {
+test("keychain summary returns authorized roster counts without asks or audit history", async (t) => {
   const s = start();
   t.after(s.close);
   const credential = await s.keychain.save({
-    ownerId: "U1",
+    ownerId: "Alice@example.com",
     service: "github",
     secret: "summary-test-secret",
     envKey: "GITHUB_TOKEN",
@@ -106,22 +106,57 @@ test("credentials-page summary avoids unrelated history and exposes counts only"
   });
   await s.keychain.createGrant({
     credentialId: credential.id,
-    ownerId: "U1",
+    ownerId: "Alice@example.com",
     audienceScopeId: scopeId("channel", "C1"),
     mode: "standing",
     purpose: "test",
   });
+  await s.keychain.save({
+    ownerId: "alice@example.com",
+    service: "gitlab",
+    secret: "another-summary-secret",
+    envKey: "GITLAB_TOKEN",
+  });
+  await s.keychain.createGrant({
+    credentialId: credential.id,
+    ownerId: "alice@example.com",
+    audienceScopeId: scopeId("channel", "C2"),
+    mode: "once",
+    purpose: "active one-time grant",
+  });
+  await s.keychain.createGrant({
+    credentialId: credential.id,
+    ownerId: "alice@example.com",
+    audienceScopeId: scopeId("channel", "C3"),
+    mode: "standing",
+    purpose: "expired grant",
+    expiresAt: Date.now() - 1,
+  });
+  const revoked = await s.keychain.createGrant({
+    credentialId: credential.id,
+    ownerId: "alice@example.com",
+    audienceScopeId: scopeId("channel", "C4"),
+    mode: "standing",
+    purpose: "revoked grant",
+  });
+  await s.keychain.revokeGrant("alice@example.com", revoked.id);
   const fail = () => {
     throw new Error("Summary must not scan unrelated data");
   };
   t.mock.method(s.keychain, "listAsks", fail);
   t.mock.method(s.built.sessions, "distinctParticipants", fail);
   t.mock.method(s.built.app, "directoryMembers", fail);
+  if (s.built.auditLog.tallyByResource)
+    t.mock.method(s.built.auditLog as Required<typeof s.built.auditLog>, "tallyByResource", fail);
   const response = await fetch(s.base + "/v1/admin/keychain?summary=1", {
     headers: { "x-admin-actor": "admin-alice@default-org" },
   });
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { users: 1, standing: 1 });
+  assert.deepEqual(await response.json(), {
+    users: 2,
+    standing: 1,
+    people: [{ principalId: "alice@example.com", credentialCount: 2, activeGrantCount: 2 }],
+  });
   const denied = await fetch(s.base + "/v1/admin/keychain?summary=1", {
     headers: { "x-admin-actor": "nobody@default-org" },
   });

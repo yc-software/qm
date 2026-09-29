@@ -58,6 +58,7 @@ export function createResourceSearchMethods(
     async searchResources(principalId, query) {
       query = query.slice(0, 500);
       if (query.trim().length < 2 || !searchTerms(query).length) return { hits: [], failed: [], limited: [] };
+      const deploymentPermissionFor = helpers.deploymentPermissionsForViewer(principalId);
       let visibleSkills = new Set<string>();
       let crons: ReturnType<typeof cronVisibility> | undefined;
       let person: ReturnType<App["personMatcher"]> | undefined;
@@ -71,7 +72,7 @@ export function createResourceSearchMethods(
             crons ??= cronVisibility(deps, helpers, principalId);
             return (await crons).canSee(row);
           case "deploys":
-            return (await helpers.principalGitPermission(row, principalId)) !== null;
+            return (await deploymentPermissionFor(row)) !== null;
           case "webhooks":
             person ??= app.personMatcher(principalId);
             return canAdministerWebhook(app, row, principalId, await person);

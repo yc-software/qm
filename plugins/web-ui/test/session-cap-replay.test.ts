@@ -72,6 +72,11 @@ test("same-second session-cap mints stay unique past core's replay dedupe", asyn
   try {
     const me = await fetch(`${base}/me`, { headers });
     assert.equal(me.status, 200);
+    assert.equal(sessionCapMints, 0, "/me reads its own permissions directly");
+
+    const firstOverview = await fetch(`${base}/api/keychain/overview`, { headers });
+    assert.equal(firstOverview.status, 200);
+    await firstOverview.arrayBuffer();
 
     const overview = await fetch(`${base}/api/keychain/overview`, { headers });
     assert.equal(overview.status, 200, "second same-second mint must not be rejected as a replay");

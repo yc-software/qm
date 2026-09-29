@@ -5,9 +5,12 @@ export function isWelcomeConversation(
   user: string,
   threadRef: string | null,
   scopeId: string | null,
+  oldestPersonalThreadRef?: string | null,
 ): boolean {
   if (threadRef?.startsWith(`web:${user}:ideas:`)) return false;
   if (!threadRef?.startsWith(`web:${user}:`) || (scopeId && scopeId !== `personal:${user}`)) return false;
+  if (oldestPersonalThreadRef !== undefined)
+    return oldestPersonalThreadRef === null || oldestPersonalThreadRef === threadRef;
   const personal = sessions.filter(
     (session) =>
       session.scopeId === `personal:${user}` &&

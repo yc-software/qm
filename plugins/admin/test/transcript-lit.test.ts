@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { buildSync } from "esbuild";
 import { JSDOM } from "jsdom";
@@ -33,18 +34,114 @@ test("transcript grouping pairs tools, folds deliveries and anchors model reques
       { type: "principal_delivery", deliveryId: "d", createdAt: 3 },
     ],
   };
-  const result = prepare(data, [
-    { turnSeq: 1, step: 2 },
-    { turnSeq: 1, step: 1 },
-  ]);
+  const result = prepare({ ...data, llmRequestCounts: [{ turnSeq: 1, count: 2 }] });
   assert.equal(result.units.length, 3);
   assert.equal(result.units[1].paired.seq, 3);
   assert.equal(result.units[1].delivery.deliveryId, "d");
   assert.equal(result.principalIds.has("d"), true);
-  assert.deepEqual(
-    result.units[2].llmReqs.map((r: any) => r.step),
-    [1, 2],
-  );
+  assert.deepEqual(result.units[2].llmCounts, [{ turnSeq: 1, count: 2 }]);
+});
+test("transcript uses one initial request and preserves each context link sharing an anchor", async () => {
+  const dom = setup();
+  try {
+    dom.window.eval(`window.calls=[];window.destinations=[];services.go=value=>destinations.push(value);
+      services.api=async(method,path)=>{calls.push(path);return {ok:true,data};};
+      data={entries:[{seq:3,type:'user',payload:'hello',createdAt:3},{seq:4,type:'assistant',payload:'reply',createdAt:4}],
+      llmRequestCounts:[{turnSeq:3,count:2},{turnSeq:4,count:1},{turnSeq:null,count:4}]};`);
+    await dom.window.eval('ui.show("session",60,false,services)');
+    assert.deepEqual(Array.from(dom.window.eval("calls") as string[]), [
+      "/api/sessions/session?scope=org%3Atest&limit=60",
+    ]);
+    const buttons = [...dom.window.document.querySelectorAll<HTMLButtonElement>(".context-icon")];
+    assert.deepEqual(
+      buttons.map((button) => button.title),
+      [
+        "View context sent to the model · 2 requests",
+        "View context sent to the model · 1 request",
+        "View context sent to the model · 4 requests",
+      ],
+    );
+    for (const button of buttons) button.click();
+    assert.deepEqual(Array.from(dom.window.eval("destinations.map(value=>value.turn)") as (number | string)[]), [
+      3,
+      4,
+      "orphan",
+    ]);
+  } finally {
+    dom.window.close();
+  }
+});
+test("old backend metadata is fetched only when the count field is absent", async () => {
+  const dom = setup();
+  try {
+    dom.window.eval(`window.calls=[];window.destinations=[];services.go=value=>destinations.push(value);
+      data={entries:[{seq:3,type:'user',payload:'hello'},{seq:4,type:'assistant',payload:'reply'}]};
+      services.api=async(method,path)=>{calls.push(path);return {ok:true,data:path.includes('/llm?')?{requests:[{turnSeq:3},{turnSeq:3},{turnSeq:9},{turnSeq:null}]}:data};};`);
+    await dom.window.eval('ui.show("session",60,false,services)');
+    assert.equal((dom.window.eval("calls") as string[]).length, 2);
+    for (const button of dom.window.document.querySelectorAll<HTMLButtonElement>(".context-icon")) button.click();
+    assert.deepEqual(Array.from(dom.window.eval("destinations.map(value=>value.turn)") as unknown[]), [3, 9, "orphan"]);
+    dom.window.eval("calls=[];data.llmRequestCounts=[]");
+    await dom.window.eval('ui.show("session",60,false,services)');
+    assert.equal((dom.window.eval("calls") as string[]).length, 1);
+    dom.window.eval(
+      `delete data.llmRequestCounts;services.api=async(method,path)=>path.includes('/llm?')?{ok:false,status:403,data:{message:'Denied'}}:{ok:true,data};`,
+    );
+    await dom.window.eval('ui.show("session",60,false,services)');
+    assert.equal(dom.window.document.getElementById("view-data")!.textContent!.trim(), "Denied");
+  } finally {
+    dom.window.close();
+  }
+});
+test("navigation invalidates a delayed old-backend metadata response", async () => {
+  const dom = setup();
+  try {
+    dom.window.eval(
+      `window.resolveLegacy=null;services.api=async(method,path)=>path.includes('/llm?')?new Promise(resolve=>resolveLegacy=resolve):{ok:true,data:{entries:[]}};window.pending=ui.show('session',60,false,services);`,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    dom.window.eval(
+      "ui.cancel();document.getElementById('view-data').textContent='Next page';resolveLegacy({ok:false,status:403,data:{message:'Late failure'}})",
+    );
+    await dom.window.eval("pending");
+    assert.equal(dom.window.document.getElementById("view-data")!.textContent, "Next page");
+  } finally {
+    dom.window.close();
+  }
+});
+test("transcript renders paired, pending and orphaned tool entries", async () => {
+  const dom = setup();
+  try {
+    const shell = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+    const helpers = ["firstLine", "toolName", "toolLabelText", "toolStatusMeta", "toolTextValue", "toolPrimaryText"];
+    dom.window.eval(
+      helpers
+        .map((name) => shell.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n {6}\\}`))![0])
+        .join("\n") +
+        `;window.metaChip=text=>textNode(text);window.stringify=JSON.stringify;
+         Object.assign(services,{${helpers.join(",")},toolCopyText:()=>'',renderToolEntry:()=>({block:document.createElement('div')})});
+         data={entries:[
+           {seq:1,type:'tool_result',payload:{callId:'orphan',tool:'background',action:'status',output:'Earlier result'},createdAt:1},
+           {seq:2,type:'tool_call',payload:{callId:'paired',tool:'read',path:'fixture.txt'},createdAt:2},
+           {seq:3,type:'tool_result',payload:{callId:'paired',output:'File contents'},createdAt:3},
+           {seq:4,type:'tool_call',payload:{callId:'pending',tool:'background',action:'start',command:'Start work'},createdAt:4},
+           {seq:5,type:'tool_result',payload:null,createdAt:5}
+         ]};`,
+    );
+    await dom.window.eval('ui.show("session",60,false,services)');
+    const doc = dom.window.document;
+    assert.deepEqual(
+      [...doc.querySelectorAll(".tool-line .tool-label")].map((node) => node.textContent),
+      ["background status", "read", "background start", "tool"],
+    );
+    assert.match(doc.getElementById("view-data")!.textContent!, /Earlier result/);
+    assert.match(doc.getElementById("view-data")!.textContent!, /fixture\.txt/);
+    assert.match(doc.getElementById("view-data")!.textContent!, /Start work/);
+    assert.equal(doc.querySelectorAll(".tool-line-entry").length, 4);
+    assert.equal(doc.querySelectorAll(".loadingline").length, 0);
+  } finally {
+    dom.window.close();
+  }
 });
 test("transcript controls filter state and preserve disclosure state without rebuilding message nodes", async () => {
   const dom = setup();

@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
+import { projectSessionNavigation, projectSessionPage } from "../../../src/api/session-navigation.ts";
+import type { Session } from "../../../src/types.ts";
 import { activeSessionForDocumentTitle, documentTitle, PRODUCT_TITLE } from "../src/document-title.ts";
 
 const index = readFileSync(new URL("../index.html", import.meta.url), "utf8");
@@ -82,8 +84,17 @@ test("document title follows session switches, split-pane focus, and sign-out", 
     const { mainConversation } = await vite.ssrLoadModule("/src/conversations.ts");
     const { openSession, refreshSessions, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
     const { mountRestoredCanvas, beginSessionDrag } = await vite.ssrLoadModule("/src/split.ts");
-    const oldSession = { id: "old", threadRef: "web:old", scopeId: "personal:tester", title: "Old title" };
-    const newSession = { id: "new", threadRef: "web:new", scopeId: "personal:tester", title: "New title" };
+    const oldSession: Session = {
+      id: "old",
+      threadRef: "web:old",
+      scopeId: "personal:tester",
+      type: "dm",
+      createdAt: 1,
+      title: "Old title",
+    };
+    const newSession: Session = { ...oldSession, id: "new", threadRef: "web:new", title: "New title" };
+    let rows = [oldSession, newSession];
+    const navigationRequests: string[] = [];
     sessionsState.list = [oldSession, newSession];
     appState.me = { user: "tester", org: "test" };
     appState.currentView = "chats";
@@ -99,7 +110,18 @@ test("document title follows session switches, split-pane focus, and sign-out", 
     syncDocumentTitle();
     assert.equal(document.title, `New title · ${PRODUCT_TITLE}`);
 
-    globalThis.fetch = async (input) => {
+    globalThis.fetch = async (input, init) => {
+      const path = String(input);
+      if (path.startsWith("/api/session-navigation")) {
+        assert.equal(init?.method, "POST");
+        const body = JSON.parse(String(init?.body));
+        navigationRequests.push(path);
+        if (path === "/api/session-navigation")
+          return Response.json(projectSessionNavigation(rows, rows, [], "tester", body));
+        if (path === "/api/session-navigation/page") return Response.json(projectSessionPage(rows, [], body));
+        assert.fail(`Unexpected navigation request: ${path}`);
+      }
+      assert.notEqual(path, "/api/sessions", "bounded navigation must not fetch the legacy full list");
       const session = String(input).includes("/sessions/new") ? newSession : oldSession;
       return Response.json({
         scopeId: "personal:tester",
@@ -109,7 +131,7 @@ test("document title follows session switches, split-pane focus, and sign-out", 
         effective: { harnessId: "pi", modelId: "" },
         session,
         entries: [],
-        sessions: sessionsState.list,
+        sessions: rows,
         contexts: [],
       });
     };
@@ -125,13 +147,10 @@ test("document title follows session switches, split-pane focus, and sign-out", 
     const paneTitles = () =>
       Array.from(document.querySelectorAll(".split-pane-title-text"), (node) => node.textContent?.trim());
     const refreshTitles = async (oldTitle: string, newTitle: string) => {
-      globalThis.fetch = async () =>
-        Response.json({
-          sessions: [
-            { ...oldSession, title: oldTitle },
-            { ...newSession, title: newTitle },
-          ],
-        });
+      rows = [
+        { ...oldSession, title: oldTitle },
+        { ...newSession, title: newTitle },
+      ];
       assert.equal(await refreshSessions({ silent: true }), true);
     };
     const focusPane = (index: number) => {
@@ -153,6 +172,7 @@ test("document title follows session switches, split-pane focus, and sign-out", 
     assert.equal(document.title, `Fallback for overloaded title model · ${PRODUCT_TITLE}`);
     focusPane(1);
     assert.equal(document.title, `Fallback for OAuth callback · ${PRODUCT_TITLE}`);
+    assert.ok(navigationRequests.filter((path) => path === "/api/session-navigation").length >= 3);
 
     globalThis.fetch = async () => new Response(null, { status: 204 });
     await signOut();

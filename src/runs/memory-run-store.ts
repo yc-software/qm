@@ -168,6 +168,22 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
           .at(0) ?? null
       );
     },
+    async latestFailedThreads(threadRefs, signal) {
+      signal?.throwIfAborted();
+      const wanted = new Set(threadRefs);
+      if (!wanted.size) return new Set();
+      const latest = new Map<string, Run>();
+      for (const run of runs.values()) {
+        if (!wanted.has(run.sessionId)) continue;
+        const previous = latest.get(run.sessionId);
+        if (!previous || run.createdAt >= previous.createdAt) latest.set(run.sessionId, run);
+      }
+      return new Set(
+        [...latest.values()]
+          .filter((run) => run.status === "failed" || run.result?.status === "failed")
+          .map((run) => run.sessionId),
+      );
+    },
     async pendingReturns(limit = 100, afterId = "") {
       const now = Date.now();
       return [...runs.values()]

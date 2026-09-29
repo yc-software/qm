@@ -55,13 +55,34 @@ test("inline waiting respects its timeout without clearing a retry deadline", as
   }
 });
 
-test("inline waiting returns another worker's result without executing twice", async () => {
+test("inline waiting returns another worker's result without executing twice", async (t) => {
   const built = buildApp(testConfig({ runWaitMs: 1_000 }));
   const queued = await built.app.turn({ ...request, async: true });
   const claimed = await built.runs.claimById(queued.runId!, "other", 60_000);
+  const claim = t.mock.method(built.runs, "claimForSession");
   const pending = built.app.turn(request);
-  await sleep(50);
+  await sleep(250);
   await built.runs.complete(claimed!.id, claimed!.leaseToken!, { status: "ok", reply: "other worker" });
   assert.equal((await pending).reply, "other worker");
   assert.equal((await built.runs.get(claimed!.id))?.attempts, 1);
+  assert.equal(claim.mock.callCount(), 0);
 });
+
+for (const requeue of ["release", "reap"] as const) {
+  test(`inline waiting resumes a running target after ${requeue}`, async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const built = buildApp(testConfig({ runWaitMs: 1_000 }));
+    const queued = await built.app.turn({ ...request, async: true });
+    const claimed = await built.runs.claimById(queued.runId!, "other", 60_000);
+    const pending = built.app.turn(request);
+    await sleep(50);
+    if (requeue === "release") {
+      assert.equal(await built.runs.releaseLease(claimed!.id, claimed!.leaseToken!), true);
+    } else {
+      t.mock.timers.tick(60_000);
+      assert.deepEqual(await built.runs.reapExpired(), { requeued: 1, parked: 0 });
+    }
+    assert.equal((await pending).status, "ok");
+    assert.equal((await built.runs.get(claimed!.id))?.attempts, 2);
+  });
+}

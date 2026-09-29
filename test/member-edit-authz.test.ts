@@ -56,7 +56,7 @@ function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: Adviso
       return undefined;
     },
   };
-  const sessions = { listByParticipant: async () => [] as { scopeId: string }[] };
+  const sessions = { scopesForParticipant: async () => [] };
   const skills = createSkillStore();
   const deployRows: Deployment[] = [];
   const deploy = { listDeployments: async () => deployRows };

@@ -49,6 +49,12 @@ test("a cron created from a live session is tied to it and shows as that session
   const list = await built.app.listSessions("U1");
   assert.equal(list.find((s) => s.threadRef === THREAD)?.crons, 1);
   assert.ok(!list.find((s) => s.threadRef === "web:U1:other")?.crons);
+  assert.equal((await built.app.sessionNavigation("U1")).recent.items.find((s) => s.id === sessionId)?.crons, 1);
+  assert.equal((await built.app.sessionPage("U1", {})).items.find((s) => s.id === sessionId)?.crons, 1);
+  assert.equal(
+    (await built.app.resolveSessions("U1", [{ kind: "id", value: sessionId }])).references[0]?.session?.crons,
+    1,
+  );
 
   await built.crons.recordFire(created.cron.id, {
     fireKey: "f1",
@@ -68,6 +74,10 @@ test("a cron created from a live session is tied to it and shows as that session
 
   await control.patchCron(created.cron.id, { enabled: false }, claims());
   assert.ok(!(await built.app.listSessions("U1")).find((s) => s.threadRef === THREAD)?.crons, "paused crons drop off");
+  assert.equal(
+    (await built.app.sessionNavigation("U1")).recent.items.find((s) => s.id === sessionId)?.crons,
+    undefined,
+  );
 });
 
 test("session:false and triggered turns leave a cron untied, and patch ties or unties it", async () => {

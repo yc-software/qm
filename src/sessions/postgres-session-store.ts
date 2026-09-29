@@ -749,6 +749,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            ON CONFLICT DO NOTHING`,
         ],
       },
+      {
+        id: "sessions/store/0024-user-preview-seq",
+        statements: [
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_user_preview
+           ON session_entries(session_id, seq DESC)
+           WHERE type = 'user' AND (payload IS NULL OR payload NOT LIKE '%"overheard":true%')`,
+        ],
+      },
     ],
     [
       {
@@ -1248,6 +1256,19 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(rowToLlmRequest);
     },
 
+    async llmRequestCounts(sessionId, fromSeq) {
+      const rows = await q(
+        `SELECT turn_seq, COUNT(*) AS count FROM session_llm_requests
+         WHERE session_id = $1 AND (turn_seq >= $2 OR turn_seq IS NULL)
+         GROUP BY turn_seq ORDER BY turn_seq NULLS LAST`,
+        [sessionId, fromSeq],
+      );
+      return rows.map((row) => ({
+        turnSeq: row.turn_seq === null ? null : Number(row.turn_seq),
+        count: Number(row.count),
+      }));
+    },
+
     async listScreenSamples(limit): Promise<ScreenSample[]> {
       const wanted = Math.max(0, Math.trunc(limit));
       const pageSize = Math.max(wanted, 100);
@@ -1357,6 +1378,24 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async listByParticipant(principalId, opts): Promise<Session[]> {
       return participantSessions(principalId, opts);
+    },
+
+    async participantHasScope(principalId, scope): Promise<boolean> {
+      const rows = await q(
+        `SELECT EXISTS(SELECT 1 FROM participants p JOIN sessions s ON s.id = p.session_id
+          WHERE p.principal_id = $1 AND s.scope_id = $2) AS present`,
+        [principalId, scope],
+      );
+      return rows[0]?.present === true;
+    },
+
+    async scopesForParticipant(principalId): Promise<ScopeId[]> {
+      const rows = await q(
+        `SELECT DISTINCT s.scope_id FROM participants p JOIN sessions s ON s.id = p.session_id
+          WHERE p.principal_id = $1 ORDER BY s.scope_id`,
+        [principalId],
+      );
+      return rows.map((row) => row.scope_id as ScopeId);
     },
 
     async getForParticipant(sessionId, principalId): Promise<Session | null> {
@@ -1667,10 +1706,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const out = new Map<string, string>();
       if (sessionIds.length === 0) return out;
       const rows = await q(
-        `SELECT DISTINCT ON (le.session_id) le.session_id, ${previewExpr("le.payload")} AS last_user
-           FROM session_entries le
-          WHERE le.session_id = ANY($1) AND ${userTurn("le")}
-          ORDER BY le.session_id, le.seq DESC`,
+        `SELECT wanted.session_id, ${previewExpr("latest.payload")} AS last_user
+           FROM unnest($1::text[]) AS wanted(session_id)
+           CROSS JOIN LATERAL (
+             SELECT le.payload FROM session_entries le
+              WHERE le.session_id = wanted.session_id AND ${userTurn("le")}
+              ORDER BY le.seq DESC LIMIT 1
+           ) latest`,
         [sessionIds],
       );
       for (const r of rows) out.set(r.session_id as string, userMessagePreview(r.last_user ?? null, 100));
@@ -1847,7 +1889,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            )
            INSERT INTO session_spend_dirty(day)
            SELECT DISTINCT floor(r.created_at::numeric / 86400000)::bigint
-             FROM session_llm_requests r JOIN affected a ON a.id = r.session_id WHERE r.usage_json IS NOT NULL
+             FROM session_llm_requests r WHERE r.session_id = ANY(ARRAY(SELECT id FROM affected)) AND r.usage_json IS NOT NULL
            ON CONFLICT DO NOTHING`,
           [changed.rows.map((r) => r.session_id)],
         );

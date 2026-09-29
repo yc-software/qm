@@ -1,3 +1,4 @@
+import type { SessionPageResult } from "../../chassis/src/session-navigation.ts";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
@@ -29,7 +30,16 @@ import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, fieldSelect, formatBytes, icon, initials, menuSelect, relTime } from "./ui";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
-import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
+import {
+  groupDmTitle,
+  openSession,
+  refreshSessions,
+  readSessionWindow,
+  navigationContext,
+  sessionsState,
+  slackLogo,
+  surfaceOf,
+} from "./sessions";
 import { activityOf } from "./session-list";
 import type { WebhookView } from "./webhooks";
 import type { CronView } from "./crons";
@@ -96,6 +106,64 @@ export const contextsState = {
   slackError: "",
 };
 
+let contextPage: SessionPageResult<CoreSession> | null = null;
+let contextPageScope: string | null = null;
+let contextPageAbort: AbortController | null = null;
+let contextPageNotice = "";
+let contextPageLegacy = false;
+
+export function cancelContextSessionRead(): void {
+  contextPageAbort?.abort();
+  contextPageAbort = null;
+}
+
+async function loadContextSessions(scopeId: string, append = false): Promise<void> {
+  if (append && (contextPageAbort || !contextPage?.nextCursor)) return;
+  cancelContextSessionRead();
+  const controller = new AbortController();
+  contextPageAbort = controller;
+  if (contextPageScope !== scopeId) contextPage = null;
+  const loadedRows = append ? 50 : (contextPage?.items.length ?? 50);
+  contextPageScope = scopeId;
+  contextPageNotice = "";
+  const seq = appState.viewRenderSeq;
+  const current = () =>
+    !controller.signal.aborted &&
+    seq === appState.viewRenderSeq &&
+    appState.currentView === "contexts" &&
+    contextsState.selected === scopeId;
+  drawContexts();
+  try {
+    const cursor = append ? contextPage?.nextCursor : null;
+    const page = await readSessionWindow(
+      { scopeId, children: true, archived: false, ...(cursor ? { cursor } : {}) },
+      loadedRows,
+      controller.signal,
+    );
+    if (!current()) return;
+    if (!page) {
+      contextPageLegacy = true;
+      if (!(await refreshSessions({ silent: true }))) throw new Error("Failed to load conversations.");
+    } else {
+      if (cursor && page.nextCursor === cursor) throw new Error("Session cursor did not advance");
+      contextPageLegacy = false;
+      contextPage = {
+        ...page,
+        items: [
+          ...new Map(
+            [...(append ? (contextPage?.items ?? []) : []), ...page.items].map((row) => [row.id, row]),
+          ).values(),
+        ],
+      };
+    }
+  } catch (error) {
+    if (current()) contextPageNotice = errMessage(error, "Failed to load conversations.");
+  } finally {
+    if (contextPageAbort === controller) contextPageAbort = null;
+    if (current()) drawContexts();
+  }
+}
+
 let contextsLoading = false;
 let contextsNotice = "";
 let memberSearchSeq = 0;
@@ -112,23 +180,37 @@ let createProjectOpener: HTMLElement | null = null;
 let createProjectSeq = 0;
 let contextsResetSeq = 0;
 let contextsFetchSeq = 0;
+let contextsRequest: Promise<CoreContext[]> | null = null;
 let contextsQuery = "";
 let contextsWorkspaceFilter: "active" | "all" = "active";
 
 async function fetchContexts(): Promise<CoreContext[]> {
+  if (contextsRequest) return contextsRequest;
   const fetchSeq = ++contextsFetchSeq;
-  const result = await api<{ contexts: CoreContext[] }>("/api/contexts").catch((error: unknown) => {
-    if (fetchSeq !== contextsFetchSeq) return null;
-    throw error;
-  });
-  if (!result || fetchSeq !== contextsFetchSeq) return contextsState.list;
-  contextsState.list = result.contexts ?? [];
-  contextsState.loaded = true;
-  contextsState.loadedAt = Date.now();
-  return contextsState.list;
+  contextsRequest = api<{ contexts: CoreContext[] }>("/api/contexts")
+    .then((result) => {
+      if (fetchSeq !== contextsFetchSeq) return contextsState.list;
+      contextsState.list = result.contexts ?? [];
+      contextsState.loaded = true;
+      contextsState.loadedAt = Date.now();
+      return contextsState.list;
+    })
+    .catch((error: unknown) => {
+      if (fetchSeq !== contextsFetchSeq) return contextsState.list;
+      throw error;
+    })
+    .finally(() => {
+      if (fetchSeq === contextsFetchSeq) contextsRequest = null;
+    });
+  return contextsRequest;
 }
 
 export function resetContextsState(): void {
+  cancelContextSessionRead();
+  contextPage = null;
+  contextPageScope = null;
+  contextPageNotice = "";
+  contextPageLegacy = false;
   contextsState.list = [];
   contextsState.loaded = false;
   contextsState.loadedAt = 0;
@@ -156,6 +238,7 @@ export function resetContextsState(): void {
   contextsNotice = "";
   memberSearchSeq++;
   contextsFetchSeq++;
+  contextsRequest = null;
   createProjectSeq++;
   contextsResetSeq++;
   createProjectOpener = null;
@@ -170,7 +253,10 @@ export async function renderContexts(): Promise<void> {
   contextsLoading = true;
   drawContexts();
   try {
-    await Promise.all([fetchContexts(), refreshSessions({ silent: true })]);
+    await Promise.all([
+      fetchContexts(),
+      ...(contextsState.selected ? [loadContextSessions(contextsState.selected)] : []),
+    ]);
     if (seq !== appState.viewRenderSeq || appState.currentView !== "contexts") return;
   } catch (e) {
     if (seq !== appState.viewRenderSeq || appState.currentView !== "contexts") return;
@@ -227,7 +313,10 @@ export async function ensureContexts(force = false): Promise<CoreContext[]> {
 }
 
 export function personalScopeId(): string | null {
-  return contextsState.list.find((c) => c.kind === "personal")?.scopeId ?? null;
+  return (
+    contextsState.list.find((c) => c.kind === "personal")?.scopeId ??
+    (appState.me ? `personal:${appState.me.user}` : null)
+  );
 }
 
 export function resolveProjectScope(contexts: readonly CoreContext[], slug: string): string | null {
@@ -243,12 +332,14 @@ export function resolveProjectScope(contexts: readonly CoreContext[], slug: stri
 }
 
 function metaForScope(scopeId: string | null, fallbackName?: string | null): { title: string; glyph: IconNode } {
+  const compact = scopeId ? navigationContext(scopeId) : undefined;
+  if (compact?.project) return { title: compact.project.name, glyph: Folder };
   const c = scopeId ? contextsState.list.find((x) => x.scopeId === scopeId) : undefined;
   if (c) {
     const { title, glyph } = contextMeta(c);
     return { title, glyph };
   }
-  const shared = sharedContextLabel(scopeId, fallbackName ?? null);
+  const shared = sharedContextLabel(scopeId, compact?.name ?? fallbackName ?? null);
   if (shared) return { title: shared, glyph: scopeId?.startsWith("group:") ? Users : Hash };
   if (scopeId?.startsWith("personal:") && scopeId !== personalScopeId())
     return { title: "Shared personal space", glyph: User };
@@ -285,6 +376,15 @@ export function scopeFilterControl(current: string | null, onSelect: (scopeId: s
 }
 
 function sessionsIn(scopeId: string): CoreSession[] {
+  if (!contextPageLegacy) {
+    const entities = new Map(sessionsState.list.map((row) => [row.id, row]));
+    return contextPageScope === scopeId
+      ? (contextPage?.items ?? []).flatMap((row) => {
+          const current = entities.get(row.id);
+          return current ? [current] : [];
+        })
+      : [];
+  }
   return sessionsState.list
     .filter((s) => s.scopeId === scopeId && !s.archived)
     .sort((a, b) => activityOf(b) - activityOf(a));
@@ -413,9 +513,16 @@ function contextRow(c: CoreContext): TemplateResult {
 function detailTpl(c: CoreContext): TemplateResult {
   const { title, sub, glyph } = contextMeta(c);
   const sessions = sessionsIn(c.scopeId);
-  const completelyEmpty = sessions.length === 0 && scopeResourcesEmpty(c.scopeId);
+  const completelyEmpty =
+    !contextPageAbort &&
+    !contextPageNotice &&
+    (contextPageLegacy || (contextPageScope === c.scopeId && contextPage !== null)) &&
+    sessions.length === 0 &&
+    scopeResourcesEmpty(c.scopeId);
+  let pageState = contextPageNotice ? "error" : "ready";
+  if (contextPageAbort) pageState = "loading";
   return html`
-    <div class="context-detail">
+    <div class="context-detail" data-session-page="context" data-session-page-state=${pageState}>
       <button class="context-back" type="button" @click=${() => selectContext(null)}>
         ${icon(ArrowLeft, 15)}<span>Projects</span>
       </button>
@@ -461,13 +568,17 @@ function detailTpl(c: CoreContext): TemplateResult {
                   <section class="context-panel context-conversations" aria-labelledby="context-conversations-title">
                     <div class="context-panel-heading">
                       <h2 class="context-panel-title" id="context-conversations-title">Conversations</h2>
-                      ${sessions.length ? html`<span class="context-panel-count">${sessions.length}</span>` : nothing}
+                      ${(contextPage?.total ?? sessions.length) ? html`<span class="context-panel-count">${contextPage?.total ?? sessions.length}</span>` : nothing}
                     </div>
                     ${
                       sessions.length
                         ? html`<div class="context-session-list">${sessions.map((s) => contextSessionRow(s))}</div>`
-                        : html`<div class="context-inline-empty">No conversations yet.</div>`
+                        : nothing
                     }
+                    ${!sessions.length && !contextPageAbort && !contextPageNotice ? html`<div class="context-inline-empty">No conversations yet.</div>` : nothing}
+                    ${contextPageAbort ? html`<div class="context-inline-empty">Loading conversations…</div>` : nothing}
+                    ${contextPageNotice ? html`<div class="context-inline-empty" role="alert">${contextPageNotice}<button class="btn" @click=${() => void loadContextSessions(c.scopeId)}>Retry</button></div>` : nothing}
+                    ${contextPage?.nextCursor ? html`<button class="btn" data-session-page="context" ?disabled=${Boolean(contextPageAbort)} @click=${() => void loadContextSessions(c.scopeId, true)}>Show more conversations</button>` : nothing}
                   </section>
                   ${resourceSections(c.scopeId)}
                 `
@@ -1087,7 +1198,7 @@ export function openProjectDetail(scopeId: string): void {
   selectContext(scopeId);
 }
 
-export async function renameProject(project: CoreProject, name: string): Promise<boolean> {
+export async function renameProject(project: Pick<CoreProject, "id">, name: string): Promise<boolean> {
   try {
     const updated = projectFromResponse(
       await api(`/api/projects/${encodeURIComponent(project.id)}`, { method: "PATCH", body: JSON.stringify({ name }) }),
@@ -1120,6 +1231,7 @@ function projectFromResponse(response: unknown): CoreProject | null {
 function upsertProject(project: CoreProject): CoreContext {
   const loaded = contextsState.loaded;
   contextsFetchSeq++;
+  contextsRequest = null;
   const scopeId = project.scopeId;
   const current = contextsState.list.find((context) => context.scopeId === scopeId);
   const next: CoreContext = {
@@ -1393,6 +1505,10 @@ function contextSessionRow(s: CoreSession): TemplateResult {
 }
 
 function selectContext(scopeId: string | null): void {
+  cancelContextSessionRead();
+  contextPage = null;
+  contextPageScope = scopeId;
+  contextPageNotice = "";
   memberSearchSeq++;
   cancelMemberSearchTimer();
   contextsState.memberProjectId = null;
@@ -1416,6 +1532,7 @@ function selectContext(scopeId: string | null): void {
   syncUrlFromState();
   drawContexts();
   if (scopeId) {
+    void loadContextSessions(scopeId);
     void loadScopeResources(scopeId);
     void loadAmbientPolicy(scopeId, drawContexts);
     void loadContextModel(scopeId, drawContexts);

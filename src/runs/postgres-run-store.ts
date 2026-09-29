@@ -381,6 +381,22 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       );
       return rows[0] ? rowToRun(rows[0]) : null;
     },
+    async latestFailedThreads(threadRefs, signal) {
+      signal?.throwIfAborted();
+      if (!threadRefs.length) return new Set();
+      const { rows } = await q(
+        `SELECT requested.session_id FROM unnest($1::text[]) AS requested(session_id)
+         CROSS JOIN LATERAL (
+           SELECT status, result FROM runs WHERE session_id=requested.session_id
+           ORDER BY created_at DESC, seq DESC LIMIT 1
+         ) latest
+         WHERE latest.status='failed' OR latest.result::jsonb->>'status'='failed'`,
+        [[...new Set(threadRefs)]],
+        { signal },
+      );
+      signal?.throwIfAborted();
+      return new Set(rows.map((row) => row.session_id as string));
+    },
     async pendingReturns(limit = 100, afterId = "") {
       const { rows } = await q(
         `SELECT * FROM (

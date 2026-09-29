@@ -116,6 +116,39 @@ test("context cards do not count hidden shells or treat them as shared-scope aut
   assert.equal(group, undefined);
 });
 
+test("context membership reads follow distinct groups and refresh for each person and request", async (t) => {
+  const { app, sessions, directory } = freshApp();
+  for (const groupId of ["G-visible", "G-revoked"]) {
+    await directory.upsertGroup(groupId, groupId === "G-visible" ? ["U1"] : []);
+    for (let i = 0; i < 8; i++) {
+      const session = await sessions.getOrCreateByThread(`web:${groupId}:${i}`, "group", `group:${groupId}`);
+      await sessions.updateTitle(session.id, "Group conversation");
+      for (const principalId of ["U1", "U2"]) await sessions.addParticipant(session.id, principalId);
+    }
+  }
+  const original = directory.groupMember.bind(directory);
+  const calls: string[] = [];
+  t.mock.method(directory, "groupMember", async (groupId: string, principalId: string) => {
+    calls.push(`${principalId}/${groupId}`);
+    return original(groupId, principalId);
+  });
+  const read = async (principalId: string) => {
+    calls.length = 0;
+    const contexts = await app.listContexts(principalId);
+    assert.deepEqual(calls.sort(), [`${principalId}/G-revoked`, `${principalId}/G-visible`]);
+    return contexts.filter((context) => context.kind === "group");
+  };
+  assert.deepEqual(
+    (await read("U1")).map((context) => [context.scopeId, context.sessionCount]),
+    [["group:G-visible", 8]],
+  );
+  await directory.upsertGroup("G-revoked", ["U1"]);
+  assert.equal((await read("U1")).length, 2);
+  assert.deepEqual(await read("U2"), []);
+  await directory.replaceGroups([], undefined, ["G-visible", "G-revoked"], ["G-visible", "G-revoked"]);
+  assert.deepEqual(await read("U1"), []);
+});
+
 test("a session becomes visible once its first entry lands", async () => {
   const { app, sessions } = freshApp();
 

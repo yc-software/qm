@@ -1,5 +1,6 @@
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
+  Grant,
   PendingApproval,
   PendingApprovalRecord,
   Permission,
@@ -211,7 +212,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           run.result ?? { status: "failed", sessionId: run.sessionId, reason: "run produced no result" },
         );
       }
-      const claimed = await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
+      const claimed =
+        run.status === "pending" ? await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs) : null;
       if (claimed) {
         const result = processRun(
           { runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
@@ -300,7 +302,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return (await managedProjectMembership(session.scopeId, principalId)) === false ? null : session;
   }
 
-  async function contextsFor(principalId: string): Promise<ContextSummary[]> {
+  async function contextsFor(principalId: string, authorizedSessions?: Session[]): Promise<ContextSummary[]> {
     const personal = scopeId("personal", principalId);
     const byScope = new Map<ScopeId, ContextSummary>();
     byScope.set(personal, { scopeId: personal, kind: "personal", name: null, sessionCount: 0, lastActivityAt: null });
@@ -328,12 +330,21 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         project,
       });
     }
-    for (const s of await sessionsForViewer(principalId)) {
+    const checkedGroups = new Set<ScopeId>();
+    for (const s of authorizedSessions ?? (await sessionsForViewer(principalId))) {
       const { kind } = parseScopeId(s.scopeId);
       if (s.scopeId !== personal && kind !== "channel" && kind !== "group") continue;
       let ctx = byScope.get(s.scopeId);
-      if (!ctx && kind === "group" && (await deps.directory.groupMember(parseScopeId(s.scopeId).ref, principalId))) {
-        ctx = { scopeId: s.scopeId, kind: "group", name: s.channelName ?? null, sessionCount: 0, lastActivityAt: null };
+      if (!ctx && kind === "group" && !checkedGroups.has(s.scopeId)) {
+        checkedGroups.add(s.scopeId);
+        if (await deps.directory.groupMember(parseScopeId(s.scopeId).ref, principalId))
+          ctx = {
+            scopeId: s.scopeId,
+            kind: "group",
+            name: s.channelName ?? null,
+            sessionCount: 0,
+            lastActivityAt: null,
+          };
       }
       if (!ctx) continue;
       if (!ctx.name && s.channelName) ctx.name = s.channelName;
@@ -381,13 +392,13 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       scopeId("org", orgIdOf()),
     ]);
     try {
-      const [sessions, channels, groups, projects] = await Promise.all([
-        deps.sessions ? sessionsForViewer(principalId) : Promise.resolve([]),
+      const [historicalScopes, channels, groups, projects] = await Promise.all([
+        deps.sessions ? deps.sessions.scopesForParticipant(principalId) : Promise.resolve([]),
         deps.directory ? deps.directory.listChannelsFor(principalId) : Promise.resolve([]),
         deps.directory?.listGroupsFor?.(principalId) ?? Promise.resolve([]),
         projectsForViewer(principalId),
       ]);
-      const historical = new Set(sessions.map((session) => session.scopeId));
+      const historical = new Set(historicalScopes);
       for (const channel of channels) {
         const scope = scopeId("channel", channel.channelId);
         if (channel.isPrivate === true || historical.has(scope)) scopes.add(scope);
@@ -531,6 +542,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function principalGitPermission(
     d: Pick<Deployment, "id" | "ownerScopeId" | "createdBy" | "createdInScope">,
     principalId: string,
+    readGrants = (owner: ScopeId, ref: string): Promise<readonly Grant[]> =>
+      deps.acl?.grantsFor(owner, ref) ?? Promise.resolve([]),
   ): Promise<"read" | "write" | null> {
     if (!principalId) return null;
     const { kind } = parseScopeId(d.ownerScopeId);
@@ -538,7 +551,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     if (isManageableCreationScope(d.createdInScope) && (await principalCanWriteScope(principalId, d.createdInScope!)))
       return "write";
     let canRead = kind === "org" && (await principalCanAccessCurrentScope(principalId, d.ownerScopeId));
-    const grants = (await deps.acl?.grantsFor(d.ownerScopeId, encodeRef(deployRef(d.id))).catch(() => [])) ?? [];
+    const grants = await readGrants(d.ownerScopeId, encodeRef(deployRef(d.id))).catch(() => []);
     for (const g of grants) {
       if (g.permission !== "read" && g.permission !== "write") continue;
       if (!(await principalCanAccessCurrentScope(principalId, g.granteeScopeId))) continue;
@@ -547,6 +560,27 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     }
     if (canRead) return "read";
     return (await principalCanAccessCurrentScope(principalId, d.ownerScopeId)) ? "read" : null;
+  }
+
+  function deploymentPermissionsForViewer(principalId: string) {
+    let pending: Promise<Map<string, Grant[]>> | undefined;
+    const readGrants = async (owner: ScopeId, ref: string): Promise<readonly Grant[]> => {
+      pending ??= Promise.resolve()
+        .then(() => deps.acl?.list() ?? [])
+        .then((grants) => {
+          const index = new Map<string, Grant[]>();
+          for (const grant of grants) {
+            const key = JSON.stringify([grant.ownerScopeId, grant.ref]);
+            const bucket = index.get(key) ?? [];
+            bucket.push(grant);
+            index.set(key, bucket);
+          }
+          return index;
+        });
+      return (await pending).get(JSON.stringify([owner, ref])) ?? [];
+    };
+    return (deployment: Parameters<typeof principalGitPermission>[0]) =>
+      principalGitPermission(deployment, principalId, readGrants);
   }
 
   async function syncProjectChannelRoster(project: Project, actorId: string): Promise<void> {
@@ -754,6 +788,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     effectiveDeploymentPermission,
     principalCanReadDeployment,
     principalGitPermission,
+    deploymentPermissionsForViewer,
     refreshSurfaceDirectory,
     reconcileProjectMember,
     syncProjectChannelRoster,

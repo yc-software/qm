@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
+import {
+  projectSessionNavigation,
+  projectSessionPage,
+  resolveSessionReferences,
+} from "../../../src/api/session-navigation.ts";
 import type { Conversation } from "../src/conv-types.ts";
 
 interface Canvas {
@@ -12,6 +17,9 @@ interface Canvas {
   focusTile: (index: number) => void;
   splitTile: (index: number) => void;
   seededChat: (threadRef?: string) => Conversation | null;
+  referenceRequests: () => number;
+  activeThreads: () => string[];
+  turnRequests: () => number;
   drag: () => void;
   closeTile: (index: number) => Promise<void>;
   split: () => Promise<void>;
@@ -23,6 +31,9 @@ async function withCanvas(
   stacked: boolean | "single" = false,
 ): Promise<void> {
   const dom = new JSDOM('<!doctype html><div id="app"></div>', { url: "http://localhost/web-ui/" });
+  let referenceRequests = 0;
+  const activeThreads: string[] = [];
+  let turnRequests = 0;
   const globals = {
     window: dom.window,
     document: dom.window.document,
@@ -45,8 +56,24 @@ async function withCanvas(
       unobserve() {}
       disconnect() {}
     },
-    fetch: async () =>
-      Response.json({
+    fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.startsWith("/api/runs/active?"))
+        activeThreads.push(new URL(path, "http://localhost").searchParams.get("threadRef")!);
+      if (path === "/api/turn") turnRequests++;
+      if (path.startsWith("/api/session-navigation")) {
+        assert.equal(init?.method, "POST");
+        const body = JSON.parse(String(init?.body));
+        if (path === "/api/session-navigation")
+          return Response.json(projectSessionNavigation([], [], [], "tester", body));
+        if (path === "/api/session-navigation/page") return Response.json(projectSessionPage([], [], body));
+        if (path === "/api/session-navigation/resolve") {
+          referenceRequests++;
+          return Response.json(resolveSessionReferences([], body.references));
+        }
+        assert.fail(`Unexpected navigation request: ${path}`);
+      }
+      return Response.json({
         scopeId: "personal:tester",
         approvedHarnesses: ["pi"],
         modelsByHarness: { pi: [] },
@@ -56,7 +83,8 @@ async function withCanvas(
         effective: { harnessId: "pi", modelId: "" },
         sessions: [],
         items: [],
-      }),
+      });
+    },
   };
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
   for (const [key, value] of Object.entries(globals)) {
@@ -142,6 +170,9 @@ async function withCanvas(
       tiles: () => document.querySelectorAll(".dv-groupview").length,
       newChat: () => sessions.startNewChat() !== null,
       seededChat: (threadRef) => sessions.startNewChat(null, null, threadRef),
+      referenceRequests: () => referenceRequests,
+      activeThreads: () => activeThreads,
+      turnRequests: () => turnRequests,
       split: async () => {
         split.beginSessionDrag({ id: "second", threadRef: "web:tester:second" });
         const target = document.querySelector(".split-zone.zone-right");
@@ -224,10 +255,19 @@ test("seeded chats return from another view without losing the grid or supplied 
     await canvas.split();
     canvas.switchAway();
     const thread = "web:tester:app-edit:example";
+    const requests = canvas.referenceRequests();
+    const active = canvas.activeThreads().length;
+    const turns = canvas.turnRequests();
     const conv = canvas.seededChat(thread);
     assert.ok(conv?.state.agent);
+    const agent = conv.state.agent;
     assert.equal(conv?.state.threadRef, thread);
     assert.deepEqual([canvas.panes(), canvas.tiles()], [3, 3]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(canvas.referenceRequests(), requests, "a newly seeded thread must mount without a lookup");
+    assert.deepEqual(canvas.activeThreads().slice(active), [thread], "only the supplied thread gets an agent");
+    assert.equal(canvas.turnRequests(), turns, "app edit must not start an intermediate proactive opener");
+    assert.equal(conv.state.agent, agent);
   });
 });
 
@@ -304,8 +344,12 @@ test("splitting does not dispose a first turn waiting for its session ID", async
 });
 
 test("app edit chats suppress the general welcome and suggestions", async () => {
-  await withCanvas((canvas) => {
-    const conv = canvas.seededChat("web:tester:app-edit:example");
+  await withCanvas(async (canvas) => {
+    const requests = canvas.referenceRequests();
+    const active = canvas.activeThreads().length;
+    const turns = canvas.turnRequests();
+    const thread = "web:tester:app-edit:example";
+    const conv = canvas.seededChat(thread);
     assert.ok(conv?.state.agent);
     const shell = document.querySelector(".app-edit-chat");
     assert.ok(shell);
@@ -314,5 +358,9 @@ test("app edit chats suppress the general welcome and suggestions", async () => 
     assert.equal(shell.querySelector(".suggested-activities"), null);
     assert.ok(shell.querySelector(".composer-wrap"));
     assert.deepEqual(conv.state.agent.state.messages, []);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(canvas.referenceRequests(), requests, "app edit must not resolve the newly seeded thread again");
+    assert.deepEqual(canvas.activeThreads().slice(active), [thread], "only the supplied thread gets an agent");
+    assert.equal(canvas.turnRequests(), turns, "app edit must not start an intermediate proactive opener");
   });
 });

@@ -1,3 +1,4 @@
+import type { SessionSubagentCounts } from "../plugins/chassis/src/session-navigation.ts";
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
 
@@ -116,6 +117,7 @@ export interface Session {
   working?: boolean;
   awaitingInput?: boolean;
   lastTurnFailed?: boolean;
+  subagents?: SessionSubagentCounts;
   backgroundJobs?: number;
   watches?: number;
   crons?: number;

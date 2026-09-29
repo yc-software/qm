@@ -64,12 +64,14 @@ import {
   splitState,
   singlePaneSessionId,
 } from "./split";
-import { activityOf } from "./session-list";
 import { replaceChildrenPreservingFocus } from "./pane-focus";
 import {
   openSession,
+  resolveSessionReference,
+  latestSession,
   closeOpenSessionMenu,
   refreshSessions,
+  cancelSessionPageRead,
   renderChatsPage,
   renderList,
   resetSessionsState,
@@ -102,7 +104,14 @@ import {
 } from "./inbox";
 import { openSkillById, renderSkills, resetActiveSkill, routeSkillsHistory } from "./skills";
 import { applyTheme, renderSettings, watchSystemTheme } from "./settings";
-import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
+import {
+  cancelContextSessionRead,
+  contextsState,
+  ensureContexts,
+  renderContexts,
+  resetContextsState,
+  resolveProjectScope,
+} from "./contexts";
 import { appState, can, canView, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
 import { activeSessionForDocumentTitle, updateDocumentTitle } from "./document-title";
@@ -681,6 +690,8 @@ function onNavClick(e: Event): void {
 }
 
 export function switchView(v: View): void {
+  cancelSessionPageRead();
+  cancelContextSessionRead();
   if (!canView(v)) v = "chats";
   closeSidebarOnNarrowView();
   if (appState.currentView === v) {
@@ -983,18 +994,23 @@ window.addEventListener("focus", () => {
   else if (appState.currentView === "chats") void refreshSessions({ silent: true, refreshContexts: true });
 });
 
-function warmDeferredChunks(): void {
-  const warm = (): void => void import("@earendil-works/pi-web-ui").catch(() => {});
-  const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => void }).requestIdleCallback;
-  if (ric) ric(warm);
-  else setTimeout(warm, 1500);
-}
-
-function openAppEditChat(slug: string): void {
+async function openAppEditChat(slug: string): Promise<void> {
+  const seq = appState.viewRenderSeq;
+  const me = appState.me;
+  const current = () => appState.currentView === "chats" && appState.viewRenderSeq === seq && appState.me === me;
+  if (!current()) return;
   const user = appState.me?.user ?? "anon";
   const threadRef = `web:${user}:app-edit:${slug}`;
   if (storedDraft(threadRef) === `Update my deployed app "${slug}": `) saveDraft(threadRef, "");
-  const existing = sessionsState.list.find((s) => s.threadRef === threadRef);
+  let existing;
+  try {
+    existing = await resolveSessionReference({ kind: "thread", value: threadRef });
+  } catch {
+    if (!current()) return;
+    showMainEmpty("Couldn't load this app conversation. Refresh to retry.");
+    return;
+  }
+  if (!current()) return;
   if (existing) {
     void openSession(existing);
     return;
@@ -1080,7 +1096,6 @@ export async function boot(): Promise<void> {
   renderList();
   shellMounted = true;
   ensureDeliveryStream();
-  warmDeferredChunks();
   void refreshInbox({ silent: true });
   const connectedProvider = params.get("status") === "connected" ? params.get("connector") : null;
   if (connectedProvider) markConnectorConnected(connectedProvider);
@@ -1160,15 +1175,15 @@ export async function boot(): Promise<void> {
   if (wanted === "app-edit") {
     const slug = (params.get("slug") ?? "").toLowerCase();
     if (/^[a-z0-9-]{1,63}$/.test(slug)) {
-      openAppEditChat(slug);
+      await openAppEditChat(slug);
       return;
     }
     showMainEmpty("This edit link is missing a valid app name.");
     return;
   }
 
-  if (connectedProvider && sessionsState.list.length) {
-    const recent = [...sessionsState.list].sort((a, b) => activityOf(b) - activityOf(a))[0]!;
+  const recent = latestSession();
+  if (connectedProvider && recent) {
     exitSplitIfActive();
     await openSession(recent);
   } else if (!mountRestoredCanvas() && !mainConversation().state.threadRef) {

@@ -37,6 +37,95 @@ const get = (base: string, path: string, headers: Record<string, string> = ALICE
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>
   (await get(base, path, headers)).json();
 
+test("admin transcript projects request counts from its visible lower bound with exact context keys", async () => {
+  const s = start();
+  try {
+    const scope = scopeId("org", "default-org");
+    const session = await s.built.sessions.getOrCreateByThread("projection", "dm", scope);
+    const { lease } = await s.built.sessions.acquireLease(session.id);
+    assert.ok(lease);
+    for (const type of ["user", "assistant", "soul", "user", "assistant"] as const)
+      await s.built.sessions.append(lease, { type, payload: { text: type }, scopeLabel: scope });
+    await s.built.sessions.releaseLease(lease);
+    for (const [step, turnSeq] of [0, 3, 3, null, -1, 2, 90].entries())
+      await s.built.sessions.recordLlmRequest(session.id, {
+        turnSeq,
+        step,
+        model: "mock",
+        scopeLabel: scope,
+        promptEnvelope: { system: "full context", messages: [] },
+        usage: { input: 5, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 6, costUsd: 0.01 },
+      });
+    const originalCounts = s.built.sessions.llmRequestCounts;
+    let arrival = true;
+    s.built.sessions.llmRequestCounts = async (...args) => {
+      if (arrival) {
+        arrival = false;
+        await s.built.sessions.recordLlmRequest(session.id, { turnSeq: 1, step: 8, model: "mock", scopeLabel: scope });
+      }
+      return originalCounts(...args);
+    };
+    const originalList = s.built.sessions.listLlmRequests;
+    s.built.sessions.listLlmRequests = async () => {
+      throw new Error("initial transcript must not materialize request records");
+    };
+    const path = `/v1/admin/sessions/${session.id}`;
+    const page = await getJson(s.base, `${path}?scope=org:default-org&limit=2`);
+    assert.deepEqual(
+      page.entries.map((row: { seq: number }) => row.seq),
+      [3, 4],
+    );
+    assert.deepEqual(page.llmRequestCounts, [
+      { turnSeq: 3, count: 2 },
+      { turnSeq: 90, count: 1 },
+      { turnSeq: null, count: 1 },
+    ]);
+    assert.equal(page.hasMore, true);
+    const middle = await getJson(s.base, `${path}?scope=org:default-org&limit=1`);
+    assert.deepEqual(middle.llmRequestCounts, [
+      { turnSeq: 90, count: 1 },
+      { turnSeq: null, count: 1 },
+    ]);
+    assert.equal(
+      (await get(s.base, `${path}?scope=org:default-org`, { "x-admin-actor": "nobody@default-org" })).status,
+      403,
+    );
+    s.built.sessions.listLlmRequests = originalList;
+    const detail = await getJson(s.base, `${path}/llm?scope=org:default-org&turnSeq=3`);
+    assert.equal(detail.requests.length, 2);
+    assert.equal(detail.requests[0].promptEnvelope.system, "full context");
+    assert.equal(detail.requests[0].usage.costUsd, 0.01);
+    const orphans = await getJson(s.base, `${path}/llm?scope=org:default-org&turnSeq=orphan`);
+    assert.deepEqual(
+      orphans.requests.map((row: { turnSeq: number | null }) => row.turnSeq),
+      [null],
+    );
+    assert.equal(orphans.requests.length, page.llmRequestCounts[2].count);
+    const compatible = await getJson(s.base, `${path}/llm?scope=org:default-org`);
+    assert.equal(compatible.requests.length, 8);
+    assert.ok(compatible.requests.every((row: { request: unknown }) => row.request === null));
+    assert.equal(
+      (await get(s.base, `${path}/llm?scope=org:default-org&turnSeq=orphan`, { "x-admin-actor": "nobody@default-org" }))
+        .status,
+      403,
+    );
+    const dangling = await getJson(s.base, `${path}/llm?scope=org:default-org&turnSeq=90`);
+    assert.equal(dangling.requests.length, 1);
+    assert.equal(dangling.requests[0].turnSeq, 90);
+    const hidden = await s.built.sessions.getOrCreateByThread("all-soul", "dm", scope);
+    const hiddenLease = (await s.built.sessions.acquireLease(hidden.id)).lease;
+    assert.ok(hiddenLease);
+    await s.built.sessions.append(hiddenLease, { type: "soul", payload: {}, scopeLabel: scope });
+    await s.built.sessions.releaseLease(hiddenLease);
+    await s.built.sessions.recordLlmRequest(hidden.id, { turnSeq: 0, step: 0, model: "mock", scopeLabel: scope });
+    const emptyPage = await getJson(s.base, `/v1/admin/sessions/${hidden.id}?scope=org:default-org`);
+    assert.deepEqual(emptyPage.entries, []);
+    assert.deepEqual(emptyPage.llmRequestCounts, [{ turnSeq: 0, count: 1 }]);
+  } finally {
+    await s.close();
+  }
+});
+
 test("an org admin sees conversations, transcripts, files, and runs top-down", async () => {
   const s = start();
   try {

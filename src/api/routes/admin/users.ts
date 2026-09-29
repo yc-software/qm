@@ -312,12 +312,25 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
 
   if (ctx.url.searchParams.get("summary") === "1") {
     const [credentials, grants] = await Promise.all([deps.keychain.listAllMetadata(), deps.keychain.listGrants({})]);
+    const now = Date.now();
     return sendJson(res, 200, {
       users: new Set(credentials.map((credential) => credential.ownerId)).size,
       standing: grants.filter(
         (grant) =>
-          grant.mode === "standing" && grant.status === "active" && (!grant.expiresAt || grant.expiresAt > Date.now()),
+          grant.mode === "standing" && grant.status === "active" && (!grant.expiresAt || grant.expiresAt > now),
       ).length,
+      people: [...new Set([...credentials, ...grants].map((record) => personKey(record.ownerId)))].map(
+        (principalId) => ({
+          principalId,
+          credentialCount: credentials.filter((credential) => samePerson(credential.ownerId, principalId)).length,
+          activeGrantCount: grants.filter(
+            (grant) =>
+              samePerson(grant.ownerId, principalId) &&
+              grant.status === "active" &&
+              (grant.expiresAt === undefined || grant.expiresAt > now),
+          ).length,
+        }),
+      ),
     });
   }
 

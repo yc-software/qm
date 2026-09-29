@@ -5,6 +5,10 @@ import type { CoreContext, CoreSession, TranscriptPage } from "../src/core-bridg
 
 export interface Harness {
   requests: string[];
+  navigationTransport: typeof import("../src/session-navigation.ts");
+  resolveSessionReference: (
+    reference: import("../../chassis/src/session-navigation.ts").SessionReference,
+  ) => Promise<CoreSession | null>;
   setTranscriptStatus: (status: number) => void;
   openSession: (session: CoreSession, prefetch?: Promise<TranscriptPage | null>) => Promise<void>;
   setConnections: (items: unknown[], status?: number) => void;
@@ -13,14 +17,20 @@ export interface Harness {
   releaseApprovals: () => void;
   releaseRuntimeConfig: () => void;
   releaseRemoteSplit: () => void;
+  releaseContexts: () => void;
+  ensureContexts: (force?: boolean) => Promise<CoreContext[]>;
+  resetContexts: () => void;
+  contextsState: { list: CoreContext[]; loaded: boolean };
   sessionsReady: () => Promise<void>;
   refreshSessions: () => Promise<boolean>;
+  resetSessions: () => void;
+  setWebOnly: (webOnly: boolean) => void;
   boot: () => Promise<void>;
-  switchView: (view: "chats" | "settings") => void;
+  switchView: (view: "chats" | "settings" | "contexts") => void;
   renderList: () => void;
   drawChatsPage: () => void;
   appState: { currentView: string };
-  sessionsState: { list: Array<{ id: string }>; loaded: boolean; openingKey: string | null };
+  sessionsState: typeof import("../src/sessions.ts").sessionsState;
   visibleConversation: () => Conversation;
   mainText: () => string;
   close: () => Promise<void>;
@@ -36,8 +46,10 @@ interface HarnessOptions {
   holdApprovals?: boolean;
   holdRuntimeConfig?: boolean;
   holdRemoteSplit?: boolean;
+  holdContexts?: boolean;
   remoteCanvas?: unknown;
   listSessions?: unknown[];
+  onRequest?: (path: string, init?: RequestInit) => Promise<Response | undefined> | Response | undefined;
   contexts?: CoreContext[];
   entries?: unknown[];
   savedCanvas?: boolean;
@@ -115,15 +127,20 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   let releaseApprovals = (): void => {};
   let releaseRuntimeConfig = (): void => {};
   let releaseRemoteSplit = (): void => {};
+  let releaseContexts = (): void => {};
+  const contextsHeld = new Promise<void>((resolve) => (releaseContexts = resolve));
   const runtimeHeld = new Promise<void>((resolve) => (releaseRuntimeConfig = resolve));
   const remoteSplitHeld = new Promise<void>((resolve) => (releaseRemoteSplit = resolve));
   const approvalsHeld = new Promise<void>((resolve) => (releaseApprovals = resolve));
   const sessionsHeld = new Promise<void>((resolve) => (releaseSessions = resolve));
   const transcriptHeld = new Promise<void>((resolve) => (releaseTranscript = resolve));
   let failuresLeft = opts.transcriptFailures ?? (opts.transcriptStatus ? Number.POSITIVE_INFINITY : 0);
-  const respond = async (input: RequestInfo | URL): Promise<Response> => {
+  const respond = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const path = String(input);
     requests.push(path);
+    const supplied = await opts.onRequest?.(path, init);
+    if (supplied) return supplied;
+    if (path.startsWith("/api/session-navigation")) return Response.json({ error: "not found" }, { status: 404 });
     if (path === "/me")
       return Response.json({
         user: "tester",
@@ -181,16 +198,21 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       }
       return Response.json({ session, entries: opts.entries ?? [] });
     }
+    const listedSession = (opts.listSessions as CoreSession[] | undefined)?.find(
+      (listed) => path === `/api/sessions/${listed.id}` || path.startsWith(`/api/sessions/${listed.id}?`),
+    );
+    if (listedSession) return Response.json({ session: listedSession, entries: opts.entries ?? [] });
     if (path === "/api/sessions") {
       await sessionsHeld;
       return Response.json({ sessions: opts.listSessions ?? [] });
     }
+    if (path === "/api/contexts" && opts.holdContexts) await contextsHeld;
     return Response.json({ contexts: opts.contexts ?? [], items: [], crons: [] });
   };
 
   const globals = {
-    fetch: (input: RequestInfo | URL): Promise<Response> => {
-      const answer = respond(input);
+    fetch: (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const answer = respond(input, init);
       inFlight.add(answer);
       void answer.finally(() => inFlight.delete(answer)).catch(() => {});
       return answer;
@@ -247,8 +269,12 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   const sessions = await vite.ssrLoadModule("/src/sessions.ts");
   const conversations = await vite.ssrLoadModule("/src/conversations.ts");
   const split = await vite.ssrLoadModule("/src/split.ts");
+  const contexts = await vite.ssrLoadModule("/src/contexts.ts");
+  const navigationTransport = await vite.ssrLoadModule("/src/session-navigation.ts");
   return {
     requests,
+    navigationTransport: navigationTransport as Harness["navigationTransport"],
+    resolveSessionReference: sessions.resolveSessionReference as Harness["resolveSessionReference"],
     setTranscriptStatus: (status) => {
       transcriptStatus = status;
       failuresLeft = status === 200 ? 0 : Number.POSITIVE_INFINITY;
@@ -263,8 +289,14 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     releaseApprovals,
     releaseRuntimeConfig,
     releaseRemoteSplit,
+    releaseContexts,
+    ensureContexts: contexts.ensureContexts as Harness["ensureContexts"],
+    resetContexts: contexts.resetContextsState as Harness["resetContexts"],
+    contextsState: contexts.contextsState as Harness["contextsState"],
     sessionsReady: sessions.sessionsReady as () => Promise<void>,
     refreshSessions: sessions.refreshSessions as () => Promise<boolean>,
+    resetSessions: sessions.resetSessionsState as () => void,
+    setWebOnly: sessions.setWebOnly as Harness["setWebOnly"],
     boot: shell.boot as () => Promise<void>,
     switchView: shell.switchView as Harness["switchView"],
     renderList: sessions.renderList as () => void,
@@ -278,6 +310,8 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       conversations.mainConversation(),
     mainText: () => dom.window.document.querySelector(".main")?.textContent ?? "",
     close: async () => {
+      sessions.resetSessionsState();
+      contexts.resetContextsState();
       split.exitSplitIfActive();
       for (const conversation of conversations.allConversations()) conversations.disposeConversation(conversation);
       releaseSessions();
@@ -285,6 +319,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       releaseApprovals();
       releaseRuntimeConfig();
       releaseRemoteSplit();
+      releaseContexts();
       for (let drain = 0; drain < 5 && inFlight.size; drain++) {
         await Promise.allSettled(inFlight);
         await new Promise((resolve) => realSetTimeout(resolve, 0));

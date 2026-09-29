@@ -6,6 +6,8 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createCurrentScopeMembers } from "../src/resolution/scope-membership.ts";
+import { createDirectoryStore } from "../src/directory/directory-store.ts";
+import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId, type ScopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 
 const OWNER = "pat@example.com";
@@ -57,8 +59,7 @@ describe("runTrigger home-scope gate when the directory snapshot dropped the cha
   it("falls back to session participation and runs", async () => {
     let ranTurn = false;
     const sessions = {
-      listByParticipant: async (pid: string): Promise<readonly { scopeId: ScopeId }[]> =>
-        pid === OWNER ? [{ scopeId: SCOPE }] : [],
+      participantHasScope: async (pid: string, scope: ScopeId) => pid === OWNER && scope === SCOPE,
     };
     const d = deps(unknownChannelDirectory(), { sessions, onRun: () => (ranTurn = true) });
     const out = await runTrigger(d, spec("participant"));
@@ -69,7 +70,7 @@ describe("runTrigger home-scope gate when the directory snapshot dropped the cha
 
   it("skips with a note naming the snapshot gap, not lost membership, when there is no session either", async () => {
     let ranTurn = false;
-    const sessions = { listByParticipant: async (): Promise<readonly { scopeId: ScopeId }[]> => [] };
+    const sessions = { participantHasScope: async () => false };
     const d = deps(unknownChannelDirectory(), { sessions, onRun: () => (ranTurn = true) });
     const out = await runTrigger(d, spec("stranger"));
     assert.equal(ranTurn, false);
@@ -86,6 +87,21 @@ describe("runTrigger home-scope gate when the directory snapshot dropped the cha
     assert.match(out.note ?? "", /missing from the directory snapshot/);
   });
 
+  it("skips without running when the historical projection fails", async () => {
+    let ranTurn = false;
+    const sessions = {
+      participantHasScope: async () => {
+        throw new Error("projection unavailable");
+      },
+    };
+    const out = await runTrigger(
+      deps(unknownChannelDirectory(), { sessions, onRun: () => (ranTurn = true) }),
+      spec("failed-history"),
+    );
+    assert.equal(ranTurn, false);
+    assert.match(out.note ?? "", /missing from the directory snapshot/);
+  });
+
   it("a directory that affirmatively knows the private channel and excludes the actor still skips as lost membership", async () => {
     const dir = {
       ...unknownChannelDirectory(),
@@ -94,7 +110,7 @@ describe("runTrigger home-scope gate when the directory snapshot dropped the cha
     };
     let ranTurn = false;
     const sessions = {
-      listByParticipant: async (): Promise<readonly { scopeId: ScopeId }[]> => [{ scopeId: SCOPE }],
+      participantHasScope: async () => true,
     };
     const d = deps(dir, { sessions, onRun: () => (ranTurn = true) });
     const out = await runTrigger(d, spec("kicked"));
@@ -118,12 +134,35 @@ function groupSpec(key: string) {
 }
 
 describe("runTrigger home-scope gate for group homes", () => {
+  it("known empty and removed groups deny historical participants when the current member snapshot is missing", async () => {
+    for (const listed of [true, false]) {
+      for (const closed of [true, false]) {
+        let ranTurn = false;
+        const directory = createDirectoryStore();
+        await directory.replace([{ principalId: OWNER, displayName: "Pete", type: "internal" }]);
+        await directory.replaceGroups([], 1, listed ? [GROUP] : [], listed ? [GROUP] : []);
+        const sessions = createMemorySessionStore();
+        const session = await sessions.getOrCreateByThread("historical-group", "group", GSCOPE);
+        await sessions.addParticipant(session.id, OWNER);
+        if (closed) await sessions.removeParticipant(session.id, OWNER);
+        const d = deps(unknownChannelDirectory(), { sessions, onRun: () => (ranTurn = true) });
+        d.directory = directory;
+        d.currentScopeMembers = createCurrentScopeMembers({ directory, identity: d.identity });
+        assert.equal(await directory.groupMembership(GROUP, OWNER), false);
+        assert.equal(await d.currentScopeMembers(GSCOPE), undefined);
+        assert.equal(await sessions.participantHasScope(OWNER, GSCOPE), true);
+        const out = await runTrigger(d, groupSpec(`revoked-${listed}-${closed}`));
+        assert.equal(ranTurn, false);
+        assert.match(out.note ?? "", /no longer a member/);
+      }
+    }
+  });
+
   it("a group missing from the snapshot falls back to session participation and runs", async () => {
     let ranTurn = false;
     const dir = unknownChannelDirectory();
     const sessions = {
-      listByParticipant: async (pid: string): Promise<readonly { scopeId: ScopeId }[]> =>
-        pid === OWNER ? [{ scopeId: GSCOPE }] : [],
+      participantHasScope: async (pid: string, scope: ScopeId) => pid === OWNER && scope === GSCOPE,
     };
     const d = deps(dir, { sessions, onRun: () => (ranTurn = true) });
     const out = await runTrigger(d, groupSpec("gap"));
@@ -142,7 +181,7 @@ describe("runTrigger home-scope gate for group homes", () => {
       ],
     };
     const sessions = {
-      listByParticipant: async (): Promise<readonly { scopeId: ScopeId }[]> => [{ scopeId: GSCOPE }],
+      participantHasScope: async () => true,
     };
     const d = deps(dir, { sessions, onRun: () => (ranTurn = true) });
     const out = await runTrigger(d, groupSpec("kicked"));
@@ -157,7 +196,7 @@ describe("runTrigger home-scope gate for group homes", () => {
       groupMembership: async (): Promise<boolean | undefined> => false,
     };
     const sessions = {
-      listByParticipant: async (): Promise<readonly { scopeId: ScopeId }[]> => [{ scopeId: GSCOPE }],
+      participantHasScope: async () => true,
     };
     const d: TriggerDeps = {
       deliveries: createDeliveryStore(),

@@ -8,7 +8,10 @@ import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, type ScopeId } from "../src/types.ts";
+import { createAppHelpers } from "../src/api/app-helpers.ts";
+import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
+import { createProjectStore, projectScopeId } from "../src/projects/project-store.ts";
 
 const ORG = "default-org";
 const U1 = "U1";
@@ -31,8 +34,12 @@ function makeDeps() {
     channelMember: async (channelId: string, principalId: string) => principalId === U1 && channelId === C1,
     channelPrivacy: async (channelId: string): Promise<boolean | undefined> => (channelId === C1 ? true : undefined),
   };
-  const sessions: { listByParticipant: (principalId: string) => Promise<unknown[]> } = {
+  const sessions: {
+    listByParticipant: (principalId: string) => Promise<unknown[]>;
+    scopesForParticipant: (principalId: string) => Promise<ScopeId[]>;
+  } = {
     listByParticipant: async (_p: string) => [],
+    scopesForParticipant: async (_p: string) => [],
   };
   const skills = createSkillStore();
   const deployRows: Deployment[] = [];
@@ -218,6 +225,7 @@ test("historical participation grants neither context listing nor current scope 
           },
         ]
       : [];
+  deps.sessions.scopesForParticipant = async (principalId) => (principalId === "U2" ? [channelScope] : []);
   await deps.skills.create({
     scopeId: channelScope,
     manifest: { name: "private", description: "private", requiredCapabilities: [], body: "# Private" },
@@ -301,4 +309,87 @@ test("webhook secrets are redacted by the route, not the app layer", async () =>
   const app = createApp(deps as unknown as AppDeps);
   const out = await app.listScopeResources(U1, channelScope);
   assert.equal(out!.webhooks[0]!.verification.secret, "topsecret");
+});
+
+test("resource scope projection preserves current access without loading decorated sessions", async () => {
+  const deps = makeDeps();
+  const sessions = createMemorySessionStore();
+  const projects = createProjectStore();
+  const project = await projects.create({ name: "Current project", ownerId: "owner" });
+  await projects.addMember(project.id, "owner", U1);
+  const revokedProject = await projects.create({ name: "Former project", ownerId: "owner" });
+  const guestProject = await projects.create({ name: "Guest-owned project", ownerId: "guest" });
+  await projects.addMember(guestProject.id, "guest", U1);
+  const publicScope = scopeId("channel", "public-history");
+  const noHistoryScope = scopeId("channel", "public-no-history");
+  const privateScope = scopeId("channel", "private-current");
+  const revokedChannel = scopeId("channel", "revoked-channel");
+  const currentGroup = scopeId("group", "current-group");
+  const staleGroup = scopeId("group", "stale-group");
+  for (const scope of [publicScope, revokedChannel, staleGroup, projectScopeId(revokedProject.id)]) {
+    const session = await sessions.getOrCreateByThread(`resource:${scope}`, "channel", scope);
+    await sessions.addParticipant(session.id, U1);
+    await sessions.removeParticipant(session.id, U1);
+  }
+  let decoratedReads = 0;
+  sessions.listByParticipant = async () => {
+    decoratedReads++;
+    throw new Error("resource projection must not load decorated sessions");
+  };
+  let channels = [
+    { channelId: "public-history", name: "History", isPrivate: false },
+    { channelId: "public-no-history", name: "No history", isPrivate: false },
+    { channelId: "private-current", name: "Private", isPrivate: true },
+  ];
+  let groups = ["current-group"];
+  const identity = {
+    classify: (id: string) => ({ id, type: id === "guest" ? "guest" : "internal", teamIds: ["team"] }),
+    isInternal: (principal: { type: string }) => principal.type === "internal",
+  };
+  const directory = {
+    ...deps.directory,
+    get: async () => null,
+    listChannelsFor: async () => channels,
+    listGroupsFor: async () => groups,
+  };
+  const { currentResourceScopesForViewer } = createAppHelpers(
+    { ...deps, identity, directory, sessions, projects } as unknown as AppDeps,
+    {} as App,
+  );
+  const base = [scopeId("personal", U1), scopeId("team", "team"), orgScope];
+  const actual = await currentResourceScopesForViewer(U1);
+  assert.deepEqual(
+    new Set(actual),
+    new Set([...base, publicScope, privateScope, currentGroup, projectScopeId(project.id)]),
+  );
+  for (const scope of [
+    noHistoryScope,
+    revokedChannel,
+    staleGroup,
+    projectScopeId(revokedProject.id),
+    projectScopeId(guestProject.id),
+  ]) {
+    assert.ok(!actual.includes(scope));
+  }
+  assert.equal(decoratedReads, 0);
+  assert.deepEqual(await currentResourceScopesForViewer("guest"), []);
+
+  channels = channels.filter((channel) => channel.channelId !== "public-history");
+  groups = [];
+  await projects.removeMember(project.id, "owner", U1);
+  assert.deepEqual(new Set(await currentResourceScopesForViewer(U1)), new Set([...base, privateScope]));
+  assert.equal(await sessions.participantHasScope(U1, publicScope), true);
+  assert.equal(decoratedReads, 0);
+
+  const projection = sessions.scopesForParticipant.bind(sessions);
+  sessions.scopesForParticipant = async () => {
+    throw new Error("historical projection unavailable");
+  };
+  assert.deepEqual(await currentResourceScopesForViewer(U1), base);
+  sessions.scopesForParticipant = projection;
+  projects.listForMember = async () => {
+    throw new Error("current project membership unavailable");
+  };
+  assert.deepEqual(await currentResourceScopesForViewer(U1), base);
+  assert.equal(decoratedReads, 0);
 });

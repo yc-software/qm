@@ -37,3 +37,9 @@ test("ideas chats never show the welcome or take the first welcome slot", () => 
   assert.equal(isWelcomeConversation([ideas], "alex", first.threadRef, null), true);
   assert.equal(isWelcomeConversation([ideas, first], "alex", first.threadRef, null), true);
 });
+
+test("welcome selection uses the complete oldest-thread fact when that row is off page", () => {
+  assert.equal(isWelcomeConversation([], "u", "web:u:new", "personal:u", "web:u:old"), false);
+  assert.equal(isWelcomeConversation([], "u", "web:u:old", "personal:u", "web:u:old"), true);
+  assert.equal(isWelcomeConversation([], "u", "web:u:ideas:x", "personal:u", "web:u:ideas:x"), false);
+});

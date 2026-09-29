@@ -11,6 +11,9 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "../src/wiring.ts";
 import { createAdminService } from "../src/admin/admin-service.ts";
 import { testConfig } from "./support/test-config.ts";
+import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
+import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
+import { scopeId } from "../src/types.ts";
 
 function start(withAdmin = true, signingSecret?: string) {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-whoami-")) }));
@@ -135,4 +138,103 @@ test("adminStatusOf reads the grant list directly (org_admin reported; non-admin
   assert.deepEqual(await svc.adminStatusOf(alice), { isAdmin: true, role: "org_admin", scopeId: "org:default-org" });
   const nobody = svc.resolveActor("U-nobody@default-org")!;
   assert.deepEqual(await svc.adminStatusOf(nobody), { isAdmin: false });
+});
+
+test("signed portal whoami preserves session-cap actor, grant and active-principal decisions", async () => {
+  const source = "whoami-source-only-secret-0123456789";
+  const portal = "whoami-portal-only-secret-0123456789";
+  const capability = "whoami-capability-only-secret-0123456789";
+  const built = buildApp(testConfig());
+  const server = createServer(built.app, {
+    signingSecret: source,
+    portalIdentitySecret: portal,
+    capabilitySecret: capability,
+    requireSignedPortalIdentity: true,
+    identity: built.identity,
+    admin: built.admin,
+    auditLog: built.auditLog,
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const request = (method: "GET" | "POST", path: string, token?: string) => {
+    const signedPath = withSourceAuthNonce(path, source);
+    return fetch(base + signedPath, {
+      method,
+      headers: {
+        ...signedHeaders(source, method, signedPath),
+        ...(token ? { "x-portal-identity": token } : {}),
+        "x-admin-actor": "admin-bob@default-org",
+      },
+    });
+  };
+  const viaCapability = async (token?: string) => {
+    const minted = await request("POST", "/v1/session-cap", token);
+    if (minted.status !== 200) return minted;
+    const { token: cap } = (await minted.json()) as { token: string };
+    return fetch(base + "/v1/admin/whoami", { headers: { "x-agent-capability": cap } });
+  };
+  const compare = async (token: string | undefined, status: number, permissions: string[]) => {
+    const responses = await Promise.all([request("GET", "/v1/admin/whoami", token), viaCapability(token)]);
+    const bodies = await Promise.all(responses.map((response) => response.json()));
+    assert.deepEqual(
+      responses.map((response) => response.status),
+      [status, status],
+    );
+    assert.deepEqual(bodies[0], bodies[1]);
+    if (status === 200) assert.deepEqual((bodies[0] as { permissions: string[] }).permissions, permissions);
+  };
+  try {
+    const admin = await mintPortalIdentity({ p: "admin-alice", exp: Date.now() + 60000 }, portal);
+    await compare(admin, 200, ["admin"]);
+    await compare(
+      await mintPortalIdentity({ p: "ordinary@example.invalid", exp: Date.now() + 60000 }, portal),
+      200,
+      [],
+    );
+    await compare(
+      await mintPortalIdentity(
+        { p: "ordinary@example.invalid", imp: "admin-alice", authenticatedAs: "admin-alice", exp: Date.now() + 60000 },
+        portal,
+      ),
+      200,
+      [],
+    );
+    await compare(
+      await mintPortalIdentity({ p: "admin-alice", authenticatedAs: "unrelated", exp: Date.now() + 60000 }, portal),
+      401,
+      [],
+    );
+    await compare(await mintPortalIdentity({ p: "admin-alice", exp: Date.now() - 1 }, portal), 401, []);
+    await compare(await mintPortalIdentity({ p: "admin-alice", exp: Date.now() + 60000 }, source), 401, []);
+    await compare(undefined, 401, []);
+
+    const minted = await request("POST", "/v1/session-cap", admin);
+    const { token: retainedCapability } = (await minted.json()) as { token: string };
+    await built.admin.revokeGrant(
+      { id: "admin-bob", type: "internal" },
+      "admin-alice",
+      scopeId("org", "default-org"),
+      "org_admin",
+    );
+    await compare(admin, 200, []);
+    const retained = await fetch(base + "/v1/admin/whoami", { headers: { "x-agent-capability": retainedCapability } });
+    assert.deepEqual(await retained.json(), { isAdmin: false, permissions: [] });
+    await built.identity.deactivate("admin-alice");
+    await compare(admin, 401, []);
+    assert.equal(
+      (await fetch(base + "/v1/admin/whoami", { headers: { "x-agent-capability": retainedCapability } })).status,
+      401,
+    );
+    await compare(
+      await mintPortalIdentity(
+        { p: "ordinary@example.invalid", imp: "admin-alice", authenticatedAs: "admin-alice", exp: Date.now() + 60000 },
+        portal,
+      ),
+      401,
+      [],
+    );
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
