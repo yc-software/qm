@@ -888,6 +888,35 @@ export function sanitizeLlmPayload(
   return withTransport({ envelope: redacted, truncated: false });
 }
 
+function droppedThinkingTransformations(message: unknown): Array<{ reason?: unknown }> {
+  const diagnostics = (message as { diagnostics?: unknown } | null)?.diagnostics;
+  if (!Array.isArray(diagnostics)) return [];
+  return diagnostics
+    .flatMap((diagnostic: { type?: unknown; details?: { transformations?: unknown } } | null) =>
+      diagnostic?.type === "anthropic_input_transformations" && Array.isArray(diagnostic.details?.transformations)
+        ? (diagnostic.details.transformations as Array<{ type?: unknown; reason?: unknown } | null>)
+        : [],
+    )
+    .filter(
+      (transformation): transformation is { type: "thinking_dropped"; reason?: unknown } =>
+        transformation?.type === "thinking_dropped",
+    );
+}
+
+export function droppedThinkingNotice(
+  message: unknown,
+  previousAssistant?: unknown,
+): { kind: "thinking_dropped"; count: number; reasons: string[] } | undefined {
+  const dropped = droppedThinkingTransformations(message);
+  if (dropped.length <= droppedThinkingTransformations(previousAssistant).length) return undefined;
+  const reasons = [
+    ...new Set(
+      dropped.map((transformation) => (typeof transformation.reason === "string" ? transformation.reason : "unknown")),
+    ),
+  ];
+  return { kind: "thinking_dropped", count: dropped.length, reasons };
+}
+
 export function thinkingBlocksFromContent(
   content: unknown,
 ): Array<{ thinking: string; redacted?: boolean; thinkingSignature?: string }> {
@@ -1107,7 +1136,7 @@ async function createIsolatedResources(prefix: string, systemPrompt: string): Pr
     ephemeralCwd = cwd;
   }
   const agentDir = mkdtempSync(join(tmpdir(), `${prefix}-agent-`));
-  const settingsManager = SettingsManager.inMemory({}, { projectTrusted: false });
+  const settingsManager = SettingsManager.inMemory({ cacheWarming: "off" }, { projectTrusted: false });
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,
@@ -1177,7 +1206,7 @@ export async function buildModelRuntime(
   const modelsPath = customModelsPath();
   const runtime = await ModelRuntime.create({ credentials, modelsPath });
   for (const [provider, apiKey] of Object.entries(apiKeys)) {
-    if (apiKey) await runtime.setRuntimeApiKey(provider, apiKey, { allowNetwork: false });
+    if (apiKey) await runtime.setRuntimeApiKey(provider, apiKey);
   }
   if (modelGateway) {
     const providers = new Set(
@@ -1226,16 +1255,15 @@ export async function buildModelRuntime(
     if (!request) {
       const providerModelId =
         model.provider === CODEX_SUBSCRIPTION_PROVIDER ? codexProviderModelId(model.id) : model.id;
-      const candidate = withRequestHeaders(model, true, false);
       const passthrough = {
         ...retained(options),
         onPayload: async (payload: unknown) => {
           const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
-          return applyThinkingBinding(transformed === undefined ? payload : transformed, candidate);
+          return applyDirectAnthropicBetas(transformed === undefined ? payload : transformed, model);
         },
       } as T;
       return {
-        model: candidate,
+        model,
         options:
           providerModelId === model.id ? passthrough : wireModelId(passthrough, model, async () => providerModelId),
       };
@@ -1329,10 +1357,9 @@ export async function probeModel(
 ): Promise<void> {
   const runtime = await buildModelRuntime(keys, modelGateway);
   signal.throwIfAborted();
-  const candidate = withRequestHeaders(model, !modelGateway?.models[model.id], fastMode);
   const response = await runtime
     .streamSimple(
-      candidate,
+      model,
       {
         systemPrompt: "This is a connection check. Reply OK. Do not call tools.",
         messages: [{ role: "user", content: "Reply OK.", timestamp: Date.now() }],
@@ -1386,18 +1413,23 @@ function thinkingBindingApplies(model: Pick<Model<Api>, "api" | "compat"> | unde
   );
 }
 
-export function applyThinkingBinding<T>(
+export function applyDirectAnthropicBetas<T>(
   payload: T,
-  model: (Pick<Model<Api>, "headers"> & Partial<Pick<Model<Api>, "thinkingLevelMap">>) | undefined,
+  model: Pick<Model<Api>, "api" | "compat"> & Partial<Pick<Model<Api>, "thinkingLevelMap">>,
 ): T {
-  if (!payload || typeof payload !== "object") return payload;
-  if (!model?.headers?.["anthropic-beta"]?.split(",").includes(THINKING_BINDING_BETA)) return payload;
-  const thinking =
-    (payload as { thinking?: { type?: unknown } }).thinking ??
-    (model.thinkingLevelMap?.off === null ? { type: "adaptive", display: "summarized" } : undefined);
-  if (thinking?.type === "adaptive" || thinking?.type === "enabled") {
-    (payload as Record<string, unknown>).thinking = { ...thinking, block_binding: THINKING_BINDING };
+  if (!payload || typeof payload !== "object" || model.api !== "anthropic-messages") return payload;
+  const body = payload as { thinking?: { type?: unknown; [key: string]: unknown }; speed?: unknown; betas?: unknown };
+  const betas: string[] = [];
+  if (thinkingBindingApplies(model)) {
+    betas.push(THINKING_BINDING_BETA);
+    const thinking =
+      body.thinking ?? (model.thinkingLevelMap?.off === null ? { type: "adaptive", display: "summarized" } : undefined);
+    if (thinking?.type === "adaptive" || thinking?.type === "enabled") {
+      body.thinking = { ...thinking, block_binding: THINKING_BINDING };
+    }
   }
+  if (body.speed === "fast") betas.push(FAST_MODE_BETA);
+  if (betas.length) body.betas = [...new Set([...(Array.isArray(body.betas) ? body.betas : []), ...betas])];
   return payload;
 }
 
@@ -1477,16 +1509,6 @@ export function resolveConfiguredModelId(configured: string | undefined, default
     swallow("pi: configured model id not in registry, falling back to default", new Error(candidate));
   }
   return DEFAULT_AGENT_MODEL_ID;
-}
-
-export function withRequestHeaders(model: Model<Api>, direct: boolean, fast: boolean): Model<Api> {
-  const api = String((model as { api?: unknown }).api ?? "").toLowerCase();
-  if (api.startsWith("openai") || !direct) return model;
-  const betas = [...(thinkingBindingApplies(model) ? [THINKING_BINDING_BETA] : []), ...(fast ? [FAST_MODE_BETA] : [])];
-  if (!betas.length) return model;
-  const prior = model.headers?.["anthropic-beta"];
-  const beta = [...new Set([...(prior ? prior.split(",").map((value) => value.trim()) : []), ...betas])].join(",");
-  return { ...model, headers: { ...model.headers, "anthropic-beta": beta } };
 }
 
 export function applyTurnEffort(session: AgentSession, level?: string): void {
@@ -1802,10 +1824,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       async runTurn(turn: HarnessTurnInput): Promise<HarnessTurnResult> {
         const desiredModelId = turn.runtime?.modelId ?? resolveModelId(turn.scopeLabel);
         const baseModel = getRequiredModel(desiredModelId, !turn.providerKeys);
-        const turnModelGateway = turn.providerKeys ? undefined : modelGateway;
         const wantFast = wantsFastMode(turn.runtime?.fastMode, desiredModelId);
         const { entry, compileMs } = await createTurnSession(
-          withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
+          baseModel,
           turn.session.id,
           turn.systemPrompt,
           turn.history,
@@ -2007,6 +2028,20 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               });
               prevStepEnd = end;
               toolWallByStep.push([]);
+              const droppedThinking = droppedThinkingNotice(
+                event.message,
+                entry.agentSession.messages.findLast(
+                  (message) => message !== event.message && (message as { role?: string }).role === "assistant",
+                ),
+              );
+              if (droppedThinking) {
+                console.warn(
+                  `pi: earlier thinking dropped session=${turn.session.id} model=${stepModel?.id ?? effectiveModel} blocks=${droppedThinking.count} reasons=${droppedThinking.reasons.join(",")}`,
+                );
+                thinkTail = thinkTail
+                  .then(() => turn.emit({ type: "system", payload: droppedThinking, scopeLabel: turn.scopeLabel }))
+                  .catch(swallowAs("pi: dropped-thinking entry persist", undefined));
+              }
               const stepContent = (event.message as { content?: unknown }).content;
               for (const block of thinkingBlocksFromContent(stepContent)) {
                 thinkTail = thinkTail
@@ -2192,9 +2227,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               `[pi] provider refusal — retrying on fallback model ${fromId} -> ${fallbackId} session=${turn.session.id}: ${refusal}`,
             );
             const wantFast = wantsFastMode(turn.runtime?.fastMode, fallbackId);
-            await entry.agentSession.setModel(
-              withRequestHeaders(fallback, !turnModelGateway?.models[fallbackId], wantFast),
-            );
+            await entry.agentSession.setModel(fallback);
             entry.ref.fast = wantFast;
             entry.ref.effortLevel = turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback);
             applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
@@ -2508,7 +2541,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         return summarizeHistory(input.history, model, (summaryModel, context, options) => {
           input.recordModelCall({
             model: compactModelId,
-            inputTokens: countTokens(context.systemPrompt ?? "") + countTokens(JSON.stringify(context.messages)),
+            inputTokens: countTokens(JSON.stringify(context.messages)),
             entryCount: input.history.length,
           });
           return runtime.streamSimple(summaryModel, context, options);

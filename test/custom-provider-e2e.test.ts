@@ -285,7 +285,7 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
         res.writeHead(record.apiKeyHeader === "sk-ant-qa" ? 200 : 401, { "content-type": "application/json" });
         return res.end(JSON.stringify({ data: [] }));
       }
-      if (req.url?.endsWith("/v1/messages")) {
+      if (req.url?.endsWith("/v1/messages?beta=true")) {
         record.model = (JSON.parse(body) as { model?: string }).model;
         seen.push(record);
         res.writeHead(200, { "content-type": "text/event-stream" });
@@ -343,7 +343,7 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
     assert.equal((model as { api?: string }).api, "anthropic-messages");
     const reply = await oneShot("qa-ant", model as unknown as Model<Api>, { antcompat: "sk-ant-qa" }, "terse", "go");
     assert.equal(reply, "ANTHROPIC QA REPLY");
-    const call = seen.find((s) => s.path.endsWith("/v1/messages"));
+    const call = seen.find((s) => s.path.endsWith("/v1/messages?beta=true"));
     assert.ok(call, "messages request reached the anthropic-compatible upstream");
     assert.equal(call!.model, "claude-compat");
     assert.equal(call!.apiKeyHeader, "sk-ant-qa", "anthropic wire auth uses x-api-key");

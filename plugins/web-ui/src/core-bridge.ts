@@ -1721,15 +1721,17 @@ export function subagentMailOf(payload: unknown): SubagentMailRef | undefined {
   return { title: xmlAttrUnescape(m[1]!), sessionId: m[2]!, kind: m[3]! };
 }
 
-export interface HistorySystemNote {
-  role: "system-note";
-  note: "message_revision";
-  action: "edited" | "deleted";
-  ts: string;
-  content: string;
-  speaker?: string;
-  timestamp?: number;
-}
+export type HistorySystemNote =
+  | {
+      role: "system-note";
+      note: "message_revision";
+      action: "edited" | "deleted";
+      ts: string;
+      content: string;
+      speaker?: string;
+      timestamp?: number;
+    }
+  | { role: "system-note"; note: "thinking_dropped"; reasons: string[]; timestamp?: number };
 
 export interface HistoryApprovalDecision {
   role: "approval-decision";
@@ -1802,7 +1804,14 @@ export function messagesWithStreaming(messages: AgentMessage[], streaming?: Agen
   });
 }
 
-function messageRevisionPayload(payload: unknown): HistorySystemNote | null {
+function thinkingDroppedPayload(payload: unknown): HistorySystemNote | null {
+  const p = payload as { kind?: unknown; reasons?: unknown } | null;
+  if (p?.kind !== "thinking_dropped") return null;
+  const reasons = Array.isArray(p.reasons) ? p.reasons.filter((reason) => typeof reason === "string") : [];
+  return { role: "system-note", note: "thinking_dropped", reasons };
+}
+
+function messageRevisionPayload(payload: unknown): Extract<HistorySystemNote, { note: "message_revision" }> | null {
   const p = payload as { kind?: unknown; action?: unknown; ts?: unknown; text?: unknown; name?: unknown } | null;
   if (p?.kind !== "message_revision") return null;
   if (p.action !== "edited" && p.action !== "deleted") return null;
@@ -2100,6 +2109,11 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
           else original.edited = true;
         }
         out.push({ ...revision, timestamp: e.createdAt } as unknown as AgentMessage);
+        continue;
+      }
+      const dropped = thinkingDroppedPayload(e.payload);
+      if (dropped) {
+        out.push({ ...dropped, timestamp: e.createdAt } as unknown as AgentMessage);
         continue;
       }
       const failure = e.payload as { kind?: string; message?: string } | null;

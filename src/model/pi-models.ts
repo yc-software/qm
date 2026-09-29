@@ -398,11 +398,22 @@ export const SELECTABLE_BASE_MODELS: ReadonlyArray<{ id: string; name: string }>
   (m) => m.base,
 ).map((m) => ({ id: m.id, name: m.name }));
 
+function withAdoptedCompat(model: PiModel): PiModel {
+  if (!model.compat) return model;
+  const {
+    allowedFallbackModels: _fallbacks,
+    supportsMidConvoEffort: _effort,
+    supportsMidConvoSystemMessages: _systemMessages,
+    supportsMidConvoToolChanges: _toolChanges,
+    ...compat
+  } = model.compat as Record<string, unknown>;
+  return { ...model, compat: compat as PiModel["compat"] };
+}
+
 function builtinModel(id: string): PiModel | undefined {
   for (const provider of MODEL_PROVIDERS) {
     const m = getModel(provider, id);
-    if (!m) continue;
-    return m;
+    if (m) return withAdoptedCompat(m);
   }
   return undefined;
 }
@@ -457,7 +468,7 @@ export function registerOpenRouterCatalogModel(definition: OpenRouterCatalogMode
 export function resolveBuiltinModel(id: string): PiModel | undefined {
   if (id.startsWith(CODEX_SUBSCRIPTION_PREFIX)) {
     const m = getModel(CODEX_SUBSCRIPTION_PROVIDER, codexProviderModelId(id));
-    return m ? { ...m, id } : undefined;
+    return m ? { ...withAdoptedCompat(m), id } : undefined;
   }
   const entry = REGISTRY_BY_ID.get(id);
   if (entry?.clone) {

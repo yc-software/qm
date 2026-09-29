@@ -17,7 +17,7 @@ test("native Auto is model and harness specific, while legacy auto remains valid
       harnessId === "pi" ? null : "effort_not_supported",
     );
   }
-  for (const modelId of ["gpt-6-astra", "codex/gpt-5.4", "claude-haiku-4-5", "openrouter/auto"])
+  for (const modelId of ["gpt-6-astra", "codex/gpt-5.5", "claude-haiku-4-5", "openrouter/auto"])
     assert.equal(validateRuntimeChoice({ harnessId: "pi", modelId, effortLevel: "adaptive" }), "effort_not_supported");
   assert.deepEqual(safeModelMetadata(adaptiveId)?.effortLevelsByHarness.pi, thinkingLevelsForHarness("pi", adaptiveId));
 });

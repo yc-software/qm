@@ -24,9 +24,11 @@ const metadata = {
 
 for (const protocol of ["openai", "anthropic", "unknown"] as const)
   test(`live ${protocol} gateway discovery, picker and tool continuation`, async (t) => {
-    const expectedPath = { openai: "/v1/responses", anthropic: "/v1/messages", unknown: "/v1/chat/completions" }[
-      protocol
-    ];
+    const expectedPath = {
+      openai: "/v1/responses",
+      anthropic: "/v1/messages?beta=true",
+      unknown: "/v1/chat/completions",
+    }[protocol];
     const expectedApi = { openai: "openai-responses", anthropic: "anthropic-messages", unknown: "openai-completions" }[
       protocol
     ];

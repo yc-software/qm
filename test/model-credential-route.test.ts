@@ -363,9 +363,9 @@ test("web turns keep a persisted OpenRouter model enabled when the refreshed cat
 
     await srv.built.config.setRuntimeSelectionLatest("personal:alice", {
       harnessId: "mock",
-      modelId: "openai/gpt-oss-20b:free",
+      modelId: "openai/gpt-oss-20b",
     });
-    const arbitrary = await turn("web:alice:arbitrary-openrouter-model", "openai/gpt-oss-20b:free");
+    const arbitrary = await turn("web:alice:arbitrary-openrouter-model", "openai/gpt-oss-20b");
     assert.equal(arbitrary.status, "refused");
     assert.match(arbitrary.reason ?? "", /not enabled for the web UI/);
   } finally {

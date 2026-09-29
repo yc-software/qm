@@ -222,6 +222,19 @@ const CHAT_CTAS = [
 ];
 const CTA_INDEX_KEY = "web-ui:chat-cta";
 
+const THINKING_DROP_CAUSES: Record<string, string> = {
+  organization_binding_mismatch: "it came from a different account",
+  model_binding_mismatch: "it came from a different model",
+  prefix_binding_mismatch: "the conversation before it changed",
+};
+
+function thinkingDroppedLabel(reasons: string[]): string {
+  const causes = [...new Set(reasons.map((reason) => THINKING_DROP_CAUSES[reason]).filter(Boolean))];
+  return causes.length
+    ? `Earlier reasoning was left out because ${causes.join(" or ")}.`
+    : "Earlier reasoning was left out of this reply.";
+}
+
 function nextChatCta(): string {
   let index = 0;
   try {
@@ -1822,8 +1835,20 @@ export function createChatSurface(
         <div class="system-note">${label}: <code>${decision.command}</code></div>
       </article>`;
     }
+    if (role === "system-note" && (message as unknown as HistorySystemNote).note === "thinking_dropped") {
+      const note = message as unknown as Extract<HistorySystemNote, { note: "thinking_dropped" }>;
+      return html`
+        <article
+          class="message-row system-note-row"
+          data-index=${index}
+          data-entry-seqs=${messageEntrySeqs(message).join(" ")}
+        >
+          <div class="system-note">${thinkingDroppedLabel(note.reasons)}</div>
+        </article>
+      `;
+    }
     if (role === "system-note") {
-      const note = message as unknown as HistorySystemNote;
+      const note = message as unknown as Extract<HistorySystemNote, { note: "message_revision" }>;
       const who = note.speaker ?? "The user";
       return html`
         <article

@@ -3,10 +3,9 @@ import assert from "node:assert/strict";
 import {
   applyTurnEffort,
   applyFastSpeed,
-  applyThinkingBinding,
+  applyDirectAnthropicBetas,
   piUsageToCallUsage,
   scaleCost,
-  withRequestHeaders,
   FAST_COST_MULTIPLIER,
   modelSupportsFastMode,
   wantsFastMode,
@@ -168,59 +167,45 @@ test("normalization ignores provider pricing, preserves tokens and never mutates
 const HAIKU = getRequiredModel("claude-haiku-4-5", false) as Model<Api>;
 const BINDING_BETA = "thinking-binding-controls-2026-08-01";
 
-test("request headers preserve rates and existing beta headers", () => {
-  for (const model of [ASTRA, OPUS, OPUS_55]) {
+test("direct Anthropic betas merge into Pi's beta list without touching the model", () => {
+  for (const model of [ASTRA, OPUS, OPUS_55, HAIKU]) {
     const snapshot = structuredClone(model);
-    assert.deepEqual(withRequestHeaders(model, true, true).cost, snapshot.cost);
+    applyDirectAnthropicBetas({ speed: "fast", thinking: { type: "adaptive" } }, model);
     assert.deepEqual(model, snapshot);
   }
-  assert.equal(
-    withRequestHeaders(OPUS, true, true).headers?.["anthropic-beta"],
-    `${BINDING_BETA},fast-mode-2026-02-01`,
-  );
-  assert.equal(
-    withRequestHeaders({ ...OPUS, headers: { "anthropic-beta": "prior-beta" } }, true, true).headers?.[
-      "anthropic-beta"
-    ],
-    `prior-beta,${BINDING_BETA},fast-mode-2026-02-01`,
-  );
-});
-
-test("direct adaptive-thinking Claude requests opt into thinking binding controls", () => {
-  assert.equal(withRequestHeaders(OPUS, true, false).headers?.["anthropic-beta"], BINDING_BETA);
-  assert.equal(withRequestHeaders(OPUS, false, true).headers?.["anthropic-beta"], undefined);
-  assert.equal(withRequestHeaders(ASTRA, true, false).headers?.["anthropic-beta"], undefined);
-  assert.equal(withRequestHeaders(HAIKU, true, false).headers?.["anthropic-beta"], undefined);
-  assert.equal(withRequestHeaders(HAIKU, true, true).headers?.["anthropic-beta"], "fast-mode-2026-02-01");
-});
-
-test("applyThinkingBinding sets drop_block only on requests that carry the beta header", () => {
-  const bound = withRequestHeaders(OPUS, true, true);
-  const adaptive = { thinking: { type: "adaptive", display: "summarized" } } as Record<string, unknown>;
-  assert.equal(applyThinkingBinding(adaptive, bound), adaptive);
+  const adaptive = {
+    speed: "fast",
+    betas: ["prior-beta"],
+    thinking: { type: "adaptive", display: "summarized" },
+  } as Record<string, unknown>;
+  assert.equal(applyDirectAnthropicBetas(adaptive, OPUS), adaptive);
+  assert.deepEqual(adaptive.betas, ["prior-beta", BINDING_BETA, "fast-mode-2026-02-01"]);
   assert.deepEqual(adaptive.thinking, {
     type: "adaptive",
     display: "summarized",
     block_binding: { prefix_mismatch_behavior: "drop_block" },
   });
   const budget = { thinking: { type: "enabled", budget_tokens: 2048 } } as Record<string, unknown>;
-  applyThinkingBinding(budget, bound);
+  applyDirectAnthropicBetas(budget, OPUS);
   assert.deepEqual(budget.thinking, {
     type: "enabled",
     budget_tokens: 2048,
     block_binding: { prefix_mismatch_behavior: "drop_block" },
   });
+  assert.deepEqual(budget.betas, [BINDING_BETA]);
   const disabled = { thinking: { type: "disabled" } } as Record<string, unknown>;
-  applyThinkingBinding(disabled, bound);
+  applyDirectAnthropicBetas(disabled, OPUS);
   assert.deepEqual(disabled.thinking, { type: "disabled" });
-  const unbound = { thinking: { type: "adaptive" } } as Record<string, unknown>;
-  applyThinkingBinding(unbound, OPUS);
-  applyThinkingBinding(unbound, withRequestHeaders(HAIKU, true, true));
-  assert.deepEqual(unbound.thinking, { type: "adaptive" });
-  const none = { messages: [] } as Record<string, unknown>;
-  applyThinkingBinding(none, bound);
-  assert.equal("thinking" in none, false);
-  assert.doesNotThrow(() => applyThinkingBinding(undefined, bound));
+  const haiku = { speed: "fast", thinking: { type: "adaptive" } } as Record<string, unknown>;
+  applyDirectAnthropicBetas(haiku, HAIKU);
+  assert.deepEqual(haiku, { speed: "fast", thinking: { type: "adaptive" }, betas: ["fast-mode-2026-02-01"] });
+  const astra = { speed: "fast" } as Record<string, unknown>;
+  applyDirectAnthropicBetas(astra, ASTRA);
+  assert.deepEqual(astra, { speed: "fast" });
+  const standard = { messages: [] } as Record<string, unknown>;
+  applyDirectAnthropicBetas(standard, HAIKU);
+  assert.deepEqual(standard, { messages: [] });
+  assert.doesNotThrow(() => applyDirectAnthropicBetas(undefined, OPUS));
 });
 
 test("normalization handles absent usage, missing token fields and an unknown model", () => {

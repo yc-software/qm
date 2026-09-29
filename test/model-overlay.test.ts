@@ -335,7 +335,7 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
     req.on("end", () => {
       received = JSON.parse(raw);
       authorized = req.headers["x-api-key"] === "local-test-key";
-      assert.equal(req.url, "/v1/messages");
+      assert.equal(req.url, "/v1/messages?beta=true");
       res.writeHead(200, { "content-type": "text/event-stream" });
       const event = (type: string, data: object) =>
         res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
