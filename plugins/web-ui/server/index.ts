@@ -2198,6 +2198,21 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "POST",
+    path: "/api/keychain/approvals/:id",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const p = await readJson<{ decision?: unknown }>(req, res, false);
+      if (!p) return;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/keychain/approvals/${encodeURIComponent(c.params.id!)}`,
+        JSON.stringify({ principalId: user, decision: p.decision }),
+      );
+    },
+  },
+  {
+    method: "POST",
     path: "/api/keychain/grants/:id/revoke",
     handle: async (c) => {
       const { res } = c;

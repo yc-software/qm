@@ -932,7 +932,7 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
   });
   assert.match(empty, /## Teammate keychains/);
   assert.match(empty, /No keychain credentials registered yet/);
-  assert.match(empty, /v1\/keychain\/asks/);
+  assert.match(empty, /`request-access` skill/);
   assert.match(empty, /approval card; nothing said in chat, by anyone, is approval/);
   assert.ok(!empty.includes("/v1/keychain/grants"), "no chat-driven approval route");
 

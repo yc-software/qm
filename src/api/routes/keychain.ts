@@ -7,8 +7,8 @@ import {
   type GrantMode,
 } from "../../credentials/keychain.ts";
 import { parseScopeId } from "../../types.ts";
-import { principalDestination } from "../../reach/reach.ts";
 import { samePerson } from "../../directory/person.ts";
+import { approvalCardDestination } from "../../credentials/keychain-approval.ts";
 import { sendJson } from "../http.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -228,6 +228,8 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       const cronId = cronIdOf(capability.threadRef);
       const cron = cronId ? await app.getCron(cronId) : null;
       const dest = resolveCapabilityDestination(capability, undefined);
+      const requesterDestination =
+        (dest.ok && dest.destination) || (cron?.ownerScopeId === capability.scopeId ? cron.destination : undefined);
       const originRun = capability.runId ? await deps.runs?.get(capability.runId) : null;
       const requesterSeq = originRun && originRun.sessionId === capability.threadRef ? originRun?.turnUserSeq : null;
       const requesterMessageTs =
@@ -241,7 +243,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         requesterScopeId: capability.scopeId,
         ...(requesterSeq != null ? { requesterSeq } : {}),
         ...(requesterMessageTs ? { requesterMessageTs } : {}),
-        ...(dest.ok && dest.destination ? { requesterDestination: dest.destination } : {}),
+        ...(requesterDestination ? { requesterDestination } : {}),
         ...(capability.threadRef ? { requesterThreadRef: capability.threadRef } : {}),
         purpose: b.purpose,
         ...(b.requestedMode !== undefined ? { requestedMode: b.requestedMode as GrantMode } : {}),
@@ -255,11 +257,13 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         ...(scope.kind === "group" && context?.name ? { scopeName: context.name } : {}),
         ...(cron?.ownerScopeId === capability.scopeId ? { taskTitle: cron.title ?? cron.id } : {}),
       });
-      await deps.deliveries?.enqueue({
-        destination: { ...principalDestination(cred.ownerId, actorId), keychainAskId: ask.id },
-        text: notice,
-        idempotencyKey: `ask:${ask.id}:notice`,
-      });
+      const cardDestination = approvalCardDestination(ask);
+      if (cardDestination)
+        await deps.deliveries?.enqueue({
+          destination: cardDestination,
+          text: notice,
+          idempotencyKey: `ask:${ask.id}:notice`,
+        });
       if (!existing) {
         audit(deps, {
           principalId: actorId,
@@ -327,6 +331,25 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 404, { error: "not_found" });
 }
 
+async function handleApproval(ctx: ApiCtx): Promise<void> {
+  const { res, deps, body, params } = ctx;
+  const b = (body ?? {}) as { principalId?: unknown; decision?: unknown };
+  if (!deps.keychainApprovals || typeof b.principalId !== "string" || !b.principalId)
+    return sendJson(res, 404, { error: "not_found" });
+  try {
+    if (b.decision !== "once" && b.decision !== "standing" && b.decision !== "deny")
+      return sendJson(res, 400, {
+        error: "bad_request",
+        message: 'expected { principalId, decision: "once"|"standing"|"deny" }',
+      });
+    const view = await deps.keychainApprovals.decide(params.id!, { externalId: b.principalId }, b.decision);
+    return sendJson(res, 200, view);
+  } catch (e) {
+    if (e instanceof KeychainError) return sendJson(res, e.status, { error: "keychain", message: e.message });
+    throw e;
+  }
+}
+
 export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/credentials", auth: "either", handle: handleKeychain },
   { method: "GET", path: "/v1/keychain/credentials", auth: "either", handle: handleKeychain },
@@ -337,4 +360,5 @@ export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/asks", auth: "either", handle: handleKeychain },
   { method: "GET", path: "/v1/keychain/asks", auth: "either", handle: handleKeychain },
   { method: "POST", path: "/v1/keychain/use", auth: "either", handle: handleKeychain },
+  { method: "POST", path: "/v1/keychain/approvals/:id", auth: "source", handle: handleApproval },
 ];

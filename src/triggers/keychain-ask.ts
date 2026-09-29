@@ -25,7 +25,8 @@ export interface AskResolutionDeps extends TriggerDeps {
 }
 
 function fallbackText(ask: KeychainAsk): string {
-  if (ask.status === "approved") return "Access approved.";
+  if (ask.status === "approved")
+    return "Access approved, but the task could not restart on its own. It will have access the next time it runs.";
   return ask.status === "declined" ? "Access was declined." : "The access request expired.";
 }
 

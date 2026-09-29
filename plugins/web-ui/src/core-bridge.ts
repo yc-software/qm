@@ -981,6 +981,16 @@ export function makeRunResumeStreamFn(
 }
 
 export async function resolveApproval(decision: ApprovalDecision): Promise<string> {
+  if (decision.requestId.startsWith("keychain:")) {
+    const id = decision.requestId.slice("keychain:".length);
+    let choice = "deny";
+    if (decision.approved) choice = decision.scope === "always" ? "standing" : "once";
+    await api(`/api/keychain/approvals/${encodeURIComponent(id)}`, {
+      method: "POST",
+      body: JSON.stringify({ decision: choice }),
+    });
+    return "";
+  }
   const submit = await api<{ runId?: string }>(`/api/approvals/${encodeURIComponent(decision.requestId)}`, {
     method: "POST",
     body: JSON.stringify({ approved: decision.approved, ...(decision.scope ? { scope: decision.scope } : {}) }),

@@ -198,3 +198,28 @@ test("keychain page renders loading placeholders instead of empty states while l
   assert.doesNotMatch(connectorsSource, /drawConnectors\((true|false)\)/);
   assert.match(shellCssSource, /\.kc-loading \.spinner/);
 });
+
+test("an inline credential card decides through the keychain approval route, not the command route", async () => {
+  const calls: Array<{ url: string; body: unknown }> = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    calls.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) });
+    return Response.json({ ask: { status: "approved" } });
+  }) as typeof fetch;
+  try {
+    const { resolveApproval } = await import("../src/core-bridge.ts");
+    assert.equal(await resolveApproval({ requestId: "keychain:a1", approved: true, scope: "always" }), "");
+    await resolveApproval({ requestId: "keychain:a1", approved: true, scope: "once" });
+    await resolveApproval({ requestId: "keychain:a1", approved: false });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(
+    calls.map((c) => [c.url.replace(/^.*(\/api\/)/, "$1"), (c.body as { decision: string }).decision]),
+    [
+      ["/api/keychain/approvals/a1", "standing"],
+      ["/api/keychain/approvals/a1", "once"],
+      ["/api/keychain/approvals/a1", "deny"],
+    ],
+  );
+});

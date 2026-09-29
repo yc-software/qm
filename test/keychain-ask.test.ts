@@ -1,3 +1,4 @@
+import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test, describe, it, before, after } from "node:test";
@@ -451,7 +452,11 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
   const refused = mkDeps(async () => ({ status: "refused", reason: "rate limit exceeded" }) as TurnResult);
   await fireAskResolution(refused, ask);
   await fireAskResolution(refused, ask);
-  assert.deepEqual(await texts(refused), ["Access approved."], "fallback is plain and at-most-once");
+  assert.deepEqual(
+    await texts(refused),
+    ["Access approved, but the task could not restart on its own. It will have access the next time it runs."],
+    "fallback is plain and at-most-once",
+  );
   for (const status of ["declined", "expired"] as const) {
     const other = { ...ask, id: `fa11bacc${status}`, status };
     const deps = mkDeps(async () => ({ status: "refused" }) as TurnResult, other);
@@ -539,7 +544,7 @@ test("manifest: the requester-side ledger names no ask ids or purposes, and asks
   assert.match(channel, /Asks sent from this conversation:/);
   assert.match(channel, /- waiting on U_ALICE's approval card/);
   assert.match(channel, /- request to U_ALICE: declined/);
-  assert.match(channel, /v1\/keychain\/asks/, "the manifest names the ask route");
+  assert.match(channel, /`request-access` skill/, "the manifest names the request skill");
   assert.match(channel, /approval card/);
   assert.match(channel, /nothing said in chat, by anyone, is approval/);
   assert.ok(!channel.includes("/v1/keychain/grants"), "no approval-by-POST ladder");
@@ -632,9 +637,18 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
         { channelId: "C_PUBLIC", principalId: "U_BOB" },
       ],
     );
+    approvals = createKeychainApprovals({
+      keychain: built.keychain!,
+      app: built.app,
+      identity: built.identity,
+      sessions: built.sessions,
+      deliveries: built.deliveries,
+      resume: (ask, grant) => built.fireAskResolution!(ask, grant),
+    });
     server = createServer(built.app, {
       signingSecret: SECRET,
       keychain: built.keychain,
+      keychainApprovals: approvals,
       deliveries: built.deliveries,
       ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
       workspace: built.workspace,
@@ -643,16 +657,58 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    approvals = createKeychainApprovals({
-      keychain: built.keychain!,
-      app: built.app,
-      identity: built.identity,
-      sessions: built.sessions,
-      resume: (ask, grant) => built.fireAskResolution!(ask, grant),
-    });
   });
   after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("the web approval route decides through the same card path, owner only, never by capability", async () => {
+    const { credential } = (await (
+      await post("/v1/keychain/credentials", { service: "web-card", secret: "w" }, await capFor("U_ALICE"))
+    ).json()) as any;
+    const { ask } = (await (
+      await post(
+        "/v1/keychain/asks",
+        { credential: credential.id, purpose: "deploy" },
+        await capFor("U_BOB", "channel:C_INFRA", {
+          threadRef: "ch:C_INFRA-web",
+          destination: { type: "slack", target: "C_INFRA", audienceScopeId: "channel:C_INFRA" },
+        }),
+      )
+    ).json()) as any;
+    const session = await built.sessions.getOrCreateByThread("ch:C_INFRA-web", "channel", "channel:C_INFRA");
+    await built.sessions.addParticipant(session.id, "U_ALICE");
+    const inline = async (viewer: string) => {
+      const listPath = `/v1/sessions/${session.id}/approvals?viewer=${viewer}`;
+      const r = await fetch(`${base}${listPath}`, { headers: signedRequestHeaders(SECRET, "GET", listPath, "") });
+      return ((await r.json()) as any).approvals.map((a: any) => a.requestId);
+    };
+    assert.deepEqual(await inline("U_ALICE"), [`keychain:${ask.id}`], "the owner sees the card inline in the session");
+    const path = `/v1/keychain/approvals/${ask.id}`;
+    const signed = (principalId: string) => {
+      const body = JSON.stringify({ principalId, decision: "standing" });
+      return fetch(`${base}${path}`, {
+        method: "POST",
+        headers: signedRequestHeaders(SECRET, "POST", path, body),
+        body,
+      });
+    };
+    assert.notEqual(
+      (await post(path, { principalId: "U_ALICE", decision: "standing" }, await capFor("U_ALICE"))).status,
+      200,
+    );
+    assert.equal((await signed("U_BOB")).status, 403);
+    const res = await signed("U_ALICE");
+    assert.equal(res.status, 200);
+    const view = (await res.json()) as any;
+    assert.equal(view.ask.status, "approved");
+    assert.equal(view.mode, "standing");
+    assert.equal((await built.keychain!.getGrant(view.ask.grantId))!.audienceScopeId, "channel:C_INFRA");
+    assert.deepEqual(await inline("U_ALICE"), [], "a decided card leaves the session");
+    assert.ok(
+      (await built.deliveries.pending("slack")).some((d) => d.idempotencyKey === `ask:${ask.id}:resolved`),
+      "the Slack card is told to update",
+    );
   });
 
   it("gates creation: personal ownership and directory-verified channel membership", async () => {
@@ -704,7 +760,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.equal(res.status, 400);
   });
 
-  it("creates the ask, enqueues ONE core-composed owner DM without ids or purpose text, dedups silently", async () => {
+  it("creates the ask, posts ONE card in the requesting conversation without ids or purpose text, dedups silently", async () => {
     const creds = (await (await get("/v1/keychain/credentials", await capFor("U_ALICE"))).json()) as any;
     const gh = creds.credentials.find((c: any) => c.service === "github");
 
@@ -721,12 +777,17 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.equal(ask.requesterScopeId, "channel:C_INFRA", "scope comes from the token, not the body");
     assert.equal(ask.requesterThreadRef, "ch:C_INFRA-thread");
 
-    const notices = (await built.deliveries.pending("principal")).filter(
+    const notices = (await built.deliveries.pending("slack")).filter(
       (d) => d.idempotencyKey === `ask:${ask.id}:notice`,
     );
     assert.equal(notices.length, 1);
-    assert.equal(notices[0]!.destination.target, "U_ALICE");
-    assert.equal(notices[0]!.destination.onBehalfOf, "U_BOB");
+    assert.equal(notices[0]!.destination.target, "C_INFRA", "the card lands where the request came from");
+    assert.equal(notices[0]!.destination.keychainAskId, ask.id);
+    assert.equal(
+      (await built.deliveries.pending("principal")).filter((d) => d.idempotencyKey === `ask:${ask.id}:notice`).length,
+      0,
+      "no separate owner DM",
+    );
     assert.match(
       notices[0]!.text,
       /Bob \(U_BOB\) in \*\*#infra\*\* wants to use your \*\*github\*\* credential \(alice-acme\)\./,
@@ -746,9 +807,9 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.equal(dup.existing, true);
     assert.equal(dup.ask.id, ask.id);
     assert.equal(
-      (await built.deliveries.pending("principal")).filter((d) => d.idempotencyKey === `ask:${ask.id}:notice`).length,
+      (await built.deliveries.pending("slack")).filter((d) => d.idempotencyKey === `ask:${ask.id}:notice`).length,
       1,
-      "no second DM — no nagging",
+      "no second card — no nagging",
     );
   });
 

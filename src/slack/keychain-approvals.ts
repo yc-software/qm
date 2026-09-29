@@ -3,6 +3,7 @@ import type { KeychainApprovalView } from "../credentials/keychain-approval.ts";
 import type { Directory } from "./directory.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import { updateSlackMessage } from "./messaging.ts";
+import { findPostedByKey, postWithVerify, slackReplyArgs } from "./delivery.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { parseScopeId } from "../types.ts";
 
@@ -82,6 +83,32 @@ export async function keychainApprovalOrigin(
   const url = new URL(`${webUrl.replace(/\/+$/, "")}/s/${encodeURIComponent(view.sessionId)}`);
   if (view.seq !== undefined) url.searchParams.set("seq", String(view.seq));
   return url.toString();
+}
+
+// Posts the approval card in the requesting conversation; a later `ask:<id>:resolved` delivery
+// finds that card and updates it in place, so a decision made on the web shows here too.
+export async function deliverKeychainCard(
+  core: SlackCoreClient,
+  client: any,
+  delivery: { idempotencyKey?: string; destination: { keychainAskId?: string } },
+  channel: string,
+  threadTs: string | undefined,
+  webUrl?: string,
+): Promise<void> {
+  const id = delivery.destination.keychainAskId!;
+  const view = await core.keychainApprovals?.card(id);
+  if (!view) return;
+  const card = keychainApprovalMessage(view, await keychainApprovalOrigin(view, client, webUrl));
+  const key = `ask:${id}:notice`;
+  if (delivery.idempotencyKey === key) {
+    await postWithVerify(client, { ...slackReplyArgs(channel, card.text, threadTs), blocks: card.blocks }, key, {
+      verifyFirst: true,
+    });
+    return;
+  }
+  const where = { channel, ...(threadTs ? { thread_ts: threadTs } : {}) };
+  const posted = await findPostedByKey(client, where, key, String((view.ask.createdAt - 60_000) / 1000));
+  if (posted) await updateSlackMessage(client, channel, posted.ts, card.text, card.blocks);
 }
 
 export function registerKeychainApprovalActions(
