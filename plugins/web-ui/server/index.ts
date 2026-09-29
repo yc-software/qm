@@ -2409,7 +2409,8 @@ const apiRoutes: readonly WebRoute[] = [
       const threadRef =
         typeof record.request?.conversation?.threadRef === "string" ? record.request.conversation.threadRef : "";
       const actor = typeof record.request?.actor?.externalId === "string" ? record.request.actor.externalId : "";
-      if ((!threadRef.startsWith("web:") && !threadRef.startsWith("swarm:")) || actor !== user || !record.request) {
+      const approvable = ["web:", "swarm:", SUBAGENT_THREAD_PREFIX].some((prefix) => threadRef.startsWith(prefix));
+      if (!approvable || actor !== user || !record.request) {
         return json(res, 404, { error: "not_found" });
       }
       if (/^web:.+:inbox$/.test(threadRef)) {

@@ -978,6 +978,8 @@ export async function resolveApproval(decision: ApprovalDecision): Promise<strin
   const submit = await api<{ runId?: string }>(`/api/approvals/${encodeURIComponent(decision.requestId)}`, {
     method: "POST",
     body: JSON.stringify({ approved: decision.approved, ...(decision.scope ? { scope: decision.scope } : {}) }),
+  }).catch((e: unknown) => {
+    throw new Error(approvalFailureMessage(e));
   });
   if (!submit.runId) throw new Error("Could not continue after the approval.");
   return submit.runId;
@@ -995,7 +997,7 @@ export async function runApprovalTurn(
   if (outcome.stopReason === "error") throw new Error(outcome.errorMessage || "Could not send the approval.");
 }
 
-const APPROVAL_GONE_MESSAGE = "This approval is no longer available — it may have expired or already been handled.";
+const APPROVAL_GONE_MESSAGE = "This approval expired or was already handled. Ask QM to retry if you still want it.";
 const APPROVAL_NOT_APPLIED_MESSAGE =
   "This approval couldn't be applied right now — the conversation is waiting on a different approval.";
 

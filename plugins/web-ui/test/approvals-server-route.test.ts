@@ -65,6 +65,19 @@ const core = createServer((req: IncomingMessage, res) => {
       );
       return;
     }
+    if (url.startsWith("/v1/approvals/a-subagent")) {
+      res.end(
+        JSON.stringify({
+          sessionId: url.includes("hidden") ? "hidden" : "child",
+          request: { ...storedRequest, conversation: { threadRef: "agent:main:subagent:child" } },
+        }),
+      );
+      return;
+    }
+    if (url.startsWith("/v1/sessions/child")) {
+      res.end(JSON.stringify({ session: { id: "child", surface: "web", threadRef: "agent:main:subagent:child" } }));
+      return;
+    }
     if (url.startsWith("/v1/sessions/hidden")) {
       res.statusCode = 403;
       res.end(JSON.stringify({ error: "forbidden" }));
@@ -240,4 +253,29 @@ test("inbox approval replay requires both current gates and preserves the screen
     else process.env.INBOX_USERS = previous;
     inboxEnabled = false;
   }
+});
+
+test("a visible subagent approval replays on the subagent thread", async () => {
+  const before = calls.length;
+  const r = await fetch(`${base}/api/approvals/a-subagent`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ approved: true, scope: "once" }),
+  });
+  assert.equal(r.status, 200);
+  const posts = turnPosts(before);
+  assert.equal(posts.length, 1);
+  assert.equal((posts[0]!.body.conversation as { threadRef: string }).threadRef, "agent:main:subagent:child");
+  assert.deepEqual(posts[0]!.body.approval, { requestId: "a-subagent", approved: true, scope: "once" });
+});
+
+test("subagent approvals still require session visibility", async () => {
+  const before = calls.length;
+  const r = await fetch(`${base}/api/approvals/a-subagent-hidden`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ approved: true }),
+  });
+  assert.equal(r.status, 404);
+  assert.equal(turnPosts(before).length, 0);
 });

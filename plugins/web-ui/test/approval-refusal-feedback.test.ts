@@ -2,7 +2,7 @@ import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { Agent } from "@earendil-works/pi-agent-core";
-import { runApprovalTurn } from "../src/core-bridge.ts";
+import { resolveApproval, runApprovalTurn } from "../src/core-bridge.ts";
 
 const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Model<Api>;
 
@@ -102,7 +102,7 @@ test("a missing or expired approval record surfaces a visible expiry message", a
   stubResolveResponse({ error: "not_found" }, 404);
   await assert.rejects(
     runApprovalTurn(fakeAgent(), { requestId: "a-1", approved: true }, undefined),
-    /no longer available/,
+    /expired or was already handled/,
   );
 });
 
@@ -138,5 +138,13 @@ test("a pending_approval response carrying a reason surfaces that reason instead
   await assert.rejects(
     runApprovalTurn(fakeAgent(), { requestId: "a-1", approved: true }, undefined),
     /another project member/,
+  );
+});
+
+test("a click on an approval that is already gone explains it instead of surfacing not_found", async () => {
+  globalThis.fetch = (async () => jsonResponse({ error: "not_found" }, 404)) as typeof fetch;
+  await assert.rejects(
+    resolveApproval({ requestId: "a-gone", approved: true, scope: "once" }),
+    (e: Error) => !e.message.includes("not_found") && /expired/.test(e.message) && /retry/i.test(e.message),
   );
 });
