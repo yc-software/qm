@@ -87,12 +87,15 @@ services:
   core:
     replicas: 2
     env:
+      SESSION_STORE: postgres
       SNAPSHOT_STORE: s3
       TRANSFER_STORE: s3
       S3_BUCKET: qm-example-data
+      S3_REGION: us-west-2
 ```
 
-This fragment expects `DATABASE_URL` and S3 credentials in `qm-runtime`; see
+This fragment expects `DATABASE_URL`, a remote `SANDBOX_BACKEND` and S3 credentials
+in `qm-runtime`; see
 [Core data and rollout behavior](#core-data-and-rollout-behavior). After supplying
 runtime config and `images.yaml`, render and inspect before applying:
 
@@ -111,13 +114,16 @@ sign-in, real turns, sandbox provider and backup/restore in your target cluster.
 Core keeps durable state in two places: Postgres (`DATABASE_URL`) and an object
 store for file bytes. Choose one of two layouts.
 
-**Shared storage (recommended, supports multiple replicas).** Set `DATABASE_URL`,
-`SNAPSHOT_STORE=s3`, `TRANSFER_STORE=s3` and `S3_BUCKET` (optionally `S3_REGION`
-and `S3_PREFIX`) on core, and leave `services.core.persistence` disabled. Uploaded
-artifacts, session shares, published-app source archives and sandbox file transfers
-then go to the bucket, so any replica can serve any request and pods can be
-replaced with rolling updates. S3 credentials come from the standard AWS chain,
-such as a pod IAM role bound through `serviceAccount.annotations` or
+**Shared storage (recommended, supports multiple replicas).** Set `DATABASE_URL`
+with `SESSION_STORE=postgres`, `SNAPSHOT_STORE=s3`, `TRANSFER_STORE=s3`, `S3_BUCKET`
+and `S3_REGION` (optionally `S3_PREFIX`) on core, use a remote `SANDBOX_BACKEND`,
+and leave `services.core.persistence` disabled. Sessions and runs then live in
+Postgres, and uploaded artifacts, session shares, published-app source archives and
+sandbox file transfers go to the bucket, so any replica can serve any request and
+pods can be replaced with rolling updates. Without `SESSION_STORE=postgres`,
+sessions and runs stay in process memory even when `DATABASE_URL` is set. S3
+credentials come from the standard AWS chain, such as a pod IAM role bound through
+`serviceAccount.create=true` with `serviceAccount.annotations`, or
 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in the runtime Secret. `/data` is then
 pod-local scratch. Agent workspace files that are not shared as artifacts still
 live there and do not survive pod replacement.
