@@ -592,7 +592,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     "the `background` tool to run it detached and poll for the result across turns. " +
     "Always start servers with the background tool, not shell ampersand: inherited output streams can keep execute waiting even after its shell exits. " +
     "If commands hang or fail with transport errors that nothing you ran explains, the computer itself may be " +
-    "wedged — use sandbox action=status to inspect it out-of-band and action=restart to recover it.";
+    "wedged — use sandbox action=status to inspect it out-of-band and action=restart to recover it. If a restart or two does not bring the shell back, stop restarting: create a fresh sandbox, set it as the default, and retry there, recovering work from git or Files.";
 
   const executeBaseParams = {
     command: Type.String({ description: "The shell command to run." }),
@@ -982,7 +982,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         const verdictLine =
           verdict === "wedged"
-            ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer"
+            ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer; if it is still wedged after a restart or two, create a fresh sandbox, set it as the default, and retry there"
             : "";
         return recordResult(
           callId,
@@ -1703,7 +1703,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "it's stopped automatically (a watch survives just long enough to tell you) — for anything " +
       `that finishes within ${execCeilingSec}s, just use \`execute\`. Available on the default sandbox or an authorized explicit sandbox_id; ` +
       "elsewhere, use `execute`. A background job carries the same environment a foreground `execute` " +
-      `does — $AGENT_API_URL, $AGENT_API_TOKEN and $AGENT_CREDENTIAL_TOKEN all work, so self-API calls and shared-credential broker calls run fine from background work. Two limits: those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — checkpoint your progress to the workspace and continue from a later turn or a cron), and a background job cannot deliver a file itself, so write results to ordinary workspace paths and attach them from a live turn after polling.\n` +
+      `does — $AGENT_API_URL, $AGENT_API_TOKEN and $AGENT_CREDENTIAL_TOKEN all work, so self-API calls and shared-credential broker calls run fine from background work. Two limits: those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — publish checkpoints to durable Files and verify success before expiry, retaining the file ID for the later turn or cron; if publication is unavailable, report it and retain needed local state on a scoped computer), and a background job cannot deliver a file itself, so write results to ordinary workspace paths and attach them from a live turn after polling.\n` +
       "INTERACTIVE LOGINS: device-flow logins (`gh auth login`, " +
       "`glab auth login`, `gcloud auth login`, and anything that prints a verification URL/code then " +
       "blocks waiting on a human) belong here, NOT in `execute`. Run them with action=start, read the " +
@@ -2266,8 +2266,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "action=patch edits IN PLACE (rename via `title`, change `schedule`/`task`/`text`, `enabled:false` " +
       "pauses, `enabled:true` resumes, `archived:true` archives). `task` is the standing instructions every " +
       "fire receives — patch it only to change what future fires are told to do; durable run-state (notes, " +
-      "workarounds, checkpoints a future fire needs) lives in files on the cron's workspace disk, not in " +
-      "`task`. action=delete removes it for good; " +
+      "workarounds, checkpoints a future fire needs) belongs in this conversation's durable Files via the available Files API, not in " +
+      "`task` or only on sandbox disk. Confirm publication succeeds, use a cron-specific filename, and leave the file ID in action=note for retrieval with GET /v1/files/:id/content. Small progress state can live directly in the note; never store credentials there. If publication is unavailable, report it and retain needed local state on a scoped computer. Keep tasks that need existing workspace files on that computer until their state has been migrated and verified. action=delete removes it for good; " +
       "action=run fires it once now (no effect on a paused cron) and is refused while a fire of that cron is " +
       "still running — repeating it never double-fires; action=disable pauses it.\n" +
       "action=note (id + note, running inside a cron fire) leaves a short shift-change note the NEXT fire " +

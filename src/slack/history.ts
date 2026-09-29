@@ -1,3 +1,4 @@
+import { isOwnStatusCard } from "./message-gating.ts";
 import { slackMessageToIngestEvent } from "./mirror.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
 import type { SlackContextSource } from "./config.ts";
@@ -53,6 +54,7 @@ export function createSlackHistoryReader(deps: {
         ? await historyClient.conversations.replies({ ...paging, ts: threadTs })
         : await historyClient.conversations.history(paging),
     );
+    page.messages = page.messages.filter((m) => !isOwnStatusCard(m, deps.ids.botUserId, deps.ids.ownBotId));
     const raw = threadTs ? page.messages : page.messages.slice().reverse();
     if (!threadTs && expandThreads) {
       const parents = raw.filter((m) => m.ts && Number(m.reply_count) > 0).slice(-5);
@@ -69,7 +71,8 @@ export function createSlackHistoryReader(deps: {
         }),
       );
       const byTs = new Map<string, SlackHistoryMessage>();
-      for (const m of [...raw, ...expanded.flatMap((result) => result.page.messages)]) if (m.ts) byTs.set(m.ts, m);
+      for (const m of [...raw, ...expanded.flatMap((result) => result.page.messages)])
+        if (m.ts && !isOwnStatusCard(m, deps.ids.botUserId, deps.ids.ownBotId)) byTs.set(m.ts, m);
       return {
         raw: [...byTs.values()],
         hasMore: page.hasMore,
@@ -282,19 +285,16 @@ export function createSlackHistoryReader(deps: {
           ? await historyClient.conversations.replies({ ...paging, ts: threadTs })
           : await historyClient.conversations.history(paging),
       );
-      await remember(channel, page.messages);
-      if (parentPending) {
-        try {
-          const parent = await historyClient.conversations.history({
-            channel,
-            limit,
-            latest: threadTs,
-            inclusive: true,
-          });
-          await remember(channel, parseMessageList(parent).messages);
-        } catch (error) {
-          swallow("slack: parent history backfill", error);
-        }
+      page.messages = page.messages.filter((m) => !isOwnStatusCard(m, deps.ids.botUserId, deps.ids.ownBotId));
+      page.messages = page.messages.filter((m) => !isOwnStatusCard(m, deps.ids.botUserId, deps.ids.ownBotId));
+      if (page.messages.length && deps.core.rememberSurfaceHistory) {
+        await deps.core
+          .rememberSurfaceHistory(
+            page.messages
+              .filter((m) => m.ts)
+              .map((m) => slackMessageToIngestEvent({ ...m, channel }, deps.ids, { handled: true })),
+          )
+          .catch((error) => swallow("slack: history mirror ingest", error));
       }
       if (deps.core.readSurfaceMessages && page.messages.length) {
         const stored = await deps.core.readSurfaceMessages(channel, {

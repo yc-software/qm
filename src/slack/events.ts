@@ -18,7 +18,7 @@ import type { DenyResponder } from "./allow-from.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { Mirror } from "./mirror.ts";
 import type { TurnHandler } from "./turn-handler.ts";
-import { shouldMirrorMessage } from "./message-gating.ts";
+import { shouldMirrorMessage, isOwnStatusCard } from "./message-gating.ts";
 
 interface EventArgs {
   event: unknown;
@@ -175,6 +175,7 @@ export function registerSlackEvents(
   app.message(async ({ message, body, client, context }: MessageArgs) => {
     try {
       const m = parseMessageEvent(message);
+      if (isOwnStatusCard(m.message ?? m.previous_message ?? m, ids.botUserId, ids.ownBotId)) return;
       if (
         m.channel &&
         !m.channel_type &&

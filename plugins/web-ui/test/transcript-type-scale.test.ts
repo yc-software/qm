@@ -25,18 +25,22 @@ test("every chat context sets one transcript base size on the chat shell", () =>
   );
 });
 
-test("message text and the work header sit on the base; tool and thinking rows one step below", () => {
+test("desktop text scales with the chat base while thinking and work messages keep their sizes", () => {
   for (const selector of [".assistant-body", ".message-bubble", ".work-head", ".work-said", ".live-work-line"]) {
-    assert.deepEqual(fontSizes(selector), ["var(--chat-font-size)"], selector);
+    assert.deepEqual(
+      fontSizes(selector),
+      ["max(min(12px, var(--chat-font-size)), calc(var(--chat-font-size) * var(--text-scale)))"],
+      selector,
+    );
   }
-  for (const selector of [
-    ".activity-group > .work-head",
-    ".tool-row,\n.tool-row .tool-summary",
-    ".thinking-summary",
-    ".thinking-body",
-    ".work-message",
-    ".stopped-head",
-  ]) {
+  for (const selector of [".activity-group > .work-head", ".tool-row,\n.tool-row .tool-summary", ".stopped-head"]) {
+    assert.deepEqual(
+      fontSizes(selector),
+      ["max(min(12px, calc(var(--chat-font-size) - 1px)), calc((var(--chat-font-size) - 1px) * var(--text-scale)))"],
+      selector,
+    );
+  }
+  for (const selector of [".thinking-summary", ".thinking-body", ".work-message"]) {
     assert.deepEqual(fontSizes(selector), ["calc(var(--chat-font-size) - 1px)"], selector);
   }
 });

@@ -1345,3 +1345,39 @@ test("usage summaries authorize before reads and include only the requested scop
   assert.deepEqual(summarize.mock.calls[0]!.arguments, [["summary"]]);
   assert.doesNotMatch(JSON.stringify(body), /private|unlisted|U2/);
 });
+
+test("credential prompt blocks are byte-identical across inventory and policy ordering", async () => {
+  const { built } = buildWithCapture();
+  for (const slug of ["z-service", "a-service"]) {
+    await built.serviceCreds.setServiceCredential("org:default-org", {
+      slug,
+      name: slug,
+      secret: "s",
+      host: "api.example.com",
+      allowedMethods: ["POST", "GET"],
+      allowedPathPrefixes: ["/z", "/a"],
+    });
+    await built.acl.grant({
+      ownerScopeId: "org:default-org",
+      ref: `service-cred:${slug}`,
+      granteeScopeId: "org:default-org",
+      permission: "read",
+      grantedBy: "admin",
+    });
+  }
+  const first = await built.app.turn(dm("!sysprompt"));
+  assert.equal(first.status, "ok");
+  assert.match(first.reply ?? "", /service_z-service/);
+  assert.match(first.reply ?? "", /service_a-service/);
+  assert.match(first.reply ?? "", /Shared org credentials available to you/);
+  const list = built.serviceCreds.listServiceCredentials.bind(built.serviceCreds);
+  built.serviceCreds.listServiceCredentials = async (...args) =>
+    (await list(...args)).reverse().map((record) => ({
+      ...record,
+      allowedMethods: record.allowedMethods?.toReversed(),
+      allowedPathPrefixes: record.allowedPathPrefixes?.toReversed(),
+    }));
+  const second = await built.app.turn(dm("!sysprompt"));
+  assert.equal(second.status, "ok");
+  assert.equal(second.reply, first.reply);
+});

@@ -325,10 +325,35 @@ export async function startSlackPlugin(
         }
       })();
     });
+  const statusClient = new WebClient(BOT_TOKEN, {
+    ...CLIENT_OPTIONS,
+    timeout: 5_000,
+    rejectRateLimitedCalls: true,
+  });
+  const statusAccount = () => `${ids.ownTeamId}:${ids.botUserId}`;
+  let statusSync: Promise<void> | undefined;
+  const reconcileStatus = () => {
+    statusSync ??= core.sessionStatus
+      ?.reconcile(statusClient, statusAccount())
+      .catch(swallowAs("slack: session status reconciliation", undefined))
+      .finally(() => {
+        statusSync = undefined;
+      });
+    return statusSync;
+  };
+  const statusSweep = createSweeper(reconcileStatus, 60_000, { label: "slack session status", immediate: true });
   const handler = createTurnHandler({
     accountId: ACCOUNT_LABEL,
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
     continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients.get(id)),
+    onEngaged: (runId, channel, threadTs) => {
+      void core.sessionStatus?.start(statusClient, statusAccount(), runId, channel, threadTs).finally(() => {
+        void reconcileStatus();
+      });
+    },
+    onSettled: () => {
+      void reconcileStatus();
+    },
     rateLimitNotice,
     readHistory,
     core,
@@ -520,6 +545,7 @@ export async function startSlackPlugin(
         }
       });
   };
+  statusSweep.start();
   let unsubscribeDeliveries = (): void => {};
   let deliveriesTimer: NodeJS.Timeout | undefined;
   if (CORE_SINGLETON || cfg.externalAccess) {
@@ -553,6 +579,7 @@ export async function startSlackPlugin(
       }
       stopped = true;
       if (slackAccountClients.get(ACCOUNT_LABEL)?.client === app.client) slackAccountClients.delete(ACCOUNT_LABEL);
+      await statusSweep.stop();
       await replaySweeper?.stop();
       if (deliveriesTimer) clearInterval(deliveriesTimer);
       if (emojiCatalogTimer) clearInterval(emojiCatalogTimer);
