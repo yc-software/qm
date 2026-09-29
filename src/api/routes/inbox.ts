@@ -61,7 +61,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
       .filter((item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail");
     await ctx.deps.inboxSourceRefresh(acting.actorId, mail);
   }
-  const summaries = (await deps.items.summaries(selectedIds)).filter(
+  const summaries = (await deps.items.summaries(selectedIds, { includeEmailClassification: true })).filter(
     (item) => selectedIds.includes(item.loopId) && item.inboxPreview?.sentChat !== true,
   );
   const itemId = ctx.url.searchParams.get("itemId");
@@ -73,15 +73,26 @@ async function inbox(ctx: ApiCtx): Promise<void> {
       outputs: (await deps.outputs.byItem(item.id)).filter((output) => output.loopId === item.loopId),
     });
   }
+  const requestedFilter = ctx.url.searchParams.get("filter");
+  if (requestedFilter !== null && !["all", "human", "triaged"].includes(requestedFilter))
+    return sendJson(ctx.res, 400, { error: "invalid_filter" });
+  const savedFilter = requestedFilter ?? (await preferences.get(uiStateId(acting.actorId, "inbox-filter")))?.value;
+  const inboxFilter = savedFilter === "all" || savedFilter === "human" ? savedFilter : "triaged";
   const handled = ctx.url.searchParams.get("view") === "handled";
   const sent = ctx.url.searchParams.get("view") === "sent";
   const filter = ctx.url.searchParams.get("loopId");
-  const attention = summaries.filter(
-    (item) => item.status === "ready" || (item.status === "failed" && item.parkedReason),
-  );
+  const open = summaries.filter((item) => item.status !== "shipped" && item.status !== "skipped");
+  const attention = open.filter((item) => {
+    if (item.source === "gmail") {
+      if (inboxFilter === "all") return true;
+      if (item.inboxPreview?.automated === true) return false;
+      if (inboxFilter === "human") return true;
+      if (item.inboxPreview?.probablyResolved === true) return false;
+    }
+    return item.status === "ready" || (item.status === "failed" && Boolean(item.parkedReason));
+  });
   const counts = new Map<string, number>();
-  for (const item of attention.filter((entry) => entry.inboxPreview?.probablyResolved !== true))
-    counts.set(item.loopId, (counts.get(item.loopId) ?? 0) + 1);
+  for (const item of open) counts.set(item.loopId, (counts.get(item.loopId) ?? 0) + 1);
   let candidates = attention;
   if (sent)
     candidates = summaries.filter(
@@ -118,7 +129,14 @@ async function inbox(ctx: ApiCtx): Promise<void> {
         id: loop.id,
         name: loop.name,
         icon: loop.icon,
-        sources: loop.sources,
+        sources: [
+          ...new Set([
+            ...(loop.sources ?? []),
+            ...summaries
+              .filter((item) => item.loopId === loop.id)
+              .flatMap((item) => (item.source ? [item.source] : [])),
+          ]),
+        ],
         count: counts.get(loop.id) ?? 0,
         state: loop.state,
         cronId: loop.cronId,
@@ -136,6 +154,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
       selected: selectedIds.includes(loop.id),
     })),
     migrationPending: !migrated,
+    filter: inboxFilter,
     total: [...counts.values()].reduce((sum, count) => sum + count, 0),
     items: page.map((item) =>
       ledgerItemView({

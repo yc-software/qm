@@ -54,8 +54,12 @@ test("email items edit like an email; slack items like slack", () => {
   assert.match(inbox, /<span>To<\/span>/);
   assert.match(inbox, /<span>Subject<\/span>/);
   assert.match(inbox, /Send it/, "send is a suggested action");
-  assert.match(inbox, /inbox-chat-suggest/, "suggested actions render beside edit prompts");
-  assert.match(inbox, /submit\(e, "Send it"\)/);
+  assert.match(
+    readFileSync(new URL("../src/assistant-sidebar.ts", import.meta.url), "utf8"),
+    /inbox-chat-suggest/,
+    "suggested actions render beside edit prompts",
+  );
+  assert.match(inbox, /submit\(event, "Send it"\)/);
   assert.match(inbox, /rows=\$\{gmail \? 7 : 3\}/, "email drafts get a taller editor than slack replies");
 });
 
@@ -77,7 +81,7 @@ test("the address keeps naming the open item, even after switchView writes the b
   assert.match(inbox, /if \(appState\.currentView !== "inbox"\) return;/, "and never writes from another view");
 });
 
-test("inbox pills own stable routes that survive refresh and history navigation", () => {
+test("inbox tabs own stable routes that survive refresh and history navigation", () => {
   assert.match(inbox, /itemId \?\? inboxViewSegment\(fullViewId\)/);
   assert.match(inbox, /if \(segment === "email"\) return "gmail"/);
   assert.match(inbox, /if \(surface === fullSurface\) selectInboxView\(v\.id, true\)/);
@@ -203,7 +207,7 @@ test("the inbox list spans the same desktop content width as the item detail", (
     css,
     /\.content-wide-page > \.pane-head \{\s*width: min\(var\(--content-wide-width\), 100%\);\s*max-width: none;/,
   );
-  assert.doesNotMatch(css, /inbox-item-aside/);
+  assert.match(css, /\.inbox-thread-page > \.inbox-item-surface/);
 });
 
 test("inbox item hover behaves like a sidebar conversation hover", () => {
@@ -223,7 +227,6 @@ test("inbox dividers do not collide with rounded hovered rows", () => {
     /\.inbox-item:hover::after,\s*\.inbox-item:has\(\+ \.inbox-item:hover\)::after \{\s*background: transparent;/,
   );
   assert.doesNotMatch(css, /\.inbox-item \{\s*border-bottom:/);
-  assert.match(css, /\.inbox-page \.inbox-toolbar \{\s*padding: 8px 0;\s*border-bottom: 0;/);
 });
 
 test("clipped email snippets do not trigger a native hover tooltip", () => {

@@ -77,7 +77,10 @@ export interface LoopItemLedger {
   get(id: string): Promise<LoopItem | null>;
   byLoop(loopId: string): Promise<LoopItem[]>;
   moveSource(from: string, to: string, source: string): Promise<void>;
-  summaries(loopIds: string[]): Promise<Array<Omit<LoopItem, "proposal" | "agentDrafts" | "thread" | "sourcePayload">>>;
+  summaries(
+    loopIds: string[],
+    options?: { includeEmailClassification?: boolean },
+  ): Promise<Array<Omit<LoopItem, "proposal" | "agentDrafts" | "thread" | "sourcePayload">>>;
   queued(loopId: string, limit?: number): Promise<LoopItem[]>;
   claim(id: string, claimedAt?: number, expectedLoopId?: string): Promise<LoopItem | null>;
   acquireDecision(id: string, decisionAt?: number): Promise<string | null>;
@@ -288,11 +291,28 @@ export function createLoopItemLedger(
       const stored = await backing.putIfAbsent(id, candidate);
       return { item: stored, created: stored.createdAt === candidate.createdAt };
     },
-    summaries: (loopIds) =>
-      backing.select({
+    async summaries(loopIds, options) {
+      if (!options?.includeEmailClassification)
+        return backing.select({
+          where: { field: "loopId", anyOfFold: loopIds },
+          omit: ["proposal", "agentDrafts", "thread", "sourcePayload"],
+        });
+      const items = await backing.select({
         where: { field: "loopId", anyOfFold: loopIds },
-        omit: ["proposal", "agentDrafts", "thread", "sourcePayload"],
-      }),
+        omit: ["proposal", "agentDrafts", "thread"],
+        pickNested: { sourcePayload: ["source", "automated"] },
+      });
+      return items.map(({ sourcePayload, ...item }) => {
+        const source = item.source ?? (typeof sourcePayload?.source === "string" ? sourcePayload.source : undefined);
+        return {
+          ...item,
+          ...(source !== undefined ? { source } : {}),
+          ...(source === "gmail"
+            ? { inboxPreview: { ...item.inboxPreview, automated: sourcePayload?.automated === true } }
+            : {}),
+        };
+      });
+    },
     async ingest(entries) {
       const outcome: IngestOutcome = { created: 0, updated: 0, skipped: 0 };
       for (const entry of entries) {

@@ -682,6 +682,21 @@ test("DEPLOY_PROVIDER=porter refuses to boot without a cluster and tolerates a m
   );
 });
 
+test("PORTER_DEPLOY_VISIBILITY=internal is accepted and refuses an apps domain", () => {
+  const cluster = {
+    DEPLOY_PROVIDER: "porter",
+    PORTER_DEPLOY_API_TOKEN: "tok",
+    PORTER_DEPLOY_PROJECT_ID: "7",
+    PORTER_DEPLOY_CLUSTER_ID: "9",
+    PORTER_DEPLOY_VISIBILITY: "internal",
+  };
+  assert.equal(loadConfig(cluster).porterDeploy.visibility, "internal");
+  assert.throws(
+    () => loadConfig({ ...cluster, PORTER_DEPLOY_APPS_DOMAIN: "apps.example.com" }),
+    /PORTER_DEPLOY_APPS_DOMAIN/,
+  );
+});
+
 test("SANDBOX_BACKEND=porter locates the API and shares the deploy provider's token", () => {
   assert.throws(
     () => loadConfig({ SANDBOX_BACKEND: "porter", PORTER_DEPLOY_API_TOKEN: "tok" }),

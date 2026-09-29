@@ -48,7 +48,7 @@ import { PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection } from "./composer";
 import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
-import { clearAllDrafts, saveDraft, storedDraft } from "./drafts";
+import { clearAllDrafts, newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, UI_BASE } from "./deep-link";
 import {
   adoptRemoteSplit,
@@ -1023,6 +1023,8 @@ export async function boot(): Promise<void> {
     item: wantedItem,
   } = parseDeepLink(UI_BASE, location.pathname, location.search);
   document.body.classList.toggle("app-edit-embed", wanted === "app-edit" && params.get("embed") === "1");
+  const prefillRoute = wanted === null || wanted === "new";
+  const prefill = prefillRoute && !wantedSession ? (params.get("q")?.slice(0, 20_000) ?? null) : null;
   const chatsLink = wanted === null || wanted === "chats";
   const linkedId = wantedSession && chatsLink ? wantedSession : null;
   let transcriptUnavailable = false;
@@ -1084,7 +1086,7 @@ export async function boot(): Promise<void> {
   if (connectedProvider) markConnectorConnected(connectedProvider);
   const viewIntent = isView(wanted) && canView(wanted) && wanted !== "chats";
   loadPersistedSplit();
-  if (!wantedSession && wanted !== "app-edit") {
+  if (!wantedSession && wanted !== "app-edit" && prefill === null) {
     const restore = adoptRemoteSplit(remoteSplitFetch).then(async () => {
       if (viewIntent && restoredCanvasNeedsSessionList()) await sessions;
     });
@@ -1146,6 +1148,14 @@ export async function boot(): Promise<void> {
   }
 
   await sessions;
+
+  if (prefill !== null) {
+    history.replaceState(null, "", deepLinkPath(UI_BASE, "chats", null));
+    saveDraft(newChatDraftKey(appState.me.user), prefill);
+    exitSplitIfActive();
+    mainConversation().newChat();
+    return;
+  }
 
   if (wanted === "app-edit") {
     const slug = (params.get("slug") ?? "").toLowerCase();

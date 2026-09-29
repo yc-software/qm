@@ -419,3 +419,50 @@ test("pg map: webhook history retains concurrent deliveries across store instanc
   assert.equal(events.at(-1)?.receivedAt, 10);
   assert.equal(new Set(events.map((e) => e.deliveryId)).size, 50);
 });
+
+for (const postgres of [false, true]) {
+  test(
+    `${postgres ? "pg" : "memory"} map: nested projection excludes large fields and preserves default reads`,
+    { skip: postgres && skip },
+    async () => {
+      type Row = { owner: string; secret: string; payload?: Record<string, unknown> | null };
+      const factory = postgres ? createPostgresMapFactory(URL!) : undefined;
+      const map = factory ? factory.map<Row>("map_widgets") : createMemoryMap<Row>();
+      const payload = { source: "gmail", automated: true, body: "x".repeat(64_000), nil: null };
+      const rows: Row[] = [
+        { owner: "projection", secret: "hidden", payload },
+        { owner: "projection", secret: "hidden" },
+        { owner: "projection", secret: "hidden", payload: null },
+      ];
+      try {
+        for (const [i, row] of rows.entries()) await map.put(`projection-${i}`, row);
+        const selected = await map.select({
+          where: { field: "owner", anyOfFold: ["PROJECTION"] },
+          omit: ["secret"],
+          pickNested: { payload: ["source", "automated", "nil", "missing"] },
+          afterId: "projection-0",
+          limit: 2,
+        });
+        assert.deepEqual(selected, [{ owner: "projection" }, { owner: "projection", payload: null }]);
+        const [first] = await map.select({
+          where: { field: "owner", anyOfFold: ["projection"] },
+          pickNested: { payload: ["source", "automated", "nil"] },
+          limit: 1,
+        });
+        assert.deepEqual(first!.payload, { source: "gmail", automated: true, nil: null });
+        assert.deepEqual(await map.get("projection-0"), rows[0]);
+        assert.deepEqual(await map.select({ where: { field: "owner", anyOfFold: ["projection"] } }), rows);
+        const [omitted] = await map.select({
+          where: { field: "owner", anyOfFold: ["projection"] },
+          pickNested: { payload: ["source"] },
+          omit: ["payload"],
+          limit: 1,
+        });
+        assert.equal("payload" in omitted!, false);
+      } finally {
+        for (let i = 0; i < rows.length; i++) await map.delete(`projection-${i}`);
+        await factory?.pool.close();
+      }
+    },
+  );
+}

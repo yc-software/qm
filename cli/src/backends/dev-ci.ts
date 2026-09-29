@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { die, note, ok } from "../log.ts";
-import { envNum, gitTopLevel, spawnBackground, stopPid, tail, waitForLog, which } from "../util.ts";
+import { envNum, gitTopLevel, runInherit, spawnBackground, stopPid, tail, waitForLog, which } from "../util.ts";
 import { serviceDef } from "../services.ts";
 
 const ciDir = (root: string): string => join(root, process.env.CI_INSTANCE_DIR ?? ".ci-instance");
@@ -58,6 +58,7 @@ export async function devCiUp(): Promise<void> {
   const root = gitTopLevel();
   requireEnv();
   requireDeps(root);
+  runInherit("npm", ["run", "build:connector-sdk"], { cwd: root });
 
   const dir = ciDir(root);
   mkdirSync(dir, { recursive: true });

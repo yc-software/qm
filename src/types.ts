@@ -115,6 +115,7 @@ export interface Session {
   hasEntries?: boolean;
   working?: boolean;
   awaitingInput?: boolean;
+  lastTurnFailed?: boolean;
   backgroundJobs?: number;
   watches?: number;
   crons?: number;
@@ -288,6 +289,7 @@ export interface Cron extends TriggerBase {
   ownerResourcesRequireOpen?: boolean;
   members?: Principal[];
   unattendedGrants?: string[];
+  sessionRef?: string;
 
   fireLog?: CronFireLogEntry[];
   lastFireNote?: CronFireNote;

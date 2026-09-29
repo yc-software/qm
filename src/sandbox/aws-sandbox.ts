@@ -1,3 +1,4 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { DeleteObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { orgId as configOrgId } from "../config.ts";
 import type { WorkspaceLayer } from "../types.ts";
@@ -423,16 +424,6 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       endpointById.set(id, body.endpoint);
       const coldStart = body.coldStart;
 
-      const prepared = await execRaw(
-        id,
-        `mkdir -p ${shq(WORKSPACE_DIR)} && ${ephemeralCredLinkScript(HOME_DIR, credentialPaths)}`,
-        PREP_TIMEOUT_SEC,
-      );
-      if (prepared.code !== 0)
-        throw new Error(
-          `AWS sandbox credential setup failed: ${execFailureDetail(prepared, PREP_TIMEOUT_SEC).slice(0, 200)}`,
-        );
-
       const env = provOpts?.env && Object.keys(provOpts.env).length ? provOpts.env : undefined;
       const handle: SandboxHandle = {
         id,
@@ -443,20 +434,35 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         ...(env ? { env } : {}),
       };
 
-      await materializeRoLayers(
-        workspace,
-        layers,
-        handle,
-        {
-          readFile: (h, rel) => sandbox.readFile(h, rel),
-          writeFileBytes: (h, rel, data) => sandbox.writeFileBytes(h, rel, data),
-          exec: (script, t) => execRaw(id, script, t),
-        },
-        { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "aws" },
-      );
-
       activeByMicrovm.set(id, (activeByMicrovm.get(id) ?? 0) + 1);
-      return handle;
+      try {
+        const prepared = await execRaw(
+          id,
+          `mkdir -p ${shq(WORKSPACE_DIR)} && ${ephemeralCredLinkScript(HOME_DIR, credentialPaths)}`,
+          PREP_TIMEOUT_SEC,
+        );
+        if (prepared.code !== 0)
+          throw new Error(
+            `AWS sandbox credential setup failed: ${execFailureDetail(prepared, PREP_TIMEOUT_SEC).slice(0, 200)}`,
+          );
+
+        await materializeRoLayers(
+          workspace,
+          layers,
+          handle,
+          {
+            readFile: (h, rel) => sandbox.readFile(h, rel),
+            writeFileBytes: (h, rel, data) => sandbox.writeFileBytes(h, rel, data),
+            exec: (script, t) => execRaw(id, script, t),
+          },
+          { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "aws" },
+        );
+
+        return handle;
+      } catch (error) {
+        await cleanupFailedProvision(sandbox, handle);
+        throw error;
+      }
     },
 
     async run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {

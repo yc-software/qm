@@ -1693,9 +1693,14 @@ function credLine(
   const who = owner.displayName ? `${owner.displayName} (${owner.id})` : owner.id;
   if (isBackendCredential(c))
     return `- ${who}: Composio backend access — use the composio skill and /v1/composio; this key cannot be loaded into a computer`;
-  let slot = `files ${(c.targets ?? [c.target]).filter(Boolean).join(", ")}`;
+  let slot = `files ${(c.targets ?? [c.target]).filter(Boolean).sort().join(", ")}`;
   if (c.kind === "env") {
-    slot = c.fields ? c.fields.map((f) => `\`${f.envKey}\``).join(" + ") : `\`${c.envKey}\``;
+    slot = c.fields
+      ? c.fields
+          .map((f) => `\`${f.envKey}\``)
+          .sort()
+          .join(" + ")
+      : `\`${c.envKey}\``;
   }
   const label = c.accountLabel ? `, account ${c.accountLabel}` : "";
   return `- ${who}: ${c.service} (${slot}${label}${expiryNote(c, now, own)}) — credential id \`${c.id}\` — ${grantNote}`;
@@ -1757,7 +1762,9 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     const services = (input.detectedByOwner?.get(member.id) ?? []).filter((s) => !registered.has(s.toLowerCase()));
     if (!services.length) continue;
     const who = member.displayName ? `${member.displayName} (${member.id})` : member.id;
-    detectedLines.push(`- ${who}: ${services.join(", ")} — signed in on their own computer, not in the keychain`);
+    detectedLines.push(
+      `- ${who}: ${services.sort().join(", ")} — signed in on their own computer, not in the keychain`,
+    );
   }
 
   const inDm = input.conversationKind === "dm";
@@ -1776,7 +1783,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
       "A connector grant works exactly like any other: ask the owner, they approve on their own turn, then `use` it.",
   );
   if (memberLines.length) {
-    lines.push("", "In this conversation:", ...memberLines);
+    lines.push("", "In this conversation:", ...memberLines.sort());
   } else {
     lines.push("", "No keychain credentials registered yet for the people here.");
   }
@@ -1800,7 +1807,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     lines.push(
       "",
       "Detected but NOT registered (not grantable yet):",
-      ...detectedLines,
+      ...detectedLines.sort(),
       "To make one usable here, its owner must first register it in their keychain from their own DM with you " +
         '(they can say "register my logins" there). A login living on someone\'s computer is not a grant — never claim access to it.',
     );
@@ -1810,12 +1817,15 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     lines.push(
       "",
       "Available command credentials:",
-      ...input.injected.map(
-        (m) =>
-          `- \`${credentialHandle(m.credentialId)}\` — ${m.service}, owner ${m.ownerId}, provides ${m.env
-            .map((e) => `\`${e.key}\``)
-            .join(" + ")}${m.purpose ? `, purpose: "${m.purpose}"` : ""}.`,
-      ),
+      ...input.injected
+        .toSorted((a, b) => a.credentialId.localeCompare(b.credentialId))
+        .map(
+          (m) =>
+            `- \`${credentialHandle(m.credentialId)}\` — ${m.service}, owner ${m.ownerId}, provides ${m.env
+              .map((e) => `\`${e.key}\``)
+              .sort()
+              .join(" + ")}${m.purpose ? `, purpose: "${m.purpose}"` : ""}.`,
+        ),
       "Pass these exact handles in the execute tool's credentials field. Core exposes them only to that command.",
     );
   }
@@ -1834,7 +1844,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     }
   }
   if (askLines.length) {
-    lines.push("", "Asks sent from this conversation:", ...askLines);
+    lines.push("", "Asks sent from this conversation:", ...askLines.sort());
   }
 
   lines.push(
@@ -1874,14 +1884,16 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     lines.push(
       "",
       "### Asks waiting on you",
-      ...waiting.map((a) => {
-        const cred = myCreds.get(a.credentialId);
-        const what = cred
-          ? `${cred.service}${cred.accountLabel ? ` (${cred.accountLabel})` : ""}`
-          : `credential \`${a.credentialId}\``;
-        const hint = a.requestedMode === "standing" ? ", asked as standing" : "";
-        return `- ask \`${a.id}\`: ${a.requesterId} wants to use your ${what} in ${a.requesterScopeId}${hint}, for: "${a.purpose}" — expires at ${new Date(a.expiresAt).toISOString()}`;
-      }),
+      ...waiting
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((a) => {
+          const cred = myCreds.get(a.credentialId);
+          const what = cred
+            ? `${cred.service}${cred.accountLabel ? ` (${cred.accountLabel})` : ""}`
+            : `credential \`${a.credentialId}\``;
+          const hint = a.requestedMode === "standing" ? ", asked as standing" : "";
+          return `- ask \`${a.id}\`: ${a.requesterId} wants to use your ${what} in ${a.requesterScopeId}${hint}, for: "${a.purpose}" — expires at ${new Date(a.expiresAt).toISOString()}`;
+        }),
       'When this person answers (their own words are the consent — "sure"/"just this once" means `once`; "keep it for that channel" means `standing`; default to `once`):',
       '- Approve: `curl -fsS -X POST "$AGENT_API_URL/v1/keychain/grants" ' +
         CAPABILITY_CURL_AUTH +

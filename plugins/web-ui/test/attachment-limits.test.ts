@@ -154,7 +154,10 @@ test("Stop pressed before the run id arrives still stops core's run", () => {
 });
 
 test("confirmed aborted output is preserved during transcript refresh", () => {
-  assert.match(chat, /if \(last\?\.stopReason === "error"\) return drawActiveChat\(agent\);/);
+  assert.match(
+    chat,
+    /if \(last\?\.stopReason === "error" && !last\.interruptedRunId\) return drawActiveChat\(agent\);/,
+  );
   assert.match(chat, /if \(last\?\.stopReason === "aborted"\) return drawActiveChat\(agent\);/);
 });
 

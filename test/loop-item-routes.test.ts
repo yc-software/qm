@@ -105,6 +105,7 @@ async function call(
     capability?: Record<string, unknown> | null;
     actor?: string;
     sessionForThread?: string;
+    flagEnabled?: (flag: string, scope: string) => Promise<boolean>;
   },
 ): Promise<{ status: number; body: unknown }> {
   const url = new URL(`http://x${over.path}`);
@@ -142,7 +143,7 @@ async function call(
     params: found.params,
     capability: over.capability === undefined ? CAP : over.capability,
     deps: {
-      featureFlags: { enabled: async () => true },
+      featureFlags: { enabled: over.flagEnabled ?? (async () => true) },
       loops: w.loops,
       ...(w.sourceRefresh ? { inboxSourceRefresh: w.sourceRefresh } : {}),
       sessions: {
@@ -1034,4 +1035,91 @@ test("followup accepts only typed runtime and staged attachment fields", async (
     assert.equal(bad.status, 400, JSON.stringify(invalid));
     assert.equal(received, undefined);
   }
+});
+
+test("email classification is scoped to the owner's flagged personal inbox", async () => {
+  for (const surface of [undefined, "inbox", "inbox:gmail", "inbox:slack"]) {
+    for (const enabled of [false, true]) {
+      for (const source of ["gmail", "slack"]) {
+        const w = world();
+        const { loop } = await w.loops.store.create({
+          owner: "josh",
+          createdBy: "josh",
+          ownerScopeId: "personal:josh",
+          name: "Classification test",
+          playbook: "Read messages",
+          successCondition: "Messages reviewed",
+          surface,
+        });
+        const classified = enabled && source === "gmail" && (surface === "inbox" || surface === "inbox:gmail");
+        const flagEnabled = async (flag: string, scope: string) => {
+          assert.equal(flag, "inbox_loops");
+          assert.equal(scope, "personal:josh");
+          return enabled;
+        };
+        for (const automated of [true, false]) {
+          const receivedAt = automated ? 1234 : 2345;
+          const item =
+            source === "slack"
+              ? ITEM
+              : {
+                  ...ITEM,
+                  source: "gmail",
+                  sourceKey: "thread-1",
+                  gmail: { threadId: "thread-1" },
+                };
+          const response = await call(w, {
+            method: "POST",
+            path: `/v1/loops/${loop.id}/items`,
+            flagEnabled,
+            body: { items: [{ ...item, receivedAt, automated, probablyResolved: false }] },
+          });
+          assert.equal(response.status, 200);
+          const [stored] = await w.loops.items.byLoop(loop.id);
+          assert.equal(stored!.sourcePayload!.automated, classified ? automated : undefined);
+          assert.equal(stored!.sourcePayload!.probablyResolved, classified ? false : undefined);
+          assert.equal(stored!.status, "ready");
+          assert.equal(stored!.proposal!.data.body, ITEM.draft.body);
+          const [summary] = await w.loops.items.summaries([loop.id]);
+          assert.equal(summary!.inboxPreview!.automated, undefined);
+        }
+      }
+    }
+  }
+});
+
+test("a company loop cannot opt into personal inbox classification", async () => {
+  const w = world();
+  const { loop } = await w.loops.store.create({
+    owner: "josh",
+    createdBy: "josh",
+    ownerScopeId: "company:org",
+    name: "Company mail",
+    surface: "inbox:gmail",
+    playbook: "Read messages",
+    successCondition: "Messages reviewed",
+  });
+  const response = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items`,
+    flagEnabled: async () => {
+      assert.fail("company loop must not read a personal flag");
+    },
+    body: {
+      items: [
+        {
+          ...ITEM,
+          source: "gmail",
+          sourceKey: "mail",
+          gmail: { threadId: "mail" },
+          automated: true,
+          probablyResolved: false,
+        },
+      ],
+    },
+  });
+  assert.equal(response.status, 200);
+  const [item] = await w.loops.items.byLoop(loop.id);
+  assert.equal(item!.sourcePayload!.automated, undefined);
+  assert.equal(item!.sourcePayload!.probablyResolved, undefined);
 });

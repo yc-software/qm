@@ -839,6 +839,13 @@ export function createTurnMethods(
       const run = await deps.runs.get(runId);
       if (!run) return { accepted: false, reason: "not_found" };
       if (viewer && !(await viewerMayUseRun(run, viewer))) return { accepted: false, reason: "not_found" };
+      if (
+        signal.kind === "steer" &&
+        run.request.surface === "web" &&
+        /^web:.+:inbox$/.test(run.request.conversation.threadRef) &&
+        !signal.request
+      )
+        return { accepted: false, reason: "conversation_mismatch" };
       const queuedKey = signal.queuedRunId
         ? `queued-steer:${run.request.conversation.threadRef}:${signal.queuedRunId}`
         : undefined;

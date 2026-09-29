@@ -277,7 +277,7 @@ export function sharedManifest(handles: readonly GrantedHandle[]): string {
   }
   if (!lines.length) return "";
   const total = lines.length;
-  const shown = lines.slice(0, MAX_SHARED_FILES_LISTED);
+  const shown = lines.sort().slice(0, MAX_SHARED_FILES_LISTED);
   const omitted = total - shown.length;
   if (omitted > 0) {
     shown.push(`…and ${omitted} more (read shared/<name> to fetch)`);

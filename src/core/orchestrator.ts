@@ -2,6 +2,7 @@ import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolut
 import { externalTools } from "./orchestrator/external-tools.ts";
 import { memoryBoundedEntries, memoryContextPayload, nextMemoryContext } from "../memory/context-boundary.ts";
 import { isBackendCredential } from "../credentials/keychain.ts";
+import { resolveBrowserModel } from "../model/browser-model.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
 import {
@@ -78,6 +79,7 @@ import {
   CAPABILITY_TTL_MS,
   SANDBOX_CAPABILITY_TTL_MS,
   CONTROL_PLANE_AUD,
+  BROWSER_MODEL_AUD,
   OAUTH_CONSENT_AUD,
   CREDENTIAL_BROKER_AUD,
   EGRESS_PROXY_AUD,
@@ -172,7 +174,7 @@ import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
-import { isHarnessId, resolveModel, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
+import { isHarnessId, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
 import type { ProviderKeys } from "../harness/pi-harness.ts";
 import type { CodexTurnAuth } from "../harness/harness.ts";
 import { resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
@@ -231,11 +233,6 @@ const ACTIVITY_ENTRY_TYPES = new Set<EntryType>([
   "approval_request",
   "approval_resolved",
 ]);
-
-function knownBrowseModel(id: string | null | undefined): { id: string; provider: string } | undefined {
-  const provider = id ? resolveModel(id)?.provider : undefined;
-  return id && provider ? { id, provider } : undefined;
-}
 
 const SHARED_CORE_MD = loadProtocolFile("shared-core");
 const MODE_CONVERSATION_MD = loadProtocolFile("mode-conversation");
@@ -1256,7 +1253,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       turnContextBlocks.push(computerBlock);
       if (!external && deps.scratchExec) {
         systemPrompt +=
-          '\n\nSelect a sandbox explicitly or use a stored default. The opt-in scratch box (scope:"scratch") is separate: same OS and tooling, org-global files only, no logins or tokens, wiped after the turn — prefer it for heavy self-contained runs that need no logins, workspace files, or follow-up; it keeps this computer responsive.';
+          '\n\nSelect a sandbox explicitly or use a stored default. The opt-in scratch box (scope:"scratch") is separate: same OS/tooling, read-only org-global files, this conversation\'s scoped Files/API capabilities, and credentials explicitly requested per execute call. Its local files are wiped after the turn, and resident workspace files and cached CLI logins are not restored. Use it for self-contained commands and API work; publish needed outputs to Files and verify success. Use scoped execution for existing workspace state or work that must continue locally.';
       }
       if (!external && deps.deploymentLayer?.hints.length) {
         systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;
@@ -1626,13 +1623,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const browseSteps = deps.config?.getBrowseMaxSteps(toScopeId("org", orgId()));
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
-        const browseChoice =
-          knownBrowseModel(deps.config?.getBrowseModel(toScopeId("org", orgId()))) ??
-          knownBrowseModel(deps.resolveBaseModelId?.());
-        if (browseChoice && !("BROWSE_LAB_MODEL" in connectorEnv)) {
-          connectorEnv.BROWSE_LAB_MODEL = browseChoice.id;
-          connectorEnv.BROWSE_LAB_MODEL_PROVIDER = browseChoice.provider;
-        }
+      }
+      const browserSelection =
+        !strictReadOnly && allInternal
+          ? await resolveBrowserModel({
+              actorId: actor.id,
+              config: deps.config,
+              credentials: deps.userModelCredentials,
+              companyModel: deps.resolveBaseModelId?.(),
+            })
+          : undefined;
+      const managedBrowse = browserSelection;
+      if (managedBrowse) {
+        connectorEnv.BROWSE_LAB_MODEL_PROVIDER = "managed";
+        connectorEnv.BROWSE_LAB_MODEL = browserSelection.model ?? "unavailable";
       }
       let actorIsOrgAdmin = false;
       let orgMemoryWrite: ScopeId | undefined;
@@ -1706,6 +1710,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.capabilitySecret ?? deps.signingSecret,
           deps.capabilityTokenCompression,
         );
+        if (managedBrowse) {
+          connectorEnv.BROWSE_LAB_BASE_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}/v1/browser-model`;
+          connectorEnv.BROWSE_LAB_MODEL_TOKEN = await mintCapabilityToken(
+            {
+              ...scopeAttestation,
+              aud: BROWSER_MODEL_AUD,
+              browserModel: browserSelection.model ?? "unavailable",
+              browserAccount: browserSelection.account,
+              exp: Date.now() + CAPABILITY_TTL_MS,
+            },
+            deps.capabilitySecret ?? deps.signingSecret,
+          );
+        }
         connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
           {
             ...scopeAttestation,
@@ -1727,8 +1744,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             if (slugs.length > 0) {
               const usable = records.filter((r) => slugs.includes(r.slug));
               const lines = usable.map((r) => {
-                const methods = r.allowedMethods?.length ? r.allowedMethods.join("/") : "GET";
-                const paths = r.allowedPathPrefixes?.length ? `paths ${r.allowedPathPrefixes.join(", ")}` : "any path";
+                const methods = r.allowedMethods?.length ? r.allowedMethods.toSorted().join("/") : "GET";
+                const paths = r.allowedPathPrefixes?.length
+                  ? `paths ${r.allowedPathPrefixes.toSorted().join(", ")}`
+                  : "any path";
                 return `- \`${r.slug}\` (${r.name}; shared org credential) → ${r.host} (${methods}; ${paths})`;
               });
               sharedCredsBlock =
@@ -1755,7 +1774,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 "If the intended account is unclear before a write, clarify it rather than silently switching accounts. " +
                 "A non-2xx `status` is the UPSTREAM service's own answer (e.g. a bad query or its auth), not a broker " +
                 "error. Use ONLY these (slug → host; allowed methods; allowed paths):\n" +
-                lines.join("\n");
+                lines.sort().join("\n");
             }
           }
         }
@@ -2314,7 +2333,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (credentialDescriptions.length)
           systemPrompt +=
             "\n\n## Execution credentials\nRequest exact handles in execute.credentials:\n" +
-            credentialDescriptions.join("\n");
+            credentialDescriptions.sort().join("\n");
         systemPrompt += sharedCredsBlock;
         if (actorIsOrgAdmin) {
           systemPrompt +=
@@ -2503,7 +2522,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         }
 
-        if (input.runId) deps.turnStream?.begin(input.runId);
+        if (input.runId) {
+          if ((input.surface === "slack" || input.surface === "monitor") && input.runLeaseToken) {
+            await deps.runs
+              ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
+              .catch(swallowAs("orchestrator: persist reply engagement", false));
+          }
+          deps.turnStream?.begin(input.runId);
+        }
 
         const backgroundBroker =
           deps.processes && supportsProcessSessions(deps.sandbox)
@@ -3508,6 +3534,31 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return deps.harness.turns.runTurn({
             session,
             prepareSteer: async (text, request) => {
+              const refreshedInbox =
+                input.surface === "web" &&
+                conversation.kind === "dm" &&
+                /^web:.+:inbox$/.test(conversation.threadRef) &&
+                request?.conversation.threadRef === conversation.threadRef
+                  ? request.conversationHeader?.trim()
+                  : undefined;
+              if (refreshedInbox) {
+                let allowed = true;
+                if (securityPolicy.inboundScreening === "external") {
+                  for (const chunk of securityScreenChunks("conversation-header", refreshedInbox)) {
+                    const verdict = await classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
+                      hook: "user_input",
+                      request: text,
+                      surface: "steer",
+                      origin: input.origin.kind,
+                    });
+                    if (verdict?.decision !== "auto" || verdict.unscreened) {
+                      allowed = false;
+                      break;
+                    }
+                  }
+                }
+                text = `${text}\n\n${allowed ? refreshedInbox : "Updated inbox context was withheld by the security screen."}`;
+              }
               if (!request?.attachments?.length) return { text };
               const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
               const inboxDir = `${turnInboxDir}/${randomUUID()}`;

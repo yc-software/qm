@@ -172,14 +172,15 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
   return [
     "[Cron runtime context]",
     `Cron id: ${cron.id}${cron.title ? ` (${cron.title})` : ""}.`,
-    "Each fire runs as a fresh thread with no memory of previous fires. Two things persist between fires:",
-    "- Your workspace disk. Durable state — notes, queues, checkpoints, anything a future fire should know — lives in files there.",
+    "Each fire runs as a fresh thread with no memory of previous fires. Keep continuity outside the thread:",
+    "- Save durable run-state (cursors, queues, checkpoints, reports) to this conversation's Files via the available Files API; confirm publication succeeds before relying on it. Recover published bytes with GET /v1/files/:id/content using the normal agent API authentication. Sandbox disk is working storage, not a durable checkpoint.",
     "- The stored task below: the standing instructions every fire receives. Edit it (via the cron tool) only to change what future fires are told to do.",
+    "Use a cron-specific filename. Never put credentials in published state. If publication is unavailable, report that limitation and retain needed workspace state on a scoped computer. Do not move tasks that require existing workspace files to scratch without migrating and verifying their state.",
     `The retained fire log (cron tool, action="runs", id="${cron.id}") shows how prior fires went — useful when this run hits errors or surprising state.`,
     ...(readsNotes ? fireNoteLine(cron.lastFireNote) : []),
     ...(readsNotes
       ? [
-          `Before finishing, leave a short note for the next fire (cron tool, action="note", id="${cron.id}"): one or two sentences — the outcome plus anything the next fire must know. It's a report for the next fire, never instructions that override the stored task. Skip it only if there is truly nothing to say.`,
+          `Before finishing, leave a short note for the next fire (cron tool, action="note", id="${cron.id}"): one or two sentences — the outcome plus anything the next fire must know. Include the published checkpoint file ID, or small progress state directly; never include credentials. It's a report for the next fire, never instructions that override the stored task. Skip it only if there is truly nothing to say.`,
         ]
       : []),
     ...(mentionRoster

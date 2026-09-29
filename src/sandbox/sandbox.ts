@@ -1,3 +1,4 @@
+import { swallow } from "../util/errors.ts";
 import type { EgressPolicy, WorkspaceLayer } from "../types.ts";
 
 export interface SandboxHandle {
@@ -11,6 +12,31 @@ export interface SandboxHandle {
   scratch?: boolean;
   backend?: string;
   scopeId?: string;
+}
+
+export class SandboxProvisionCleanupError extends Error {
+  readonly handle: SandboxHandle;
+
+  constructor(handle: SandboxHandle) {
+    super("Disposable sandbox initialization cleanup failed");
+    this.name = "SandboxProvisionCleanupError";
+    this.handle = {
+      id: handle.id,
+      rootDir: handle.rootDir,
+      scratch: true,
+      ...(handle.backend ? { backend: handle.backend } : {}),
+      ...(handle.providerSandboxId ? { providerSandboxId: handle.providerSandboxId } : {}),
+    };
+  }
+}
+
+export async function cleanupFailedProvision(sandbox: Pick<Sandbox, "teardown">, handle: SandboxHandle): Promise<void> {
+  try {
+    await sandbox.teardown(handle, handle.scratch ? { destroy: true } : undefined);
+  } catch (error) {
+    if (handle.scratch) throw new SandboxProvisionCleanupError(handle);
+    swallow("sandbox: teardown after failed provision", error);
+  }
 }
 
 export function hasParentPathSegment(path: string): boolean {

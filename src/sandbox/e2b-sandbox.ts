@@ -1,3 +1,4 @@
+import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -264,6 +265,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
   async function withSession<T>(name: string, action: (session: E2bSession) => Promise<T>): Promise<T> {
     const scratchKey = scratchKeyByName.get(name);
+    if (scratchKey === undefined && !scopeByName.has(name)) throw new Error("sandbox handle has been released");
 
     const reviveScratch = async (): Promise<E2bSession> => {
       const session = await client.create({ metadata: { name, scratch: "true" }, autoPause: false });
@@ -463,7 +465,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
         return handle;
       } catch (err) {
-        await sandbox.teardown(handle).catch(swallowAs("e2b-sandbox: teardown after failed provision", undefined));
+        await cleanupFailedProvision(sandbox, handle);
         throw err;
       }
     },
@@ -622,8 +624,12 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
           }
           activeScratch.delete(handle.id);
           const session = sessionByName.get(handle.id);
+          if (session) {
+            if (tdOpts?.destroy) await session.kill();
+            else await session.kill().catch(swallowAs("e2b-sandbox: scratch kill", undefined));
+          }
           sessionByName.delete(handle.id);
-          if (session) await session.kill().catch(swallowAs("e2b-sandbox: scratch kill", undefined));
+          scratchKeyByName.delete(handle.id);
         });
       }
       if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;

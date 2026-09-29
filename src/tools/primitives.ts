@@ -1,7 +1,7 @@
 import type { MemoryCaptureMetadata } from "../memory/records.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
-import { withAbort } from "../util/async.ts";
+import { withAbort, withTimeout } from "../util/async.ts";
 import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-types.ts";
 import { readContextFile } from "../resolution/context-files.ts";
 import { type TurnContext } from "../resolution/turn-context.ts";
@@ -683,25 +683,31 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         }
       : {}),
     async computerStatus(sandboxId?: string): Promise<ComputerStatus> {
+      const probe = async (status: ComputerStatus, provision: () => Promise<SandboxHandle>) => {
+        if (!status.provisioned || status.lifecycleState === "paused") return status;
+        try {
+          const code = await withTimeout(
+            async () =>
+              (await deps.sandbox.run(await provision(), "true", { timeoutMs: COMMAND_PATH_PROBE_TIMEOUT_MS })).code,
+            COMMAND_PATH_PROBE_TIMEOUT_MS * 2,
+            "command probe",
+          );
+          return { ...status, guestResponsive: code === 0 };
+        } catch (e) {
+          return { ...status, guestResponsive: false, probeError: errMessage(e) };
+        }
+      };
       if (sandboxId) {
         const resources = deps.sandboxResources;
-        if (!resources) throw new Error("sandbox inventory unavailable");
-        await accessSandbox(sandboxId);
-        return resources.status(deps.createdBy, sandboxId);
+        if (!resources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
+        const access = await accessSandbox(sandboxId);
+        return probe(await resources.status(deps.createdBy, sandboxId), () => deps.provisionResource!(access));
       }
       if (!deps.sandbox.computerStatus) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "reporting computer status");
       }
       if (!writableScopeId) throw new Error("this turn has no scoped computer");
-      const status = await deps.sandbox.computerStatus(writableScopeId);
-      if (!status.provisioned || ("lifecycleState" in status && status.lifecycleState === "paused")) return status;
-      try {
-        const handle = await deps.provision();
-        const probe = await deps.sandbox.run(handle, "true", { timeoutMs: COMMAND_PATH_PROBE_TIMEOUT_MS });
-        return { ...status, guestResponsive: probe.code === 0 };
-      } catch (e) {
-        return { ...status, guestResponsive: false, probeError: errMessage(e) };
-      }
+      return probe(await deps.sandbox.computerStatus(writableScopeId), deps.provision);
     },
     async restartComputer(sandboxId?: string): Promise<void> {
       if (sandboxId) {
@@ -786,8 +792,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const scratch = execOpts?.scratch === true;
         const ownerAuth = execOpts?.ownerAuth === true;
         const requestedCredentials = execOpts?.credentials ?? [];
-        if (requestedCredentials.length && (scratch || execOpts?.reachTarget !== undefined || !writableScopeId)) {
-          throw new Error("command credentials are available only on the scoped or owner computer");
+        if (requestedCredentials.length && (execOpts?.reachTarget !== undefined || !writableScopeId)) {
+          throw new Error("command credentials are available only on scoped, scratch, or owner computers");
         }
         const availableCredentials = new Map(
           (
@@ -1493,7 +1499,7 @@ function tryDecodeUtf8(bytes: Uint8Array): string | null {
   }
 }
 
-const COMMAND_PATH_PROBE_TIMEOUT_MS = 15_000;
+const COMMAND_PATH_PROBE_TIMEOUT_MS = 10_000;
 
 async function collectTree(
   sandbox: Sandbox,

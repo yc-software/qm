@@ -7,6 +7,7 @@ import {
   Archive,
   ArrowUpLeft,
   Binoculars,
+  Bot,
   Box,
   Brain,
   Clock3,
@@ -52,7 +53,7 @@ import {
   type SplitEdge,
 } from "./split-layout";
 import { paneKindByKey, paneKindEntry } from "./pane-kinds";
-import { focusComposerOnPaneClick, preservingFocus } from "./pane-focus";
+import { focusComposerOnPaneClick, focusPaneComposer, preservingFocus } from "./pane-focus";
 import { attachTooltip, tip } from "./tooltip";
 import { icon, workingWave } from "./ui";
 import { contextsState, scopeTitle } from "./contexts";
@@ -78,7 +79,7 @@ import {
   archiveSessionById,
   syncWorkingPulse,
 } from "./sessions";
-import { conversationBackground, type RowIndicators } from "./session-list";
+import { conversationBackground, rowIndicators, type RowIndicators } from "./session-list";
 import { scopeToolCount, setScopedSession, type SessionTool } from "./session-scope";
 import {
   fetchTranscript,
@@ -250,6 +251,7 @@ function buildDock(): DockviewApi {
   api.onDidActivePanelChange((e) => {
     splitState.focusedId = e.panel?.id ?? null;
     syncDocumentTitle();
+    if (e.panel) focusPaneComposer(paneContents.get(e.panel.id)?.element);
   });
   api.onDidMaximizedGroupChange(() => {
     for (const a of groupActions) a.draw();
@@ -804,10 +806,13 @@ export function drawCanvas(): void {
 
 function computeHeaderSignature(): string {
   return (dockApi?.panels ?? [])
-    .map(
-      (p) =>
-        `${p.id}|${paneSession(p)?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${JSON.stringify(paneSession(p)?.status ?? null)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}|${paneSession(p)?.parentSessionId ?? ""}|${sessionsState.list.find((row) => row.id === paneSession(p)?.parentSessionId)?.title ?? ""}`,
-    )
+    .map((p) => {
+      const session = paneSession(p);
+      const parent = session?.parentSessionId
+        ? sessionsState.list.find((row) => row.id === session.parentSessionId)
+        : undefined;
+      return `${p.id}|${session?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${JSON.stringify(session?.status ?? null)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}|${session?.parentSessionId ?? ""}|${parent?.title ?? ""}`;
+    })
     .join("~");
 }
 
@@ -905,7 +910,8 @@ function paneIsWorking(panel: IDockviewPanel): boolean {
 }
 
 function paneAwaitsInput(panel: IDockviewPanel): boolean {
-  return Boolean(paneSession(panel)?.awaitingInput);
+  const session = paneSession(panel);
+  return session ? rowIndicators(session, null, sessionsState.list).awaiting : false;
 }
 
 function paneBackground(panel: IDockviewPanel): RowIndicators["background"] {
@@ -1231,7 +1237,7 @@ class PaneTab implements ITabRenderer {
             ? html`<span class="bg-chip" aria-label=${background.label} ${tip(background.label)}
                 >${background.jobs > 0 ? icon(Cog, 11) : nothing}${
                   background.watches > 0 ? icon(Binoculars, 11) : nothing
-                }${background.crons > 0 ? icon(Clock3, 11) : nothing}</span
+                }${background.crons > 0 ? icon(Clock3, 11) : nothing}${background.subagents > 0 ? icon(Bot, 11) : nothing}</span
               >`
             : nothing
         }

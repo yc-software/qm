@@ -14,12 +14,19 @@ import { attributedSteerText } from "../src/api/app-turn.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-signal-")) }));
-const core = createServer(built.app, { signingSecret: SECRET, webhookReceiver: built.webhookReceiver });
+const core = createServer(built.app, {
+  signingSecret: SECRET,
+  webhookReceiver: built.webhookReceiver,
+  featureFlags: built.featureFlags,
+  loops: built.loops,
+  uiState: built.uiState,
+});
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
 const coreBase = `http://localhost:${corePort}`;
@@ -305,8 +312,12 @@ test("core route: a terminal run rejects signals with reason=terminal", async ()
 });
 
 test("web proxy: the submitting user can signal their run; others (and token-less strangers) cannot", async () => {
+  const threadRef = `web:alice:${crypto.randomUUID()}`;
   const submit = (await (
-    await fetch(`${webBase}/api/turn`, asUser("alice", { method: "POST", body: JSON.stringify({ text: "queue me" }) }))
+    await fetch(
+      `${webBase}/api/turn`,
+      asUser("alice", { method: "POST", body: JSON.stringify({ text: "queue me", threadRef }) }),
+    )
   ).json()) as { runId?: string; runToken?: string };
   assert.ok(submit.runId, "async turn returns a runId");
   assert.equal(submit.runToken, undefined, "no bearer credential is exposed to browser code or URLs");
@@ -360,6 +371,91 @@ test("web proxy: a steer carries a server-built ts and TurnRequest for the signe
   assert.equal(signal.request?.actor.externalId, "alice", "a client-supplied request/actor is ignored");
   assert.equal(signal.request?.surface, "web");
   assert.deepEqual(signal.request?.conversation, { kind: "dm", threadRef });
+});
+
+test("web proxy: inbox steering cannot omit or disguise its context to bypass rollout gates", async () => {
+  const threadRef = "web:alice:inbox";
+  const { run } = await built.runs.enqueue({
+    sessionId: "inbox-steer-gates",
+    request: {
+      ...request("Review my inbox", threadRef),
+      surface: "web",
+      actor: { id: "alice", type: "internal" },
+      conversation: { kind: "dm", threadRef, audience: [{ id: "alice", type: "internal" }] },
+    },
+  });
+  const previousAllowlist = process.env.INBOX_USERS;
+  const steer = (body: Record<string, unknown>) =>
+    fetch(`${webBase}/api/runs/${run.id}/signal`, asUser("alice", { method: "POST", body: JSON.stringify(body) }));
+  try {
+    process.env.INBOX_USERS = "alice";
+    for (const enabled of [false, true]) {
+      await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", "alice"), enabled, "test");
+      for (const context of [{}, { threadRef: "" }, { threadRef: "invalid" }, { threadRef: "web:alice:ordinary" }]) {
+        const response = await steer({
+          kind: "steer",
+          text: "Prioritize these",
+          request: steererRequest("alice", threadRef, "forged"),
+          ...context,
+        });
+        assert.equal(response.status, 400);
+        assert.equal(((await response.json()) as { reason?: string }).reason, "conversation_mismatch");
+        assert.deepEqual(await built.signals.takePending(run.id), []);
+      }
+      const response = await steer({ kind: "steer", text: "Prioritize these", threadRef });
+      assert.equal(response.status, enabled ? 200 : 403);
+      const signals = await built.signals.takePending(run.id);
+      assert.equal(signals.length, enabled ? 1 : 0);
+      if (enabled) {
+        assert.equal(signals[0]?.request?.conversation.threadRef, threadRef);
+        assert.match(signals[0]?.request?.conversationHeader ?? "", /fresh snapshot/);
+      }
+    }
+    process.env.INBOX_USERS = "bob";
+    const denied = await steer({ kind: "steer", text: "Prioritize these", threadRef });
+    assert.equal(denied.status, 403);
+    assert.deepEqual(await built.signals.takePending(run.id), []);
+    const abort = await steer({ kind: "abort" });
+    assert.equal(abort.status, 200);
+  } finally {
+    await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", "alice"), false, "test");
+    if (previousAllowlist === undefined) delete process.env.INBOX_USERS;
+    else process.env.INBOX_USERS = previousAllowlist;
+  }
+});
+
+test("web proxy: shared scopes cannot disguise an alias-owned inbox thread", async () => {
+  const user = "alice@example.com";
+  const threadRef = "web:ALICE@example.com:inbox";
+  const { run } = await built.runs.enqueue({
+    sessionId: "inbox-alias-steer-gates",
+    request: {
+      ...request("Review my inbox", threadRef),
+      surface: "web",
+      actor: { id: user, type: "internal" },
+      conversation: { kind: "dm", threadRef, audience: [{ id: user, type: "internal" }] },
+    },
+  });
+  const previousAllowlist = process.env.INBOX_USERS;
+  try {
+    process.env.INBOX_USERS = "nobody";
+    for (const scopeId of ["channel:any", "group:any"]) {
+      for (const path of ["/api/turn", `/api/runs/${run.id}/signal`]) {
+        const response = await fetch(
+          `${webBase}${path}`,
+          asUser(user, {
+            method: "POST",
+            body: JSON.stringify({ kind: "steer", text: "Prioritize these", threadRef, scopeId }),
+          }),
+        );
+        assert.equal(response.status, 403);
+        assert.deepEqual(await built.signals.takePending(run.id), []);
+      }
+    }
+  } finally {
+    if (previousAllowlist === undefined) delete process.env.INBOX_USERS;
+    else process.env.INBOX_USERS = previousAllowlist;
+  }
 });
 
 test("web proxy: a steer claiming another user's thread is refused", async () => {

@@ -1838,6 +1838,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           entry.ref.silentRequested = false;
           entry.ref.pollFire = !!turn.pollFire;
           entry.ref.screenToolResult = turn.screenToolResult;
+          entry.ref.verifyGoal = turn.verifyGoal;
           entry.ref.emit = turn.emit;
           entry.ref.scopeLabel = turn.scopeLabel;
           entry.ref.orgScopeId = turn.orgScopeId;
@@ -2410,7 +2411,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 scopeLabel: turn.scopeLabel,
               });
               await tapeEntryMirror(goalEntry);
-              if (g.status === "complete" || g.status === "blocked") entry.ref.goal = null;
+              if (g.status === "complete") entry.ref.goal = null;
             }
             const finalEntry = await turn.emit({
               type: "assistant",
@@ -2446,7 +2447,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               scopeLabel: turn.scopeLabel,
             });
             await tapeEntryMirror(goalEntry);
-            if (g.status === "complete" || g.status === "blocked") entry.ref.goal = null;
+            if (g.status === "complete") entry.ref.goal = null;
           }
           const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
           const closingTextWithWaiver = [closingText, grindWaiverNote].filter(Boolean).join("\n\n");

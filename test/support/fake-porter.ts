@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { NotFoundError } from "porter-sandbox";
 import type { PorterClientLike, PorterSandboxLike, PorterSandboxSpec } from "../../src/sandbox/porter-client.ts";
 
@@ -124,7 +124,9 @@ export function installFakePorter(opts: FakePorterOptions = {}): FakePorter {
       },
       async refresh() {
         known = true;
-        return { name, host: observe(bodies.get(name))?.host ?? "" };
+        const cur = observe(bodies.get(name));
+        const internal = cur?.networking?.[0]?.internal ? cur.networking[0].port : undefined;
+        return { name, host: cur?.host ?? "", ...(internal ? { internal_address: `127.0.0.1:${internal}` } : {}) };
       },
       async terminate() {
         const cur = bodies.get(name);
@@ -158,7 +160,7 @@ export function installFakePorter(opts: FakePorterOptions = {}): FakePorter {
         mkdirSync(app, { recursive: true });
         const exposed = spec.networking?.[0];
         const named = opts.assignHost === false ? undefined : `${spec.name}.fake.test`;
-        const host = exposed ? (exposed.domains?.[0]?.domain ?? named ?? "") : "";
+        const host = exposed && !exposed.internal ? (exposed.domains?.[0]?.domain ?? named ?? "") : "";
         bodies.set(spec.name!, {
           id: `sb-${++bodySeq}`,
           phase: "running",
@@ -250,6 +252,15 @@ export function installFakePorter(opts: FakePorterOptions = {}): FakePorter {
         if (attached) throw new Error("volume is attached to a sandbox");
         rmSync(v.dir, { recursive: true, force: true });
         volumes.delete(name);
+      },
+      raw: {
+        async writeFile(id, body, options) {
+          const v = volumeById(id);
+          if (!v) throw new NotFoundError(`fake porter: no volume ${id}`);
+          const target = join(v.dir, options.path);
+          mkdirSync(dirname(target), { recursive: true });
+          writeFileSync(target, body);
+        },
       },
     },
   };

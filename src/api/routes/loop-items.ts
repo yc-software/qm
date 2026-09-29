@@ -149,12 +149,20 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
   const sessionId = ctx.capability.threadRef
     ? ((await ctx.deps.sessions?.getByThread(ctx.capability.threadRef))?.id ?? undefined)
     : undefined;
+  const classifyInboxEmail =
+    (loop.surface === "inbox" || loop.surface === "inbox:gmail") &&
+    loop.ownerScopeId === scopeId("personal", loop.owner) &&
+    (await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", loop.owner))) === true;
   const entries: IngestEntryInput[] = [];
   const existingItems = await deps.items.byLoop(loop.id);
   for (const [at, raw] of body.items.entries()) {
     const parsed = parseIngestEntry(loop, raw);
     if ("error" in parsed) {
       return sendJson(ctx.res, 400, { error: "bad_request", message: `items[${at}]: ${parsed.error}` });
+    }
+    if (classifyInboxEmail && parsed.source === "gmail" && isObj(raw)) {
+      for (const key of ["automated", "probablyResolved"])
+        if (typeof raw[key] === "boolean") parsed.sourcePayload[key] = raw[key];
     }
     if (parsed.source === "slack") {
       const adapter = sourceAdapter("slack")!;

@@ -38,6 +38,7 @@ export function capture(
   try {
     return execFileSync(cmd, args, {
       encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
       stdio: ["ignore", "pipe", "pipe"],
       ...procOpts(opts),
     });

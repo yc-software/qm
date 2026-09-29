@@ -1144,3 +1144,18 @@ test("untracked scope sandboxes are terminated after a grace period while scratc
   assert.deepEqual(running, new Set([tracked, scratch, foreign]));
   assert.equal(running.has(orphan), false);
 });
+
+test("forced scratch destruction surfaces failure and retries the same live session", async () => {
+  const handle = await sandbox.provision(layers, { scratch: { key: "destroy-retry" } });
+  fake.failTerminateOnce();
+  await assert.rejects(sandbox.teardown(handle, { destroy: true }));
+  assert.equal(fake.runningCount(), 1);
+  await sandbox.teardown(handle, { destroy: true });
+  assert.equal(fake.runningCount(), 0);
+});
+
+test("released scratch handles cannot recreate a persistent sandbox", async () => {
+  const handle = await sandbox.provision(layers, { scratch: { key: "released-handle" } });
+  await sandbox.teardown(handle, { destroy: true });
+  await assert.rejects(sandbox.run(handle, "true"), /handle has been released/);
+});

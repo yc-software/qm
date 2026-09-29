@@ -962,7 +962,8 @@ test("steered documents use the inbound security screen before writing their con
     prepared = await turn.prepareSteer!("read the attachment", {
       surface: "web",
       actor: { externalId: actor.id },
-      conversation: { kind: "dm", threadRef: "steer-screen" },
+      conversation: { kind: "dm", threadRef: "web:alice:inbox" },
+      conversationHeader: "REFRESH_WITH_ATTACHMENT",
       text: "read the attachment",
       attachments: [{ name: "unsafe.txt", mimetype: "text/plain", ...blob }],
     });
@@ -978,11 +979,12 @@ test("steered documents use the inbound security screen before writing their con
     }),
   };
   const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer, securityScreener });
-  const result = await orchestrator.handleTurn(dm("steer-screen", "hello"));
+  const result = await orchestrator.handleTurn(dm("web:alice:inbox", "hello", { surface: "web" }));
   assert.equal(result.status, "ok", result.reason);
   assert.deepEqual(prepared?.attachments, []);
   assert.deepEqual(prepared?.documents, []);
   assert.match(prepared?.text ?? "", /unsafe.txt.*withheld/);
+  assert.match(prepared?.text ?? "", /REFRESH_WITH_ATTACHMENT/);
   assert.equal(
     writes.some((path) => path.endsWith("unsafe.txt")),
     false,
@@ -1223,3 +1225,46 @@ test("connector revocation still refreshes system-authority permissions", async 
   assert.doesNotMatch(prefix(second.reply!), /Connected: Google/);
   assert.notEqual(prefix(first.reply!), prefix(second.reply!));
 });
+
+for (const mode of ["safe", "blocked", "unavailable", "ordinary", "off"] as const) {
+  test(`live inbox steering refreshes context with ${mode} screening`, async () => {
+    const harness = createMockHarness();
+    const thread = mode === "ordinary" ? "web:alice:default" : "web:alice:inbox";
+    let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+    harness.turns.runTurn = async (turn) => {
+      prepared = await turn.prepareSteer!("summarize again", {
+        surface: "web",
+        actor: { externalId: actor.id },
+        conversation: { kind: "dm", threadRef: thread },
+        text: "summarize again",
+        conversationHeader: "UPDATED_INBOX_SNAPSHOT",
+      });
+      return { reply: "done" };
+    };
+    let refreshedScreens = 0;
+    const securityScreener: SecurityScreener = {
+      provider: "test",
+      shadow: false,
+      classify: async ({ payload }) => {
+        if (payload.includes("UPDATED_INBOX_SNAPSHOT")) {
+          refreshedScreens++;
+          if (mode === "unavailable") throw new Error("screen unavailable");
+          if (mode === "blocked") return { verdict: { decision: "strict" }, score: 1, threshold: 1 };
+        }
+        return { verdict: { decision: "auto" }, score: 0, threshold: 1 };
+      },
+    };
+    const { orchestrator, config } = buildOrchestrator({ harness, securityScreener });
+    if (mode === "off") await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
+    const result = await orchestrator.handleTurn(dm(thread, "hello", { surface: "web" }));
+    assert.equal(result.status, "ok", result.reason);
+    if (mode === "safe" || mode === "off") assert.match(prepared!.text, /UPDATED_INBOX_SNAPSHOT/);
+    else if (mode === "ordinary") assert.equal(prepared!.text, "summarize again");
+    else {
+      assert.doesNotMatch(prepared!.text, /UPDATED_INBOX_SNAPSHOT/);
+      assert.match(prepared!.text, /withheld/);
+    }
+    if (mode === "ordinary" || mode === "off") assert.equal(refreshedScreens, 0);
+    else assert.ok(refreshedScreens > 0);
+  });
+}

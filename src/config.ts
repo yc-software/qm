@@ -553,7 +553,7 @@ interface PorterDeployEnv {
   baseUrl?: string;
   runnerImage?: string;
   appsDomain?: string;
-  visibility?: "public" | "private";
+  visibility?: "public" | "private" | "internal";
   namePrefix?: string;
   ttlSec?: number;
 }
@@ -574,9 +574,9 @@ const porterLocatorPresent = (env: NodeJS.ProcessEnv): boolean =>
 function porterDeployVisibilityStrict(value: string | undefined): PorterDeployEnv["visibility"] {
   if (value === undefined || value.trim() === "") return undefined;
   const visibility = value.trim();
-  if (visibility === "public" || visibility === "private") return visibility;
+  if (visibility === "public" || visibility === "private" || visibility === "internal") return visibility;
   throw new Error(
-    `PORTER_DEPLOY_VISIBILITY=${JSON.stringify(value)} is not recognized — use public or private, or unset it.`,
+    `PORTER_DEPLOY_VISIBILITY=${JSON.stringify(value)} is not recognized — use public, private, or internal, or unset it.`,
   );
 }
 
@@ -584,6 +584,11 @@ function porterDeployEnv(env: NodeJS.ProcessEnv): PorterDeployEnv {
   const token = env.PORTER_DEPLOY_API_TOKEN;
   const baseUrl = porterApiBaseUrl(env);
   const visibility = porterDeployVisibilityStrict(env.PORTER_DEPLOY_VISIBILITY);
+  if (visibility === "internal" && env.PORTER_DEPLOY_APPS_DOMAIN) {
+    throw new Error(
+      "PORTER_DEPLOY_VISIBILITY=internal serves apps inside the cluster only, so it takes no PORTER_DEPLOY_APPS_DOMAIN — unset one of them.",
+    );
+  }
   const ttlSec = numEnvStrict("PORTER_DEPLOY_TTL_SEC", env.PORTER_DEPLOY_TTL_SEC);
   const runnerImage = env.PORTER_DEPLOY_RUNNER_IMAGE ?? env.PORTER_SANDBOX_IMAGE;
   return {
@@ -1235,7 +1240,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (env.DEPLOY_PROVIDER === "porter" && !env.PORTER_DEPLOY_APPS_DOMAIN && !env.DEPLOY_APPS_DOMAIN) {
     console.warn(
-      "[config] DEPLOY_PROVIDER=porter without an apps domain — published apps use hostnames assigned by the cluster and are reachable signed-in at /d/<app>/; set DEPLOY_APPS_DOMAIN to a domain you control to serve each app on its own subdomain.",
+      "[config] DEPLOY_PROVIDER=porter without an apps domain — published apps are reachable signed-in at /d/<app>/ only; set DEPLOY_APPS_DOMAIN to a domain you control to serve each app on its own subdomain.",
     );
   }
   for (const [selected, label] of [

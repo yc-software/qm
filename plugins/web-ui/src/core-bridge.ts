@@ -139,6 +139,7 @@ export interface CoreSession {
   lastActivityAt?: number;
   working?: boolean;
   awaitingInput?: boolean;
+  lastTurnFailed?: boolean;
   backgroundJobs?: number;
   watches?: number;
   crons?: number;
@@ -220,7 +221,12 @@ export interface SessionBackgroundView {
     expiresAt: number;
     lastFiredAt?: number;
   }>;
-  crons: Array<{ id: string; title?: string; nextFireAt?: number }>;
+  crons: Array<{
+    id: string;
+    title?: string;
+    nextFireAt?: number;
+    lastFire?: { firedAt: number; status?: string };
+  }>;
 }
 
 export interface SessionBackgroundOutput {
@@ -454,6 +460,7 @@ export type AssistantWork = AssistantMessage & {
   work?: WorkBlock;
   deliveredFiles?: DeliveredFile[];
   retryableSend?: boolean;
+  interruptedRunId?: string;
   sendBlocked?: "pending_approval";
   sendFailed?: "attachments";
   droppedAttachmentIds?: string[];
@@ -506,6 +513,19 @@ export interface QueuedRun {
 
 export function runIsTerminal(run: Pick<RunPoll, "status" | "result" | "replyComplete">): boolean {
   return run.status === "done" || run.status === "failed" || run.result != null || run.replyComplete === true;
+}
+
+export function hasRecordedRunReply(entries: SessionEntry[], runId: string): boolean {
+  let matchesRun = false;
+  for (const entry of entries) {
+    const payload = entry.payload as { runId?: string; steered?: boolean } | null;
+    if (entry.type === "user") {
+      if (!payload?.steered || payload.runId !== undefined) matchesRun = payload?.runId === runId;
+    } else if (matchesRun && entry.type === "assistant") {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function resumeAnchor(): AgentMessage {
@@ -722,7 +742,12 @@ export function fetchUiState(key: string): Promise<UiStateRecord> {
   return api<UiStateRecord>(`/api/ui-state?key=${encodeURIComponent(key)}`);
 }
 
-export function putUiState(key: string, value: unknown, updatedAt: number, init?: RequestInit): Promise<unknown> {
+export function putUiState(
+  key: string,
+  value: unknown,
+  updatedAt: number,
+  init?: RequestInit,
+): Promise<{ ok: boolean; updatedAt: number }> {
   return api("/api/ui-state", { method: "PUT", body: JSON.stringify({ key, value, updatedAt }), ...init });
 }
 
@@ -1403,6 +1428,10 @@ export async function pollRun(
   signal?: AbortSignal,
   notify?: () => void,
 ): Promise<void> {
+  const failIdle = (): void => {
+    (partial as AssistantWork).interruptedRunId = runId;
+    fail(stream, partial, "Timed out waiting for the agent to respond.");
+  };
   let consecutiveFailures = 0;
   for (;;) {
     if (signal?.aborted) return abortStream(stream, partial);
@@ -1417,8 +1446,7 @@ export async function pollRun(
       if (signal?.aborted) return abortStream(stream, partial);
       if (e instanceof ApiError && e.status >= 400 && e.status < 500) return fail(stream, partial, e.message);
       consecutiveFailures++;
-      if (now() - st.lastProgressAt > RUN_IDLE_MS)
-        return fail(stream, partial, "Timed out waiting for the agent to respond.");
+      if (now() - st.lastProgressAt > RUN_IDLE_MS) return failIdle();
       await sleep(Math.min(POLL_MS * 2 ** Math.min(consecutiveFailures, 4), POLL_RETRY_MAX_MS));
       continue;
     }
@@ -1427,8 +1455,7 @@ export async function pollRun(
     else st.staleSince = undefined;
     if (run.alive === true || (st.staleSince !== undefined && now() - st.staleSince < STALE_GRACE_MS))
       st.lastProgressAt = now();
-    if (now() - st.lastProgressAt > RUN_IDLE_MS)
-      return fail(stream, partial, "Timed out waiting for the agent to respond.");
+    if (now() - st.lastProgressAt > RUN_IDLE_MS) return failIdle();
     await sleep(POLL_MS);
   }
 }
