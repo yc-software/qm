@@ -3741,9 +3741,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "finish_silently",
     label: "finish_silently",
     description:
-      "End this turn immediately with no closing reply. Use on surface turns after posting or when " +
-      "choosing not to reply, and on scheduled background fires with nothing worth reporting. " +
-      "Keeps the audit log and any messages already posted. Do not write a closing status line. " +
+      "End this turn without replying. Use on surface turns when choosing not to reply at all, and on " +
+      "scheduled background fires with nothing worth reporting. After posting a reply, just stop; " +
+      "this is not needed. Keeps the audit log and any messages already posted. " +
       "On a direct human turn without surface tools this does nothing — just answer.",
     parameters: Type.Object({
       reason: Type.Optional(
