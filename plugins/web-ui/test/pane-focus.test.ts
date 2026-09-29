@@ -175,7 +175,7 @@ test("switching the focused pane moves the caret into that pane's composer", asy
   const b = doc.querySelector(".b") as HTMLElement;
   a.querySelector("textarea")!.focus();
   focusPaneComposer(b);
-  await new Promise((r) => dom.window.requestAnimationFrame(r));
+  await new Promise((r) => setTimeout(r, 0));
   assert.equal(doc.activeElement, b.querySelector("textarea"));
 });
 
@@ -188,6 +188,6 @@ test("pane switch leaves focus alone when it already landed inside the pane", as
   const search = doc.querySelector(".search") as HTMLInputElement;
   search.focus();
   focusPaneComposer(b);
-  await new Promise((r) => dom.window.requestAnimationFrame(r));
+  await new Promise((r) => setTimeout(r, 0));
   assert.equal(doc.activeElement, search);
 });
