@@ -153,6 +153,7 @@ import {
   formatBytes,
   icon,
   relTime,
+  sheenLabel,
   waveLoader,
 } from "./ui";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
@@ -2686,12 +2687,6 @@ export function createChatSurface(
     return html`<div class="approval-card inline-approval-marker">
       <div class="approval-text">${approvalSummaryView(a)}</div>
     </div>`;
-  }
-
-  function sheenLabel(label: string, active: boolean): TemplateResult {
-    return html`<span class="sheen-label ${active ? "thinking-sheen" : ""}" data-sheen=${active ? label : ""}
-      >${label}</span
-    >`;
   }
 
   function renderTimelineItem(item: TimelineItem, work: WorkBlock): TemplateResult {

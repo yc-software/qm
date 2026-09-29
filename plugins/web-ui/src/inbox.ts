@@ -48,7 +48,7 @@ import { listBackLink } from "./list-page";
 import { registerPaneKind } from "./pane-kinds";
 import { exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
-import { brandName, fieldSelect, icon, initials, relTime, workingWave } from "./ui";
+import { brandName, fieldSelect, icon, initials, relTime, sheenLabel, workingWave } from "./ui";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { inboxChat } from "./inbox-chat";
 
@@ -1654,7 +1654,15 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
     </div>
   `;
   const list = html`
-    ${!inboxState.loaded && inboxState.loading ? html`<div class="empty compact">Reading your inbox…</div>` : nothing}
+    ${
+      !inboxState.loaded && inboxState.loading
+        ? html`<div class="empty compact" role="status" aria-label="Reading your inbox…">
+            <span aria-hidden="true">
+              <span class="working-mark">${workingWave()}</span>${sheenLabel("Reading your inbox…", true)}
+            </span>
+          </div>`
+        : nothing
+    }
     ${
       inboxState.error && !inboxState.loaded
         ? html`<div class="empty compact">Couldn't load the inbox: ${inboxState.error}</div>`
