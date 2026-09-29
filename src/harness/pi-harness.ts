@@ -932,9 +932,14 @@ function parseProviderError(message: string): { type: string; message: string } 
   const jsonAt = message.indexOf("{");
   if (jsonAt < 0) return null;
   try {
-    const parsed = JSON.parse(message.slice(jsonAt)) as { error?: { type?: unknown; message?: unknown } };
-    const providerMessage = typeof parsed.error?.message === "string" ? parsed.error.message.trim() : "";
-    const providerType = typeof parsed.error?.type === "string" ? parsed.error.type.trim() : "";
+    const parsed = JSON.parse(message.slice(jsonAt)) as {
+      type?: unknown;
+      message?: unknown;
+      error?: { type?: unknown; message?: unknown };
+    };
+    const body = parsed.error && typeof parsed.error === "object" ? parsed.error : parsed;
+    const providerMessage = typeof body.message === "string" ? body.message.trim() : "";
+    const providerType = typeof body.type === "string" ? body.type.trim() : "";
     return providerMessage || providerType ? { type: providerType, message: providerMessage } : null;
   } catch (e) {
     swallow("pi: assistant error json parse", e);
@@ -956,7 +961,7 @@ const TRANSIENT_PROVIDER_ERROR_TYPES = new Set(["overloaded_error", "api_error",
 
 function piErrorRetryable(failed: AssistantMessage): boolean {
   const providerType = failed.errorMessage ? parseProviderError(failed.errorMessage)?.type : undefined;
-  if (providerType) return TRANSIENT_PROVIDER_ERROR_TYPES.has(providerType);
+  if (providerType && !TRANSIENT_PROVIDER_ERROR_TYPES.has(providerType)) return false;
   return isRetryableAssistantError(failed) && !isContextOverflow(failed);
 }
 

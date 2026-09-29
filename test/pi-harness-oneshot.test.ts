@@ -639,6 +639,8 @@ test("transient Pi provider errors stay retryable and keep their message for the
     '400 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 215003 tokens > 200000 maximum"}}',
     "prompt is too long: 215003 tokens > 200000 maximum",
     '400 {"type":"error","error":{"type":"invalid_request_error","message":"thinking.budget_tokens must be at least 1500"}}',
+    '400 {"type":"invalid_request_error","message":"max_tokens must be at most 50000"}',
+    '429 {"type":"error","error":{"type":"rate_limit_error","message":"quota exceeded"}}',
   ]) {
     assert.ok(piTurnError(failed(errorMessage), new Error("x")) instanceof NonRetryableTurnError, errorMessage);
   }
