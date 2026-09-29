@@ -2352,12 +2352,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
             ...audienceMembers,
           ].map((p) => ({ id: p.id, ...(p.displayName ? { displayName: p.displayName } : {}) }));
-          const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks, ownerAsks] = await Promise.all([
+          const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
             deps.keychain.listByOwners(members.map((m) => m.id)),
             deps.keychain.listConnectorsByOwners(members.map((m) => m.id)),
             deps.keychain.grantsForScope(scopeId),
             deps.keychain.listAsks({ requesterScopeId: scopeId }),
-            conversation.kind === "dm" ? deps.keychain.listAsks({ ownerId: actor.id }) : Promise.resolve([]),
           ]);
           const keychainBlock = renderKeychainManifest({
             scopeId,
@@ -2370,7 +2369,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             scopeGrants,
             injected: [],
             scopeAsks,
-            ownerAsks,
           });
           if (keychainBlock) systemPrompt += `\n\n${keychainBlock}`;
         }

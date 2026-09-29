@@ -25,21 +25,20 @@ export function keychainApprovalMessage(
   if (kind === "personal") audience = "your personal conversations";
   if (kind === "channel") audience = "this channel";
   const standing = `ongoing access across ${audience}`;
-  const duration =
-    pending && ask.requestedMode ? ` (${ask.requestedMode === "standing" ? standing : "one-time access"})` : "";
+  const duration = pending ? ` (${ask.requestedMode === "once" ? "one-time access" : standing})` : "";
   const summary = `Use your *${escape(view.service.slice(0, 150))}* credential ${origin}${duration}.`;
   let status = "This request expired.";
   if (ask.status === "approved") status = `Approved — ${view.mode === "standing" ? standing : "one-time access"}.`;
   if (ask.status === "declined") status = "Denied.";
   const text = pending
-    ? `Approval needed: use your ${view.service} credential in ${view.conversation}${duration}. ${ask.purpose}`
+    ? `Approval needed: use your ${view.service} credential in ${view.conversation}${duration}.`
     : status;
   const blocks: Array<Record<string, unknown>> = [
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `${pending ? ":lock: *Approval needed.*" : `*${status}*`}\n${summary}\n*Why:* ${escape(ask.purpose.slice(0, 900))}`,
+        text: `${pending ? ":lock: *Approval needed.*" : `*${status}*`}\n${summary}`,
       },
     },
   ];
@@ -48,14 +47,13 @@ export function keychainApprovalMessage(
       type: "actions",
       block_id: `keychain_ask:${ask.id}`,
       elements: [
-        {
+        ...(ask.requestedMode === "once" ? [ACTIONS[0], ACTIONS[1]] : [ACTIONS[1], ACTIONS[0]]).map((id, i) => ({
           type: "button",
-          text: { type: "plain_text", text: "Allow once" },
-          action_id: ACTIONS[0],
+          text: { type: "plain_text", text: id === ACTIONS[0] ? "Allow once" : "Allow" },
+          action_id: id,
           value: ask.id,
-          style: "primary",
-        },
-        { type: "button", text: { type: "plain_text", text: "Allow always" }, action_id: ACTIONS[1], value: ask.id },
+          ...(i === 0 ? { style: "primary" } : {}),
+        })),
         {
           type: "button",
           text: { type: "plain_text", text: "Deny" },

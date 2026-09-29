@@ -91,10 +91,9 @@ values.
    ```bash
    curl -fsS "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGENT_API_TOKEN"
    ```
-2. **Registered to the person themselves** → their browse request is the owner speaking on
-   their own turn, which is the approval; mint the grant (`POST /v1/keychain/grants` with
-   `{"credential":"<id>","mode":"standing","purpose":"browse"}`), then `keychain/use` it and
-   re-source.
+2. **Registered to the person themselves** → in their DM, load it directly with
+   `POST /v1/keychain/use` and `{"credential":"<id>"}`, then re-source. Anywhere else, send an ask
+   (step 3); they approve it on the card.
 3. **Registered to someone else** (the provider key usually lives with whoever set it up) →
    send an ask: `POST /v1/keychain/asks` with the credential id and the person's words as
    the purpose. Core DMs the owner and wakes this conversation when they answer; tell the
@@ -114,11 +113,8 @@ curl -fsS "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGEN
   | python3 -c "import sys,json;print(json.dumps([c['id'] for c in json.load(sys.stdin)['credentials'] if c.get('envKey')==sys.argv[1]]))" "$PROFILE_ENV"
 ```
 
-- **Credential exists but wasn't in your sourced env** → it just isn't granted here. Mint a
-  standing grant for it (`POST /v1/keychain/grants` with `{"credential":"<id>","mode":"standing",
-"purpose":"browse browser profile"}`) — safe only because of the DM-only rule: the grant's
-  audience is this conversation's scope, which in their DM is their personal scope. Then
-  `keychain/use` that grant to a NEW file and fold it in
+- **Credential exists but wasn't in your sourced env** → in their DM, load it with
+  `POST /v1/keychain/use` and `{"credential":"<id>"}` to a NEW file and fold it in
   (`-o /tmp/keychain2.env && . /tmp/keychain2.env && cat /tmp/keychain2.env >> /tmp/keychain.env`)
   so a later background re-source of `/tmp/keychain.env` still has everything.
   Never bootstrap in this case.
@@ -135,15 +131,10 @@ and orphan one profile.)
 PROFILE="lab-$(python3 -c 'import secrets;print(secrets.token_hex(6))')"
 export "$PROFILE_ENV"="$PROFILE"
 
-CRED_ID=$(curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGENT_API_TOKEN" \
+curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGENT_API_TOKEN" \
   -H 'content-type: application/json' \
-  -d "{\"service\":\"$PROFILE_SERVICE\",\"envKey\":\"$PROFILE_ENV\",\"secret\":\"$PROFILE\"}" \
-  | python3 -c "import sys,json;print(json.load(sys.stdin)['credential']['id'])")
+  -d "{\"service\":\"$PROFILE_SERVICE\",\"envKey\":\"$PROFILE_ENV\",\"secret\":\"$PROFILE\"}" > /dev/null
 
-
-curl -fsS -X POST "$AGENT_API_URL/v1/keychain/grants" -H "x-agent-capability: $AGENT_API_TOKEN" \
-  -H 'content-type: application/json' \
-  -d "{\"credential\":\"$CRED_ID\",\"mode\":\"standing\",\"purpose\":\"browse browser profile\"}" > /dev/null
 ```
 
 ## 1. Create the browser

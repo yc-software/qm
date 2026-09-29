@@ -95,7 +95,7 @@ export function createKeychainApprovals(deps: {
             askId: id,
             ownerId: actor.id,
             mode: decision,
-            purpose: `${decision === "once" ? "Allow once" : "Allow always"}: ${ask.purpose}`,
+            purpose: ask.purpose,
           }));
       } catch (error) {
         if (!(error instanceof KeychainError) || error.status !== 410) throw error;

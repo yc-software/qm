@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
+import { keychainRoutes } from "../src/api/routes/keychain.ts";
 import {
   createKeychain,
   renderKeychainManifest,
@@ -19,6 +20,7 @@ import {
   type KeychainAsk,
 } from "../src/credentials/keychain.ts";
 import { createAskExpirySweep, fireAskResolution } from "../src/triggers/keychain-ask.ts";
+import { createKeychainApprovals, type KeychainApprovals } from "../src/credentials/keychain-approval.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
@@ -180,7 +182,8 @@ for (const outcome of ["declined", "expired"] as const) {
 }
 
 test("approveAsk: same createGrant owner gate, audience from the record, single resolution", async () => {
-  const k = kcAt(Date.now);
+  let t = 1_000_000;
+  const k = kcAt(() => t);
   const cred = await k.save(GH);
   const { ask } = await k.createAsk({
     credentialId: cred.id,
@@ -220,7 +223,18 @@ test("approveAsk: same createGrant owner gate, audience from the record, single 
   await assert.rejects(k.materialize(grant.id, "channel:OTHER", "U_BOB"), (e: KeychainError) => e.status === 403);
   const m = await k.materialize(grant.id, "channel:C1", "U_BOB");
   assert.ok(m.kind === "env" && m.env[0]!.value === "ghp_alice");
-  await assert.rejects(k.materialize(grant.id, "channel:C1", "U_BOB"), (e: KeychainError) => e.status === 410);
+  t += 60_000;
+  const retry = await k.materialize(grant.id, "channel:C1", "U_BOB");
+  assert.ok(retry.kind === "env" && retry.env[0]!.value === "ghp_alice", "a once grant covers re-runs of its command");
+  const used = (await k.getGrant(grant.id))!;
+  assert.equal(used.status, "active");
+  assert.equal(used.usedAt, 1_000_000, "the first use starts the window; re-runs don't extend it");
+  assert.equal(used.expiresAt, 1_000_000 + 15 * 60_000);
+  t = used.expiresAt! + 1;
+  await assert.rejects(
+    k.materialize(grant.id, "channel:C1", "U_BOB"),
+    (e: KeychainError) => e.status === 410 && /expired/.test(e.message),
+  );
 });
 
 test("declineAsk is owner-gated and single-resolution", async () => {
@@ -328,18 +342,6 @@ test("sweep is the durable retry for approve/decline resolutions that never fire
   await sweep(t);
   assert.equal(fired.length, 1, "marked notified after firing — no refire");
 
-  await k.createAsk({ credentialId: cred.id, requesterId: "U_BOB", requesterScopeId: "channel:C2", purpose: "p2" });
-  const grant = await k.createGrant({
-    credentialId: cred.id,
-    ownerId: "U_ALICE",
-    audienceScopeId: "channel:C2",
-    mode: "once",
-    purpose: "here",
-  });
-  await k.resolveAsksForGrant(grant);
-  await sweep(t);
-  assert.equal(fired.length, 1, "adopted asks are born notified");
-
   t += ASK_PRUNE_AFTER_MS + 1;
   await sweep(t);
   assert.equal(await k.getAsk(ask.id), null, "resolved+notified asks are pruned after the retention window");
@@ -370,40 +372,6 @@ test("sweep isolates per-ask failures — one failed fire doesn't starve the bat
   assert.deepEqual(fired, [a2.id], "the failure didn't starve the rest of the batch");
   assert.equal((await k.getAsk(a1.id))?.notifiedAt, undefined, "the failed ask stays unnotified and retries next tick");
   assert.notEqual((await k.getAsk(a2.id))?.notifiedAt, undefined);
-});
-
-test("resolveAsksForGrant: an in-room grant adopts the matching pending ask", async () => {
-  const k = kcAt(Date.now);
-  const cred = await k.save(GH);
-  const { ask } = await k.createAsk({
-    credentialId: cred.id,
-    requesterId: "U_BOB",
-    requesterScopeId: "channel:C1",
-    purpose: "p",
-  });
-
-  const other = await k.createGrant({
-    credentialId: cred.id,
-    ownerId: "U_ALICE",
-    audienceScopeId: "channel:OTHER",
-    mode: "once",
-    purpose: "elsewhere",
-  });
-  assert.deepEqual(await k.resolveAsksForGrant(other), [], "a grant for another scope adopts nothing");
-
-  const grant = await k.createGrant({
-    credentialId: cred.id,
-    ownerId: "U_ALICE",
-    audienceScopeId: "channel:C1",
-    mode: "once",
-    purpose: "yes go ahead",
-  });
-  const adopted = await k.resolveAsksForGrant(grant);
-  assert.deepEqual(
-    adopted.map((a) => [a.id, a.status, a.grantId]),
-    [[ask.id, "approved", grant.id]],
-  );
-  assert.equal((await k.listGrants({ ownerId: "U_ALICE" })).find((g) => g.id === grant.id)?.askId, ask.id);
 });
 
 test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate claim)", async () => {
@@ -454,14 +422,6 @@ test("runTrigger: silent markers never silence a notification-shaped fire (keych
 });
 
 test("fireAskResolution: a turn that fires but doesn't land falls back to a plain delivery (once)", async () => {
-  const deliveries = createDeliveryStore();
-  const mkDeps = (run: () => Promise<TurnResult>) => ({
-    deliveries,
-    idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
-    identity: createIdentityService(createMemoryMap()),
-    run,
-    getAsk: async () => ask,
-  });
   const ask: KeychainAsk = {
     id: "fa11bacc0000",
     credentialId: "c1",
@@ -469,74 +429,83 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
     requesterId: "U_BOB",
     requesterScopeId: "channel:C1",
     requesterDestination: { type: "slack", target: "C1", audienceScopeId: "channel:C1" },
-    purpose: "p",
+    purpose: "clone the payments repo",
     status: "approved",
     createdAt: 1,
     expiresAt: 2,
     resolvedAt: 1,
     grantId: "g1",
   };
+  const mkDeps = (run: (req: TurnRequest) => Promise<TurnResult>, current: KeychainAsk = ask) => {
+    const deliveries = createDeliveryStore();
+    return {
+      deliveries,
+      idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
+      identity: createIdentityService(createMemoryMap()),
+      run,
+      getAsk: async () => current,
+    };
+  };
+  const texts = async (deps: ReturnType<typeof mkDeps>) => (await deps.deliveries.pending("slack")).map((d) => d.text);
 
-  const deps = mkDeps(async () => ({ status: "refused", reason: "rate limit exceeded" }) as TurnResult);
-  await fireAskResolution(deps, ask);
-  let pending = (await deliveries.pending("slack")).filter((d) => d.text.includes(ask.id));
-  assert.equal(pending.length, 1);
-  assert.match(pending[0]!.text, /couldn't resume the task automatically/);
-  assert.match(pending[0]!.text, /was approved/);
-
-  await fireAskResolution(deps, ask);
-  pending = (await deliveries.pending("slack")).filter((d) => d.text.includes(ask.id));
-  assert.equal(pending.length, 1, "fallback is at-most-once");
+  const refused = mkDeps(async () => ({ status: "refused", reason: "rate limit exceeded" }) as TurnResult);
+  await fireAskResolution(refused, ask);
+  await fireAskResolution(refused, ask);
+  assert.deepEqual(await texts(refused), ["Access approved."], "fallback is plain and at-most-once");
+  for (const status of ["declined", "expired"] as const) {
+    const other = { ...ask, id: `fa11bacc${status}`, status };
+    const deps = mkDeps(async () => ({ status: "refused" }) as TurnResult, other);
+    await fireAskResolution(deps, other);
+    assert.deepEqual(await texts(deps), [
+      status === "declined" ? "Access was declined." : "The access request expired.",
+    ]);
+  }
 
   const notified = { ...ask, id: "fa11bacc1111", notifiedAt: 5 };
-  const deps2 = { ...mkDeps(async () => ({ status: "refused" }) as TurnResult), getAsk: async () => notified };
-  await fireAskResolution(deps2, notified);
-  const before = (await deliveries.pending("slack")).filter((d) => d.text.includes(notified.id)).length;
-  await fireAskResolution(deps2, notified);
-  assert.equal(
-    (await deliveries.pending("slack")).filter((d) => d.text.includes(notified.id)).length,
-    before,
-    "no redundant line once notified",
-  );
+  const quiet = mkDeps(async () => ({ status: "refused" }) as TurnResult, notified);
+  await fireAskResolution(quiet, notified);
+  const before = (await texts(quiet)).length;
+  await fireAskResolution(quiet, notified);
+  assert.equal((await texts(quiet)).length, before, "no redundant line once notified");
 
-  let promptText = "";
-  const standingGrant = {
-    id: "g9",
-    credentialId: "c1",
-    ownerId: "U_ALICE",
-    audienceScopeId: "channel:C1",
-    mode: "standing",
-    purpose: "use it for payments work this week",
-    status: "active",
-    createdAt: 1,
-  } as any;
-  const swAsk = { ...ask, id: "fa11bacc3333", grantId: "g9" };
-  await fireAskResolution(
-    {
-      ...mkDeps(async () => ({ status: "ok" }) as TurnResult),
-      getAsk: async () => swAsk,
-      getGrant: async () => standingGrant,
-      run: async (req) => ((promptText = req.text ?? ""), { status: "ok", reply: `ok ${swAsk.id}` } as TurnResult),
-    },
-    swAsk,
-  );
-  assert.match(promptText, /standing/, "mode comes from the looked-up grant");
-  assert.match(
-    promptText,
-    /"use it for payments work this week"/,
-    "the owner's verbatim consent is what the agent must act within",
-  );
-  assert.ok(!promptText.includes("single-use"), "a standing grant is not described as single-use");
+  const prompts: string[] = [];
+  for (const mode of ["standing", "once"] as const) {
+    const grant = {
+      id: `g-${mode}`,
+      credentialId: "c1",
+      ownerId: "U_ALICE",
+      audienceScopeId: "channel:C1",
+      mode,
+      purpose: "use it for payments work this week",
+      status: "active",
+      createdAt: 1,
+    } as any;
+    const current = { ...ask, id: `fa11bacc${mode}`, grantId: grant.id };
+    await fireAskResolution(
+      {
+        ...mkDeps(
+          async (req) => (prompts.push(req.text ?? ""), { status: "ok", reply: "on it" }) as TurnResult,
+          current,
+        ),
+        getGrant: async () => grant,
+      },
+      current,
+    );
+  }
+  assert.match(prompts[0]!, /until revoked/, "mode comes from the looked-up grant");
+  assert.match(prompts[1]!, /for the blocked command and its re-runs/);
+  for (const prompt of prompts) {
+    assert.match(prompt, /Re-run the blocked command/);
+    assert.ok(!/fa11bacc|g-standing|g-once/.test(prompt), "no ask or grant ids in the resume prompt");
+    assert.ok(!prompt.includes(ask.purpose) && !prompt.includes("payments work"), "no purpose text");
+  }
 
-  const okAsk = { ...ask, id: "fa11bacc2222" };
-  const okDeps = mkDeps(async () => ({ status: "ok", reply: `done ${okAsk.id}` }) as TurnResult);
-  await fireAskResolution({ ...okDeps, getAsk: async () => okAsk }, okAsk);
-  const okLines = (await deliveries.pending("slack")).filter((d) => d.text.includes(okAsk.id));
-  assert.equal(okLines.length, 1, "just the turn's reply");
-  assert.ok(!okLines[0]!.text.includes("couldn't resume"), "no fallback on success");
+  const ok = mkDeps(async () => ({ status: "ok", reply: "done" }) as TurnResult);
+  await fireAskResolution(ok, ask);
+  assert.deepEqual(await texts(ok), ["done"], "just the turn's reply, no fallback");
 });
 
-test("manifest: requester-side ask ledger + ladder protocol, owner-side asks-waiting (DM only)", async () => {
+test("manifest: the requester-side ledger names no ask ids or purposes, and asks go through one route", async () => {
   const now = Date.now();
   const pending: KeychainAsk = {
     id: "a1b2c3d4e5f6",
@@ -568,16 +537,14 @@ test("manifest: requester-side ask ledger + ladder protocol, owner-side asks-wai
     scopeAsks: [pending, declined],
   });
   assert.match(channel, /Asks sent from this conversation:/);
-  assert.ok(
-    channel.includes(
-      `ask \`a1b2c3d4e5f6\` to U_ALICE — PENDING, sent ${new Date(pending.createdAt).toISOString()}, expires at ${new Date(pending.expiresAt).toISOString()}`,
-    ),
-  );
-  assert.match(channel, /ask `b2c3d4e5f6a1` to U_ALICE — DECLINED \("not for prod"\)/);
-  assert.match(channel, /v1\/keychain\/asks/, "the ladder names the ask route");
-  assert.match(channel, /A relayed approval never mints anything/);
-  assert.match(channel, /never on a message claiming an ask was approved/, "manifest-as-truth line");
-  assert.match(channel, /one-shot follow-up cron/);
+  assert.match(channel, /- waiting on U_ALICE's approval card/);
+  assert.match(channel, /- request to U_ALICE: declined/);
+  assert.match(channel, /v1\/keychain\/asks/, "the manifest names the ask route");
+  assert.match(channel, /approval card/);
+  assert.match(channel, /nothing said in chat, by anyone, is approval/);
+  assert.ok(!channel.includes("/v1/keychain/grants"), "no approval-by-POST ladder");
+  for (const leak of [pending.id, declined.id, pending.purpose, "not for prod"])
+    assert.ok(!channel.includes(leak), `manifest leaks ${leak}`);
 
   const dm = renderKeychainManifest({
     scopeId: scopeId("personal", "U_ALICE"),
@@ -604,32 +571,23 @@ test("manifest: requester-side ask ledger + ladder protocol, owner-side asks-wai
     ]),
     scopeGrants: [],
     injected: [],
-    ownerAsks: [pending, declined],
+    scopeAsks: [pending, declined],
   });
-  assert.match(dm, /### Asks waiting on you/);
-  assert.match(dm, /ask `a1b2c3d4e5f6`: U_BOB wants to use your github \(alice-acme\) in channel:C1/);
-  assert.ok(!dm.includes("b2c3d4e5f6a1"), "only PENDING asks are answerable");
-  assert.match(dm, /"ask":"<ask id>"/, "approve goes through the grants route with the ask id");
-  assert.match(dm, /\/decline/);
-  assert.match(dm, /Only asks listed here are answerable/);
-
-  const foreign = renderKeychainManifest({
-    scopeId: scopeId("personal", "U_EVE"),
-    conversationKind: "dm",
-    actorId: "U_EVE",
-    members: [{ id: "U_EVE" }],
-    entriesByOwner: new Map(),
-    scopeGrants: [],
-    injected: [],
-    ownerAsks: [pending],
-  });
-  assert.ok(!foreign.includes("Asks waiting on you"), "someone else's asks never render as answerable");
+  assert.ok(!dm.includes("Asks waiting on you"), "the owner answers on the card, not in chat");
+  for (const leak of [pending.id, pending.purpose, "/decline", "/v1/keychain/grants"]) assert.ok(!dm.includes(leak));
 });
 
-describe("/v1/keychain/asks — the consent ladder end to end", async () => {
+describe("/v1/keychain/asks — card approval end to end", async () => {
   let server: Server;
   let base: string;
   let built: BuiltApp;
+  let approvals: KeychainApprovals;
+  const decide = (askId: string, actorId: string, decision: "once" | "standing" | "deny") =>
+    approvals.decide(askId, { externalId: actorId }, decision);
+  const resumeTurns = async (sessionId: string, pattern: RegExp) =>
+    (await built.sessions.getEntries(sessionId)).filter(
+      (e) => e.type === "user" && pattern.test(JSON.stringify(e.payload)),
+    );
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
     mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
@@ -685,6 +643,13 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    approvals = createKeychainApprovals({
+      keychain: built.keychain!,
+      app: built.app,
+      identity: built.identity,
+      sessions: built.sessions,
+      resume: (ask, grant) => built.fireAskResolution!(ask, grant),
+    });
   });
   after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -739,7 +704,7 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
     assert.equal(res.status, 400);
   });
 
-  it("creates the ask, enqueues ONE core-composed owner DM (onBehalfOf provenance), dedups silently", async () => {
+  it("creates the ask, enqueues ONE core-composed owner DM without ids or purpose text, dedups silently", async () => {
     const creds = (await (await get("/v1/keychain/credentials", await capFor("U_ALICE"))).json()) as any;
     const gh = creds.credentials.find((c: any) => c.service === "github");
 
@@ -764,17 +729,13 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
     assert.equal(notices[0]!.destination.onBehalfOf, "U_BOB");
     assert.match(
       notices[0]!.text,
-      /Bob \(U_BOB\) asked in \*\*#infra\*\*/,
+      /Bob \(U_BOB\) in \*\*#infra\*\* wants to use your \*\*github\*\* credential \(alice-acme\)\./,
       "core composes the notice from the directory + token",
     );
-    assert.match(notices[0]!.text, /\*\*github\*\* credential \(alice-acme\), one time/);
-    assert.match(
-      notices[0]!.text,
-      /"clone acme\/payments and run the tests"/,
-      "the requester's purpose is quoted, visibly",
-    );
-    assert.match(notices[0]!.text, /only your own reply counts/);
-    assert.match(notices[0]!.text, new RegExp(`ask \`${ask.id}\``));
+    assert.match(notices[0]!.text, /Approve or deny on the card/);
+    assert.ok(!notices[0]!.text.includes(ask.id), "no ask id");
+    assert.ok(!notices[0]!.text.includes("clone acme/payments"), "no requester purpose text");
+    assert.ok(!/Mention me|reply/i.test(notices[0]!.text), "chat replies are not approval");
 
     const again = await post(
       "/v1/keychain/asks",
@@ -807,7 +768,7 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
     assert.equal(res.status, 200);
   });
 
-  it("relayed approve 403s; the owner's own DM turn mints the audience-bound grant; replay 410s; the original thread resumes", async () => {
+  it("only the owner's card click mints the audience-bound grant; replay is a no-op; the original thread resumes once", async () => {
     const creds = (await (await get("/v1/keychain/credentials", await capFor("U_ALICE"))).json()) as any;
     const gh = creds.credentials.find((c: any) => c.service === "github");
     const list = (await (await get("/v1/keychain/asks", await bobInInfra())).json()) as any;
@@ -829,145 +790,82 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
     const session = await built.sessions.getByThread("ch:C_INFRA-thread");
     assert.ok(session);
 
-    const relayed = await post(
-      "/v1/keychain/grants",
-      { ask: ask.id, mode: "once", purpose: "alice said it's fine" },
-      await bobInInfra(),
-    );
-    assert.equal(relayed.status, 403);
+    await assert.rejects(decide(ask.id, "U_BOB", "once"), (e: KeychainError) => e.status === 403, "relayed approval");
+    await assert.rejects(decide("deadbeef0000", "U_ALICE", "once"), (e: KeychainError) => e.status === 403);
+    assert.equal((await built.keychain!.getAsk(ask.id))?.status, "pending");
 
-    assert.equal(
-      (await post("/v1/keychain/grants", { ask: "deadbeef0000", mode: "once", purpose: "x" }, await capFor("U_ALICE")))
-        .status,
-      404,
-    );
+    const view = await decide(ask.id, "U_ALICE", "once");
+    assert.equal(view.ask.status, "approved");
+    assert.equal(view.mode, "once");
+    const grant = (await built.keychain!.getGrant(view.ask.grantId!))!;
+    assert.equal(grant.audienceScopeId, "channel:C_INFRA");
+    assert.equal(grant.askId, ask.id);
+    assert.equal(grant.purpose, ask.purpose, "the card records the request, not relayed chat words");
+    const replay = await decide(ask.id, "U_ALICE", "standing");
+    assert.equal(replay.ask.grantId, grant.id, "a second click resolves to the first decision");
 
-    const approved = await post(
-      "/v1/keychain/grants",
-      { ask: ask.id, mode: "once", purpose: "sure, just this once" },
-      await capFor("U_ALICE"),
-    );
-    assert.equal(approved.status, 200);
-    const body = (await approved.json()) as any;
-    assert.equal(body.grant.audienceScopeId, "channel:C_INFRA");
-    assert.equal(body.grant.askId, ask.id);
-    assert.equal(body.ask.status, "approved");
-    assert.equal(body.use.command, undefined, "the use.command would 403 from the owner's DM — suppressed");
-    assert.match(body.use.note, /channel:C_INFRA/);
-
-    assert.equal(
-      (await post("/v1/keychain/grants", { ask: ask.id, mode: "once", purpose: "again" }, await capFor("U_ALICE")))
-        .status,
-      410,
-    );
-
-    const resolution = await waitFor(async () =>
-      (await built.sessions.getEntries(session!.id)).filter(
-        (e) => e.type === "user" && JSON.stringify(e.payload).includes(`Keychain ask \`${ask.id}\` was approved`),
-      ),
-    );
+    const resolution = await waitFor(() => resumeTurns(session!.id, /The credential owner approved access/));
     assert.equal(resolution.length, 1, "exactly one resolution turn, in the original thread's session");
-    const delivered = await waitFor(async () =>
-      (await built.deliveries.pending("slack")).filter((d) => d.text.includes(`\`${ask.id}\``)),
-    );
-    assert.equal(delivered.length, 1);
-    assert.equal(delivered[0]!.destination.target, "C_INFRA");
+    const prompt = JSON.stringify(resolution[0]!.payload);
+    assert.ok(!prompt.includes(ask.id) && !prompt.includes(grant.id), "no ids in the resume text");
+    assert.ok(!prompt.includes("clone acme/payments"), "no purpose text in the resume text");
 
     await waitFor(async () =>
       (((await (await get("/v1/keychain/asks", await bobInInfra())).json()) as any).asks as any[]).filter(
         (a) => a.id === ask.id && a.notifiedAt !== undefined,
       ),
     );
-    await built.fireAskResolution!({ ...body.ask } as KeychainAsk, body.grant);
-    assert.equal((await built.deliveries.pending("slack")).filter((d) => d.text.includes(`\`${ask.id}\``)).length, 1);
+    await built.fireAskResolution!({ ...view.ask } as KeychainAsk, grant);
+    assert.equal((await resumeTurns(session!.id, /The credential owner approved access/)).length, 1);
 
     assert.equal(
-      (await post("/v1/keychain/use", { grant: body.grant.id }, await capFor("U_EVE", "channel:OTHER"))).status,
+      (await post("/v1/keychain/use", { grant: grant.id }, await capFor("U_EVE", "channel:OTHER"))).status,
       403,
     );
-    const used = await post("/v1/keychain/use", { grant: body.grant.id }, await bobInInfra());
+    const used = await post("/v1/keychain/use", { grant: grant.id }, await bobInInfra());
     assert.equal(used.status, 200);
     assert.equal(await used.text(), "export GITHUB_TOKEN='ghp_alice'\n");
+    const rerun = await post("/v1/keychain/use", { grant: grant.id }, await bobInInfra());
+    assert.equal(rerun.status, 200, "a sub-agent or retry re-runs the same command inside the window");
   });
 
-  it("decline flips the ask and fires exactly one resolution turn into the asking channel", async () => {
+  it("deny on the card flips the ask and fires exactly one resolution turn into the asking channel", async () => {
     const creds = (await (await get("/v1/keychain/credentials", await capFor("U_ALICE"))).json()) as any;
     const npm = creds.credentials.find((c: any) => c.service === "npm");
     const made = (await (
       await post("/v1/keychain/asks", { credential: npm.id, purpose: "publish from infra" }, await bobInInfra())
     ).json()) as any;
+    const session = await built.sessions.getByThread("ch:C_INFRA-thread");
+    assert.ok(session);
 
-    assert.equal(
-      (await post(`/v1/keychain/asks/${made.ask.id}/decline`, { note: "not from a shared room" }, await bobInInfra()))
-        .status,
-      403,
-      "only the owner declines",
-    );
-    const res = await post(
-      `/v1/keychain/asks/${made.ask.id}/decline`,
-      { note: "not from a shared room" },
-      await capFor("U_ALICE"),
-    );
-    assert.equal(res.status, 200);
-    const { ask } = (await res.json()) as any;
-    assert.equal(ask.status, "declined");
-
-    const delivered = await waitFor(async () =>
-      (await built.deliveries.pending("slack")).filter((d) => d.text.includes(`\`${ask.id}\``)),
-    );
-    assert.equal(delivered.length, 1);
-    assert.match(delivered[0]!.text, /declined/);
-
-    assert.equal((await post(`/v1/keychain/asks/${made.ask.id}/decline`, {}, await capFor("U_ALICE"))).status, 410);
+    await assert.rejects(decide(made.ask.id, "U_BOB", "deny"), (e: KeychainError) => e.status === 403);
+    const view = await decide(made.ask.id, "U_ALICE", "deny");
+    assert.equal(view.ask.status, "declined");
+    const resolution = await waitFor(() => resumeTurns(session!.id, /declined the access request/));
+    assert.equal(resolution.length, 1);
+    assert.equal((await decide(made.ask.id, "U_ALICE", "once")).ask.status, "declined", "a decided card stays decided");
+    assert.equal((await post("/v1/keychain/use", { credential: npm.id }, await bobInInfra())).status, 403);
   });
 
-  it("in-room grant (owner present in the channel) adopts the pending ask without a resolution turn", async () => {
-    const { credential } = (await (
-      await post(
-        "/v1/keychain/credentials",
-        { service: "fly", secret: "fly_alice", envKey: "FLY_API_TOKEN" },
-        await capFor("U_ALICE"),
-      )
-    ).json()) as any;
-    const made = (await (
-      await post("/v1/keychain/asks", { credential: credential.id, purpose: "deploy the preview" }, await bobInInfra())
-    ).json()) as any;
-
-    const granted = await post(
-      "/v1/keychain/grants",
-      { credential: credential.id, mode: "once", purpose: "yes, deploy it" },
-      await capFor("U_ALICE", "channel:C_INFRA"),
-    );
-    assert.equal(granted.status, 200);
-    const g = (await granted.json()) as any;
-    assert.ok(g.use.command, "an in-scope mint keeps the runnable use.command");
-
-    const asks = (await (await get("/v1/keychain/asks", await bobInInfra())).json()) as any;
-    const adopted = asks.asks.find((a: any) => a.id === made.ask.id);
-    assert.equal(adopted.status, "approved");
-    assert.equal(adopted.grantId, g.grant.id);
-    assert.equal(
-      (await built.deliveries.pending("slack")).filter((d) => d.text.includes(`\`${made.ask.id}\``)).length,
-      0,
-      "no resolution turn — the conversation was already awake",
-    );
-  });
-
-  it("trigger-claim hardening: consent routes refuse a trigger-fired turn's token", async () => {
+  it("the removed chat-approval routes are gone; background requests may still ask", async () => {
     const creds = (await (await get("/v1/keychain/credentials", await capFor("U_ALICE"))).json()) as any;
     const gh = creds.credentials.find((c: any) => c.service === "github");
-    const triggeredOwner = await capFor("U_ALICE", "channel:C_INFRA", { triggered: true });
-
-    const mint = await post(
-      "/v1/keychain/grants",
-      { credential: gh.id, mode: "standing", purpose: "cron says yes" },
-      triggeredOwner,
-    );
-    assert.equal(mint.status, 403, "an owner-owned cron firing in a requester-controlled context must not mint");
-    const approve = await post("/v1/keychain/grants", { ask: "anything", mode: "once", purpose: "x" }, triggeredOwner);
-    assert.equal(approve.status, 403);
-    const decline = await post("/v1/keychain/asks/anything/decline", {}, triggeredOwner);
-    assert.equal(decline.status, 403);
+    const liveOwner = await capFor("U_ALICE", "channel:C_INFRA", { liveActor: true });
+    const registered = keychainRoutes.flatMap((r) => ("path" in r ? [`${r.method} ${r.path}`] : []));
+    assert.ok(registered.includes("POST /v1/keychain/asks"));
+    for (const removed of ["POST /v1/keychain/grants", "POST /v1/keychain/asks/:id/decline"])
+      assert.ok(!registered.includes(removed), `${removed} is no longer registered`);
+    // An unregistered path answers exactly like any unknown route: the capability gate refuses it.
+    const unknown = await (await post("/v1/keychain/no-such-route", {}, liveOwner)).json();
+    for (const [path, body] of [
+      ["/v1/keychain/grants", { credential: gh.id, mode: "standing", purpose: "owner says yes" }],
+      ["/v1/keychain/grants", { ask: "anything", mode: "once", purpose: "x" }],
+      ["/v1/keychain/asks/anything/decline", {}],
+    ] as const) {
+      const res = await post(path, body, liveOwner);
+      assert.equal(res.status, 403, path);
+      assert.deepEqual(await res.json(), unknown, path);
+    }
     const send = await post(
       "/v1/keychain/asks",
       { credential: gh.id, purpose: "p" },
@@ -1014,7 +912,6 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
           threadRef,
           ...(scopeVersion ? { scopeVersion } : {}),
         });
-        const liveOwner = await capFor("U_ALICE", "personal:U_ALICE", { liveActor: true });
         const seed = await built.app.turn({
           surface: "cron",
           triggered: true,
@@ -1048,39 +945,17 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
         assert.match(notices[0]!.text, /Scheduled task "Shared credential QA"/);
         if (kind === "project") assert.match(notices[0]!.text, /Approval QA/);
         assert.ok(!notices[0]!.text.includes("synthetic-shared-value"));
-        assert.equal(
-          (await post("/v1/keychain/grants", { ask: ask.id, mode: "once", purpose: "I approve myself" }, token)).status,
-          403,
-        );
+        assert.ok(!notices[0]!.text.includes(ask.id) && !notices[0]!.text.includes(ask.purpose));
         if (requesterId !== "U_ALICE")
-          assert.equal(
-            (
-              await post(
-                "/v1/keychain/grants",
-                { ask: ask.id, mode: "once", purpose: "Alice said yes" },
-                await capFor(requesterId),
-              )
-            ).status,
-            403,
-          );
-        const response = await post(
-          "/v1/keychain/grants",
-          { ask: ask.id, mode: "once", purpose: "yes, for this shared check" },
-          liveOwner,
-        );
-        assert.equal(response.status, 200, await response.clone().text());
-        const { grant, use } = (await response.json()) as any;
+          await assert.rejects(decide(ask.id, requesterId, "once"), (e: KeychainError) => e.status === 403);
+        const view = await decide(ask.id, "U_ALICE", "once");
+        const grant = (await built.keychain!.getGrant(view.ask.grantId!))!;
         assert.equal(grant.audienceScopeId, scope);
-        assert.equal(use.command, undefined);
-        const resumed = await waitFor(async () =>
-          (await built.sessions.getEntries(session.id)).filter(
-            (e) => e.type === "user" && JSON.stringify(e.payload).includes(`Keychain ask \`${ask.id}\` was approved`),
-          ),
-        );
+        const resumed = await waitFor(() => resumeTurns(session.id, /The credential owner approved access/));
         assert.equal(resumed.length, 1);
         assert.equal((await post("/v1/keychain/use", { grant: grant.id }, await capFor(requesterId))).status, 403);
         assert.equal((await post("/v1/keychain/use", { grant: grant.id }, token)).status, 200);
-        assert.equal((await post("/v1/keychain/use", { grant: grant.id }, token)).status, 410);
+        assert.equal((await post("/v1/keychain/use", { grant: grant.id }, token)).status, 200, "re-run in the window");
       });
     }
   }
@@ -1189,37 +1064,23 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
       );
       assert.equal(notices.length, 1);
       assert.equal(notices[0]!.destination.target, "U_ALICE");
-      assert.match(notices[0]!.text, /A task in your personal conversation is asking/);
+      assert.match(notices[0]!.text, /A task in your personal conversation wants to use/);
       assert.ok(!notices[0]!.text.includes("dummy-cron-value"));
-      assert.equal(
-        (await post("/v1/keychain/grants", { ask: ask.id, mode, purpose: "approve myself" }, token)).status,
-        403,
-      );
-      assert.equal(
-        (await post("/v1/keychain/grants", { ask: ask.id, mode, purpose: "Alice said yes" }, await capFor("U_BOB")))
-          .status,
-        403,
-      );
-      const approval = await post(
-        "/v1/keychain/grants",
-        { ask: ask.id, mode, purpose: "yes, run this dummy check" },
-        live,
-      );
-      assert.equal(approval.status, 200);
-      const approved = (await approval.json()) as any;
+      await assert.rejects(decide(ask.id, "U_BOB", mode), (e: KeychainError) => e.status === 403);
+      const view = await decide(ask.id, "U_ALICE", mode);
+      assert.equal(view.mode, mode);
+      const approved = { grant: (await built.keychain!.getGrant(view.ask.grantId!))! };
       assert.equal(approved.grant.audienceScopeId, personal);
-      assert.equal(approved.use.command, undefined);
-      assert.match(approved.use.note, /Do not load or consume/);
-      const resumed = await waitFor(async () =>
-        (await built.sessions.getEntries(session.id)).filter(
-          (e) => e.type === "user" && JSON.stringify(e.payload).includes(`Keychain ask \`${ask.id}\` was approved`),
-        ),
-      );
+      const resumed = await waitFor(() => resumeTurns(session.id, /The credential owner approved access/));
       assert.equal(resumed.length, 1);
       assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, await capFor("U_BOB"))).status, 403);
       assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, token)).status, 200);
-      const second = await post("/v1/keychain/use", { grant: approved.grant.id }, token);
-      assert.equal(second.status, mode === "standing" ? 200 : 410);
+      assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, token)).status, 200);
+      const after = (await built.keychain!.getGrant(approved.grant.id))!;
+      assert.equal(after.status, "active");
+      if (mode === "once") {
+        assert.ok(after.usedAt !== undefined && after.expiresAt! <= after.usedAt + 15 * 60_000, "window capped");
+      } else assert.equal(after.expiresAt, approved.grant.expiresAt, "standing grants are not capped by use");
       if (mode === "standing") {
         assert.equal((await post(`/v1/keychain/grants/${approved.grant.id}/revoke`, {}, live)).status, 200);
         assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, token)).status, 410);
@@ -1240,8 +1101,8 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
     const { ask } = (await (
       await post("/v1/keychain/asks", { credential: credential.id, purpose: "dummy declined check" }, token)
     ).json()) as any;
-    assert.equal((await post(`/v1/keychain/asks/${ask.id}/decline`, {}, token)).status, 403);
-    assert.equal((await post(`/v1/keychain/asks/${ask.id}/decline`, { note: "no" }, live)).status, 200);
+    await assert.rejects(decide(ask.id, "U_BOB", "deny"), (e: KeychainError) => e.status === 403);
+    assert.equal((await decide(ask.id, "U_ALICE", "deny")).ask.status, "declined");
     assert.equal((await built.keychain!.getAsk(ask.id))?.status, "declined");
     assert.equal((await post("/v1/keychain/use", { credential: credential.id }, token)).status, 403);
     assert.equal(
@@ -1273,17 +1134,16 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
     ).json()) as any;
     await new Promise((r) => setTimeout(r, 120));
 
+    const session = await built.sessions.getByThread("ch:C_INFRA-thread");
+    assert.ok(session);
     await built.scheduler.tick(Date.now());
-    const delivered = await waitFor(async () =>
-      (await built.deliveries.pending("slack")).filter((d) => d.text.includes(`\`${made.ask.id}\``)),
-    );
-    assert.equal(delivered.length, 1, "exactly one expired-resolution delivery");
-    assert.match(delivered[0]!.text, /expired without an answer/);
-    assert.equal(delivered[0]!.destination.target, "C_INFRA");
+    const resolved = await waitFor(() => resumeTurns(session!.id, /did not answer the access request/));
+    assert.equal(resolved.length, 1, "exactly one expired-resolution turn in the asking thread");
+    assert.ok(!JSON.stringify(resolved[0]!.payload).includes(made.ask.id));
 
     await built.scheduler.tick(Date.now());
     assert.equal(
-      (await built.deliveries.pending("slack")).filter((d) => d.text.includes(`\`${made.ask.id}\``)).length,
+      (await resumeTurns(session!.id, /did not answer the access request/)).length,
       1,
       "a second tick refires nothing — notifiedAt + fireKey both hold",
     );

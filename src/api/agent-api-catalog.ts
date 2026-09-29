@@ -607,13 +607,12 @@ const FAMILIES: AgentApiFamily[] = [
       (p === "/v1/keychain/credentials" && (m === "POST" || m === "GET")) ||
       (p === "/v1/keychain/overview" && m === "GET") ||
       (m === "DELETE" && p.startsWith("/v1/keychain/credentials/")) ||
-      (p === "/v1/keychain/grants" && (m === "POST" || m === "GET")) ||
+      (p === "/v1/keychain/grants" && m === "GET") ||
       (m === "POST" && p.startsWith("/v1/keychain/grants/") && p.endsWith("/revoke")) ||
       (p === "/v1/keychain/asks" && (m === "POST" || m === "GET")) ||
-      (m === "POST" && p.startsWith("/v1/keychain/asks/") && p.endsWith("/decline")) ||
       (m === "POST" && p === "/v1/keychain/drops") ||
       (m === "POST" && p === "/v1/keychain/use"),
-    guidance: "The keychain ask→approve→use protocol is documented in your keychain manifest when one renders.",
+    guidance: "The keychain ask→card approval→use protocol is documented in your keychain manifest when one renders.",
     routes: [
       {
         method: "POST|GET",
@@ -627,12 +626,7 @@ const FAMILIES: AgentApiFamily[] = [
         summary: "list this user's credential metadata, grants, and pending asks (never secret values)",
       },
       { method: "DELETE", path: "/v1/keychain/credentials/:id", summary: "remove a registered login" },
-      {
-        method: "POST|GET",
-        path: "/v1/keychain/grants",
-        summary:
-          "request a purpose-bound grant to use someone's login here (when the owner authorized it mid-conversation rather than on their own turn, pass onBehalfOf with their id) / list grants",
-      },
+      { method: "GET", path: "/v1/keychain/grants", summary: "list grants for this conversation" },
       { method: "POST", path: "/v1/keychain/grants/:id/revoke", summary: "revoke a grant" },
       {
         method: "POST|GET",
@@ -640,7 +634,6 @@ const FAMILIES: AgentApiFamily[] = [
         summary:
           "ask a credential's owner for access, including scheduled turns in personal or shared conversations for discoverable credentials (no access until owner approval) / list asks",
       },
-      { method: "POST", path: "/v1/keychain/asks/:id/decline", summary: "decline an ask" },
       {
         method: "POST",
         path: "/v1/keychain/drops",

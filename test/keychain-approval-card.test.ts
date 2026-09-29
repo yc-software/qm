@@ -140,9 +140,17 @@ test("the card links the conversation inline and omits command-policy fields", a
   }
   const once = keychainApprovalMessage({ ...view, ask: { ...view.ask, requestedMode: "once" } }, origin);
   assert.match(JSON.stringify(once), /one-time access/);
-  assert.match(wire, /Allow once/);
-  assert.match(wire, /Allow always/);
-  assert.match(wire, /Deny/);
+  const buttons = (card.blocks.find((block) => block.type === "actions") as any).elements;
+  assert.deepEqual(
+    buttons.map((b: any) => [b.text.text, b.action_id, b.style]),
+    [
+      ["Allow", "keychain_allow_always", "primary"],
+      ["Allow once", "keychain_allow_once", undefined],
+      ["Deny", "keychain_deny", "danger"],
+    ],
+  );
+  assert.doesNotMatch(wire, /Why:/);
+  assert.ok(!wire.includes(view.ask.purpose), "the card never echoes the requester's purpose text");
   assert.ok(card.blocks.every((block) => block.type !== "context"));
   const settled = keychainApprovalMessage(
     { ...view, ask: { ...view.ask, status: "approved" }, mode: "standing" },
