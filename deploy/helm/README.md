@@ -119,14 +119,19 @@ with `SESSION_STORE=postgres`, `SNAPSHOT_STORE=s3`, `TRANSFER_STORE=s3`, `S3_BUC
 and `S3_REGION` (optionally `S3_PREFIX`) on core, use a remote `SANDBOX_BACKEND`,
 and leave `services.core.persistence` disabled. Sessions and runs then live in
 Postgres, and uploaded artifacts, session shares, published-app source archives and
-sandbox file transfers go to the bucket, so any replica can serve any request and
-pods can be replaced with rolling updates. Without `SESSION_STORE=postgres`,
-sessions and runs stay in process memory even when `DATABASE_URL` is set. S3
+sandbox file transfers go to the bucket, so replicas share that state and pods can
+be replaced with rolling updates. Without `SESSION_STORE=postgres`, sessions and
+runs stay in process memory even when `DATABASE_URL` is set; an explicit
+`RUN_STORE=memory` also keeps runs there. S3
 credentials come from the standard AWS chain, such as a pod IAM role bound through
 `serviceAccount.create=true` with `serviceAccount.annotations`, or
 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in the runtime Secret. `/data` is then
-pod-local scratch. Agent workspace files that are not shared as artifacts still
-live there and do not survive pod replacement.
+pod-local, and a few things still live only on the replica that created them:
+agent workspace files outside `artifacts/` (including files shared from there) and
+pending ChatGPT device logins. The chart sets no session affinity, so these can be
+unavailable from another replica and are lost on pod replacement. Switching an
+existing volume-backed install to S3 does not migrate bytes already under `/data`;
+copy them into the bucket first or they become unreadable.
 
 **Local volume (single replica).** Without an object store, core writes file bytes
 under `/data`, and they are lost when the pod is replaced even with Postgres
