@@ -4,7 +4,7 @@ A delegated task runs in a durable session with its own transcript and a mutable
 
 ## Lifecycle
 
-`sessions.open` accepts a task, title, model, harness, thinking level, and optional `noComputer` flag. `noComputer: true` removes computer access entirely: no shell, filesystem, browser, or computer-backed integrations. Only memory/history, session coordination, runtime inspection, and permitted read-only connectors remain. Leave it unset for tasks that need a computer to read email, files, or code; express any no-write constraint in the task. The former `readOnly` tool argument is rejected with guidance to use the new contract.
+`sessions.open` accepts a task, title, model, harness, thinking level, and optional `noComputer` flag. `noComputer: true` removes computer access entirely: no shell, filesystem, browser, or computer-backed integrations. Only memory/history, session coordination, runtime inspection, and permitted read-only connectors remain. Leave it unset for tasks that need a computer to read email, files, or code; express any no-write constraint in the task.
 
 Reusing a request key recovers the same child and initial run after a lost receipt; using that key for different work is rejected. Children inherit the caller's scope and audience. The existing internal `readOnly` restriction remains durable: `noComputer: false` cannot lift a caller's restriction or an existing child's restriction. The session tree admits at most ten pending or running qm runs, including direct turns and explicit follow-up tasks.
 

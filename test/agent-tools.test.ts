@@ -3426,24 +3426,17 @@ test("sessions open exposes noComputer and preserves the internal restriction", 
     read: async () => ({ ok: false, message: "unused" }),
   };
   const session = createAgentTools({ current: tc }).find((tool) => tool.name === "sessions")!;
-  const properties = (
-    session.parameters as { properties: Record<string, { description?: string; deprecated?: boolean }> }
-  ).properties;
+  const properties = (session.parameters as { properties: Record<string, { description?: string }> }).properties;
   assert.ok(properties.noComputer);
-  assert.equal(properties.readOnly?.deprecated, true);
+  assert.equal(properties.readOnly, undefined);
   assert.match(properties.noComputer.description!, /no shell, filesystem, browser/);
   const shape = (fromJSONSchema(session.parameters as Parameters<typeof fromJSONSchema>[0]) as ZodObject).shape;
   assert.ok(!Check(session.parameters, { action: "open", task: "test", noComputer: "true" }));
   for (const noComputer of [undefined, false, true]) {
     const params = { action: "open", task: "test", ...(noComputer === undefined ? {} : { noComputer }) };
     assert.ok(Check(session.parameters, params));
-    await call(session, params);
+    await call(session, z.object(shape).parse(params));
     assert.equal(opened.at(-1)!.readOnly, noComputer);
-  }
-  for (const params of [{ readOnly: false }, { readOnly: true }, { readOnly: true, noComputer: false }]) {
-    const input = { action: "open", task: "test", ...params };
-    assert.ok(Check(session.parameters, input));
-    assert.match(textOut(await call(session, z.object(shape).parse(input))), /readOnly.*noComputer/);
   }
   assert.equal(opened.length, 3);
 });
