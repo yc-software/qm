@@ -125,7 +125,10 @@ runs stay in process memory even when `DATABASE_URL` is set; an explicit
 `RUN_STORE=memory` also keeps runs there. S3
 credentials come from the standard AWS chain, such as a pod IAM role bound through
 `serviceAccount.create=true` with `serviceAccount.annotations`, or
-`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in the runtime Secret. `/data` is then
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in the runtime Secret. Any S3-compatible
+store works outside AWS: set `AWS_ENDPOINT_URL_S3` to its endpoint (for example
+Cloudflare R2, Tigris or Google Cloud Storage with HMAC keys) and `S3_REGION` to
+what it expects, such as `auto` for R2. `/data` is then
 pod-local, and a few things still live only on the replica that created them:
 agent workspace files outside `artifacts/` (including files shared from there) and
 pending ChatGPT device logins. The chart sets no session affinity, so these can be
