@@ -190,15 +190,21 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         stream.once("end", resolve);
       });
     const exited = new Promise<number>((resolve, reject) => {
-      cmd.on("error", (e) => {
+      const fail = (detail: string): void => {
         const phase = submissionStarted ? "script submission started; execution unknown" : "script not submitted";
+        reject(new Error(`sprites exec: WebSocket error (${phase}): ${detail}`));
+      };
+      cmd.on("error", (e) => {
         const detail =
           /^(?:WebSocket error: )?(TypeError|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|connection reset by peer|Received network error or non-101 status code|WebSocket closed before open)\b/.exec(
             errMessage(e),
           )?.[1] ?? "unknown transport error";
-        reject(new Error(`sprites exec: WebSocket error (${phase}): ${detail}`));
+        fail(detail);
       });
-      cmd.once("exit", resolve);
+      cmd.once("exit", (code) => {
+        if (code < 0) fail("connection closed without an exit status");
+        else resolve(code);
+      });
       cmd.once("spawn", () => {
         submissionStarted = true;
         cmd.stdin.end(stdin);

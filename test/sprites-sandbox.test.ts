@@ -399,22 +399,33 @@ test("a refused restart with no checkpoint to fall back on names all three failu
 });
 
 for (const submitted of [false, true]) {
-  test(`exec failures report submission state without replay or private details (submitted=${submitted})`, async () => {
-    const h = await sandbox.provision(layers);
-    const before = fake.calls.filter((call) => call.method === "WS").length;
-    if (submitted) fake.stallAfterRun(h.id);
-    else fake.fail502(h.id);
+  for (const closeOnly of [false, true]) {
+    test(`exec failures report submission state without replay or private details (submitted=${submitted}, closeOnly=${closeOnly})`, async (t) => {
+      const h = await sandbox.provision(layers);
+      if (closeOnly) {
+        const dispatch = EventTarget.prototype.dispatchEvent;
+        t.mock.method(EventTarget.prototype, "dispatchEvent", function (this: EventTarget, event: Event) {
+          return event.type === "error" || dispatch.call(this, event);
+        });
+      }
+      const before = fake.calls.filter((call) => call.method === "WS").length;
+      if (submitted) fake.stallAfterRun(h.id);
+      else fake.fail502(h.id);
 
-    await assert.rejects(sandbox.run(h, "echo entry >> /home/sprite/workspace/ledger"), (error: Error) => {
-      assert.match(error.message, submitted ? /script submission started; execution unknown/ : /script not submitted/);
-      for (const value of [h.id, fake.baseUrl.replace("https:", "wss:"), "cmd=", "echo entry"])
-        assert.ok(!inspect(error).includes(value));
-      return true;
+      await assert.rejects(sandbox.run(h, "echo entry >> /home/sprite/workspace/ledger"), (error: Error) => {
+        assert.match(
+          error.message,
+          submitted ? /script submission started; execution unknown/ : /script not submitted/,
+        );
+        for (const value of [h.id, fake.baseUrl.replace("https:", "wss:"), "cmd=", "echo entry"])
+          assert.ok(!inspect(error).includes(value));
+        return true;
+      });
+
+      assert.equal(fake.calls.filter((call) => call.method === "WS").length, before + 1);
+      assert.equal(await sandbox.readFile(h, "ledger"), submitted ? "entry\n" : null);
     });
-
-    assert.equal(fake.calls.filter((call) => call.method === "WS").length, before + 1);
-    assert.equal(await sandbox.readFile(h, "ledger"), submitted ? "entry\n" : null);
-  });
+  }
 }
 
 test("exec diagnostics retain known transport reasons without raw error causes", async (t) => {
