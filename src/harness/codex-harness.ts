@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-import { NonRetryableTurnError, ProviderTurnError } from "../core/turn-error.ts";
+import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { DEFAULT_CODEX_MODEL_ID, modelSupportedByHarness } from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
@@ -173,7 +173,7 @@ export function codexNonRetryable(message: string): boolean {
 
 export function codexProviderFailure(message: string): Error {
   const safe = redactCodexDiagnostics(message);
-  return codexNonRetryable(safe) ? new NonRetryableTurnError(safe) : new ProviderTurnError(safe);
+  return codexNonRetryable(safe) ? new NonRetryableTurnError(safe) : new Error(safe);
 }
 export function codexChildToolAllowed(name: string, args?: unknown): boolean {
   return nativeChildToolAllowed(name, args);

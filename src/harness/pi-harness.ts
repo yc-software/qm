@@ -16,6 +16,7 @@ import {
 import {
   calculateCost,
   InMemoryCredentialStore,
+  isContextOverflow,
   isRetryableAssistantError,
   type Api,
   type AssistantMessage,
@@ -927,26 +928,36 @@ export function textFromContent(content: unknown): string {
 
 type AssistantTextSession = Pick<AgentSession, "getLastAssistantText" | "messages">;
 
+function parseProviderError(message: string): { type: string; message: string } | null {
+  const jsonAt = message.indexOf("{");
+  if (jsonAt < 0) return null;
+  try {
+    const parsed = JSON.parse(message.slice(jsonAt)) as { error?: { type?: unknown; message?: unknown } };
+    const providerMessage = typeof parsed.error?.message === "string" ? parsed.error.message.trim() : "";
+    const providerType = typeof parsed.error?.type === "string" ? parsed.error.type.trim() : "";
+    return providerMessage || providerType ? { type: providerType, message: providerMessage } : null;
+  } catch (e) {
+    swallow("pi: assistant error json parse", e);
+    return null;
+  }
+}
+
 function formatPiAssistantError(raw: string | undefined): string {
   const message = raw?.trim();
   if (!message) return "Pi agent stopped with an error";
+  const provider = parseProviderError(message);
+  if (!provider?.message) return message;
+  return provider.type
+    ? `Model provider API error (${provider.type}): ${provider.message}`
+    : `Model provider API error: ${provider.message}`;
+}
 
-  const jsonAt = message.indexOf("{");
-  if (jsonAt >= 0) {
-    try {
-      const parsed = JSON.parse(message.slice(jsonAt)) as { error?: { type?: unknown; message?: unknown } };
-      const providerMessage = typeof parsed.error?.message === "string" ? parsed.error.message.trim() : "";
-      const providerType = typeof parsed.error?.type === "string" ? parsed.error.type.trim() : "";
-      if (providerMessage)
-        return providerType
-          ? `Model provider API error (${providerType}): ${providerMessage}`
-          : `Model provider API error: ${providerMessage}`;
-    } catch (e) {
-      swallow("pi: assistant error json parse", e);
-    }
-  }
+const TRANSIENT_PROVIDER_ERROR_TYPES = new Set(["overloaded_error", "api_error", "rate_limit_error", "timeout_error"]);
 
-  return message;
+function piErrorRetryable(failed: AssistantMessage): boolean {
+  const providerType = failed.errorMessage ? parseProviderError(failed.errorMessage)?.type : undefined;
+  if (providerType) return TRANSIENT_PROVIDER_ERROR_TYPES.has(providerType);
+  return isRetryableAssistantError(failed) && !isContextOverflow(failed);
 }
 
 function piFailedAssistant(session: AssistantTextSession): AssistantMessage | undefined {
@@ -964,7 +975,7 @@ function piAssistantFailure(session: AssistantTextSession): Error | null {
   const failed = piFailedAssistant(session);
   if (!failed) return null;
   const message = formatPiAssistantError(failed.errorMessage);
-  return isRetryableAssistantError(failed) ? new ProviderTurnError(message) : new NonRetryableTurnError(message);
+  return piErrorRetryable(failed) ? new ProviderTurnError(message) : new NonRetryableTurnError(message);
 }
 
 export function piLastAssistantTextOrThrow(session: AssistantTextSession): string | undefined {
