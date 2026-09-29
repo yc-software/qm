@@ -1097,7 +1097,7 @@ export async function boot(): Promise<void> {
     if (!viewIntent) await restore;
   }
 
-  const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider && prefill === null;
+  const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider;
   if (bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);
 
   if (wantedSession && !viewIntent && wanted !== "app-edit") {
