@@ -132,6 +132,50 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
     assert.doesNotMatch(self.content, /speaker attribution/);
   });
 
+  it("GET hands out the notebook revision for optimistic curate", async () => {
+    const cap = await capFor("U1", { write: U1, read: [U1] });
+    const self = (await (await get("/v1/memory/self", { "x-agent-capability": cap })).json()) as any;
+    assert.equal(typeof self.revision, "string");
+    assert.notEqual(self.revision, "");
+  });
+
+  it("PUT with a stale revision loses visibly instead of overwriting captures (#1680)", async () => {
+    const cap = await capFor("U1", { write: U1, read: [U1] });
+    const before = (await (await get("/v1/memory/self", { "x-agent-capability": cap })).json()) as any;
+    // A capture lands while the agent is mid-edit.
+    const captured = await post(
+      "/v1/memory/facts",
+      { facts: ["Landed mid-edit and must survive."] },
+      { "x-agent-capability": cap },
+    );
+    assert.equal(captured.status, 200);
+    const res = await put(
+      "/v1/memory/self",
+      { content: "# Memory\n\n- rewritten from a stale read.", revision: before.revision },
+      { "x-agent-capability": cap },
+    );
+    assert.equal(res.status, 409);
+    assert.equal(((await res.json()) as any).error, "revision_conflict");
+    const after = (await (await get("/v1/memory/self", { "x-agent-capability": cap })).json()) as any;
+    assert.match(after.content, /Landed mid-edit/);
+    assert.doesNotMatch(after.content, /rewritten from a stale read/);
+    assert.notEqual(after.revision, before.revision);
+  });
+
+  it("PUT with the current revision replaces and returns the next one", async () => {
+    const cap = await capFor("U1", { write: U1, read: [U1] });
+    const before = (await (await get("/v1/memory/self", { "x-agent-capability": cap })).json()) as any;
+    const res = await put(
+      "/v1/memory/self",
+      { content: "# Memory\n\n- (2026-06-10) curated with a revision.", revision: before.revision },
+      { "x-agent-capability": cap },
+    );
+    assert.equal(res.status, 200);
+    const after = (await (await get("/v1/memory/self", { "x-agent-capability": cap })).json()) as any;
+    assert.match(after.content, /curated with a revision/);
+    assert.notEqual(after.revision, before.revision);
+  });
+
   it('scope:"org" writes the org notebook when the token carries orgWrite (admin turn)', async () => {
     const cap = await capFor("A1", { write: scopeId("personal", "A1"), orgWrite: ORG, read: [ORG] });
     const res = await post(

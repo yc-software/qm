@@ -807,13 +807,36 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
       resource: "memory",
       scopeLabel: write,
     });
-    return sendJson(res, 200, { scopeId: write, content: await deps.memory.read(write) });
+    // Hand out the revision so a curating agent can PUT it back and lose
+    // nothing when captures land mid-edit (#1680).
+    const head = await deps.memory.readHead?.(write);
+    const content = head ? head.content : await deps.memory.read(write);
+    return sendJson(res, 200, {
+      scopeId: write,
+      content,
+      ...(head?.revision ? { revision: head.revision } : {}),
+    });
   }
   if (method === "PUT" && pathname === "/v1/memory/self") {
-    const b = body as { content?: unknown };
+    const b = body as { content?: unknown; revision?: unknown };
     if (typeof b.content !== "string")
       return sendJson(res, 400, { error: "bad_request", message: "content (string) required" });
-    await deps.memory.replace(write, b.content, capability.actorId);
+    if (b.revision !== undefined && typeof b.revision !== "string")
+      return sendJson(res, 400, { error: "bad_request", message: "revision must be a string" });
+    // Optimistic concurrency for curate: with a revision, a capture that
+    // landed since the agent's GET wins the race visibly (409) instead of
+    // being silently overwritten (#1680). Without one, keep the historical
+    // blind replace so existing callers keep working.
+    if (typeof b.revision === "string" && deps.memory.replaceIfRevision) {
+      const won = await deps.memory.replaceIfRevision(write, b.content, b.revision, capability.actorId);
+      if (!won)
+        return sendJson(res, 409, {
+          error: "revision_conflict",
+          message: "the notebook changed since it was read; GET /v1/memory/self again and reapply the edit",
+        });
+    } else {
+      await deps.memory.replace(write, b.content, capability.actorId);
+    }
     audit(deps, {
       principalId: capability.actorId,
       action: "memory.agent.curate",
