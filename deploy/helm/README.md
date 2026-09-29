@@ -85,14 +85,16 @@ ingress:
   clusterIssuer: letsencrypt-prod
 services:
   core:
-    persistence:
-      enabled: true
-      storageClass: null
-      size: 10Gi
+    replicas: 2
+    env:
+      SNAPSHOT_STORE: s3
+      TRANSFER_STORE: s3
+      S3_BUCKET: qm-example-data
 ```
 
-Confirm that storage class exists in your cluster. After supplying runtime config
-and `images.yaml`, render and inspect before applying:
+This fragment expects `DATABASE_URL` and S3 credentials in `qm-runtime`; see
+[Core data and rollout behavior](#core-data-and-rollout-behavior). After supplying
+runtime config and `images.yaml`, render and inspect before applying:
 
 ```bash
 helm lint deploy/helm -f images.yaml -f cluster.yaml
@@ -106,17 +108,32 @@ sign-in, real turns, sandbox provider and backup/restore in your target cluster.
 
 ## Core data and rollout behavior
 
-Persistence is **opt-in**. Without it, core's local files (including uploaded
-artifacts) are lost when its pod is replaced, even with Postgres configured.
-`services.core.persistence.enabled=true` mounts a ReadWriteOnce PVC at `/data`,
-sets `DATA_DIR=/data` and uses group 1000 for the Node image's volume permissions.
-Storage drivers must support `fsGroup`, or an existing volume must already be
-writable by UID/GID 1000.
+Core keeps durable state in two places: Postgres (`DATABASE_URL`) and an object
+store for file bytes. Choose one of two layouts.
+
+**Shared storage (recommended, supports multiple replicas).** Set `DATABASE_URL`,
+`SNAPSHOT_STORE=s3`, `TRANSFER_STORE=s3` and `S3_BUCKET` (optionally `S3_REGION`
+and `S3_PREFIX`) on core, and leave `services.core.persistence` disabled. Uploaded
+artifacts, session shares, published-app source archives and sandbox file transfers
+then go to the bucket, so any replica can serve any request and pods can be
+replaced with rolling updates. S3 credentials come from the standard AWS chain,
+such as a pod IAM role bound through `serviceAccount.annotations` or
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in the runtime Secret. `/data` is then
+pod-local scratch. Agent workspace files that are not shared as artifacts still
+live there and do not survive pod replacement.
+
+**Local volume (single replica).** Without an object store, core writes file bytes
+under `/data`, and they are lost when the pod is replaced even with Postgres
+configured. `services.core.persistence.enabled=true` mounts a ReadWriteOnce PVC at
+`/data`, sets `DATA_DIR=/data` and uses group 1000 for the Node image's volume
+permissions. Storage drivers must support `fsGroup`, or an existing volume must
+already be writable by UID/GID 1000.
 
 Persistent core supports zero or one replica, with `Recreate` deployment strategy
 so upgrades do not mount the same data concurrently. Expect downtime on upgrades;
-shared-storage multi-replica operation is not supported. `replicas: 0` scales down
-without discarding the claim.
+shared-storage multi-replica operation over a volume is not supported. Use the
+object-store layout for high availability. `replicas: 0` scales down without
+discarding the claim.
 
 The chart-created `<fullname>-core-data` claim has `helm.sh/resource-policy: keep`;
 it is retained on uninstall or when persistence is removed. It is not a backup.
