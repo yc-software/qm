@@ -3865,7 +3865,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       '("grind on X for 30 minutes", "do 20 minutes of research", "keep going until the tests are green"); never infer ' +
       "one from an ordinary request. A request that names a duration or amount of work IS such a request: create the goal " +
       "FIRST, before doing any of the work, with the floor set to exactly the amount the user named (20 minutes = " +
-      "minMs 1200000; never subtract time already spent). Once registered the harness enforces it: trying to end a reply while the goal " +
+      "minMs 1200000; never subtract time already spent). Do this even when the task looks hard, slow or impossible: " +
+      "the user asked for the effort, so create the goal and spend it rather than explaining why you will stop. Once registered the harness enforces it: trying to end a reply while the goal " +
       "is active (or while a work floor is unmet) is answered with a keep-going prompt, not a hard stop. Only the user can stop it; " +
       'when the work is verifiably done, request completion (goal action update "complete"); a fresh verifier decides. ' +
       "Fails if an unfinished goal exists.",
