@@ -280,16 +280,17 @@ export function createHarnessRouter(
           await adapter.turns.resetSession?.(input.session.id);
         }
         lastHarness.set(input.session.id, choice.harnessId);
+        const judge = adapter.models?.judge;
         const dispatched: HarnessTurnInput = {
           ...input,
           runtime: choice,
           tools: input.runtimeControl
             ? { ...input.tools, runtime: (request, signal) => input.runtimeControl!(choice, request, signal) }
             : input.tools,
-          ...(adapter.models.judge
+          ...(judge
             ? {
                 verifyGoal: (objective: string, evidence: string) =>
-                  verifyGoalCompletion(adapter.models.judge!, objective, evidence, input.cancel),
+                  verifyGoalCompletion(judge, objective, evidence, input.cancel),
               }
             : {}),
         };
