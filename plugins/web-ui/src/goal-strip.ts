@@ -88,6 +88,7 @@ export function goalObjectiveLabel(objective: string, max = 120): string {
   return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
 }
 
-export function goalRemainingLabel(endsAt: number, now = Date.now()): string {
-  return endsAt > now ? `${goalElapsedLabel(now, endsAt)} left` : "floor met";
+export function goalWorkedLabel(startedAt: number, now: number, floor?: string | null): string {
+  const worked = `${goalElapsedLabel(startedAt, now)} worked`;
+  return floor ? `${worked} · ${floor} floor` : worked;
 }

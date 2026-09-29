@@ -2209,7 +2209,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const rawRemainingCapMs = floorCap.remainingCapMs;
           const raceCapMs = floorCap.raceCapMs;
           const extendCapMs = floorCap.extendMs;
-          let grindWaiverNote = "";
           const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
             if (userAborted || turn.cancel?.aborted) return false;
             const fromId = (entry.agentSession.model as { id?: string } | undefined)?.id;
@@ -2266,16 +2265,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               !userAborted &&
               !turn.cancel?.aborted
             ) {
-              const goalResult = await enforceGoal({
+              wallClock = await enforceGoal({
                 goal: goalAfterPrompt,
                 meter: grindMeter,
                 outcome: wallClock,
                 ok: "ok" as const,
-                toolCalls: () =>
-                  entry.agentSession.messages
-                    .slice(messagesBefore)
-                    .filter((message) => contentHasToolUse((message as { role?: string; content?: unknown }).content))
-                    .length,
                 blocked: () =>
                   userAborted ||
                   !!turn.cancel?.aborted ||
@@ -2301,8 +2295,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   });
                 },
               });
-              wallClock = goalResult.outcome;
-              grindWaiverNote = goalResult.waiverNote;
             }
             if (wallClock === "ok" && !entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
               const refusal = providerRefusalError(entry.agentSession, messagesBefore);
@@ -2479,9 +2471,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (g.status === "complete") entry.ref.goal = null;
           }
           const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
-          const closingTextWithWaiver = [closingText, grindWaiverNote].filter(Boolean).join("\n\n");
           // A stall auto-waive stays visible even when the final stop attempt was a silent finish.
-          const reply = entry.ref.silentRequested && !grindWaiverNote ? "" : closingTextWithWaiver;
+          const reply = entry.ref.silentRequested ? "" : closingText;
           const finalEntry = await turn.emit({
             type: "assistant",
             payload: { text: reply },

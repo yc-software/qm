@@ -442,14 +442,18 @@ export function createSessionMethods(
         const run = await deps.runs.latestForThread(s.threadRef);
         if (run?.status === "failed" || run?.result?.status === "failed") failedChildren.add(s.id);
       }
-      const goals = new Map<string, { objective: string; endsAt?: number }>();
+      const goals = new Map<string, { objective: string; startedAt: number; floor?: Record<string, number> }>();
       for (const s of sessions) {
         if (!workingThreadRefs.has(s.threadRef)) continue;
         const since = Math.max(0, (await deps.sessions.latestEntrySeq(s.id)) - GOAL_LOOKBACK_ENTRIES);
         const goal = latestGoalRecord(await deps.sessions.getEntries(s.id, { sinceSeq: since }));
         const endsAt = goal ? goalFloorEndsAt(goal) : undefined;
         if (goal && (goal.status === "active" || (goal.status === "complete" && endsAt !== undefined && endsAt > now)))
-          goals.set(s.id, { objective: goal.objective, ...(endsAt !== undefined ? { endsAt } : {}) });
+          goals.set(s.id, {
+            objective: goal.objective,
+            startedAt: goal.createdAt,
+            ...(goal.floor ? { floor: { ...goal.floor } } : {}),
+          });
       }
       if (
         workingThreadRefs.size === 0 &&

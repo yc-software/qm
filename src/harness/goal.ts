@@ -43,7 +43,6 @@ export interface GoalRecord {
 }
 
 export const GOAL_FLOOR_RECHECK_MS = 60_000;
-export const GOAL_FLOOR_STALL_LIMIT = 5;
 const GOAL_MAX_OBJECTIVE_CHARS = 4000;
 
 const FLOOR_KEYS = ["minTurns", "minMs", "minTokens", "minUsd"] as const;
@@ -125,7 +124,7 @@ export function goalContinuationPrompt(goal: GoalRecord, meter: GrindMeter): str
     `- Derive the concrete requirements from the objective; verify each against authoritative current state (files, command output, test results), not memory or intent.`,
     `- Do not redefine success around a smaller, easier, or merely test-passing subset. A narrow check never supports a broad claim.`,
     `- Uncertain or indirect evidence means NOT done: gather stronger evidence or keep working.`,
-    `There is no other way out: only the user can stop this goal. Report progress or an impasse in your reply if useful, then keep working, attacking any impasse a different way.`,
+    `There is no other way out: you cannot pause, block or abandon this goal, and going quiet does not end it — only the user can stop it. If you feel stuck, that is the signal to change approach: re-read the objective, question your assumptions, try a different method or tool, or break the problem down differently. Keep working.`,
     `If the objective is verifiably achieved, request completion with goal action update "complete" and a note carrying the concrete evidence; a fresh verifier decides from that note alone. Otherwise go deeper on the least-examined requirement now.`,
   ]
     .filter(Boolean)
@@ -224,7 +223,7 @@ export function reviveGoalRecord(goal: GoalRecord): GoalRecord {
 /**
  * Recover the session's open goal from persisted history, newest snapshot
  * first. Only an open (active/paused) goal survives turns: a terminal
- * snapshot (complete, or a legacy blocked) is the goal's final record, and reviving it
+ * snapshot (complete, or a legacy blocked/stopped record) is the goal's final record, and reviving it
  * would re-emit an end-of-turn snapshot — and a fresh "goal complete"
  * notice — on every later turn.
  */
@@ -261,11 +260,6 @@ export function goalReport(goal: GoalRecord): string {
   ].join("\n");
 }
 
-export interface GoalEnforcementResult<T> {
-  outcome: T;
-  waiverNote: string;
-}
-
 function goalFloorApplies(goal: GoalRecord): boolean {
   return goal.floor !== undefined && (goal.status === "active" || goal.status === "complete");
 }
@@ -289,42 +283,23 @@ export function createFloorCapPolicy(opts: {
 }): FloorCapPolicy {
   const now = opts.now ?? Date.now;
   let floorSatisfiedAt: number | undefined;
-  let stalled = false;
-  let strikes = 0;
-  let progressMark = -1;
   const remainingCapMs = (): number => {
     const goal = opts.goal();
     const t = now();
     if (goal && goalFloorApplies(goal)) {
       if (goalFloorUnmet(goal, opts.meter, t)) {
-        if (!stalled) {
-          floorSatisfiedAt = undefined;
-          return GOAL_FLOOR_RECHECK_MS;
-        }
+        floorSatisfiedAt = undefined;
+        return GOAL_FLOOR_RECHECK_MS;
       } else {
         floorSatisfiedAt ??= Math.min(Math.max(goalFloorEndsAt(goal) ?? t, opts.promptStart), t);
       }
     }
     return (floorSatisfiedAt ?? opts.promptStart) + opts.turnWallClockMs - t;
   };
-  const noteFloorProgress = (): void => {
-    const goal = opts.goal();
-    const t = now();
-    if (!goal || !goalFloorUnmet(goal, opts.meter, t)) return;
-    const minMs = goal.floor?.minMs;
-    if (minMs !== undefined && t - goal.createdAt < minMs) return;
-    const progress = goal.tokensUsed + opts.meter.tokens + opts.meter.turns;
-    strikes = progress === progressMark ? strikes + 1 : 0;
-    progressMark = progress;
-    stalled = strikes >= GOAL_FLOOR_STALL_LIMIT;
-  };
   return {
     remainingCapMs,
     raceCapMs: () => (opts.turnWallClockMs > 0 ? Math.max(remainingCapMs(), 1) : opts.turnWallClockMs),
-    extendMs: () => {
-      noteFloorProgress();
-      return Math.max(remainingCapMs(), 0);
-    },
+    extendMs: () => Math.max(remainingCapMs(), 0),
   };
 }
 
@@ -345,33 +320,26 @@ export function goalFloorUnmet(goal: GoalRecord, meter: GrindMeter, now = Date.n
  * goal is active: a stop is answered with the continuation prompt; a spent
  * token cap gets one wind-down prompt. A closed goal with an unmet work
  * floor keeps drawing keep-going prompts (an artificial user message, the
- * Codex/Claude Code shape) until the floor is met. An active goal is never
- * waived; five idle rounds only release the floor of a completed goal.
+ * Codex/Claude Code shape) until the floor is met. Nothing the agent does
+ * (going idle, stalling, staying silent) ends it: only a human stop, a
+ * verifier-approved completion, or the user's own token cap.
  */
 export async function enforceGoal<T>(opts: {
   goal: GoalRecord;
   meter: GrindMeter;
   outcome: T;
   ok: T;
-  toolCalls(): number;
   blocked(): boolean;
   beforePrompt(note: string): void | Promise<void>;
   prompt(note: string): Promise<T>;
-}): Promise<GoalEnforcementResult<T>> {
+}): Promise<T> {
   let outcome = opts.outcome;
-  let stalledRounds = 0;
-  let lastToolCalls = opts.toolCalls();
   let capNoticeSent = false;
   const floorUnmet = (): boolean => goalFloorUnmet(opts.goal, opts.meter);
   while (outcome === opts.ok && !opts.blocked() && (opts.goal.status === "active" || floorUnmet())) {
     const active = opts.goal.status === "active";
     const capSpent = opts.goal.capTokens !== undefined && opts.goal.tokensUsed >= opts.goal.capTokens;
     if (capSpent && capNoticeSent) break;
-    const calls = opts.toolCalls();
-    stalledRounds = calls > lastToolCalls ? 0 : stalledRounds + 1;
-    lastToolCalls = calls;
-    if (!active && stalledRounds >= 5)
-      return { outcome, waiverNote: "[goal floor waived: no progress after 5 continuation rounds]" };
     let note: string;
     if (capSpent) note = goalCapPrompt(opts.goal);
     else if (active) note = goalContinuationPrompt(opts.goal, opts.meter);
@@ -380,5 +348,5 @@ export async function enforceGoal<T>(opts: {
     await opts.beforePrompt(note);
     outcome = await opts.prompt(note);
   }
-  return { outcome, waiverNote: "" };
+  return outcome;
 }

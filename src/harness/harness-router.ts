@@ -72,12 +72,11 @@ async function runTurnEnforcingGoal(
       (remaining !== undefined && remaining < GOAL_ROUND_MIN_WALL_MS)
     );
   };
-  const enforced = await enforceGoal<"ok" | "halted">({
+  await enforceGoal<"ok" | "halted">({
     goal,
     meter,
     outcome: blocked() ? "halted" : "ok",
     ok: "ok",
-    toolCalls: () => emitted.filter((entry) => entry.type === "tool_call").length,
     blocked,
     beforePrompt: () => {
       console.error(`[goal] continuation session=${input.session.id} harness=${harnessId} turns=${meter.turns}`);
@@ -100,9 +99,7 @@ async function runTurnEnforcingGoal(
     goal.updatedAt = Date.now();
   }
   await dispatched.emit({ type: "system", payload: goalSnapshotPayload(goal), scopeLabel: input.scopeLabel });
-  if (!enforced.waiverNote) return result;
-  await dispatched.emit({ type: "assistant", payload: { text: enforced.waiverNote }, scopeLabel: input.scopeLabel });
-  return { ...result, reply: [result.reply, enforced.waiverNote].filter(Boolean).join("\n\n") };
+  return result;
 }
 
 function normalizeRuntimeChoice(choice: RuntimeChoice): RuntimeChoice {

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   goalElapsedLabel,
-  goalRemainingLabel,
+  goalWorkedLabel,
   goalFloorLabel,
   goalObjectiveLabel,
   latestGoal,
@@ -66,7 +66,7 @@ test("labels: elapsed, floor, objective trim", () => {
   assert.equal(goalObjectiveLabel("x".repeat(200)).length, 120);
 });
 
-test("a time floor carries endsAt and a remaining label", () => {
+test("worked time leads the label, the floor follows", () => {
   const goal = latestGoal([
     msg([
       {
@@ -76,6 +76,6 @@ test("a time floor carries endsAt and a remaining label", () => {
     ]),
   ]);
   assert.equal(goal?.endsAt, 1000 + 1_200_000);
-  assert.equal(goalRemainingLabel(1_200_000, 0), "20m left");
-  assert.equal(goalRemainingLabel(0, 5), "floor met");
+  assert.equal(goalWorkedLabel(0, 720_000, "20m"), "12m worked · 20m floor");
+  assert.equal(goalWorkedLabel(0, 45_000), "45s worked");
 });

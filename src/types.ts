@@ -119,8 +119,8 @@ export interface Session {
   backgroundJobs?: number;
   watches?: number;
   crons?: number;
-  /** Set while a working session pursues a goal; endsAt when it has a time floor. */
-  goal?: { objective: string; endsAt?: number };
+  /** Set while a working session pursues a goal: when it started and the user's floor, if any. */
+  goal?: { objective: string; startedAt: number; floor?: Record<string, number> };
 }
 
 export type EntryType =

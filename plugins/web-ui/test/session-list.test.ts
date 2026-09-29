@@ -580,9 +580,9 @@ test("cronRowMeta shows the next fire and the last result of a session's cron", 
   assert.equal(cronRowMeta({ id: "c", lastFire: { firedAt: now - 1_000, status: "running" } }), "paused · running now");
 });
 
-test("a goal lights the background chip with time left", () => {
-  const row = backgroundLabel(0, 0, 0, 0, 0, { endsAt: 600_000 }, 0);
+test("a goal lights the background chip with time worked, then the floor", () => {
+  const row = backgroundLabel(0, 0, 0, 0, 0, { startedAt: 0, floor: { minMs: 1_200_000 } }, 720_000);
   assert.equal(row?.goal, true);
-  assert.equal(row?.label, "goal · 10m left");
-  assert.equal(backgroundLabel(0, 0, 0, 0, 0, {})?.label, "pursuing a goal");
+  assert.equal(row?.label, "goal · 12m worked · 20m floor");
+  assert.equal(backgroundLabel(0, 0, 0, 0, 0, { startedAt: 0 }, 60_000)?.label, "goal · 1m worked");
 });

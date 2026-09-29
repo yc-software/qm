@@ -186,7 +186,7 @@ import {
   watchActivityLabel,
 } from "./session-list";
 import { liveTurnThreadRef } from "./working-dot";
-import { goalElapsedLabel, goalObjectiveLabel, goalRemainingLabel, latestGoal } from "./goal-strip";
+import { goalElapsedLabel, goalObjectiveLabel, goalWorkedLabel, latestGoal } from "./goal-strip";
 import {
   ackKey,
   peekLines,
@@ -2630,7 +2630,6 @@ export function createChatSurface(
     if (!goal || (goal.status !== "active" && goal.status !== "paused" && !floorRunning)) return nothing;
     const paused = goal.status === "paused";
     const streaming = agent.state.isStreaming;
-    const elapsed = goal.endsAt ? goalRemainingLabel(goal.endsAt, now) : goalElapsedLabel(goal.createdAt, now);
     let title = "Goal";
     if (paused) title = "Goal paused";
     else if (floorRunning) title = "Goal met · using the floor";
@@ -2640,8 +2639,7 @@ export function createChatSurface(
         <span class="goal-strip-icon">${icon(paused ? Pause : Target, 13)}</span>
         <span class="goal-strip-title">${title}</span>
         <span class="goal-strip-objective" dir="auto">${goalObjectiveLabel(goal.objective)}</span>
-        ${goal.floor ? html`<span class="goal-strip-meta">at least ${goal.floor}</span>` : nothing}
-        ${paused ? nothing : html`<span class="goal-strip-meta">· ${elapsed}</span>`}
+        <span class="goal-strip-meta">${goalWorkedLabel(goal.createdAt, now, goal.floor)}</span>
       </section>
     `;
   }

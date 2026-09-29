@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   GOAL_FLOOR_RECHECK_MS,
-  GOAL_FLOOR_STALL_LIMIT,
   createFloorCapPolicy,
   createGoalRecord,
   enforceGoal,
@@ -88,7 +87,8 @@ test("prompts carry the objective as escaped user data plus audit language", () 
   assert.match(cont, /finish &lt;thing&gt; &amp; verify/);
   assert.match(cont, /treat completion as unproven/);
   assert.match(cont, /NOT met/);
-  assert.match(cont, /only the user can stop this goal/);
+  assert.match(cont, /only the user can stop it/);
+  assert.match(cont, /change approach/);
   assert.doesNotMatch(cont, /"blocked"/);
   goal.capTokens = 1000;
   goal.tokensUsed = 1200;
@@ -100,27 +100,24 @@ test("enforceGoal keeps prompting while the goal is active and stops the moment 
   const goal = createGoalRecord({ objective: "do it" });
   const meter = createGrindMeter();
   let prompts = 0;
-  let calls = 0;
   const result = await enforceGoal({
     goal,
     meter,
     outcome: "ok",
     ok: "ok",
-    toolCalls: () => calls,
     blocked: () => false,
     beforePrompt: () => {},
     prompt: async () => {
       prompts++;
-      calls++; // makes progress every round
       if (prompts === 3) goal.status = "complete";
       return "ok";
     },
   });
   assert.equal(prompts, 3);
-  assert.equal(result.waiverNote, "");
+  assert.equal(result, "ok");
 });
 
-test("enforceGoal never waives an active goal, even with zero new tool calls", async () => {
+test("enforceGoal never waives an active goal, even when the agent does nothing", async () => {
   const goal = createGoalRecord({ objective: "impossible" });
   let prompts = 0;
   const result = await enforceGoal({
@@ -128,7 +125,6 @@ test("enforceGoal never waives an active goal, even with zero new tool calls", a
     meter: createGrindMeter(),
     outcome: "ok",
     ok: "ok",
-    toolCalls: () => 7,
     blocked: () => prompts >= 50,
     beforePrompt: () => {},
     prompt: async () => {
@@ -137,7 +133,7 @@ test("enforceGoal never waives an active goal, even with zero new tool calls", a
     },
   });
   assert.equal(prompts, 50, "only an external blocker (user stop, approval, wall clock) ends the loop");
-  assert.equal(result.waiverNote, "");
+  assert.equal(result, "ok");
   assert.equal(goal.status, "active");
 });
 
@@ -146,13 +142,11 @@ test("enforceGoal sends exactly one wind-down prompt when the token cap is spent
   goal.tokensUsed = 150;
   const meter = createGrindMeter();
   const notes: string[] = [];
-  let calls = 0;
   await enforceGoal({
     goal,
     meter,
     outcome: "ok",
     ok: "ok",
-    toolCalls: () => calls++,
     blocked: () => false,
     beforePrompt: (note) => {
       notes.push(note);
@@ -169,19 +163,16 @@ test("enforceGoal keeps nudging after early completion until the work floor is m
   goal.status = "complete";
   const meter = createGrindMeter();
   const notes: string[] = [];
-  let calls = 0;
   const result = await enforceGoal({
     goal,
     meter,
     outcome: "ok",
     ok: "ok",
-    toolCalls: () => calls,
     blocked: () => false,
     beforePrompt: (note) => {
       notes.push(note);
     },
     prompt: async () => {
-      calls++;
       meter.turns++;
       return "ok";
     },
@@ -189,32 +180,28 @@ test("enforceGoal keeps nudging after early completion until the work floor is m
   assert.equal(notes.length, 3, "nudged until the floor was met");
   assert.match(notes[0]!, /work floor.*not met/);
   assert.match(notes[0]!, /adjacent, genuinely useful work/);
-  assert.equal(result.waiverNote, "");
+  assert.equal(result, "ok");
   assert.equal(goal.status, "complete", "nudges never reopen a completed goal");
 });
 
-test("enforceGoal floor nudging waives after 5 stalled rounds", async () => {
+test("enforceGoal never waives a floor for idle rounds: an idle agent keeps being prompted", async () => {
   const goal = createGoalRecord({ objective: "grind", floor: { minTurns: 99 } });
   goal.status = "complete";
-  const meter = createGrindMeter();
   let prompts = 0;
-  const result = await enforceGoal({
+  await enforceGoal({
     goal,
-    meter,
+    meter: createGrindMeter(),
     outcome: "ok",
     ok: "ok",
-    toolCalls: () => 0,
-    blocked: () => false,
+    blocked: () => prompts >= 40,
     beforePrompt: () => {},
     prompt: async () => {
       prompts++;
       return "ok";
     },
   });
-  assert.equal(prompts, 4);
-  assert.match(result.waiverNote, /floor waived/);
+  assert.equal(prompts, 40);
 });
-
 test("enforceGoal leaves a paused goal alone, even with an unmet floor", async () => {
   const goal = createGoalRecord({ objective: "grind", floor: { minTurns: 99 } });
   goal.status = "paused";
@@ -224,7 +211,6 @@ test("enforceGoal leaves a paused goal alone, even with an unmet floor", async (
     meter: createGrindMeter(),
     outcome: "ok",
     ok: "ok",
-    toolCalls: () => 0,
     blocked: () => false,
     beforePrompt: () => {},
     prompt: async () => {
@@ -249,7 +235,6 @@ test("enforceGoal respects external blockers (approval pause, abort)", async () 
     meter: createGrindMeter(),
     outcome: "ok",
     ok: "ok",
-    toolCalls: () => 0,
     blocked: () => true,
     beforePrompt: () => {},
     prompt: async () => {
@@ -328,13 +313,11 @@ test("enforceGoal enforces the token cap even while a completed goal grinds its 
   goal.status = "complete";
   goal.tokensUsed = 150;
   const notes: string[] = [];
-  let calls = 0;
   await enforceGoal({
     goal,
     meter: createGrindMeter(),
     outcome: "ok",
     ok: "ok",
-    toolCalls: () => calls++,
     blocked: () => false,
     beforePrompt: (note) => {
       notes.push(note);
@@ -405,29 +388,14 @@ test("floor cap policy: a combined floor met late is never backdated to the time
   assert.equal(h.policy.extendMs(), 600_000, "floor met now: a full fresh cap from this moment, not an instant kill");
 });
 
-test("floor cap policy: a stalled non-time floor falls back to the plain cap, never below it", () => {
-  const goal = createGoalRecord({ objective: "grind", floor: { minTokens: 500 } });
-  const h = policyHarness({ goal, capMs: 3_600_000 });
-  for (let i = 0; i <= GOAL_FLOOR_STALL_LIMIT; i++) {
-    h.advance(GOAL_FLOOR_RECHECK_MS);
-    h.policy.extendMs();
-  }
-  const remaining = h.policy.extendMs();
-  assert.ok(remaining > 0, "stall within the plain cap keeps the turn alive to the cap");
-  h.advance(remaining);
-  assert.equal(h.policy.extendMs(), 0, "then the plain cap ends it");
-});
-
-test("floor cap policy: token progress resets the stall counter", () => {
+test("floor cap policy: an unmet floor with no progress keeps the turn alive past the plain cap", () => {
   const goal = createGoalRecord({ objective: "grind", floor: { minTokens: 500 } });
   const h = policyHarness({ goal, capMs: 600_000 });
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 30; i++) {
     h.advance(GOAL_FLOOR_RECHECK_MS);
-    goal.tokensUsed += 1;
-    assert.equal(h.policy.extendMs(), GOAL_FLOOR_RECHECK_MS, "progressing work is never declared stalled");
+    assert.equal(h.policy.extendMs(), GOAL_FLOOR_RECHECK_MS, "no stall detector: the floor alone decides");
   }
 });
-
 test("floor cap policy: a progressing unmet floor keeps extending well past the plain cap", () => {
   const goal = createGoalRecord({ objective: "grind", floor: { minTokens: 5_000_000 } });
   const h = policyHarness({ goal, capMs: 3_600_000 });
@@ -453,18 +421,6 @@ test("floor cap policy: a floor met before the turn started imposes nothing and 
   const goal = createGoalRecord({ objective: "grind", floor: { minMs: 60_000 } });
   const h = policyHarness({ goal, capMs: 600_000, floorStart: 1_000_000 - 120_000 });
   assert.equal(h.policy.raceCapMs(), 600_000, "cap counts from turn start, not from the old floor deadline");
-});
-
-test("floor cap policy: a stall clears when progress resumes", () => {
-  const goal = createGoalRecord({ objective: "grind", floor: { minTokens: 500 } });
-  const h = policyHarness({ goal, capMs: 3_600_000 });
-  for (let i = 0; i <= GOAL_FLOOR_STALL_LIMIT; i++) {
-    h.advance(GOAL_FLOOR_RECHECK_MS);
-    h.policy.extendMs();
-  }
-  goal.tokensUsed += 1;
-  h.advance(GOAL_FLOOR_RECHECK_MS);
-  assert.equal(h.policy.extendMs(), GOAL_FLOOR_RECHECK_MS, "resumed progress re-arms the unmet floor");
 });
 
 test("rehydration honors the newest goal receipt, including terminal and paused updates", () => {
