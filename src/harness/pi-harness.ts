@@ -16,7 +16,9 @@ import {
 import {
   calculateCost,
   InMemoryCredentialStore,
+  isRetryableAssistantError,
   type Api,
+  type AssistantMessage,
   type Context,
   type Model,
   type ModelThinkingLevel,
@@ -51,7 +53,7 @@ import type {
   TapeRecord,
 } from "../sessions/session-store.ts";
 import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
-import { NonRetryableTurnError, TitleRejected } from "../core/turn-error.ts";
+import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
 import {
@@ -947,16 +949,27 @@ function formatPiAssistantError(raw: string | undefined): string {
   return message;
 }
 
-function piAssistantError(session: AssistantTextSession): string | null {
+function piFailedAssistant(session: AssistantTextSession): AssistantMessage | undefined {
   const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant") as
-    { stopReason?: string; errorMessage?: string } | undefined;
-  if (lastAssistant?.stopReason !== "error") return null;
-  return formatPiAssistantError(lastAssistant.errorMessage);
+    AssistantMessage | undefined;
+  return lastAssistant?.stopReason === "error" ? lastAssistant : undefined;
+}
+
+function piAssistantError(session: AssistantTextSession): string | null {
+  const failed = piFailedAssistant(session);
+  return failed ? formatPiAssistantError(failed.errorMessage) : null;
+}
+
+function piAssistantFailure(session: AssistantTextSession): Error | null {
+  const failed = piFailedAssistant(session);
+  if (!failed) return null;
+  const message = formatPiAssistantError(failed.errorMessage);
+  return isRetryableAssistantError(failed) ? new ProviderTurnError(message) : new NonRetryableTurnError(message);
 }
 
 export function piLastAssistantTextOrThrow(session: AssistantTextSession): string | undefined {
-  const err = piAssistantError(session);
-  if (err) throw new NonRetryableTurnError(err);
+  const err = piAssistantFailure(session);
+  if (err) throw err;
   return session.getLastAssistantText();
 }
 
@@ -965,8 +978,8 @@ export function piTurnError(session: AssistantTextSession, thrown: unknown, mess
     messagesBefore === undefined
       ? session
       : ({ messages: session.messages.slice(messagesBefore) } as AssistantTextSession);
-  const detailed = piAssistantError(fresh);
-  if (detailed) return new NonRetryableTurnError(detailed);
+  const detailed = piAssistantFailure(fresh);
+  if (detailed) return detailed;
   return thrown instanceof Error ? thrown : new Error(String(thrown));
 }
 
