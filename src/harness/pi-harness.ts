@@ -66,6 +66,7 @@ import {
   modelSupportsAdaptiveThinking,
   modelSupportsProviderDefault,
   modelDisplayName,
+  modelRequestOverrides,
   resolveModel,
   getRequiredModel,
   modelSupportsFastMode,
@@ -1244,7 +1245,7 @@ export async function buildModelRuntime(
         if (!body || typeof body !== "object" || Array.isArray(body)) {
           throw new Error("model request payload must be an object");
         }
-        return { ...body, model: await target() };
+        return { ...body, ...modelRequestOverrides(model.id), model: await target() };
       },
     }) as T;
   const route = <T extends ModelsSimpleStreamOptions | undefined>(
@@ -1254,7 +1255,9 @@ export async function buildModelRuntime(
     const request = modelGatewayRequest(modelGateway, model);
     if (!request) {
       const providerModelId =
-        model.provider === CODEX_SUBSCRIPTION_PROVIDER ? codexProviderModelId(model.id) : model.id;
+        model.provider === CODEX_SUBSCRIPTION_PROVIDER
+          ? codexProviderModelId(model.id)
+          : (modelRequestOverrides(model.id)?.model ?? model.id);
       const candidate = withRequestHeaders(model, true, false);
       const passthrough = {
         ...retained(options),

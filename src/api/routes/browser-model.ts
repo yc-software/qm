@@ -1,3 +1,4 @@
+import { modelRequestOverrides } from "../../model/pi-models.ts";
 import { orgId } from "../../config.ts";
 import { scopeId } from "../../types.ts";
 import { resolveBrowserModel } from "../../model/browser-model.ts";
@@ -54,7 +55,9 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
       return sendJson(res, 409, {
         error: "AI access changed or is unavailable; start a new turn to refresh browser access",
       });
-    if (selected.account !== "company" || !gateway) {
+    const nativeVariant = Boolean(modelRequestOverrides(capability.browserModel));
+    if (nativeVariant && selected.account === "company") await gateway?.refresh?.();
+    if (selected.account !== "company" || !gateway || nativeVariant) {
       if (selected.account !== "company" && !selected.routing)
         return sendJson(res, 409, { error: "Reconnect your selected AI account in Settings" });
       if (selected.routing?.kind === "oauth" && selected.routing.provider === "anthropic")
@@ -72,6 +75,7 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
         200,
         await nativeBrowserCompletion({
           selection: selected,
+          modelGateway: selected.account === "company" ? gateway : undefined,
           credentials: deps.userModelCredentials,
           companyProviderKeys:
             selected.account === "company" ? await deps.resolveBrowserCompanyKeys?.(useCompanySubscription) : undefined,

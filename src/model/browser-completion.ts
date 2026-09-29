@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { modelGatewayRequest, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import type { Context, ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { buildModelRuntime, type ProviderKeys } from "../harness/pi-harness.ts";
 import { zeroUsage } from "../harness/replay.ts";
@@ -28,6 +29,7 @@ export async function nativeBrowserCompletion(
     selection: Awaited<ReturnType<typeof resolveBrowserModel>>;
     credentials?: UserModelCredentialStore;
     companyProviderKeys?: ProviderKeys;
+    modelGateway?: ModelGatewayTransportConfig;
     companySubscriptionProvider?: ModelProvider;
     actorId: string;
     body: Record<string, unknown>;
@@ -35,6 +37,7 @@ export async function nativeBrowserCompletion(
   },
   runtimeFactory: (
     keys: Parameters<typeof buildModelRuntime>[0],
+    modelGateway?: ModelGatewayTransportConfig,
   ) => Promise<Pick<Awaited<ReturnType<typeof buildModelRuntime>>, "completeSimple">> = buildModelRuntime,
 ) {
   const { selection, body } = input;
@@ -112,11 +115,13 @@ export async function nativeBrowserCompletion(
   const limit = body.max_completion_tokens ?? body.max_tokens ?? 4096;
   if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit <= 0)
     throw new BrowserCompletionError("Invalid browser output token limit");
+  const gateway = selection.account === "company" ? input.modelGateway : undefined;
+  const gatewayRequest = modelGatewayRequest(gateway, model);
   let keys: ProviderKeys;
   if (selection.account === "company") {
     const key = input.companyProviderKeys?.[model.provider];
-    if (!key) throw new BrowserCompletionError("Company model credentials are unavailable", 503);
-    keys = { [model.provider]: key };
+    if (!key && !gatewayRequest) throw new BrowserCompletionError("Company model credentials are unavailable", 503);
+    keys = key ? { [model.provider]: key } : {};
   } else {
     if (!routing) throw new BrowserCompletionError("Selected browser model is unavailable", 409);
     const auth =
@@ -126,7 +131,7 @@ export async function nativeBrowserCompletion(
     if (!auth) throw new BrowserCompletionError("Reconnect your selected AI account in Settings", 409);
     keys = { [routing.kind === "apikey" ? routing.provider : CODEX_SUBSCRIPTION_PROVIDER]: auth };
   }
-  const runtime = await runtimeFactory(keys);
+  const runtime = await runtimeFactory(keys, gateway);
   const modelApi = model.api;
   const result = await runtime.completeSimple(model, context, {
     signal: input.signal,

@@ -115,6 +115,7 @@ test("the curated catalog contains only current model families", () => {
       "gpt-5.6-terra",
       "gpt-5.6-luna",
       "gpt-6-astra",
+      "gpt-6-astra-ultrafast",
       "gpt-6-sol",
       "gpt-6-luna",
       "openrouter/auto",

@@ -255,3 +255,52 @@ test("company Codex subscription auth uses the native subscription transport wit
     (error: unknown) => error instanceof BrowserCompletionError && error.status === 422,
   );
 });
+
+for (const mapped of [true, false]) {
+  test(`Ultrafast browser inference retains native routing with ${mapped ? "mapped" : "unrelated"} gateway`, async () => {
+    const id = "gpt-6-astra-ultrafast";
+    const gateway: NonNullable<Parameters<typeof nativeBrowserCompletion>[0]["modelGateway"]> = {
+      url: "https://gateway.example.test/v1",
+      apiKey: "gateway-key",
+      apiKeyHeader: "api-key",
+      models: mapped ? { [id]: "router/astra" } : { "claude-opus-5": "router/opus" },
+    };
+    const input = {
+      selection: { account: "company" as const, model: id, routing: null },
+      actorId: "U1",
+      modelGateway: gateway,
+      companyProviderKeys: mapped ? {} : { openai: "direct-key" },
+      body: { messages: [{ role: "user", content: "test" }] },
+      signal: new AbortController().signal,
+    };
+    const result = await nativeBrowserCompletion(input, async (keys, transport) => {
+      assert.deepEqual(keys, input.companyProviderKeys);
+      assert.equal(transport, gateway);
+      return {
+        completeSimple: async (model) => {
+          assert.equal(model.id, id);
+          assert.equal(model.api, "openai-responses");
+          return {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: zeroUsage(),
+            timestamp: Date.now(),
+            stopReason: "stop",
+            content: [{ type: "text", text: "done" }],
+          };
+        },
+      };
+    });
+    assert.equal(result.choices[0]?.message.content, "done");
+    await assert.rejects(
+      nativeBrowserCompletion({
+        ...input,
+        modelGateway: { ...gateway, models: {}, reservedModelIds: new Set([id]) },
+        companyProviderKeys: { openai: "must-not-fallback" },
+      }),
+      /Gateway model is unavailable/,
+    );
+  });
+}

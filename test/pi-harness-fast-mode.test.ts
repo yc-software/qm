@@ -326,7 +326,11 @@ async function runTurn(
             url: "https://gateway.example/v1",
             apiKey: "sk-gateway-test",
             apiKeyHeader: "x-gateway-key",
-            models: { "gpt-6-astra": "openai/gpt-6-astra", "claude-sonnet-5": "anthropic/claude-sonnet-5" },
+            models: {
+              "gpt-6-astra": "openai/gpt-6-astra",
+              "gpt-6-astra-ultrafast": "openai/gpt-6-astra",
+              "claude-sonnet-5": "anthropic/claude-sonnet-5",
+            },
           },
         }
       : {}),
@@ -449,3 +453,20 @@ test("a refusal fallback prices each step on its actual model and tier", async (
   assertUsd(rows[0]!.usage!.costUsd, 0);
   assertUsd(rows[1]!.usage!.costUsd, 0.15);
 });
+
+for (const gateway of [true, false]) {
+  test(`Ultrafast prices a successful turn exactly once through ${gateway ? "gateway" : "direct"}`, async () => {
+    const { rows, payloads } = await runTurn(
+      `astra-ultrafast-${gateway}`,
+      "gpt-6-astra-ultrafast",
+      false,
+      () => responsesReply("done", ASTRA_WIRE_USAGE, "ultrafast"),
+      gateway,
+    );
+    assert.equal(payloads[0]?.model, gateway ? "openai/gpt-6-astra" : "gpt-6-astra");
+    assert.equal(payloads[0]?.service_tier, "ultrafast");
+    assert.equal(rows.length, 1);
+    assertUsd(rows[0]!.usage!.costUsd, 1.8);
+    assert.equal(rows[0]!.model, "gpt-6-astra-ultrafast");
+  });
+}
