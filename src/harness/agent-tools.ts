@@ -2356,6 +2356,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       destinationKey: Type.Optional(
         Type.String({ description: 'create/retarget: a key from the "Where scheduled tasks post" menu.' }),
       ),
+      session: Type.Optional(
+        Type.Boolean({
+          description:
+            "create/patch: tie the cron to this conversation so it shows as ongoing work here. Created crons are tied by default; pass false to leave it untied, or patch true/false to tie or untie it.",
+        }),
+      ),
       unfurlLinks: Type.Optional(
         Type.Boolean({
           description:
@@ -2458,6 +2464,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.destinationKey !== undefined ? { destinationKey: params.destinationKey } : {}),
             ...(params.runAs !== undefined ? { runAs: params.runAs } : {}),
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
+            ...(params.session !== undefined ? { session: params.session } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) {
@@ -2588,6 +2595,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.archived !== undefined ? { archived: params.archived } : {}),
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.runAs !== undefined ? { runAs: params.runAs } : {}),
+            ...(params.session !== undefined ? { session: params.session } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);

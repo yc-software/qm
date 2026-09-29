@@ -179,6 +179,7 @@ import {
   backgroundLabel,
   clearWorking,
   conversationBackground,
+  cronRowMeta,
   isAbandonedNewChat,
   shouldStartProactiveOpener,
   markWorking,
@@ -2412,18 +2413,10 @@ export function createChatSurface(
         <a class="bg-row-head" href=${deepLinkPath(UI_BASE, "crons", null, null, c.id)}>
           ${icon(Clock3, 13)}
           <span class="bg-row-cmd">Cron: <bdi>${c.title ?? "scheduled task"}</bdi></span>
-          <span class="bg-row-meta">${c.nextFireAt ? `next fire ${nextFireIn(c.nextFireAt)}` : "paused"}</span>
+          <span class="bg-row-meta">${cronRowMeta(c)}</span>
         </a>
       </div>
     `;
-  }
-
-  function nextFireIn(at: number): string {
-    const mins = Math.round((at - Date.now()) / 60_000);
-    if (mins <= 0) return "due now";
-    if (mins < 60) return `in ${mins}m`;
-    if (mins < 1440) return `in ${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m`;
-    return `in ${Math.floor(mins / 1440)}d`;
   }
 
   function backgroundWatchRow(w: SessionBackgroundView["watches"][number]): TemplateResult {

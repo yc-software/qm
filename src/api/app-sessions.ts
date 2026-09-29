@@ -18,6 +18,7 @@ import { swallowAs } from "../util/errors.ts";
 import { SEARCH_HIT_LIMIT, entrySearchText, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { processIsGone } from "../sandbox/process-poll.ts";
+import { cronIsActive, cronTiedTo } from "../cron/cron-store.ts";
 import { cronRef, deployRef, encodeRef, fileRef, parseRef, skillRef } from "../acl/resource-ref.ts";
 import { samePerson } from "../directory/person.ts";
 import { AdminError } from "../admin/admin-service.ts";
@@ -427,8 +428,10 @@ export function createSessionMethods(
       }
       const cronCounts = new Map<string, number>();
       for (const c of await deps.crons.list()) {
-        if (!c.enabled || c.archived || !c.destination) continue;
-        cronCounts.set(c.destination.target, (cronCounts.get(c.destination.target) ?? 0) + 1);
+        if (!cronIsActive(c)) continue;
+        for (const ref of new Set([c.destination?.target, c.sessionRef])) {
+          if (ref) cronCounts.set(ref, (cronCounts.get(ref) ?? 0) + 1);
+        }
       }
       const failedChildren = new Set<string>();
       for (const s of sessions) {
@@ -510,14 +513,20 @@ export function createSessionMethods(
           expiresAt: m.expiresAt,
           ...(m.lastFiredAt !== undefined ? { lastFiredAt: m.lastFiredAt } : {}),
         }));
-      const crons = (await deps.crons.list())
-        .filter((c) => c.enabled && !c.archived && c.destination?.target === session.threadRef)
-        .sort((a, b) => b.createdAt - a.createdAt)
-        .map((c) => ({
-          id: c.id,
-          ...(c.title !== undefined ? { title: c.title } : {}),
-          ...(c.nextFireAt !== undefined ? { nextFireAt: c.nextFireAt } : {}),
-        }));
+      const crons = await Promise.all(
+        (await deps.crons.list())
+          .filter((c) => cronIsActive(c) && cronTiedTo(c, session.threadRef))
+          .sort((a, b) => b.createdAt - a.createdAt)
+          .map(async (c) => {
+            const last = (await deps.crons.listFires(c.id, { limit: 1 })).runs[0];
+            return {
+              id: c.id,
+              ...(c.title !== undefined ? { title: c.title } : {}),
+              ...(c.nextFireAt !== undefined ? { nextFireAt: c.nextFireAt } : {}),
+              ...(last ? { lastFire: { firedAt: last.firedAt, ...(last.status ? { status: last.status } : {}) } } : {}),
+            };
+          }),
+      );
       return { jobs, watches, crons };
     },
 

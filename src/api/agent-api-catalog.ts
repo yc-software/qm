@@ -319,7 +319,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/crons",
         summary:
-          'schedule future or recurring work — a 2-5 word `title` naming what the cron is for (distinctive in a list, not the command) plus `task` (re-run at fire time) or exact `text`, optionally addressed by name to a teammate (`recipient`), a channel (`channel`), or a group DM (`participants`: its other members, which must already exist as a group DM — reach it once first, which opens it; same venue rule as /v1/reach — narrowest audience, a channel only when explicitly requested or genuinely room-wide), or run privately for whoever asked at their own scope (`scope:"personal"`, even from a channel); pass `unfurlLinks:false` to suppress Slack previews (to send now instead, use /v1/reach)',
+          'schedule future or recurring work — a 2-5 word `title` naming what the cron is for (distinctive in a list, not the command) plus `task` (re-run at fire time) or exact `text`, optionally addressed by name to a teammate (`recipient`), a channel (`channel`), or a group DM (`participants`: its other members, which must already exist as a group DM — reach it once first, which opens it; same venue rule as /v1/reach — narrowest audience, a channel only when explicitly requested or genuinely room-wide), or run privately for whoever asked at their own scope (`scope:"personal"`, even from a channel); pass `unfurlLinks:false` to suppress Slack previews; the cron is tied to this conversation so it shows as ongoing work here unless `session:false` (to send now instead, use /v1/reach)',
       },
       { method: "GET", path: "/v1/crons", summary: "list your crons" },
       {

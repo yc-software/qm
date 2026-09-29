@@ -1,4 +1,10 @@
-import { sharedContextLabel, type CoreContext, type CoreProject, type CoreSession } from "./core-bridge.ts";
+import {
+  sharedContextLabel,
+  type CoreContext,
+  type CoreProject,
+  type CoreSession,
+  type SessionBackgroundView,
+} from "./core-bridge.ts";
 import { subagentCounts } from "./subagent-activity.ts";
 import { relTime } from "./ui.ts";
 
@@ -259,4 +265,19 @@ export function shouldStartProactiveOpener(state: {
     state.loaded &&
     !state.sessions.some((session) => session.id && !session.threadRef.startsWith("cron:"))
   );
+}
+
+export function cronRowMeta(c: SessionBackgroundView["crons"][number]): string {
+  const next = c.nextFireAt ? `next fire ${nextFireIn(c.nextFireAt)}` : "paused";
+  if (!c.lastFire) return next;
+  if (c.lastFire.status === "running") return `${next} · running now`;
+  return `${next} · last ${c.lastFire.status ?? "fired"} ${relTime(c.lastFire.firedAt)}`;
+}
+
+function nextFireIn(at: number): string {
+  const mins = Math.round((at - Date.now()) / 60_000);
+  if (mins <= 0) return "due now";
+  if (mins < 60) return `in ${mins}m`;
+  if (mins < 1440) return `in ${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m`;
+  return `in ${Math.floor(mins / 1440)}d`;
 }

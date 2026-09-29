@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   activityOf,
+  cronRowMeta,
   sidebarSessions,
   applySessionState,
   isAbandonedNewChat,
@@ -548,4 +549,18 @@ test("sidebar excludes attached subagents including pinned and orphaned children
   const orphan = { ...child, id: "orphan", parentSessionId: "missing" };
   const detached = saved("detached", "agent:main:subagent:detached");
   assert.deepEqual(sidebarSessions([parent, child, pinned, orphan, detached]), [parent, detached]);
+});
+
+test("cronRowMeta shows the next fire and the last result of a session's cron", () => {
+  const now = Date.now();
+  assert.equal(cronRowMeta({ id: "c", nextFireAt: now + 10 * 60_000 + 1_000 }), "next fire in 10m");
+  assert.equal(
+    cronRowMeta({
+      id: "c",
+      nextFireAt: now + 5 * 60_000 + 1_000,
+      lastFire: { firedAt: now - 3 * 60_000, status: "ok" },
+    }),
+    "next fire in 5m · last ok 3m ago",
+  );
+  assert.equal(cronRowMeta({ id: "c", lastFire: { firedAt: now - 1_000, status: "running" } }), "paused · running now");
 });
