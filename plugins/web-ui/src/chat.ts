@@ -2155,7 +2155,8 @@ export function createChatSurface(
     const goalTicking = Boolean(
       chatState.agent?.state.isStreaming && latestGoal(visibleMessages(chatState.agent))?.status === "active",
     );
-    const active = (chatState.liveWork?.status === "working" && !chatState.liveWork.stale) || goalTicking;
+    const active =
+      (chatState.liveWork?.status === "working" && !chatState.liveWork.stale) || goalTicking || subagentUi.ticking;
     if (active && !workTicker) {
       workTicker = setInterval(() => drawActiveChat(), 1000);
     } else if (!active && workTicker) {
@@ -2440,6 +2441,7 @@ export function createChatSurface(
     expanded: false,
     peekId: null as string | null,
     peek: null as PeekLine[] | null,
+    ticking: false,
     timer: null as ReturnType<typeof setInterval> | null,
     approvals: new Map<string, PendingApproval[]>(),
     approvalsKey: "",
@@ -2595,6 +2597,8 @@ export function createChatSurface(
     const rows = visibleSubagents(subagentRows(sessionsState.list, rootId), subagentUi.acknowledged);
     if (subagentUi.peekId && !rows.some((row) => row.session.id === subagentUi.peekId)) stopSubagentPeek();
     syncSubagentApprovals(rows);
+    subagentUi.ticking = rows.some((row) => row.state === "working" || row.state === "waiting");
+    syncWorkTicker();
     if (!rows.length) return nothing;
     const single = rows.length === 1;
     const expanded = single || subagentUi.expanded || rows.some((row) => row.state === "waiting");
