@@ -74,7 +74,7 @@ async function refresh(f: Awaited<ReturnType<typeof fixture>>) {
   f.input.visibleHistory = forModelContext((await f.sessions.getContextWindow(f.input.session.id)).entries);
 }
 
-for (const status of ["active", "paused", "complete", "blocked"] as const) {
+for (const status of ["active", "paused", "complete"] as const) {
   test(`recent recovery preserves ${status} goal and a fitting saved summary without a model call`, async () => {
     const f = await fixture();
     const goal = { ...createGoalRecord({ objective: "verify result", source: "tool" }), status };

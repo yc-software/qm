@@ -159,17 +159,16 @@ test("an open goal from an earlier turn is picked up from history", async () => 
   assert.equal(result.reply, "now done");
 });
 
-test("rounds without progress are waived after the stall limit and the waiver reaches the reply", async () => {
+test("rounds without progress never waive the goal; only a user stop ends it", async () => {
   const emitted: SessionEntry[] = [];
   const { harness, calls } = fakeAdapter(async (turn, round) => {
     if (round === 0) await emitGoalCreate(turn, "spin forever");
-    return { reply: `round ${round}` };
+    return round === 20 ? { reply: "stopped", stopped: true, stoppedByUser: true } : { reply: `round ${round}` };
   });
   const result = await router(harness).turns.runTurn(stubTurn(emitted));
-  assert.equal(calls.length, 5);
-  assert.match(result.reply, /\[goal waived: no progress after 5 continuation rounds — still active\]/);
-  const kinds = emitted.slice(-2).map((entry) => entry.type);
-  assert.deepEqual(kinds, ["system", "assistant"]);
+  assert.equal(calls.length, 21);
+  assert.doesNotMatch(result.reply, /waived/);
+  assert.equal(latestGoalRecord(emitted)?.status, "paused");
 });
 
 for (const harnessId of ["codex", "claude", "opencode"] as const) {

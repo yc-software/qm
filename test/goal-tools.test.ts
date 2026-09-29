@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createGrindMeter } from "../src/harness/grind.ts";
-import { GOAL_BLOCKED_MIN_ROUNDS, rehydrateOpenGoal } from "../src/harness/goal.ts";
+import { goalContinuationPrompt, rehydrateOpenGoal } from "../src/harness/goal.ts";
 import type { ScopeId } from "../src/types.ts";
 
 function toolbox(screenToolResult?: ToolContextRef["screenToolResult"]) {
@@ -11,6 +11,7 @@ function toolbox(screenToolResult?: ToolContextRef["screenToolResult"]) {
     scopeLabel: { kind: "org", id: "test" } as unknown as ScopeId,
     emit: async () => undefined,
     goalMeter: createGrindMeter(),
+    verifyGoal: async () => ({ complete: true, reasons: "proven" }),
     ...(screenToolResult ? { screenToolResult } : {}),
   };
   const tools = createAgentTools(ref);
@@ -64,7 +65,7 @@ test("update complete: an unmet floor no longer blocks completion, it just warns
   const { ref, create, update } = toolbox();
   await create.execute("c1", { objective: "work a while", floor: { minTurns: 2 } });
   const early = await update.execute("u1", { status: "complete", note: "did it" });
-  assert.match(textOf(early as never), /marked complete/);
+  assert.match(textOf(early as never), /the goal is complete/);
   assert.match(textOf(early as never), /floor is not met yet/);
   assert.equal(ref.goal?.status, "complete");
   assert.equal(ref.goal?.completionNote, "did it");
@@ -75,53 +76,91 @@ test("update complete: no floor warning once the floor is met", async () => {
   await create.execute("c1", { objective: "work a while", floor: { minTurns: 2 } });
   ref.goalMeter!.turns = 5;
   const done = await update.execute("u2", { status: "complete", note: "did it" });
-  assert.match(textOf(done as never), /marked complete/);
+  assert.match(textOf(done as never), /the goal is complete/);
   assert.equal(/floor is not met/.test(textOf(done as never)), false);
   assert.equal(ref.goal?.status, "complete");
 });
 
-test("update blocked: needs a reason and three claims in distinct rounds", async () => {
-  const { ref, create, update } = toolbox();
-  await create.execute("c1", { objective: "hopeless" });
-  const noReason = await update.execute("u0", { status: "blocked" });
-  assert.match(textOf(noReason as never), /requires a note/);
-  // same round: repeated claims don't stack
-  await update.execute("u1", { status: "blocked", note: "api is down" });
-  await update.execute("u2", { status: "blocked", note: "api is down" });
-  assert.equal(ref.goal?.blockedStreak, 1, "one claim per round");
-  ref.goalRound = 1;
-  await update.execute("u3", { status: "blocked", note: "api is down" });
-  assert.equal(ref.goal?.blockedStreak, 2);
-  assert.equal(ref.goal?.status, "active", "still not accepted");
-  ref.goalRound = 2;
-  const final = await update.execute("u4", { status: "blocked", note: "api is down" });
-  assert.equal(ref.goal?.blockedStreak, GOAL_BLOCKED_MIN_ROUNDS);
-  assert.match(textOf(final as never), /marked blocked/);
-  assert.equal(ref.goal?.status, "blocked");
-});
+for (const status of ["blocked", "paused", "active"]) {
+  test(`agent cannot set goal status ${status}, however many rounds it claims an impasse`, async () => {
+    const { ref, create, update } = toolbox();
+    await create.execute("c1", { objective: "hopeless" });
+    const before = structuredClone(ref.goal);
+    for (let round = 0; round < 5; round++) {
+      ref.goalRound = round;
+      const result = await update.execute(`u${round}`, { status, note: "api is down" });
+      assert.match(textOf(result as never), /Invalid arguments/);
+    }
+    assert.deepEqual(ref.goal, before);
+  });
+}
 
-test("update resumes a user-paused goal", async () => {
+test("agent cannot close or resume a user-paused goal", async () => {
   const { ref, create, update } = toolbox();
   await create.execute("c1", { objective: "long haul" });
   ref.goal!.status = "paused";
-  const closeWhilePaused = await update.execute("u2", { status: "complete" });
-  assert.match(textOf(closeWhilePaused as never), /paused. Resume it first/);
+  const done = await update.execute("u1", { status: "complete", note: "ok" });
+  assert.match(textOf(done as never), /paused by the user/);
   assert.equal(ref.goal?.status, "paused");
   const conflict = await create.execute("c2", { objective: "another" });
   assert.match(textOf(conflict as never), /already registered/);
-  const resumed = await update.execute("u3", { status: "active" });
-  assert.match(textOf(resumed as never), /Goal resumed/);
+});
+
+test("the agent cannot self-complete: without a verifier the request is rejected", async () => {
+  const { ref, create, update } = toolbox();
+  delete ref.verifyGoal;
+  await create.execute("c1", { objective: "ship it" });
+  const res = await update.execute("u1", { status: "complete", note: "trust me" });
+  assert.match(textOf(res as never), /did not accept completion/);
   assert.equal(ref.goal?.status, "active");
-  const reResume = await update.execute("u4", { status: "active" });
-  assert.match(textOf(reResume as never), /already active/);
-  const done = await update.execute("u5", { status: "complete", note: "ok" });
-  assert.match(textOf(done as never), /marked complete/);
+});
+
+test("a verifier approval closes the goal and sees only the objective and evidence", async () => {
+  const { ref, create, update } = toolbox();
+  const seen: string[][] = [];
+  ref.verifyGoal = async (objective, evidence) => {
+    seen.push([objective, evidence]);
+    return { complete: true, reasons: "tests pass" };
+  };
+  await create.execute("c1", { objective: "suite green" });
+  const res = await update.execute("u1", { status: "complete", note: "npm test: 0 failures" });
+  assert.match(textOf(res as never), /verifier accepted completion/);
+  assert.equal(ref.goal?.status, "complete");
+  assert.deepEqual(seen, [["suite green", "npm test: 0 failures"]]);
+});
+
+test("a verifier rejection keeps the goal active and feeds its reasons into the next continuation", async () => {
+  const { ref, create, update } = toolbox();
+  ref.verifyGoal = async () => ({ complete: false, reasons: "no test output shown" });
+  await create.execute("c1", { objective: "suite green" });
+  const res = await update.execute("u1", { status: "complete", note: "done" });
+  assert.match(textOf(res as never), /stays active.*no test output shown/);
+  assert.equal(ref.goal?.status, "active");
+  assert.match(
+    goalContinuationPrompt(ref.goal!, createGrindMeter()),
+    /rejected your last completion request[\s\S]*no test output shown/,
+  );
+  ref.verifyGoal = async () => ({ complete: true, reasons: "ok" });
+  await update.execute("u2", { status: "complete", note: "npm test: 0 failures" });
+  assert.equal(ref.goal?.status, "complete");
+  assert.equal(ref.goal?.verifierFeedback, undefined);
+});
+
+test("a failing verifier never closes the goal", async () => {
+  const { ref, create, update } = toolbox();
+  ref.verifyGoal = async () => {
+    throw new Error("model down");
+  };
+  await create.execute("c1", { objective: "suite green" });
+  const res = await update.execute("u1", { status: "complete", note: "done" });
+  assert.match(textOf(res as never), /verifier failed/);
+  assert.equal(ref.goal?.status, "active");
 });
 
 test("update with no active goal errors cleanly", async () => {
   const { update } = toolbox();
-  const res = await update.execute("u1", { status: "complete" });
-  assert.match(textOf(res as never), /No active or paused goal/);
+  const res = await update.execute("u1", { status: "complete", note: "x" });
+  assert.match(textOf(res as never), /No active goal/);
 });
 
 test("goal tool results are core-authored, so the security classifier never sees or quarantines them", async () => {
@@ -168,9 +207,6 @@ test("goal mutation receipts are durable before returning and rehydrate without 
   assert.equal(rehydrateOpenGoal(entries)?.status, "active");
   await update.execute("u1", { status: "paused" });
   assert.equal(rehydrateOpenGoal(entries)?.status, "active");
-  ref.goal!.status = "paused";
-  await update.execute("u2", { status: "active" });
-  assert.equal(rehydrateOpenGoal(entries)?.status, "active");
   await update.execute("u3", { status: "complete", note: "verified" });
   assert.equal(rehydrateOpenGoal(entries), null);
   assert.ok(entries.every((entry) => entry.type !== "system"));
@@ -185,10 +221,10 @@ test("agent cannot pause a goal or bypass its work floor", async () => {
   assert.deepEqual(ref.goal, before);
 });
 
-test("goal update schema does not offer pause", () => {
+test("goal update schema offers only complete", () => {
   const { tools } = toolbox();
   const goal = tools.find((tool) => tool.name === "goal")!;
-  assert.doesNotMatch(JSON.stringify(goal.parameters), /"paused"/);
+  assert.doesNotMatch(JSON.stringify(goal.parameters), /"paused"|"blocked"|"active"/);
 });
 
 test("invalid goal status cannot fall through to completion", async () => {

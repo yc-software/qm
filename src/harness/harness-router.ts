@@ -16,7 +16,14 @@ import { withTapedEntryMirrors } from "./harness-shared.ts";
 import { NON_INTERACTIVE_THINKING_LEVEL, NON_INTERACTIVE_FAST_MODE } from "../core/turn-options.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { createGrindMeter } from "./grind.ts";
-import { enforceGoal, goalSnapshotPayload, latestGoalRecord, rehydrateOpenGoal, type GoalRecord } from "./goal.ts";
+import {
+  enforceGoal,
+  goalSnapshotPayload,
+  latestGoalRecord,
+  rehydrateOpenGoal,
+  verifyGoalCompletion,
+  type GoalRecord,
+} from "./goal.ts";
 
 const GOAL_ROUND_MIN_WALL_MS = 30_000;
 
@@ -279,6 +286,12 @@ export function createHarnessRouter(
           tools: input.runtimeControl
             ? { ...input.tools, runtime: (request, signal) => input.runtimeControl!(choice, request, signal) }
             : input.tools,
+          ...(adapter.models.judge
+            ? {
+                verifyGoal: (objective: string, evidence: string) =>
+                  verifyGoalCompletion(adapter.models.judge!, objective, evidence, input.cancel),
+              }
+            : {}),
         };
         const taped = adapter.profile.capabilities.has("native-tape") ? dispatched : withTapedEntryMirrors(dispatched);
         return adapter.profile.capabilities.has("goal-enforcement")

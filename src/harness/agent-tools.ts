@@ -19,7 +19,7 @@ import { computerVerdict } from "../sandbox/sandbox.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
-import { GOAL_BLOCKED_MIN_ROUNDS, createGoalRecord, goalFloorMeter, goalReport, type GoalRecord } from "./goal.ts";
+import { createGoalRecord, goalFloorMeter, goalReport, type GoalRecord, type GoalVerifier } from "./goal.ts";
 import {
   toolLabelOf,
   toolResultProvenance,
@@ -94,9 +94,8 @@ export interface ToolContextRef {
 
   goalRound?: number;
 
-  goalLastBlockedRound?: number;
-
   goalMeter?: import("./grind.ts").GrindMeter;
+  verifyGoal?: GoalVerifier;
   screenToolResult?: (input: ToolResultScreenInput) => Promise<ToolResultScreen>;
   toolApprovalGate?: (tool: string) => boolean;
 }
@@ -3832,8 +3831,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "Register a goal for this session — ONLY when the user explicitly asks for sustained, self-directed work " +
       '("grind on X for 30 minutes", "keep going until the tests are green", "work through this list"); never infer ' +
       "one from an ordinary request. Once registered the harness enforces it: trying to end a reply while the goal " +
-      "is active (or while a work floor is unmet) is answered with a keep-going prompt, not a hard stop. Close it by " +
-      'verifiably completing it (goal action update "complete") or, after repeated genuine impasses, marking it blocked. ' +
+      "is active (or while a work floor is unmet) is answered with a keep-going prompt, not a hard stop. Only the user can stop it; " +
+      'when the work is verifiably done, request completion (goal action update "complete"); a fresh verifier decides. ' +
       "Fails if an unfinished goal exists.",
     parameters: Type.Object({
       objective: Type.String({
@@ -3865,9 +3864,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "create", error: "goal_exists" },
-          text(
-            "A goal is already registered (active or paused). Resume, complete, or block it with goal action update first — goal action get shows it.",
-          ),
+          text("A goal is already registered (active or paused) — goal action get shows it."),
           true,
         );
       }
@@ -3919,95 +3916,51 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "update",
     label: "update",
     description:
-      'Close or resume the goal. status "complete" ONLY when the objective is achieved and verified against ' +
-      'current evidence. status "blocked" ONLY at a genuine impasse that has recurred across ' +
-      `${GOAL_BLOCKED_MIN_ROUNDS} separate continuation rounds — never because the work is hard, slow, or unclear. ` +
-      "Only the user can pause a goal by stopping the turn; agents cannot pause goals. " +
-      'status "active" resumes a paused goal.',
+      'Request completion of the goal. Set to "complete" only when the objective has actually been achieved and no ' +
+      "required work remains. Do not mark a goal complete merely because its budget is nearly exhausted or because " +
+      "you are stopping work. An independent fresh-context verifier reads only the objective and your note and " +
+      "decides; if it rejects, the goal stays active and its reasons come back to you. You cannot block, pause, or " +
+      "resume a goal; only the user stops it.",
     parameters: Type.Object({
-      status: Type.Union([Type.Literal("complete"), Type.Literal("blocked"), Type.Literal("active")]),
-      note: Type.Optional(
-        Type.String({ description: "complete: what evidence proves it. blocked: the exact impasse (required)." }),
-      ),
+      status: Type.Literal("complete"),
+      note: Type.String({
+        description: "The concrete evidence (commands, output, results, links) that proves the objective is achieved.",
+      }),
     }),
     async execute(callId, params) {
-      const p = params as { status: "complete" | "blocked" | "active"; note?: string };
+      const p = params as { note: string };
       await recordCall(callId, {
         tool: "goal",
         action: "update",
-        status: p.status,
+        status: "complete",
         ...(p.note ? { note: p.note } : {}),
       });
       const goal = ref.goal;
-      if (!goal || (goal.status !== "active" && goal.status !== "paused")) {
+      if (goal?.status !== "active") {
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "update", error: "no_active_goal" },
-          text("No active or paused goal to update."),
+          text(goal?.status === "paused" ? "The goal is paused by the user." : "No active goal to complete."),
           true,
         );
       }
-      if (p.status === "active") {
-        if (goal.status !== "paused") {
-          return recordCoreAuthoredResult(
-            callId,
-            { tool: "goal", action: "update", error: "not_paused" },
-            text("The goal is already active."),
-            true,
-          );
-        }
-        goal.status = "active";
+      const verdict = ref.verifyGoal
+        ? await ref.verifyGoal(goal.objective, p.note ?? "").catch((e: unknown) => ({
+            complete: false,
+            reasons: `the verifier failed (${errMessage(e)}); request completion again`,
+          }))
+        : { complete: false, reasons: "no independent verifier is available on this runtime; keep working" };
+      if (!verdict.complete) {
+        goal.verifierFeedback = verdict.reasons;
         goal.updatedAt = Date.now();
         return recordCoreAuthoredResult(
           callId,
-          { tool: "goal", action: "update", goal },
-          text("Goal resumed. It is enforced again; keep working toward it."),
-        );
-      }
-      if (goal.status === "paused") {
-        return recordCoreAuthoredResult(
-          callId,
-          { tool: "goal", action: "update", error: "paused" },
-          text('The goal is paused. Resume it first (goal action update status "active") before closing it.'),
+          { tool: "goal", action: "update", error: "verifier_rejected", goal },
+          text(`The verifier did not accept completion; the goal stays active. Reasons: ${verdict.reasons}`),
           true,
         );
       }
-      if (p.status === "blocked") {
-        const reason = p.note?.trim();
-        if (!reason) {
-          return recordCoreAuthoredResult(
-            callId,
-            { tool: "goal", action: "update", error: "blocked_needs_reason" },
-            text("Blocking requires a note naming the exact impasse."),
-            true,
-          );
-        }
-        const round = ref.goalRound ?? 0;
-        if (ref.goalLastBlockedRound !== round) {
-          ref.goalLastBlockedRound = round;
-          goal.blockedStreak += 1;
-          goal.blockedReason = reason;
-          goal.updatedAt = Date.now();
-        }
-        if (goal.blockedStreak < GOAL_BLOCKED_MIN_ROUNDS) {
-          return recordCoreAuthoredResult(
-            callId,
-            { tool: "goal", action: "update", error: "blocked_audit", streak: goal.blockedStreak },
-            text(
-              `Blocked claim ${goal.blockedStreak}/${GOAL_BLOCKED_MIN_ROUNDS} recorded — not accepted yet. ` +
-                "Attack the impasse differently this round; if the SAME impasse recurs, claim blocked again next round.",
-            ),
-            true,
-          );
-        }
-        goal.status = "blocked";
-        goal.updatedAt = Date.now();
-        return recordCoreAuthoredResult(
-          callId,
-          { tool: "goal", action: "update", goal },
-          text("Goal marked blocked. Tell the user the exact impasse and what would unblock it."),
-        );
-      }
+      delete goal.verifierFeedback;
       let floorNote = "";
       if (goal.floor) {
         const meter = ref.goalMeter;
@@ -4020,11 +3973,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }
       goal.status = "complete";
       goal.updatedAt = Date.now();
-      if (p.note) goal.completionNote = p.note;
+      goal.completionNote = p.note;
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "update", goal },
-        text(`Goal marked complete. Report the outcome (and evidence) to the user.${floorNote}`),
+        text(
+          `The verifier accepted completion; the goal is complete. Report the outcome (and evidence) to the user.${floorNote}`,
+        ),
       );
     },
   });

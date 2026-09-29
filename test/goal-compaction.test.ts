@@ -54,7 +54,7 @@ async function fixture(
   return { sessions, session, lease, goal, compaction, harness };
 }
 
-for (const status of ["active", "paused", "complete", "blocked"] as const) {
+for (const status of ["active", "paused", "complete"] as const) {
   test(`compaction preserves latest ${status} goal across context reload and repeated compaction`, async () => {
     const { sessions, session, lease, goal, compaction } = await fixture(status);
     try {
