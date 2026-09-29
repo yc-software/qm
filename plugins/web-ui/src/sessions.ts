@@ -9,6 +9,7 @@ import {
   Ban,
   Binoculars,
   Bot,
+  Target,
   ArchiveRestore,
   ChevronDown,
   ChevronRight,
@@ -772,7 +773,7 @@ function statusMarks(s: CoreSession): TemplateResult {
           @keydown=${(e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && openBackgroundInspector(e, s)}
           >${ind.background.jobs > 0 ? icon(Cog, 11) : nothing}${
             ind.background.watches > 0 ? icon(Binoculars, 11) : nothing
-          }${ind.background.crons > 0 ? icon(Clock3, 11) : nothing}${ind.background.subagents > 0 ? icon(Bot, 11) : nothing}</span
+          }${ind.background.crons > 0 ? icon(Clock3, 11) : nothing}${ind.background.subagents > 0 ? icon(Bot, 11) : nothing}${ind.background.goal ? icon(Target, 11) : nothing}</span
         >`
       : nothing
   }`;

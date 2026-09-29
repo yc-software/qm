@@ -143,6 +143,7 @@ export interface CoreSession {
   backgroundJobs?: number;
   watches?: number;
   crons?: number;
+  goal?: { objective: string; endsAt?: number };
   forkedFrom?: { sessionId: string; title?: string | null };
   forkBoundarySeq?: number;
   parentSessionId?: string;

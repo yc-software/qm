@@ -56,7 +56,7 @@ function router(harness: Harness): Harness {
 }
 
 async function emitGoalCreate(turn: HarnessTurnInput, objective: string) {
-  const goal = createGoalRecord({ objective, source: "tool" });
+  const goal = createGoalRecord({ objective });
   await turn.emit({ type: "tool_call", payload: { tool: "goal", action: "create", callId: "c1" }, scopeLabel: scope });
   await turn.emit({
     type: "tool_result",
@@ -144,7 +144,7 @@ test("turns without a goal pass through untouched", async () => {
 
 test("an open goal from an earlier turn is picked up from history", async () => {
   const emitted: SessionEntry[] = [];
-  const prior = createGoalRecord({ objective: "carried over", source: "tool" });
+  const prior = createGoalRecord({ objective: "carried over" });
   const history = [
     { type: "system", payload: { kind: "goal", goal: prior }, sessionId: "s1", seq: 0, parentSeq: null, createdAt: 1 },
   ] as SessionEntry[];

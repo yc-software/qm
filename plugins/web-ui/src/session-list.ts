@@ -6,6 +6,7 @@ import {
   type SessionBackgroundView,
 } from "./core-bridge.ts";
 import { subagentCounts } from "./subagent-activity.ts";
+import { goalRemainingLabel } from "./goal-strip.ts";
 import { relTime } from "./ui.ts";
 
 type ProjectAwareContext = CoreContext & { project?: CoreProject };
@@ -194,6 +195,7 @@ export interface BackgroundCounts {
   watches: number;
   crons: number;
   subagents: number;
+  goal: boolean;
   label: string;
 }
 
@@ -203,8 +205,11 @@ export function backgroundLabel(
   crons: number,
   subagents = 0,
   subagentsWaiting = 0,
+  goal?: { endsAt?: number },
+  now = Date.now(),
 ): BackgroundCounts | null {
   const parts: string[] = [];
+  if (goal) parts.push(goal.endsAt ? `goal · ${goalRemainingLabel(goal.endsAt, now)}` : "pursuing a goal");
   if (subagents > 0) parts.push(`${subagents} subagent${subagents === 1 ? "" : "s"} running`);
   if (subagentsWaiting > 0)
     parts.push(`${subagentsWaiting} subagent${subagentsWaiting === 1 ? " needs" : "s need"} you`);
@@ -212,7 +217,7 @@ export function backgroundLabel(
   if (watches > 0) parts.push(`${watches} watch${watches === 1 ? "" : "es"} armed`);
   if (crons > 0) parts.push(`${crons} cron${crons === 1 ? "" : "s"} scheduled here`);
   return parts.length
-    ? { jobs, watches, crons, subagents: subagents + subagentsWaiting, label: parts.join(" · ") }
+    ? { jobs, watches, crons, subagents: subagents + subagentsWaiting, goal: Boolean(goal), label: parts.join(" · ") }
     : null;
 }
 
@@ -236,6 +241,7 @@ export function rowIndicators(
       s.crons ?? 0,
       children.running,
       children.waiting,
+      s.goal,
     ),
   };
 }

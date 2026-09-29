@@ -240,7 +240,6 @@ test("Pi rehydrates a durable receipt and preserves its active goal when the wor
     objective: "resume after restart",
     floor: { minMs: 32_400_000 },
     capTokens: 50_000,
-    source: "tool",
   });
   goal.tokensUsed = 1234;
   try {

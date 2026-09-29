@@ -77,7 +77,7 @@ async function refresh(f: Awaited<ReturnType<typeof fixture>>) {
 for (const status of ["active", "paused", "complete"] as const) {
   test(`recent recovery preserves ${status} goal and a fitting saved summary without a model call`, async () => {
     const f = await fixture();
-    const goal = { ...createGoalRecord({ objective: "verify result", source: "tool" }), status };
+    const goal = { ...createGoalRecord({ objective: "verify result" }), status };
     try {
       await f.sessions.append(f.input.lease, {
         type: "system",
@@ -226,7 +226,7 @@ test("recent recovery cannot recover an unauthorized summary or goal", async () 
     });
     await f.sessions.append(f.input.lease, {
       type: "system",
-      payload: goalSnapshotPayload(createGoalRecord({ objective: "private sentinel", source: "tool" })),
+      payload: goalSnapshotPayload(createGoalRecord({ objective: "private sentinel" })),
       scopeLabel: "personal:other",
     });
     await refresh(f);
@@ -247,7 +247,7 @@ test("recent recovery cannot recover an unauthorized summary or goal", async () 
 
 test("recent recovery replaces the replay prefix even when the exclusion ends inside a completed turn", async () => {
   const f = await fixture();
-  const goal = createGoalRecord({ objective: "verify result", source: "tool" });
+  const goal = createGoalRecord({ objective: "verify result" });
   try {
     await f.sessions.append(f.input.lease, {
       type: "system",

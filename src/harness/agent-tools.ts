@@ -3834,13 +3834,38 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
+  const GOAL_EVIDENCE_FILES = 5;
+  const GOAL_EVIDENCE_FILE_CHARS = 20_000;
+  async function goalEvidenceFiles(
+    tc: typeof ref.current,
+    paths: readonly string[] | undefined,
+    signal?: AbortSignal,
+  ): Promise<string[]> {
+    const out: string[] = [];
+    for (const path of (paths ?? []).slice(0, GOAL_EVIDENCE_FILES)) {
+      const content = tc
+        ? await tc.read(path, signal).then(
+            (r) => r.content,
+            () => null,
+          )
+        : null;
+      let body = content ?? "[missing: no such file]";
+      if (body.length > GOAL_EVIDENCE_FILE_CHARS)
+        body = `${body.slice(0, GOAL_EVIDENCE_FILE_CHARS)}\n[truncated at ${GOAL_EVIDENCE_FILE_CHARS} of ${body.length} chars]`;
+      out.push(`<file path="${path.replace(/"/g, "")}">\n${body}\n</file>`);
+    }
+    return out;
+  }
+
   const createGoal = defineTool({
     name: "create",
     label: "create",
     description:
-      "Register a goal for this session — ONLY when the user explicitly asks for sustained, self-directed work " +
-      '("grind on X for 30 minutes", "keep going until the tests are green", "work through this list"); never infer ' +
-      "one from an ordinary request. Once registered the harness enforces it: trying to end a reply while the goal " +
+      "Register a goal for this session when the user explicitly asks for sustained, self-directed work " +
+      '("grind on X for 30 minutes", "do 20 minutes of research", "keep going until the tests are green"); never infer ' +
+      "one from an ordinary request. A request that names a duration or amount of work IS such a request: create the goal " +
+      "FIRST, before doing any of the work, with the floor set to exactly the amount the user named (20 minutes = " +
+      "minMs 1200000; never subtract time already spent). Once registered the harness enforces it: trying to end a reply while the goal " +
       "is active (or while a work floor is unmet) is answered with a keep-going prompt, not a hard stop. Only the user can stop it; " +
       'when the work is verifiably done, request completion (goal action update "complete"); a fresh verifier decides. ' +
       "Fails if an unfinished goal exists.",
@@ -3884,7 +3909,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           objective: p.objective,
           ...(p.floor ? { floor: p.floor } : {}),
           ...(p.token_cap !== undefined ? { capTokens: p.token_cap } : {}),
-          source: "tool",
         });
       } catch (e) {
         return recordCoreAuthoredResult(
@@ -3928,7 +3952,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     description:
       'Request completion of the goal. Set to "complete" only when the objective has actually been achieved and no ' +
       "required work remains. Do not mark a goal complete merely because its budget is nearly exhausted or because " +
-      "you are stopping work. An independent fresh-context verifier reads only the objective and your note and " +
+      "you are stopping work. An independent fresh-context verifier reads only the objective, your note, and any " +
+      "workspace files you name in `files` (the harness reads them for it — name deliverables, never paste them into the note), and " +
       "decides; if it rejects, the goal stays active and its reasons come back to you. You cannot block, pause, or " +
       "resume a goal; only the user stops it.",
     parameters: Type.Object({
@@ -3936,9 +3961,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       note: Type.String({
         description: "The concrete evidence (commands, output, results, links) that proves the objective is achieved.",
       }),
+      files: Type.Optional(
+        Type.Array(Type.String(), {
+          maxItems: GOAL_EVIDENCE_FILES,
+          description: "Workspace paths of the deliverables; the verifier reads them directly.",
+        }),
+      ),
     }),
     async execute(callId, params) {
-      const p = params as { note: string };
+      const p = params as { note: string; files?: string[] };
       await recordCall(callId, {
         tool: "goal",
         action: "update",
@@ -3954,8 +3985,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           true,
         );
       }
+      const evidence = [p.note ?? "", ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal))].join("\n");
       const verdict = ref.verifyGoal
-        ? await ref.verifyGoal(goal.objective, p.note ?? "").catch((e: unknown) => ({
+        ? await ref.verifyGoal(goal.objective, evidence).catch((e: unknown) => ({
             complete: false,
             reasons: `the verifier failed (${errMessage(e)}); request completion again`,
           }))

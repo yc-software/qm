@@ -393,6 +393,7 @@ test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken 
     watches: 0,
     crons: 0,
     subagents: 0,
+    goal: false,
     label: "1 background job running",
   });
   assert.deepEqual(backgroundLabel(2, 1, 0), {
@@ -400,14 +401,23 @@ test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken 
     watches: 1,
     crons: 0,
     subagents: 0,
+    goal: false,
     label: "2 background jobs running · 1 watch armed",
   });
-  assert.deepEqual(backgroundLabel(0, 2, 0), { jobs: 0, watches: 2, crons: 0, subagents: 0, label: "2 watches armed" });
+  assert.deepEqual(backgroundLabel(0, 2, 0), {
+    jobs: 0,
+    watches: 2,
+    crons: 0,
+    subagents: 0,
+    goal: false,
+    label: "2 watches armed",
+  });
   assert.deepEqual(backgroundLabel(0, 0, 1), {
     jobs: 0,
     watches: 0,
     crons: 1,
     subagents: 0,
+    goal: false,
     label: "1 cron scheduled here",
   });
   assert.deepEqual(backgroundLabel(0, 1, 2), {
@@ -415,6 +425,7 @@ test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken 
     watches: 1,
     crons: 2,
     subagents: 0,
+    goal: false,
     label: "1 watch armed · 2 crons scheduled here",
   });
   assert.equal(backgroundLabel(0, 0, 0), null, "nothing running, nothing to say");
@@ -433,6 +444,7 @@ test("rowIndicators: background counts flow through backgroundLabel — zero cou
     watches: 1,
     crons: 0,
     subagents: 0,
+    goal: false,
     label: "2 background jobs running · 1 watch armed",
   });
   const cronOnly = rowIndicators({ ...saved("1", "web:u:x"), crons: 3 }, null);
@@ -441,6 +453,7 @@ test("rowIndicators: background counts flow through backgroundLabel — zero cou
     watches: 0,
     crons: 3,
     subagents: 0,
+    goal: false,
     label: "3 crons scheduled here",
   });
   assert.equal(
@@ -457,6 +470,7 @@ test("conversationBackground: resolves the mounted conversation by session id", 
     watches: 1,
     crons: 0,
     subagents: 0,
+    goal: false,
     label: "2 background jobs running · 1 watch armed",
   });
 });
@@ -468,6 +482,7 @@ test("conversationBackground: falls back to threadRef while the conversation is 
     watches: 1,
     crons: 0,
     subagents: 0,
+    goal: false,
     label: "1 watch armed",
   });
 });
@@ -563,4 +578,11 @@ test("cronRowMeta shows the next fire and the last result of a session's cron", 
     "next fire in 5m · last ok 3m ago",
   );
   assert.equal(cronRowMeta({ id: "c", lastFire: { firedAt: now - 1_000, status: "running" } }), "paused · running now");
+});
+
+test("a goal lights the background chip with time left", () => {
+  const row = backgroundLabel(0, 0, 0, 0, 0, { endsAt: 600_000 }, 0);
+  assert.equal(row?.goal, true);
+  assert.equal(row?.label, "goal · 10m left");
+  assert.equal(backgroundLabel(0, 0, 0, 0, 0, {})?.label, "pursuing a goal");
 });

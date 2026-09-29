@@ -186,7 +186,7 @@ import {
   watchActivityLabel,
 } from "./session-list";
 import { liveTurnThreadRef } from "./working-dot";
-import { goalElapsedLabel, goalObjectiveLabel, latestGoal } from "./goal-strip";
+import { goalElapsedLabel, goalObjectiveLabel, goalRemainingLabel, latestGoal } from "./goal-strip";
 import {
   ackKey,
   peekLines,
@@ -2625,12 +2625,15 @@ export function createChatSurface(
 
   function goalStrip(agent: Agent): TemplateResult | typeof nothing {
     const goal = latestGoal(visibleMessages(agent));
-    if (!goal || (goal.status !== "active" && goal.status !== "paused")) return nothing;
+    const now = Date.now();
+    const floorRunning = goal?.status === "complete" && goal.endsAt !== undefined && goal.endsAt > now;
+    if (!goal || (goal.status !== "active" && goal.status !== "paused" && !floorRunning)) return nothing;
     const paused = goal.status === "paused";
     const streaming = agent.state.isStreaming;
-    const elapsed = goalElapsedLabel(goal.createdAt, Date.now());
+    const elapsed = goal.endsAt ? goalRemainingLabel(goal.endsAt, now) : goalElapsedLabel(goal.createdAt, now);
     let title = "Goal";
     if (paused) title = "Goal paused";
+    else if (floorRunning) title = "Goal met · using the floor";
     else if (streaming) title = "Pursuing goal";
     return html`
       <section class="goal-strip ${paused ? "paused" : ""}" aria-live="polite" title=${goal.objective}>

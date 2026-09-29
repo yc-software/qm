@@ -31,7 +31,6 @@ async function fixture(
       objective: "verify the result",
       floor: { minMs: 32_400_000 },
       capTokens: 50_000,
-      source: "tool",
     }),
     status,
     tokensUsed: 1234,

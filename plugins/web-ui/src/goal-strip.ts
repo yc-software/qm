@@ -1,7 +1,8 @@
 export interface GoalStripState {
   objective: string;
-  status: "active" | "paused" | "complete" | "blocked";
+  status: "active" | "paused" | "complete";
   floor?: string;
+  endsAt?: number;
   createdAt: number;
 }
 
@@ -14,11 +15,9 @@ interface MessageLike {
   work?: { activity?: ActivityLike[] };
 }
 
-const GOAL_TOOLS = new Set(["goal", "create_goal", "update_goal", "get_goal"]);
-
 function snapshotFrom(payload: unknown): GoalStripState | null | undefined {
   const p = payload as { tool?: unknown; goal?: unknown } | null;
-  if (!p || typeof p !== "object" || typeof p.tool !== "string" || !GOAL_TOOLS.has(p.tool)) return undefined;
+  if (!p || typeof p !== "object" || p.tool !== "goal") return undefined;
   if (!("goal" in p)) return undefined;
   if (p.goal === null) return null;
   const goal = p.goal as {
@@ -29,13 +28,17 @@ function snapshotFrom(payload: unknown): GoalStripState | null | undefined {
   };
   if (typeof goal !== "object" || typeof goal.objective !== "string" || !goal.objective.trim()) return undefined;
   const status = goal.status;
-  if (status !== "active" && status !== "paused" && status !== "complete" && status !== "blocked") return undefined;
+  if (status !== "active" && status !== "paused" && status !== "complete") return undefined;
   const floor = goalFloorLabel(goal.floor ?? null);
+  const minMs = goal.floor?.minMs;
+  const createdAt = typeof goal.createdAt === "number" ? goal.createdAt : Date.now();
+  const timeOnly = typeof minMs === "number" && Object.keys(goal.floor ?? {}).length === 1;
   return {
     objective: goal.objective,
     status,
     ...(floor ? { floor } : {}),
-    createdAt: typeof goal.createdAt === "number" ? goal.createdAt : Date.now(),
+    ...(timeOnly ? { endsAt: createdAt + minMs } : {}),
+    createdAt,
   };
 }
 
@@ -83,4 +86,8 @@ export function goalObjectiveLabel(objective: string, max = 120): string {
     .replace(/\s+/g, " ")
     .trim();
   return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
+}
+
+export function goalRemainingLabel(endsAt: number, now = Date.now()): string {
+  return endsAt > now ? `${goalElapsedLabel(now, endsAt)} left` : "floor met";
 }

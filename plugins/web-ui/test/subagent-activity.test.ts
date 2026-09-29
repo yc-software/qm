@@ -59,6 +59,7 @@ test("running and waiting counts feed the sidebar and tab badge", () => {
     watches: 0,
     crons: 0,
     subagents: 3,
+    goal: false,
     label: "2 subagents running · 1 subagent needs you",
   });
   assert.equal(backgroundLabel(1, 0, 0, 1)?.label, "1 subagent running · 1 background job running");

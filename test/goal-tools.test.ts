@@ -235,3 +235,20 @@ test("invalid goal status cannot fall through to completion", async () => {
   assert.match(textOf(result), /Invalid arguments/);
   assert.deepEqual(ref.goal, before);
 });
+
+test("update reads named workspace files into the verifier's evidence", async () => {
+  const { ref, create, update } = toolbox();
+  ref.current = {
+    read: async (path: string) => ({ content: path === "report.md" ? "# Findings\nthree candidates" : null }),
+  } as unknown as ToolContextRef["current"];
+  let seen = "";
+  ref.verifyGoal = async (_objective, evidence) => {
+    seen = evidence;
+    return { complete: true, reasons: "report present" };
+  };
+  await create.execute("c1", { objective: "write the report" });
+  await update.execute("u1", { status: "complete", note: "see report", files: ["report.md", "gone.md"] });
+  assert.match(seen, /<file path="report.md">\n# Findings\nthree candidates\n<\/file>/);
+  assert.match(seen, /<file path="gone.md">\n\[missing: no such file\]/);
+  assert.equal(ref.goal?.status, "complete");
+});

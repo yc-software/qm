@@ -3847,7 +3847,7 @@ test("context recovery drains in-flight effects, preserves an active goal, and b
       },
     },
     scopeLabel: "personal:U1",
-    goal: createGoalRecord({ objective: "finish verification", source: "tool" }),
+    goal: createGoalRecord({ objective: "finish verification" }),
     emit: async (entry) => {
       events.push(entry as Emitted);
     },
