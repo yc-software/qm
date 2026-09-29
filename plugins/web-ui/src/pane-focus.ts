@@ -75,3 +75,20 @@ export function focusComposerOnPaneClick(pane: HTMLElement, isActive: () => bool
     pane.querySelector<HTMLTextAreaElement>(".composer-input:not(:disabled)")?.focus({ preventScroll: true });
   });
 }
+
+export function focusPaneComposer(pane: HTMLElement | undefined): void {
+  if (!pane) return;
+  const doc = pane.ownerDocument;
+  const view = doc.defaultView;
+  if (!view) return;
+  const inside = (): boolean => {
+    const now = doc.activeElement;
+    return Boolean(now && now !== pane && pane.contains(now));
+  };
+  if (inside() || (doc.activeElement as HTMLElement | null)?.closest?.("dialog, [role='dialog'], [role='menu']"))
+    return;
+  view.requestAnimationFrame(() => {
+    if (inside()) return;
+    pane.querySelector<HTMLTextAreaElement>(".composer-input:not(:disabled)")?.focus({ preventScroll: true });
+  });
+}

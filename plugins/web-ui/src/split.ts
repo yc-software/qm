@@ -53,7 +53,7 @@ import {
   type SplitEdge,
 } from "./split-layout";
 import { paneKindByKey, paneKindEntry } from "./pane-kinds";
-import { focusComposerOnPaneClick, preservingFocus } from "./pane-focus";
+import { focusComposerOnPaneClick, focusPaneComposer, preservingFocus } from "./pane-focus";
 import { attachTooltip, tip } from "./tooltip";
 import { icon, workingWave } from "./ui";
 import { contextsState, scopeTitle } from "./contexts";
@@ -251,6 +251,7 @@ function buildDock(): DockviewApi {
   api.onDidActivePanelChange((e) => {
     splitState.focusedId = e.panel?.id ?? null;
     syncDocumentTitle();
+    if (e.panel) focusPaneComposer(paneContents.get(e.panel.id)?.element);
   });
   api.onDidMaximizedGroupChange(() => {
     for (const a of groupActions) a.draw();
