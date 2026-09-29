@@ -69,7 +69,10 @@ test("labels: elapsed, floor, objective trim", () => {
 test("a time floor carries endsAt and a remaining label", () => {
   const goal = latestGoal([
     msg([
-      { type: "tool_result", payload: { tool: "goal", goal: { ...record("complete"), floor: { minMs: 1_200_000 } } } },
+      {
+        type: "tool_result",
+        payload: { tool: "goal", goal: record("complete", { floor: { minMs: 1_200_000 } }) },
+      },
     ]),
   ]);
   assert.equal(goal?.endsAt, 1000 + 1_200_000);
