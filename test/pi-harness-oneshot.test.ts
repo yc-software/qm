@@ -921,6 +921,14 @@ test("isProviderRefusal matches Anthropic's ToS-refusal wording and nothing else
     true,
   );
   assert.equal(isProviderRefusal("This request seems to violate Anthropic’s usage policy."), true);
+  assert.equal(
+    isProviderRefusal(
+      "This request triggered restrictions on violative cyber content and was blocked under Anthropic's Usage Policy. To learn more, see https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback.",
+    ),
+    true,
+  );
+  assert.equal(isProviderRefusal("The model refused to complete the request"), true);
+  assert.equal(isProviderRefusal("Gateway model is unavailable: claude-opus-5-5"), true);
   assert.equal(isProviderRefusal("Anthropic API error (overloaded_error): Overloaded"), false);
   assert.equal(isProviderRefusal("prompt is too long: 250000 tokens > 200000 maximum"), false);
   assert.equal(isProviderRefusal(undefined), false);
@@ -958,6 +966,8 @@ test("refusal fallback drawdown: Fable -> Opus, Opus -> Sonnet, never the refuse
   assert.equal(refusalFallbackModelId("claude-fable-5-1"), "claude-opus-5");
   assert.equal(refusalFallbackModelId("claude-fable-5"), "claude-opus-5");
   assert.equal(refusalFallbackModelId("claude-opus-5"), "claude-sonnet-5");
+  assert.equal(refusalFallbackModelId("claude-opus-5", "gpt-6-sol"), "gpt-6-sol");
+  assert.equal(refusalFallbackModelId("gpt-6-sol", "gpt-6-sol"), "claude-opus-5");
   for (const id of REFUSAL_FALLBACK_MODEL_IDS) {
     assert.notEqual(refusalFallbackModelId(id), id);
     assert.equal(resolveModel(id)?.provider, "anthropic");

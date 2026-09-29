@@ -1369,6 +1369,7 @@ export function buildApp(
         ...piHarnessConfigOptions(config),
         modelGateway: gatewayTransport,
         resolveBaseModelId: () => orgBaseModelId() ?? defaultForHarness("pi"),
+        resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
         resolveProviderKeys: resolveModelProviderKeys,
         signals: runSignals,
         mcpTools,

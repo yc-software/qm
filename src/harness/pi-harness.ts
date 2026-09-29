@@ -126,6 +126,7 @@ export interface PiHarnessOptions {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
   defaultModelId?: string;
   resolveBaseModelId?: () => string | undefined;
+  resolveFallbackRuntime?: () => { modelId: string; effortLevel?: string; fastMode?: boolean } | undefined;
   detectModelId?: string;
   titleModelId?: string;
   judgeModelId?: string;
@@ -1001,7 +1002,7 @@ export function piTurnError(session: AssistantTextSession, thrown: unknown, mess
 }
 
 const PROVIDER_REFUSAL_PATTERN =
-  /violate Anthropic(?:'|’)?s (?:Terms of Service|usage policy)|reduce refusals for your users by configuring a fallback model/i;
+  /violate Anthropic(?:'|’)?s (?:Terms of Service|usage policy)|under Anthropic(?:'|’)?s usage policy|refusals-and-fallback|reduce refusals for your users by configuring a fallback model|the model refused to complete the request|gateway model is unavailable/i;
 
 export function isProviderRefusal(message: string | undefined): boolean {
   return !!message && PROVIDER_REFUSAL_PATTERN.test(message);
@@ -1018,17 +1019,18 @@ export function providerRefusalError(session: AssistantTextSession, messagesBefo
 
 export const REFUSAL_FALLBACK_MODEL_IDS = ["claude-opus-5", "claude-sonnet-5"] as const;
 
-export function refusalFallbackModelId(fromId: string): string | undefined {
+export function refusalFallbackModelId(fromId: string, configuredId?: string): string | undefined {
+  if (configuredId && configuredId !== fromId) return configuredId;
   return REFUSAL_FALLBACK_MODEL_IDS.find((id) => id !== fromId);
 }
 
 export function refusalFallbackNote(fromModel: string, toModel: string, refusal: string): string {
   return (
-    `[system] Your previous response was blocked by the model provider's automated content filter ` +
-    `before it reached the user — these blocks can fire spuriously; the user did nothing wrong. ` +
+    `[system] Your previous response was blocked or failed at the model provider before it reached the user ` +
+    `— these failures can fire spuriously; the user did nothing wrong. ` +
     `The provider's stated reason was: "${refusal}". ` +
     `The turn has been switched from ${fromModel} to ${toModel}. Start your reply by briefly ` +
-    `telling the user that ${fromModel} declined this request and why (paraphrase the provider's ` +
+    `telling the user that ${fromModel} could not answer this request and why (paraphrase the provider's ` +
     `stated reason in plain words), and that you are answering as ${toModel} instead — then answer ` +
     `their message.`
   );
@@ -2216,7 +2218,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
             if (userAborted || turn.cancel?.aborted) return false;
             const fromId = (entry.agentSession.model as { id?: string } | undefined)?.id;
-            const fallbackId = fromId ? refusalFallbackModelId(fromId) : undefined;
+            const configured = opts?.resolveFallbackRuntime?.();
+            const fallbackId = fromId ? refusalFallbackModelId(fromId, configured?.modelId) : undefined;
             const fallback = fallbackId ? resolveModel(fallbackId, !turn.providerKeys) : undefined;
             if (!fallbackId || !fallback) return false;
             const capMs = raceCapMs();
@@ -2224,12 +2227,14 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             console.error(
               `[pi] provider refusal — retrying on fallback model ${fromId} -> ${fallbackId} session=${turn.session.id}: ${refusal}`,
             );
-            const wantFast = wantsFastMode(turn.runtime?.fastMode, fallbackId);
+            const custom = configured?.modelId === fallbackId ? configured : undefined;
+            const wantFast = wantsFastMode(custom?.fastMode ?? turn.runtime?.fastMode, fallbackId);
             await entry.agentSession.setModel(
               withRequestHeaders(fallback, !turnModelGateway?.models[fallbackId], wantFast),
             );
             entry.ref.fast = wantFast;
-            entry.ref.effortLevel = turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback);
+            entry.ref.effortLevel =
+              custom?.effortLevel ?? turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback);
             applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
             const state = entry.agentSession.agent.state;
             for (let i = state.messages.length - 1; i >= messagesBefore; i--) {
@@ -2534,18 +2539,34 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       },
 
       async compactHistory(input: HarnessCompactInput): Promise<string> {
-        const compactModelId = resolveModelId();
-        const model = getRequiredModel(compactModelId);
+        const primaryId = resolveModelId();
         const providerKeys = await resolveProviderKeys();
         const runtime = await buildModelRuntime(providerKeys, modelGateway);
-        return summarizeHistory(input.history, model, (summaryModel, context, options) => {
-          input.recordModelCall({
-            model: compactModelId,
-            inputTokens: countTokens(context.systemPrompt ?? "") + countTokens(JSON.stringify(context.messages)),
-            entryCount: input.history.length,
+        const summarize = (compactModelId: string) =>
+          summarizeHistory(input.history, getRequiredModel(compactModelId), (summaryModel, context, options) => {
+            input.recordModelCall({
+              model: compactModelId,
+              inputTokens: countTokens(context.systemPrompt ?? "") + countTokens(JSON.stringify(context.messages)),
+              entryCount: input.history.length,
+            });
+            return runtime.streamSimple(summaryModel, context, options);
           });
-          return runtime.streamSimple(summaryModel, context, options);
-        });
+        try {
+          return await summarize(primaryId);
+        } catch (error) {
+          const fallbackId = refusalFallbackModelId(primaryId, opts?.resolveFallbackRuntime?.()?.modelId);
+          if (
+            !(error instanceof Error) ||
+            !isProviderRefusal(error.message) ||
+            !fallbackId ||
+            !resolveModel(fallbackId)
+          )
+            throw error;
+          console.error(
+            `[pi] compaction failed on ${primaryId}; retrying on fallback model ${fallbackId}: ${error.message}`,
+          );
+          return summarize(fallbackId);
+        }
       },
 
       contextTokenBudget(scopeLabel?: string, model?: string): number | undefined {
