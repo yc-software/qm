@@ -5,6 +5,8 @@ import { createSlackHistoryReader } from "../src/slack/history.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createTurnStream } from "../src/runs/turn-stream.ts";
 import type { BotIdentity } from "../src/slack/directory.ts";
+import { registerSlackEvents } from "../src/slack/events.ts";
+import { createDeduper } from "../src/slack/lib.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
 
@@ -145,4 +147,37 @@ test("the history gap note lands in the conversation's own scope memory", async 
   await client.noteSurfaceHistoryGap!("C1", "gap");
   await client.noteSurfaceHistoryGap!("G1", "gap");
   assert.deepEqual(captured, ["channel:C1=gap", "group:G1=gap"]);
+});
+
+test("the bot joining a channel backfills it once, and a failed pull never blocks the join", async () => {
+  const events = new Map<string, (args: any) => Promise<void>>();
+  const pulled: string[] = [];
+  let synced = 0;
+  registerSlackEvents({ event: (n: string, h: any) => void events.set(n, h), message: () => {} } as any, {
+    handler: {} as any,
+    mirror: {} as any,
+    directory: {
+      forceDirectorySync: async () => {
+        synced++;
+      },
+    } as any,
+    ids,
+    deduper: createDeduper(),
+    allowActor: () => true,
+    backfillHistory: async (_client, channel) => {
+      pulled.push(channel);
+      if (channel === "C2") throw new Error("rate limited");
+    },
+  });
+  const join = (channel: string, user: string) =>
+    events.get("member_joined_channel")!({
+      event: { channel, user, event_ts: `${channel}${user}` },
+      body: {},
+      client: {},
+    });
+  await join("C1", "UBOT");
+  await join("C1", "U9");
+  await join("C2", "UBOT");
+  assert.deepEqual(pulled, ["C1", "C2"]);
+  assert.equal(synced, 3);
 });

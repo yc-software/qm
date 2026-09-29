@@ -416,6 +416,9 @@ export async function startSlackPlugin(
     ...(allowActor ? { allowActor } : {}),
     ...(denyResponder ? { denyResponder } : {}),
     ...(cfg.webUiPublicUrl ? { webUiPublicUrl: cfg.webUiPublicUrl } : {}),
+    ...((cfg.contextSource ?? "live") === "mirror"
+      ? { backfillHistory: (client: unknown, channel: string) => readHistory(client, channel) }
+      : {}),
     ensureHeader,
   });
   const surfaceContext = createSurfaceContextFulfiller({

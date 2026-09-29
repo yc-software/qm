@@ -48,6 +48,7 @@ export function registerSlackEvents(
     allowActor?: (actor: ActorAssertion) => boolean;
     denyResponder?: DenyResponder;
     webUiPublicUrl?: string;
+    backfillHistory?: (client: unknown, channel: string) => Promise<unknown>;
     ensureHeader?: (
       client: SurfaceHeaderClient,
       channel: string,
@@ -356,6 +357,7 @@ export function registerSlackEvents(
     const e = parseLifecycleEvent(event);
     if (deduper.seen(dedupeKey({ event_id: parseEventId(body), channel: e.channel, ts: e.eventTs }))) return;
     if (e.user === ids.botUserId) {
+      if (e.channel && deps.backfillHistory) await deps.backfillHistory(client, e.channel).catch(() => {});
       if (allowActor) {
         await forceDirectorySync(client);
         return;
