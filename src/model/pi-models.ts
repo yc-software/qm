@@ -114,7 +114,12 @@ interface ModelEntry {
   };
 }
 
-const GPT_56_CLONE = { template: "gpt-5.5", contextWindow: 1_050_000, maxTokens: 128_000 } as const;
+const GPT_56_CLONE = {
+  template: "gpt-5.5",
+  contextWindow: 1_050_000,
+  maxTokens: 128_000,
+  thinkingLevelMap: { max: "max" },
+} as const;
 
 export const MODEL_REGISTRY: readonly ModelEntry[] = [
   {
@@ -224,6 +229,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     base: true,
     clone: {
       ...GPT_56_CLONE,
+      thinkingLevelMap: { ...GPT_56_CLONE.thinkingLevelMap, off: null },
       input: 10,
       output: 50,
       cacheRead: 1,
@@ -241,6 +247,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     request: { model: "gpt-6-astra", service_tier: "ultrafast" },
     clone: {
       ...GPT_56_CLONE,
+      thinkingLevelMap: { ...GPT_56_CLONE.thinkingLevelMap, off: null },
       input: 60,
       output: 300,
       cacheRead: 6,
