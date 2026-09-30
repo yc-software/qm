@@ -17,6 +17,7 @@ import {
   renderUseScript,
   KeychainError,
   type Keychain,
+  type KeychainGrant,
 } from "../src/credentials/keychain.ts";
 import { createMemoryMap, type DurableMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
 import { envKey } from "../src/credentials/connector-token.ts";
@@ -37,8 +38,6 @@ function kc(now?: () => number): Keychain {
     ...(now ? { now } : {}),
   });
 }
-
-const ONCE_WINDOW_MS = 15 * 60_000;
 
 const GH = {
   ownerId: "U1",
@@ -143,9 +142,8 @@ test("envKey defaults from the service name (github → GITHUB_TOKEN)", async ()
   assert.equal(meta.service, "github");
 });
 
-test("only the owner can grant; materialize is scope-checked; once-grants cover re-runs for a window", async () => {
-  let t = 1_000_000;
-  const k = kc(() => t);
+test("only the owner can grant; materialize is scope-checked; once-grants are consumed", async () => {
+  const k = kc();
   const cred = await k.save(GH);
 
   await assert.rejects(
@@ -181,64 +179,55 @@ test("only the owner can grant; materialize is scope-checked; once-grants cover 
   );
   assert.equal(m.purpose, "use my gh to clone the repo");
 
-  t += ONCE_WINDOW_MS - 1;
-  const rerun = await k.materialize(grant.id, "channel:C1", "U2");
-  assert.ok(rerun.kind === "env" && rerun.env[0]!.value === "ghp_secret", "a retry of the same command still works");
-  const claimed = (await k.getGrant(grant.id))!;
-  assert.equal(claimed.status, "active", "once grants are no longer flipped to used");
-  assert.equal(claimed.usedAt, 1_000_000);
-  assert.equal(claimed.usedBy, "U2");
-  assert.equal(claimed.expiresAt, 1_000_000 + ONCE_WINDOW_MS);
-
-  t += 2;
   await assert.rejects(
     k.materialize(grant.id, "channel:C1", "U2"),
-    (e: KeychainError) => e.status === 410 && e.message === "grant is expired",
-    "after the window the once grant is expired",
+    (e: KeychainError) => e.status === 410,
+    "a once-grant is single-use",
   );
 });
 
-test("a once grant's window never outlives an earlier expiry the owner set", async () => {
-  let t = 1_000_000;
-  const k = kc(() => t);
+test("concurrent materialization consumes a once grant exactly once", async () => {
+  const k = kc();
   const cred = await k.save(GH);
   const grant = await k.createGrant({
     credentialId: cred.id,
     ownerId: "U1",
     audienceScopeId: "channel:C1",
     mode: "once",
-    purpose: "short",
-    expiresAt: t + 60_000,
+    purpose: "single use",
   });
-  await k.materialize(grant.id, "channel:C1", "U2");
-  assert.equal((await k.getGrant(grant.id))!.expiresAt, t + 60_000);
-  t += 60_001;
-  await assert.rejects(k.materialize(grant.id, "channel:C1", "U2"), (e: KeychainError) => e.status === 410);
+  const results = await Promise.allSettled([
+    k.materialize(grant.id, "channel:C1", "U2"),
+    k.materialize(grant.id, "channel:C1", "U2"),
+    k.materialize(grant.id, "channel:C1", "U3"),
+  ]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(
+    results.filter(
+      (result) =>
+        result.status === "rejected" && result.reason instanceof KeychainError && result.reason.status === 410,
+    ).length,
+    2,
+  );
 });
 
-test("a once grant serves concurrent parent + child loads by the same requester, not other members", async () => {
-  let t = 1_000_000;
-  const k = kc(() => t);
-  const cred = await k.save(GH);
+test("legacy retry grants remain consumed and invalidate prepared uses", async () => {
+  const grants = createMemoryMap<KeychainGrant>();
+  const k = createKeychain({ creds: createMemoryMap(), grants, asks: createMemoryMap(), key: KEY });
+  const credential = await k.save(GH);
   const grant = await k.createGrant({
-    credentialId: cred.id,
+    credentialId: credential.id,
     ownerId: "U1",
     audienceScopeId: "channel:C1",
     mode: "once",
-    purpose: "single command",
+    purpose: "one use",
   });
-  const results = await Promise.all([
-    k.materialize(grant.id, "channel:C1", "U2"),
-    k.materialize(grant.id, "channel:C1", "U2"),
-  ]);
-  assert.ok(results.every((m) => m.kind === "env" && m.env[0]!.value === "ghp_secret"));
-  const claimed = (await k.getGrant(grant.id))!;
-  assert.equal(claimed.usedAt, 1_000_000);
-  assert.equal(claimed.expiresAt, 1_000_000 + ONCE_WINDOW_MS);
-  await assert.rejects(k.materialize(grant.id, "channel:C1", "U3"), (e: KeychainError) => e.status === 410);
-  t += 5 * 60_000;
-  await k.materialize(grant.id, "channel:C1", "U2");
-  assert.equal((await k.getGrant(grant.id))!.expiresAt, 1_000_000 + ONCE_WINDOW_MS, "later uses don't extend it");
+  const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
+  await grants.put(grant.id, { ...grant, status: "active", usedAt: Date.now(), usedBy: "U2" });
+  assert.equal((await k.grantsForScope("channel:C1")).length, 0);
+  for (const actor of ["U2", "U3"])
+    await assert.rejects(k.materialize(grant.id, "channel:C1", actor), (e: KeychainError) => e.status === 410);
+  await assert.rejects(prepared.commit(), (e: KeychainError) => e.status === 410);
 });
 
 test("materializeOwnById: the owner's own credential needs no grant — scope, ownership, expiry, and connectors enforced", async () => {
@@ -345,7 +334,7 @@ describe("connectors are grantable like any keychain record", () => {
     );
   });
 
-  it("only the owner can grant a connector; materialize hands back the token under the host env var; once re-runs work", async () => {
+  it("only the owner can grant a connector; materialize hands back the token under the host env var; once is consumed", async () => {
     const k = kc();
     await k.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
     const cid = await cidOf(k, "alex@x");
@@ -368,8 +357,7 @@ describe("connectors are grantable like any keychain record", () => {
       { key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.alex" },
     ]);
     assert.match(renderUseScript(m), /export VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM=/);
-    const rerun = await k.materialize(grant.id, G1, "carol@x");
-    assert.deepEqual(rerun.kind === "env" ? rerun.env : null, m.kind === "env" ? m.env : null, "re-run in the window");
+    await assert.rejects(k.materialize(grant.id, G1, "carol@x"), (e: KeychainError) => e.status === 410);
   });
 
   it("an expired connector token is refreshed on materialize; with no refresh it 410s for reconnect", async () => {
@@ -1160,7 +1148,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.deepEqual(other.credentials, []);
   });
 
-  it("env grants expose the credential's execution handle; committing a once grant starts its re-run window", async () => {
+  it("env grants expose the credential's execution handle; committing a once grant consumes it", async () => {
     const owner = "HANDLE_OWNER";
     const cap = await capFor(owner, scopeId("personal", owner), { liveActor: true });
     const saved = (await (
@@ -1182,8 +1170,9 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(prepared.materialized.kind, "env");
     await prepared.commit();
     const claimed = (await built.keychain!.getGrant(grant.id))!;
-    assert.equal(claimed.status, "active", "a used once grant stays usable for re-runs of its command");
-    assert.ok(claimed.usedAt !== undefined && claimed.expiresAt === claimed.usedAt + 15 * 60_000);
+    assert.equal(claimed.status, "used");
+    assert.ok(claimed.usedAt !== undefined);
+    await assert.rejects(prepared.commit(), (e: KeychainError) => e.status === 410);
   });
 
   it("a participant's granted connector is materialized under the host env var", async () => {
@@ -1257,7 +1246,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.notEqual(res.status, 200);
   });
 
-  it("use is scope-bound, returns sourceable env text, and a once grant serves re-runs", async () => {
+  it("use is scope-bound, returns sourceable env text, and a once grant cannot be reused", async () => {
     const { credential } = (await (
       await post(
         "/v1/keychain/credentials",
@@ -1277,7 +1266,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(await used.text(), "export GH_GRANT='ghp_grant'\n");
 
     const rerun = await post("/v1/keychain/use", { grant: g.grant.id }, await capFor("U3", "channel:C7"));
-    assert.equal(rerun.status, 200, "a retry of the same command inside the window");
+    assert.equal(rerun.status, 410, "a consumed grant cannot authorize another credential load");
 
     const usage = await built.credentialUsage.list({});
     assert.ok(
@@ -1581,7 +1570,7 @@ test("prepared grants reject credential rotation without consuming a single use"
   if (fresh.materialized.kind === "env") assert.equal(fresh.materialized.env[0]?.value, "rotated-execution-token");
   await fresh.commit();
   const committed = (await k.getGrant(grant.id))!;
-  assert.equal(committed.status, "active");
+  assert.equal(committed.status, "used");
   assert.equal(committed.usedBy, "U2", "only the committed materialization claims the once grant");
 });
 

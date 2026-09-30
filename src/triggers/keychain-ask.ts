@@ -11,7 +11,7 @@ import { keychainUseCommand } from "../api/contract.ts";
 
 function resolutionInput(ask: KeychainAsk, grant?: KeychainGrant): string {
   if (ask.status === "approved") {
-    const scope = grant?.mode === "once" ? "for the blocked command and its re-runs" : "until revoked";
+    const scope = grant?.mode === "once" ? "for one credential use" : "until revoked";
     return `The credential owner approved access ${scope}; it is now in this conversation's grants. Re-run the blocked command and continue. Tell the requester in one short line.`;
   }
   const what = ask.status === "declined" ? "declined" : "did not answer";

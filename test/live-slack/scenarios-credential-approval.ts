@@ -172,6 +172,10 @@ export const credentialApprovalScenarios: Scenario[] = (["once", "standing", "we
       root,
       `<@${env.botUserId}> run that exact command again and reply COUNT=<number>.`,
     );
+    if (mode === "once") {
+      const next = await nextCard(ctx, channel.id, root, again, `demo-${mode}`);
+      await click(env, owner, channel.id, next, "keychain_allow_once");
+    }
     const since2 = String(Date.now() / 1000);
     await waitFor("re-run", async () =>
       (await threadText(ctx, channel.id, root, again)).includes(`COUNT=${count}`) ? true : undefined,

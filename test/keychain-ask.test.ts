@@ -183,7 +183,7 @@ for (const outcome of ["declined", "expired"] as const) {
 }
 
 test("approveAsk: same createGrant owner gate, audience from the record, single resolution", async () => {
-  let t = 1_000_000;
+  const t = 1_000_000;
   const k = kcAt(() => t);
   const cred = await k.save(GH);
   const { ask } = await k.createAsk({
@@ -224,18 +224,10 @@ test("approveAsk: same createGrant owner gate, audience from the record, single 
   await assert.rejects(k.materialize(grant.id, "channel:OTHER", "U_BOB"), (e: KeychainError) => e.status === 403);
   const m = await k.materialize(grant.id, "channel:C1", "U_BOB");
   assert.ok(m.kind === "env" && m.env[0]!.value === "ghp_alice");
-  t += 60_000;
-  const retry = await k.materialize(grant.id, "channel:C1", "U_BOB");
-  assert.ok(retry.kind === "env" && retry.env[0]!.value === "ghp_alice", "a once grant covers re-runs of its command");
   const used = (await k.getGrant(grant.id))!;
-  assert.equal(used.status, "active");
-  assert.equal(used.usedAt, 1_000_000, "the first use starts the window; re-runs don't extend it");
-  assert.equal(used.expiresAt, 1_000_000 + 15 * 60_000);
-  t = used.expiresAt! + 1;
-  await assert.rejects(
-    k.materialize(grant.id, "channel:C1", "U_BOB"),
-    (e: KeychainError) => e.status === 410 && /expired/.test(e.message),
-  );
+  assert.equal(used.status, "used");
+  assert.equal(used.usedAt, 1_000_000);
+  await assert.rejects(k.materialize(grant.id, "channel:C1", "U_BOB"), (e: KeychainError) => e.status === 410);
 });
 
 test("declineAsk is owner-gated and single-resolution", async () => {
@@ -498,7 +490,7 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
     );
   }
   assert.match(prompts[0]!, /until revoked/, "mode comes from the looked-up grant");
-  assert.match(prompts[1]!, /for the blocked command and its re-runs/);
+  assert.match(prompts[1]!, /for one credential use/);
   for (const prompt of prompts) {
     assert.match(prompt, /Re-run the blocked command/);
     assert.ok(!/fa11bacc|g-standing|g-once/.test(prompt), "no ask or grant ids in the resume prompt");
@@ -887,7 +879,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.equal(used.status, 200);
     assert.equal(await used.text(), "export GITHUB_TOKEN='ghp_alice'\n");
     const rerun = await post("/v1/keychain/use", { grant: grant.id }, await bobInInfra());
-    assert.equal(rerun.status, 200, "a sub-agent or retry re-runs the same command inside the window");
+    assert.equal(rerun.status, 410, "a child or retry needs a new approval after consumption");
   });
 
   it("deny on the card flips the ask and fires exactly one resolution turn into the asking channel", async () => {
@@ -1016,7 +1008,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
         assert.equal(resumed.length, 1);
         assert.equal((await post("/v1/keychain/use", { grant: grant.id }, await capFor(requesterId))).status, 403);
         assert.equal((await post("/v1/keychain/use", { grant: grant.id }, token)).status, 200);
-        assert.equal((await post("/v1/keychain/use", { grant: grant.id }, token)).status, 200, "re-run in the window");
+        assert.equal((await post("/v1/keychain/use", { grant: grant.id }, token)).status, 410);
       });
     }
   }
@@ -1136,12 +1128,14 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       assert.equal(resumed.length, 1);
       assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, await capFor("U_BOB"))).status, 403);
       assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, token)).status, 200);
-      assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, token)).status, 200);
+      assert.equal(
+        (await post("/v1/keychain/use", { grant: approved.grant.id }, token)).status,
+        mode === "once" ? 410 : 200,
+      );
       const after = (await built.keychain!.getGrant(approved.grant.id))!;
-      assert.equal(after.status, "active");
-      if (mode === "once") {
-        assert.ok(after.usedAt !== undefined && after.expiresAt! <= after.usedAt + 15 * 60_000, "window capped");
-      } else assert.equal(after.expiresAt, approved.grant.expiresAt, "standing grants are not capped by use");
+      assert.equal(after.status, mode === "once" ? "used" : "active");
+      if (mode === "once") assert.ok(after.usedAt !== undefined);
+      assert.equal(after.expiresAt, approved.grant.expiresAt);
       if (mode === "standing") {
         assert.equal((await post(`/v1/keychain/grants/${approved.grant.id}/revoke`, {}, live)).status, 200);
         assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, token)).status, 410);

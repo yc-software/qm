@@ -113,7 +113,7 @@ for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-sh
     assert.equal(request.unattendedGrants, undefined);
     assert.equal(request.ownerKeychainUnion, undefined);
     assert.deepEqual(request.triggerDestination, f.cron.destination);
-    assert.match(request.text, /approved access for the blocked command and its re-runs/);
+    assert.match(request.text, /approved access for one credential use/);
     assert.ok(!request.text.includes(f.ask.id) && !request.text.includes(f.ask.purpose));
     assert.equal(f.grant.audienceScopeId, scope);
     assert.equal(f.grant.ownerId, "U_CREDENTIAL_OWNER");
@@ -123,9 +123,6 @@ for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-sh
     );
     const materialized = await f.k.materialize(f.grant.id, scope, request.actor.externalId);
     assert.ok(materialized.kind === "env" && materialized.env[0]!.value === "dummy-only-secret");
-    const retried = await f.k.materialize(f.grant.id, scope, request.actor.externalId);
-    assert.ok(retried.kind === "env" && retried.env[0]!.value === "dummy-only-secret", "a re-run inside the window");
-    f.clock.t += 15 * 60_000 + 1;
     await assert.rejects(
       f.k.materialize(f.grant.id, scope, request.actor.externalId),
       (error: KeychainError) => error.status === 410,
