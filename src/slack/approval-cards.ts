@@ -49,9 +49,12 @@ export function approvalCardDestination(threadOnly: boolean): ApprovalCardDestin
 }
 
 export function approvalMessage(approvals: readonly PendingApproval[]): SlackApprovalMessage {
-  const items = approvals.length
-    ? approvals
-    : [{ requestId: "", command: "unknown command", reason: "requires approval" }];
+  // Slack rejects a message whose blocks repeat a block_id (invalid_blocks),
+  // and one click settles every pending approval sharing a request id anyway,
+  // so two gated calls with the same command label in one turn are one card (#1735).
+  const seen = new Set<string>();
+  const unique = approvals.filter((p) => (seen.has(p.requestId) ? false : (seen.add(p.requestId), true)));
+  const items = unique.length ? unique : [{ requestId: "", command: "unknown command", reason: "requires approval" }];
   const describe = (p: (typeof items)[number]): string => {
     if (p.kind === "input") return "My security screen flagged part of this message. Allow it?";
     if (p.purpose) return `Approval needed: ${clip(p.purpose, 400)}`;
