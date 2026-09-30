@@ -1632,6 +1632,18 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
       </button>
     </div>
     <div class="inbox-view-actions">
+      ${
+        hasMore
+          ? html`<button
+              class="inbox-load-more"
+              type="button"
+              ?disabled=${inboxState.loading}
+              @click=${() => void refreshInbox({ more: true, viewId: surface.viewId })}
+            >
+              Load more
+            </button>`
+          : nothing
+      }
       <button
         class="icon-btn subtle compact inbox-add-loop"
         type="button"
@@ -1715,42 +1727,26 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
         ${chips} ${surface.pane ? html`<span class="inbox-toolbar-spacer"></span>${syncLineTpl(surface)}` : nothing}
       </div>
       ${
-        showEmailFilter || hasMore
+        showEmailFilter
           ? html`
               <div class="inbox-filter-bar">
-                ${
-                  showEmailFilter
-                    ? html`<label class="inbox-filter">
-                        <span>Emails</span>
-                        ${fieldSelect({
-                          className: "inbox-filter-control",
-                          ariaLabel: "Email filter",
-                          ariaDescription: INBOX_FILTERS.find((filter) => filter.id === inboxState.filter)?.description,
-                          value: inboxState.filter,
-                          disabled: inboxState.filterBusy || inboxState.loading,
-                          onChange: (value) => void selectInboxFilter(value as InboxFilter),
-                          options: INBOX_FILTERS.map(
-                            (filter) =>
-                              html`<option value=${filter.id} ?selected=${filter.id === inboxState.filter}>
-                                ${filter.label}
-                              </option>`,
-                          ),
-                        })}
-                      </label>`
-                    : nothing
-                }
-                ${
-                  hasMore
-                    ? html`<button
-                        class="inbox-load-more"
-                        type="button"
-                        ?disabled=${inboxState.loading}
-                        @click=${() => void refreshInbox({ more: true, viewId: surface.viewId })}
-                      >
-                        Load more
-                      </button>`
-                    : nothing
-                }
+                <label class="inbox-filter">
+                  <span>Emails</span>
+                  ${fieldSelect({
+                    className: "inbox-filter-control",
+                    ariaLabel: "Email filter",
+                    ariaDescription: INBOX_FILTERS.find((filter) => filter.id === inboxState.filter)?.description,
+                    value: inboxState.filter,
+                    disabled: inboxState.filterBusy || inboxState.loading,
+                    onChange: (value) => void selectInboxFilter(value as InboxFilter),
+                    options: INBOX_FILTERS.map(
+                      (filter) =>
+                        html`<option value=${filter.id} ?selected=${filter.id === inboxState.filter}>
+                          ${filter.label}
+                        </option>`,
+                    ),
+                  })}
+                </label>
               </div>
             `
           : nothing
