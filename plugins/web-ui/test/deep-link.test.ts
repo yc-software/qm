@@ -146,6 +146,8 @@ test("in-app session links resolve to the session and optional message seq", () 
   assert.deepEqual(sessionLinkTarget(`${origin}/s/abc`, origin, ""), { session: "abc", seq: null });
   assert.deepEqual(sessionLinkTarget(`${origin}/s/abc?seq=12`, origin, ""), { session: "abc", seq: 12 });
   assert.deepEqual(sessionLinkTarget("/ui/s/abc", origin, "/ui"), { session: "abc", seq: null });
+  assert.deepEqual(sessionLinkTarget(`${origin}/c/abc`, origin, ""), { session: "abc", seq: null });
+  assert.deepEqual(sessionLinkTarget(`${origin}/s/abc?seq=abc`, origin, ""), { session: "abc", seq: null });
 });
 
 test("other links are not treated as session links", () => {

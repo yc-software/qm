@@ -1040,6 +1040,13 @@ document.addEventListener("click", (e) => {
   const target = sessionLinkTarget(anchor.href, location.origin, UI_BASE);
   if (!target) return;
   e.preventDefault();
+  const open = allConversations().find(
+    (conversation) => conversation.state.sessionId === target.session && conversation.state.host?.isConnected,
+  );
+  if (open) {
+    if (target.seq !== null) open.revealEntry(target.seq);
+    return;
+  }
   const transcript = loadMessageTranscript(
     (window) => fetchTranscript(target.session, window),
     target.seq,

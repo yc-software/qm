@@ -1,3 +1,5 @@
+import { messageLinkSeq } from "./message-link.ts";
+
 export const UI_BASE = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(
   /\/$/,
   "",
@@ -91,8 +93,7 @@ export function sessionLinkTarget(
   if (url.origin !== origin || (b && url.pathname !== b && !url.pathname.startsWith(`${b}/`))) return null;
   const linked = parseDeepLink(b, url.pathname, url.search);
   if (linked.view !== "chats" || !linked.session) return null;
-  const seq = url.searchParams.get("seq");
-  return { session: linked.session, seq: seq !== null && /^(0|[1-9]\d*)$/.test(seq) ? Number(seq) : null };
+  return { session: linked.session, seq: messageLinkSeq(url.search) };
 }
 
 /** True for an unmodified left click — the case an in-app link should handle itself (SPA nav). Modified clicks (cmd/ctrl/shift/alt, middle-click) fall through to the browser so "open in new tab" works. */

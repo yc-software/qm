@@ -1292,7 +1292,8 @@ export function createChatSurface(
     else readonlyRedraw?.();
   }
 
-  function togglePins(): void {
+  function togglePins(e: Event): void {
+    if ((e.target as Element | null)?.closest("a")) return;
     chatState.pinsExpanded = !chatState.pinsExpanded;
     if (chatState.agent) drawActiveChat(chatState.agent);
     else readonlyRedraw?.();
@@ -1301,9 +1302,7 @@ export function createChatSurface(
   function linkifiedText(text: string): TemplateResult {
     return html`${splitLinks(text).map((seg) =>
       seg.kind === "link"
-        ? html`<a href=${seg.href} target="_blank" rel="noreferrer noopener" @click=${(e: Event) => e.stopPropagation()}
-            >${seg.href}</a
-          >`
+        ? html`<a href=${seg.href} target="_blank" rel="noreferrer noopener">${seg.href}</a>`
         : seg.text,
     )}`;
   }
