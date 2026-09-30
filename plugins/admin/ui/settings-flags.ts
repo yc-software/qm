@@ -136,6 +136,7 @@ function template() {
             <option value="persistent_subagents">Persistent subagents</option>
             <option value="inbox_loops">Inbox Loops</option>
             <option value="slack_loading_indicator">Slack loading indicator (experimental)</option>
+            <option value="external_app_sharing">External app sharing (public links, outside emails)</option>
           </select></label
         >
         <div>

@@ -17,6 +17,10 @@ import { createMemorySessionStore } from "../src/sessions/memory-session-store.t
 import { PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
 import { portalSession } from "../src/deploy/viewer-session.ts";
 import { scopeId } from "../src/types.ts";
+import type { FeatureFlagStore } from "../src/feature-flags.ts";
+
+let externalSharing = true;
+const externalSharingOn = { enabled: async () => externalSharing } as unknown as FeatureFlagStore;
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const SESSION_SECRET = "portal-session-secret";
@@ -162,6 +166,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
 
   const deployStore = createDeployStore();
   const deploy = createDeployService({
+    externalSharingAllowed: async () => true,
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
@@ -191,6 +196,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     deliveries.push(input);
   };
   const server = createInsecureTestServer(app, {
+    featureFlags: externalSharingOn,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     deployAppsSessionSecret: SESSION_SECRET,
@@ -238,6 +244,12 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
       undefined,
       "a link-only public visitor stays anonymous even when a portal session cookie is present",
     );
+    externalSharing = false;
+    const lockedDown = await httpGet(port, "/consultants?x=1", { Host: host, Accept: "text/html,*/*" });
+    assert.equal(lockedDown.status, 302, "with external sharing off, a stored public link requires sign-in");
+    const lockedXhr = await httpGet(port, "/api/data", { Host: host, Accept: "application/json" });
+    assert.equal(lockedXhr.status, 401);
+    externalSharing = true;
     await app.setDeploymentPublic("mysite", false, { createdBy: "alice@example.com" });
 
     const backFromLogin = await httpGet(port, "/consultants?x=1&dpl_signin=1", {
@@ -352,6 +364,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
 test("subdomain ingress: without the session config the domain has no door — a 503, not a bounce", async () => {
   const deployStore = createDeployStore();
   const deploy = createDeployService({
+    externalSharingAllowed: async () => true,
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
@@ -377,6 +390,7 @@ test("subdomain ingress: without the session config the domain has no door — a
     name: "mysite",
   });
   const server = createInsecureTestServer(app, {
+    featureFlags: externalSharingOn,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
   });

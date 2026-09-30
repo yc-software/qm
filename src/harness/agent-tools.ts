@@ -1143,7 +1143,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "the app must listen on the PORT env var. `dir` is workspace-relative: use `app`, never a path " +
       "beginning with `/` or a redundant `workspace/app`. `renameFrom` takes an existing " +
       "deployment name, not its ID. Set audience to [] to suppress default audience grants, or supply " +
-      "publication-time grants. `public: true` makes the app reachable without sign-in; it is never the default. " +
+      "publication-time grants. `public: true` makes the app reachable without sign-in; it is never the default and is refused unless an org admin has enabled external app sharing. " +
       "Use apps action share for subsequent grants. Share the full absolute URL " +
       "returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, " +
       "stable link /d/<name>/; `renameFrom` to rename; `rollbackTo` to flip back to an earlier version. " +
