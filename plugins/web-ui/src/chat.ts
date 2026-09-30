@@ -1102,6 +1102,7 @@ export function createChatSurface(
     host.className = "custom-chat readonly-chat";
     let approvals: PendingApproval[] = [];
     const draw = () => {
+      approvals = unresolvedApprovals(approvals);
       const shownMessages = chatState.inheritedExpanded ? [...chatState.inheritedMessages, ...messages] : messages;
       prepareMessageRows(shownMessages);
       render(
