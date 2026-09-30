@@ -23,7 +23,12 @@ import { sanitizeBranding } from "./resolution/branding.ts";
 import type { OrgBranding } from "./resolution/config-store.ts";
 import { validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
-import { parseSecurityPosture, type SecurityPosture } from "./security/security-posture.ts";
+import {
+  parseSecurityPosture,
+  SECURITY_SCREEN_MODES,
+  type SecurityPosture,
+  type SecurityScreenMode,
+} from "./security/security-posture.ts";
 import { parseSharingPosture, type SharingPosture } from "./resolution/sharing-posture.ts";
 import {
   parseSlackContextSource,
@@ -185,13 +190,12 @@ export interface Config {
   approvalSummaryTimeoutMs: number;
   turnLeaseWaitMs: number;
   securityScreenTimeoutMs: number;
-  securityScreenBackend: "off" | "model" | "proxy";
-  securityScreenAllPostures: boolean;
+  securityScreen: SecurityScreenMode;
+  securityScreenClassifier: "model" | "proxy";
   securityScreenProxy?: {
     provider: string;
     endpoint: string;
     token: string;
-    shadow: boolean;
   };
   scratchExecEnabled: boolean;
   reachExecEnabled: boolean;
@@ -1061,14 +1065,18 @@ function sharingPostureEnvStrict(value: string | undefined): SharingPosture {
   );
 }
 
-function securityScreenBackendEnvStrict(value: string | undefined): Config["securityScreenBackend"] {
-  if (value === undefined || value.trim() === "") return "off";
-  const backend = value.trim().toLowerCase();
-  if (backend === "off" || backend === "model" || backend === "proxy") return backend;
-  throw new Error(
-    `SECURITY_SCREEN_BACKEND=${JSON.stringify(value)} is not recognized — use off, model, or proxy, or unset it.`,
-  );
+function choiceEnvStrict<T extends string>(name: string, value: string | undefined, choices: readonly T[]): T {
+  if (value === undefined || value.trim() === "") return choices[0]!;
+  const choice = value.trim().toLowerCase();
+  if ((choices as readonly string[]).includes(choice)) return choice as T;
+  throw new Error(`${name}=${JSON.stringify(value)} is not recognized — use ${choices.join(", ")}, or unset it.`);
 }
+
+const RETIRED_SECURITY_SCREEN_ENV = [
+  "SECURITY_SCREEN_BACKEND",
+  "SECURITY_SCREEN_ALL_POSTURES",
+  "SECURITY_SCREEN_PROXY_ROLLOUT",
+] as const;
 
 function csvPaths(value: string | undefined): string[] | undefined {
   if (value === undefined) return undefined;
@@ -1301,24 +1309,34 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       `[config] ${retiredBrainEnv.join(", ")} ${retiredBrainEnv.length === 1 ? "is" : "are"} retired and ignored — the brain integration was removed; point an external knowledge server at MEMORY_PROVIDER_CONFIG (docs/memory-providers.md). Remove the variables.`,
     );
   }
-  const securityScreenBackend = securityScreenBackendEnvStrict(env.SECURITY_SCREEN_BACKEND);
-  const securityScreenAllPostures =
-    boolEnvStrict("SECURITY_SCREEN_ALL_POSTURES", env.SECURITY_SCREEN_ALL_POSTURES) ?? false;
-  if (securityScreenAllPostures && securityScreenBackend === "off") {
-    throw new Error("SECURITY_SCREEN_ALL_POSTURES requires an enabled SECURITY_SCREEN_BACKEND");
+  const retiredScreenEnv = RETIRED_SECURITY_SCREEN_ENV.filter((name) => env[name]?.trim());
+  const retiredScreenOff =
+    retiredScreenEnv.length === 1 &&
+    env.SECURITY_SCREEN_BACKEND?.trim().toLowerCase() === "off" &&
+    !env.SECURITY_SCREEN?.trim();
+  if (retiredScreenOff) {
+    console.warn("[config] SECURITY_SCREEN_BACKEND=off is retired and read as SECURITY_SCREEN=off. Replace it.");
+  } else if (retiredScreenEnv.length) {
+    throw new Error(
+      `${retiredScreenEnv.join(", ")} ${retiredScreenEnv.length === 1 ? "is" : "are"} retired — set SECURITY_SCREEN=off|observe|enforce and SECURITY_SCREEN_CLASSIFIER=model|proxy instead, and remove the old variables.`,
+    );
   }
+  const securityScreen = choiceEnvStrict("SECURITY_SCREEN", env.SECURITY_SCREEN, SECURITY_SCREEN_MODES);
+  const securityScreenClassifier = choiceEnvStrict("SECURITY_SCREEN_CLASSIFIER", env.SECURITY_SCREEN_CLASSIFIER, [
+    "model",
+    "proxy",
+  ] as const);
   const proxyProvider = env.SECURITY_SCREEN_PROXY_PROVIDER?.trim();
   const proxyEndpoint = env.SECURITY_SCREEN_PROXY_ENDPOINT?.trim();
   const proxyToken = env.SECURITY_SCREEN_PROXY_TOKEN?.trim();
-  const proxyRollout = env.SECURITY_SCREEN_PROXY_ROLLOUT?.trim().toLowerCase();
-  const hasProxyConfig = [proxyProvider, proxyEndpoint, proxyToken, proxyRollout].some(Boolean);
-  if (securityScreenBackend === "proxy" && (!proxyProvider || !proxyEndpoint || !proxyToken || !proxyRollout)) {
+  const hasProxyConfig = [proxyProvider, proxyEndpoint, proxyToken].some(Boolean);
+  if (securityScreenClassifier === "proxy" && (!proxyProvider || !proxyEndpoint || !proxyToken)) {
     throw new Error(
-      "SECURITY_SCREEN_BACKEND=proxy requires SECURITY_SCREEN_PROXY_PROVIDER, SECURITY_SCREEN_PROXY_ENDPOINT, SECURITY_SCREEN_PROXY_TOKEN, and SECURITY_SCREEN_PROXY_ROLLOUT",
+      "SECURITY_SCREEN_CLASSIFIER=proxy requires SECURITY_SCREEN_PROXY_PROVIDER, SECURITY_SCREEN_PROXY_ENDPOINT, and SECURITY_SCREEN_PROXY_TOKEN",
     );
   }
-  if (securityScreenBackend !== "proxy" && hasProxyConfig) {
-    throw new Error("SECURITY_SCREEN_PROXY_* requires SECURITY_SCREEN_BACKEND=proxy");
+  if (securityScreenClassifier !== "proxy" && hasProxyConfig) {
+    throw new Error("SECURITY_SCREEN_PROXY_* requires SECURITY_SCREEN_CLASSIFIER=proxy");
   }
   if (proxyProvider && (proxyProvider.length > 63 || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(proxyProvider))) {
     throw new Error("SECURITY_SCREEN_PROXY_PROVIDER must be a lowercase DNS label");
@@ -1336,9 +1354,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         "SECURITY_SCREEN_PROXY_ENDPOINT must be an HTTPS URL without credentials, a fragment, or a trailing hostname dot",
       );
     }
-  }
-  if (proxyRollout && proxyRollout !== "shadow" && proxyRollout !== "enforce") {
-    throw new Error("SECURITY_SCREEN_PROXY_ROLLOUT must be shadow or enforce");
   }
   const securityScreenTimeoutMs =
     numEnvStrict("SECURITY_SCREEN_TIMEOUT_MS", env.SECURITY_SCREEN_TIMEOUT_MS) ??
@@ -1456,17 +1471,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     harness,
     securityPosture: securityPostureEnvStrict(env.HARNESS_SECURITY_POSTURE),
     sharingPosture: sharingPostureEnvStrict(env.HARNESS_SHARING_POSTURE),
-    securityScreenBackend,
-    securityScreenAllPostures,
-    ...(securityScreenBackend === "proxy"
-      ? {
-          securityScreenProxy: {
-            provider: proxyProvider!,
-            endpoint: proxyEndpoint!,
-            token: proxyToken!,
-            shadow: proxyRollout === "shadow",
-          },
-        }
+    securityScreen,
+    securityScreenClassifier,
+    ...(securityScreenClassifier === "proxy"
+      ? { securityScreenProxy: { provider: proxyProvider!, endpoint: proxyEndpoint!, token: proxyToken! } }
       : {}),
     sandboxBackend,
     sandboxScopeDefaults,

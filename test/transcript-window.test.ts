@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { ENTRY_STRING_BUDGET, TRANSCRIPT_BYTE_BUDGET, windowedTranscript } from "../src/sessions/session-store.ts";
+import { ENTRY_STRING_BUDGET, windowedTranscript } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -151,23 +151,6 @@ test("windowedTranscript: conversation text is never truncated — only tool pay
   }
 });
 
-test("windowedTranscript: the byte budget drops the oldest entries and counts them as earlier", () => {
-  const log = [entry(0, "user")];
-  for (let seq = 1; seq <= 400; seq++) log.push(fat(seq, "tool_result", ENTRY_STRING_BUDGET));
-  const w = windowedTranscript(log, { tailTurns: 99 });
-  const shipped = w.entries.reduce((a, e) => a + JSON.stringify(e.payload).length, 0);
-  assert.ok(shipped <= TRANSCRIPT_BYTE_BUDGET * 1.1, `shipped ${shipped} must respect the budget`);
-  assert.ok(w.entries.length < log.length, "the budget must bite");
-  assert.equal(w.entries.length + w.earlier, log.length, "everything dropped is counted as earlier");
-  assert.equal(w.entries[w.entries.length - 1]!.seq, 400, "the newest end is what survives");
-});
-
-test("windowedTranscript: one entry over budget still ships — a window is never empty", () => {
-  const w = windowedTranscript([fat(0, "user", TRANSCRIPT_BYTE_BUDGET * 2)], { tailTurns: 1 });
-  assert.equal(w.entries.length, 1);
-  assert.equal(w.earlier, 0);
-});
-
 function start(): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "transcript-window-")) }));
   const server = createInsecureTestServer(built.app, {
@@ -238,7 +221,16 @@ test("GET /v1/sessions/:id honors tailTurns/sinceSeq and reports earlierEntries"
     const one = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}/entries/${seq}?viewer=U1`);
     assert.equal(one.status, 200);
     const oneBody = (await one.json()) as { entry: SessionEntry };
-    assert.deepEqual(oneBody.entry, fullBody.entries[0], "the whole entry, exactly as stored");
+    const { truncated, ...shown } = fullBody.entries[0] as SessionEntry & { truncated?: true };
+    assert.equal(truncated, true, "the view marks a user entry whose model-only context it left out");
+    assert.equal((shown.payload as { environment?: unknown }).environment, undefined);
+    assert.equal((shown.payload as { memoryRecall?: unknown }).memoryRecall, undefined);
+    assert.equal(typeof (oneBody.entry.payload as { environment?: unknown }).environment, "string");
+    assert.deepEqual(
+      { ...oneBody.entry, payload: { ...(oneBody.entry.payload as object), environment: undefined } },
+      { ...shown, payload: { ...(shown.payload as object), environment: undefined } },
+      "the whole entry, exactly as stored, is one fetch away",
+    );
 
     const missing = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}/entries/99999?viewer=U1`);
     assert.equal(missing.status, 404, "a seq that isn't in this session");
@@ -279,7 +271,7 @@ test("windowedTranscript: the text a post tool call puts in the conversation is 
   assert.equal(posted.truncated, undefined);
 });
 
-test("windowedTranscript: a deeply nested payload cannot smuggle bytes past the budget", () => {
+test("windowedTranscript: a deeply nested payload cannot smuggle bytes past the preview", () => {
   const deep = (depth: number, leaf: unknown): unknown => (depth === 0 ? leaf : { nest: deep(depth - 1, leaf) });
   const log = [entry(0, "user")];
   for (let seq = 1; seq <= 6; seq++) {
@@ -287,22 +279,10 @@ test("windowedTranscript: a deeply nested payload cannot smuggle bytes past the 
   }
   const w = windowedTranscript(log, { tailTurns: 1 });
   const shipped = JSON.stringify(w.entries).length;
-  assert.ok(shipped < TRANSCRIPT_BYTE_BUDGET * 2, `a nested subtree must be charged its real size, shipped ${shipped}`);
-});
-
-test("windowedTranscript: the byte cut lands on a turn boundary, so a call keeps its result", () => {
-  const log: SessionEntry[] = [];
-  let seq = 0;
-  const said = (n: number): SessionEntry => ({ ...entry(n, "assistant"), payload: { text: "s".repeat(20_000) } });
-  for (let turn = 0; turn < 40; turn++) {
-    log.push(entry(seq++, "user"));
-    log.push(fat(seq++, "tool_call", ENTRY_STRING_BUDGET * 2));
-    log.push(fat(seq++, "tool_result", ENTRY_STRING_BUDGET * 2));
-    log.push(said(seq++));
-  }
-  const w = windowedTranscript(log, { tailTurns: 99 });
-  assert.ok(w.earlier > 0, "the budget must bite for this to mean anything");
-  assert.equal(w.entries[0]!.type, "user", "a page opens on a turn, never mid-turn");
+  assert.ok(
+    shipped < 7 * 2 * ENTRY_STRING_BUDGET,
+    `a nested subtree must be charged its real size, shipped ${shipped}`,
+  );
 });
 
 test("windowedTranscript: a sinceSeq re-read is never trimmed — it refreshes what the client already holds", () => {
@@ -313,17 +293,47 @@ test("windowedTranscript: a sinceSeq re-read is never trimmed — it refreshes w
   assert.equal(w.earlier, 1);
 });
 
-test("a turn larger than the byte budget leaves a window with nothing the person said", () => {
-  const big = "x".repeat(ENTRY_STRING_BUDGET);
-  const log: SessionEntry[] = [entry(0, "user")];
-  for (let seq = 1; seq <= 2 * Math.ceil(TRANSCRIPT_BYTE_BUDGET / ENTRY_STRING_BUDGET); seq++) {
-    log.push({ ...entry(seq, seq % 2 ? "tool_call" : "tool_result"), payload: { text: big } });
+test("a user entry carrying huge model-only context no longer hides the turns before it", () => {
+  const context = "c".repeat(300_000);
+  const log: SessionEntry[] = [];
+  for (let turn = 0; turn < 4; turn++) {
+    log.push({
+      ...entry(turn * 2, "user"),
+      payload: { text: `ask ${turn}`, environment: context, memoryRecall: { body: context } },
+    });
+    log.push(entry(turn * 2 + 1, "assistant"));
   }
   const w = windowedTranscript(log, { tailTurns: 25 });
-  assert.equal(
-    w.entries.some((e) => e.type === "user"),
-    false,
-    "the byte budget trims past the only user entry and the forward snap finds no other",
+  assert.equal(w.earlier, 0, "every turn is shipped; nothing is pushed behind the earlier button");
+  assert.deepEqual(
+    w.entries.map((e) => e.seq),
+    log.map((e) => e.seq),
   );
-  assert.ok(w.earlier > 0, "the dropped entries are still reported as earlier");
+  for (const user of w.entries.filter((e) => e.type === "user")) {
+    assert.deepEqual(Object.keys(user.payload as object), ["text"], "model-only context stays out of the view");
+    assert.equal(user.truncated, true, "the full entry is one lazy fetch away");
+  }
+  assert.ok(JSON.stringify(w.entries).length < 10_000);
+});
+
+test("thinking entries keep their text but not the provider's signature", () => {
+  const log = [
+    entry(0, "user"),
+    { ...entry(1, "thinking"), payload: { thinking: "weighing it", thinkingSignature: "s".repeat(50_000) } },
+  ];
+  const thought = windowedTranscript(log, { tailTurns: 1 }).entries[1]!;
+  assert.deepEqual(thought.payload, { thinking: "weighing it" });
+  assert.equal(thought.truncated, true);
+});
+
+test("paging is by turns alone, however large the turns are", () => {
+  const log: SessionEntry[] = [];
+  const said = (n: number): SessionEntry => ({ ...entry(n, "assistant"), payload: { text: "s".repeat(50_000) } });
+  for (let turn = 0; turn < 40; turn++) {
+    log.push(entry(turn * 2, "user"));
+    log.push(said(turn * 2 + 1));
+  }
+  const w = windowedTranscript(log, { tailTurns: 25 });
+  assert.equal(w.entries.filter((e) => e.type === "user").length, 25);
+  assert.equal(w.earlier, 30);
 });

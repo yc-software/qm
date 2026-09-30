@@ -274,7 +274,12 @@ import {
   type DeviceFlowCutoverReset,
   type DeviceFlowCutoverStore,
 } from "./credentials/device-flow-cutover.ts";
-import { createFeatureFlagStore, type FeatureFlagRecord, type FeatureFlagStore } from "./feature-flags.ts";
+import {
+  createFeatureFlagStore,
+  externalAppSharingAllowed,
+  type FeatureFlagRecord,
+  type FeatureFlagStore,
+} from "./feature-flags.ts";
 import { makeRefresh, type OAuthClientResolver, type OAuthState } from "./connectors/oauth.ts";
 import {
   createConnectorClientResolver,
@@ -359,6 +364,7 @@ import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus
 import { createMemoryRunActivityStore, type RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
+import { startSession } from "./api/start-session.ts";
 import { createSwarmStore, type SwarmStorage } from "./swarms/swarm-store.ts";
 import { createSwarmService } from "./swarms/swarm-service.ts";
 import { createSlackCoreClient, type SlackAgentRequestContext, type SlackCoreClient } from "./api/slack-core-client.ts";
@@ -793,8 +799,7 @@ export function buildApp(
     config.orgId,
     configStore,
     acl,
-    config.securityScreenBackend !== "off" || Boolean(overrides.securityScreener),
-    config.securityScreenAllPostures,
+    config.securityScreen === "off" && overrides.securityScreener ? "enforce" : config.securityScreen,
   );
 
   const workspace = createLocalWorkspaceStore(config.dataDir);
@@ -1466,11 +1471,7 @@ export function buildApp(
     );
   });
 
-  if (
-    config.securityScreenBackend !== "model" &&
-    !config.securityScreenProxy?.shadow &&
-    !overrides.securityScreener?.shadow
-  ) {
+  if (config.securityScreen === "off" || config.securityScreenClassifier !== "model") {
     delete harness.models.screenSecurity;
   }
 
@@ -1740,12 +1741,14 @@ export function buildApp(
     advisoryLock,
     canReadScope,
     canWriteScope,
+    externalSharingAllowed: (ownerScopeId) => externalAppSharingAllowed(featureFlags, ownerScopeId),
     canManageEmail: async (email) => {
       await identity.refresh();
       return (
         identity.isInternal(identity.classify(email)) &&
         ((await directory.get(email))?.type === "internal" ||
           config.emailAuthPrincipals?.includes(email) ||
+          Boolean(config.emailAuthDomain && email.endsWith(`@${config.emailAuthDomain}`)) ||
           identity.externalMember(email) !== undefined)
       );
     },
@@ -1844,13 +1847,10 @@ export function buildApp(
   });
   const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals"), deliveries);
   let securityScreener = overrides.securityScreener;
-  if (!securityScreener && config.securityScreenBackend === "proxy") {
+  if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
     securityScreener = createSecurityScreenProxy({
-      provider: config.securityScreenProxy!.provider,
-      endpoint: config.securityScreenProxy!.endpoint,
-      token: config.securityScreenProxy!.token,
+      ...config.securityScreenProxy,
       timeoutMs: config.securityScreenTimeoutMs,
-      shadow: config.securityScreenProxy!.shadow,
     });
   }
   const layerEnv = config.layerEnv ?? {};
@@ -1899,6 +1899,10 @@ export function buildApp(
     advisoryLock,
     prepareRequest: prepareSessionRequest,
     authorize: (session, actorId) => canWriteScope(actorId, session.scopeId),
+    conversations: {
+      list: (actorId) => app.listSessions(actorId),
+      start: (actorId, input) => startSession(app, sessions, actorId, input),
+    },
     async validateRuntime(input, scope) {
       await resolveRuntimeChoiceDurable(
         configStore,

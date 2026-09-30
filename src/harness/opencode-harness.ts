@@ -467,25 +467,28 @@ async function terminateProcess(proc: ChildProcess): Promise<void> {
   }
 }
 
-export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harness {
-  const active = new Map<string, ActiveTurn>();
+export function openCodeToolDefinitions(
+  opts: OpenCodeHarnessOptions,
+): Array<{ name: string; description: string; parameters: unknown }> {
   const definitionRef: ToolContextRef = { current: null };
   const definitionTools = [
+    ...bridgedTools(definitionRef, { ...harnessToolOptions(opts), surfaceName: "web" }),
     ...bridgedTools(definitionRef, harnessToolOptions(opts)),
     ...bridgedTools(definitionRef, { ...harnessToolOptions(opts), surfaceTools: false }),
   ];
-  const definitions = [
+  return [
     ...new Map(
       definitionTools.map((tool) => [
         bridgeToolName(tool.name),
-        {
-          name: bridgeToolName(tool.name),
-          description: tool.description,
-          parameters: tool.parameters,
-        },
+        { name: bridgeToolName(tool.name), description: tool.description, parameters: tool.parameters },
       ]),
     ).values(),
   ];
+}
+
+export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harness {
+  const active = new Map<string, ActiveTurn>();
+  const definitions = openCodeToolDefinitions(opts);
   const bridgeSecret = randomBytes(32).toString("base64url");
   const configuredModel = opts.modelId;
   const resolveModelId = (scope?: ScopeId) =>

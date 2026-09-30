@@ -150,6 +150,7 @@ test(
        SELECT pg_terminate_backend(l.pid) AS ok
          FROM pg_locks l, k
         WHERE l.locktype = 'advisory' AND l.granted
+          AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
           AND l.classid::bigint = ((k.v >> 32) & 4294967295) AND l.objid::bigint = (k.v & 4294967295)`,
       );
       assert.equal(killed.length, 1, "found and terminated the holder's lock connection");

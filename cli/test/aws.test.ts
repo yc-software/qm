@@ -645,10 +645,10 @@ test("AWS routes security screen proxy configuration and its token only to core"
   const screened: QmConfig = {
     ...config,
     securityScreen: {
-      backend: "proxy",
+      mode: "enforce",
+      classifier: "proxy",
       provider: "example-screen",
       endpoint: "https://screen.example.test/classify",
-      rollout: "enforce",
     },
     secretEnv: { core: { SECURITY_SCREEN_PROXY_TOKEN: "EXAMPLE_SCREEN_TOKEN" } },
   };
@@ -657,10 +657,9 @@ test("AWS routes security screen proxy configuration and its token only to core"
       Object.entries(serviceEnvironment(screened, "core")).filter(([name]) => name.startsWith("SECURITY_SCREEN_")),
     ),
     {
-      SECURITY_SCREEN_BACKEND: "proxy",
+      SECURITY_SCREEN_CLASSIFIER: "proxy",
       SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
       SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
-      SECURITY_SCREEN_PROXY_ROLLOUT: "enforce",
     },
   );
   assert.deepEqual(

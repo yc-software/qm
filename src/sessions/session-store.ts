@@ -582,12 +582,15 @@ export function transcriptEntries(entries: readonly SessionEntry[]): SessionEntr
   return entries.filter((e) => e.type !== "soul");
 }
 
-export const TRANSCRIPT_BYTE_BUDGET = 400_000;
 export const ENTRY_STRING_BUDGET = 2_000;
 
 export type TranscriptEntry = SessionEntry & { truncated?: true };
 
 const PROJECTED_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["tool_call", "tool_result"]);
+const MODEL_ONLY_FIELDS: Partial<Record<EntryType, ReadonlySet<string>>> = {
+  user: new Set(["environment", "memoryRecall"]),
+  thinking: new Set(["thinkingSignature"]),
+};
 const WALK_DEPTH = 8;
 
 function shortenStrings(value: unknown, depth: number): { value: unknown; truncated: boolean } {
@@ -625,7 +628,16 @@ function postsToTheConversation(entry: SessionEntry): boolean {
   return entry.type === "tool_call" && p?.action === "post";
 }
 
+function withoutModelContext(entry: SessionEntry, fields: ReadonlySet<string>): TranscriptEntry {
+  const payload = entry.payload;
+  if (!payload || typeof payload !== "object" || !Object.keys(payload).some((k) => fields.has(k))) return entry;
+  const visible = Object.fromEntries(Object.entries(payload).filter(([k]) => !fields.has(k)));
+  return { ...entry, payload: visible, truncated: true };
+}
+
 function projectEntry(entry: SessionEntry): TranscriptEntry {
+  const modelOnly = MODEL_ONLY_FIELDS[entry.type];
+  if (modelOnly) return withoutModelContext(entry, modelOnly);
   if (!PROJECTED_TYPES.has(entry.type) || postsToTheConversation(entry)) return entry;
   const walked = shortenStrings(entry.payload, 0);
   return walked.truncated ? { ...entry, payload: walked.value, truncated: true } : entry;
@@ -672,21 +684,7 @@ export function windowedTranscript(
       }
     }
   }
-  const windowed = (cut > 0 ? entries.slice(cut) : entries).map(projectEntry);
-  if (window === undefined || window.sinceSeq !== undefined) return { entries: windowed, earlier: cut };
-  let spend = 0;
-  let from = windowed.length;
-  while (from > 0) {
-    const bytes = payloadBytes(windowed[from - 1]!.payload, 0);
-    if (spend + bytes > TRANSCRIPT_BYTE_BUDGET && from < windowed.length) break;
-    spend += bytes;
-    from--;
-  }
-  if (from > 0) {
-    const boundary = windowed.findIndex((e, i) => i >= from && e.type === "user");
-    if (boundary > 0) from = boundary;
-  }
-  return { entries: from > 0 ? windowed.slice(from) : windowed, earlier: cut + from };
+  return { entries: (cut > 0 ? entries.slice(cut) : entries).map(projectEntry), earlier: cut };
 }
 
 export function isOverheardEntry(e: Pick<SessionEntry, "type" | "payload">): boolean {

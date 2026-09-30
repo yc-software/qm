@@ -40,6 +40,9 @@ import {
   TAIL_TURNS,
   webFetch,
   withBase,
+  type CoreSession,
+  type PendingApproval,
+  type TranscriptPage,
 } from "./core-bridge";
 import { seedRuntimeConfig } from "./runtime-config-store";
 import { errMessage, swallow } from "../../chassis/src/errors";
@@ -49,7 +52,7 @@ import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection } from "./composer";
 import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
 import { clearAllDrafts, newChatDraftKey, saveDraft, storedDraft } from "./drafts";
-import { deepLinkPath, isPlainLeftClick, parseDeepLink, UI_BASE } from "./deep-link";
+import { deepLinkPath, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
 import {
   adoptRemoteSplit,
   beginPaneKindDrag,
@@ -1012,6 +1015,50 @@ export async function bootSafely(): Promise<void> {
   }
 }
 
+async function showLinkedSession(
+  linked: CoreSession,
+  transcript: Promise<TranscriptPage | null>,
+  seq: number | null,
+  approvals?: Promise<{ approvals: PendingApproval[] } | null>,
+): Promise<void> {
+  if (!sessionsState.list.some((s) => s.id === linked.id)) sessionsState.list = [linked, ...sessionsState.list];
+  revealSessionSurface(linked);
+  await openSession(linked, transcript, approvals);
+  if (seq !== null)
+    requestAnimationFrame(() => {
+      for (const conversation of allConversations())
+        if (conversation.state.sessionId === linked.id) conversation.revealEntry(seq);
+    });
+}
+
+// Session links nobody else handled (chat messages, markdown) switch the view instead of opening a new
+// tab or desktop window. Modified clicks fall through, so cmd/ctrl-click still opens a new tab.
+document.addEventListener("click", (e) => {
+  if (!shellMounted || e.defaultPrevented || !isPlainLeftClick(e)) return;
+  const anchor = e.composedPath().find((node): node is HTMLAnchorElement => node instanceof HTMLAnchorElement);
+  if (!anchor?.href || anchor.hasAttribute("download")) return;
+  const target = sessionLinkTarget(anchor.href, location.origin, UI_BASE);
+  if (!target) return;
+  e.preventDefault();
+  const open = allConversations().find(
+    (conversation) => conversation.state.sessionId === target.session && conversation.state.host?.isConnected,
+  );
+  if (open) {
+    if (target.seq !== null) open.revealEntry(target.seq);
+    return;
+  }
+  const transcript = loadMessageTranscript(
+    (window) => fetchTranscript(target.session, window),
+    target.seq,
+    TAIL_TURNS,
+  ).catch(() => null);
+  void (async () => {
+    const linked = sessionsState.list.find((s) => s.id === target.session) ?? (await transcript)?.session;
+    if (linked) await showLinkedSession(linked, transcript, target.seq);
+    else location.assign(anchor.href);
+  })();
+});
+
 export async function boot(): Promise<void> {
   if (new URLSearchParams(location.search).get("themeOnly") === "1") return;
   captureConnectionReturn(location.href);
@@ -1105,14 +1152,7 @@ export async function boot(): Promise<void> {
     const linked = (await transcript)?.session;
     if (linked) {
       exitSplitIfActive();
-      if (!sessionsState.list.some((s) => s.id === linked.id)) sessionsState.list = [linked, ...sessionsState.list];
-      revealSessionSurface(linked);
-      await openSession(linked, transcript, approvalsPrefetch ?? undefined);
-      if (wantedSeq !== null)
-        requestAnimationFrame(() => {
-          for (const conversation of allConversations())
-            if (conversation.state.sessionId === linked.id) conversation.revealEntry(wantedSeq);
-        });
+      await showLinkedSession(linked, transcript, wantedSeq, approvalsPrefetch ?? undefined);
       return;
     }
     await sessions;

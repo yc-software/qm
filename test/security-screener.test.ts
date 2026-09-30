@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSecurityScreenProxy, runShadowScreen } from "../src/security/security-screener.ts";
+import { createSecurityScreenProxy } from "../src/security/security-screener.ts";
+import { createSecurityClassifier } from "../src/core/orchestrator/security-screen.ts";
+import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
+import type { AuditEvent } from "../src/audit/audit-log.ts";
 
 test("the security screen proxy sends the neutral classifier contract and maps its scores", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -13,7 +16,6 @@ test("the security screen proxy sends the neutral classifier contract and maps i
     endpoint: "https://screen.example.test/classify",
     token: "test-token",
     timeoutMs: 50,
-    shadow: true,
     fetch: async (input, init) => {
       calls.push({ url: String(input), init: init! });
       return new Response(JSON.stringify(results.shift()), { status: 200 });
@@ -32,7 +34,6 @@ test("the security screen proxy sends the neutral classifier contract and maps i
   assert.deepEqual(malicious.verdict, { decision: "strict", reason: "example-screen:system_compromise" });
   assert.equal(malicious.score, 0.96);
   assert.equal(screener.provider, "example-screen");
-  assert.equal(screener.shadow, true);
   assert.deepEqual(
     calls.map((call) => call.url),
     ["https://screen.example.test/classify", "https://screen.example.test/classify"],
@@ -63,7 +64,6 @@ test("the security screen proxy classifies long input in overlapping bounded win
     endpoint: "https://screen.example.test/classify",
     token: "test-token",
     timeoutMs: 500,
-    shadow: false,
     fetch: async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as (typeof bodies)[number];
       bodies.push(body);
@@ -127,7 +127,6 @@ test("the security screen proxy keeps Unicode chunk boundaries well formed", asy
     endpoint: "https://screen.example.test/classify",
     token: "test-token",
     timeoutMs: 50,
-    shadow: false,
     fetch: async (_input, init) => {
       chunks.push((JSON.parse(String(init?.body)) as { text: string }).text);
       return new Response(JSON.stringify({ score: 0.1, threshold: 0.7 }));
@@ -145,19 +144,6 @@ test("the security screen proxy keeps Unicode chunk boundaries well formed", asy
   assert.equal(chunks[1]!.at(-1), "\ufffd");
 });
 
-test("shadow observation never delays the authoritative classifier", async () => {
-  const never = new Promise<never>(() => {});
-  const verdict = await Promise.race([
-    runShadowScreen(
-      async () => ({ decision: "auto" as const }),
-      () => never,
-      () => assert.fail("an unfinished shadow call must not report a comparison"),
-    ),
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("shadow delayed authority")), 50)),
-  ]);
-  assert.deepEqual(verdict, { decision: "auto" });
-});
-
 test("the security screen proxy rejects malformed responses and HTTP failures", async () => {
   for (const response of [
     new Response("not json"),
@@ -171,7 +157,6 @@ test("the security screen proxy rejects malformed responses and HTTP failures", 
       endpoint: "https://screen.example.test/classify",
       token: "test-token",
       timeoutMs: 50,
-      shadow: false,
       fetch: async () => response,
     });
     await assert.rejects(
@@ -188,7 +173,6 @@ test("the security screen proxy retries throttled requests within its deadline",
     endpoint: "https://screen.example.test/classify",
     token: "test-token",
     timeoutMs: 50,
-    shadow: false,
     fetch: async () => {
       calls += 1;
       if (calls === 1) return new Response("", { status: 429, headers: { "retry-after": "0" } });
@@ -205,7 +189,6 @@ test("the security screen proxy retries throttled requests within its deadline",
     endpoint: "https://screen.example.test/classify",
     token: "test-token",
     timeoutMs: 10,
-    shadow: false,
     fetch: async () => {
       bareCalls += 1;
       return new Response("", { status: 429 });
@@ -229,7 +212,6 @@ test("the security screen proxy aborts sibling chunks after a terminal failure",
     endpoint: "https://screen.example.test/classify",
     token: "test-token",
     timeoutMs: 100,
-    shadow: false,
     fetch: async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { metadata: { qm: { chunk_index: number } } };
       const index = body.metadata.qm.chunk_index;
@@ -259,7 +241,6 @@ test("the security screen proxy bounds response size and request time", async ()
     endpoint: "https://screen.example.test/classify",
     token: "test-token",
     timeoutMs: 50,
-    shadow: false,
     fetch: async () =>
       new Response(
         new ReadableStream({
@@ -280,7 +261,6 @@ test("the security screen proxy bounds response size and request time", async ()
     endpoint: "https://screen.example.test/classify",
     token: "test-token",
     timeoutMs: 50,
-    shadow: false,
     fetch: async () =>
       new Response(
         new ReadableStream({
@@ -299,7 +279,6 @@ test("the security screen proxy bounds response size and request time", async ()
     endpoint: "https://screen.example.test/classify",
     token: "test-token",
     timeoutMs: 50,
-    shadow: false,
     fetch: async () => new Response("x".repeat(64 * 1024 + 1)),
   });
   await assert.rejects(
@@ -312,7 +291,6 @@ test("the security screen proxy bounds response size and request time", async ()
     endpoint: "https://screen.example.test/classify",
     token: "test-token",
     timeoutMs: 5,
-    shadow: false,
     fetch: async (_input, init) =>
       new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
@@ -335,7 +313,6 @@ test("the security screen proxy accepts concurrent classifications and rejects o
     endpoint: "https://screen.example.test/classify",
     token: "test-token",
     timeoutMs: 50,
-    shadow: false,
     fetch: async () => {
       calls += 1;
       await pending;
@@ -354,25 +331,43 @@ test("the security screen proxy accepts concurrent classifications and rejects o
   await Promise.all([first, second, third]);
 });
 
-test("the security screen proxy drops excess detached shadow work", async () => {
+test("observed screening returns immediately and audits each verdict once it settles", async () => {
   let release!: () => void;
   const pending = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const screener = createSecurityScreenProxy({
-    provider: "example-screen",
-    endpoint: "https://screen.example.test/classify",
-    token: "test-token",
-    timeoutMs: 50,
-    shadow: true,
-    fetch: async () => {
-      await pending;
-      return new Response(JSON.stringify({ score: 0.1, threshold: 0.7 }));
+  const events: AuditEvent[] = [];
+  const classify = createSecurityClassifier({
+    securityScreener: {
+      provider: "example-screen",
+      async classify() {
+        await pending;
+        return { verdict: { decision: "strict", reason: "example-screen:injection" }, score: 0.9, threshold: 0.5 };
+      },
     },
-  });
-  const first = screener.classify({ payload: "one", hook: "user_input" });
-  const second = screener.classify({ payload: "two", hook: "user_input" });
-  await assert.rejects(screener.classify({ payload: "three", hook: "user_input" }), /shadow capacity reached/);
+    harness: { models: {} },
+    auditLog: { record: (event: AuditEvent) => events.push(event) },
+  } as unknown as OrchestratorDeps);
+  const verdicts = await Promise.all(
+    Array.from({ length: 20 }, (_, i) =>
+      classify(JSON.stringify([{ source: "webhook", content: `hostile ${i}` }]), "U1", "personal:U1", undefined, {
+        mode: "observe",
+        sessionId: "s1",
+        runId: "r1",
+      }),
+    ),
+  );
+  assert.ok(verdicts.every((verdict) => verdict?.decision === "auto" && !verdict.unscreened));
+  assert.equal(events.length, 0);
   release();
-  await Promise.all([first, second]);
+  const deadline = Date.now() + 2_000;
+  while (events.length < 20 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
+  assert.ok(events.every((event) => event.status === "would_block"));
+  assert.equal(events.length, 20);
+  const detail = JSON.parse(events.at(-1)!.detail!) as Record<string, unknown>;
+  assert.equal(detail.sessionId, "s1");
+  assert.equal(detail.runId, "r1");
+  assert.deepEqual(detail.sources, ["webhook"]);
+  assert.equal(detail.score, 0.9);
+  assert.doesNotMatch(JSON.stringify(events), /hostile/);
 });

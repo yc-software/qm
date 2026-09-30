@@ -1,3 +1,4 @@
+import { EXTERNAL_APP_SHARING_OFF, externalAppSharingAllowed } from "../../feature-flags.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -835,7 +836,10 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     return true;
   }
   const deployment = await app.getDeployment(slug).catch(() => null);
-  const isPublic = deployment?.public === true;
+  const externalAllowed = deployment
+    ? await externalAppSharingAllowed(deps.featureFlags, deployment.ownerScopeId)
+    : false;
+  const isPublic = deployment?.public === true && externalAllowed;
   const sessionSecret = deps.deployAppsSessionSecret;
   const loginUrl = deps.deployAppsLoginUrl;
   const wantsHtml = ctx.method === "GET" && String(req.headers.accept ?? "").includes("text/html");
@@ -882,6 +886,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     if (session?.appOnly) {
       await deps.identity?.refresh();
       if (
+        externalAllowed &&
         deps.identity?.deactivationSource(sub) !== "manual" &&
         (await app.deploymentGrantees(deployment.id)).some(
           (grant) => grant.scope === scopeId("personal", sub.trim().toLowerCase()) && grant.permission === "read",
@@ -1531,8 +1536,10 @@ export async function getDeploymentShares(ctx: ApiCtx): Promise<void> {
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
   if (deployment.ownerScopeId !== `personal:${capability.actorId}`)
     return sendJson(res, 403, { error: "forbidden", message: "Only the owner can edit app permissions." });
+  const externalSharing = await externalAppSharingAllowed(ctx.deps.featureFlags, deployment.ownerScopeId);
   return sendJson(res, 200, {
-    public: deployment.public === true,
+    public: deployment.public === true && externalSharing,
+    externalSharing,
     grantees: await app.deploymentGrantees(deployment.id),
   });
 }
@@ -1574,6 +1581,9 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       } else if (/only the owner/.test(msg)) {
         status = 403;
         error = "forbidden";
+      } else if (msg === EXTERNAL_APP_SHARING_OFF) {
+        status = 403;
+        error = "external_sharing_disabled";
       }
       return sendJson(res, status, { error, message: msg });
     }
@@ -1625,16 +1635,19 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       access,
       reach,
       ...(invite ? { invitation: invite.invitation } : {}),
-      public: deployment?.public === true,
+      public:
+        deployment?.public === true &&
+        (await externalAppSharingAllowed(ctx.deps.featureFlags, deployment.ownerScopeId)),
       grantees,
     });
   } catch (e) {
     const msg = errMessage(e);
     let status = 400;
     if (/no such app/.test(msg)) status = 404;
-    else if (/only the owner/.test(msg)) status = 403;
+    else if (/only the owner/.test(msg) || msg === EXTERNAL_APP_SHARING_OFF) status = 403;
     let error = "share_failed";
     if (status === 404) error = "not_found";
+    else if (msg === EXTERNAL_APP_SHARING_OFF) error = "external_sharing_disabled";
     else if (status === 403) error = "forbidden";
     return sendJson(res, status, { error, message: msg });
   }

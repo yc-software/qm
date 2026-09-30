@@ -7,6 +7,7 @@ export const FEATURE_NAMES = [
   "responsive_spine",
   "inbox_loops",
   "slack_loading_indicator",
+  "external_app_sharing",
 ] as const;
 export type FeatureName = (typeof FEATURE_NAMES)[number];
 
@@ -54,4 +55,14 @@ export function createFeatureFlagStore(
       return record;
     },
   };
+}
+
+export const EXTERNAL_APP_SHARING_OFF =
+  "sharing apps outside the organization is turned off; an org admin can enable the external_app_sharing flag";
+
+export function externalAppSharingAllowed(
+  flags: FeatureFlagStore | undefined,
+  ownerScopeId: ScopeId,
+): Promise<boolean> {
+  return flags ? flags.enabled("external_app_sharing", ownerScopeId) : Promise.resolve(false);
 }
