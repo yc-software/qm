@@ -22,6 +22,8 @@ describe("a published app's broker token follows the app it was minted for, on e
   let base: string;
   let deploymentsAllowed = true;
   let scopeAuthorized = true;
+  let offboarded = false;
+  const authorized: unknown[] = [];
   const deployments = new Map<string, Deployment>();
   const running = (id: string, createdBy = "publisher"): Deployment => ({
     id,
@@ -65,10 +67,17 @@ describe("a published app's broker token follows the app it was minted for, on e
 
   before(async () => {
     const app = {
-      authorizesCapabilityScope: async () => scopeAuthorized,
+      authorizesCapabilityScope: async (claims: unknown) => {
+        authorized.push(claims);
+        return scopeAuthorized;
+      },
       getDeployment: async (id: string) => deployments.get(id) ?? null,
     } as unknown as App;
     const deps = {
+      identity: {
+        refresh: async () => {},
+        classify: () => ({ type: offboarded ? "offboarded" : "internal" }),
+      },
       serviceCreds: {
         getServiceCredentialSecret: async () => ({
           slug: "sample-api",
@@ -130,5 +139,42 @@ describe("a published app's broker token follows the app it was minted for, on e
     } finally {
       scopeAuthorized = true;
     }
+  });
+
+  it("is refused once the publisher is offboarded", async () => {
+    deployments.set("d1", running("d1"));
+    offboarded = true;
+    try {
+      assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 401, git: 401 });
+    } finally {
+      offboarded = false;
+    }
+  });
+
+  it("checks scope membership with the token's bot and member claims on both routes", async () => {
+    const token = () =>
+      mintCapabilityToken(
+        {
+          actorId: "B1",
+          scopeId: "channel:C1",
+          aud: CREDENTIAL_BROKER_AUD,
+          credentials: ["sample-api"],
+          botActor: true,
+          liveActor: true,
+          members: [{ id: "B1", type: "internal" }],
+          exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
+        },
+        SECRET,
+      );
+    authorized.length = 0;
+    assert.deepEqual(await statuses(token), { broker: 200, git: 200 });
+    const expected = {
+      actorId: "B1",
+      scopeId: "channel:C1",
+      botActor: true,
+      liveActor: true,
+      members: [{ id: "B1", type: "internal" }],
+    };
+    assert.deepEqual(authorized, [expected, expected]);
   });
 });
