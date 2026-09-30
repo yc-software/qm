@@ -398,7 +398,7 @@ function ledgerRows(loop: LoopView, items: LoopItemView[]): TemplateResult[] {
 
 function priorityTpl(loop: LoopView, item: LoopItemView): TemplateResult | typeof nothing {
   const priority = item.triage?.priority;
-  if (loop.triage?.prioritize?.enabled !== true || !priority || priority === "normal") return nothing;
+  if (loop.triage?.prioritize?.enabled !== true || (priority !== "urgent" && priority !== "high")) return nothing;
   const reason = item.triage?.pinned?.includes("priority") ? "Set by you" : item.triage?.reason;
   return html`<span class="inbox-priority inbox-priority-${priority}" ${reason ? tip(reason) : nothing}
     >${priority[0]!.toUpperCase()}${priority.slice(1)}</span

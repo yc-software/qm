@@ -686,9 +686,7 @@ function usesOutputReview(item: InboxItem): boolean {
 function reviewTpl(item: InboxItem): TemplateResult {
   if (!item.detailLoaded) return html`<div class="empty compact">Loading review…</div>`;
   const outputs = item.outputs ?? [];
-  const controls = triageControlsTpl(item);
   return html`<div class="inbox-generic-review">
-    ${controls === nothing ? nothing : html`<div class="inbox-item-detail-actions">${controls}</div>`}
     <div class="inbox-draft-head"><span>${inboxViewName(item.loopId)}</span><span>${item.reviewState}</span></div>
     <p>${item.snippet}</p>
     ${!outputs.length && item.proposalData ? html`<pre class="inbox-proposal-data">${JSON.stringify(item.proposalData, null, 2)}</pre>` : nothing}
@@ -1482,7 +1480,7 @@ function loopTriage(item: InboxItem): { prioritize: boolean; consolidate: boolea
 }
 
 function priorityMarkTpl(item: InboxItem): TemplateResult | typeof nothing {
-  if (!item.priority || item.priority === "normal" || item.status !== "open") return nothing;
+  if ((item.priority !== "urgent" && item.priority !== "high") || item.status !== "open") return nothing;
   const reason = item.priorityPinned ? "Set by you" : item.priorityReason;
   return html`<span class="inbox-priority inbox-priority-${item.priority}" ${reason ? tip(reason) : nothing}
     >${PRIORITY_LABELS[item.priority]}</span
@@ -1493,12 +1491,11 @@ function triageControlsTpl(item: InboxItem): TemplateResult | typeof nothing {
   if (item.status !== "open") return nothing;
   const { prioritize } = loopTriage(item);
   if (!prioritize && !item.groupId) return nothing;
-  return html`<span class="inbox-triage-controls">
+  return html`<span class="inbox-triage-controls" ${prioritize ? tip("Priority") : nothing}>
     ${
       prioritize
         ? fieldSelect({
-            className: "inbox-priority-control",
-            compact: true,
+            className: "inbox-filter-control inbox-priority-control",
             ariaLabel: "Priority",
             value: item.priority ?? "normal",
             disabled: acting.has(item.id),
@@ -1676,7 +1673,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
           ? html`<div class="inbox-item-detail">
               ${
                 usesOutputReview(item)
-                  ? reviewTpl(item)
+                  ? html`${triageControlsTpl(item) === nothing ? nothing : html`<div class="inbox-item-detail-actions">${triageControlsTpl(item)}</div>`}${reviewTpl(item)}`
                   : html`${handled ? nothing : html`<div class="inbox-item-detail-actions">${triageControlsTpl(item)}${dismissItemTpl(item)}</div>`}
                     ${contextTpl(item)} ${draftMessageTpl(item)} ${handled ? handledNoteTpl(item) : chatTpl(item, true)}`
               }
@@ -2046,7 +2043,7 @@ function itemPageTpl(item: InboxItem): TemplateResult {
         <h1 class="pane-title">
           <span class="inbox-item-glyph">${sourceGlyph(item)}</span><span>${heading}</span>
           <span class="inbox-item-head-meta">
-            ${participantsTpl(item)} ${priorityMarkTpl(item)} ${itemSideMark(item, handled)}
+            ${participantsTpl(item)} ${itemSideMark(item, handled)}
             <span class="inbox-item-time" title=${fmtClock(item.receivedAt)}>${relTime(item.receivedAt)}</span>
           </span>
         </h1>

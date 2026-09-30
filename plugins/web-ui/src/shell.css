@@ -10035,19 +10035,19 @@ h3.ambient-field-label {
 }
 .inbox-priority {
   flex: none;
-  border: 1px solid currentColor;
-  border-radius: 999px;
-  padding: 0 6px;
-  font-size: 11px;
-  line-height: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   white-space: nowrap;
   color: var(--muted-foreground);
+  font-size: var(--font-12-5);
 }
-.inbox-priority-urgent {
-  color: var(--destructive);
-}
-.inbox-priority-high {
-  color: var(--warning);
+.inbox-priority-urgent::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--destructive) 70%, transparent);
 }
 .inbox-group-count {
   flex: none;
@@ -10064,10 +10064,20 @@ h3.ambient-field-label {
 }
 .inbox-triage-controls {
   display: inline-flex;
+  align-self: flex-start;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   flex: none;
   white-space: nowrap;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+}
+.field-select.inbox-filter-control.inbox-priority-control > select {
+  padding-block: 6px;
+  color: var(--muted-foreground);
+}
+.inbox-priority-control:hover > select:not(:disabled) {
+  color: var(--foreground);
 }
 .inbox-item-head-copy {
   flex: 1;
