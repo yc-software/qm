@@ -631,36 +631,37 @@ export function createDirectory(deps: {
     publishMembers?: ActorAssertion[];
     slackIdsByPrincipal?: Map<string, string>;
   }> {
+    let membership: Awaited<ReturnType<typeof resolveChannelMembership>>;
     try {
       const memberIds = await fetchChannelMemberIds(client, channel);
-      const membership = await resolveChannelMembership({
+      membership = await resolveChannelMembership({
         memberIds,
         actor,
         actorSlackId,
         info,
         classify: (id) => classifyUserCached(client, id),
       });
-      if (CORE_SINGLETON && !deps.externalAccess && !actor.isBot && !info?.is_mpim) {
-        if (!info?.name || typeof info.is_private !== "boolean" || info.is_member === false || observedAt === undefined)
-          return { audience: [actor, externalMarker()] };
-        if (membership.publishMembers) {
-          const applied = await core.pushDirectory({
-            channels: [{ channelId: channel, name: info.name, isPrivate: info.is_private }],
-            channelMembers: membership.publishMembers.map((member) => ({
-              channelId: channel,
-              principalId: member.externalId,
-            })),
-            channelRosterIds: [channel],
-            channelsSyncedAt: observedAt,
-            partialChannels: true,
-          });
-          if (!applied) return { audience: [actor, externalMarker()] };
-        }
-      }
-      return membership;
     } catch {
       return { audience: [actor, externalMarker()] };
     }
+    if (CORE_SINGLETON && !deps.externalAccess && !actor.isBot && !info?.is_mpim) {
+      if (!info?.name || typeof info.is_private !== "boolean" || info.is_member === false || observedAt === undefined)
+        return { audience: [actor, externalMarker()] };
+      if (membership.publishMembers) {
+        const applied = await core.pushDirectory({
+          channels: [{ channelId: channel, name: info.name, isPrivate: info.is_private }],
+          channelMembers: membership.publishMembers.map((member) => ({
+            channelId: channel,
+            principalId: member.externalId,
+          })),
+          channelRosterIds: [channel],
+          channelsSyncedAt: observedAt,
+          partialChannels: true,
+        });
+        if (!applied) throw new Error("Slack channel membership was not persisted before admission");
+      }
+    }
+    return membership;
   }
 
   async function resolveAutoIdentityMode(client: any): Promise<SlackIdentityMode> {
