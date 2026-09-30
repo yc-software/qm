@@ -97,6 +97,7 @@ import {
   makeOpenerStreamFn,
   makeRunResumeStreamFn,
   resolveApproval,
+  unresolvedApprovals,
   runApprovalTurn,
   type RunPoll,
   TAIL_TURNS,
@@ -817,7 +818,7 @@ export function createChatSurface(
         if (!chatState.resolvingApprovals.has(approval.requestId)) byId.set(approval.requestId, approval);
       }
     }
-    return [...byId.values()];
+    return unresolvedApprovals([...byId.values()]);
   }
 
   function hasUnresolvedApproval(): boolean {
@@ -827,9 +828,7 @@ export function createChatSurface(
   async function syncPendingApprovals(agent: Agent, messages = agent.state.messages): Promise<void> {
     const id = chatState.sessionId;
     if (!id || agent !== chatState.agent) return;
-    const r = await api<{ approvals: PendingApproval[] }>(`/api/sessions/${encodeURIComponent(id)}/approvals`).catch(
-      () => null,
-    );
+    const r = await fetchSessionApprovals(id);
     if (!r || id !== chatState.sessionId || agent !== chatState.agent) return;
     for (const message of messages) delete (message as AssistantWork).work?.pendingApprovals;
     attachPendingApprovals(messages, r.approvals ?? [], transcriptModel());
@@ -1463,6 +1462,10 @@ export function createChatSurface(
   function drawActiveChat(agent = chatState.agent, opts: { forceScroll?: boolean } = {}): void {
     if (!agent || agent !== chatState.agent || !chatState.host || (!ctx.inbox && appState.currentView !== "chats"))
       return;
+    for (const message of agent.state.messages) {
+      const work = (message as AssistantWork).work;
+      if (work?.pendingApprovals) work.pendingApprovals = unresolvedApprovals(work.pendingApprovals);
+    }
     adoptActiveSessionFromList(agent);
     if (!ctx.visible()) {
       postCurrentPaneState();
@@ -2541,6 +2544,7 @@ export function createChatSurface(
     const now = Date.now();
     const elapsed = goalElapsedLabel(row.startedAt, row.endedAt ?? now);
     const peeking = subagentUi.peekId === row.session.id;
+    const approvals = unresolvedApprovals(subagentUi.approvals.get(row.session.id) ?? []);
     const title = row.session.title?.trim() || "Subagent";
     return html`<div
       class="subagent-row ${row.state} ${peeking ? "peeking" : ""}"
@@ -2569,8 +2573,8 @@ export function createChatSurface(
         Open
       </button>
       ${
-        subagentUi.approvals.get(row.session.id)?.length
-          ? ctx.composer.composerApprovalPanel(subagentUi.approvals.get(row.session.id)!, (decision) =>
+        approvals.length
+          ? ctx.composer.composerApprovalPanel(approvals, (decision) =>
               resolveSubagentApproval(row.session.id, decision),
             )
           : nothing

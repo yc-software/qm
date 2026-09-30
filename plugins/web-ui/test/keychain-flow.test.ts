@@ -209,8 +209,8 @@ test("an inline credential card decides through the keychain approval route, not
   try {
     const { resolveApproval } = await import("../src/core-bridge.ts");
     assert.equal(await resolveApproval({ requestId: "keychain:a1", approved: true, scope: "always" }), "");
-    await resolveApproval({ requestId: "keychain:a1", approved: true, scope: "once" });
-    await resolveApproval({ requestId: "keychain:a1", approved: false });
+    await resolveApproval({ requestId: "keychain:a2", approved: true, scope: "once" });
+    await resolveApproval({ requestId: "keychain:a3", approved: false });
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -218,8 +218,8 @@ test("an inline credential card decides through the keychain approval route, not
     calls.map((c) => [c.url.replace(/^.*(\/api\/)/, "$1"), (c.body as { decision: string }).decision]),
     [
       ["/api/keychain/approvals/a1", "standing"],
-      ["/api/keychain/approvals/a1", "once"],
-      ["/api/keychain/approvals/a1", "deny"],
+      ["/api/keychain/approvals/a2", "once"],
+      ["/api/keychain/approvals/a3", "deny"],
     ],
   );
 });
