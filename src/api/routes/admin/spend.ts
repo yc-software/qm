@@ -1,14 +1,17 @@
 import { cacheHitRatio } from "../../../admin/metrics-sink.ts";
 import { canonicalPerson } from "../../../directory/person.ts";
 import { parseScopeId, personalScope, type ScopeId } from "../../../types.ts";
-import type { SessionOrigin, SpendRow } from "../../../sessions/session-store.ts";
+import type { SessionOrigin, SessionStore, SpendRow } from "../../../sessions/session-store.ts";
+import { constantTimeEqual } from "../../../util/crypto.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import { discoverScopes } from "./common.ts";
-import { type ApiCtx } from "../route.ts";
+import { type ApiCtx, type BaseCtx } from "../route.ts";
 
 const DAY_MS = 86_400_000;
 const DEFAULT_WINDOW_DAYS = 30;
+const EXPORT_MAX_DAYS = 93;
+const SPEND_EXPORT_PRINCIPAL = "spend-export";
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const EPOCH_MS = /^\d+$/;
 const CSV_FORMULA_LEAD = /^[=+\-@\t\r]/;
@@ -76,6 +79,16 @@ export interface SpendReport {
   people: SpendEntity[];
   scopes: SpendEntity[];
   models: ({ model: string | null } & SpendTotals)[];
+}
+
+export interface SpendExportRow extends Tally {
+  day: string;
+  scopeId: ScopeId;
+  kind: string;
+  principalId: string | null;
+  displayName: string;
+  origin: OriginBucket;
+  model: string | null;
 }
 
 export interface SpendSummaryOptions {
@@ -172,12 +185,26 @@ function totalsOf(byOrigin: Record<OriginBucket, Tally>): SpendTotals {
   };
 }
 
+function resolveScope(scopeId: ScopeId): { key: ScopeId; person: string | null; kind: string } {
+  const parsed = parseScopeId(scopeId);
+  const person = parsed.kind === "personal" && parsed.ref ? canonicalPerson(parsed.ref) : null;
+  return {
+    key: person === null ? scopeId : personalScope(person),
+    person,
+    kind: person === null ? (parsed.kind ?? "unknown") : "person",
+  };
+}
+
+function displayNameOf(sources: readonly ScopeId[], label: (scopeId: ScopeId) => string): string {
+  return sources.map(label).find((name) => name) ?? "";
+}
+
 function entityOf(acc: EntityAccumulator, label: (scopeId: ScopeId) => string): SpendEntity {
   return {
     principalId: acc.principalId,
     scopeId: acc.scopeId,
     kind: acc.kind,
-    displayName: acc.sources.map(label).find((name) => name) ?? "",
+    displayName: displayNameOf(acc.sources, label),
     ...totalsOf(acc.byOrigin),
   };
 }
@@ -208,18 +235,10 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
   const modelBuckets = new Map<string | null, Record<OriginBucket, Tally>>();
   const orgOrigins = emptyOrigins();
   for (const row of rows) {
-    const parsed = parseScopeId(row.scopeId);
-    const person = parsed.kind === "personal" && parsed.ref ? canonicalPerson(parsed.ref) : null;
-    const key = person === null ? row.scopeId : personalScope(person);
+    const { key, person, kind } = resolveScope(row.scopeId);
     let acc = accumulators.get(key);
     if (!acc) {
-      acc = {
-        principalId: person,
-        scopeId: key,
-        kind: person === null ? (parsed.kind ?? "unknown") : "person",
-        sources: [],
-        byOrigin: emptyOrigins(),
-      };
+      acc = { principalId: person, scopeId: key, kind, sources: [], byOrigin: emptyOrigins() };
       accumulators.set(key, acc);
     }
     if (!acc.sources.includes(row.scopeId)) acc.sources.push(row.scopeId);
@@ -290,6 +309,43 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
   };
 }
 
+export function spendExportRows(rows: readonly SpendRow[], label: (scopeId: ScopeId) => string): SpendExportRow[] {
+  const sources = new Map<ScopeId, ScopeId[]>();
+  const merged = new Map<string, SpendExportRow>();
+  for (const row of rows) {
+    const { key: scopeId, person, kind } = resolveScope(row.scopeId);
+    const seen = sources.get(scopeId);
+    if (!seen) sources.set(scopeId, [row.scopeId]);
+    else if (!seen.includes(row.scopeId)) seen.push(row.scopeId);
+    const origin = originBucket(row.origin);
+    const key = JSON.stringify([row.day, scopeId, origin, row.model]);
+    let out = merged.get(key);
+    if (!out) {
+      out = {
+        day: isoDay(row.day),
+        scopeId,
+        kind,
+        principalId: person,
+        displayName: "",
+        origin,
+        model: row.model,
+        ...emptyTally(),
+      };
+      merged.set(key, out);
+    }
+    addRow(out, row);
+  }
+  return [...merged.values()]
+    .map((out) => ({ ...out, displayName: displayNameOf(sources.get(out.scopeId) ?? [], label) }))
+    .sort(
+      (a, b) =>
+        a.day.localeCompare(b.day) ||
+        a.scopeId.localeCompare(b.scopeId) ||
+        ORIGIN_BUCKETS.indexOf(a.origin) - ORIGIN_BUCKETS.indexOf(b.origin) ||
+        (a.model ?? "").localeCompare(b.model ?? ""),
+    );
+}
+
 function csvCell(value: string | number | null): string {
   if (value === null) return "";
   if (typeof value === "number") return String(value);
@@ -329,14 +385,61 @@ export function spendCsv(report: SpendReport, breakdown: SpendBreakdown = "entit
   return lines.join("\r\n") + "\r\n";
 }
 
-function parseBound(raw: string): number | null {
+function parseDay(raw: string): number | null {
   const value = raw.trim();
-  let parsed = NaN;
-  if (DATE_ONLY.test(value)) {
-    parsed = Date.parse(`${value}T00:00:00.000Z`);
-    if (!Number.isFinite(parsed) || new Date(parsed).toISOString().slice(0, 10) !== value) return null;
-  } else if (EPOCH_MS.test(value)) parsed = Number(value);
+  if (!DATE_ONLY.test(value)) return null;
+  const parsed = Date.parse(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === value ? parsed : null;
+}
+
+function parseBound(raw: string): number | null {
+  const day = parseDay(raw);
+  if (day !== null || !EPOCH_MS.test(raw.trim())) return day;
+  const parsed = Number(raw.trim());
   return Number.isSafeInteger(parsed) && Number.isFinite(new Date(parsed).getTime()) ? parsed : null;
+}
+
+async function loadSpendRows(
+  sessions: SessionStore,
+  range: { from: number; to: number },
+): Promise<{ rows: SpendRow[]; asOf?: number }> {
+  return sessions.spendReport ? sessions.spendReport(range) : { rows: await sessions.spendRollup(range) };
+}
+
+export async function spendExport(ctx: BaseCtx): Promise<void> {
+  const { req, res, app, deps, url } = ctx;
+  const token = deps.spendExportToken;
+  if (!token) return sendJson(res, 404, { error: "not_found" });
+  const authorization = req.headers.authorization;
+  if (typeof authorization !== "string" || !constantTimeEqual(authorization, `Bearer ${token}`))
+    return sendJson(res, 401, { error: "unauthorized" });
+  if (!deps.sessions) return sendJson(res, 503, { error: "spend_unavailable" });
+  const from = parseDay(url.searchParams.get("from") ?? "");
+  const to = parseDay(url.searchParams.get("to") ?? "");
+  if (from === null || to === null)
+    return sendJson(res, 400, { error: "bad_request", message: "from and to must be YYYY-MM-DD dates (UTC)" });
+  if (to <= from || to - from > EXPORT_MAX_DAYS * DAY_MS)
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: `to must be later than from and at most ${EXPORT_MAX_DAYS} days after it`,
+    });
+  const { rows, asOf } = await loadSpendRows(deps.sessions, { from, to });
+  const labels = await discoverScopes(
+    app,
+    deps,
+    rows.map((r) => r.scopeId),
+  );
+  const scope = orgScope(deps);
+  const window = { from: isoDay(from / DAY_MS), to: isoDay(to / DAY_MS) };
+  const exported = spendExportRows(rows, (id) => labels.get(id) ?? "");
+  audit(deps, {
+    principalId: SPEND_EXPORT_PRINCIPAL,
+    action: "spend.export",
+    resource: "spend",
+    scopeLabel: scope,
+    detail: `${window.from}..${window.to} rows=${exported.length}`,
+  });
+  sendJson(res, 200, { scopeId: scope, window, ...(asOf === undefined ? {} : { asOf }), rows: exported });
 }
 
 export async function spend(ctx: ApiCtx): Promise<void> {
@@ -363,9 +466,9 @@ export async function spend(ctx: ApiCtx): Promise<void> {
   if (from === null) return bad("from must be a YYYY-MM-DD date (UTC) or epoch milliseconds");
   if (to <= from) return bad("to must be later than from");
 
-  const { rows, asOf } = deps.sessions?.spendReport
-    ? await deps.sessions.spendReport({ from, to })
-    : { rows: (await deps.sessions?.spendRollup({ from, to })) ?? [], asOf: undefined };
+  const { rows, asOf } = deps.sessions
+    ? await loadSpendRows(deps.sessions, { from, to })
+    : { rows: [], asOf: undefined };
   const labels = await discoverScopes(
     app,
     deps,
