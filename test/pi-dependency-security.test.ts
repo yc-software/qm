@@ -6,7 +6,7 @@ import test from "node:test";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 const piCodingAgentTarball =
-  "https://github.com/yc-software/pi/releases/download/qm-pi-coding-agent-0.82.0-security.4/earendil-works-pi-coding-agent-0.82.0-qm-security.4.tgz";
+  "https://github.com/yc-software/qm/releases/download/vendored-pi-coding-agent-0.82.0-security.5/earendil-works-pi-coding-agent-0.82.0-qm-security.5.tgz";
 
 function installedVersion(path: string): string {
   const manifestUrl = new URL(`../node_modules/${path}/package.json`, import.meta.url);
@@ -45,13 +45,20 @@ test("Pi and MCP security overrides are materialized by the root lockfile", () =
 
   assert.equal(pi?.resolved, piCodingAgentTarball);
 
-  assert.deepEqual(lockedVersions(packages, "brace-expansion"), ["5.0.9"]);
-  assert.deepEqual(lockedVersions(packages, "fast-uri").sort(), ["3.1.7", "4.1.4"]);
+  assert.deepEqual(lockedVersions(packages, "brace-expansion"), ["5.0.12"]);
+  assert.deepEqual(lockedVersions(packages, "fast-uri").sort(), ["3.1.8", "4.1.5"]);
   assert.deepEqual(lockedVersions(packages, "hono"), ["4.13.5"]);
   assert.deepEqual(lockedVersions(packages, "protobufjs"), ["7.6.5"]);
   assert.deepEqual(lockedVersions(packages, "undici"), ["8.10.2"]);
   assert.deepEqual(lockedVersions(packages, "@hono/node-server"), ["2.0.10"]);
-  assert.equal(dependencyVersion(minimatchManifest, "brace-expansion"), "5.0.9");
+  assert.equal(dependencyVersion(minimatchManifest, "brace-expansion"), "5.0.12");
+  for (const dependency of ["@fastify/ajv-compiler", "ajv", "fast-json-stringify"]) {
+    const parentManifest = new URL(`../node_modules/${dependency}/package.json`, import.meta.url);
+    assert.equal(
+      dependencyVersion(parentManifest, "fast-uri"),
+      dependency === "fast-json-stringify" ? "4.1.5" : "3.1.8",
+    );
+  }
   assert.equal(dependencyVersion(piManifest, "undici"), "8.10.2");
   assert.equal(dependencyVersion(piManifest, "protobufjs"), "7.6.5");
   assert.equal(installedVersion("@hono/node-server"), "2.0.10");
