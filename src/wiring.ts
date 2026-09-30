@@ -1752,6 +1752,7 @@ export function buildApp(
         identity.isInternal(identity.classify(email)) &&
         ((await directory.get(email))?.type === "internal" ||
           config.emailAuthPrincipals?.includes(email) ||
+          Boolean(config.emailAuthDomain && email.endsWith(`@${config.emailAuthDomain}`)) ||
           identity.externalMember(email) !== undefined)
       );
     },

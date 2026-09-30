@@ -625,11 +625,24 @@ test("with external app sharing off, public links and outside emails are refused
       createdBy: "U1",
       entrypoint: "x",
       files: [],
-      name: "locked",
+      name: "fresh-share",
       share: [{ scope: scopeId("personal", "guest@elsewhere.test"), permission: "read" }],
     }),
     /external_app_sharing/,
   );
+  assert.equal(await deploy.getDeployment("fresh-share"), null, "publish refuses outside shares before deploying");
+  const d = (await app.getDeployment("locked"))!;
+  await assert.rejects(
+    app.grant({
+      ownerScopeId: d.ownerScopeId,
+      ref: `deployment:${d.id}`,
+      granteeScopeId: scopeId("personal", "guest@elsewhere.test"),
+      permission: "read",
+      grantedBy: "U1",
+    }),
+    /external_app_sharing/,
+  );
+  assert.ok(!(await deploy.deploymentGrantees("locked")).some((g) => g.scope === "personal:guest@elsewhere.test"));
 });
 
 test("deployment permissions are visible only to the owner, including for managers", async () => {

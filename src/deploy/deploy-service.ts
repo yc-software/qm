@@ -105,6 +105,7 @@ export interface DeployService {
     permission: Permission | null,
     actor: { createdBy: string },
   ): Promise<DeploymentGrantee[]>;
+  assertShareAllowed(ownerScopeId: ScopeId, grantee: ScopeId, permission: Permission | null): Promise<void>;
   transferDeploymentOwner(
     idOrName: string,
     toScope: ScopeId,
@@ -377,6 +378,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
   return {
     providerProfile: deps.provider.profile,
+    assertShareAllowed,
 
     async deploy(input) {
       if (input.name !== undefined) {
@@ -707,6 +709,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const { ownerScopeId, createdBy } = input;
       if (input.public === true && !(await externalSharingAllowed(ownerScopeId)))
         throw new Error(EXTERNAL_APP_SHARING_OFF);
+      for (const s of input.share ?? [])
+        await assertShareAllowed(
+          ownerScopeId,
+          await deploymentShareScope(s.scope, s.permission, deps.canManageEmail),
+          s.permission,
+        );
       if (input.embedAncestors !== undefined && !parseEmbedAncestors(input.embedAncestors))
         throw new Error(`embedAncestors must be an ${EMBED_ANCESTORS_HINT}`);
 

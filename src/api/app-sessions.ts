@@ -1045,6 +1045,7 @@ export function createSessionMethods(
               (await h.directoryMember(email))?.type === "internal",
           ),
         };
+        await deps.deploy.assertShareAllowed(g.ownerScopeId, g.granteeScopeId, g.permission);
       }
       await deps.acl.grant(g, await artifactAuthor(g.ownerScopeId, g.ref));
       deps.auditLog.record({
