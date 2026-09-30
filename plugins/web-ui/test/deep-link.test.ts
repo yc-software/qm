@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deepLinkPath, parseDeepLink, sessionLink } from "../src/deep-link.ts";
+import { deepLinkPath, parseDeepLink, sessionLink, sessionLinkTarget } from "../src/deep-link.ts";
 
 test("chats view with an active session is addressed by /s/<id>", () => {
   assert.equal(deepLinkPath("", "chats", "abc-123"), "/s/abc-123");
@@ -139,4 +139,22 @@ test("sent and pending email URLs use the same id route shape", () => {
       item: "96e58b52e75bf97f",
     });
   }
+});
+
+test("in-app session links resolve to the session and optional message seq", () => {
+  const origin = "https://qm.example.com";
+  assert.deepEqual(sessionLinkTarget(`${origin}/s/abc`, origin, ""), { session: "abc", seq: null });
+  assert.deepEqual(sessionLinkTarget(`${origin}/s/abc?seq=12`, origin, ""), { session: "abc", seq: 12 });
+  assert.deepEqual(sessionLinkTarget("/ui/s/abc", origin, "/ui"), { session: "abc", seq: null });
+  assert.deepEqual(sessionLinkTarget(`${origin}/c/abc`, origin, ""), { session: "abc", seq: null });
+  assert.deepEqual(sessionLinkTarget(`${origin}/s/abc?seq=abc`, origin, ""), { session: "abc", seq: null });
+});
+
+test("other links are not treated as session links", () => {
+  const origin = "https://qm.example.com";
+  assert.equal(sessionLinkTarget("https://elsewhere.example.com/s/abc", origin, ""), null);
+  assert.equal(sessionLinkTarget(`${origin}/d/my-app/`, origin, ""), null);
+  assert.equal(sessionLinkTarget(`${origin}/apps`, origin, ""), null);
+  assert.equal(sessionLinkTarget(`${origin}/s/abc`, origin, "/ui"), null);
+  assert.equal(sessionLinkTarget("not a url", "null", ""), null);
 });

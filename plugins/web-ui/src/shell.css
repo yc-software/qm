@@ -12667,6 +12667,18 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   left: auto;
   right: 0;
 }
+.general-access-control .menu-button {
+  margin-left: -8px;
+  font-size: var(--font-13);
+  font-weight: 500;
+}
+.menu-option[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.menu-option[aria-disabled="true"]:hover {
+  background: transparent;
+}
 .permission-control .menu-option {
   font-size: 12px;
 }
@@ -12713,6 +12725,10 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 }
 .deployment-permissions-dialog .permission-invite .menu-popover {
   inset: calc(100% + 6px) auto auto 0 !important;
+}
+.deployment-permissions-dialog .general-access-control .menu-popover {
+  inset: calc(100% + 6px) auto auto -8px !important;
+  width: 220px !important;
 }
 .deployment-permissions-dialog .permission-control .menu-popover.drop-up {
   top: auto !important;

@@ -566,6 +566,9 @@ test("deployment public access is explicit, owner-only, and reversible", async (
     access: "view",
   });
   assert.equal(sharedWhilePublic.body.public, true, "person changes preserve and return general access");
+  const off = { enabled: async () => false } as unknown as FeatureFlagStore;
+  const orgWhileOff = await callShare(app, cap("U1"), "public-toggle", { scope: "org" }, off);
+  assert.equal(orgWhileOff.body.public, false, "with external sharing off, a stored public bit is reported as off");
 
   const disabled = await callShare(app, cap("U1"), "public-toggle", { public: false });
   assert.equal(disabled.status, 200);

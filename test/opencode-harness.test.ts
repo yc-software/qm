@@ -10,6 +10,7 @@ import {
   latestAssistantParts,
   openCodeHarnessConfigOptions,
   openCodeMessageId,
+  openCodeToolDefinitions,
 } from "../src/harness/opencode-harness.ts";
 import type { OpencodeClient } from "@opencode-ai/sdk";
 import type { Config } from "../src/config.ts";
@@ -721,3 +722,13 @@ for (const surfaceTools of [false, true]) {
     assert.ok(entries.some((entry) => entry.type === "tool_result" && (entry.payload as { silent?: boolean }).silent));
   });
 }
+
+test("OpenCode's fixed tool list includes the web-only sessions tool", () => {
+  const definitions = openCodeToolDefinitions({});
+  for (const name of ["subagents", "sessions"])
+    assert.ok(
+      definitions.some((tool) => tool.name === name),
+      name,
+    );
+  assert.doesNotMatch(definitions.find((tool) => tool.name === "subagents")!.description, /use sessions/);
+});

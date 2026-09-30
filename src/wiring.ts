@@ -364,6 +364,7 @@ import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus
 import { createMemoryRunActivityStore, type RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
+import { startSession } from "./api/start-session.ts";
 import { createSwarmStore, type SwarmStorage } from "./swarms/swarm-store.ts";
 import { createSwarmService } from "./swarms/swarm-service.ts";
 import { createSlackCoreClient, type SlackAgentRequestContext, type SlackCoreClient } from "./api/slack-core-client.ts";
@@ -1898,6 +1899,10 @@ export function buildApp(
     advisoryLock,
     prepareRequest: prepareSessionRequest,
     authorize: (session, actorId) => canWriteScope(actorId, session.scopeId),
+    conversations: {
+      list: (actorId) => app.listSessions(actorId),
+      start: (actorId, input) => startSession(app, sessions, actorId, input),
+    },
     async validateRuntime(input, scope) {
       await resolveRuntimeChoiceDurable(
         configStore,

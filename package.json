@@ -76,7 +76,7 @@
     "@earendil-works/pi-ai": "0.82.0",
     "@earendil-works/pi-coding-agent": "https://github.com/yc-software/qm/releases/download/vendored-pi-coding-agent-0.82.0-security.5/earendil-works-pi-coding-agent-0.82.0-qm-security.5.tgz",
     "@fly/sprites": "0.2.3",
-    "@openai/codex": "0.155.1",
+    "@openai/codex": "0.156.1",
     "@opencode-ai/plugin": "1.18.31",
     "@opencode-ai/sdk": "1.18.31",
     "@sentry/node": "10.75.0",

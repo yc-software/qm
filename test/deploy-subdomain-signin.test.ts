@@ -26,11 +26,18 @@ const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
 
-function mintPortalSession(sub: string, expInSeconds = 3600, secret = SESSION_SECRET): string {
+function mintPortalSession(sub: string, expInSeconds = 3600, secret = SESSION_SECRET, appOnly?: true): string {
   const key = createHmac("sha256", secret).update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
   const body = Buffer.from(
-    JSON.stringify({ k: "session", sub, org: "acme", iat: now, exp: now + expInSeconds }),
+    JSON.stringify({
+      k: "session",
+      sub,
+      org: "acme",
+      iat: now,
+      exp: now + expInSeconds,
+      ...(appOnly ? { appOnly } : {}),
+    }),
   ).toString("base64url");
   const sig = createHmac("sha256", key).update(body).digest("base64url");
   return `${body}.${sig}`;
@@ -355,6 +362,69 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     });
     assert.equal(crafted.status, 302);
     assert.equal(crafted.headers.location, "/", "a scheme-relative pathname never enters a gateway redirect");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  }
+});
+
+test("org-wide app access admits only signed-in org members", async () => {
+  const upstream = createHttpServer((_req, res) => res.end("UPSTREAM OK"));
+  upstream.listen(0);
+  const acl = createAclStore();
+  const identity = createIdentityService();
+  const deploy = createDeployService({
+    externalSharingAllowed: async () => false,
+    deployStore: createDeployStore(),
+    provider: {
+      profile: { managedScaleToZero: false },
+      apply: async () => ({ host: "127.0.0.1", port: (upstream.address() as AddressInfo).port }),
+      destroy: async () => {},
+    },
+    auditLog,
+    acl,
+    deployDir: mkdtempSync(join(tmpdir(), "org-access-")),
+  });
+  const app = createApp({
+    deploy,
+    acl,
+    directory: createDirectoryStore(),
+    sessions: createMemorySessionStore(),
+    identity,
+  } as unknown as Parameters<typeof createApp>[0]);
+  const d = await app.deploy({
+    ownerScopeId: scopeId("personal", "alice@example.com"),
+    createdBy: "alice@example.com",
+    entrypoint: "x",
+    files: [],
+    name: "teamsite",
+  });
+  const server = createInsecureTestServer(app, {
+    featureFlags: { enabled: async () => false } as unknown as FeatureFlagStore,
+    identity,
+    deployAppsDomain: "apps.example.com",
+    deployGateSecret: "gate-secret",
+    deployAppsSessionSecret: SESSION_SECRET,
+    deployAppsLoginUrl: LOGIN_URL,
+  });
+  server.listen(0);
+  const port = (server.address() as AddressInfo).port;
+  const visit = (cookieFor?: string, appOnly?: true) =>
+    httpGet(port, "/", {
+      Host: "teamsite.apps.example.com",
+      Accept: "application/json",
+      ...(cookieFor ? { Cookie: `portal_session=${mintPortalSession(cookieFor, 3600, SESSION_SECRET, appOnly)}` } : {}),
+    });
+  try {
+    assert.equal((await visit("bob@example.com")).status, 403, "restricted: a signed-in member without a grant");
+    await app.shareDeployment(d.id, scopeId("org", "acme"), "read", { createdBy: "alice@example.com" });
+    assert.equal((await visit()).status, 401, "org access still requires sign-in");
+    assert.equal((await visit("bob@example.com")).status, 200, "any signed-in org member can open it");
+    assert.equal((await visit("guest@partner.test", true)).status, 403, "an app-only outside session is not the org");
+    await identity.deactivate("carol@example.com", "directory-sync");
+    assert.equal((await visit("carol@example.com")).status, 403, "someone who left the org is not the org");
+    await app.shareDeployment(d.id, scopeId("org", "acme"), null, { createdBy: "alice@example.com" });
+    assert.equal((await visit("bob@example.com")).status, 403, "back to restricted closes it");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
