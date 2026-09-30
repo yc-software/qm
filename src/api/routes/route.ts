@@ -20,6 +20,7 @@ export interface BaseCtx {
   pathname: string;
   method: string;
   params: Record<string, string>;
+  capability?: CapabilityClaims | null;
 }
 
 export interface ApiCtx extends BaseCtx {
