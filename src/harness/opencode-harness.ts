@@ -52,7 +52,7 @@ import {
 import { recordedMessageTimestamps, reconstructMessagesFromHistory } from "./replay.ts";
 import { countTokens } from "../util/tokens.ts";
 
-const OPENCODE_VERSION = "1.18.31";
+const OPENCODE_VERSION = "1.18.32";
 const OPENCODE_IDLE_WAIT_MS = 30 * 60_000;
 export const OPENCODE_STARTUP_TIMEOUT_MS = 90_000;
 
