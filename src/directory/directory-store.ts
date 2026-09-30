@@ -49,6 +49,7 @@ export interface DirectoryStore {
     syncedAt?: number,
     channelRosterIds?: string[],
     revocations?: ChannelMembership[],
+    partial?: boolean,
   ): Promise<boolean>;
   list(): Promise<DirectoryMember[]>;
   listChannels(): Promise<DirectoryChannel[]>;
@@ -110,6 +111,7 @@ export function createDirectoryStore(): DirectoryStore {
   let groupsSynced = false;
   let workspaceUrl: string | undefined;
   const syncedAts = new Map<string, number>();
+  const channelObservedAts = new Map<string, number>();
 
   function acceptSync(section: string, syncedAt: number | undefined): boolean {
     if (syncedAt === undefined) return true;
@@ -134,15 +136,45 @@ export function createDirectoryStore(): DirectoryStore {
       members = next.filter((m) => m.principalId && m.type === "internal");
       return true;
     },
-    async replaceChannels(nextChannels, nextChannelMembers, syncedAt, nextChannelRosterIds, revocations = []) {
-      if (!acceptSync("channels", syncedAt)) return false;
-      channels = nextChannels.filter((c) => c.channelId && c.name);
+    async replaceChannels(
+      nextChannels,
+      nextChannelMembers,
+      syncedAt,
+      nextChannelRosterIds,
+      revocations = [],
+      partial = false,
+    ) {
+      if (partial && (syncedAt === undefined || !Number.isFinite(syncedAt) || nextChannelMembers === undefined))
+        return false;
+      if (partial && (syncedAts.get("channels") ?? 0) >= syncedAt!) return false;
+      const protectedIds = new Set(
+        [...channelObservedAts]
+          .filter(([, at]) => syncedAt !== undefined && (partial ? at >= syncedAt : at > syncedAt))
+          .map(([id]) => id),
+      );
+      if (partial && nextChannels.some((channel) => protectedIds.has(channel.channelId))) return false;
+      if (!partial && !acceptSync("channels", syncedAt)) return false;
+      const updatedIds = new Set(nextChannels.map((channel) => channel.channelId));
+      channels = [
+        ...channels.filter((channel) =>
+          partial ? !updatedIds.has(channel.channelId) : protectedIds.has(channel.channelId),
+        ),
+        ...nextChannels.filter((c) => c.channelId && c.name && !protectedIds.has(c.channelId)),
+      ];
+      for (const id of updatedIds) {
+        if (partial) channelObservedAts.set(id, syncedAt!);
+        else if (!protectedIds.has(id)) channelObservedAts.delete(id);
+      }
       const listed = new Set(channels.map((channel) => channel.channelId));
       knownChannelRosters = knownChannelRosters
         ? new Set([...knownChannelRosters].filter((channelId) => listed.has(channelId)))
         : undefined;
       if (nextChannelMembers !== undefined) {
-        const rosterIds = new Set(nextChannelRosterIds ?? channels.map((channel) => channel.channelId));
+        const rosterIds = new Set(
+          (nextChannelRosterIds ?? nextChannels.map((channel) => channel.channelId)).filter(
+            (id) => updatedIds.has(id) && !protectedIds.has(id),
+          ),
+        );
         const byChannel = new Map(
           [...(channelMembers ?? [])].filter(([channelId]) => listed.has(channelId) && !rosterIds.has(channelId)),
         );
@@ -156,9 +188,10 @@ export function createDirectoryStore(): DirectoryStore {
         for (const channelId of rosterIds) if (listed.has(channelId)) knownChannelRosters.add(channelId);
       }
       for (const member of revocations) {
-        if (listed.has(member.channelId) && member.principalId)
+        if (updatedIds.has(member.channelId) && !protectedIds.has(member.channelId) && member.principalId)
           channelMembers?.get(member.channelId)?.delete(member.principalId);
       }
+      for (const id of channelObservedAts.keys()) if (!listed.has(id)) channelObservedAts.delete(id);
       return true;
     },
     async channelMember(channelId, principalId) {

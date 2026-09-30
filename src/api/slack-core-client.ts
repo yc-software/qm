@@ -96,6 +96,7 @@ interface DirectoryPush {
   workspaceUrl?: string;
   membersSyncedAt?: number;
   channelsSyncedAt?: number;
+  partialChannels?: boolean;
   groupsSyncedAt?: number;
 }
 
@@ -521,6 +522,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
             body.channelsSyncedAt,
             body.channelRosterIds,
             body.channelRevocations,
+            body.partialChannels,
           )) && applied;
       }
       if (body.groupMembers) {
