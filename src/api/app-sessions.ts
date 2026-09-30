@@ -438,12 +438,11 @@ export function createSessionMethods(
           if (ref) cronCounts.set(ref, (cronCounts.get(ref) ?? 0) + 1);
         }
       }
-      const failedChildren = new Set<string>();
-      for (const s of sessions) {
-        if (!s.parentSessionId || workingThreadRefs.has(s.threadRef) || waiting.has(s.id)) continue;
-        const run = await deps.runs.latestForThread(s.threadRef);
-        if (run?.status === "failed" || run?.result?.status === "failed") failedChildren.add(s.id);
-      }
+      const failedChildren = await deps.runs.latestFailedThreads(
+        sessions
+          .filter((s) => s.parentSessionId && !workingThreadRefs.has(s.threadRef) && !waiting.has(s.id))
+          .map((s) => s.threadRef),
+      );
       const goals = new Map<
         string,
         { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> }
@@ -475,7 +474,7 @@ export function createSessionMethods(
         ...s,
         ...(workingThreadRefs.has(s.threadRef) ? { working: true } : {}),
         ...(waiting.has(s.id) ? { awaitingInput: true } : {}),
-        ...(failedChildren.has(s.id) ? { lastTurnFailed: true } : {}),
+        ...(failedChildren.has(s.threadRef) ? { lastTurnFailed: true } : {}),
         ...(jobCounts.has(s.threadRef) ? { backgroundJobs: jobCounts.get(s.threadRef)! } : {}),
         ...(watchCounts.has(s.threadRef) ? { watches: watchCounts.get(s.threadRef)! } : {}),
         ...(cronCounts.has(s.threadRef) ? { crons: cronCounts.get(s.threadRef)! } : {}),

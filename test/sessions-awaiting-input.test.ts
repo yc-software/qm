@@ -21,19 +21,22 @@ function dm(text: string, thread: string): TurnRequest {
 
 const BLOCKED_CMD = ["git", "push", `--${"force"}`, "origin", "main"].join(" ");
 
-test("listSessions flags a session whose turn paused on a blocking approval", async () => {
-  const { app } = freshApp();
+test("listSessions flags a session whose turn paused on a blocking approval", async (t) => {
+  const { app, runs, sessions } = freshApp();
 
-  await app.turn(dm("Just a question", "web:U1:done"));
+  const parent = await app.turn(dm("Just a question", "web:U1:done"));
 
   const paused = await app.turn(dm(`!run ${BLOCKED_CMD}`, "dm:U1:waiting"));
   assert.equal(paused.status, "pending_approval");
   const waitingId = paused.sessionId!;
   assert.ok(waitingId);
+  await sessions.setParentSession(waitingId, parent.sessionId!);
 
+  const failures = t.mock.method(runs, "latestFailedThreads");
   const list = await app.listSessions("U1");
   const waiting = list.find((s) => s.id === waitingId);
   const done = list.find((s) => s.threadRef === "web:U1:done");
+  assert.deepEqual(failures.mock.calls[0]!.arguments[0], []);
 
   assert.equal(waiting?.awaitingInput, true, "the paused session is flagged");
   assert.ok(done, "the completed session is still listed");
