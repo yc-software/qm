@@ -2,7 +2,7 @@ export interface GoalStripState {
   objective: string;
   status: "active" | "paused" | "complete";
   floor?: string;
-  endsAt?: number;
+  floorMs?: number;
   createdAt: number;
 }
 
@@ -32,12 +32,11 @@ function snapshotFrom(payload: unknown): GoalStripState | null | undefined {
   const floor = goalFloorLabel(goal.floor ?? null);
   const minMs = goal.floor?.minMs;
   const createdAt = typeof goal.createdAt === "number" ? goal.createdAt : Date.now();
-  const timeOnly = typeof minMs === "number" && Object.keys(goal.floor ?? {}).length === 1;
   return {
     objective: goal.objective,
     status,
     ...(floor ? { floor } : {}),
-    ...(timeOnly ? { endsAt: createdAt + minMs } : {}),
+    ...(typeof minMs === "number" && minMs > 0 ? { floorMs: minMs } : {}),
     createdAt,
   };
 }
@@ -88,7 +87,7 @@ export function goalObjectiveLabel(objective: string, max = 120): string {
   return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
 }
 
-export function goalWorkedLabel(startedAt: number, now: number, floor?: string | null): string {
-  const worked = `${goalElapsedLabel(startedAt, now)} worked`;
+export function goalWorkedLabel(workedMs: number, floor?: string | null): string {
+  const worked = `${goalElapsedLabel(0, workedMs)} worked`;
   return floor ? `${worked} · ${floor} floor` : worked;
 }

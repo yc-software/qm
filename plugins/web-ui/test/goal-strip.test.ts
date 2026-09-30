@@ -75,7 +75,7 @@ test("worked time leads the label, the floor follows", () => {
       },
     ]),
   ]);
-  assert.equal(goal?.endsAt, 1000 + 1_200_000);
-  assert.equal(goalWorkedLabel(0, 720_000, "20m"), "12m worked · 20m floor");
-  assert.equal(goalWorkedLabel(0, 45_000), "45s worked");
+  assert.equal(goal?.floorMs, 1_200_000);
+  assert.equal(goalWorkedLabel(720_000, "20m"), "12m worked · 20m floor");
+  assert.equal(goalWorkedLabel(45_000), "45s worked");
 });

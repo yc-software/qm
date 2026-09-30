@@ -205,11 +205,14 @@ export function backgroundLabel(
   crons: number,
   subagents = 0,
   subagentsWaiting = 0,
-  goal?: { startedAt: number; floor?: Record<string, number> },
+  goal?: { activeMs: number; runningSince?: number; floor?: Record<string, number> },
   now = Date.now(),
 ): BackgroundCounts | null {
   const parts: string[] = [];
-  if (goal) parts.push(`goal · ${goalWorkedLabel(goal.startedAt, now, goalFloorLabel(goal.floor ?? null))}`);
+  if (goal)
+    parts.push(
+      `goal · ${goalWorkedLabel(goal.activeMs + (goal.runningSince ? Math.max(0, now - goal.runningSince) : 0), goalFloorLabel(goal.floor ?? null))}`,
+    );
   if (subagents > 0) parts.push(`${subagents} subagent${subagents === 1 ? "" : "s"} running`);
   if (subagentsWaiting > 0)
     parts.push(`${subagentsWaiting} subagent${subagentsWaiting === 1 ? " needs" : "s need"} you`);

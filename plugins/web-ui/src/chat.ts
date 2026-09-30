@@ -200,7 +200,7 @@ import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { createForkOriginController, forkOriginView } from "./fork-origin";
 import { base64ToBytes } from "./paste-text";
 import { tip } from "./tooltip";
-import { workSeconds, workedLabel } from "./work-duration";
+import { goalWorked, workSeconds, workedLabel } from "./work-duration";
 import { decorateTextCodeBlocks } from "./text-code";
 
 import { createTranscriptViewport } from "./transcript-viewport";
@@ -2624,22 +2624,23 @@ export function createChatSurface(
   }
 
   function goalStrip(agent: Agent): TemplateResult | typeof nothing {
-    const goal = latestGoal(visibleMessages(agent));
-    const now = Date.now();
-    const floorRunning = goal?.status === "complete" && goal.endsAt !== undefined && goal.endsAt > now;
-    if (!goal || (goal.status !== "active" && goal.status !== "paused" && !floorRunning)) return nothing;
-    const paused = goal.status === "paused";
-    const streaming = agent.state.isStreaming;
+    const messages = visibleMessages(agent);
+    const goal = latestGoal(messages);
+    if (!goal) return nothing;
+    const { workedMs, paused: stopped } = goalWorked(messages, goal);
+    const paused = goal.status === "paused" || (goal.status === "active" && stopped);
+    const floorRunning = goal.status === "complete" && goal.floorMs !== undefined && workedMs < goal.floorMs;
+    if (goal.status !== "active" && !paused && !floorRunning) return nothing;
     let title = "Goal";
     if (paused) title = "Goal paused";
     else if (floorRunning) title = "Goal met · using the floor";
-    else if (streaming) title = "Pursuing goal";
+    else if (agent.state.isStreaming) title = "Pursuing goal";
     return html`
       <section class="goal-strip ${paused ? "paused" : ""}" aria-live="polite" title=${goal.objective}>
         <span class="goal-strip-icon">${icon(paused ? Pause : Target, 13)}</span>
         <span class="goal-strip-title">${title}</span>
         <span class="goal-strip-objective" dir="auto">${goalObjectiveLabel(goal.objective)}</span>
-        <span class="goal-strip-meta">${goalWorkedLabel(goal.createdAt, now, goal.floor)}</span>
+        <span class="goal-strip-meta">${goalWorkedLabel(workedMs, goal.floor)}</span>
       </section>
     `;
   }

@@ -37,6 +37,8 @@ export interface GoalRecord {
   tokensUsed: number;
   createdAt: number;
   updatedAt: number;
+  /** Time spent actually running turns on this goal, banked at each turn end. */
+  activeMs?: number;
   completionNote?: string;
   /** Reasons the verifier gave for rejecting the last completion request. */
   verifierFeedback?: string;
@@ -210,11 +212,13 @@ export async function verifyGoalCompletion(
 export function reviveGoalRecord(goal: GoalRecord): GoalRecord {
   const floor = sanitizeFloor(goal.floor);
   const capTokens = positiveInteger(goal.capTokens);
-  const { floor: _floor, capTokens: _capTokens, ...rest } = goal;
+  const activeMs = finitePositive(goal.activeMs);
+  const { floor: _floor, capTokens: _capTokens, activeMs: _activeMs, ...rest } = goal;
   return {
     ...rest,
     objective: String(goal.objective ?? ""),
     tokensUsed: Math.floor(finitePositive(goal.tokensUsed) ?? 0),
+    ...(activeMs ? { activeMs } : {}),
     ...(capTokens ? { capTokens } : {}),
     ...(floor ? { floor } : {}),
   };
@@ -264,8 +268,24 @@ function goalFloorApplies(goal: GoalRecord): boolean {
   return goal.floor !== undefined && (goal.status === "active" || goal.status === "complete");
 }
 
-export function goalFloorMeter(goal: GoalRecord, meter: GrindMeter): GrindMeter {
-  return { turns: meter.turns, tokens: goal.tokensUsed, usd: meter.usd, startedAt: goal.createdAt };
+/** Active time on the goal: banked turns plus the running turn (counted from when the goal existed). */
+export function goalActiveMs(goal: GoalRecord, turnStartedAt: number | undefined, now = Date.now()): number {
+  const running = turnStartedAt === undefined ? 0 : Math.max(0, now - Math.max(turnStartedAt, goal.createdAt));
+  return (goal.activeMs ?? 0) + running;
+}
+
+/** Fold the finished turn into the goal's banked active time; call once, right before the end-of-turn snapshot. */
+export function bankGoalTurn(goal: GoalRecord, turnStartedAt: number, now = Date.now()): void {
+  goal.activeMs = goalActiveMs(goal, turnStartedAt, now);
+}
+
+export function goalFloorMeter(goal: GoalRecord, meter: GrindMeter, now = Date.now()): GrindMeter {
+  return {
+    turns: meter.turns,
+    tokens: goal.tokensUsed,
+    usd: meter.usd,
+    startedAt: now - goalActiveMs(goal, meter.startedAt, now),
+  };
 }
 
 export interface FloorCapPolicy {
@@ -291,7 +311,7 @@ export function createFloorCapPolicy(opts: {
         floorSatisfiedAt = undefined;
         return GOAL_FLOOR_RECHECK_MS;
       } else {
-        floorSatisfiedAt ??= Math.min(Math.max(goalFloorEndsAt(goal) ?? t, opts.promptStart), t);
+        floorSatisfiedAt ??= Math.min(Math.max(goalFloorEndsAt(goal, opts.meter.startedAt) ?? t, opts.promptStart), t);
       }
     }
     return (floorSatisfiedAt ?? opts.promptStart) + opts.turnWallClockMs - t;
@@ -304,15 +324,16 @@ export function createFloorCapPolicy(opts: {
 }
 
 /** When a time-only floor ends (ms epoch); undefined when the floor is not purely time. */
-export function goalFloorEndsAt(goal: GoalRecord): number | undefined {
+function goalFloorEndsAt(goal: GoalRecord, turnStartedAt: number): number | undefined {
   const f = goal.floor;
-  return f?.minMs !== undefined && Object.keys(f).length === 1 ? goal.createdAt + f.minMs : undefined;
+  if (f?.minMs === undefined || Object.keys(f).length !== 1) return undefined;
+  return Math.max(turnStartedAt, goal.createdAt) + f.minMs - (goal.activeMs ?? 0);
 }
 
 export function goalFloorUnmet(goal: GoalRecord, meter: GrindMeter, now = Date.now()): boolean {
   const floor = goal.floor;
   if (floor === undefined || !goalFloorApplies(goal)) return false;
-  return !grindState(floor, goalFloorMeter(goal, meter), now).met;
+  return !grindState(floor, goalFloorMeter(goal, meter, now), now).met;
 }
 
 /**

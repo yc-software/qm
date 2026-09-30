@@ -112,6 +112,7 @@ import { errMessage } from "../util/errors.ts";
 import { createGrindMeter, meterGrindCall } from "./grind.ts";
 import {
   createFloorCapPolicy,
+  bankGoalTurn,
   enforceGoal,
   goalFloorUnmet,
   goalPausedNote,
@@ -2392,6 +2393,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           }
           if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
             if (entry.ref.goal) {
+              bankGoalTurn(entry.ref.goal, grindMeter.startedAt);
               const goalEntry = await turn.emit({
                 type: "system",
                 payload: goalSnapshotPayload(entry.ref.goal),
@@ -2426,6 +2428,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 g.status = "paused";
                 g.updatedAt = Date.now();
               }
+              bankGoalTurn(g, grindMeter.startedAt);
               const goalEntry = await turn.emit({
                 type: "system",
                 payload: goalSnapshotPayload(g),
@@ -2462,6 +2465,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
 
           if (entry.ref.goal) {
             const g = entry.ref.goal;
+            bankGoalTurn(g, grindMeter.startedAt);
             const goalEntry = await turn.emit({
               type: "system",
               payload: goalSnapshotPayload(g),

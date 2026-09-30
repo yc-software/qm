@@ -581,8 +581,16 @@ test("cronRowMeta shows the next fire and the last result of a session's cron", 
 });
 
 test("a goal lights the background chip with time worked, then the floor", () => {
-  const row = backgroundLabel(0, 0, 0, 0, 0, { startedAt: 0, floor: { minMs: 1_200_000 } }, 720_000);
+  const row = backgroundLabel(
+    0,
+    0,
+    0,
+    0,
+    0,
+    { activeMs: 600_000, runningSince: 600_000, floor: { minMs: 1_200_000 } },
+    720_000,
+  );
   assert.equal(row?.goal, true);
   assert.equal(row?.label, "goal · 12m worked · 20m floor");
-  assert.equal(backgroundLabel(0, 0, 0, 0, 0, { startedAt: 0 }, 60_000)?.label, "goal · 1m worked");
+  assert.equal(backgroundLabel(0, 0, 0, 0, 0, { activeMs: 60_000 }, 9_999_999)?.label, "goal · 1m worked");
 });

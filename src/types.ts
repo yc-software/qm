@@ -119,8 +119,8 @@ export interface Session {
   backgroundJobs?: number;
   watches?: number;
   crons?: number;
-  /** Set while a working session pursues a goal: when it started and the user's floor, if any. */
-  goal?: { objective: string; startedAt: number; floor?: Record<string, number> };
+  /** Set while a working session pursues a goal: banked active time, the running turn's start, and the floor. */
+  goal?: { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> };
 }
 
 export type EntryType =

@@ -17,6 +17,7 @@ import { NON_INTERACTIVE_THINKING_LEVEL, NON_INTERACTIVE_FAST_MODE } from "../co
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { createGrindMeter } from "./grind.ts";
 import {
+  bankGoalTurn,
   enforceGoal,
   goalSnapshotPayload,
   latestGoalRecord,
@@ -98,6 +99,7 @@ async function runTurnEnforcingGoal(
     goal.status = "paused";
     goal.updatedAt = Date.now();
   }
+  bankGoalTurn(goal, startedAt);
   await dispatched.emit({ type: "system", payload: goalSnapshotPayload(goal), scopeLabel: input.scopeLabel });
   return result;
 }
