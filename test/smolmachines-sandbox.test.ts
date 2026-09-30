@@ -53,46 +53,36 @@ beforeEach(() => {
 });
 after(() => fake?.cleanup());
 
-test("provision runs commands with env and cwd", async () => {
+test("provision runs commands with env and cwd, and streams and exit codes are exact", async () => {
   const h = await sandbox.provision(layers, { env: { MY_VAR: "v1" } });
   assert.equal(h.coldStart, true);
   const r = await sandbox.run(h, "pwd; echo VAR=$MY_VAR");
   assert.equal(r.code, 0);
   assert.match(r.stdout, /workspace/);
   assert.match(r.stdout, /VAR=v1/);
+  const streams = await sandbox.run(h, "echo out; echo err >&2; exit 3");
+  assert.equal(streams.code, 3);
+  assert.equal(streams.stdout.trim(), "out");
+  assert.equal(streams.stderr.trim(), "err");
 });
 
-test("streams and exit codes are exact", async () => {
-  const h = await sandbox.provision(layers);
-  const r = await sandbox.run(h, "echo out; echo err >&2; exit 3");
-  assert.equal(r.code, 3);
-  assert.equal(r.stdout.trim(), "out");
-  assert.equal(r.stderr.trim(), "err");
-});
-
-test("file roundtrip incl. large binary and missing file", async () => {
+test("file roundtrip incl. empty, large binary and missing file", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.writeFile(h, "a/b.txt", "hello\n");
   assert.equal(await sandbox.readFile(h, "a/b.txt"), "hello\n");
   assert.equal(await sandbox.readFile(h, "nope.txt"), null);
-  const big = Buffer.alloc(200 * 1024);
-  for (let i = 0; i < big.length; i++) big[i] = (i * 7) % 256;
-  await sandbox.writeFileBytes(h, "big.bin", big);
-  const back = await sandbox.readFileBytes(h, "big.bin");
-  assert.ok(back && Buffer.from(back).equals(big));
-  const huge = Buffer.alloc(1300 * 1024);
-  for (let i = 0; i < huge.length; i++) huge[i] = (i * 13) % 256;
-  await sandbox.writeFileBytes(h, "huge.bin", huge);
-  const hugeBack = await sandbox.readFileBytes(h, "huge.bin");
-  assert.ok(hugeBack && Buffer.from(hugeBack).equals(huge));
-});
-
-test("empty file roundtrip", async () => {
-  const h = await sandbox.provision(layers);
-  await sandbox.writeFileBytes(h, "empty.bin", Buffer.alloc(0));
-  const back = await sandbox.readFileBytes(h, "empty.bin");
-  assert.ok(back);
-  assert.equal(back.length, 0);
+  for (const [name, kib, step] of [
+    ["big.bin", 200, 7],
+    ["huge.bin", 1300, 13],
+    ["empty.bin", 0, 1],
+  ] as const) {
+    const bytes = Buffer.alloc(kib * 1024);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = (i * step) % 256;
+    await sandbox.writeFileBytes(h, name, bytes);
+    const back = await sandbox.readFileBytes(h, name);
+    assert.ok(back && Buffer.from(back).equals(bytes));
+    assert.equal(back.length, bytes.length);
+  }
 });
 
 test("process sessions capability works end to end", async () => {
@@ -233,10 +223,7 @@ test("a control plane without base64 output still fails closed on truncated text
 });
 
 test("a name conflict on create adopts the existing machine instead of failing", async () => {
-  await fake.fetchImpl("https://api.smolmachines.com/v1/machines", {
-    method: "POST",
-    body: JSON.stringify({ name: sandboxScopeName("qmt", scope), ephemeral: false }),
-  });
+  await preCreate(scopeName());
   const h = await sandbox.provision(layers);
   assert.equal(h.coldStart, false);
   const r = await sandbox.run(h, "echo alive");

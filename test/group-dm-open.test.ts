@@ -21,15 +21,17 @@ const MEMBERS = [
 function directory(
   opts: {
     groups?: Record<string, string[]>;
-    open?: (participants: readonly string[]) => Promise<{ groupId: string } | { error: string } | null>;
+    open?: { groupId: string } | { error: string };
     unknownAuthor?: boolean;
   } = {},
-): ReachDirectory & { registered: Array<{ groupId: string; participants: readonly string[] }> } {
+): ReachDirectory & { registered: Array<{ groupId: string; participants: readonly string[] }>; opened: string[][] } {
   const groups = opts.groups ?? {};
   const registered: Array<{ groupId: string; participants: readonly string[] }> = [];
+  const opened: string[][] = [];
   const key = (ids: Iterable<string>) => [...new Set([...ids].filter(Boolean))].sort().join(",");
   return {
     registered,
+    opened,
     async resolveRecipient(query) {
       const q = query.trim().toLowerCase();
       const hits = MEMBERS.filter((m) => m.principalId.toLowerCase() === q || m.displayName.toLowerCase() === q);
@@ -55,7 +57,14 @@ function directory(
       if (opts.unknownAuthor) return null;
       return MEMBERS.some((m) => m.principalId === principalId) ? { type: "internal" } : null;
     },
-    ...(opts.open ? { openGroup: opts.open } : {}),
+    ...(opts.open
+      ? {
+          openGroup: async (participants: readonly string[]) => {
+            opened.push([...participants]);
+            return opts.open!;
+          },
+        }
+      : {}),
     async registerGroup(groupId, participants) {
       registered.push({ groupId, participants });
       groups[groupId] = [...participants];
@@ -63,140 +72,87 @@ function directory(
   };
 }
 
+const NEW_GROUP = { groupId: "C-mpim-new" };
+const reach = (dir: ReachDirectory, participants: string[], author = "alice@acme.dev", mayOpenGroup = true) =>
+  resolveReachTarget(dir, { participants }, author, ...(mayOpenGroup ? [{ mayOpenGroup }] : [])) as Promise<any>;
+
 describe("reaching a group DM that the directory hasn't seen", () => {
   it("opens the group DM live, registers it, and addresses it by its real id", async () => {
-    const opened: string[][] = [];
-    const dir = directory({
-      open: async (participants) => {
-        opened.push([...participants]);
-        return { groupId: "C-mpim-new" };
-      },
-    });
-
-    const r = await resolveReachTarget(dir, { participants: ["kai@acme.dev"] }, "alice@acme.dev", {
-      mayOpenGroup: true,
-    });
-
+    const dir = directory({ open: NEW_GROUP });
+    const r = await reach(dir, ["kai@acme.dev"]);
     assert.equal(r.ok, true);
-    assert.equal((r as any).destination.type, "group");
-    assert.equal((r as any).destination.target, "C-mpim-new");
-    assert.equal((r as any).destination.audienceScopeId, "group:C-mpim-new");
-    assert.deepEqual(opened, [["kai@acme.dev", "alice@acme.dev"]]);
+    assert.equal(r.destination.type, "group");
+    assert.equal(r.destination.target, "C-mpim-new");
+    assert.equal(r.destination.audienceScopeId, "group:C-mpim-new");
+    assert.deepEqual(dir.opened, [["kai@acme.dev", "alice@acme.dev"]]);
     assert.deepEqual(dir.registered, [{ groupId: "C-mpim-new", participants: ["kai@acme.dev", "alice@acme.dev"] }]);
   });
 
   it("resolves participants named however the agent knows them", async () => {
-    const dir = directory({ open: async () => ({ groupId: "C-mpim-new" }) });
-    const r = await resolveReachTarget(dir, { participants: ["kai", "jo"] }, "alice@acme.dev", {
-      mayOpenGroup: true,
-    });
-    assert.equal(r.ok, true);
+    const dir = directory({ open: NEW_GROUP });
+    assert.equal((await reach(dir, ["kai", "jo"])).ok, true);
     assert.deepEqual(dir.registered[0]?.participants, ["kai@acme.dev", "jo@acme.dev", "alice@acme.dev"]);
   });
 
   it("prefers a group the directory already knows and never opens a second one", async () => {
-    let openCalls = 0;
-    const dir = directory({
-      groups: { "C-known": ["alice@acme.dev", "kai@acme.dev"] },
-      open: async () => {
-        openCalls++;
-        return { groupId: "C-mpim-new" };
-      },
-    });
-    const r = await resolveReachTarget(dir, { participants: ["kai"] }, "alice@acme.dev", {
-      mayOpenGroup: true,
-    });
-    assert.equal((r as any).destination.target, "C-known");
-    assert.equal(openCalls, 0);
+    const dir = directory({ groups: { "C-known": ["alice@acme.dev", "kai@acme.dev"] }, open: NEW_GROUP });
+    assert.equal((await reach(dir, ["kai"])).destination.target, "C-known");
+    assert.equal(dir.opened.length, 0);
   });
 
   it("names the person it can't find instead of blaming the group", async () => {
-    const dir = directory({ open: async () => ({ groupId: "C-mpim-new" }) });
-    const r = await resolveReachTarget(dir, { participants: ["nobody"] }, "alice@acme.dev", {
-      mayOpenGroup: true,
-    });
-    assert.equal((r as any).status, 404);
-    assert.equal((r as any).error, "recipient_not_found");
-    assert.match((r as any).message, /nobody/);
+    const r = await reach(directory({ open: NEW_GROUP }), ["nobody"]);
+    assert.equal(r.status, 404);
+    assert.equal(r.error, "recipient_not_found");
+    assert.match(r.message, /nobody/);
   });
 
   it("refuses to open anything for an author it can't place in the directory", async () => {
-    let openCalls = 0;
-    const dir = directory({
-      unknownAuthor: true,
-      open: async () => {
-        openCalls++;
-        return { groupId: "C-mpim-new" };
-      },
-    });
-    const r = await resolveReachTarget(dir, { participants: ["kai"] }, "stranger@example.com", {
-      mayOpenGroup: true,
-    });
-    assert.equal((r as any).status, 403);
-    assert.equal((r as any).error, "identity_unverified");
-    assert.equal(openCalls, 0);
+    const dir = directory({ unknownAuthor: true, open: NEW_GROUP });
+    const r = await reach(dir, ["kai"], "stranger@example.com");
+    assert.equal(r.status, 403);
+    assert.equal(r.error, "identity_unverified");
+    assert.equal(dir.opened.length, 0);
   });
 
   it("won't open a group DM that is really a 1:1, or one Slack can't hold", async () => {
-    const dir = directory({ open: async () => ({ groupId: "C-mpim-new" }) });
-    const self = await resolveReachTarget(dir, { participants: ["alice"] }, "alice@acme.dev", {
-      mayOpenGroup: true,
-    });
-    assert.equal((self as any).status, 400);
-    assert.match((self as any).message, /recipient/);
+    const self = await reach(directory({ open: NEW_GROUP }), ["alice"]);
+    assert.equal(self.status, 400);
+    assert.match(self.message, /recipient/);
 
-    let openCalls = 0;
-    const crowd = directory({
-      open: async () => {
-        openCalls++;
-        return { groupId: "C-mpim-new" };
-      },
-    });
-    const many = await resolveReachTarget(
+    const crowd = directory({ open: NEW_GROUP });
+    const many = await reach(
       crowd,
-      { participants: Array.from({ length: 9 }, (_, i) => `p${i}`) },
-      "alice@acme.dev",
-      { mayOpenGroup: true },
+      Array.from({ length: 9 }, (_, i) => `p${i}`),
     );
-    assert.equal((many as any).status, 400);
-    assert.equal((many as any).error, "group_too_large");
-    assert.equal(openCalls, 0);
+    assert.equal(many.status, 400);
+    assert.equal(many.error, "group_too_large");
+    assert.equal(crowd.opened.length, 0);
   });
 
   it("relays what Slack said when the open fails", async () => {
-    const dir = directory({ open: async () => ({ error: "kai is deactivated" }) });
-    const r = await resolveReachTarget(dir, { participants: ["kai"] }, "alice@acme.dev", {
-      mayOpenGroup: true,
-    });
-    assert.equal((r as any).status, 502);
-    assert.equal((r as any).error, "group_open_failed");
-    assert.match((r as any).message, /deactivated/);
+    const r = await reach(directory({ open: { error: "kai is deactivated" } }), ["kai"]);
+    assert.equal(r.status, 502);
+    assert.equal(r.error, "group_open_failed");
+    assert.match(r.message, /deactivated/);
   });
 
   it("opens nothing unless the caller is actually sending a message", async () => {
-    let openCalls = 0;
-    const dir = directory({
-      open: async () => {
-        openCalls++;
-        return { groupId: "C-mpim-new" };
-      },
-    });
-    const r = await resolveReachTarget(dir, { participants: ["kai"] }, "alice@acme.dev");
-    assert.equal((r as any).status, 404);
-    assert.equal((r as any).error, "group_not_found");
-    assert.match((r as any).message, /post to it once/);
-    assert.equal(openCalls, 0);
+    const dir = directory({ open: NEW_GROUP });
+    const r = await reach(dir, ["kai"], "alice@acme.dev", false);
+    assert.equal(r.status, 404);
+    assert.equal(r.error, "group_not_found");
+    assert.match(r.message, /post to it once/);
+    assert.equal(dir.opened.length, 0);
     assert.deepEqual(dir.registered, []);
   });
 
   it("still says group_not_found when the surface can't open one", async () => {
     const dir = directory();
-    delete (dir as { openGroup?: unknown }).openGroup;
-    const r = await resolveReachTarget(dir, { participants: ["kai"] }, "alice@acme.dev", {
-      mayOpenGroup: true,
-    });
-    assert.equal((r as any).status, 404);
-    assert.equal((r as any).error, "group_not_found");
+    assert.equal("openGroup" in dir, false);
+    const r = await reach(dir, ["kai"]);
+    assert.equal(r.status, 404);
+    assert.equal(r.error, "group_not_found");
   });
 });
 
@@ -246,6 +202,14 @@ describe("the Slack surface opening a group DM", () => {
     return { f, client, fulfilled };
   }
 
+  const openRequest = (id: string) => ({
+    id,
+    source: "slack" as const,
+    createdAt: Date.now(),
+    status: "pending" as const,
+    query: { count: 1, openGroup: { participants: ["alice@acme.dev", "kai@acme.dev"] } },
+  });
+
   it("maps principals to Slack ids and opens one conversation for all of them", async () => {
     const calls: Array<{ users: string }> = [];
     const syncs: string[] = [];
@@ -254,13 +218,7 @@ describe("the Slack surface opening a group DM", () => {
       return { channel: { id: "C-mpim-live" } };
     }, syncs);
 
-    await f.fulfillSurfaceContext(client, {
-      id: "req-1",
-      source: "slack",
-      createdAt: Date.now(),
-      status: "pending",
-      query: { count: 1, openGroup: { participants: ["alice@acme.dev", "kai@acme.dev"] } },
-    });
+    await f.fulfillSurfaceContext(client, openRequest("req-1"));
 
     assert.deepEqual(calls, [{ users: "U-alice,U-kai" }]);
     assert.deepEqual((fulfilled[0]!.outcome as any).result.group, { groupId: "C-mpim-live" });
@@ -274,57 +232,73 @@ describe("the Slack surface opening a group DM", () => {
       throw err;
     });
 
-    await f.fulfillSurfaceContext(client, {
-      id: "req-2",
-      source: "slack",
-      createdAt: Date.now(),
-      status: "pending",
-      query: { count: 1, openGroup: { participants: ["alice@acme.dev", "kai@acme.dev"] } },
-    });
+    await f.fulfillSurfaceContext(client, openRequest("req-2"));
 
     assert.match(String((fulfilled[0]!.outcome as any).error), /user_not_found/);
   });
 });
 
+const IDS = {
+  ownTeamId: "T1",
+  botUserId: "UBOT",
+  ownBotId: "BBOT",
+  botHandle: "qm",
+  ownWorkspaceUrl: "",
+  identityMode: "email",
+} as const;
+const ALICE = { id: "U1", team_id: "T1", name: "alice", profile: { email: "alice@x.com" } };
+const KAI = { id: "U2", team_id: "T1", name: "kai", profile: { email: "kai@x.com" } };
+
+function syncCore(
+  holdDirectorySync: (fn: (lost: Promise<void>) => Promise<unknown>) => Promise<unknown> | unknown,
+  accept: () => boolean = () => true,
+) {
+  const pushes: Array<Record<string, unknown>> = [];
+  const core = {
+    pushDirectory: async (body: Record<string, unknown>) => {
+      pushes.push(body);
+      return accept();
+    },
+    holdDirectorySync,
+  };
+  return { core: core as never, pushes };
+}
+
+const held = (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {}));
+
+function crawlClient(opts: { members?: unknown[]; isPrivate?: boolean; failMpim?: boolean; listed?: string[] } = {}) {
+  return {
+    users: { info: async () => ({ user: undefined }) },
+    conversations: { info: async () => ({ channel: undefined }) },
+    async *paginate(method: string, args: Record<string, unknown> = {}) {
+      opts.listed?.push(method);
+      if (method === "users.list") {
+        yield { members: opts.members ?? [ALICE] };
+        return;
+      }
+      if (method === "conversations.list") {
+        if (opts.failMpim && args.types === "mpim") throw new Error("ratelimited");
+        yield {
+          channels: [{ id: "C1", name: "eng", is_member: true, ...(opts.isPrivate ? { is_private: true } : {}) }],
+        };
+        return;
+      }
+      yield { members: opts.failMpim ? [] : ["U1"] };
+    },
+  };
+}
+
+async function waitForPushes(pushes: unknown[], count: number): Promise<void> {
+  const deadline = Date.now() + 2000;
+  while (pushes.length < count && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+}
+
 describe("pushing the group roster when Slack won't list group DMs", () => {
   it("omits the roster rather than replacing it with an empty one", async () => {
-    const pushes: Array<Record<string, unknown>> = [];
-    const core = {
-      pushDirectory: async (body: Record<string, unknown>) => {
-        pushes.push(body);
-        return true;
-      },
-      holdDirectorySync: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
-    };
-    const client = {
-      users: { info: async () => ({ user: undefined }) },
-      conversations: { info: async () => ({ channel: undefined }) },
-      async *paginate(method: string, args: Record<string, unknown>) {
-        if (method === "users.list") {
-          yield { members: [{ id: "U1", team_id: "T1", name: "alice", profile: { email: "alice@x.com" } }] };
-          return;
-        }
-        if (method === "conversations.list") {
-          if (args.types === "mpim") throw new Error("ratelimited");
-          yield { channels: [{ id: "C1", name: "eng", is_member: true }] };
-          return;
-        }
-        yield { members: [] };
-      },
-    };
-    const dir = createDirectory({
-      core: core as never,
-      ids: {
-        ownTeamId: "T1",
-        botUserId: "UBOT",
-        ownBotId: "BBOT",
-        botHandle: "qm",
-        ownWorkspaceUrl: "",
-        identityMode: "email",
-      },
-    });
+    const { core, pushes } = syncCore(held);
+    const dir = createDirectory({ core, ids: IDS });
 
-    await dir.getUserSnapshot(client);
+    await dir.getUserSnapshot(crawlClient({ failMpim: true }));
     await new Promise((r) => setTimeout(r, 50));
 
     assert.equal(pushes.length, 1);
@@ -335,146 +309,40 @@ describe("pushing the group roster when Slack won't list group DMs", () => {
 
 describe("the directory crawl when another instance holds the sync lease", () => {
   it("skips the channel crawl and the push instead of racing the leader", async () => {
-    const pushes: Array<Record<string, unknown>> = [];
-    const listedMethods: string[] = [];
-    const core = {
-      pushDirectory: async (body: Record<string, unknown>) => {
-        pushes.push(body);
-        return true;
-      },
-      holdDirectorySync: async () => null,
-    };
-    const client = {
-      users: { info: async () => ({ user: undefined }) },
-      async *paginate(method: string) {
-        listedMethods.push(method);
-        if (method === "users.list") {
-          yield { members: [{ id: "U1", team_id: "T1", name: "alice", profile: { email: "alice@x.com" } }] };
-          return;
-        }
-        yield { channels: [{ id: "C1", name: "eng", is_member: true }] };
-      },
-    };
-    const dir = createDirectory({
-      core: core as never,
-      ids: {
-        ownTeamId: "T1",
-        botUserId: "UBOT",
-        ownBotId: "BBOT",
-        botHandle: "qm",
-        ownWorkspaceUrl: "",
-        identityMode: "email",
-      },
-    });
+    const listed: string[] = [];
+    const { core, pushes } = syncCore(async () => null);
+    const dir = createDirectory({ core, ids: IDS });
 
-    const snap = await dir.getUserSnapshot(client);
+    const snap = await dir.getUserSnapshot(crawlClient({ listed }));
     await new Promise((r) => setTimeout(r, 50));
 
     assert.ok(snap?.byId.has("U1"), "the local snapshot still refreshes for classification");
     assert.equal(pushes.length, 0);
-    assert.deepEqual(listedMethods, ["users.list"], "no channel or group crawl runs on the follower");
+    assert.deepEqual(listed, ["users.list"], "no channel or group crawl runs on the follower");
   });
 
   it("retries a skipped sync until the lease frees, then applies the queued revocation", async () => {
-    const pushes: Array<Record<string, unknown>> = [];
     let locked = true;
-    const core = {
-      pushDirectory: async (body: Record<string, unknown>) => {
-        pushes.push(body);
-        return true;
-      },
-      holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<unknown>) =>
-        locked ? null : fn(new Promise<void>(() => {})),
-    };
-    const client = {
-      users: { info: async () => ({ user: undefined }) },
-      async *paginate(method: string) {
-        if (method === "users.list") {
-          yield {
-            members: [
-              { id: "U1", team_id: "T1", name: "alice", profile: { email: "alice@x.com" } },
-              { id: "U2", team_id: "T1", name: "kai", profile: { email: "kai@x.com" } },
-            ],
-          };
-          return;
-        }
-        if (method === "conversations.list") {
-          yield { channels: [{ id: "C1", name: "eng", is_member: true, is_private: true }] };
-          return;
-        }
-        yield { members: ["U1"] };
-      },
-    };
-    const dir = createDirectory({
-      core: core as never,
-      syncRetryMs: 5,
-      ids: {
-        ownTeamId: "T1",
-        botUserId: "UBOT",
-        ownBotId: "BBOT",
-        botHandle: "qm",
-        ownWorkspaceUrl: "",
-        identityMode: "email",
-      },
-    });
+    const { core, pushes } = syncCore(async (fn) => (locked ? null : held(fn)));
+    const dir = createDirectory({ core, syncRetryMs: 5, ids: IDS });
 
-    await dir.forceDirectorySync(client, "C1", "kai@x.com");
+    await dir.forceDirectorySync(crawlClient({ members: [ALICE, KAI], isPrivate: true }), "C1", "kai@x.com");
     await new Promise((r) => setTimeout(r, 30));
     assert.equal(pushes.length, 0, "nothing lands while the lease is held elsewhere");
 
     locked = false;
-    const deadline = Date.now() + 2000;
-    while (!pushes.length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
-
+    await waitForPushes(pushes, 1);
     const revocations = pushes.at(-1)?.channelRevocations as Array<Record<string, string>>;
     assert.deepEqual(revocations, [{ channelId: "C1", principalId: "kai@x.com" }]);
   });
 
   it("retries a push the store refused as stale until the revocation actually lands", async () => {
-    const pushes: Array<Record<string, unknown>> = [];
     let refusals = 1;
-    const core = {
-      pushDirectory: async (body: Record<string, unknown>) => {
-        pushes.push(body);
-        return refusals-- <= 0;
-      },
-      holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
-    };
-    const client = {
-      users: { info: async () => ({ user: undefined }) },
-      async *paginate(method: string) {
-        if (method === "users.list") {
-          yield {
-            members: [
-              { id: "U1", team_id: "T1", name: "alice", profile: { email: "alice@x.com" } },
-              { id: "U2", team_id: "T1", name: "kai", profile: { email: "kai@x.com" } },
-            ],
-          };
-          return;
-        }
-        if (method === "conversations.list") {
-          yield { channels: [{ id: "C1", name: "eng", is_member: true, is_private: true }] };
-          return;
-        }
-        yield { members: ["U1"] };
-      },
-    };
-    const dir = createDirectory({
-      core: core as never,
-      syncRetryMs: 5,
-      ids: {
-        ownTeamId: "T1",
-        botUserId: "UBOT",
-        ownBotId: "BBOT",
-        botHandle: "qm",
-        ownWorkspaceUrl: "",
-        identityMode: "email",
-      },
-    });
+    const { core, pushes } = syncCore(held, () => refusals-- <= 0);
+    const dir = createDirectory({ core, syncRetryMs: 5, ids: IDS });
 
-    await dir.forceDirectorySync(client, "C1", "kai@x.com");
-    const deadline = Date.now() + 2000;
-    while (pushes.length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+    await dir.forceDirectorySync(crawlClient({ members: [ALICE, KAI], isPrivate: true }), "C1", "kai@x.com");
+    await waitForPushes(pushes, 2);
 
     assert.ok(pushes.length >= 2, "the refused push is retried");
     const revocations = pushes.at(-1)?.channelRevocations as Array<Record<string, string>>;
@@ -482,41 +350,10 @@ describe("the directory crawl when another instance holds the sync lease", () =>
   });
 
   it("discards a crawl whose lease was lost mid-flight instead of pushing it", async () => {
-    const pushes: Array<Record<string, unknown>> = [];
-    const core = {
-      pushDirectory: async (body: Record<string, unknown>) => {
-        pushes.push(body);
-        return true;
-      },
-      holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<unknown>) => fn(Promise.resolve()),
-    };
-    const client = {
-      users: { info: async () => ({ user: undefined }) },
-      async *paginate(method: string) {
-        if (method === "users.list") {
-          yield { members: [{ id: "U1", team_id: "T1", name: "alice", profile: { email: "alice@x.com" } }] };
-          return;
-        }
-        if (method === "conversations.list") {
-          yield { channels: [{ id: "C1", name: "eng", is_member: true }] };
-          return;
-        }
-        yield { members: ["U1"] };
-      },
-    };
-    const dir = createDirectory({
-      core: core as never,
-      ids: {
-        ownTeamId: "T1",
-        botUserId: "UBOT",
-        ownBotId: "BBOT",
-        botHandle: "qm",
-        ownWorkspaceUrl: "",
-        identityMode: "email",
-      },
-    });
+    const { core, pushes } = syncCore(async (fn) => fn(Promise.resolve()));
+    const dir = createDirectory({ core, ids: IDS });
 
-    const snap = await dir.getUserSnapshot(client);
+    const snap = await dir.getUserSnapshot(crawlClient());
     await new Promise((r) => setTimeout(r, 50));
 
     assert.ok(snap?.byId.has("U1"));

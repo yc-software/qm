@@ -10,17 +10,36 @@ import { getRequiredModel } from "../src/model/pi-models.ts";
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 const MODEL_ID = "overlay-future-model";
 
-test("unknown builtin-provider model fails resolution and a live runtime selection request", async () => {
-  assert.throws(() => getRequiredModel(MODEL_ID), /Unsupported model/);
-  const config = testConfig({ harness: "pi" });
-  const built = buildApp(config, {
+function overlayApp(config: ReturnType<typeof testConfig>) {
+  return buildApp(config, {
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
   });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
-  server.listen(0, "127.0.0.1");
-  await new Promise<void>((resolve) => server.once("listening", resolve));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
+
+async function listen(server: ReturnType<typeof createInsecureTestServer>) {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+const webTurn = (built: ReturnType<typeof buildApp>, threadRef: string, extra: Record<string, unknown> = {}) =>
+  built.app.turn({
+    surface: "web",
+    actor: { externalId: "alice" },
+    conversation: { kind: "dm", threadRef },
+    text: "hello",
+    async: true,
+    ...extra,
+  });
+
+test("unknown builtin-provider model fails resolution and a live runtime selection request", async () => {
+  assert.throws(() => getRequiredModel(MODEL_ID), /Unsupported model/);
+  const config = testConfig({ harness: "pi" });
+  const built = overlayApp(config);
+  const { base, close } = await listen(createInsecureTestServer(built.app, serverDeps(config, built)));
   try {
     const response = await fetch(`${base}/v1/runtime-config`, {
       method: "PUT",
@@ -35,9 +54,8 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
     const body = await response.json();
     assert.equal(response.status, 400, JSON.stringify(body));
     assert.match(JSON.stringify(body), /model|supported/);
-    console.log(`Baseline: unknown model resolution throws; live runtime selection HTTP ${response.status}`);
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await close();
   }
 });
 
@@ -209,13 +227,8 @@ test("collisions are rejected in both registration orders and OpenRouter failure
 
 test("live admin lifecycle is authorized, audited, immediately selectable and removed on delete", async () => {
   const config = testConfig({ harness: "pi", openaiApiKey: "local-test-key" });
-  const built = buildApp(config, {
-    modelCredentialFetch: async () => Response.json({ data: [] }),
-    modelVerificationProbe: async () => {},
-  });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const built = overlayApp(config);
+  const { base, close } = await listen(createInsecureTestServer(built.app, serverDeps(config, built)));
   const api = (path: string, method = "GET", body?: unknown, headers = ADMIN) =>
     fetch(`${base}${path}`, {
       method,
@@ -260,14 +273,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.ok(body.modelsByHarness.pi?.includes(MODEL_ID));
     const wire = JSON.stringify(body.modelCatalog);
     assert.doesNotMatch(wire, /baseUrl|headers|apiKey|local-test-key/);
-    const turn = await built.app.turn({
-      surface: "web",
-      actor: { externalId: "alice" },
-      conversation: { kind: "dm", threadRef: "overlay-live-test" },
-      text: "hello",
-      model: MODEL_ID,
-      async: true,
-    });
+    const turn = await webTurn(built, "overlay-live-test", { model: MODEL_ID });
     assert.equal(turn.status, "queued");
     assert.equal((await api(path, "PUT", { ...spec, name: "Renamed", maxTokens: 30_000 })).status, 200);
     assert.equal(getRequiredModel(MODEL_ID).name, "Renamed");
@@ -287,27 +293,17 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.match(unavailable.unavailableReason, /deleted/);
     assert.ok(unavailable.modelsByHarness.pi.includes("gpt-5.6-sol"));
     assert.equal((await api("/v1/runtime-config", "PUT", runtime)).status, 400);
-    const deletedTurn = await built.app.turn({
-      surface: "web",
-      actor: { externalId: "alice" },
-      conversation: { kind: "dm", threadRef: "overlay-deleted-test" },
-      text: "hello",
-      model: MODEL_ID,
-      async: true,
-    });
+    const deletedTurn = await webTurn(built, "overlay-deleted-test", { model: MODEL_ID });
     assert.equal(deletedTurn.status, "refused");
     assert.match(JSON.stringify(deletedTurn), /couldn.t set up that runtime choice/);
     const recovered = await api("/v1/runtime-config", "PUT", { ...runtime, modelId: "gpt-5.6-sol" });
     assert.equal(recovered.status, 200);
     assert.equal(((await recovered.json()) as { effective: { modelId: string } }).effective.modelId, "gpt-5.6-sol");
     for (const model of [undefined, "gpt-5.6-sol"]) {
-      const recoveredTurn = await built.app.turn({
-        surface: "web",
+      const recoveredTurn = await webTurn(built, `overlay-recovered-${model ?? "saved-selection"}`, {
         actor: { externalId: runtime.principalId },
-        conversation: { kind: "dm", threadRef: `overlay-recovered-${model ?? "saved-selection"}` },
         text: "Continue with the replacement I selected",
         ...(model ? { model } : {}),
-        async: true,
       });
       assert.equal(recoveredTurn.status, "queued", JSON.stringify(recoveredTurn));
     }
@@ -315,7 +311,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.equal(events.filter((e) => e.action === "model-registry.update").length, 2);
     assert.equal(events.filter((e) => e.action === "model-registry.delete").length, 1);
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await close();
   }
 });
 
@@ -448,10 +444,7 @@ test("hydration isolates promoted builtins, incompatible providers, missing temp
 
 test("model refresh is limited to dependent routes and admin repair survives stale persisted definitions", async () => {
   const config = testConfig({ harness: "pi" });
-  const built = buildApp(config, {
-    modelCredentialFetch: async () => Response.json({ data: [] }),
-    modelVerificationProbe: async () => {},
-  });
+  const built = overlayApp(config);
   const backing = createMemoryMap<StoredModelOverlay>();
   await backing.put("stale", {
     spec: { ...spec, id: "stale", template: "missing" },
@@ -469,9 +462,7 @@ test("model refresh is limited to dependent routes and admin repair survives sta
       await registry.refresh();
     },
   };
-  const server = createInsecureTestServer(built.app, deps);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const { base, close } = await listen(createInsecureTestServer(built.app, deps));
   try {
     assert.equal((await fetch(base + "/v1/admin/whoami", { headers: ADMIN })).status, 200);
     assert.equal(refreshes, 0);
@@ -490,7 +481,7 @@ test("model refresh is limited to dependent routes and admin repair survives sta
       200,
     );
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await close();
   }
 });
 

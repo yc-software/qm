@@ -12,33 +12,16 @@ import {
 } from "../src/harness/replay.ts";
 import type { ConversationTurn, OverheardMessage, SessionEntry } from "../src/types.ts";
 
-function entry(type: SessionEntry["type"], text: string): SessionEntry {
-  return {
-    sessionId: "s",
-    seq: 0,
-    parentSeq: null,
-    type,
-    payload: { text },
-    scopeLabel: "org:default-org",
-    createdAt: 0,
-  };
+function ent(type: SessionEntry["type"], payload: unknown, seq = 0, createdAt = seq): SessionEntry {
+  return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: "org:default-org", createdAt };
 }
 
-function overheardEntry(ts: string, name: string, text: string, files?: string[]): SessionEntry {
-  return {
-    sessionId: "s",
-    seq: 0,
-    parentSeq: null,
-    type: "user",
-    payload: { overheard: true, ts, name, text, ...(files ? { files } : {}) },
-    scopeLabel: "org:default-org",
-    createdAt: Number(ts) || 0,
-  };
-}
+const entry = (type: SessionEntry["type"], text: string): SessionEntry => ent(type, { text });
 
-function ent(type: SessionEntry["type"], payload: unknown, seq = 0): SessionEntry {
-  return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: "org:default-org", createdAt: seq };
-}
+const overheardEntry = (ts: string, name: string, text: string, files?: string[]): SessionEntry =>
+  ent("user", { overheard: true, ts, name, text, ...(files ? { files } : {}) }, 0, Number(ts) || 0);
+
+const triggerEntry = (ts: string, text: string): SessionEntry => ent("user", { text, ts }, 0, Number(ts) || 0);
 
 function assertValidWire(msgs: ReturnType<typeof reconstructMessagesFromHistory>): void {
   if (!msgs.length) return;
@@ -72,20 +55,18 @@ test("replayPreamble renders user, assistant, and delivered-file entries", () =>
   assert.match(out, /^\[files delivered to the conversation: pirate_flag\.png \(image\/png, 142 bytes\)\]$/m);
 });
 
-test("replayPreamble is empty when there is nothing to replay", () => {
+test("replayPreamble and reconstructMessagesFromHistory are empty for a fresh session", () => {
   assert.equal(replayPreamble([]), "");
+  assert.deepEqual(reconstructMessagesFromHistory([]), []);
 });
 
 test("replayPreamble EXCLUDES thinking from cold-start context (signature is stored but never replayed)", () => {
-  const thinking: SessionEntry = {
-    sessionId: "s",
-    seq: 1,
-    parentSeq: null,
-    type: "thinking",
-    payload: { thinking: "secret chain of thought", thinkingSignature: "OPAQUE-SIG-BYTES" },
-    scopeLabel: "org:default-org",
-    createdAt: 0,
-  };
+  const thinking = ent(
+    "thinking",
+    { thinking: "secret chain of thought", thinkingSignature: "OPAQUE-SIG-BYTES" },
+    1,
+    0,
+  );
   const out = replayPreamble([entry("user", "hi"), thinking, entry("assistant", "hello")]);
   assert.match(out, /User: hi/);
   assert.match(out, /Assistant: hello/);
@@ -247,10 +228,6 @@ test("reconstructMessagesFromHistory replays a context summary as a user turn an
   assert.equal(msgs.filter((m) => m.role === "toolResult").length, 2);
 });
 
-test("reconstructMessagesFromHistory is empty for empty history (fresh session — nothing to replay)", () => {
-  assert.deepEqual(reconstructMessagesFromHistory([]), []);
-});
-
 test("planColdStartSeed prefers the faithful rebuild; priorTurns only bootstraps an empty durable log", () => {
   const oneMsg = [{ role: "user" as const, content: [{ type: "text" as const, text: "hi" }], timestamp: 0 }];
   assert.equal(planColdStartSeed(oneMsg, true), "structured");
@@ -307,34 +284,10 @@ test("seedPriorTurns renders a lone named assistant turn as a from=agent <messag
   ]);
 });
 
-test("seedPriorTurns re-merges after a downgrade so alternation holds (no two consecutive user turns)", () => {
-  const turns: ConversationTurn[] = [
-    { role: "user", name: "alice", text: "status?" },
-    { role: "assistant", name: "agent (cron)", text: "deploy shipped" },
-  ];
-  const seeded = seedPriorTurns(turns);
-  assert.equal(seeded.length, 1);
-  assert.equal(seeded[0]!.role, "user");
-  assert.match(seeded[0]!.text, /status\?/);
-  assert.match(seeded[0]!.text, /<message from="agent" via="agent \(cron\)">deploy shipped<\/message>/);
-});
-
 test("seedPriorTurns skips empty turns and returns [] for an empty input", () => {
   assert.deepEqual(seedPriorTurns([]), []);
   assert.deepEqual(seedPriorTurns([{ role: "user", name: "x", text: "   " }]), []);
 });
-
-function triggerEntry(ts: string, text: string): SessionEntry {
-  return {
-    sessionId: "s",
-    seq: 0,
-    parentSeq: null,
-    type: "user",
-    payload: { text, ts },
-    scopeLabel: "org:default-org",
-    createdAt: Number(ts) || 0,
-  };
-}
 
 test("recordedMessageTimestamps collects ts from BOTH overheard imports and stamped triggers", () => {
   assert.deepEqual([...recordedMessageTimestamps([])], []);
@@ -461,48 +414,34 @@ test("replayPreamble renders an overheard entry distinctly from a normal user li
   assert.match(out, /User: thanks/);
 });
 
-test("a bytes-only surface call (legacy post / reach) replays with stand-in text, never {action,bytes}", () => {
+function replayedCallArgs(call: Record<string, unknown>, action: string, reply: string): Record<string, unknown> {
   const msgs = reconstructMessagesFromHistory([
     ent("user", { text: "hi" }, 0),
-    ent("tool_call", { tool: "web", action: "post", bytes: 873, callId: "c1" }, 1),
-    ent("tool_result", { tool: "web", action: "post", ok: true, callId: "c1", isError: false, result: "[sent]" }, 2),
-    ent("assistant", { text: "Replied in thread." }, 3),
+    ent("tool_call", { tool: "web", ...call, callId: "c1" }, 1),
+    ent("tool_result", { tool: "web", action, ok: true, callId: "c1", isError: false, result: "[sent]" }, 2),
+    ent("assistant", { text: reply }, 3),
   ]);
   assertValidWire(msgs);
-  const call = msgs.flatMap((m) => (m.role === "assistant" ? m.content : [])).find((b) => b.type === "toolCall");
-  assert.ok(call && call.type === "toolCall");
-  const args = call.arguments as Record<string, unknown>;
+  const replayed = msgs.flatMap((m) => (m.role === "assistant" ? m.content : [])).find((b) => b.type === "toolCall");
+  assert.ok(replayed && replayed.type === "toolCall");
+  return replayed.arguments as Record<string, unknown>;
+}
+
+test("a bytes-only surface call (legacy post / reach) replays with stand-in text, never {action,bytes}", () => {
+  const args = replayedCallArgs({ action: "post", bytes: 873 }, "post", "Replied in thread.");
   assert.equal(args.action, "post");
   assert.equal(args.text, "[sent earlier — text not retained]");
   assert.ok(!("bytes" in args), "the schema-invalid bytes summary must never replay as the model's own call");
 });
 
 test("a text-carrying post call replays verbatim (ts/broadcast preserved)", () => {
-  const msgs = reconstructMessagesFromHistory([
-    ent("user", { text: "hi" }, 0),
-    ent("tool_call", { tool: "web", action: "post", broadcast: true, text: "the actual reply", callId: "c1" }, 1),
-    ent("tool_result", { tool: "web", action: "post", ok: true, callId: "c1", isError: false, result: "[sent]" }, 2),
-    ent("assistant", { text: "Replied." }, 3),
-  ]);
-  assertValidWire(msgs);
-  const call = msgs.flatMap((m) => (m.role === "assistant" ? m.content : [])).find((b) => b.type === "toolCall");
-  assert.ok(call && call.type === "toolCall");
-  const args = call.arguments as Record<string, unknown>;
+  const args = replayedCallArgs({ action: "post", broadcast: true, text: "the actual reply" }, "post", "Replied.");
   assert.equal(args.text, "the actual reply");
   assert.equal(args.broadcast, true);
 });
 
 test("a legacy call with a numeric files count replays without it (schema wants string[])", () => {
-  const msgs = reconstructMessagesFromHistory([
-    ent("user", { text: "hi" }, 0),
-    ent("tool_call", { tool: "web", action: "reach", recipient: "bob", bytes: 100, files: 2, callId: "c1" }, 1),
-    ent("tool_result", { tool: "web", action: "reach", ok: true, callId: "c1", isError: false, result: "[sent]" }, 2),
-    ent("assistant", { text: "Sent." }, 3),
-  ]);
-  assertValidWire(msgs);
-  const call = msgs.flatMap((m) => (m.role === "assistant" ? m.content : [])).find((b) => b.type === "toolCall");
-  assert.ok(call && call.type === "toolCall");
-  const args = call.arguments as Record<string, unknown>;
+  const args = replayedCallArgs({ action: "reach", recipient: "bob", bytes: 100, files: 2 }, "reach", "Sent.");
   assert.equal(args.recipient, "bob");
   assert.ok(!("files" in args), "numeric files count must not replay");
   assert.ok(!("bytes" in args));

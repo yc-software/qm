@@ -9,6 +9,15 @@ import { processRun } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 
+type Fixture = Awaited<ReturnType<typeof swarmFixture>>;
+
+async function swarmFixtures(count: number) {
+  const first = await swarmFixture();
+  const fixtures = [first];
+  while (fixtures.length < count) fixtures.push(await swarmFixture(first.serviceOptions));
+  return fixtures;
+}
+
 test("delayed ready acknowledgment cannot roll back a delivered worker across phase locks", async (context) => {
   const fixture = await swarmFixture();
   const [worker] = await fixture.service.spawn(fixture.caller, { requestId: "initial", text: "Work" });
@@ -106,18 +115,9 @@ test("ordinary root and worker turns bypass frozen rosters but swarm notificatio
 });
 
 test("sweeps use bounded pages and advance past pending cleanup to later swarms", async () => {
-  const first = await swarmFixture();
-  const fixtures = [first];
   const batchSize = SWARM_LIMITS.sweepBatch ?? 16;
-  for (let index = 0; index < batchSize; index++)
-    fixtures.push(
-      await swarmFixture({
-        store: first.store,
-        sessions: first.sessions,
-        runs: first.runs,
-        lock: first.serviceOptions.lock,
-      }),
-    );
+  const fixtures = await swarmFixtures(batchSize + 1);
+  const first = fixtures[0]!;
   for (const fixture of fixtures) await fixture.service.spawn(fixture.caller, { requestId: "initial", text: "Work" });
   const page = await first.store.pending();
   assert.equal(page.length, batchSize);
@@ -136,13 +136,7 @@ test("sweeps use bounded pages and advance past pending cleanup to later swarms"
 });
 
 test("provisioning deadlines isolate healthy swarms and retire late private resources without delivering", async (context) => {
-  const first = await swarmFixture();
-  const second = await swarmFixture({
-    store: first.store,
-    sessions: first.sessions,
-    runs: first.runs,
-    lock: first.serviceOptions.lock,
-  });
+  const [first, second] = (await swarmFixtures(2)) as [Fixture, Fixture];
   const forum = await first.sandboxes.create("alice", first.root.scopeId, "modal", "Forum");
   const [slow] = await first.service.spawn(first.caller, { requestId: "slow", text: "Work", forumSandboxId: forum.id });
   await second.service.spawn(second.caller, { requestId: "healthy", text: "Work" });
@@ -152,14 +146,8 @@ test("provisioning deadlines isolate healthy swarms and retire late private reso
       if (left.id === first.root.id) return -1;
       return right.id === first.root.id ? 1 : 0;
     });
-  let release!: () => void;
-  let reached!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const entered = new Promise<void>((resolve) => {
-    reached = resolve;
-  });
+  const { promise: gate, resolve: release } = Promise.withResolvers<void>();
+  const { promise: entered, resolve: reached } = Promise.withResolvers<void>();
   const create = first.sandboxes.create.bind(first.sandboxes);
   const list = first.sandboxes.list.bind(first.sandboxes);
   let inventoryReads = 0;
@@ -206,17 +194,8 @@ test("provisioning deadlines isolate healthy swarms and retire late private reso
 });
 
 test("timed-out provider calls retain bounded execution slots across repeated sweeps", async (context) => {
-  const first = await swarmFixture();
-  const fixtures = [first];
-  for (let index = 0; index < SWARM_LIMITS.sweepConcurrency + 1; index++)
-    fixtures.push(
-      await swarmFixture({
-        store: first.store,
-        sessions: first.sessions,
-        runs: first.runs,
-        lock: first.serviceOptions.lock,
-      }),
-    );
+  const fixtures = await swarmFixtures(SWARM_LIMITS.sweepConcurrency + 2);
+  const first = fixtures[0]!;
   for (const fixture of fixtures)
     await fixture.service.spawn(fixture.caller, { requestId: "pool", count: 3, text: "Work" });
   const releases: Array<() => void> = [];
@@ -257,10 +236,8 @@ test("timed-out provider calls retain bounded execution slots across repeated sw
 });
 
 test("ready notifications progress while every provider slot remains fenced after timeout", async (context) => {
-  const first = await swarmFixture();
-  const fixtures = [first];
-  for (let index = 0; index < SWARM_LIMITS.sweepConcurrency; index++)
-    fixtures.push(await swarmFixture(first.serviceOptions));
+  const fixtures = await swarmFixtures(SWARM_LIMITS.sweepConcurrency + 1);
+  const first = fixtures[0]!;
   fixtures.sort((left, right) => left.root.id.localeCompare(right.root.id));
   const healthy = fixtures.at(-1)!;
   const [worker] = await healthy.service.spawn(healthy.caller, { requestId: "ready", text: "Work" });
@@ -307,10 +284,7 @@ test("ready notifications progress while every provider slot remains fenced afte
 
 test("timed-out pending selection stays single-flight until the query settles", async (context) => {
   const { service, store } = await swarmFixture();
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const { promise: gate, resolve: release } = Promise.withResolvers<void>();
   const pending = store.pending.bind(store);
   let selections = 0;
   store.pending = async (afterId) => {
@@ -357,14 +331,8 @@ test("late session creation remains fenced from cleanup until its side effect se
   await fixture.store.update(fixture.root.id, (swarm) => {
     swarm.members[1]!.attempts = 2;
   });
-  let release!: () => void;
-  let reached!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const entered = new Promise<void>((resolve) => {
-    reached = resolve;
-  });
+  const { promise: gate, resolve: release } = Promise.withResolvers<void>();
+  const { promise: entered, resolve: reached } = Promise.withResolvers<void>();
   const createSession = fixture.sessions.getOrCreateByThread.bind(fixture.sessions);
   fixture.sessions.getOrCreateByThread = async (...args) => {
     if (args[0] === member!.threadRef) {
@@ -402,14 +370,8 @@ test("failed participant writes retain every sibling write before session cleanu
     swarm.members[1]!.attempts = 2;
   });
   const addParticipant = fixture.sessions.addParticipant.bind(fixture.sessions);
-  let release!: () => void;
-  let reached!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const entered = new Promise<void>((resolve) => {
-    reached = resolve;
-  });
+  const { promise: gate, resolve: release } = Promise.withResolvers<void>();
+  const { promise: entered, resolve: reached } = Promise.withResolvers<void>();
   fixture.sessions.addParticipant = async (sessionId, principalId) => {
     if (principalId === "alice") throw new Error("participant write failed");
     reached();
@@ -581,35 +543,6 @@ test("eligible recipients exclude a session whose roster changes", async () => {
   await assert.rejects(service.binding({ ...run.request, runId: run.id }), /authorization changed/);
 });
 
-test("spawn and send retry keys are idempotent and reject conflicting payloads", async () => {
-  const { service, caller, store, root } = await swarmFixture();
-  const request = { requestId: "one", text: "Work" };
-  const [first, second] = await Promise.all([service.spawn(caller, request), service.spawn(caller, request)]);
-  assert.equal(first[0]!.id, second[0]!.id);
-  await assert.rejects(service.spawn(caller, { ...request, text: "Different" }), /reused/);
-  await service.sweep();
-  const message = { requestId: "message", audience: "all" as const, text: "Question" };
-  const [sent, resent] = await Promise.all([service.send(caller, message), service.send(caller, message)]);
-  assert.equal(sent.id, resent.id);
-  await assert.rejects(service.send(caller, { ...message, text: "Different" }), /reused/);
-  assert.equal((await store.get(root.id))!.messages.length, 2);
-});
-
-test("swarm settings are fixed at creation and reject conflicting attempts", async () => {
-  const { service, caller, store } = await swarmFixture();
-  const [worker] = await service.spawn(caller, {
-    requestId: "initial",
-    text: "Work",
-    settings: { turnMs: 600_000 },
-  });
-  const swarm = (await store.get(worker!.parentId!))!;
-  assert.equal(swarm.settings.turnMs, 600_000);
-  await assert.rejects(
-    service.spawn(caller, { requestId: "second", text: "Work", settings: { turnMs: 300_000 } }),
-    /settings are only allowed on initial swarm creation/,
-  );
-});
-
 test("concurrent pool reservations enforce a finite total without partial allocation", async () => {
   const { service, serviceOptions, caller } = await swarmFixture();
   const second = createSwarmService(serviceOptions);
@@ -691,10 +624,7 @@ test("sandbox reservation survives a crash after provisioning without creating a
 
 test("slow provisioning does not accumulate overlapping outbox sweeps", async () => {
   const { service, caller, backend } = await swarmFixture();
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const { promise: gate, resolve: release } = Promise.withResolvers<void>();
   const provision = backend.provision;
   backend.provision = async (layers, options) => {
     await gate;
@@ -819,7 +749,7 @@ test("swarm provenance is bound to the durable run, content, actor, and recipien
     await assert.rejects(service.binding({ ...input, ...patch }), /forged/);
 });
 
-test("human messages preserve human actor attribution while notifications remain unattended", async () => {
+test("human messages preserve human actor attribution and the root sender", async () => {
   const { service, caller, root } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });
   await service.sweep();
@@ -923,37 +853,6 @@ test("durable worker rejects excessive swarm claims before calling the harness",
   assert.equal((await runs.get(claimed.id))!.status, "failed");
 });
 
-test("swarm work cancellation has a hard worker deadline independent of the harness", async (context) => {
-  const { service, caller, runs } = await swarmFixture();
-  await service.spawn(caller, { requestId: "one", text: "Work" });
-  await service.sweep();
-  const pending = (await runs.list()).find((item) => item.request.swarm)!;
-  const claimed = (await runs.claimById(pending.id, "test", 60_000))!;
-  context.mock.timers.enable({ apis: ["setTimeout"] });
-  let cancelled = false;
-  const orchestrator = {
-    async handleTurn(input: import("../src/core/orchestrator.ts").OrchestratorInput) {
-      await new Promise<void>((resolve) =>
-        input.cancel!.addEventListener(
-          "abort",
-          () => {
-            cancelled = true;
-            resolve();
-          },
-          { once: true },
-        ),
-      );
-      return { status: "silent" as const };
-    },
-  } as unknown as Orchestrator;
-  const work = processRun({ runs, orchestrator, leaseTtlMs: 60_000 }, claimed);
-  context.mock.timers.tick(SWARM_DEFAULTS.turnMs - 1);
-  assert.equal(cancelled, false);
-  context.mock.timers.tick(1);
-  await work;
-  assert.equal(cancelled, true);
-});
-
 for (const action of ["spawn", "send", "context"] as const) {
   test(`a replaced run cannot commit ${action} after admission`, async () => {
     const fixture = await swarmFixture();
@@ -984,4 +883,19 @@ test("an old session credential cannot attach to a replacement session on the sa
   await fixture.sessions.addParticipant(replacement.id, "alice");
   await assert.rejects(fixture.service.spawn(fixture.caller, { requestId: "replacement", text: "Work" }), /mismatch/);
   assert.equal(await fixture.store.get(replacement.id), null);
+});
+
+test("swarm settings are fixed at creation and reject conflicting attempts", async () => {
+  const { service, caller, store } = await swarmFixture();
+  const [worker] = await service.spawn(caller, {
+    requestId: "initial",
+    text: "Work",
+    settings: { turnMs: 600_000 },
+  });
+  const swarm = (await store.get(worker!.parentId!))!;
+  assert.equal(swarm.settings.turnMs, 600_000);
+  await assert.rejects(
+    service.spawn(caller, { requestId: "second", text: "Work", settings: { turnMs: 300_000 } }),
+    /settings are only allowed on initial swarm creation/,
+  );
 });

@@ -137,29 +137,24 @@ test("recentWindow drops stale channel history beyond the age cap for a top-leve
   assert.equal(uncapped.length, 3, "without the cap (thread turns) nothing is dropped");
 });
 
-test("recentWindow caps at the most-recent MAX_RECENT_MESSAGES (older ones drop contiguously)", () => {
-  const candidates = Array.from({ length: MAX_RECENT_MESSAGES + 8 }, (_, i) => ({
+const numbered = (count: number) =>
+  Array.from({ length: count }, (_, i) => ({
     ts: `1700000000.0000${String(i).padStart(2, "0")}`,
     name: `p${i}`,
     text: `m${i}`,
     authorId: `U_${i}`,
   }));
-  const picked = recentWindow(candidates);
+
+test("recentWindow caps at the most-recent MAX_RECENT_MESSAGES (older ones drop contiguously) or an explicit limit override", () => {
+  const picked = recentWindow(numbered(MAX_RECENT_MESSAGES + 8));
   assert.equal(picked.length, MAX_RECENT_MESSAGES);
   assert.ok(
     picked.some((m) => m.text === `m${MAX_RECENT_MESSAGES + 7}`),
     "newest present",
   );
   assert.ok(!picked.some((m) => m.text === "m0"), "oldest beyond the window dropped");
-});
 
-test("recentWindow honors an explicit limit override (env-tunable window depth)", () => {
-  const candidates = Array.from({ length: 30 }, (_, i) => ({
-    ts: `1700000000.0000${String(i).padStart(2, "0")}`,
-    name: `p${i}`,
-    text: `m${i}`,
-    authorId: `U_${i}`,
-  }));
+  const candidates = numbered(30);
   assert.equal(recentWindow(candidates, 5).length, 5, "caps at the override");
   assert.ok(
     recentWindow(candidates, 5).some((m) => m.text === "m29"),
@@ -194,7 +189,7 @@ test("formatSlackTs renders a Slack epoch ts as a compact UTC datetime; junk →
   assert.equal(formatSlackTs("nope"), "");
 });
 
-test("mergeConsecutiveTurns merges consecutive user speakers into one, names inline", () => {
+test("mergeConsecutiveTurns merges consecutive user speakers (names inline) and assistant turns, leaving alternation untouched", () => {
   const merged = mergeConsecutiveTurns([
     { role: "user", name: "alice", text: "hi" },
     { role: "user", name: "carol", text: "hey" },
@@ -209,24 +204,21 @@ test("mergeConsecutiveTurns merges consecutive user speakers into one, names inl
   assert.equal(merged[2]!.role, "user");
   assert.equal(merged[2]!.name, "alice");
   assert.equal(merged[2]!.text, "one more thing");
-});
 
-test("mergeConsecutiveTurns merges consecutive assistant turns plainly (one speaker)", () => {
-  const merged = mergeConsecutiveTurns([
-    { role: "assistant", text: "part one" },
-    { role: "assistant", text: "part two" },
-  ]);
-  assert.deepEqual(merged, [{ role: "assistant", text: "part one\npart two" }]);
-});
-
-test("mergeConsecutiveTurns leaves a strictly-alternating sequence untouched", () => {
-  const turns: ConversationTurn[] = [
+  assert.deepEqual(
+    mergeConsecutiveTurns([
+      { role: "assistant", text: "part one" },
+      { role: "assistant", text: "part two" },
+    ]),
+    [{ role: "assistant", text: "part one\npart two" }],
+    "consecutive assistant turns merge plainly (one speaker)",
+  );
+  const alternating: ConversationTurn[] = [
     { role: "user", name: "alice", text: "q1" },
     { role: "assistant", text: "a1" },
     { role: "user", name: "alice", text: "q2" },
   ];
-  const merged = mergeConsecutiveTurns(turns);
-  assert.deepEqual(merged, turns);
+  assert.deepEqual(mergeConsecutiveTurns(alternating), alternating, "a strictly-alternating sequence is untouched");
 });
 
 test("resolveMentions rewrites <@U…> to @Name from the map; unknown ids stay raw", () => {
@@ -280,19 +272,17 @@ test("renderConversationView: a bot member is tagged `agent` so the agent @menti
     }),
   );
   assert.match(header, /@Alice \(<@U1>\), @Finance \(<@UBOT>, agent\), you\./);
-});
 
-test("renderConversationView: email principals still show real Slack mention ids", () => {
-  const { header } = renderConversationView(
+  const emails = renderConversationView(
     baseView({
       members: [
         { id: "alice@acme.com", mentionId: "U1", name: "Alice" },
         { id: "bob@acme.com", mentionId: "U2", name: "Bob" },
       ],
     }),
-  );
-  assert.match(header, /@Alice \(<@U1>\), @Bob \(<@U2>\)/);
-  assert.doesNotMatch(header, /<@alice@acme\.com>/);
+  ).header;
+  assert.match(emails, /@Alice \(<@U1>\), @Bob \(<@U2>\)/, "email principals still show real Slack mention ids");
+  assert.doesNotMatch(emails, /<@alice@acme\.com>/);
 });
 
 test("renderConversationView: header names a group DM distinctly from a channel", () => {

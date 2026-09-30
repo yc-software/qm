@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -104,15 +104,32 @@ function turnInput(entries: SessionEntry[], llmRows: HarnessLlmRequestRecord[]):
   };
 }
 
-test("OpenCode surfaces a provider error as a non-retryable failure, never a successful empty reply", async (t) => {
+type Handlers = string | ((dir: string) => string);
+
+function sidecarHarness(
+  t: TestContext,
+  handlers: Handlers,
+  options: Omit<Parameters<typeof createOpenCodeHarness>[0], "binaryPath"> = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), "qm-opencode-test-"));
   const harness = createOpenCodeHarness({
-    binaryPath: fakeSidecar(dir, "provider-error", promptHandlers(errorAssistant)),
+    binaryPath: fakeSidecar(dir, "opencode", typeof handlers === "string" ? handlers : handlers(dir)),
+    ...options,
   });
   t.after(async () => {
     await harness.turns.close?.();
     rmSync(dir, { recursive: true, force: true });
   });
+  return { dir, harness };
+}
+
+const contextFetch = (sessionExpr: string, query = "") =>
+  `fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + ${sessionExpr} + "/context${query}", {
+    headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET },
+  }).then((r) => r.json())`;
+
+test("OpenCode surfaces a provider error as a non-retryable failure, never a successful empty reply", async (t) => {
+  const { harness } = sidecarHarness(t, promptHandlers(errorAssistant));
   const entries: SessionEntry[] = [];
   const llmRows: HarnessLlmRequestRecord[] = [];
   await assert.rejects(harness.turns.runTurn(turnInput(entries, llmRows)), (error: Error) => {
@@ -130,15 +147,9 @@ test("OpenCode surfaces a provider error as a non-retryable failure, never a suc
 });
 
 test("OpenCode records real usage, cost, and timings for each captured model call", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-test-"));
-  const harness = createOpenCodeHarness({ binaryPath: fakeSidecar(dir, "usage", promptHandlers(okAssistant)) });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const entries: SessionEntry[] = [];
+  const { harness } = sidecarHarness(t, promptHandlers(okAssistant));
   const llmRows: HarnessLlmRequestRecord[] = [];
-  const result = await harness.turns.runTurn(turnInput(entries, llmRows));
+  const result = await harness.turns.runTurn(turnInput([], llmRows));
   assert.equal(result.reply, "hello from fake");
   assert.equal(result.modelCalls, 1);
   assert.equal(llmRows.length, 1);
@@ -163,39 +174,24 @@ test("OpenCode records real usage, cost, and timings for each captured model cal
 test("OpenCode startup failure reports the sidecar's real output and honors the configured timeout", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-opencode-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const noisy = join(dir, "noisy");
-  writeFileSync(noisy, `#!/bin/sh\necho "FATAL: missing libfoo" >&2\nexec sleep 30\n`);
-  chmodSync(noisy, 0o755);
-  const noisyHarness = createOpenCodeHarness({ binaryPath: noisy, startupTimeoutMs: 400 });
-  t.after(async () => noisyHarness.turns.close?.());
-  await assert.rejects(noisyHarness.turns.runTurn(turnInput([], [])), (error: Error) => {
-    assert.match(error.message, /did not start within \d+s/);
-    assert.match(error.message, /FATAL: missing libfoo/);
-    return true;
-  });
-  const silent = join(dir, "silent");
-  writeFileSync(silent, `#!/bin/sh\nexec sleep 30\n`);
-  chmodSync(silent, 0o755);
-  const silentHarness = createOpenCodeHarness({ binaryPath: silent, startupTimeoutMs: 400 });
-  t.after(async () => silentHarness.turns.close?.());
-  await assert.rejects(silentHarness.turns.runTurn(turnInput([], [])), (error: Error) => {
-    assert.match(error.message, /did not start within \d+s: \(no output\)/);
-    return true;
-  });
+  for (const [name, script, expected] of [
+    ["noisy", `echo "FATAL: missing libfoo" >&2\nexec sleep 30`, /did not start within \d+s.*FATAL: missing libfoo/s],
+    ["silent", "exec sleep 30", /did not start within \d+s: \(no output\)/],
+  ] as const) {
+    const binaryPath = join(dir, name);
+    writeFileSync(binaryPath, `#!/bin/sh\n${script}\n`);
+    chmodSync(binaryPath, 0o755);
+    const harness = createOpenCodeHarness({ binaryPath, startupTimeoutMs: 400 });
+    t.after(async () => harness.turns.close?.());
+    await assert.rejects(harness.turns.runTurn(turnInput([], [])), expected);
+  }
 });
 
 test("OpenCode keeps the run's retry budget for an APIError the provider marks retryable", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-test-"));
   const retryableAssistant = erroredAssistant(
     `{ name: "APIError", data: { message: "overloaded", isRetryable: true } }`,
   );
-  const harness = createOpenCodeHarness({
-    binaryPath: fakeSidecar(dir, "retryable", promptHandlers(retryableAssistant)),
-  });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
+  const { harness } = sidecarHarness(t, promptHandlers(retryableAssistant));
   await assert.rejects(harness.turns.runTurn(turnInput([], [])), (error: Error) => {
     assert.equal(error.name, "Error");
     assert.match(error.message, /APIError.*overloaded/);
@@ -203,40 +199,23 @@ test("OpenCode keeps the run's retry budget for an APIError the provider marks r
   });
 });
 
-test("OpenCode delivers the truncated reply on an output-length error instead of parking the turn", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-test-"));
-  const truncatedAssistant = okAssistant.replace(
-    'finish: "stop",',
-    'error: { name: "MessageOutputLengthError", data: {} },',
-  );
-  const harness = createOpenCodeHarness({
-    binaryPath: fakeSidecar(dir, "output-length", promptHandlers(truncatedAssistant)),
-  });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const result = await harness.turns.runTurn(turnInput([], []));
-  assert.equal(result.reply, "hello from fake");
-});
-
-test("OpenCode treats an aborted assistant message as a quiet stop, not a failure", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-test-"));
-  const abortedAssistant = erroredAssistant(`{ name: "MessageAbortedError", data: { message: "aborted" } }`);
-  const harness = createOpenCodeHarness({
-    binaryPath: fakeSidecar(dir, "aborted", promptHandlers(abortedAssistant)),
-  });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const result = await harness.turns.runTurn(turnInput([], []));
-  assert.equal(result.reply, "");
+test("OpenCode delivers a truncated reply on output-length and treats an aborted message as a quiet stop", async (t) => {
+  for (const [assistant, reply] of [
+    [
+      okAssistant.replace('finish: "stop",', 'error: { name: "MessageOutputLengthError", data: {} },'),
+      "hello from fake",
+    ],
+    [erroredAssistant(`{ name: "MessageAbortedError", data: { message: "aborted" } }`), ""],
+  ] as Array<[string, string]>) {
+    const { harness } = sidecarHarness(t, promptHandlers(assistant));
+    assert.equal((await harness.turns.runTurn(turnInput([], []))).reply, reply);
+  }
 });
 
 test("OpenCode records requests without usage attribution when captures and assistant messages misalign", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-test-"));
-  const doubleCapture = `
+  const { harness } = sidecarHarness(
+    t,
+    `
   if (req.method === "POST" && message) {
     await readBody(req);
     await capture(message[1], { system: "s", messages: [{ role: "user" }] });
@@ -244,12 +223,8 @@ test("OpenCode records requests without usage attribution when captures and assi
     return json(res, ${okAssistant});
   }
   if (req.method === "GET" && message) return json(res, [${okAssistant}]);
-`;
-  const harness = createOpenCodeHarness({ binaryPath: fakeSidecar(dir, "misaligned", doubleCapture) });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
+`,
+  );
   const llmRows: HarnessLlmRequestRecord[] = [];
   const result = await harness.turns.runTurn(turnInput([], llmRows));
   assert.equal(result.reply, "hello from fake");
@@ -285,22 +260,16 @@ test("latestAssistantParts skips errored and aborted messages, returning the lat
 });
 
 test("assistantFailure classifies provider errors and exempts aborts and output-length truncation", () => {
-  assert.deepEqual(
-    assistantFailure({ role: "assistant", error: { name: "ProviderAuthError", data: { message: "bad key" } } }),
-    { message: "OpenCode provider error (ProviderAuthError): bad key", retryable: false },
-  );
-  assert.deepEqual(
-    assistantFailure({ role: "assistant", error: { name: "APIError", data: { message: "529", isRetryable: true } } }),
-    { message: "OpenCode provider error (APIError): 529", retryable: true },
-  );
-  assert.deepEqual(
-    assistantFailure({ role: "assistant", error: { name: "APIError", data: { message: "400", isRetryable: false } } }),
-    { message: "OpenCode provider error (APIError): 400", retryable: false },
-  );
-  assert.deepEqual(
-    assistantFailure({ role: "assistant", error: { name: "UnknownError", data: { message: "socket hang up" } } }),
-    { message: "OpenCode provider error (UnknownError): socket hang up", retryable: true },
-  );
+  for (const [name, data, retryable] of [
+    ["ProviderAuthError", { message: "bad key" }, false],
+    ["APIError", { message: "529", isRetryable: true }, true],
+    ["APIError", { message: "400", isRetryable: false }, false],
+    ["UnknownError", { message: "socket hang up" }, true],
+  ] as const)
+    assert.deepEqual(assistantFailure({ role: "assistant", error: { name, data } }), {
+      message: `OpenCode provider error (${name}): ${data.message}`,
+      retryable,
+    });
   assert.equal(assistantFailure({ role: "assistant", error: { name: "MessageAbortedError" } }), null);
   assert.equal(assistantFailure({ role: "assistant", error: { name: "MessageOutputLengthError" } }), null);
   assert.equal(assistantFailure({ role: "assistant" }), null);
@@ -308,7 +277,6 @@ test("assistantFailure classifies provider errors and exempts aborts and output-
 });
 
 test("OpenCode judge honors the configured judge model while oneShot keeps the default", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-test-"));
   const echoModelHandlers = `
   if (req.method === "POST" && message) {
     const posted = JSON.parse(await readBody(req));
@@ -326,14 +294,9 @@ test("OpenCode judge honors the configured judge model while oneShot keeps the d
   }
   if (req.method === "GET" && message) return json(res, []);
 `;
-  const harness = createOpenCodeHarness({
-    binaryPath: fakeSidecar(dir, "judge-model", echoModelHandlers),
+  const { harness } = sidecarHarness(t, echoModelHandlers, {
     defaultModelId: "openai/gpt-5",
     judgeModelId: "anthropic/claude-haiku-4-5",
-  });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
   });
   assert.equal(await harness.models.oneShot?.("system", "prompt"), "openai/gpt-5");
   assert.equal(await harness.models.judge?.("system", "prompt"), "anthropic/claude-haiku-4-5");
@@ -357,11 +320,10 @@ test("OpenCode config options forward a judge model only when its provider has a
   assert.equal(openCodeHarnessConfigOptions({} as Config).judgeModelId, undefined);
 });
 
-test("custom providers materialize into the opencode config (enabled + provider map, key included)", async () => {
+test("custom providers materialize into the opencode config (enabled + provider map, key included)", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "opencode-custom-"));
   const dump = join(dir, "config.json");
   const bin = fakeSidecar(dir, "custom", promptHandlers(okAssistant));
-  // wrap the binary so it writes the config it received before exec
   const wrapped = join(dir, "custom-wrapped");
   writeFileSync(
     wrapped,
@@ -393,48 +355,41 @@ test("custom providers materialize into the opencode config (enabled + provider 
       },
     ],
   });
-  const entries: SessionEntry[] = [];
-  const llmRows: HarnessLlmRequestRecord[] = [];
-  try {
-    await harness.turns.runTurn(turnInput(entries, llmRows));
-    const config = JSON.parse(readFileSync(dump, "utf8"));
-    assert.ok(config.enabled_providers.includes("litellm"));
-    assert.ok(config.enabled_providers.includes("responses-proxy"));
-    const litellm = config.provider.litellm;
-    assert.equal(litellm.npm, "@ai-sdk/openai-compatible");
-    assert.equal(litellm.options.baseURL, "http://litellm.internal:4000/v1");
-    assert.equal(litellm.options.apiKey, "sk-lite");
-    assert.deepEqual(litellm.models["deepseek-chat"], { name: "DeepSeek", limit: { context: 128000, output: 8192 } });
-    assert.equal(config.provider["responses-proxy"].npm, "@ai-sdk/openai");
-    assert.equal(config.provider["responses-proxy"].options.apiKey, "sk-responses");
-  } finally {
+  t.after(async () => {
     await harness.turns.close?.();
     rmSync(dir, { recursive: true, force: true });
-  }
+  });
+  await harness.turns.runTurn(turnInput([], []));
+  const config = JSON.parse(readFileSync(dump, "utf8"));
+  assert.ok(config.enabled_providers.includes("litellm"));
+  assert.ok(config.enabled_providers.includes("responses-proxy"));
+  const litellm = config.provider.litellm;
+  assert.equal(litellm.npm, "@ai-sdk/openai-compatible");
+  assert.equal(litellm.options.baseURL, "http://litellm.internal:4000/v1");
+  assert.equal(litellm.options.apiKey, "sk-lite");
+  assert.deepEqual(litellm.models["deepseek-chat"], { name: "DeepSeek", limit: { context: 128000, output: 8192 } });
+  assert.equal(config.provider["responses-proxy"].npm, "@ai-sdk/openai");
+  assert.equal(config.provider["responses-proxy"].options.apiKey, "sk-responses");
 });
 
 test("OpenCode advertises aliases only for tools available on the turn", async (t) => {
   for (const sandboxResources of [false, true]) {
-    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-aliases-"));
-    const captured = join(dir, "context.json");
-    const handlers = `
+    const captured = (dir: string) => join(dir, "context.json");
+    const { dir, harness } = sidecarHarness(
+      t,
+      (dir) => `
       if (req.method === "POST" && message) {
         await readBody(req);
-        const context = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + message[1] + "/context", {
-          headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET },
-        }).then((r) => r.json());
-        require("node:fs").writeFileSync(${JSON.stringify(captured)}, JSON.stringify(context));
+        const context = await ${contextFetch("message[1]")};
+        require("node:fs").writeFileSync(${JSON.stringify(captured(dir))}, JSON.stringify(context));
         return json(res, ${okAssistant});
       }
       if (req.method === "GET" && message) return json(res, [${okAssistant}]);
-    `;
-    const harness = createOpenCodeHarness({ binaryPath: fakeSidecar(dir, "aliases", handlers), sandboxResources });
-    t.after(async () => {
-      await harness.turns.close?.();
-      rmSync(dir, { recursive: true, force: true });
-    });
+    `,
+      { sandboxResources },
+    );
     await harness.turns.runTurn(turnInput([], []));
-    const { systemPrompt } = JSON.parse(readFileSync(captured, "utf8")) as { systemPrompt: string };
+    const { systemPrompt } = JSON.parse(readFileSync(captured(dir), "utf8")) as { systemPrompt: string };
     assert.doesNotMatch(systemPrompt, /workspace_read|workspace_write/);
     if (sandboxResources) assert.doesNotMatch(systemPrompt, /workspace_execute/);
     else assert.match(systemPrompt, /workspace_execute is execute/);
@@ -467,7 +422,9 @@ test("OpenCode steer message IDs sort against IDs minted by native OpenCode 1.18
 });
 
 test("OpenCode includes steered PDF and extracted documents without copying echoed contents into tape", async (t) => {
+  const signals = createMemoryRunSignalStore();
   const dir = mkdtempSync(join(tmpdir(), "qm-opencode-steer-doc-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const capturePath = join(dir, "steered.json");
   const binary = fakeSidecar(
     dir,
@@ -496,12 +453,8 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
     ]);
   `,
   );
-  const signals = createMemoryRunSignalStore();
   const harness = createOpenCodeHarness({ binaryPath: binary, signals, turnWallClockMs: 10_000 });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
+  t.after(async () => harness.turns.close?.());
   const pdf = readFileSync(new URL("./fixtures/documents/sample.pdf", import.meta.url)).toString("base64");
   const docx = readFileSync(new URL("./fixtures/documents/sample.docx", import.meta.url)).toString("base64");
   const tape: unknown[] = [];
@@ -568,29 +521,19 @@ for (const [modelId, fastMode, expected] of [
   ["unknown-model", true, {}],
 ] as const) {
   test(`OpenCode bridge resolves fast options for ${modelId} with fast=${fastMode}`, async (t) => {
-    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-fast-"));
-    const harness = createOpenCodeHarness({
-      binaryPath: fakeSidecar(
-        dir,
-        "fast-options",
-        `
+    const { harness } = sidecarHarness(
+      t,
+      `
         if (req.method === "GET" && message) return json(res, []);
         if (req.method === "POST" && message) {
           await readBody(req);
-          const context = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + message[1] + "/context?model=${modelId}", {
-            headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET },
-          }).then(r => r.json());
+          const context = await ${contextFetch("message[1]", `?model=${modelId}`)};
           const assistant = ${okAssistant};
           assistant.parts[0].text = JSON.stringify(context.modelOptions);
           return json(res, assistant);
         }
       `,
-      ),
-    });
-    t.after(async () => {
-      await harness.turns.close?.();
-      rmSync(dir, { recursive: true, force: true });
-    });
+    );
     const turn = turnInput([], []);
     turn.runtime = { modelId: "claude-opus-5", fastMode };
     const result = await harness.turns.runTurn(turn);
@@ -599,21 +542,16 @@ for (const [modelId, fastMode, expected] of [
 }
 
 test("OpenCode child requests inherit fast mode and a reused runtime honors switching it off", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-fast-child-"));
-  const harness = createOpenCodeHarness({
-    binaryPath: fakeSidecar(
-      dir,
-      "child-fast",
-      `
+  const { harness } = sidecarHarness(
+    t,
+    `
       if (req.method === "GET" && url.pathname === "/session/ses_child") return json(res, { id: "ses_child", parentID: "ses_main" });
       if (req.method === "GET" && message) return json(res, []);
       if (req.method === "POST" && message) {
         await readBody(req);
         const options = [];
         for (const model of ["gpt-5.6-sol", "claude-sonnet-5"]) {
-          const context = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/ses_child/context?model=" + model, {
-            headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET },
-          }).then(r => r.json());
+          const context = await ${contextFetch('"ses_child"', '?model=" + model + "')};
           if (context.history !== undefined || context.systemPrompt !== undefined) throw new Error("child borrowed parent prompt");
           options.push(context.modelOptions);
         }
@@ -622,12 +560,7 @@ test("OpenCode child requests inherit fast mode and a reused runtime honors swit
         return json(res, assistant);
       }
     `,
-    ),
-  });
-  t.after(async () => {
-    await harness.turns.close?.();
-    rmSync(dir, { recursive: true, force: true });
-  });
+  );
   for (const fastMode of [true, false]) {
     const turn = turnInput([], []);
     turn.runtime = { modelId: "claude-opus-5", fastMode };
@@ -638,14 +571,11 @@ test("OpenCode child requests inherit fast mode and a reused runtime honors swit
 
 for (const mechanism of ["signal", "cancel", "both"] as const) {
   test(`OpenCode preserves explicit Stop provenance via ${mechanism}`, async (t) => {
-    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-stop-"));
     const signals = createMemoryRunSignalStore();
     const cancel = new AbortController();
-    const harness = createOpenCodeHarness({
-      binaryPath: fakeSidecar(
-        dir,
-        "stop",
-        `
+    const { dir, harness } = sidecarHarness(
+      t,
+      (dir) => `
         if (req.method === "POST" && message) {
           await readBody(req);
           globalThis.pendingPrompt = res;
@@ -658,14 +588,8 @@ for (const mechanism of ["signal", "cancel", "both"] as const) {
         }
         if (req.method === "GET" && message) return json(res, []);
       `,
-      ),
-      signals,
-      turnWallClockMs: 5_000,
-    });
-    t.after(async () => {
-      await harness.turns.close?.();
-      rmSync(dir, { recursive: true, force: true });
-    });
+      { signals, turnWallClockMs: 5_000 },
+    );
     const running = harness.turns.runTurn({ ...turnInput([], []), runId: "stop", cancel: cancel.signal });
     const deadline = Date.now() + 4_000;
     while (!existsSync(join(dir, "started"))) {
@@ -682,12 +606,9 @@ for (const mechanism of ["signal", "cancel", "both"] as const) {
 
 for (const surfaceTools of [false, true]) {
   test(`OpenCode finish_silently suppresses provider closing text (surface=${surfaceTools})`, async (t) => {
-    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-silent-"));
-    const harness = createOpenCodeHarness({
-      binaryPath: fakeSidecar(
-        dir,
-        "silent",
-        `
+    const { harness } = sidecarHarness(
+      t,
+      `
         if (req.method === "POST" && message) {
           await readBody(req);
           const result = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + message[1] + "/tool", {
@@ -700,12 +621,7 @@ for (const surfaceTools of [false, true]) {
         }
         if (req.method === "GET" && message) return json(res, [${okAssistant}]);
       `,
-      ),
-    });
-    t.after(async () => {
-      await harness.turns.close?.();
-      rmSync(dir, { recursive: true, force: true });
-    });
+    );
     const entries: SessionEntry[] = [];
     const result = await harness.turns.runTurn({
       ...turnInput(entries, []),

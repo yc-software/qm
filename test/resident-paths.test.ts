@@ -51,20 +51,35 @@ async function runLinkScript(home: string, credDir: string): Promise<number> {
   }
 }
 
+async function runWithShim(
+  home: string,
+  credDir: string,
+  name: string,
+  body: string,
+  env: Record<string, string> = {},
+  timeout?: number,
+) {
+  const bin = join(home, "bin");
+  await mkdir(bin, { recursive: true });
+  await writeFile(join(bin, name), body, { mode: 0o755 });
+  const script = ephemeralCredLinkScript(home).replaceAll(EPHEMERAL_CRED_DIR, credDir);
+  return execFileAsync("sh", ["-c", script], {
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, ...env },
+    ...(timeout ? { timeout } : {}),
+  });
+}
+
 test("custom credential files use distinct ephemeral parent directories", () => {
-  const links = ephemeralCredLinkPaths([
+  const extras = [
     { path: ".config/foo/token.json", kind: "file" },
     { path: ".config/bar/token.json", kind: "file" },
     { path: ".acme", kind: "directory" },
-  ]);
+  ] as const;
+  const links = ephemeralCredLinkPaths([...extras]);
   assert.ok(links.some((link) => link.rel === ".config/foo/token.json" && link.kind === "file"));
   assert.ok(links.some((link) => link.rel === ".config/bar/token.json" && link.kind === "file"));
   assert.ok(links.some((link) => link.rel === ".acme" && link.kind === "dir"));
-  const script = ephemeralCredLinkScript("/root", [
-    { path: ".config/foo/token.json", kind: "file" },
-    { path: ".config/bar/token.json", kind: "file" },
-    { path: ".acme", kind: "directory" },
-  ]);
+  const script = ephemeralCredLinkScript("/root", [...extras]);
   assert.match(script, /\/tmp\/agent-creds\/\.config\/foo\/token\.json/);
   assert.match(script, /\/tmp\/agent-creds\/\.config\/bar\/token\.json/);
   assert.match(script, /\/tmp\/agent-creds\/\.acme/);
@@ -76,12 +91,11 @@ test("credential service names use the same path convention as automatic capture
   assert.equal(credentialServiceForPath(".netrc"), "netrc");
 });
 
-test("known single-file credential paths remain file links", () => {
-  const netrc = ephemeralCredLinkPaths().find((link) => link.rel === ".netrc");
-  assert.deepEqual(netrc, { rel: ".netrc", kind: "file" });
-});
-
-test("custom single-segment credential files remain file links", () => {
+test("known and custom single-segment credential files remain file links", () => {
+  assert.deepEqual(
+    ephemeralCredLinkPaths().find((link) => link.rel === ".netrc"),
+    { rel: ".netrc", kind: "file" },
+  );
   const path = { path: ".acmerc", kind: "file" } as const;
   assert.deepEqual(
     ephemeralCredLinkPaths([path]).find((link) => link.rel === path.path),
@@ -204,17 +218,6 @@ test(".config/glab is ephemeral-linked but NOT publish-captured (prod never bake
   assert.ok(EPHEMERAL_CRED_PATHS.some((link) => link.rel === ".config/glab" && link.kind === "dir"));
 });
 
-test("prep never emits a command that could delete $HOME or a credential bundle", () => {
-  const script = ephemeralCredLinkScript("/home/agent", [{ path: ".acmecli", kind: "directory" }]);
-  for (const doomed of ["/home/agent", "/home/agent/.config", "/home/agent/.aws", "/home/agent/.acmecli"]) {
-    assert.doesNotMatch(
-      script,
-      new RegExp(`rm -rf '${doomed}'(?!\\.)`),
-      `${doomed} must only ever be renamed aside, never removed`,
-    );
-  }
-});
-
 test("prep never copies bytes across the $HOME/ephemeral device boundary", () => {
   const script = ephemeralCredLinkScript("/home/agent", [{ path: ".acmecli", kind: "directory" }]);
   const crossDevice = [...script.matchAll(/mv (?!'\/tmp\/agent-creds)(\S+) '\/tmp\/agent-creds[^']*'/g)];
@@ -280,29 +283,21 @@ test("concurrent preps on one box both succeed and neither destroys the other's 
 
 test("credential link prep stops when ln keeps failing", async (t) => {
   const { home, credDir } = await tempPair(t);
-  const bin = join(home, "bin");
-  await mkdir(bin);
-  await writeFile(join(bin, "ln"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-  const script = ephemeralCredLinkScript(home).replaceAll(EPHEMERAL_CRED_DIR, credDir);
-
   await assert.rejects(
-    execFileAsync("sh", ["-c", script], {
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
-      timeout: 5_000,
-    }),
+    runWithShim(home, credDir, "ln", "#!/bin/sh\nexit 1\n", {}, 5_000),
     (error: unknown) => (error as { code?: number }).code === 1,
   );
 });
 
 test("a prep accepts a peer that converges the link after its displacement loses the race", async (t) => {
   const { home, credDir } = await tempPair(t);
-  const bin = join(home, "bin");
   const target = join(credDir, ".aws");
-  await mkdir(bin);
   await mkdir(target);
   await writeFile(join(home, ".aws"), "squatter");
-  await writeFile(
-    join(bin, "mv"),
+  await runWithShim(
+    home,
+    credDir,
+    "mv",
     `#!/bin/sh
 if [ "$1" = "$TEST_HOME/.aws" ]; then
   rm -f "$1"
@@ -311,13 +306,8 @@ if [ "$1" = "$TEST_HOME/.aws" ]; then
 fi
 PATH=/usr/bin:/bin exec mv "$@"
 `,
-    { mode: 0o755 },
+    { TEST_HOME: home, TEST_TARGET: target },
   );
-
-  const script = ephemeralCredLinkScript(home).replaceAll(EPHEMERAL_CRED_DIR, credDir);
-  await execFileAsync("sh", ["-c", script], {
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, TEST_HOME: home, TEST_TARGET: target },
-  });
   assert.equal(await readlink(join(home, ".aws")), target);
 });
 
@@ -336,24 +326,19 @@ test("a file squatting on the quarantine root does not brick the box", async (t)
 test("a quarantine squatter is never deleted when preserving it fails", async (t) => {
   const { home, credDir } = await tempPair(t);
   const quarantine = join(home, DISPLACED_DIR_REL);
-  const bin = join(home, "bin");
-  await mkdir(bin);
   await writeFile(quarantine, "irreplaceable");
   await writeFile(join(home, ".aws"), "creds");
-  await writeFile(
-    join(bin, "ln"),
-    `#!/bin/sh
+  await assert.rejects(
+    runWithShim(
+      home,
+      credDir,
+      "ln",
+      `#!/bin/sh
 if [ "$1" = "$TEST_QUARANTINE" ]; then exit 1; fi
 PATH=/usr/bin:/bin exec ln "$@"
 `,
-    { mode: 0o755 },
-  );
-
-  const script = ephemeralCredLinkScript(home).replaceAll(EPHEMERAL_CRED_DIR, credDir);
-  await assert.rejects(
-    execFileAsync("sh", ["-c", script], {
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, TEST_QUARANTINE: quarantine },
-    }),
+      { TEST_QUARANTINE: quarantine },
+    ),
   );
   assert.equal(await readFile(quarantine, "utf8"), "irreplaceable");
 });

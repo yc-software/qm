@@ -214,6 +214,18 @@ function fixture(
   };
 }
 
+async function targetApproval(pending: Promise<unknown>) {
+  let approvalKey = "";
+  await assert.rejects(pending, (error: unknown) => {
+    assert.ok(error instanceof NeedsApproval);
+    assert.deepEqual(error.grantModes, { session: false, always: false });
+    approvalKey = error.approvalKey!;
+    assert.deepEqual(JSON.parse(approvalKey.slice("sandbox:".length)), ["personal:alice", "protected", "command"]);
+    return true;
+  });
+  return approvalKey;
+}
+
 test("Open shared requests execute on the owner's personal machine without moving room credentials or files", async () => {
   const f = fixture();
   assert.equal((await f.tools.execute("pwd", { sandboxId: "personal-box" })).stdout, "existing work");
@@ -244,10 +256,8 @@ test("Open cross-scope cached handles recheck membership, posture, and target au
 
 test("a command waiting on another provision rechecks the target policy before continuing", async () => {
   const f = fixture();
-  let release!: () => void;
-  f.state.provisionGate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const { promise, resolve: release } = Promise.withResolvers<void>();
+  f.state.provisionGate = promise;
   const first = f.turn.provisionResource("personal-box");
   while (f.provisions.length === 0) await new Promise((resolve) => setImmediate(resolve));
   const access = await f.turn.accessResource("personal-box");
@@ -271,10 +281,8 @@ test("a one-shot command approval is consumed once after a pending provision set
     return true;
   });
   f.approve(approvalKey);
-  let release!: () => void;
-  f.state.provisionGate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const { promise, resolve: release } = Promise.withResolvers<void>();
+  f.state.provisionGate = promise;
   const first = f.turn.provisionResource("personal-box");
   while (f.provisions.length === 0) await new Promise((resolve) => setImmediate(resolve));
   const execute = f.tools.execute("protected", { sandboxId: "personal-box" });
@@ -403,14 +411,7 @@ test("two requiring policies produce one target-qualified one-shot approval", as
     const f = fixture();
     f.state.sourcePolicy = { mode: "denylist", rules: [{ pattern: "protected", decision: "require_approval" }] };
     f.state.targetPolicy = { mode: "denylist", rules: [{ pattern: "command", decision: "require_approval" }] };
-    let approvalKey = "";
-    await assert.rejects(f.tools[method]("protected command", { sandboxId: "personal-box" }), (err: unknown) => {
-      assert.ok(err instanceof NeedsApproval);
-      assert.deepEqual(err.grantModes, { session: false, always: false });
-      approvalKey = err.approvalKey!;
-      assert.deepEqual(JSON.parse(approvalKey.slice("sandbox:".length)), ["personal:alice", "protected", "command"]);
-      return true;
-    });
+    const approvalKey = await targetApproval(f.tools[method]("protected command", { sandboxId: "personal-box" }));
     assert.deepEqual(f.approvalCalls, [[approvalKey, true]]);
     f.approve(approvalKey);
     await f.tools[method]("protected command", { sandboxId: "personal-box" });
@@ -481,14 +482,7 @@ test("credential-specific source approval intersects target policy without consu
   await assert.rejects(f.tools.execute("protected command", { sandboxId: "personal-box" }), /denied/);
   assert.deepEqual(f.approvalCalls, []);
   f.state.targetPolicy = { mode: "denylist", rules: [{ pattern: "command", decision: "require_approval" }] };
-  let approvalKey = "";
-  await assert.rejects(f.tools.execute("protected command", { sandboxId: "personal-box" }), (error: unknown) => {
-    assert.ok(error instanceof NeedsApproval);
-    assert.deepEqual(error.grantModes, { session: false, always: false });
-    approvalKey = error.approvalKey!;
-    assert.deepEqual(JSON.parse(approvalKey.slice("sandbox:".length)), ["personal:alice", "protected", "command"]);
-    return true;
-  });
+  const approvalKey = await targetApproval(f.tools.execute("protected command", { sandboxId: "personal-box" }));
   f.approve(approvalKey);
   await f.tools.execute("protected command", { sandboxId: "personal-box" });
   await assert.rejects(f.tools.execute("protected command", { sandboxId: "personal-box" }), NeedsApproval);

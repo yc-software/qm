@@ -35,11 +35,13 @@ const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";
 const OIDC = "oidc:1111111111111111111111111111111111111111111111111111111111111111:am9yZGFu";
 const EVIDENCE = "SSO email jordan@acme.test matched the Slack-verified directory email";
+const linkJordan = (links: { link: ReturnType<typeof createPrincipalLinkService>["link"] }, linkedBy = "admin") =>
+  links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy });
 
 describe("principal link service: one person, several sign-ins", () => {
   it("links a sign-in to a canonical principal and resolves both directions", async () => {
     const links = createPrincipalLinkService();
-    const row = await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
+    const row = await linkJordan(links);
     assert.equal(row.canonicalId, EMAIL);
     assert.equal(links.canonical(OIDC), EMAIL);
     assert.deepEqual(links.aliases(EMAIL), [OIDC]);
@@ -61,14 +63,16 @@ describe("principal link service: one person, several sign-ins", () => {
         return true;
       });
     };
-    await reject(
-      { principalId: EMAIL, canonicalId: "Jordan@Acme.Test", evidence: EVIDENCE, linkedBy: "a" },
-      400,
-      /itself/,
-    );
-    await reject({ principalId: OIDC, canonicalId: EMAIL, evidence: "", linkedBy: "a" }, 400, /evidence/);
-    await reject({ principalId: "", canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "a" }, 400, /non-empty/);
-    await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "a" });
+    const input = (principalId: string, canonicalId: string, evidence = EVIDENCE) => ({
+      principalId,
+      canonicalId,
+      evidence,
+      linkedBy: "a",
+    });
+    await reject(input(EMAIL, "Jordan@Acme.Test"), 400, /itself/);
+    await reject(input(OIDC, EMAIL, ""), 400, /evidence/);
+    await reject(input("", EMAIL), 400, /non-empty/);
+    await linkJordan(links, "a");
     const again = await links.link({
       principalId: OIDC,
       canonicalId: EMAIL.toUpperCase(),
@@ -76,21 +80,9 @@ describe("principal link service: one person, several sign-ins", () => {
       linkedBy: "b",
     });
     assert.equal(again.linkedBy, "a", "re-linking to the same canonical is idempotent and keeps the first record");
-    await reject(
-      { principalId: OIDC, canonicalId: "casey@acme.test", evidence: EVIDENCE, linkedBy: "a" },
-      409,
-      /already/,
-    );
-    await reject(
-      { principalId: "U0OTHER", canonicalId: OIDC, evidence: EVIDENCE, linkedBy: "a" },
-      400,
-      /itself linked/,
-    );
-    await reject(
-      { principalId: EMAIL, canonicalId: "casey@acme.test", evidence: EVIDENCE, linkedBy: "a" },
-      400,
-      /canonical/,
-    );
+    await reject(input(OIDC, "casey@acme.test"), 409, /already/);
+    await reject(input("U0OTHER", OIDC), 400, /itself linked/);
+    await reject(input(EMAIL, "casey@acme.test"), 400, /canonical/);
   });
 
   it("reads links written by another process on refresh", async () => {
@@ -115,7 +107,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
 
   async function installed() {
     const links = createPrincipalLinkService();
-    await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
+    await linkJordan(links);
     installPrincipalLinks(links);
     return links;
   }
@@ -143,9 +135,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
   });
 
   it("the identity service classifies a linked sign-in as the canonical principal and deactivates the person", async () => {
-    const links = createPrincipalLinkService();
-    await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
-    installPrincipalLinks(links);
+    const links = await installed();
     const identity = createIdentityService(undefined, { principalLinks: links });
     await identity.refresh(true);
     assert.equal(identity.classify(OIDC).id, EMAIL);
@@ -170,7 +160,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
       createdAt: 1,
       updatedAt: 1,
     });
-    await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
+    await linkJordan(links);
     await links.link({
       principalId: "guest@partner.test",
       canonicalId: "U0GUEST",
@@ -283,6 +273,7 @@ describe("linked sign-ins across the HTTP surface", () => {
 
   it("only an org admin manages links, the agent never does, and a directory member stays canonical", async () => {
     const body = JSON.stringify({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE });
+    const post = (payload: object) => signed("POST", "/v1/admin/principal-links", JSON.stringify(payload), admin);
     assert.equal(
       (await signed("POST", "/v1/admin/principal-links", body, { "x-admin-actor": "U0STRANGER@default-org" })).status,
       403,
@@ -294,21 +285,11 @@ describe("linked sign-ins across the HTTP surface", () => {
     });
     assert.equal(agent.status, 403);
     for (const memberSide of [EMAIL, EMAIL.toUpperCase(), SLACK]) {
-      const reversed = await signed(
-        "POST",
-        "/v1/admin/principal-links",
-        JSON.stringify({ principalId: memberSide, canonicalId: OIDC, evidence: EVIDENCE }),
-        admin,
-      );
+      const reversed = await post({ principalId: memberSide, canonicalId: OIDC, evidence: EVIDENCE });
       assert.equal(reversed.status, 400, `${memberSide} is a directory member and stays canonical`);
       assert.match(((await reversed.json()) as { message: string }).message, /directory member/);
     }
-    const escalation = await signed(
-      "POST",
-      "/v1/admin/principal-links",
-      JSON.stringify({ principalId: "admin-alice", canonicalId: "casey@acme.test", evidence: EVIDENCE }),
-      admin,
-    );
+    const escalation = await post({ principalId: "admin-alice", canonicalId: "casey@acme.test", evidence: EVIDENCE });
     assert.equal(escalation.status, 400, "an admin sign-in cannot make a non-admin canonical principal an admin");
     assert.match(((await escalation.json()) as { message: string }).message, /admin grant/);
     assert.equal(adminStatusFromGrants(await built.admin.listGrants(), "casey@acme.test").isAdmin, false);
@@ -341,21 +322,9 @@ describe("linked sign-ins across the HTTP surface", () => {
     const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
     const t = new URL(formPath, "http://x").searchParams.get("t")!;
     const owner = (id: string) => ({ "x-drop-owner": id, "x-drop-owner-org": "default-org" });
-    assert.equal(
-      (
-        await signed(
-          "GET",
-          `/v1/keychain/drops/${dropId}/form?t=${encodeURIComponent(t)}`,
-          "",
-          owner("casey@acme.test"),
-        )
-      ).status,
-      403,
-    );
-    assert.equal(
-      (await signed("GET", `/v1/keychain/drops/${dropId}/form?t=${encodeURIComponent(t)}`, "", owner(OIDC))).status,
-      200,
-    );
+    const form = `/v1/keychain/drops/${dropId}/form?t=${encodeURIComponent(t)}`;
+    assert.equal((await signed("GET", form, "", owner("casey@acme.test"))).status, 403);
+    assert.equal((await signed("GET", form, "", owner(OIDC))).status, 200);
     const redeemed = await signed(
       "POST",
       `/v1/keychain/drops/${dropId}?t=${encodeURIComponent(t)}`,
@@ -369,12 +338,9 @@ describe("linked sign-ins across the HTTP surface", () => {
   });
 
   it("deleting the link restores two separate principals", async () => {
-    const removed = await signed("DELETE", `/v1/admin/principal-links/${encodeURIComponent(OIDC)}`, "", admin);
-    assert.equal(removed.status, 200);
-    assert.equal(
-      (await signed("DELETE", `/v1/admin/principal-links/${encodeURIComponent(OIDC)}`, "", admin)).status,
-      404,
-    );
+    const remove = () => signed("DELETE", `/v1/admin/principal-links/${encodeURIComponent(OIDC)}`, "", admin);
+    assert.equal((await remove()).status, 200);
+    assert.equal((await remove()).status, 404);
     assert.equal(samePerson(OIDC, EMAIL), false);
     assert.equal(built.identity.classify(OIDC).id, OIDC);
   });
@@ -388,7 +354,7 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "principal-links-gate-")) }));
-    await built.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "test" });
+    await linkJordan(built.principalLinks, "test");
     await built.identity.refresh(true);
     server = createInsecureTestServer(built.app, {
       portalIdentitySecret: PID,
@@ -487,7 +453,7 @@ describe("canonical portal claims retain proof of the original sign-in", () => {
   it("accepts a linked sign-in and rejects its stale canonical claim after unlink", async () => {
     const secret = "authenticated-as-test-secret-0123456789";
     const app = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "slack-link-proof-")) }));
-    await app.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "qa" });
+    await linkJordan(app.principalLinks, "qa");
     await app.identity.refresh(true);
     const server = createInsecureTestServer(app.app, {
       portalIdentitySecret: secret,

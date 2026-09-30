@@ -10,13 +10,16 @@ import {
 } from "../src/policy/command-policy.ts";
 import type { CommandPolicy, CommandRule } from "../src/types.ts";
 
-test("org floor requires approval for recursive delete and denies fork bomb", () => {
+test("org floor requires approval for recursive delete, denies mkfs and fork bombs, and allows benign commands", () => {
   const p = defaultOrgPolicy();
   assert.equal(evaluateCommand("rm -rf build", p).decision, "require_approval");
   assert.equal(evaluateCommand("mkfs.ext4 /dev/sda", p).decision, "deny");
+  assert.equal(evaluateCommand(":(){ :|:& };:", p).decision, "deny");
+  assert.equal(evaluateCommand(":() { :|:& };:", p).decision, "deny");
+  assert.equal(evaluateCommand("echo hello", p).decision, "allow");
 });
 
-test("evaluateCommand surfaces the matched rule's identity (its pattern) as the grant key", () => {
+test("evaluateCommand surfaces the matched rule's identity (its pattern) as the grant key and the exact substring that tripped it", () => {
   const p: CommandPolicy = {
     mode: "denylist",
     rules: [{ pattern: "\\bzz-tool\\b", decision: "require_approval", reason: "ZZ tool" }],
@@ -24,6 +27,10 @@ test("evaluateCommand surfaces the matched rule's identity (its pattern) as the 
   const r = evaluateCommand("run zz-tool now", p);
   assert.equal(r.decision, "require_approval");
   assert.equal(r.approvalKey, "\\bzz-tool\\b");
+
+  const force = evaluateCommand("git push --force origin main", defaultOrgPolicy());
+  assert.equal(force.decision, "require_approval");
+  assert.ok(force.matched?.includes("--force"), `expected matched to include the trigger, got ${force.matched}`);
 });
 
 test("recursive delete is gated in every flag form and order", () => {
@@ -45,23 +52,20 @@ test("recursive delete is gated in every flag form and order", () => {
   assert.equal(evaluateCommand("rm -f file.txt", p).decision, "allow");
 });
 
-test("fork bomb is denied", () => {
-  const p = defaultOrgPolicy();
-  assert.equal(evaluateCommand(":(){ :|:& };:", p).decision, "deny");
-  assert.equal(evaluateCommand(":() { :|:& };:", p).decision, "deny");
-});
-
-test("benign command is allowed in denylist mode", () => {
-  assert.equal(evaluateCommand("echo hello", defaultOrgPolicy()).decision, "allow");
-});
-
-test("scope rules can tighten but org floor wins (evaluated first)", () => {
-  const scope: CommandPolicy = {
+test("composePolicy: org floor wins over scope rules; a scope can tighten a denylist to an allowlist but never downgrade an allowlist", () => {
+  const allowLs: CommandPolicy = { mode: "allowlist", rules: [{ pattern: "^ls\\b", decision: "allow" }] };
+  const loosened = composePolicy(defaultOrgPolicy(), {
     mode: "denylist",
     rules: [{ pattern: "rm -rf", decision: "allow" }],
-  };
-  const composed = composePolicy(defaultOrgPolicy(), scope);
-  assert.equal(evaluateCommand("rm -rf build", composed).decision, "require_approval");
+  });
+  assert.equal(evaluateCommand("rm -rf build", loosened).decision, "require_approval");
+  for (const composed of [
+    composePolicy(allowLs, { mode: "denylist", rules: [] }),
+    composePolicy(defaultOrgPolicy(), allowLs),
+  ]) {
+    assert.equal(composed.mode, "allowlist");
+    assert.equal(evaluateCommand("cat secrets", composed).decision, "deny");
+  }
 });
 
 test("first-match-wins in rule order: an operator allow carve-out before a broader require_approval still allows", () => {
@@ -176,44 +180,47 @@ test("deployment rules replace tool-specific hard-coded command denials", () => 
   }
 });
 
-test("a dangerous-looking pattern inside data (heredoc body, quoted literal) is NOT gated", () => {
+test("heredoc bodies and quoted literals are data unless a shell, SQL client, or command substitution executes them", () => {
   const p = defaultOrgPolicy();
-  const writeHeredoc = [
-    "cat > test/x.ts <<EOF",
-    'const c = "!run git push --force origin main";',
-    "rm -rf node_modules // in a comment",
-    "EOF",
-  ].join("\n");
-  assert.equal(evaluateCommand(writeHeredoc, p).decision, "allow");
-  assert.equal(evaluateCommand("echo 'rm -rf /'", p).decision, "allow");
-  assert.equal(evaluateCommand('git commit -m "drop table users"', p).decision, "allow");
-});
-
-test("a real dangerous command is still gated even when the turn also writes a heredoc", () => {
-  const p = defaultOrgPolicy();
-  const cmd = ["cat > note.txt <<EOF", "harmless body", "EOF", "git push --force origin main"].join("\n");
-  const r = evaluateCommand(cmd, p);
-  assert.equal(r.decision, "require_approval");
-  assert.equal(r.reason, "force push");
-});
-
-test("command substitution that runs a dangerous command is still gated, even inside quotes", () => {
-  const p = defaultOrgPolicy();
-  assert.equal(evaluateCommand('echo "$(rm -rf /tmp/x)"', p).decision, "require_approval");
-});
-
-test("a heredoc body fed to a shell stays gated (executed, not a file write)", () => {
-  const p = defaultOrgPolicy();
-  assert.equal(evaluateCommand("bash <<EOF\nrm -rf /\nEOF", p).decision, "require_approval");
-  assert.equal(evaluateCommand("cat <<EOF | bash\nrm -rf /\nEOF", p).decision, "require_approval");
-  assert.equal(evaluateCommand("cat > /tmp/s.sh <<EOF\nrm -rf /\nEOF", p).decision, "allow");
-});
-
-test("evaluateCommand surfaces the exact substring that tripped the rule", () => {
-  const p = defaultOrgPolicy();
-  const r = evaluateCommand("git push --force origin main", p);
-  assert.equal(r.decision, "require_approval");
-  assert.ok(r.matched?.includes("--force"), `expected matched to include the trigger, got ${r.matched}`);
+  const cases: Array<[string, string, string?]> = [
+    [
+      [
+        "cat > test/x.ts <<EOF",
+        'const c = "!run git push --force origin main";',
+        "rm -rf node_modules // in a comment",
+        "EOF",
+      ].join("\n"),
+      "allow",
+    ],
+    ["echo 'rm -rf /'", "allow"],
+    ['git commit -m "drop table users"', "allow"],
+    [
+      ["cat > note.txt <<EOF", "harmless body", "EOF", "git push --force origin main"].join("\n"),
+      "require_approval",
+      "force push",
+    ],
+    ['echo "$(rm -rf /tmp/x)"', "require_approval"],
+    ["bash <<EOF\nrm -rf /\nEOF", "require_approval"],
+    ["cat <<EOF | bash\nrm -rf /\nEOF", "require_approval"],
+    ["cat > /tmp/s.sh <<EOF\nrm -rf /\nEOF", "allow"],
+    [
+      [
+        `gh pr create --title x --body "$(cat <<'EOF'`,
+        "Extract SQL payloads safely; previously DROP TABLE users in payloads broke parsing.",
+        "EOF",
+        ')"',
+      ].join("\n"),
+      "allow",
+    ],
+    [["cat <<'EOF' | gh pr create --body-file -", "fixes DROP TABLE handling", "EOF"].join("\n"), "allow"],
+    [["psql mydb <<EOF", "drop table users;", "EOF"].join("\n"), "require_approval"],
+    [["cat <<EOF | gh pr create --body-file -", "hello $(rm -rf /tmp/x)", "EOF"].join("\n"), "require_approval"],
+  ];
+  for (const [command, decision, reason] of cases) {
+    const r = evaluateCommand(command, p);
+    assert.equal(r.decision, decision, command);
+    if (reason) assert.equal(r.reason, reason);
+  }
 });
 
 test("scannableCommand strips inert data but preserves executable command substitution", () => {
@@ -337,27 +344,6 @@ test("allowlist mode denies anything not explicitly allowed", () => {
   assert.equal(evaluateCommand("cat secrets", p).decision, "deny");
 });
 
-test("a lower scope cannot downgrade an org allowlist to a denylist", () => {
-  const orgAllowlist: CommandPolicy = {
-    mode: "allowlist",
-    rules: [{ pattern: "^ls\\b", decision: "allow" }],
-  };
-  const scope: CommandPolicy = { mode: "denylist", rules: [] };
-  const composed = composePolicy(orgAllowlist, scope);
-  assert.equal(composed.mode, "allowlist");
-  assert.equal(evaluateCommand("cat secrets", composed).decision, "deny");
-});
-
-test("a lower scope can tighten an org denylist to an allowlist", () => {
-  const scope: CommandPolicy = {
-    mode: "allowlist",
-    rules: [{ pattern: "^ls\\b", decision: "allow" }],
-  };
-  const composed = composePolicy(defaultOrgPolicy(), scope);
-  assert.equal(composed.mode, "allowlist");
-  assert.equal(evaluateCommand("cat secrets", composed).decision, "deny");
-});
-
 test("an invalid stored rule is skipped (any decision) — one stale pattern never locks a scope", () => {
   const p: CommandPolicy = {
     mode: "denylist",
@@ -423,7 +409,7 @@ test("parseCommandPolicy accepts a valid policy and normalizes it", () => {
   assert.equal(parsed.policy.rules.length, 1);
 });
 
-test("parseCommandPolicy rejects malformed input", () => {
+test("parseCommandPolicy rejects malformed input and regexes with catastrophic repetition", () => {
   const cases: Array<[unknown, RegExp]> = [
     [null, /must be an object/],
     [{ mode: "blocklist", rules: [] }, /mode must be/],
@@ -432,44 +418,16 @@ test("parseCommandPolicy rejects malformed input", () => {
     [{ mode: "denylist", rules: [{ pattern: "(", decision: "deny" }] }, /not a valid regex/],
     [{ mode: "denylist", rules: [{ pattern: "x", decision: "block" }] }, /decision must be/],
     [{ mode: "denylist", rules: [{ pattern: "x", decision: "deny", reason: 5 }] }, /reason must be a string/],
+    ...["(a+)+$", "(a|aa)+$", "(.*)*$"].map((pattern): [unknown, RegExp] => [
+      { mode: "denylist", rules: [{ pattern, decision: "deny" }] },
+      /./,
+    ]),
   ];
   for (const [input, msg] of cases) {
     const parsed = parseCommandPolicy(input);
     assert.ok("error" in parsed, `expected error for ${JSON.stringify(input)}`);
     assert.match(parsed.error, msg);
   }
-});
-
-test("parseCommandPolicy rejects regexes with catastrophic repetition", () => {
-  for (const pattern of ["(a+)+$", "(a|aa)+$", "(.*)*$"]) {
-    const parsed = parseCommandPolicy({ mode: "denylist", rules: [{ pattern, decision: "deny" }] });
-    assert.ok("error" in parsed, pattern);
-  }
-});
-
-test("a heredoc fed to a non-interpreter command (cat, gh) is data, not gated", () => {
-  const policy = defaultOrgPolicy();
-  const prBody = [
-    `gh pr create --title x --body "$(cat <<'EOF'`,
-    "Extract SQL payloads safely; previously DROP TABLE users in payloads broke parsing.",
-    "EOF",
-    ')"',
-  ].join("\n");
-  assert.equal(evaluateCommand(prBody, policy).decision, "allow");
-  const piped = ["cat <<'EOF' | gh pr create --body-file -", "fixes DROP TABLE handling", "EOF"].join("\n");
-  assert.equal(evaluateCommand(piped, policy).decision, "allow");
-});
-
-test("a heredoc fed to a SQL client or interpreter stays gated", () => {
-  const policy = defaultOrgPolicy();
-  const sql = ["psql mydb <<EOF", "drop table users;", "EOF"].join("\n");
-  assert.equal(evaluateCommand(sql, policy).decision, "require_approval");
-});
-
-test("an unquoted heredoc's command substitutions still execute and stay gated", () => {
-  const policy = defaultOrgPolicy();
-  const sneaky = ["cat <<EOF | gh pr create --body-file -", "hello $(rm -rf /tmp/x)", "EOF"].join("\n");
-  assert.equal(evaluateCommand(sneaky, policy).decision, "require_approval");
 });
 
 test("destructive SQL handed to a SQL client fires the floor rule (public #49)", () => {

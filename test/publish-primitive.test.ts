@@ -49,6 +49,8 @@ interface CtxOpts {
   runId?: string;
   rw?: boolean;
   splitEnv?: Record<string, string>;
+  user?: string;
+  config?: ReturnType<typeof createMemoryConfigStore>;
 }
 
 function fileSandbox(files: Array<{ path: string; data: Uint8Array }>): Sandbox {
@@ -69,17 +71,19 @@ function fileSandbox(files: Array<{ path: string; data: Uint8Array }>): Sandbox 
 function ctx(deploy: DeployService, opts: CtxOpts = {}) {
   const files = opts.files ?? [];
   const sandbox = opts.sandbox ?? fileSandbox(files);
+  const user = opts.user ?? "U1";
   return createToolContext({
     sandbox,
     provision: opts.provision ?? (async () => ({}) as SandboxHandle),
-    layers: opts.rw === false ? [] : [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }],
+    layers: opts.rw === false ? [] : [{ scopeId: scopeId("personal", user), mountPath: "", mode: "rw" }],
     commandPolicy: () => ({}) as never,
     authorizeCommand: () => false,
     grantedHandles: [],
     workspace: {} as never,
     deploy,
     acl: {} as never,
-    createdBy: "U1",
+    createdBy: user,
+    ...(opts.config ? { config: opts.config } : {}),
     ...(opts.ledger ? { ledger: opts.ledger } : {}),
     ...(opts.runId ? { runId: opts.runId } : {}),
     ...(opts.splitEnv
@@ -90,6 +94,14 @@ function ctx(deploy: DeployService, opts: CtxOpts = {}) {
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 const appFile = (path = "server.js", data = "listen") => [{ path, data: bytes(data) }];
+
+function exportRefused(files: Array<{ path: string; data: Uint8Array }>): Sandbox {
+  const sandbox = fileSandbox(files);
+  sandbox.exportFiles = async () => {
+    throw new CapabilityUnsupportedError("sprites", "exportFiles");
+  };
+  return sandbox;
+}
 
 test("publish collects only the published dir (prefix-stripped) and returns a /d/<name>/ link", async () => {
   const s = svc();
@@ -123,10 +135,7 @@ test("publish falls back to per-file reads when the routed backend refuses expor
     { path: "dist/server.js", data: bytes("listen") },
     { path: "dist/public/index.html", data: bytes("<h1>") },
   ];
-  const sandbox = fileSandbox(files);
-  sandbox.exportFiles = async () => {
-    throw new CapabilityUnsupportedError("sprites", "exportFiles");
-  };
+  const sandbox = exportRefused(files);
   const warnings: unknown[][] = [];
   const warn = console.warn;
   console.warn = (...args: unknown[]) => {
@@ -262,18 +271,7 @@ test("publish without an entrypoint and without a prior version fails before pro
 test("publish: a different scope claiming a taken name is rejected", async () => {
   const s = svc();
   await ctx(s.deploy, { files: appFile() }).publish({ entrypoint: "x", name: "taken" });
-  const other = createToolContext({
-    sandbox: fileSandbox(appFile()),
-    provision: async () => ({}) as SandboxHandle,
-    layers: [{ scopeId: scopeId("personal", "U2"), mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace: {} as never,
-    deploy: s.deploy,
-    acl: {} as never,
-    createdBy: "U2",
-  });
+  const other = ctx(s.deploy, { files: appFile(), user: "U2" });
   await assert.rejects(() => other.publish({ entrypoint: "x", name: "taken" }), /name taken/);
 });
 
@@ -338,18 +336,7 @@ test("publish collects the app tree as ONE archive (not file-by-file)", async ()
     },
   } as unknown as Sandbox;
   const { deploy, captured } = spyDeploy();
-  const tc = createToolContext({
-    sandbox,
-    provision: async () => ({}) as SandboxHandle,
-    layers: [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace: {} as never,
-    deploy,
-    acl: {} as never,
-    createdBy: "U1",
-  });
+  const tc = ctx(deploy, { sandbox });
   await tc.publish({ dir: "app", entrypoint: "node server.js", name: "agg-app" });
   assert.equal(archives, 1, "the whole tree rides one archive, not N reads");
   assert.equal(perFileReads, 0, "no per-file readFileBytes round-trips");
@@ -370,18 +357,7 @@ test("publish FAILS LOUDLY on a flaky archive read — it never silently drops f
       throw new Error("fly export workspace read-back failed");
     },
   } as unknown as Sandbox;
-  const tc = createToolContext({
-    sandbox,
-    provision: async () => ({}) as SandboxHandle,
-    layers: [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace: {} as never,
-    deploy: s.deploy,
-    acl: {} as never,
-    createdBy: "U1",
-  });
+  const tc = ctx(s.deploy, { sandbox });
   await assert.rejects(
     () => tc.publish({ dir: "app", entrypoint: "node server.js", name: "flaky-app" }),
     /read-back failed/,
@@ -406,18 +382,7 @@ test("publish on a sandbox WITHOUT exportFiles (AWS) still collects the tree, an
 
   {
     const { deploy, captured } = spyDeploy();
-    const tc = createToolContext({
-      sandbox: awsLike((p) => files.find((f) => f.path === p)?.data ?? null),
-      provision: async () => ({}) as SandboxHandle,
-      layers: [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }],
-      commandPolicy: () => ({}) as never,
-      authorizeCommand: () => false,
-      grantedHandles: [],
-      workspace: {} as never,
-      deploy,
-      acl: {} as never,
-      createdBy: "U1",
-    });
+    const tc = ctx(deploy, { sandbox: awsLike((p) => files.find((f) => f.path === p)?.data ?? null) });
     await tc.publish({ dir: "app", entrypoint: "node server.js", name: "aws-ok" });
     assert.deepEqual(
       (captured()!.files ?? []).map((f) => f.path).sort(),
@@ -428,17 +393,8 @@ test("publish on a sandbox WITHOUT exportFiles (AWS) still collects the tree, an
 
   {
     const s = svc();
-    const tc = createToolContext({
+    const tc = ctx(s.deploy, {
       sandbox: awsLike((p) => (p === "app/ok.txt" ? null : (files.find((f) => f.path === p)?.data ?? null))),
-      provision: async () => ({}) as SandboxHandle,
-      layers: [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }],
-      commandPolicy: () => ({}) as never,
-      authorizeCommand: () => false,
-      grantedHandles: [],
-      workspace: {} as never,
-      deploy: s.deploy,
-      acl: {} as never,
-      createdBy: "U1",
     });
     await assert.rejects(
       () => tc.publish({ dir: "app", entrypoint: "node server.js", name: "aws-flaky" }),
@@ -515,55 +471,6 @@ test("publish is ledgered (G6): a crash-replay returns the cached result, not a 
   assert.equal(s.starts, 1, "the container was started exactly once");
 });
 
-test("publish never copies resident credentials into the deployment", async () => {
-  const home: AgentComputerExportEntry[] = [
-    { area: "home", path: ".aws/credentials", data: bytes("[default]") },
-    { area: "home", path: ".config/gh/hosts.yml", data: bytes("gh") },
-    { area: "home", path: ".config/gcloud/access_tokens.db", data: bytes("gcloud") },
-    { area: "home", path: ".ssh/id_ed25519", data: bytes("key") },
-    { area: "home", path: ".netrc", data: bytes("machine") },
-    { area: "home", path: ".git-credentials", data: bytes("https://") },
-    { area: "home", path: ".bash_history", data: bytes("rm -rf") },
-    { area: "home", path: "secret-notes.txt", data: bytes("private") },
-    { area: "home", path: ".config/fish/config.fish", data: bytes("shell") },
-  ];
-  const sandbox = exportSandbox(home);
-
-  let captured: DeployOrUpdateInput | undefined;
-  const deploy = {
-    deployOrUpdate: async (input: DeployOrUpdateInput) => {
-      captured = input;
-      return {
-        id: "d1",
-        ownerScopeId: input.ownerScopeId,
-        createdBy: input.createdBy,
-        ...(input.name ? { name: input.name } : {}),
-        currentVersion: 1,
-        status: "running",
-        endpoint: null,
-        versions: [],
-      } satisfies Deployment;
-    },
-    deploymentGrantees: async () => [],
-  } as unknown as DeployService;
-
-  const tc = createToolContext({
-    sandbox,
-    provision: async () => ({}) as SandboxHandle,
-    layers: [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace: {} as never,
-    deploy,
-    acl: {} as never,
-    createdBy: "U1",
-  });
-  await tc.publish({ entrypoint: "node s.js", name: "authed" });
-
-  assert.equal(captured!.homeFiles, undefined);
-});
-
 function exportSandbox(entries: AgentComputerExportEntry[], workspace = appFile("s.js")): Sandbox {
   const all: AgentComputerExportEntry[] = [
     ...workspace.map((f) => ({ area: "workspace" as const, path: f.path, data: f.data })),
@@ -615,31 +522,27 @@ const RESIDENT_HOME: AgentComputerExportEntry[] = [
   { area: "home", path: ".aws/credentials", data: bytes("[default]") },
   { area: "home", path: ".acmecli/config.json", data: bytes("{}") },
   { area: "home", path: ".config/gh/hosts.yml", data: bytes("gh") },
+  { area: "home", path: ".config/gcloud/access_tokens.db", data: bytes("gcloud") },
+  { area: "home", path: ".ssh/id_ed25519", data: bytes("key") },
   { area: "home", path: ".netrc", data: bytes("machine") },
+  { area: "home", path: ".git-credentials", data: bytes("https://") },
+  { area: "home", path: ".bash_history", data: bytes("rm -rf") },
+  { area: "home", path: "secret-notes.txt", data: bytes("private") },
+  { area: "home", path: ".config/fish/config.fish", data: bytes("shell") },
 ];
 
-test("publish always splits: bakes NO resident creds and injects no acting-as env", async () => {
-  const config = createMemoryConfigStore("default-org");
-  const { deploy, captured } = spyDeploy();
-  const tc = createToolContext({
-    sandbox: exportSandbox(RESIDENT_HOME),
-    provision: async () => ({}) as SandboxHandle,
-    layers: [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace: {} as never,
-    deploy,
-    acl: {} as never,
-    createdBy: "U1",
-    config,
+for (const config of [undefined, createMemoryConfigStore("default-org")]) {
+  test(`publish always splits${config ? " with a config store" : ""}: bakes NO resident creds and injects no acting-as env`, async () => {
+    const { deploy, captured } = spyDeploy();
+    await ctx(deploy, { sandbox: exportSandbox(RESIDENT_HOME), ...(config ? { config } : {}) }).publish({
+      entrypoint: "node s.js",
+      name: "split-app",
+    });
+    const c = captured()!;
+    assert.equal(c.homeFiles, undefined, "split bakes no third-party creds and no raw .acmecli");
+    assert.equal(c.env, undefined, "the layer never injects an acting-as env; identity rides the broker token");
   });
-  await tc.publish({ entrypoint: "node s.js", name: "split-app" });
-
-  const c = captured()!;
-  assert.equal((c.homeFiles ?? []).length, 0, "split bakes no third-party creds and no raw .acmecli");
-  assert.equal(c.env, undefined, "the layer never injects an acting-as env; identity rides the broker token");
-});
+}
 
 test("publish rejects an invalid or id-shaped name, and a turn with no writable scope", async () => {
   const s = svc();
@@ -685,11 +588,7 @@ test("publish drops git metadata on the per-file fallback path too", async () =>
     { path: "server.js", data: bytes("listen") },
     { path: ".git/config", data: bytes("[core]\n") },
   ];
-  const sandbox = fileSandbox(files);
-  sandbox.exportFiles = async () => {
-    throw new CapabilityUnsupportedError("sprites", "exportFiles");
-  };
-  const tc = ctx(s.deploy, { files, sandbox });
+  const tc = ctx(s.deploy, { files, sandbox: exportRefused(files) });
   await tc.publish({ entrypoint: "node server.js", name: "gitty-fallback" });
 
   const d = (await s.deployStore.getByName("gitty-fallback"))!;

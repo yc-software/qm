@@ -19,8 +19,15 @@ import type { SessionEntry } from "../src/types.ts";
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import { defaultInteractiveThinkingLevel, getRequiredModel } from "../src/model/pi-models.ts";
 
-test("modelSupportsFastMode allows only the documented direct Opus ids", () => {
-  for (const id of ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"]) {
+test("modelSupportsFastMode allows only the documented direct Opus ids and the GPT-5.6 family (priority tier)", () => {
+  for (const id of [
+    "claude-opus-5-5",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+  ]) {
     assert.equal(modelSupportsFastMode(id), true, `${id} should support fast mode`);
   }
   for (const id of [
@@ -38,29 +45,12 @@ test("modelSupportsFastMode allows only the documented direct Opus ids", () => {
   }
 });
 
-test('applyFastSpeed injects service_tier:"priority" for OpenAI-API models', () => {
-  const on = { model: "gpt-5.6-sol", input: [] } as Record<string, unknown>;
-  applyFastSpeed(on, true, "openai-responses");
-  assert.equal(on.service_tier, "priority");
-  assert.equal("speed" in on, false, "no Anthropic speed field on an OpenAI request");
-
-  const off = { model: "gpt-5.6-sol", input: [] } as Record<string, unknown>;
-  applyFastSpeed(off, false, "openai-responses");
-  assert.equal("service_tier" in off, false);
-});
-
-test("modelSupportsFastMode covers the GPT-5.6 family (priority tier)", () => {
-  for (const id of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
-    assert.equal(modelSupportsFastMode(id), true, id);
-  }
-});
-
 test("scaleCost doubles OpenAI per-token rates for fast mode", () => {
   const scaled = scaleCost({ input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 }, FAST_COST_MULTIPLIER);
   assert.deepEqual(scaled, { input: 8, output: 40, cacheRead: 0.8, cacheWrite: 10 });
 });
 
-test('applyFastSpeed injects speed:"fast" into the body only when fast is requested', () => {
+test('applyFastSpeed injects speed:"fast" (Anthropic) or service_tier:"priority" (OpenAI) only when fast is requested, and never throws on non-object payloads', () => {
   const on = { model: "claude-opus-4-8", messages: [] } as Record<string, unknown>;
   assert.equal(applyFastSpeed(on, true), on, "returns the same object (in-place mutation)");
   assert.equal(on.speed, "fast");
@@ -69,9 +59,15 @@ test('applyFastSpeed injects speed:"fast" into the body only when fast is reques
   applyFastSpeed(off, false);
   applyFastSpeed(off, undefined);
   assert.equal("speed" in off, false, "no speed field on a non-fast turn");
-});
 
-test("applyFastSpeed never throws on non-object payloads", () => {
+  const openai = { model: "gpt-5.6-sol", input: [] } as Record<string, unknown>;
+  applyFastSpeed(openai, true, "openai-responses");
+  assert.equal(openai.service_tier, "priority");
+  assert.equal("speed" in openai, false, "no Anthropic speed field on an OpenAI request");
+  const openaiOff = { model: "gpt-5.6-sol", input: [] } as Record<string, unknown>;
+  applyFastSpeed(openaiOff, false, "openai-responses");
+  assert.equal("service_tier" in openaiOff, false);
+
   assert.doesNotThrow(() => applyFastSpeed(undefined, true));
   assert.doesNotThrow(() => applyFastSpeed(null, true));
   assert.doesNotThrow(() => applyFastSpeed("raw", true));
@@ -314,6 +310,31 @@ const ANTHROPIC_WIRE_USAGE = {
   cache_creation_input_tokens: 0,
 };
 
+async function withFetch<T>(
+  respond: (payload: Record<string, unknown>, index: number, init?: RequestInit) => Response,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const realFetch = globalThis.fetch;
+  let index = 0;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) =>
+    respond(
+      JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+      index++,
+      init,
+    )) as typeof globalThis.fetch;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+const refusal = (type: string, message: string): Response =>
+  new Response(JSON.stringify({ type: "error", error: { type, message } }), {
+    status: 400,
+    headers: { "content-type": "application/json" },
+  });
+
 async function runTurn(
   sessionId: string,
   modelId: string,
@@ -344,16 +365,14 @@ async function runTurn(
       : {}),
     ...extra,
   });
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-    const payload = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+  let seq = 0;
+  const respondAndRecord = (payload: Record<string, unknown>, index: number, init?: RequestInit) => {
     payloads.push(payload);
     betas.push(new Headers(init?.headers).get("anthropic-beta"));
-    return respond(payload, payloads.length - 1);
-  }) as typeof globalThis.fetch;
-  let seq = 0;
-  try {
-    await harness.turns.runTurn({
+    return respond(payload, index);
+  };
+  await withFetch(respondAndRecord, () =>
+    harness.turns.runTurn({
       session: { id: sessionId } as HarnessTurnInput["session"],
       input: "price this turn",
       systemPrompt: "BASE",
@@ -368,10 +387,8 @@ async function runTurn(
       recordLlmRequest: (rec: HarnessLlmRequestRecord) => {
         rows.push(rec);
       },
-    });
-  } finally {
-    globalThis.fetch = realFetch;
-  }
+    }),
+  );
   return { rows, payloads, betas };
 }
 
@@ -435,16 +452,7 @@ test("gateway-routed Claude requests carry neither the binding beta nor block_bi
 test("a refusal fallback prices each step on its actual model and tier", async () => {
   const { rows, payloads } = await runTurn("refusal-fallback-pricing", "claude-sonnet-5", true, (_payload, index) =>
     index === 0
-      ? new Response(
-          JSON.stringify({
-            type: "error",
-            error: {
-              type: "api_error",
-              message: "Output blocked by content filtering policy: this would violate Anthropic's usage policy.",
-            },
-          }),
-          { status: 400, headers: { "content-type": "application/json" } },
-        )
+      ? refusal("api_error", "Output blocked by content filtering policy: this would violate Anthropic's usage policy.")
       : anthropicReply("recovered", ANTHROPIC_WIRE_USAGE),
   );
   assert.equal(payloads.length, 2);
@@ -490,13 +498,7 @@ test("a current Usage Policy refusal retries on the admin-configured fallback ru
     false,
     (_payload, index) =>
       index === 0
-        ? new Response(
-            JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: USAGE_POLICY_REFUSAL } }),
-            {
-              status: 400,
-              headers: { "content-type": "application/json" },
-            },
-          )
+        ? refusal("invalid_request_error", USAGE_POLICY_REFUSAL)
         : responsesReply("recovered", ASTRA_WIRE_USAGE),
     false,
     { resolveFallbackRuntime: () => ({ modelId: "gpt-6-sol", effortLevel: "low" }) },
@@ -538,32 +540,23 @@ test("compaction retries a refused summary on the configured fallback model", as
     resolveFallbackRuntime: () => ({ modelId: "gpt-6-sol" }),
   });
   const models: unknown[] = [];
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-    const payload = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-    models.push(payload.model);
-    return models.length === 1
-      ? new Response(
-          JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: USAGE_POLICY_REFUSAL } }),
-          {
-            status: 400,
-            headers: { "content-type": "application/json" },
-          },
-        )
-      : responsesReply("summary of the work", ASTRA_WIRE_USAGE);
-  }) as typeof globalThis.fetch;
-  try {
-    const text = await harness.models.compactHistory!({
-      session: { id: "compact-fallback" } as HarnessTurnInput["session"],
-      history: [
-        { seq: 1, kind: "user", payload: { text: "hello" }, createdAt: 1 },
-        { seq: 2, kind: "assistant", payload: { text: "hi" }, createdAt: 2 },
-      ] as unknown as SessionEntry[],
-      recordModelCall: () => {},
-    });
-    assert.match(text, /summary of the work/);
-  } finally {
-    globalThis.fetch = realFetch;
-  }
+  const text = await withFetch(
+    (payload, index) => {
+      models.push(payload.model);
+      return index === 0
+        ? refusal("invalid_request_error", USAGE_POLICY_REFUSAL)
+        : responsesReply("summary of the work", ASTRA_WIRE_USAGE);
+    },
+    () =>
+      harness.models.compactHistory!({
+        session: { id: "compact-fallback" } as HarnessTurnInput["session"],
+        history: [
+          { seq: 1, kind: "user", payload: { text: "hello" }, createdAt: 1 },
+          { seq: 2, kind: "assistant", payload: { text: "hi" }, createdAt: 2 },
+        ] as unknown as SessionEntry[],
+        recordModelCall: () => {},
+      }),
+  );
+  assert.match(text, /summary of the work/);
   assert.deepEqual(models, ["claude-sonnet-5", "gpt-6-sol"]);
 });

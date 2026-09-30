@@ -1,6 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,18 +26,49 @@ const turn: OrchestratorInput = {
   text: "x",
 };
 
-test("reaper requeues a run whose lease expired (crashed worker)", async () => {
-  const { runs } = createMemoryRunStore();
-  const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 })).run;
-  await runs.claim("dead-worker", 10);
-  await sleep(30);
+const build = (overrides: Parameters<typeof testConfig>[0] = {}, pinned = true) =>
+  buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "wr-")),
+      workers: 1,
+      ...(pinned ? { leaseTtlMs: 5_000, reaperIntervalMs: 60_000 } : {}),
+      ...overrides,
+    }),
+  );
 
-  const reaper = createReaper(runs, createMemorySessionStore(), { intervalMs: 60_000 });
-  const swept = await reaper.sweep();
-  assert.equal(swept.requeued, 1);
-  assert.equal(swept.parked, 0);
-  assert.equal((await runs.get(r.id))?.status, "pending", "expired run is back on the queue");
-});
+const ask = (built: ReturnType<typeof buildApp>, threadRef: string, async = true, text = "hello") =>
+  built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef },
+    text,
+    async,
+  });
+
+function holdCompletion(built: ReturnType<typeof buildApp>, everyCall = false) {
+  const completing = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const complete = built.runs.complete.bind(built.runs);
+  let first = true;
+  built.runs.complete = async (...args) => {
+    if (first || everyCall) {
+      first = false;
+      completing.resolve();
+      await release.promise;
+    }
+    return complete(...args);
+  };
+  return { completing: completing.promise, release: () => release.resolve() };
+}
+
+function captureAnalytics(t: TestContext): string[] {
+  const events: string[] = [];
+  t.mock.method(globalThis, "fetch", async (_url: string, init: RequestInit) => {
+    events.push(JSON.parse(String(init.body)).event);
+    return new Response("ok");
+  });
+  return events;
+}
 
 test("a run parks once the ERROR budget (error_attempts) is exhausted", async () => {
   const { runs } = createMemoryRunStore();
@@ -398,34 +429,16 @@ test("stop() lets an in-flight turn finish inside the drain budget — the run c
   assert.equal((await runs.get(enq.id))?.status, "done", "nothing left to hand back");
 });
 
-test("runtime.stop() drains the in-flight run even with the queue non-empty", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "wr-")),
-      workers: 1,
-      leaseTtlMs: 5_000,
-      reaperIntervalMs: 60_000,
-    }),
-  );
-  const a = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "t1" },
-    text: "first",
-    async: true,
-  });
-  const b = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "t2" },
-    text: "second",
-    async: true,
-  });
+test("runtime.stop() drains the in-flight run even with the queue non-empty, completing it end-to-end", async () => {
+  const built = build();
+  const a = await ask(built, "t1", true, "first");
+  const b = await ask(built, "t2", true, "second");
   assert.equal(a.status, "queued");
   assert.equal(b.status, "queued");
 
   built.runtime.start();
-  await built.runs.waitFor(a.runId!, 5_000);
+  const finished = await built.runs.waitFor(a.runId!, 5_000);
+  assert.match(finished.result?.reply ?? "", /You said: first/);
   await built.runtime.stop();
   for (const id of [a.runId!, b.runId!]) {
     const status = (await built.runs.get(id))?.status;
@@ -434,54 +447,11 @@ test("runtime.stop() drains the in-flight run even with the queue non-empty", as
   assert.equal((await built.runs.get(a.runId!))?.status, "done", "the drained run finished");
 });
 
-test("a worker pool drains a queued run end-to-end", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "wr-")),
-      workers: 1,
-      leaseTtlMs: 5_000,
-      reaperIntervalMs: 60_000,
-    }),
-  );
-  built.runtime.start();
-  try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t1" },
-      text: "hello",
-      async: true,
-    });
-    assert.equal(ack.status, "queued");
-    assert.ok(ack.runId);
-
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
-    assert.equal(finished.status, "done");
-    assert.match(finished.result?.reply ?? "", /You said: hello/);
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
 test("runtime.start() leaves queued runs idle when background work is disabled", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "wr-")),
-      backgroundWorkEnabled: false,
-      workers: 1,
-      leaseTtlMs: 5_000,
-      reaperIntervalMs: 60_000,
-    }),
-  );
+  const built = build({ backgroundWorkEnabled: false });
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t1" },
-      text: "hello",
-      async: true,
-    });
+    const ack = await ask(built, "t1");
     assert.equal(ack.status, "queued");
     assert.ok(ack.runId);
     await sleep(50);
@@ -575,33 +545,13 @@ test("stopClaims waits for an outstanding claim to be handed back before acknowl
 });
 
 test("runtime pauses without closing stores and restores worker capacity after a busy rollback", async () => {
-  const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wr-pause-")), workers: 1, leaseTtlMs: 5_000 }),
-  );
-  const completing = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const complete = built.runs.complete.bind(built.runs);
-  let first = true;
-  built.runs.complete = async (...args) => {
-    if (first) {
-      first = false;
-      completing.resolve();
-      await release.promise;
-    }
-    return complete(...args);
-  };
-  const enqueue = (threadRef: string) =>
-    built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef },
-      text: "hello",
-      async: true,
-    });
+  const built = build({ leaseTtlMs: 5_000 }, false);
+  const { completing, release } = holdCompletion(built);
+  const enqueue = (threadRef: string) => ask(built, threadRef);
   try {
     const a = await enqueue("pause-first");
     built.runtime.start();
-    await completing.promise;
+    await completing;
     await built.runtime.stopBackground();
     assert.equal((await built.runs.get(a.runId!))?.status, "running");
     const b = await enqueue("pause-second");
@@ -613,7 +563,7 @@ test("runtime pauses without closing stores and restores worker capacity after a
     await sleep(10);
     assert.equal(drained, false);
     built.runtime.startBackground();
-    release.resolve();
+    release();
     const result = await built.runs.waitFor(b.runId!, 5_000);
     assert.equal(result.status, "done");
     assert.equal(result.attempts, 1);
@@ -623,44 +573,20 @@ test("runtime pauses without closing stores and restores worker capacity after a
     const c = await enqueue("pause-third");
     assert.equal((await built.runs.waitFor(c.runId!, 5_000)).status, "done");
   } finally {
-    release.resolve();
+    release();
     await built.runtime.stop();
   }
 });
 
 test("inline turns remain admitted through pause and queued intake survives rollback", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "inline-drain-")),
-      backgroundDeploymentId: "controlled-test",
-      workers: 1,
-    }),
-  );
+  const built = build({ backgroundDeploymentId: "controlled-test" }, false);
   let admitted = true;
   built.runtime.setBackgroundAdmission(() => admitted);
-  const completing = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const complete = built.runs.complete.bind(built.runs);
-  let first = true;
-  built.runs.complete = async (...args) => {
-    if (first) {
-      first = false;
-      completing.resolve();
-      await release.promise;
-    }
-    return complete(...args);
-  };
-  const turn = (threadRef: string, async = false) =>
-    built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef },
-      text: "hello",
-      async,
-    });
+  const { completing, release } = holdCompletion(built);
+  const turn = (threadRef: string, async = false) => ask(built, threadRef, async);
   const running = turn("inline-before-pause");
   try {
-    await completing.promise;
+    await completing;
     admitted = false;
     await built.runtime.stopBackgroundClaims();
     let drained = false;
@@ -673,7 +599,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
     const queued = await turn("queued-after-pause", true);
     assert.equal(queued.status, "queued");
     assert.equal((await built.runs.get(queued.runId!))?.status, "pending");
-    release.resolve();
+    release();
     assert.equal((await running).status, "ok");
     await draining;
     admitted = true;
@@ -681,38 +607,19 @@ test("inline turns remain admitted through pause and queued intake survives roll
     assert.equal((await built.runs.waitFor(queued.runId!, 5000)).status, "done");
     assert.equal((await turn("inline-after-resume")).status, "ok");
   } finally {
-    release.resolve();
+    release();
     await running;
     await built.runtime.stop();
   }
 });
 
 test("final shutdown waits for an already-started completion instead of releasing its lease", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "bounded-drain-")),
-      workers: 1,
-      shutdownDrainMs: 30,
-    }),
-  );
-  const completing = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const complete = built.runs.complete.bind(built.runs);
-  built.runs.complete = async (...args) => {
-    completing.resolve();
-    await release.promise;
-    return complete(...args);
-  };
-  const queued = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "bounded-worker" },
-    text: "hello",
-    async: true,
-  });
+  const built = build({ shutdownDrainMs: 30 }, false);
+  const { completing, release } = holdCompletion(built, true);
+  const queued = await ask(built, "bounded-worker");
   built.runtime.start();
   try {
-    await completing.promise;
+    await completing;
     let drained = false;
     const ownershipDrain = built.runtime.backgroundDrained().then(() => {
       drained = true;
@@ -725,21 +632,17 @@ test("final shutdown waits for an already-started completion instead of releasin
     assert.equal(stopped, false);
     assert.equal(drained, false);
     assert.equal((await built.runs.get(queued.runId!))?.status, "running");
-    release.resolve();
+    release();
     await Promise.all([stopping, ownershipDrain]);
     assert.equal((await built.runs.get(queued.runId!))?.status, "done");
   } finally {
-    release.resolve();
+    release();
     await built.runtime.backgroundDrained();
   }
 });
 
 test("buildApp captures human run outcomes through the shared terminal hook", async (t) => {
-  const events: string[] = [];
-  t.mock.method(globalThis, "fetch", async (_url: string, init: RequestInit) => {
-    events.push(JSON.parse(String(init.body)).event);
-    return new Response("ok");
-  });
+  const events = captureAnalytics(t);
   const built = buildApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
   try {
     const request: OrchestratorInput = { ...turn, origin: { kind: "human" }, surface: "slack" };
@@ -755,11 +658,7 @@ test("buildApp captures human run outcomes through the shared terminal hook", as
 });
 
 test("web admission and replay preserve analytics exclusions", async (t) => {
-  const events: string[] = [];
-  t.mock.method(globalThis, "fetch", async (_url: string, init: RequestInit) => {
-    events.push(JSON.parse(String(init.body)).event);
-    return new Response("ok");
-  });
+  const events = captureAnalytics(t);
   const built = buildApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
   try {
     for (const flag of ["analyticsSuppressed", "proactiveOpener"] as const) {

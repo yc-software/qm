@@ -32,6 +32,32 @@ import type { StoredModelOverlay } from "../src/model/model-overlay-store.ts";
 const verified: ModelVerifier = async () => ({ fingerprint: "test-context", probe: async () => {} });
 afterEach(() => setModelOverlays([]));
 
+function probeGate() {
+  let release: () => void = () => {};
+  let entered: () => void = () => {};
+  const started = new Promise<void>((r) => {
+    entered = r;
+  });
+  const hold = async () => {
+    entered();
+    await new Promise<void>((r) => {
+      release = r;
+    });
+  };
+  return { started, hold, release: () => release() };
+}
+
+function failingProbeStore(message: string) {
+  const state = { fail: false };
+  const store = createModelOverlayStore(createMemoryMap(), undefined, async () => ({
+    fingerprint: "context",
+    probe: async () => {
+      if (state.fail) throw Error(message);
+    },
+  }));
+  return { store, state };
+}
+
 test("legacy unverified rows remain unavailable and statuses never expose proof fingerprints", async () => {
   const backing = createMemoryMap<StoredModelOverlay>();
   const store = createModelOverlayStore(backing, undefined, verified);
@@ -49,15 +75,9 @@ test("legacy unverified rows remain unavailable and statuses never expose proof 
 });
 
 test("failed probes never publish new models or replace previously verified definitions", async () => {
-  let fail = false;
-  const store = createModelOverlayStore(createMemoryMap(), undefined, async () => ({
-    fingerprint: "context",
-    probe: async () => {
-      if (fail) throw Error("403 secret-credential-value");
-    },
-  }));
+  const { store, state } = failingProbeStore("403 secret-credential-value");
   await store.upsert(spec, "admin");
-  fail = true;
+  state.fail = true;
   await assert.rejects(store.upsert({ ...spec, name: "Unverified edit" }, "admin"), /cannot access/);
   await assert.rejects(store.upsert({ ...spec, id: "unverified-new" }, "admin"), /cannot access/);
   const statuses = await store.statuses();
@@ -85,29 +105,20 @@ test("credential rotation invalidates availability and a successful recheck rest
 });
 
 test("a deletion while verification runs cannot be undone by its late success", async () => {
-  let release: () => void = () => {};
-  let entered: () => void = () => {};
-  const started = new Promise<void>((r) => {
-    entered = r;
-  });
+  const gate = probeGate();
   let hold = false;
   const store = createModelOverlayStore(createMemoryMap(), undefined, async () => ({
     fingerprint: "context",
     probe: async () => {
-      if (hold) {
-        entered();
-        await new Promise<void>((r) => {
-          release = r;
-        });
-      }
+      if (hold) await gate.hold();
     },
   }));
   await store.upsert(spec, "admin");
   hold = true;
   const update = store.upsert({ ...spec, name: "Late edit" }, "admin");
-  await started;
+  await gate.started;
   await store.delete(spec.id, "admin");
-  release();
+  gate.release();
   await assert.rejects(update, /changed during verification/);
   assert.equal((await store.statuses())[0]?.disabled, true);
 });
@@ -310,17 +321,11 @@ test("the streaming probe aborts a nonresponsive provider and never accepts an i
 });
 
 test("a failed recheck of the saved definition removes its prior certification", async () => {
-  let fail = false;
-  const store = createModelOverlayStore(createMemoryMap(), undefined, async () => ({
-    fingerprint: "context",
-    probe: async () => {
-      if (fail) throw Error("403");
-    },
-  }));
+  const { store, state } = failingProbeStore("403");
   await store.upsert(spec, "admin");
   await store.refresh();
   assert.ok(resolveModel(spec.id));
-  fail = true;
+  state.fail = true;
   await assert.rejects(store.upsert(spec, "admin"), /cannot access/);
   await store.refresh();
   assert.equal(resolveModel(spec.id), undefined);
@@ -361,54 +366,36 @@ test("corrupt persisted rows and copied proofs cannot enable a different model I
 });
 
 test("concurrent successful probes cannot silently overwrite a newer saved definition", async () => {
-  let release: () => void = () => {};
-  let entered: () => void = () => {};
-  const started = new Promise<void>((r) => {
-    entered = r;
-  });
+  const gate = probeGate();
   let holding = false;
   const store = createModelOverlayStore(createMemoryMap(), undefined, async (value) => ({
     fingerprint: JSON.stringify(value),
     probe: async () => {
-      if (holding && value.name === "Slow edit") {
-        entered();
-        await new Promise<void>((r) => {
-          release = r;
-        });
-      }
+      if (holding && value.name === "Slow edit") await gate.hold();
     },
   }));
   await store.upsert(spec, "admin");
   holding = true;
   const slow = store.upsert({ ...spec, name: "Slow edit" }, "admin");
-  await started;
+  await gate.started;
   await store.upsert({ ...spec, name: "Newer edit" }, "admin");
-  release();
+  gate.release();
   await assert.rejects(slow, /changed during verification/);
   assert.equal((await store.statuses())[0]?.spec.name, "Newer edit");
 });
 
 test("a model stays unavailable until its pending probe completes", async () => {
-  let release: () => void = () => {};
-  let entered: () => void = () => {};
-  const started = new Promise<void>((r) => {
-    entered = r;
-  });
+  const gate = probeGate();
   const store = createModelOverlayStore(createMemoryMap(), undefined, async () => ({
     fingerprint: "context",
-    probe: async () => {
-      entered();
-      await new Promise<void>((r) => {
-        release = r;
-      });
-    },
+    probe: gate.hold,
   }));
   const pending = store.upsert(spec, "admin");
-  await started;
+  await gate.started;
   await store.refresh();
   assert.equal(resolveModel(spec.id), undefined);
   assert.deepEqual(await store.statuses(), []);
-  release();
+  gate.release();
   await pending;
   await store.refresh();
   assert.ok(resolveModel(spec.id));

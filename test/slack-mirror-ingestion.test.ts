@@ -20,6 +20,24 @@ const ids: BotIdentity = {
   identityMode: "slack-id",
 };
 
+const inC1 = { type: "message", channel: "C1", channel_type: "channel" };
+const botReply = { ...inC1, user: "UBOT", ts: "2", text: "reply" };
+const changedInC1 = (message: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+  ...inC1,
+  subtype: "message_changed",
+  message,
+  ...extra,
+});
+
+async function strictRoster(client: unknown) {
+  return createDirectory({ core: {} as any, ids }).allInternalRosters(client as any, [{ id: "C1" }], {
+    plural: "rooms",
+    authz: "mirror",
+    item: "room",
+    requireComplete: true,
+  });
+}
+
 function fixture(
   options: {
     ingest?: (events: any[]) => Promise<void>;
@@ -140,19 +158,11 @@ test("visible Slack system messages and their edits mirror without agent dispatc
 
 test("hidden messages never enter context or dispatch", async () => {
   const f = fixture();
-  const message = {
-    type: "message",
-    channel: "C1",
-    channel_type: "channel",
-    user: "U1",
-    ts: "3.000001",
-    text: "hidden control",
-    hidden: true,
-  };
+  const message = { ...inC1, user: "U1", ts: "3.000001", text: "hidden control", hidden: true };
   await f.fire(message);
   await f.fire({ ...message, subtype: "channel_topic" });
   await f.fire({ ...message, hidden: false, subtype: "message_replied" });
-  await f.fire({ type: "message", subtype: "message_changed", channel: "C1", channel_type: "channel", message });
+  await f.fire(changedInC1(message));
   assert.deepEqual(f.events, []);
   assert.deepEqual(f.dispatches, []);
   assert.deepEqual(f.inbox, []);
@@ -160,14 +170,12 @@ test("hidden messages never enter context or dispatch", async () => {
 
 test("a system-message edit arriving first is already handled", async () => {
   const f = fixture();
-  await f.fire({
-    type: "message",
-    subtype: "message_changed",
-    channel: "C1",
-    channel_type: "channel",
-    ts: "4.000001",
-    message: { subtype: "channel_topic", ts: "3.000001", user: "U1", text: "new topic", edited: { ts: "4.000001" } },
-  });
+  await f.fire(
+    changedInC1(
+      { subtype: "channel_topic", ts: "3.000001", user: "U1", text: "new topic", edited: { ts: "4.000001" } },
+      { ts: "4.000001" },
+    ),
+  );
   assert.equal(f.events.length, 1);
   assert.equal(f.events[0].handled, true);
   assert.deepEqual(f.dispatches, []);
@@ -215,15 +223,7 @@ test("real Bolt ingests own channel/DM messages and edits without responses or s
 
 test("canonical root snapshots clear parent", async () => {
   const f = fixture();
-  await f.fire({
-    type: "message",
-    channel: "C1",
-    channel_type: "channel",
-    user: "UBOT",
-    ts: "2",
-    thread_ts: "2",
-    text: "canonical",
-  });
+  await f.fire({ ...botReply, thread_ts: "2", text: "canonical" });
   assert.equal(f.events.length, 1);
   assert.equal(f.events[0].sub, null);
   assert.equal(f.events[0].text, "canonical");
@@ -239,7 +239,6 @@ test("actual Bolt swallowed listener errors still withhold ack and preserve stag
       if (fail) throw new Error("database unavailable");
     },
   });
-  const event = { type: "message", channel: "C1", channel_type: "channel", user: "UBOT", ts: "2", text: "reply" };
   const gate = createDeferredEnvelopeAck(
     async () => {
       acknowledged++;
@@ -257,7 +256,7 @@ test("actual Bolt swallowed listener errors still withhold ack and preserve stag
       },
     },
   );
-  await f.fire(event, gate);
+  await f.fire(botReply, gate);
   assert.equal(acknowledged, 0);
   assert.equal(withheld, 1);
   assert.equal(cleared, 0);
@@ -268,7 +267,7 @@ test("actual Bolt swallowed listener errors still withhold ack and preserve stag
     },
     { gated: true },
   );
-  await f.fire(event, retry);
+  await f.fire(botReply, retry);
   assert.equal(acknowledged, 1);
 });
 
@@ -287,32 +286,20 @@ test("unavailable room authorization retries; genuine room denial never ingests"
         withheld++;
       },
     });
-    await f.fire(
-      { type: "message", channel: "C1", channel_type: "channel", user: "UBOT", ts: "2", text: "reply" },
-      gate,
-    );
+    await f.fire(botReply, gate);
     assert.equal(f.events.length, 0);
     assert.equal(withheld, Number(unavailable));
   }
 });
 
 test("strict directory roster distinguishes unavailable members from denied rooms", async () => {
-  const directory = createDirectory({ core: {} as any, ids });
   const client = {
     conversations: { members: {} },
     paginate: async function* () {
       yield await Promise.reject(new Error("rate limited"));
     },
   };
-  await assert.rejects(
-    directory.allInternalRosters(client, [{ id: "C1" }], {
-      plural: "rooms",
-      authz: "mirror",
-      item: "room",
-      requireComplete: true,
-    }),
-    /rate limited/,
-  );
+  await assert.rejects(strictRoster(client), /rate limited/);
 });
 
 test("late ingestion failure keeps an already staged envelope for replay", async () => {
@@ -343,7 +330,7 @@ test("late ingestion failure keeps an already staged envelope for replay", async
       },
     },
   );
-  await f.fire({ type: "message", channel: "C1", channel_type: "channel", user: "UBOT", ts: "2", text: "reply" }, gate);
+  await f.fire(botReply, gate);
   assert.equal(staged, 1);
   assert.equal(acknowledged, 1);
   assert.equal(cleared, 0);
@@ -364,7 +351,6 @@ test("self message deletions reach the mirror without dispatch", async () => {
 });
 
 test("strict roster rejects incomplete user classification rather than treating it as denied", async () => {
-  const directory = createDirectory({ core: {} as any, ids });
   const client = {
     conversations: { members: {} },
     users: {
@@ -376,65 +362,34 @@ test("strict roster rejects incomplete user classification rather than treating 
       yield { members: ["U1"] };
     },
   };
-  await assert.rejects(
-    directory.allInternalRosters(client, [{ id: "C1" }], {
-      plural: "rooms",
-      authz: "mirror",
-      item: "room",
-      requireComplete: true,
-    }),
-    /classification unavailable/,
-  );
+  await assert.rejects(strictRoster(client), /classification unavailable/);
 });
 
 test("file-only changes keep Slack edit version and missing edit versions use envelope time", async () => {
   const f = fixture();
   const message = { user: "UBOT", bot_id: "BBOT", ts: "2", text: "unchanged", edited: { ts: "3.500" }, files: [] };
-  await f.fire({
-    type: "message",
-    subtype: "message_changed",
-    channel: "C1",
-    channel_type: "channel",
-    ts: "4",
-    message,
-    previous_message: { text: "unchanged" },
-  });
+  await f.fire(changedInC1(message, { ts: "4", previous_message: { text: "unchanged" } }));
   assert.equal(f.events[0].editedAt, 3500);
   assert.deepEqual(f.events[0].files, []);
-  await f.fire({
-    type: "message",
-    subtype: "message_changed",
-    channel: "C1",
-    channel_type: "channel",
-    ts: "5.500",
-    message: { ...message, edited: undefined, text: "changed" },
-    previous_message: { text: "unchanged" },
-  });
+  await f.fire(
+    changedInC1(
+      { ...message, edited: undefined, text: "changed" },
+      { ts: "5.500", previous_message: { text: "unchanged" } },
+    ),
+  );
   assert.equal(f.events[1].editedAt, 5500);
 });
 
 test("thread broadcast snapshots retain broadcast membership through metadata updates", async () => {
   const f = fixture();
-  await f.fire({
-    type: "message",
-    subtype: "thread_broadcast",
-    channel: "C1",
-    channel_type: "channel",
-    user: "UBOT",
-    ts: "2",
-    thread_ts: "1",
-    text: "reply",
-  });
+  await f.fire({ ...botReply, subtype: "thread_broadcast", thread_ts: "1" });
   assert.equal(f.events[0].broadcast, true);
-  await f.fire({
-    type: "message",
-    subtype: "message_changed",
-    channel: "C1",
-    channel_type: "channel",
-    ts: "3",
-    message: { user: "UBOT", ts: "2", thread_ts: "1", text: "edited" },
-    previous_message: { text: "reply" },
-  });
+  await f.fire(
+    changedInC1(
+      { user: "UBOT", ts: "2", thread_ts: "1", text: "edited" },
+      { ts: "3", previous_message: { text: "reply" } },
+    ),
+  );
   assert.equal(f.events[1].broadcast, undefined);
 });
 
@@ -480,15 +435,7 @@ test("real message handler checks prior stake before ingesting the current reply
       await cache.ingest(events);
     },
   });
-  await f.fire({
-    type: "message",
-    channel: "C1",
-    channel_type: "channel",
-    user: "U1",
-    ts: currentTs,
-    thread_ts: "1.000001",
-    text: "follow-up",
-  });
+  await f.fire({ ...inC1, user: "U1", ts: currentTs, thread_ts: "1.000001", text: "follow-up" });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(f.dispatches.length, 1);
   assert.equal(calls.length, 1);
@@ -642,30 +589,15 @@ test("broadcast metadata survives reduced remirroring and partial edits across H
       await cache.ingest(events.map((e) => toEvent(e)!));
     },
   });
-  await f.fire({
-    type: "message",
-    subtype: "thread_broadcast",
-    channel: "C1",
-    channel_type: "channel",
-    user: "UBOT",
-    ts: "2",
-    thread_ts: "1",
-    text: "reply",
-  });
+  await f.fire({ ...botReply, subtype: "thread_broadcast", thread_ts: "1" });
   await f.mirror.mirrorMessageEvent(
     { channel: "C1", channel_type: "channel", user: "UBOT", ts: "2", thread_ts: "1", text: "reply" },
     {},
     { partial: true, handled: true },
   );
-  await f.fire({
-    type: "message",
-    subtype: "message_changed",
-    channel: "C1",
-    channel_type: "channel",
-    ts: "3",
-    message: { user: "UBOT", ts: "2", text: "edited" },
-    previous_message: { text: "reply" },
-  });
+  await f.fire(
+    changedInC1({ user: "UBOT", ts: "2", text: "edited" }, { ts: "3", previous_message: { text: "reply" } }),
+  );
   const rows = await cache.readMessages("C1", { channelHistory: true });
   assert.equal(rows.length, 1);
   assert.equal(rows[0]?.sub, "1");

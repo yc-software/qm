@@ -46,6 +46,12 @@ const proxyToken = () =>
     "secret",
   );
 
+const blobWired = () => ({
+  blobTransfer: createMemoryBlobTransferStore(),
+  capabilitySecret: "blob-secret",
+  apiBaseUrl: "http://core.internal:8080",
+});
+
 beforeEach(() => {
   fake?.cleanup();
   fake = installFakeSprites();
@@ -68,6 +74,9 @@ test("streams and exit codes are exact", async () => {
   assert.equal(r.code, 3);
   assert.equal(r.stdout.trim(), "out");
   assert.equal(r.stderr.trim(), "err");
+  const stdin = await sandbox.run(h, "cat; echo after-cat");
+  assert.equal(stdin.code, 0);
+  assert.equal(stdin.stdout.trim(), "after-cat", "commands cannot swallow the script from stdin");
 });
 
 test("commands run over the WebSocket exec endpoint with the script in the stream, never the URL", async () => {
@@ -218,13 +227,13 @@ test("proxy migration keeps both hosts reachable across cutover and rollback", a
   }
 });
 
-test("proxy migration rejects mismatched provider policy and invalid configuration", async () => {
-  const s = make({
-    egressProxyUrl: "https://new.example.com",
-    egressProxyAdditionalUrls: ["https://old.example.com"],
-  });
+test("force-through fails closed on a policy readback mismatch and rejects invalid proxy configuration", async () => {
   fake.breakPolicyReadback(sandboxScopeName("qmt", scope));
-  await assert.rejects(s.provision(layers, { egressToken: await proxyToken() }), /readback mismatch/);
+  for (const options of [
+    { egressProxyUrl: "https://proxy.example.com" },
+    { egressProxyUrl: "https://new.example.com", egressProxyAdditionalUrls: ["https://old.example.com"] },
+  ])
+    await assert.rejects(make(options).provision(layers, { egressToken: await proxyToken() }), /readback mismatch/);
   assert.throws(() => make({ egressProxyAdditionalUrls: ["https://old.example.com"] }), /require a primary/);
   assert.throws(
     () => make({ egressProxyUrl: "https://new.example.com", egressProxyAdditionalUrls: ["file:///tmp/x"] }),
@@ -240,12 +249,6 @@ test("force-through strips agent-supplied proxy vars", async () => {
   });
   assert.ok(!h.env?.HTTPS_PROXY?.includes("evil"));
   assert.equal(h.env?.FOO, "keep");
-});
-
-test("force-through fails closed if the policy readback doesn't bind", async () => {
-  const s = make({ egressProxyUrl: "https://proxy.example.com" });
-  fake.breakPolicyReadback(sandboxScopeName("qmt", scope));
-  await assert.rejects(s.provision(layers, { egressToken: await proxyToken() }), /readback mismatch/);
 });
 
 test("a recreated sprite gets the egress policy re-pinned, never served from a stale cache", async () => {
@@ -447,7 +450,7 @@ test("exec diagnostics retain known transport reasons without raw error causes",
   }
 });
 
-test("exec results carry io pressure when the guest exposes it, and omit it when it can't be read", async () => {
+test("exec results and computerStatus carry io pressure when the guest exposes it, and omit it when it can't be read", async () => {
   const h = await sandbox.provision(layers);
   const bare = await sandbox.run(h, "echo ok");
   assert.equal(bare.pressure, undefined);
@@ -456,6 +459,12 @@ test("exec results carry io pressure when the guest exposes it, and omit it when
   const r = await sandbox.run(h, "echo ok");
   assert.equal(r.code, 0);
   assert.deepEqual(r.pressure, { ioFull10: 85.17, ioFull60: 86.14, load1: 30.78 });
+
+  fake.setPressure(h.id, { full10: 60, full60: 55, load1: 8 });
+  const status = await sandbox.computerStatus!(scope);
+  assert.equal(status.machine, "healthy");
+  assert.equal(status.guestResponsive, true);
+  assert.deepEqual(status.pressure, { ioFull10: 60, ioFull60: 55, load1: 8 });
 });
 
 test("sustained io pressure is reported once per episode, then re-arms after it clears", async () => {
@@ -479,15 +488,6 @@ test("sustained io pressure is reported once per episode, then re-arms after it 
   assert.equal(events.filter((e) => e.code === "io_pressure_high").length, 2, "a new episode records again");
 });
 
-test("computerStatus carries guest pressure alongside the health check", async () => {
-  const h = await sandbox.provision(layers);
-  fake.setPressure(h.id, { full10: 60, full60: 55, load1: 8 });
-  const s = await sandbox.computerStatus!(scope);
-  assert.equal(s.machine, "healthy");
-  assert.equal(s.guestResponsive, true);
-  assert.deepEqual(s.pressure, { ioFull10: 60, ioFull60: 55, load1: 8 });
-});
-
 test("a garbled pressure read never costs the caller a completed command's result", async () => {
   const h = await sandbox.provision(layers);
   fake.setPressure(h.id, { full10: 60, full60: 55, load1: 8 });
@@ -502,13 +502,6 @@ test("concurrent restart calls for one sprite collapse into sequential requests"
   const h = await sandbox.provision(layers);
   await Promise.all([sandbox.restartComputer!(scope), sandbox.restartComputer!(scope)]);
   assert.deepEqual(fake.restarts(), [h.id, h.id], "serialized, one request per call, never interleaved forcing");
-});
-
-test("commands cannot swallow the script from stdin", async () => {
-  const h = await sandbox.provision(layers);
-  const r = await sandbox.run(h, "cat; echo after-cat");
-  assert.equal(r.code, 0);
-  assert.equal(r.stdout.trim(), "after-cat");
 });
 
 test("a creation rate limit surfaces the provider's code and retry hint", async () => {
@@ -597,20 +590,12 @@ test("blob staging is advertised only when the channel is actually wired", async
     false,
     "without blobTransfer/secret/apiBaseUrl the capability must not be claimed — copyHome probes for it",
   );
-  const wired = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
+  const wired = make(blobWired());
   assert.equal(supportsBlobStaging(wired), true, "wired up, sprites can move bytes by reference");
 });
 
 test("stageOut posts to core's blob endpoint by streaming, never by buffering in the guest", async () => {
-  const sb = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
+  const sb = make(blobWired());
   const h = await sb.provision(layers);
   await assert.rejects(() => sb.stageOut!(h, "artifacts/big.bin"), /sprites stageOut/);
 
@@ -623,11 +608,7 @@ test("stageOut posts to core's blob endpoint by streaming, never by buffering in
 });
 
 test("stageIn pulls a blob into the guest atomically (temp then mv)", async () => {
-  const sb = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
+  const sb = make(blobWired());
   const h = await sb.provision(layers);
   await assert.rejects(() => sb.stageIn!(h, "inbox/big.bin", "f".repeat(32)), /sprites stageIn/);
 

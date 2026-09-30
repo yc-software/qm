@@ -18,6 +18,32 @@ import { testConfig } from "./support/test-config.ts";
 const scopedHandle: SandboxHandle = { id: "scoped-box", rootDir: "/workspace" };
 const scratchHandle: SandboxHandle = { id: "scratch-box", rootDir: "/workspace", scratch: true };
 
+function outputSandbox(stdout: string | (() => string), stderr = ""): Sandbox {
+  return {
+    async run() {
+      return { stdout: typeof stdout === "string" ? stdout : stdout(), stderr, code: 0, timedOut: false };
+    },
+  } as unknown as Sandbox;
+}
+
+function providerErrorCtx(secret: string) {
+  return routingCtx({
+    provision: async () => ({ ...scopedHandle, env: { TOKEN: secret } }),
+    sandbox: {
+      async run() {
+        throw new Error(`provider returned ${secret}`);
+      },
+    } as unknown as Sandbox,
+  });
+}
+
+function migrationRunner(
+  backends: string[],
+  migrateScope: (scope: string, to: string, reason?: string, opts?: unknown) => Promise<unknown>,
+) {
+  return { migrateScope, listRoutes: async () => [], availableBackends: () => backends, defaultBackend: "e2b" };
+}
+
 function routingCtx(extra: Partial<ToolContextDeps> = {}) {
   const calls = { provision: 0, scratch: 0, ranOn: [] as string[] };
   const layers: WorkspaceLayer[] = [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }];
@@ -50,17 +76,14 @@ function routingCtx(extra: Partial<ToolContextDeps> = {}) {
   return { ctx, calls };
 }
 
-test("execute routes scratch:true to the scratch box and default to the scoped box", async () => {
+test("execute routes scratch:true to the scratch box, default to the scoped box, and never silently falls back", async () => {
   const { ctx, calls } = routingCtx();
   await ctx.execute("echo hi");
   assert.deepEqual({ ...calls }, { provision: 1, scratch: 0, ranOn: ["scoped-box"] });
   await ctx.execute("echo hi", { scratch: true });
   assert.deepEqual({ ...calls }, { provision: 1, scratch: 1, ranOn: ["scoped-box", "scratch-box"] });
-});
-
-test("execute scratch:true without a wired scratch path fails loudly, never silently scoped", async () => {
-  const { ctx } = routingCtx({ provisionScratch: undefined });
-  await assert.rejects(ctx.execute("echo hi", { scratch: true }), /scratch execution is not available/);
+  const unwired = routingCtx({ provisionScratch: undefined });
+  await assert.rejects(unwired.ctx.execute("echo hi", { scratch: true }), /scratch execution is not available/);
 });
 
 function sinkToolContext() {
@@ -296,28 +319,23 @@ test("execute schema lists exact command credential handles", async () => {
   assert.deepEqual(seen.at(-1)?.opts, { credentials: ["kc_github12345"] });
 });
 
-test("migrateComputer gates on approval, validates the target, bounds the copy, and settles routing", async () => {
+test("migrateComputer gates on approval and wiring, validates the target, bounds the copy, and settles routing", async () => {
   const migrated: Array<{ scope: string; to: string; reason?: string; opts?: unknown }> = [];
   const audited: string[] = [];
   let invalidated = 0;
-  const runner = {
-    migrateScope: async (scope: string, to: string, reason?: string, opts?: unknown) => {
-      migrated.push({ scope, to, ...(reason ? { reason } : {}), opts });
-      return {
-        scopeId: scope,
-        from: "e2b",
-        to,
-        resynced: false,
-        capabilitiesLost: [],
-        bytes: 1,
-        sha: "shashasha1234",
-        sourceFiles: 1,
-      };
-    },
-    listRoutes: async () => [],
-    availableBackends: () => ["e2b", "modal"],
-    defaultBackend: "e2b",
-  };
+  const runner = migrationRunner(["e2b", "modal"], async (scope, to, reason, opts) => {
+    migrated.push({ scope, to, ...(reason ? { reason } : {}), opts });
+    return {
+      scopeId: scope,
+      from: "e2b",
+      to,
+      resynced: false,
+      capabilitiesLost: [],
+      bytes: 1,
+      sha: "shashasha1234",
+      sourceFiles: 1,
+    };
+  });
   const base = {
     sandboxMigration: runner as never,
     migrateSettleMs: 0,
@@ -339,20 +357,16 @@ test("migrateComputer gates on approval, validates the target, bounds the copy, 
   ]);
   assert.equal(invalidated, 1, "the turn's provision memo is cleared so the next command lands on the new box");
   assert.deepEqual(audited, ["sandbox_routes.migrate"]);
+  const unwired = routingCtx({ authorizeCommand: () => true });
+  await assert.rejects(unwired.ctx.migrateComputer("modal"), /not available on this deployment/);
 });
 
 test("migrateComputer rewords the operator-only force refusal and audits failures", async () => {
   const audited: string[] = [];
-  const runner = {
-    migrateScope: async () => {
-      throw new Error("cannot migrate to sprites: it has no process sessions. Migrate with force to accept the loss.");
-    },
-    listRoutes: async () => [],
-    availableBackends: () => ["e2b", "sprites"],
-    defaultBackend: "e2b",
-  };
   const { ctx } = routingCtx({
-    sandboxMigration: runner as never,
+    sandboxMigration: migrationRunner(["e2b", "sprites"], async () => {
+      throw new Error("cannot migrate to sprites: it has no process sessions. Migrate with force to accept the loss.");
+    }) as never,
     migrateSettleMs: 0,
     authorizeCommand: () => true,
     auditLog: { record: (e: { action: string }) => audited.push(e.action) } as never,
@@ -362,21 +376,12 @@ test("migrateComputer rewords the operator-only force refusal and audits failure
   assert.deepEqual(audited, ["sandbox_routes.migrate_failed", "sandbox_routes.migrate_failed"]);
 });
 
-test("migrateComputer without a wired runner fails loudly", async () => {
-  const { ctx } = routingCtx({ authorizeCommand: () => true });
-  await assert.rejects(ctx.migrateComputer("modal"), /not available on this deployment/);
-});
-
 test("execute masks credential output before model delivery, screening, and transcript logging", async () => {
   const secret = "execution-secret-123456";
   const emitted: unknown[] = [];
   const screened: unknown[] = [];
   const { ctx } = routingCtx({
-    sandbox: {
-      async run() {
-        return { stdout: `safe prefix ${secret} safe suffix`, stderr: "useful diagnostics", code: 0, timedOut: false };
-      },
-    } as unknown as Sandbox,
+    sandbox: outputSandbox(`safe prefix ${secret} safe suffix`, "useful diagnostics"),
     commandCredentials: [{ handle: "kc_test123456", env: [{ key: "TOKEN", value: secret }] }],
   });
   const [execute] = createAgentTools(
@@ -414,11 +419,7 @@ test("execute checks only the current execution environment, including inherited
   let output = unselected;
   const { ctx } = routingCtx({
     provision: async () => ({ ...scopedHandle, env: { TOKEN: inherited, AWS_REGION: "us-west-2" } }),
-    sandbox: {
-      async run() {
-        return { stdout: output, stderr: "", code: 0, timedOut: false };
-      },
-    } as unknown as Sandbox,
+    sandbox: outputSandbox(() => output),
     commandCredentials: [{ handle: "kc_unused1234", env: [{ key: "OTHER_TOKEN", value: unselected }] }],
   });
   assert.equal((await ctx.execute("diagnose")).stdout, unselected);
@@ -428,34 +429,15 @@ test("execute checks only the current execution environment, including inherited
   assert.equal((await ctx.execute("diagnose")).stdout, "<redacted:credential>");
 });
 
-test("execute replaces credential-bearing provider errors without retaining the original cause", async () => {
+test("execute replaces credential-bearing provider errors and records a safe result for native replay", async () => {
   const secret = "provider-secret-12345";
-  const { ctx } = routingCtx({
-    provision: async () => ({ ...scopedHandle, env: { TOKEN: secret } }),
-    sandbox: {
-      async run() {
-        throw new Error(`provider returned ${secret}`);
-      },
-    } as unknown as Sandbox,
-  });
+  const entries: unknown[] = [];
+  const { ctx } = providerErrorCtx(secret);
   await assert.rejects(ctx.execute("diagnose"), (error: Error) => {
     assert.equal(error.message, "provider returned <redacted:credential>");
     assert.ok(!error.stack?.includes(secret));
     assert.equal(error.cause, undefined);
     return true;
-  });
-});
-
-test("execute records a safe provider-error result for native replay", async () => {
-  const secret = "provider-secret-12345";
-  const entries: unknown[] = [];
-  const { ctx } = routingCtx({
-    provision: async () => ({ ...scopedHandle, env: { TOKEN: secret } }),
-    sandbox: {
-      async run() {
-        throw new Error(`provider returned ${secret}`);
-      },
-    } as unknown as Sandbox,
   });
   const [execute] = createAgentTools({
     current: ctx,
@@ -472,11 +454,7 @@ test("execute records a safe provider-error result for native replay", async () 
 
 test("execute respects secret metadata even for configuration-named credentials", async () => {
   const { ctx } = routingCtx({
-    sandbox: {
-      async run() {
-        return { stdout: "credential", stderr: "", code: 0, timedOut: false };
-      },
-    } as unknown as Sandbox,
+    sandbox: outputSandbox("credential"),
     commandCredentials: [
       {
         handle: "kc_config1234",
@@ -494,11 +472,7 @@ test("owner execute masks selected credentials and inherited proxy credentials",
   const { ctx } = routingCtx({
     provisionOwnerAuth: async () => ({ ...scopedHandle, env: { HTTPS_PROXY: "https://user:proxy-secret@proxy.test" } }),
     commandCredentials: [{ handle: "owner-token", scope: "owner", env: [{ key: "TOKEN", value: "owner-secret" }] }],
-    sandbox: {
-      async run() {
-        return { stdout: "owner-secret https://user:proxy-secret@proxy.test", stderr: "", code: 0, timedOut: false };
-      },
-    } as unknown as Sandbox,
+    sandbox: outputSandbox("owner-secret https://user:proxy-secret@proxy.test"),
   });
   assert.equal(
     (await ctx.execute("diagnose", { ownerAuth: true, credentials: ["owner-token"] })).stdout,

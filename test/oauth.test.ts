@@ -34,6 +34,9 @@ const env = {
 
 const resolve = createSecretClientResolver(createEnvSecretSource(env));
 const googleClient = (): Promise<ResolvedClient> => resolve("google", {});
+const respondWith =
+  (body: Record<string, unknown>): FetchLike =>
+  async () => ({ ok: true, status: 200, json: async () => body });
 
 test("authorizeUrl builds a consent URL with client id, scopes, redirect, state", async () => {
   const url = authorizeUrl("google", { redirectUri: "https://app/cb", state: "st-1", client: await googleClient() });
@@ -97,8 +100,10 @@ test("exchangeCode returns a token for the provider's hosts (default authorizati
   assert.deepEqual(token.grantedScopes, ["a", "b"]);
 });
 
-test("makeRefresh exchanges a refresh token, keeping it if the provider omits a new one", async () => {
-  const fetchImpl: FetchLike = async (_url, init) => {
+test("makeRefresh exchanges a refresh token by host, keeping it if the provider omits a new one", async () => {
+  const hits: string[] = [];
+  const fetchImpl: FetchLike = async (url, init) => {
+    hits.push(url);
     assert.match(init.body, /grant_type=refresh_token/);
     return { ok: true, status: 200, json: async () => ({ access_token: "at2", expires_in: 3600 }) };
   };
@@ -107,17 +112,11 @@ test("makeRefresh exchanges a refresh token, keeping it if the provider omits a 
   assert.equal(fresh.accessToken, "at2");
   assert.equal(fresh.refreshToken, "rt");
   assert.equal(fresh.expiresAt, 2_000 + 3600_000);
-});
-
-test("refresh dispatches by host (calendar host → google provider)", async () => {
-  let hit = "";
-  const fetchImpl: FetchLike = async (url) => {
-    hit = url;
-    return { ok: true, status: 200, json: async () => ({ access_token: "at" }) };
-  };
-  const refresh = makeRefresh({ resolveClient: resolve, fetchImpl });
-  await refresh("www.googleapis.com", { accessToken: "x", refreshToken: "rt" });
-  assert.equal(hit, PROVIDERS.google!.tokenUrl);
+  await makeRefresh({ resolveClient: resolve, fetchImpl })("www.googleapis.com", {
+    accessToken: "x",
+    refreshToken: "rt",
+  });
+  assert.deepEqual(hits, [PROVIDERS.google!.tokenUrl, PROVIDERS.google!.tokenUrl]);
 });
 
 test("google company-slot exchange verifies the id_token hosted domain server-side", async () => {
@@ -127,44 +126,22 @@ test("google company-slot exchange verifies the id_token hosted domain server-si
     ["h", Buffer.from(JSON.stringify({ sub: "1", ...(hd ? { hd } : {}) }), "utf8").toString("base64url"), "s"].join(
       ".",
     );
-  const respondWith =
-    (body: Record<string, unknown>): FetchLike =>
-    async () => ({ ok: true, status: 200, json: async () => body });
-
   const ok = await exchangeCode("google", "c", "https://app/cb", {
     client,
     accountType: "company",
     fetchImpl: respondWith({ access_token: "at", id_token: idToken("example.com") }),
   });
   assert.equal(ok.token.accessToken, "at");
-
-  await assert.rejects(
-    () =>
-      exchangeCode("google", "c", "https://app/cb", {
-        client,
-        accountType: "company",
-        fetchImpl: respondWith({ access_token: "at", id_token: idToken("evil.example") }),
-      }),
-    /not in the example\.com workspace/,
-  );
-  await assert.rejects(
-    () =>
-      exchangeCode("google", "c", "https://app/cb", {
-        client,
-        accountType: "company",
-        fetchImpl: respondWith({ access_token: "at", id_token: idToken() }),
-      }),
-    /not in the example\.com workspace/,
-  );
-  await assert.rejects(
-    () =>
-      exchangeCode("google", "c", "https://app/cb", {
-        client,
-        accountType: "company",
-        fetchImpl: respondWith({ access_token: "at" }),
-      }),
-    /not in the example\.com workspace/,
-  );
+  for (const body of [{ id_token: idToken("evil.example") }, { id_token: idToken() }, {}])
+    await assert.rejects(
+      () =>
+        exchangeCode("google", "c", "https://app/cb", {
+          client,
+          accountType: "company",
+          fetchImpl: respondWith({ access_token: "at", ...body }),
+        }),
+      /not in the example\.com workspace/,
+    );
 
   const personal = await exchangeCode("google", "c", "https://app/cb", {
     client: await r("google", { accountType: "personal" }),
@@ -194,10 +171,9 @@ test("github refresh asks for JSON and surfaces GitHub's 200-with-error bodies",
   assert.equal(fresh.refreshToken, "gh-rt2");
   assert.equal(fresh.expiresAt, 1_000 + 28800_000);
 
-  const errBody: FetchLike = async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ error: "bad_refresh_token", error_description: "The refresh token passed is incorrect" }),
+  const errBody = respondWith({
+    error: "bad_refresh_token",
+    error_description: "The refresh token passed is incorrect",
   });
   await assert.rejects(
     () =>
@@ -231,7 +207,7 @@ test("github exchange asks for JSON and surfaces GitHub's 200-with-error bodies"
 });
 
 test("makeRefresh never returns an empty access token (parseable junk can't poison the keychain)", async () => {
-  const empty: FetchLike = async () => ({ ok: true, status: 200, json: async () => ({ token_type: "bearer" }) });
+  const empty = respondWith({ token_type: "bearer" });
   await assert.rejects(
     () =>
       makeRefresh({ resolveClient: resolve, fetchImpl: empty })("gmail.googleapis.com", {
@@ -248,6 +224,9 @@ test("Slack uses oauth.v2.access and keeps the USER token, scopes in user_scope"
   );
   assert.equal(url.searchParams.get("user_scope"), PROVIDERS.slack!.scopes.join(" "));
   assert.equal(url.searchParams.get("scope"), null);
+  const scopes = (url.searchParams.get("user_scope") ?? "").split(" ");
+  assert.ok(scopes.includes("canvases:read"), "canvases:read missing from Slack user_scope");
+  assert.ok(scopes.includes("canvases:write"), "canvases:write missing from Slack user_scope");
 
   const fetchImpl: FetchLike = async (u) => {
     assert.equal(u, PROVIDERS.slack!.tokenUrl);
@@ -270,41 +249,18 @@ test("Slack uses oauth.v2.access and keeps the USER token, scopes in user_scope"
   assert.deepEqual(token.grantedScopes, ["users:read", "chat:write"]);
 });
 
-test("Slack consent requests the canvas scopes so fresh connections can edit canvases", async () => {
-  const url = new URL(
-    authorizeUrl("slack", { redirectUri: "https://app/cb", state: "s", client: await resolve("slack", {}) }),
-  );
-  const scopes = (url.searchParams.get("user_scope") ?? "").split(" ");
-  assert.ok(scopes.includes("canvases:read"), "canvases:read missing from Slack user_scope");
-  assert.ok(scopes.includes("canvases:write"), "canvases:write missing from Slack user_scope");
-});
-
-test("Slack surfaces a provider-side oauth error", async () => {
-  const fetchImpl: FetchLike = async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ ok: false, error: "invalid_code" }),
-  });
-  const slackClient = await resolve("slack", {});
-  await assert.rejects(
-    () => exchangeCode("slack", "c", "https://app/cb", { client: slackClient, fetchImpl }),
-    /invalid_code/,
-  );
-});
-
-test("Slack/Notion reject a degenerate ok-but-no-token response (no empty token persisted)", async () => {
-  const slackClient = await resolve("slack", {});
-  const notionClient = await resolve("notion", {});
-  const slackEmpty: FetchLike = async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) });
-  await assert.rejects(
-    () => exchangeCode("slack", "c", "https://app/cb", { client: slackClient, fetchImpl: slackEmpty }),
-    /no usable token/,
-  );
-  const notionEmpty: FetchLike = async () => ({ ok: true, status: 200, json: async () => ({ workspace_id: "w" }) });
-  await assert.rejects(
-    () => exchangeCode("notion", "c", "https://app/cb", { client: notionClient, fetchImpl: notionEmpty }),
-    /no access_token/,
-  );
+test("Slack/Notion surface provider errors and reject a degenerate ok-but-no-token response", async () => {
+  for (const [provider, body, error] of [
+    ["slack", { ok: false, error: "invalid_code" }, /invalid_code/],
+    ["slack", { ok: true }, /no usable token/],
+    ["notion", { workspace_id: "w" }, /no access_token/],
+  ] as const) {
+    const client = await resolve(provider, {});
+    await assert.rejects(
+      () => exchangeCode(provider, "c", "https://app/cb", { client, fetchImpl: respondWith(body) }),
+      error,
+    );
+  }
 });
 
 test("Notion exchanges via HTTP Basic + JSON body and does not refresh", async () => {
@@ -331,7 +287,7 @@ test("scopesFor: BYO client scopes override the provider default", async () => {
   assert.deepEqual(scopesFor(PROVIDERS.google!, await googleClient()), PROVIDERS.google!.scopes);
 });
 
-test("OAuth state is sealed, scoped (org/accountType/clientRef), and expires", async () => {
+test("OAuth state is sealed, scoped (org/accountType/clientRef), round-trips the PKCE verifier, and expires", async () => {
   const state = await sealOAuthState(
     {
       provider: "google",
@@ -360,14 +316,18 @@ test("OAuth state is sealed, scoped (org/accountType/clientRef), and expires", a
     () => openOAuthState(state, { secret: "state-secret", now: () => 900_000, maxAgeMs: 10_000 }),
     /expired OAuth state/,
   );
+  const sealed = await sealOAuthState(
+    { provider: "x", principalId: "U1", redirectUri: "https://app/cb", codeVerifier: "ver-abc" },
+    { secret: "state-secret" },
+  );
+  assert.equal((await openOAuthState(sealed, { secret: "state-secret" })).codeVerifier, "ver-abc");
 });
 
-test("codeChallengeS256 matches the RFC 7636 test vector", () => {
-  const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
-  assert.equal(codeChallengeS256(verifier), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
-});
-
-test("generateCodeVerifier is URL-safe and high-entropy", () => {
+test("codeChallengeS256 matches the RFC 7636 test vector; generateCodeVerifier is URL-safe and high-entropy", () => {
+  assert.equal(
+    codeChallengeS256("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+    "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+  );
   const v = generateCodeVerifier();
   assert.match(v, /^[A-Za-z0-9_-]+$/, "base64url, no padding");
   assert.ok(v.length >= 43, "at least 256 bits of entropy encoded");
@@ -409,15 +369,6 @@ test("exchangeCode sends code_verifier in the token body when provided, omits it
   assert.match(bodies[0]!, /(^|&)code_verifier=the-verifier(&|$)/, "verifier is in the exchange body");
   await exchangeCode("google", "code-2", "https://app/cb", { client, fetchImpl: capture, now: 1_000 });
   assert.doesNotMatch(bodies[1]!, /code_verifier/, "no verifier when none provided");
-});
-
-test("OAuth state round-trips the PKCE verifier", async () => {
-  const sealed = await sealOAuthState(
-    { provider: "x", principalId: "U1", redirectUri: "https://app/cb", codeVerifier: "ver-abc" },
-    { secret: "state-secret" },
-  );
-  const opened = await openOAuthState(sealed, { secret: "state-secret" });
-  assert.equal(opened.codeVerifier, "ver-abc");
 });
 
 const xClient = (): Promise<ResolvedClient> => resolve("x", {});

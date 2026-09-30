@@ -54,10 +54,6 @@ function dm(text: string, channel: string): TurnRequest {
   };
 }
 
-// A web turn. Web is deliberately excluded from core-side mid-turn steering: on web a mid-turn
-// message QUEUES by default — it is submitted as its own turn and waits for the session lock —
-// and steering is a separate, explicit act on the queued row. So a turn that reaches core mid-run
-// must stay a real second run; folding it into the live one would be the bug.
 function web(text: string, threadRef: string): TurnRequest {
   return {
     surface: "web",
@@ -69,26 +65,164 @@ function web(text: string, threadRef: string): TurnRequest {
   };
 }
 
-test("spine ON: a mid-turn DM message STEERS the live run instead of forking a second reply", async () => {
+function automationRun(channel: string, root: string): TurnRequest {
+  return {
+    surface: "slack",
+    actor: { externalId: "U-owner" },
+    conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [] },
+    deliveryTarget: `slack:${channel}:${root}`,
+    text: "check the deploy and report back",
+    triggered: true,
+    async: true,
+  };
+}
+
+function synthetic(text: string, channel: string, root: string): TurnRequest {
+  return {
+    surface: "slack",
+    actor: { externalId: "U2" },
+    conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
+    deliveryTarget: `slack:${channel}:${root}`,
+    text,
+    unprompted: true,
+    async: true,
+  };
+}
+
+async function followUp(first: TurnRequest, second: TurnRequest, claim = false) {
   const built = freshApp();
-  const channel = "D1";
-  const first = await built.app.turn(dm("why did you choose this for me", channel));
-  const liveRunId = first.runId!;
+  const live = await built.app.turn(first);
+  if (claim) assert.ok(await built.runs.claimById(live.runId!, "worker", 30_000));
+  const next = await built.app.turn(second);
+  const signals = await built.signals.takePending(live.runId!);
+  const runs = (await built.runs.list()).filter((r) => r.sessionId === first.conversation.threadRef).length;
+  return { live, next, signals, runs };
+}
 
-  const second = await built.app.turn(dm("@bot why did you choose this", channel));
-  assert.equal(second.runId, liveRunId, "the second DM message attached to the LIVE run, not a new turn");
-  // The surface can only tell "I joined this run" from "I started it" by this flag; without it
-  // both handlers poll the shared run and each posts its reply (the duplicate-message bug).
-  assert.equal(second.steered, true, "a joined run is flagged steered so the surface stands down");
+const joins: Array<{
+  name: string;
+  first: (c: string, r: string) => TurnRequest;
+  second: (c: string, r: string) => TurnRequest;
+  claim?: boolean;
+  steered?: true;
+  signal?: { kind: "steer" | "abort"; text?: string | RegExp };
+  runs?: number;
+}> = [
+  {
+    name: "spine ON: a mid-turn DM message STEERS the live run instead of forking a second reply",
+    first: (c) => dm("why did you choose this for me", `D${c}`),
+    second: (c) => dm("@bot why did you choose this", `D${c}`),
+    steered: true,
+    signal: { kind: "steer", text: "@bot why did you choose this" },
+    runs: 1,
+  },
+  {
+    name: "spine ON: a mid-turn message STEERS the live run instead of forking a second turn",
+    first: (c, r) => mention("@bot start the task", c, r),
+    second: (c, r) => mention("actually make it blue", c, r),
+    steered: true,
+    signal: { kind: "steer", text: "actually make it blue" },
+    runs: 1,
+  },
+  {
+    name: "spine ON: an empty mid-turn message DROPS (attaches to the live run) — no second turn, no signal",
+    first: (c, r) => mention("@bot go", c, r),
+    second: (c, r) => mention("   ", c, r),
+    runs: 1,
+  },
+  {
+    name: "spine ON: an OVERHEARD thread-follow (unprompted, not addressed) STEERS the live run",
+    first: (c, r) => mention("@bot make custom emoji for :gruel:", c, r),
+    second: (c, r) => overheard("and :caviar:", c, r),
+    signal: { kind: "steer", text: /: and :caviar:$/ },
+    runs: 1,
+  },
+  {
+    name: "spine ON: an overheard bare 'stop' folds in as steer text (a bystander does NOT abort)",
+    first: (c, r) => mention("@bot do a long thing", c, r),
+    second: (c, r) => overheard("stop", c, r),
+    signal: { kind: "steer" },
+  },
+  {
+    name: "an overheard follow still steers a live UNPROMPTED run (a stranded one re-imports from the mirror)",
+    first: (c, r) => overheard("hm, interesting", c, r),
+    second: (c, r) => overheard("and another thing", c, r),
+    signal: { kind: "steer" },
+  },
+  {
+    name: "a SYNTHETIC detection (no live author) still steers a live AUTOMATION run — screened, no authority",
+    first: automationRun,
+    second: (c, r) => synthetic("bot posted: build finished", c, r),
+    signal: { kind: "steer" },
+  },
+  {
+    name: "spine ON: a bare 'stop' mid-turn routes through the ABORT interrupt (not a steer)",
+    first: (c, r) => mention("@bot do a long thing", c, r),
+    second: (c, r) => mention("stop", c, r),
+    claim: true,
+    signal: { kind: "abort" },
+  },
+  {
+    name: "an addressed bare 'stop' still ABORTS a live UNPROMPTED run",
+    first: (c, r) => overheard("hm, interesting", c, r),
+    second: (c, r) => mention("stop", c, r),
+    claim: true,
+    signal: { kind: "abort" },
+  },
+  {
+    name: "an addressed bare 'stop' still ABORTS a live AUTOMATION run",
+    first: automationRun,
+    second: (c, r) => mention("stop", c, r),
+    claim: true,
+    signal: { kind: "abort" },
+  },
+];
 
-  const signals = await built.signals.takePending(liveRunId);
-  assert.equal(signals.length, 1);
-  assert.equal(signals[0]!.kind, "steer");
-  assert.equal(signals[0]!.text, "@bot why did you choose this");
+for (const [index, c] of joins.entries()) {
+  test(c.name, async () => {
+    const { live, next, signals, runs } = await followUp(
+      c.first(`CJ${index}`, "1.1"),
+      c.second(`CJ${index}`, "1.1"),
+      c.claim,
+    );
+    assert.equal(live.status, "queued");
+    assert.equal(next.status, "queued");
+    assert.equal(next.runId, live.runId, "the follow-up attached to the LIVE run, not a new turn");
+    if (c.steered) assert.equal(next.steered, true, "a joined run is flagged steered so the surface stands down");
+    assert.equal(signals.length, c.signal ? 1 : 0);
+    if (c.signal) assert.equal(signals[0]!.kind, c.signal.kind);
+    if (typeof c.signal?.text === "string") assert.equal(signals[0]!.text, c.signal.text);
+    if (c.signal?.text instanceof RegExp) assert.match(signals[0]!.text!, c.signal.text);
+    if (c.runs !== undefined) assert.equal(runs, c.runs, "no second run was enqueued");
+  });
+}
 
-  const runs = await built.runs.list();
-  assert.equal(runs.filter((r) => r.sessionId === `dm:${channel}`).length, 1, "no second run enqueued for the DM");
-});
+for (const [index, [name, first, second]] of (
+  [
+    [
+      "an ADDRESSED mention never steers into a live UNPROMPTED run — it enqueues its own turn",
+      (c: string, r: string) => overheard("hm, interesting", c, r),
+      (c: string, r: string) => mention("@bot why did you do it wrong?", c, r),
+    ],
+    [
+      "a person's reply never steers into a live AUTOMATION run — it enqueues behind it with its own claims",
+      automationRun,
+      (c: string, r: string) => mention("@bot also update the shared skill", c, r),
+    ],
+    [
+      "a person's verbatim thread-follow (authored detection) also enqueues behind a live AUTOMATION run",
+      automationRun,
+      (c: string, r: string) => overheard("actually, please change the plan", c, r),
+    ],
+  ] as const
+).entries()) {
+  test(name, async () => {
+    const { live, next, signals, runs } = await followUp(first(`CE${index}`, "1.1"), second(`CE${index}`, "1.1"));
+    assert.notEqual(next.runId, live.runId, "the follow-up got its own run, not a steer into the live one");
+    assert.equal(signals.length, 0, "no signal was sent to the live run");
+    assert.equal(runs, 2, "the follow-up enqueued behind the live run");
+  });
+}
 
 test("a mid-turn message from a DIFFERENT person is attributed and its author durably recorded", async () => {
   const built = freshApp();
@@ -119,79 +253,6 @@ test("a mid-turn message from a DIFFERENT person is attributed and its author du
     "also add a screenshot",
     "a steer from the turn's own actor stays unprefixed",
   );
-});
-
-test("spine ON: a mid-turn message STEERS the live run instead of forking a second turn", async () => {
-  const built = freshApp();
-  const channel = "C1";
-  const root = "100.1";
-  const first = await built.app.turn(mention("@bot start the task", channel, root));
-  assert.equal(first.status, "queued");
-  const liveRunId = first.runId!;
-
-  const second = await built.app.turn(mention("actually make it blue", channel, root));
-  assert.equal(second.status, "queued");
-  assert.equal(second.runId, liveRunId, "the second message attached to the LIVE run, not a new turn");
-  assert.equal(second.steered, true, "a joined run is flagged steered so the surface stands down");
-
-  const signals = await built.signals.takePending(liveRunId);
-  assert.equal(signals.length, 1);
-  assert.equal(signals[0]!.kind, "steer");
-  assert.equal(signals[0]!.text, "actually make it blue");
-
-  const runs = await built.runs.list();
-  assert.equal(runs.filter((r) => r.sessionId === `ch:${channel}:${root}`).length, 1, "no second run was enqueued");
-});
-
-test("spine ON: an empty mid-turn message DROPS (attaches to the live run) — no second turn, no signal", async () => {
-  const built = freshApp();
-  const channel = "C5";
-  const root = "500.5";
-  const first = await built.app.turn(mention("@bot go", channel, root));
-  const liveRunId = first.runId!;
-  const empty = await built.app.turn(mention("   ", channel, root));
-  assert.equal(empty.runId, liveRunId, "the empty message attached to the live run, not a new turn");
-  assert.equal((await built.signals.takePending(liveRunId)).length, 0, "a drop sends no signal");
-  const runs = await built.runs.list();
-  assert.equal(
-    runs.filter((r) => r.sessionId === `ch:${channel}:${root}`).length,
-    1,
-    "no second run enqueued on a drop",
-  );
-});
-
-test("spine ON: a bare 'stop' mid-turn routes through the ABORT interrupt (not a steer)", async () => {
-  const built = freshApp();
-  const channel = "C2";
-  const root = "200.2";
-  const first = await built.app.turn(mention("@bot do a long thing", channel, root));
-  const liveRunId = first.runId!;
-  assert.ok(await built.runs.claimById(liveRunId, "worker", 30_000));
-
-  const stop = await built.app.turn(mention("stop", channel, root));
-  assert.equal(stop.runId, liveRunId, "the stop attached to the live run");
-  const signals = await built.signals.takePending(liveRunId);
-  assert.equal(signals.length, 1);
-  assert.equal(signals[0]!.kind, "abort", "a bare stop aborts the live run");
-});
-
-test("spine ON: an OVERHEARD thread-follow (unprompted, not addressed) STEERS the live run", async () => {
-  const built = freshApp();
-  const channel = "C6";
-  const root = "600.6";
-  const first = await built.app.turn(mention("@bot make custom emoji for :gruel:", channel, root));
-  const liveRunId = first.runId!;
-
-  const follow = await built.app.turn(overheard("and :caviar:", channel, root));
-  assert.equal(follow.runId, liveRunId, "the overheard follow attached to the LIVE run, not a new turn");
-
-  const signals = await built.signals.takePending(liveRunId);
-  assert.equal(signals.length, 1);
-  assert.equal(signals[0]!.kind, "steer");
-  assert.match(signals[0]!.text!, /: and :caviar:$/, "overheard steer text carries an author label");
-
-  const runs = await built.runs.list();
-  assert.equal(runs.filter((r) => r.sessionId === `ch:${channel}:${root}`).length, 1, "no second run enqueued");
 });
 
 test("Auto blocks a prompt-injection attempt from an unprompted mid-turn coworker update", async () => {
@@ -279,147 +340,6 @@ test("spine ON: the steer signal carries the message's real surface ts (so the h
   assert.equal(signals[1]!.ts, "800.011", "unprompted steer forwards entryTs as the persist/dedupe key");
 });
 
-test("spine ON: an overheard bare 'stop' folds in as steer text (a bystander does NOT abort)", async () => {
-  const built = freshApp();
-  const channel = "C7";
-  const root = "700.7";
-  const first = await built.app.turn(mention("@bot do a long thing", channel, root));
-  const liveRunId = first.runId!;
-
-  const stop = await built.app.turn(overheard("stop", channel, root));
-  assert.equal(stop.runId, liveRunId);
-  const signals = await built.signals.takePending(liveRunId);
-  assert.equal(signals.length, 1);
-  assert.equal(signals[0]!.kind, "steer", "an overheard stop steers, it does not abort");
-});
-
-test("an ADDRESSED mention never steers into a live UNPROMPTED run — it enqueues its own turn", async () => {
-  const built = freshApp();
-  const channel = "C9";
-  const root = "900.9";
-  const first = await built.app.turn(overheard("hm, interesting", channel, root));
-  const liveRunId = first.runId!;
-
-  const second = await built.app.turn(mention("@bot why did you do it wrong?", channel, root));
-  assert.notEqual(second.runId, liveRunId, "the mention got its own run, not a steer into the detection turn");
-  assert.equal((await built.signals.takePending(liveRunId)).length, 0, "no signal was sent to the detection-gated run");
-  const runs = await built.runs.list();
-  assert.equal(
-    runs.filter((r) => r.sessionId === `ch:${channel}:${root}`).length,
-    2,
-    "the mention enqueued behind the live run",
-  );
-});
-
-test("an overheard follow still steers a live UNPROMPTED run (a stranded one re-imports from the mirror)", async () => {
-  const built = freshApp();
-  const channel = "C10";
-  const root = "1000.1";
-  const first = await built.app.turn(overheard("hm, interesting", channel, root));
-  const liveRunId = first.runId!;
-
-  const follow = await built.app.turn(overheard("and another thing", channel, root));
-  assert.equal(follow.runId, liveRunId);
-  const signals = await built.signals.takePending(liveRunId);
-  assert.equal(signals.length, 1);
-  assert.equal(signals[0]!.kind, "steer");
-});
-
-test("an addressed bare 'stop' still ABORTS a live UNPROMPTED run", async () => {
-  const built = freshApp();
-  const channel = "C11";
-  const root = "1100.1";
-  const first = await built.app.turn(overheard("hm, interesting", channel, root));
-  const liveRunId = first.runId!;
-  assert.ok(await built.runs.claimById(liveRunId, "worker", 30_000));
-
-  const stop = await built.app.turn(mention("stop", channel, root));
-  assert.equal(stop.runId, liveRunId, "the stop attached to the live run");
-  const signals = await built.signals.takePending(liveRunId);
-  assert.equal(signals.length, 1);
-  assert.equal(signals[0]!.kind, "abort");
-});
-
-function automationRun(channel: string, root: string): TurnRequest {
-  return {
-    surface: "slack",
-    actor: { externalId: "U-owner" },
-    conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [] },
-    deliveryTarget: `slack:${channel}:${root}`,
-    text: "check the deploy and report back",
-    triggered: true,
-    async: true,
-  };
-}
-
-test("a person's reply never steers into a live AUTOMATION run — it enqueues behind it with its own claims", async () => {
-  const built = freshApp();
-  const channel = "C12";
-  const root = "1200.1";
-  const first = await built.app.turn(automationRun(channel, root));
-  const liveRunId = first.runId!;
-
-  const second = await built.app.turn(mention("@bot also update the shared skill", channel, root));
-  assert.notEqual(second.runId, liveRunId, "the person's message got its own run, not a steer into the cron's");
-  assert.equal((await built.signals.takePending(liveRunId)).length, 0, "no signal was sent to the automation run");
-  const runs = await built.runs.list();
-  assert.equal(
-    runs.filter((r) => r.sessionId === `ch:${channel}:${root}`).length,
-    2,
-    "the reply enqueued behind the live automation run",
-  );
-});
-
-test("a person's verbatim thread-follow (authored detection) also enqueues behind a live AUTOMATION run", async () => {
-  const built = freshApp();
-  const channel = "C13";
-  const root = "1300.1";
-  const first = await built.app.turn(automationRun(channel, root));
-  const liveRunId = first.runId!;
-
-  const follow = await built.app.turn(overheard("actually, please change the plan", channel, root));
-  assert.notEqual(follow.runId, liveRunId, "the authored follow got its own run");
-  assert.equal((await built.signals.takePending(liveRunId)).length, 0, "no signal was sent to the automation run");
-});
-
-test("an addressed bare 'stop' still ABORTS a live AUTOMATION run", async () => {
-  const built = freshApp();
-  const channel = "C14";
-  const root = "1400.1";
-  const first = await built.app.turn(automationRun(channel, root));
-  const liveRunId = first.runId!;
-  assert.ok(await built.runs.claimById(liveRunId, "worker", 30_000));
-
-  const stop = await built.app.turn(mention("stop", channel, root));
-  assert.equal(stop.runId, liveRunId, "the stop attached to the live automation run");
-  const signals = await built.signals.takePending(liveRunId);
-  assert.equal(signals.length, 1);
-  assert.equal(signals[0]!.kind, "abort");
-});
-
-test("a SYNTHETIC detection (no live author) still steers a live AUTOMATION run — screened, no authority", async () => {
-  const built = freshApp();
-  const channel = "C15";
-  const root = "1500.1";
-  const first = await built.app.turn(automationRun(channel, root));
-  const liveRunId = first.runId!;
-
-  const synthetic: TurnRequest = {
-    surface: "slack",
-    actor: { externalId: "U2" },
-    conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
-    deliveryTarget: `slack:${channel}:${root}`,
-    text: "bot posted: build finished",
-    unprompted: true,
-    async: true,
-  };
-  const follow = await built.app.turn(synthetic);
-  assert.equal(follow.runId, liveRunId, "the synthetic detection folded into the live run as context");
-  const signals = await built.signals.takePending(liveRunId);
-  assert.equal(signals.length, 1);
-  assert.equal(signals[0]!.kind, "steer");
-});
-
 function spawnedWorker(channel: string, askTs: string): TurnRequest {
   return {
     surface: "slack",
@@ -436,9 +356,8 @@ function spawnedWorker(channel: string, askTs: string): TurnRequest {
   };
 }
 
-test("a keyed live turn does NOT steer (it routes to enqueue where it dedupes); an unkeyed one DOES", async () => {
+test("a keyed live turn does NOT steer — it routes to enqueue where it dedupes", async () => {
   const built = freshApp();
-
   const kFirst = await built.app.turn(mention("@bot start", "C14", "1400.1"));
   const keyed = await built.app.turn({
     ...mention("make it green", "C14", "1400.1"),
@@ -446,14 +365,6 @@ test("a keyed live turn does NOT steer (it routes to enqueue where it dedupes); 
   });
   assert.equal((await built.signals.takePending(kFirst.runId!)).length, 0, "the keyed live turn sent no steer");
   assert.notEqual(keyed.runId, kFirst.runId, "the keyed turn did not fold into the live run");
-
-  const uFirst = await built.app.turn(mention("@bot start", "C14b", "1401.1"));
-  const steered = await built.app.turn(mention("make it green", "C14b", "1401.1"));
-  assert.equal(steered.runId, uFirst.runId, "the unkeyed live turn folded into the live run");
-  const signals = await built.signals.takePending(uFirst.runId!);
-  assert.equal(signals.length, 1);
-  assert.equal(signals[0]!.kind, "steer");
-  assert.equal(signals[0]!.text, "make it green");
 });
 
 test("a same-key REDELIVERY of a live keyed turn never steers — it dedupes to the existing run", async () => {
@@ -521,8 +432,6 @@ test("reverse race: an addressed mention steers into the live ambient run, not a
 
   const second = await built.app.turn({ ...mention("@bot are you on it?", channel, askTs), triggerTs: askTs });
   assert.equal(second.runId, ambient.runId, "the mention steered into the LIVE ambient run, not a second reply");
-  // NOT flagged steered: the ambient owner is unprompted and stays silent on a refusal/failure,
-  // so the addressed caller must keep waiting on the run — it's the only one that would report it.
   assert.equal(second.steered, undefined, "the ambient reverse-race join keeps the addressed caller waiting");
   const signals = await built.signals.takePending(ambient.runId!);
   assert.equal(signals.length, 1);
@@ -558,7 +467,6 @@ test("spine ON: the FIRST message (no live run) engages normally — no steer", 
   const first = await built.app.turn(mention("@bot hello", channel, root));
   assert.equal(first.status, "queued");
   assert.equal(first.steered, undefined, "an engaged run belongs to its caller — never flagged steered");
-  // A fresh engage sends no signal (there was no live run to steer).
   const signals = await built.signals.takePending(first.runId!);
   assert.equal(signals.length, 0);
 });
@@ -623,7 +531,6 @@ test("web's queue is durable and readable: core names the live run, then what wa
     "the queue comes back in send order, with the text — enough for any surface to render it",
   );
 
-  // A queued turn is withdrawable right up to the moment a worker takes it, and not after.
   assert.deepEqual(await built.app.withdrawRun(second.runId!), { withdrawn: true });
   assert.deepEqual(
     (await built.app.activeRunForThread(threadRef))?.queued,
@@ -673,8 +580,6 @@ test("a queued web turn runs on its own — the sender's client need never come 
   assert.equal(next?.id, queued.runId, "the queued turn is claimed by a worker, with no client involved");
   assert.equal(next?.request.text, "the queued one");
 });
-
-// ── Orphaned-signal replay: a steer that loses the pickup race is never dropped ────────────────
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 async function until<T>(get: () => Promise<T | undefined>, ms = 3_000): Promise<T> {
@@ -742,6 +647,7 @@ test("signalRun: a web steer that races the run's end is replayed and reports th
   assert.equal(raced.accepted, false);
   assert.equal(raced.reason, "terminal");
   assert.equal(raced.replayed, true, "the caller is told the text now rides a fresh run");
+  assert.equal((await built.signals.takePending(liveRunId)).length, 0, "nothing left rotting in the queue");
   const fresh = await until(async () =>
     (await built.runs.list()).find((r) => r.sessionId === `ch:${channel}:${root}` && r.id !== liveRunId),
   );
@@ -772,20 +678,6 @@ function completeOnSend(built: ReturnType<typeof freshApp>, sanitize = false): v
     return sent;
   };
 }
-
-test("signalRun: a steer whose run goes terminal mid-send is REFUSED, never a false accept", async () => {
-  const built = freshApp();
-  const channel = "C12";
-  const root = "1200.1";
-  const first = await built.app.turn(mention("@bot go", channel, root));
-  const liveRunId = first.runId!;
-  completeOnSend(built);
-
-  const raced = await built.app.signalRun(liveRunId, { kind: "steer", text: "did this make it?" });
-  assert.equal(raced.accepted, false, "a signal that raced the run's completion must not report success");
-  assert.equal(raced.reason, "terminal");
-  assert.equal((await built.signals.takePending(liveRunId)).length, 0, "nothing left rotting in the queue");
-});
 
 for (const sanitize of [false, true])
   test(`steer path: a message whose run goes terminal mid-send returns the fresh run (sanitize=${sanitize})`, async () => {

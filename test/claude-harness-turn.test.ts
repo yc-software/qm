@@ -59,6 +59,18 @@ function assistantMessage(id: string, text: string, usage: Record<string, number
   };
 }
 
+const usage = (input: number, output: number, cacheRead = 0, cacheWrite = 0) => ({
+  input_tokens: input,
+  output_tokens: output,
+  cache_read_input_tokens: cacheRead,
+  cache_creation_input_tokens: cacheWrite,
+});
+
+const delta = (text: string): FakeSdkMessage => ({
+  type: "stream_event",
+  event: { type: "content_block_delta", delta: { type: "text_delta", text } },
+});
+
 function resultMessage(text: string, overrides: Record<string, unknown> = {}): FakeSdkMessage {
   return {
     type: "result",
@@ -69,7 +81,7 @@ function resultMessage(text: string, overrides: Record<string, unknown> = {}): F
     duration_ms: 100,
     duration_api_ms: 90,
     total_cost_usd: 0,
-    usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    usage: usage(0, 0),
     permission_denials: [],
     ...overrides,
   };
@@ -115,7 +127,7 @@ function harnessTurn(overrides: Partial<HarnessTurnInput> = {}): {
   return { turn, entries, modelCalls, llmRequests };
 }
 
-test("a steered turn persists every reply, not only the last result's", async () => {
+test("a steered turn persists every reply and records one LLM request per steered prompt", async () => {
   const signals = createMemoryRunSignalStore();
   const runId = "run-steer";
   currentScript = async function* (prompts) {
@@ -123,27 +135,29 @@ test("a steered turn persists every reply, not only the last result's", async ()
     yield (await iterator.next()).value as unknown as FakeSdkMessage;
     await signals.send(runId, { kind: "steer", text: "now do the other three", ts: "123.456" });
     yield (await iterator.next()).value as unknown as FakeSdkMessage;
-    yield assistantMessage("msg_A", "The capital of France is Paris.", {
-      input_tokens: 3,
-      output_tokens: 8,
-      cache_read_input_tokens: 50,
-      cache_creation_input_tokens: 0,
-    });
-    yield resultMessage("The capital of France is Paris.");
-    yield assistantMessage("msg_B", "All four done.", {
-      input_tokens: 4,
-      output_tokens: 5,
-      cache_read_input_tokens: 60,
-      cache_creation_input_tokens: 0,
-    });
-    yield resultMessage("All four done.", { num_turns: 2 });
+    yield assistantMessage("msg_A", "The capital of France is Paris.", usage(3, 8, 50));
+    yield resultMessage("The capital of France is Paris.", { ttft_ms: 10, duration_ms: 20, total_cost_usd: 0.1 });
+    yield assistantMessage("msg_B", "All four done.", usage(4, 5, 60));
+    yield resultMessage("All four done.", { num_turns: 2, ttft_ms: 30, duration_ms: 40, total_cost_usd: 0.3 });
   };
 
   const harness = createClaudeHarness({ signals });
-  const { turn, entries } = harnessTurn({ runId });
+  const { turn, entries, llmRequests } = harnessTurn({ runId });
   const result = await harness.turns.runTurn(turn);
 
   assert.equal(result.reply, "All four done.");
+  assert.deepEqual(
+    llmRequests.map((record) => record.step),
+    [0, 1],
+  );
+  assert.equal(llmRequests[1]!.truncated, false);
+  assert.equal(
+    (llmRequests[1]!.promptEnvelope as { system: string }).system,
+    "be brief",
+    "steer steps reuse the turn's envelope — the steer text itself lives on the tape",
+  );
+  assert.equal(llmRequests[0]!.usage?.costUsd, 0.1);
+  assert.ok(Math.abs((llmRequests[1]!.usage?.costUsd ?? 0) - 0.2) < 1e-9);
   const assistantTexts = entries
     .filter((entry) => entry.type === "assistant")
     .map((entry) => (entry.payload as { text: string }).text);
@@ -182,27 +196,55 @@ for (const shutdown of [false, true]) {
   });
 }
 
-for (const late of [
-  { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: " late" } } },
-  resultMessage("replacement after stop"),
-]) {
-  test(`Claude freezes partial output when cancellation races with ${late.type}`, async () => {
+const thinkingMessage: FakeSdkMessage = {
+  type: "assistant",
+  message: { id: "thinking", content: [{ type: "thinking", thinking: "Checking the answer." }] },
+};
+const cancelRaces: Array<{
+  name: string;
+  tail: FakeSdkMessage[];
+  hook?: (turn: HarnessTurnInput, pause: () => Promise<void>) => void;
+}> = [
+  { name: "cancellation races with stream_event", tail: [delta(" late")] },
+  { name: "cancellation races with result", tail: [resultMessage("replacement after stop")] },
+  {
+    name: "stopped during request recording",
+    tail: [thinkingMessage, resultMessage("replacement after stop")],
+    hook: (turn, pause) => {
+      turn.recordLlmRequest = pause;
+    },
+  },
+  {
+    name: "stopped during thinking persistence",
+    tail: [thinkingMessage, resultMessage("replacement after stop")],
+    hook: (turn, pause) => {
+      const emit = turn.emit;
+      turn.emit = async (entry) => {
+        if (entry.type === "thinking") await pause();
+        return emit(entry);
+      };
+    },
+  },
+];
+for (const { name, tail, hook } of cancelRaces) {
+  test(`Claude freezes its partial reply when ${name}`, async () => {
     const waiting = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
+    const pause = async () => {
+      waiting.resolve();
+      await release.promise;
+    };
     const cancel = new AbortController();
     const deltas: string[] = [];
     currentScript = async function* (prompts) {
       await prompts[Symbol.asyncIterator]().next();
-      yield {
-        type: "stream_event",
-        event: { type: "content_block_delta", delta: { type: "text_delta", text: "Visible partial" } },
-      };
-      waiting.resolve();
-      await release.promise;
-      yield late;
+      yield delta("Visible partial");
+      if (!hook) await pause();
+      yield* tail;
     };
     const harness = createClaudeHarness({});
     const { turn, entries } = harnessTurn({ cancel: cancel.signal, onDelta: (text) => deltas.push(text) });
+    hook?.(turn, pause);
     const running = harness.turns.runTurn(turn);
     await waiting.promise;
     cancel.abort();
@@ -212,52 +254,6 @@ for (const late of [
     assert.equal(result.stoppedByUser, undefined);
     assert.equal(result.reply, "Visible partial");
     assert.deepEqual(deltas, ["Visible partial"]);
-    assert.deepEqual(
-      entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
-      [{ text: "Visible partial", stopped: true }],
-    );
-  });
-}
-
-for (const bookkeeping of ["request recording", "thinking persistence"]) {
-  test(`Claude preserves its partial reply when stopped during ${bookkeeping}`, async () => {
-    const waiting = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    const cancel = new AbortController();
-    currentScript = async function* (prompts) {
-      await prompts[Symbol.asyncIterator]().next();
-      yield {
-        type: "stream_event",
-        event: { type: "content_block_delta", delta: { type: "text_delta", text: "Visible partial" } },
-      };
-      yield {
-        type: "assistant",
-        message: { id: "thinking", content: [{ type: "thinking", thinking: "Checking the answer." }] },
-      };
-      yield resultMessage("replacement after stop");
-    };
-    const harness = createClaudeHarness({});
-    const { turn, entries } = harnessTurn({ cancel: cancel.signal });
-    const pause = async () => {
-      waiting.resolve();
-      await release.promise;
-    };
-    if (bookkeeping === "request recording") turn.recordLlmRequest = pause;
-    else {
-      const emit = turn.emit;
-      turn.emit = async (entry) => {
-        if (entry.type === "thinking") await pause();
-        return emit(entry);
-      };
-    }
-    const running = harness.turns.runTurn(turn);
-    await waiting.promise;
-    cancel.abort();
-    release.resolve();
-    const result = await running;
-    assert.equal(result.stopped, true);
-    assert.equal(result.stoppedByUser, undefined);
-    assert.equal(result.reply, "Visible partial");
     assert.deepEqual(
       entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
       [{ text: "Visible partial", stopped: true }],
@@ -319,23 +315,13 @@ for (const persistence of ["final entry", "reply checkpoint"]) {
 test("model calls are counted per API response and charged their real input tokens", async () => {
   currentScript = async function* (prompts) {
     await prompts[Symbol.asyncIterator]().next();
-    const usage = {
-      input_tokens: 2,
-      output_tokens: 40,
-      cache_read_input_tokens: 100_000,
-      cache_creation_input_tokens: 500,
-    };
-    yield assistantMessage("msg_shared", "thinking rendered as its own message", usage);
-    yield assistantMessage("msg_shared", "and the text block again", usage);
-    yield assistantMessage("msg_other", "second real call", {
-      input_tokens: 1,
-      output_tokens: 10,
-      cache_read_input_tokens: 28_750,
-      cache_creation_input_tokens: 0,
-    });
+    const shared = usage(2, 40, 100_000, 500);
+    yield assistantMessage("msg_shared", "thinking rendered as its own message", shared);
+    yield assistantMessage("msg_shared", "and the text block again", shared);
+    yield assistantMessage("msg_other", "second real call", usage(1, 10, 28_750));
     yield resultMessage("done", {
       num_turns: 2,
-      usage: { input_tokens: 2, output_tokens: 50, cache_read_input_tokens: 128_750, cache_creation_input_tokens: 500 },
+      usage: usage(2, 50, 128_750, 500),
     });
   };
 
@@ -354,12 +340,7 @@ test("model calls are counted per API response and charged their real input toke
 test("recorded LLM requests carry real timing and usage instead of a hardcoded truncation flag", async () => {
   currentScript = async function* (prompts) {
     await prompts[Symbol.asyncIterator]().next();
-    yield assistantMessage("msg_A", "hello", {
-      input_tokens: 12,
-      output_tokens: 7,
-      cache_read_input_tokens: 300,
-      cache_creation_input_tokens: 20,
-    });
+    yield assistantMessage("msg_A", "hello", usage(12, 7, 300, 20));
     yield resultMessage("hello", { ttft_ms: 1234, duration_ms: 5678, total_cost_usd: 0.42 });
   };
 
@@ -383,57 +364,10 @@ test("recorded LLM requests carry real timing and usage instead of a hardcoded t
   });
 });
 
-test("each steered prompt gets its own LLM request record", async () => {
-  const signals = createMemoryRunSignalStore();
-  const runId = "run-steps";
-  currentScript = async function* (prompts) {
-    const iterator = prompts[Symbol.asyncIterator]();
-    await iterator.next();
-    await signals.send(runId, { kind: "steer", text: "and another thing" });
-    await iterator.next();
-    yield assistantMessage("msg_A", "first", {
-      input_tokens: 5,
-      output_tokens: 2,
-      cache_read_input_tokens: 0,
-      cache_creation_input_tokens: 0,
-    });
-    yield resultMessage("first", { ttft_ms: 10, duration_ms: 20, total_cost_usd: 0.1 });
-    yield assistantMessage("msg_B", "second", {
-      input_tokens: 9,
-      output_tokens: 3,
-      cache_read_input_tokens: 0,
-      cache_creation_input_tokens: 0,
-    });
-    yield resultMessage("second", { ttft_ms: 30, duration_ms: 40, total_cost_usd: 0.3 });
-  };
-
-  const harness = createClaudeHarness({ signals });
-  const { turn, llmRequests } = harnessTurn({ runId });
-  await harness.turns.runTurn(turn);
-
-  assert.deepEqual(
-    llmRequests.map((record) => record.step),
-    [0, 1],
-  );
-  assert.equal(llmRequests[1]!.truncated, false);
-  assert.equal(
-    (llmRequests[1]!.promptEnvelope as { system: string }).system,
-    "be brief",
-    "steer steps reuse the turn's envelope — the steer text itself lives on the tape",
-  );
-  assert.equal(llmRequests[0]!.usage?.costUsd, 0.1);
-  assert.ok(Math.abs((llmRequests[1]!.usage?.costUsd ?? 0) - 0.2) < 1e-9);
-});
-
 test("a turn that dies before its first result still records exactly one request row", async () => {
   currentScript = async function* (prompts) {
     await prompts[Symbol.asyncIterator]().next();
-    yield assistantMessage("msg_A", "partial work before the crash", {
-      input_tokens: 4,
-      output_tokens: 1,
-      cache_read_input_tokens: 0,
-      cache_creation_input_tokens: 0,
-    });
+    yield assistantMessage("msg_A", "partial work before the crash", usage(4, 1));
     throw new Error("binary crashed");
   };
 
@@ -733,4 +667,46 @@ test("Claude retains a queued message which the SDK never consumes", async () =>
   await createClaudeHarness({ signals }).turns.runTurn(turn);
   assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
   assert.equal((await signals.pending("no-echo"))[0]?.signal.ts, "pending");
+});
+
+test("each steered prompt gets its own LLM request record", async () => {
+  const signals = createMemoryRunSignalStore();
+  const runId = "run-steps";
+  currentScript = async function* (prompts) {
+    const iterator = prompts[Symbol.asyncIterator]();
+    await iterator.next();
+    await signals.send(runId, { kind: "steer", text: "and another thing" });
+    await iterator.next();
+    yield assistantMessage("msg_A", "first", {
+      input_tokens: 5,
+      output_tokens: 2,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    });
+    yield resultMessage("first", { ttft_ms: 10, duration_ms: 20, total_cost_usd: 0.1 });
+    yield assistantMessage("msg_B", "second", {
+      input_tokens: 9,
+      output_tokens: 3,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    });
+    yield resultMessage("second", { ttft_ms: 30, duration_ms: 40, total_cost_usd: 0.3 });
+  };
+
+  const harness = createClaudeHarness({ signals });
+  const { turn, llmRequests } = harnessTurn({ runId });
+  await harness.turns.runTurn(turn);
+
+  assert.deepEqual(
+    llmRequests.map((record) => record.step),
+    [0, 1],
+  );
+  assert.equal(llmRequests[1]!.truncated, false);
+  assert.equal(
+    (llmRequests[1]!.promptEnvelope as { system: string }).system,
+    "be brief",
+    "steer steps reuse the turn's envelope — the steer text itself lives on the tape",
+  );
+  assert.equal(llmRequests[0]!.usage?.costUsd, 0.1);
+  assert.ok(Math.abs((llmRequests[1]!.usage?.costUsd ?? 0) - 0.2) < 1e-9);
 });

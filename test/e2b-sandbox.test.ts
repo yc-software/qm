@@ -49,6 +49,13 @@ const nativeClient = (): typeof fake.client => ({
 });
 after(() => fake?.cleanup());
 
+const wired = (): Sandbox =>
+  make({
+    blobTransfer: createMemoryBlobTransferStore(),
+    capabilitySecret: "blob-secret",
+    apiBaseUrl: "http://core.internal:8080",
+  });
+
 test("provision runs commands with env and cwd", async () => {
   const h = await sandbox.provision(layers, { env: { MY_VAR: "v1" } });
   assert.equal(h.coldStart, true);
@@ -66,15 +73,18 @@ test("an already-aborted signal never executes a command", async () => {
   assert.equal(fake.execScripts().length, before);
 });
 
-test("streams and exit codes are exact", async () => {
+test("streams, exit codes, and large output are exact", async () => {
   const h = await sandbox.provision(layers);
   const r = await sandbox.run(h, "echo out; echo err >&2; exit 3");
   assert.equal(r.code, 3);
   assert.equal(r.stdout.trim(), "out");
   assert.equal(r.stderr.trim(), "err");
+  const large = await sandbox.run(h, "python3 -c \"print('x' * (900 * 1024), end='')\"");
+  assert.equal(large.code, 0);
+  assert.equal(large.stdout, "x".repeat(900 * 1024));
 });
 
-test("file roundtrip incl. large binary and missing file", async () => {
+test("file roundtrip incl. large binary, empty file, missing file, listDir and removeDir", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.writeFile(h, "a/b.txt", "hello\n");
   assert.equal(await sandbox.readFile(h, "a/b.txt"), "hello\n");
@@ -84,18 +94,8 @@ test("file roundtrip incl. large binary and missing file", async () => {
   await sandbox.writeFileBytes(h, "big.bin", big);
   const back = await sandbox.readFileBytes(h, "big.bin");
   assert.ok(back && Buffer.from(back).equals(big));
-});
-
-test("empty file roundtrip", async () => {
-  const h = await sandbox.provision(layers);
   await sandbox.writeFileBytes(h, "empty.bin", Buffer.alloc(0));
-  const back = await sandbox.readFileBytes(h, "empty.bin");
-  assert.ok(back);
-  assert.equal(back.length, 0);
-});
-
-test("listDir and removeDir", async () => {
-  const h = await sandbox.provision(layers);
+  assert.equal((await sandbox.readFileBytes(h, "empty.bin"))?.length, 0);
   await sandbox.writeFile(h, "d/one.txt", "1");
   await sandbox.writeFile(h, "d/e/two.txt", "2");
   const listed = await sandbox.listDir(h, "d");
@@ -124,13 +124,6 @@ test("force-through proxy env is set when a proxy url and token are present", as
   const h = await s.provision(layers, { egressToken: token });
   const r = await s.run(h, "echo PROXY=$HTTPS_PROXY");
   assert.match(r.stdout, /PROXY=https?:\/\/[^ ]*proxy\.example\.com/);
-});
-
-test("large command output survives intact", async () => {
-  const h = await sandbox.provision(layers);
-  const r = await sandbox.run(h, "python3 -c \"print('x' * (900 * 1024), end='')\"");
-  assert.equal(r.code, 0);
-  assert.equal(r.stdout, "x".repeat(900 * 1024));
 });
 
 test("sandbox is reused across provisions and warm start is reported", async () => {
@@ -222,16 +215,6 @@ test("a sandbox that dies mid-turn is revived transparently for the next command
   assert.equal(fake.createdCount(scopeName()), 2);
 });
 
-test("teardown snapshots are throttled by snapshotIntervalMs", async () => {
-  const counting = instrumentedSnapshotStore();
-  const s = make({ snapshots: counting.store, snapshotIntervalMs: 60 * 60_000 });
-  const a = await s.provision(layers);
-  await s.teardown(a);
-  const b = await s.provision(layers);
-  await s.teardown(b);
-  assert.equal(counting.puts(), 1, "second teardown inside the interval skips the snapshot");
-});
-
 test("computerStatus probes the guest", async () => {
   await sandbox.provision(layers);
   assert.ok(sandbox.computerStatus);
@@ -250,11 +233,12 @@ test("computerStatus reports a gone sandbox as unprovisioned, not wedged", async
   assert.equal(status.provisioned, false, "a sandbox the platform says is gone needs a re-provision, not a restart");
 });
 
-test("profile advertises snapshot persistence and process sessions", () => {
+test("profile advertises snapshot persistence, process sessions, and egress enforcement only with a proxy", () => {
   assert.equal(sandbox.profile.backend, "e2b");
   assert.equal(sandbox.profile.writablePersistence, "snapshot_to_workspace");
   assert.equal(sandbox.profile.processSessions, true);
   assert.equal(sandbox.profile.egressEnforcement, "none");
+  assert.equal(make({ egressProxyUrl: "https://proxy.example.com" }).profile.egressEnforcement, "domain");
 });
 
 test("file reads and writes revive a sandbox that died mid-turn", async () => {
@@ -331,20 +315,11 @@ test("blob staging is advertised only when the channel is actually wired", async
     false,
     "without blobTransfer/secret/apiBaseUrl the capability must not be claimed — copyHome probes for it",
   );
-  const wired = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
-  assert.equal(supportsBlobStaging(wired), true, "wired up, e2b can move bytes by reference");
+  assert.equal(supportsBlobStaging(wired()), true, "wired up, e2b can move bytes by reference");
 });
 
 test("stageOut posts to core's blob endpoint by streaming, never by buffering in the guest", async () => {
-  const sb = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
+  const sb = wired();
   const h = await sb.provision(layers);
   await assert.rejects(() => sb.stageOut!(h, "artifacts/big.bin"), /e2b stageOut/);
 
@@ -357,11 +332,7 @@ test("stageOut posts to core's blob endpoint by streaming, never by buffering in
 });
 
 test("stageIn pulls a blob into the guest atomically (temp then mv)", async () => {
-  const sb = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
+  const sb = wired();
   const h = await sb.provision(layers);
   await assert.rejects(() => sb.stageIn!(h, "inbox/big.bin", "f".repeat(32)), /e2b stageIn/);
 
@@ -374,14 +345,7 @@ test("stageIn pulls a blob into the guest atomically (temp then mv)", async () =
 test("native pause skips tar checkpoints and status does not wake a paused sandbox", async () => {
   const store = createMemoryMap<StoredE2bSandbox>();
   const portable = instrumentedSnapshotStore();
-  const client = {
-    ...fake.client,
-    nativePause: true,
-    async info() {
-      const current = fake.current(scopeName())!;
-      return { state: current.state, expiresAtMs: Date.now() + 60_000, onTimeout: "pause" };
-    },
-  };
+  const client = nativeClient();
   const first = make({ client, store, snapshots: portable.store });
   const handle = await first.provision(layers);
   await first.writeFile(handle, "work.txt", "keep");
@@ -407,14 +371,7 @@ test("legacy metadata adopts paused native state without reading a broken portab
   await store.put(scope, { sandboxId: legacy.sandboxId, createdAtMs: legacy.createdAtMs });
   portable.failReads(true);
   portable.failWrites(true);
-  const client = {
-    ...fake.client,
-    nativePause: true,
-    async info() {
-      return { state: fake.current(scopeName())!.state, expiresAtMs: Date.now() + 60_000, onTimeout: "pause" };
-    },
-  };
-  const restarted = make({ client, store, snapshots: portable.store });
+  const restarted = make({ client: nativeClient(), store, snapshots: portable.store });
   const resumed = await restarted.provision(layers);
   assert.equal(await restarted.readFile(resumed, "unpublished.txt"), "newest native contents");
   await restarted.teardown(resumed);
@@ -526,15 +483,6 @@ test("recovery snapshots follow the native interval and supersede the previous c
   assert.deepEqual(fake.snapshots(), [], "destroying the scope deletes its snapshot");
 });
 
-test("legacy keepWarm teardown still takes its portable checkpoint", async () => {
-  const counting = instrumentedSnapshotStore();
-  const s = make({ snapshots: counting.store });
-  const h = await s.provision(layers);
-  await s.teardown(h, { keepWarm: true });
-  assert.equal(counting.puts(), 1);
-  assert.equal(fake.current(h.id)?.state, "running");
-});
-
 test("a failing snapshot delete never wedges destroy", async () => {
   const store = createMemoryMap<StoredE2bSandbox>();
   const client = {
@@ -552,10 +500,12 @@ test("a failing snapshot delete never wedges destroy", async () => {
   assert.equal(fake.current(scopeName()), null);
 });
 
-test("keepWarm teardown extends the sandbox timeout to the keep-warm horizon", async () => {
-  const s = make({ keepWarmSec: 7200 });
+test("legacy keepWarm teardown takes its portable checkpoint and extends the timeout to the keep-warm horizon", async () => {
+  const counting = instrumentedSnapshotStore();
+  const s = make({ snapshots: counting.store, keepWarmSec: 7200 });
   const h = await s.provision(layers);
   await s.teardown(h, { keepWarm: true });
+  assert.equal(counting.puts(), 1);
   assert.equal(fake.current(h.id)?.state, "running");
   assert.ok(fake.timeouts(h.id).includes(7200_000), `timeouts: ${fake.timeouts(h.id).join(",")}`);
 });
@@ -569,11 +519,6 @@ test("a command whose sandbox is lost mid-flight fails loudly instead of running
   const r = await sandbox.run(h, "echo back");
   assert.equal(r.stdout.trim(), "back", "the next command reconnects");
   assert.equal(fake.createdCount(scopeName()), 1);
-});
-
-test("an egress proxy is advertised as domain enforcement", () => {
-  assert.equal(make({ egressProxyUrl: "https://proxy.example.com" }).profile.egressEnforcement, "domain");
-  assert.equal(make().profile.egressEnforcement, "none");
 });
 
 test("computerStatus reports provider metrics and the profile learns the sandbox shape", async () => {

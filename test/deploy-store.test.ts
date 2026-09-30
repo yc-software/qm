@@ -14,18 +14,45 @@ import {
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
+import { createMemoryDurableByteStore, type DurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
 
+const owner = { ownerScopeId: scopeId("personal", "U1"), createdBy: "U1" };
+const auditLog = { record() {}, events: async () => [], tail: async () => [] };
+
+function archivedStores() {
+  const deployments = createMemoryMap<Deployment>();
+  const archiveStore = createMemoryMap<DeployGitArchive>();
+  const open = (prefix: string, archiveBytes?: DurableByteStore) =>
+    createDeployStore({
+      deployments,
+      git: { repoRoot: mkdtempSync(join(tmpdir(), prefix)), archiveStore, archiveBytes },
+    });
+  return { archiveStore, open };
+}
+
+const serverVersion = (version: number) => ({
+  entrypoint: "node server.js",
+  snapshotDir: `/snap/v${version}`,
+  files: [{ path: "server.js", data: `console.log('v${version}')` }],
+});
+
+const filesText = async (s: ReturnType<typeof createDeployStore>, id: string, version: number) =>
+  (await s.filesOf(id, version))?.map((f) => [f.path, Buffer.from(f.data).toString("utf8")]);
+
+function pushEdit(repo: string, file: string, data: string, prefix: string): string {
+  const work = mkdtempSync(join(tmpdir(), prefix));
+  execFileSync("git", ["clone", "--quiet", repo, work]);
+  writeFileSync(join(work, file), data);
+  execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-aqm", "v2"], { cwd: work });
+  execFileSync("git", ["push", "--quiet", repo, "HEAD:current"], { cwd: work });
+  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: work }).toString().trim();
+}
+
 test("deploy versions are immutable and rollback flips the pointer", async () => {
   const s = createDeployStore();
-  const d = await s.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "v1",
-    snapshotDir: "/snap/v1",
-  });
+  const d = await s.create({ ...owner, entrypoint: "v1", snapshotDir: "/snap/v1" });
   assert.equal(d.currentVersion, 1);
   assert.equal(d.versions.length, 1);
 
@@ -40,10 +67,6 @@ test("deploy versions are immutable and rollback flips the pointer", async () =>
   assert.equal((await s.get(d.id))!.versions.length, 2, "rollback doesn't drop versions");
 
   await assert.rejects(s.setCurrentVersion(d.id, 99), /no such version/);
-});
-
-test("addVersion on an unknown deployment throws", async () => {
-  const s = createDeployStore();
   await assert.rejects(s.addVersion("nope", { entrypoint: "x", snapshotDir: "/x" }), /unknown deployment/);
 });
 
@@ -51,8 +74,7 @@ test("addVersionFromCommit registers a pushed commit as a new version inheriting
   const repoRoot = mkdtempSync(join(tmpdir(), "from-commit-"));
   const s = createDeployStore({ git: { repoRoot } });
   const d = await s.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
+    ...owner,
     entrypoint: "node server.js",
     snapshotDir: "/snap/v1",
     env: { FOO: "bar" },
@@ -61,13 +83,7 @@ test("addVersionFromCommit registers a pushed commit as a new version inheriting
   await s.setAppliedVersion(d.id, 1);
   const v1commit = (await s.versionOf(d.id, 1))!.commit!;
 
-  const work = mkdtempSync(join(tmpdir(), "from-commit-work-"));
-  const repo = await s.repoUrl(d.id);
-  execFileSync("git", ["clone", "--quiet", repo, work]);
-  writeFileSync(join(work, "server.js"), "2");
-  execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-aqm", "v2"], { cwd: work });
-  execFileSync("git", ["push", "--quiet", repo, "HEAD:current"], { cwd: work });
-  const pushed = execFileSync("git", ["rev-parse", "HEAD"], { cwd: work }).toString().trim();
+  const pushed = pushEdit(await s.repoUrl(d.id), "server.js", "2", "from-commit-work-");
   assert.notEqual(pushed, v1commit);
 
   const v2 = (await s.addVersionFromCommit(d.id, pushed))!;
@@ -99,34 +115,22 @@ test("a provider without reconcile receives durable Git contents after a push", 
       destroy: async () => {},
     },
     deployDir: join(root, "snapshots"),
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog,
     acl: createAclStore(),
   });
   const d = await deploy.deploy({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
+    ...owner,
     entrypoint: "node server.js",
     files: [{ path: "server.js", data: "v1" }],
   });
-  const work = mkdtempSync(join(tmpdir(), "from-commit-apply-work-"));
-  const repo = await deploy.gitRepoPath(d.id);
-  execFileSync("git", ["clone", "--quiet", repo!, work]);
-  writeFileSync(join(work, "server.js"), "v2");
-  execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-aqm", "v2"], { cwd: work });
-  execFileSync("git", ["push", "--quiet", repo!, "HEAD:current"], { cwd: work });
+  pushEdit((await deploy.gitRepoPath(d.id))!, "server.js", "v2", "from-commit-apply-work-");
   await deploy.pushGit(d.id, async () => ({ result: true, ok: true }));
   assert.deepEqual(applied, ["v1", "v2"]);
 });
 
 test("homeDir (resident-auth snapshot) round-trips through create + addVersion", async () => {
   const s = createDeployStore();
-  const d = await s.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "v1",
-    snapshotDir: "/snap/v1",
-    homeDir: "/home/v1",
-  });
+  const d = await s.create({ ...owner, entrypoint: "v1", snapshotDir: "/snap/v1", homeDir: "/home/v1" });
   assert.equal((await s.versionOf(d.id, 1))!.homeDir, "/home/v1");
   await s.addVersion(d.id, { entrypoint: "v2", snapshotDir: "/snap/v2", homeDir: "/home/v2" });
   assert.equal((await s.versionOf(d.id, 2))!.homeDir, "/home/v2");
@@ -136,12 +140,7 @@ test("homeDir (resident-auth snapshot) round-trips through create + addVersion",
 
 test("setVersionImage records the built image ref onto a version (the durable artifact)", async () => {
   const s = createDeployStore();
-  const d = await s.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "v1",
-    snapshotDir: "/snap/v1",
-  });
+  const d = await s.create({ ...owner, entrypoint: "v1", snapshotDir: "/snap/v1" });
   assert.equal("image" in (await s.versionOf(d.id, 1))!, false, "no image until one is recorded");
   await s.setVersionImage(d.id, 1, "registry.fly.io/app:v1");
   assert.equal((await s.versionOf(d.id, 1))!.image, "registry.fly.io/app:v1");
@@ -156,13 +155,7 @@ test("setVersionImage records the built image ref onto a version (the durable ar
 
 test("setDisplayName sets the free-form label and clearing leaves no undefined noise", async () => {
   const s = createDeployStore();
-  const d = await s.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "x",
-    snapshotDir: "/snap",
-    name: "slug",
-  });
+  const d = await s.create({ ...owner, entrypoint: "x", snapshotDir: "/snap", name: "slug" });
   assert.equal((await s.get(d.id))!.displayName, undefined, "no display label until one is set");
   await s.setDisplayName(d.id, "My Cool App");
   assert.equal((await s.get(d.id))!.displayName, "My Cool App");
@@ -173,12 +166,7 @@ test("setDisplayName sets the free-form label and clearing leaves no undefined n
 
 test("touch records last-access for scale-to-zero (C3)", async () => {
   const s = createDeployStore();
-  const d = await s.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "node s.js",
-    snapshotDir: "/snap",
-  });
+  const d = await s.create({ ...owner, entrypoint: "node s.js", snapshotDir: "/snap" });
   assert.equal((await s.get(d.id))!.lastAccessAt, undefined);
   await s.touch(d.id, 12345);
   assert.equal((await s.get(d.id))!.lastAccessAt, 12345);
@@ -196,12 +184,7 @@ test("the touch debounce is clamped well under the reap TTL so steady traffic ne
 
 test("touch is debounced per id within the window", async () => {
   const s = createDeployStore({ touchDebounceMs: 10_000 });
-  const d = await s.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "node s.js",
-    snapshotDir: "/snap",
-  });
+  const d = await s.create({ ...owner, entrypoint: "node s.js", snapshotDir: "/snap" });
   await s.touch(d.id, 1_000);
   await s.touch(d.id, 5_000);
   assert.equal((await s.get(d.id))!.lastAccessAt, 1_000, "a touch inside the window is skipped");
@@ -212,12 +195,7 @@ test("touch is debounced per id within the window", async () => {
 test("touch does not rewrite the deployment blob and falls back to the blob's legacy value", async () => {
   const deployments = createMemoryMap<Deployment>();
   const s1 = createDeployStore({ deployments });
-  const d = await s1.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "node s.js",
-    snapshotDir: "/snap",
-  });
+  const d = await s1.create({ ...owner, entrypoint: "node s.js", snapshotDir: "/snap" });
   await deployments.merge(d.id, { lastAccessAt: 777 } as Partial<Deployment>);
 
   const s2 = createDeployStore({ deployments, touchDebounceMs: 0 });
@@ -232,8 +210,7 @@ test("deploy versions carry git commits for app files and rollback moves the cur
   const repoRoot = mkdtempSync(join(tmpdir(), "deploy-git-"));
   const s1 = createDeployStore({ deployments, git: { repoRoot } });
   const d = await s1.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
+    ...owner,
     entrypoint: "node server.js",
     snapshotDir: "/snap/v1",
     files: [
@@ -322,8 +299,7 @@ test("an upload cannot smuggle files into the deployment repo's own git director
   const s = createDeployStore({ git: { repoRoot } });
   await assert.rejects(
     s.create({
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
+      ...owner,
       entrypoint: "node app.js",
       snapshotDir: "/snap/v1",
       files: [
@@ -345,8 +321,7 @@ test("an upload cannot smuggle files into the deployment repo's own git director
   ]) {
     await assert.rejects(
       s.create({
-        ownerScopeId: scopeId("personal", "U1"),
-        createdBy: "U1",
+        ...owner,
         entrypoint: "node app.js",
         snapshotDir: "/snap/v1",
         files: [{ path: bad, data: "x" }],
@@ -357,8 +332,7 @@ test("an upload cannot smuggle files into the deployment repo's own git director
   }
 
   const ok = await s.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
+    ...owner,
     entrypoint: "node app.js",
     snapshotDir: "/snap/v1",
     files: [
@@ -380,8 +354,7 @@ test("uploaded files a .gitignore would exclude still reach the deployment's git
   const repoRoot = mkdtempSync(join(tmpdir(), "deploy-git-ignored-"));
   const s = createDeployStore({ deployments, git: { repoRoot } });
   const d = await s.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
+    ...owner,
     entrypoint: "node server.cjs",
     snapshotDir: "/snap/v1",
     files: [
@@ -420,30 +393,13 @@ test("uploaded files a .gitignore would exclude still reach the deployment's git
 });
 
 test("deploy git repos restore from the durable archive into a fresh repo root", async () => {
-  const deployments = createMemoryMap<Deployment>();
-  const archiveStore = createMemoryMap<DeployGitArchive>();
-  const s1 = createDeployStore({
-    deployments,
-    git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-a-")), archiveStore },
-  });
-  const d = await s1.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "node server.js",
-    snapshotDir: "/snap/v1",
-    files: [{ path: "server.js", data: "console.log('v1')" }],
-  });
+  const { open } = archivedStores();
+  const s1 = open("deploy-git-a-");
+  const d = await s1.create({ ...owner, ...serverVersion(1) });
   const v1 = (await s1.versionOf(d.id, 1))!;
-  await s1.addVersion(d.id, {
-    entrypoint: "node server.js",
-    snapshotDir: "/snap/v2",
-    files: [{ path: "server.js", data: "console.log('v2')" }],
-  });
+  await s1.addVersion(d.id, serverVersion(2));
 
-  const s2 = createDeployStore({
-    deployments,
-    git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-b-")), archiveStore },
-  });
+  const s2 = open("deploy-git-b-");
   const v2 = (await s2.versionOf(d.id, 2))!;
   await s2.setAppliedVersion(d.id, 2);
   assert.equal(
@@ -452,55 +408,29 @@ test("deploy git repos restore from the durable archive into a fresh repo root",
     "a fresh instance restores refs from the durable bundle",
   );
   assert.ok(existsSync(await s2.repoUrl(d.id)), "the restored bare repo exists on the fresh instance");
-  assert.deepEqual(
-    (await s2.filesOf(d.id, 2))?.map((f) => [f.path, Buffer.from(f.data).toString("utf8")]),
-    [["server.js", "console.log('v2')"]],
-  );
+  assert.deepEqual(await filesText(s2, d.id, 2), [["server.js", "console.log('v2')"]]);
 
   await s2.setCurrentVersion(d.id, 1);
   await s2.setAppliedVersion(d.id, 1);
-  const s3 = createDeployStore({
-    deployments,
-    git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-c-")), archiveStore },
-  });
+  const s3 = open("deploy-git-c-");
   assert.equal(await s3.refOf(d.id, deployCurrentGitRef), v1.commit, "ref-only changes are also durably archived");
 });
 
 test("deploy git archives keep bundle bytes in the byte store, not the row", async () => {
-  const deployments = createMemoryMap<Deployment>();
-  const archiveStore = createMemoryMap<DeployGitArchive>();
+  const { archiveStore, open } = archivedStores();
   const archiveBytes = createMemoryDurableByteStore();
-  const s1 = createDeployStore({
-    deployments,
-    git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-blob-a-")), archiveStore, archiveBytes },
-  });
-  const d = await s1.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "node server.js",
-    snapshotDir: "/snap/v1",
-    files: [{ path: "server.js", data: "console.log('v1')" }],
-  });
+  const s1 = open("deploy-git-blob-a-", archiveBytes);
+  const d = await s1.create({ ...owner, ...serverVersion(1) });
 
   const row = (await archiveStore.get(d.id))!;
   assert.equal(row.bundleB64, undefined, "the row carries no bundle bytes");
   assert.ok(row.blobKey, "the row references the bundle blob");
   const firstBlobKey = row.blobKey!;
 
-  const s2 = createDeployStore({
-    deployments,
-    git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-blob-b-")), archiveStore, archiveBytes },
-  });
-  assert.deepEqual(
-    (await s2.filesOf(d.id, 1))?.map((f) => [f.path, Buffer.from(f.data).toString("utf8")]),
-    [["server.js", "console.log('v1')"]],
-  );
+  const s2 = open("deploy-git-blob-b-", archiveBytes);
+  assert.deepEqual(await filesText(s2, d.id, 1), [["server.js", "console.log('v1')"]]);
 
-  await s2.addVersion(d.id, {
-    entrypoint: "node server.js",
-    snapshotDir: "/snap/v2",
-    files: [{ path: "server.js", data: "console.log('v2')" }],
-  });
+  await s2.addVersion(d.id, serverVersion(2));
   const row2 = (await archiveStore.get(d.id))!;
   assert.notEqual(row2.blobKey, firstBlobKey, "a new commit stores a new blob");
   assert.ok(
@@ -510,31 +440,14 @@ test("deploy git archives keep bundle bytes in the byte store, not the row", asy
 });
 
 test("legacy inline-bundle rows still restore and migrate to blob refs on read", async () => {
-  const deployments = createMemoryMap<Deployment>();
-  const archiveStore = createMemoryMap<DeployGitArchive>();
-  const s1 = createDeployStore({
-    deployments,
-    git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-legacy-a-")), archiveStore },
-  });
-  const d = await s1.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "node server.js",
-    snapshotDir: "/snap/v1",
-    files: [{ path: "server.js", data: "console.log('v1')" }],
-  });
+  const { archiveStore, open } = archivedStores();
+  const d = await open("deploy-git-legacy-a-").create({ ...owner, ...serverVersion(1) });
   const legacy = (await archiveStore.get(d.id))!;
   assert.ok(legacy.bundleB64, "without a byte store the bundle is stored inline (legacy format)");
 
   const archiveBytes = createMemoryDurableByteStore();
-  const s2 = createDeployStore({
-    deployments,
-    git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-legacy-b-")), archiveStore, archiveBytes },
-  });
-  assert.deepEqual(
-    (await s2.filesOf(d.id, 1))?.map((f) => [f.path, Buffer.from(f.data).toString("utf8")]),
-    [["server.js", "console.log('v1')"]],
-  );
+  const s2 = open("deploy-git-legacy-b-", archiveBytes);
+  assert.deepEqual(await filesText(s2, d.id, 1), [["server.js", "console.log('v1')"]]);
   const migrated = (await archiveStore.get(d.id))!;
   assert.equal(migrated.bundleB64, undefined, "reading a legacy row rewrites it without inline bytes");
   assert.ok(migrated.blobKey, "the migrated row references the offloaded blob");
@@ -574,14 +487,13 @@ test("resident home files are held to the same path rules as app files", async (
       apply: async () => ({ host: "127.0.0.1", port: 20000 }),
       destroy: async () => {},
     },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog,
     acl,
     deployDir,
   });
   await assert.rejects(
     deploy.deployOrUpdate({
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
+      ...owner,
       entrypoint: "node app.js",
       files: [{ path: "app.js", data: "x" }],
       homeFiles: [{ path: ".git/config", data: '[core]\n\tfsmonitor = "touch /tmp/qm-should-not-run"\n' }],

@@ -62,57 +62,51 @@ async function emitTurnEntries(
   return emitted;
 }
 
+type TapeInput = Parameters<SessionStore["appendTape"]>[1];
+
+const piMessage = (payload: Record<string, unknown>, extra: Partial<TapeInput> = {}, harness = "pi"): TapeInput => ({
+  kind: "message",
+  harness,
+  payload: { ...payload, timestamp: Date.now() },
+  scopeLabel: scope,
+  ...extra,
+});
+const textContent = (text: string) => [{ type: "text", text }];
+const userMessage = (input: string, ts: string, entry: SessionEntry, harness = "pi") =>
+  piMessage(
+    { role: "user", content: textContent(input) },
+    { entrySeq: entry.seq, meta: { bareText: input, ts, entryCreatedAt: entry.createdAt } },
+    harness,
+  );
+const replyMessage = (reply: string, harness = "pi") =>
+  piMessage({ role: "assistant", content: textContent(reply), stopReason: "stop" }, {}, harness);
+
 async function tapePreCutoverTurn(
   sim: Sim,
   turn: { input: string; ts: string; calls?: SimCall[]; reply: string },
   emitted: SessionEntry[],
 ): Promise<void> {
-  const tape = (rec: Parameters<SessionStore["appendTape"]>[1]) => sim.store.appendTape(sim.lease, rec);
-  await tape({
-    kind: "message",
-    harness: "pi",
-    payload: { role: "user", content: [{ type: "text", text: turn.input }], timestamp: Date.now() },
-    scopeLabel: scope,
-    entrySeq: emitted[0]!.seq,
-    meta: { bareText: turn.input, ts: turn.ts, entryCreatedAt: emitted[0]!.createdAt },
-  });
+  const tape = (rec: TapeInput) => sim.store.appendTape(sim.lease, rec);
+  await tape(userMessage(turn.input, turn.ts, emitted[0]!));
   for (const c of turn.calls ?? []) {
-    await tape({
-      kind: "message",
-      harness: "pi",
-      payload: {
+    await tape(
+      piMessage({
         role: "assistant",
         content: [{ type: "toolCall", id: c.id, name: c.name, arguments: c.args }],
         stopReason: "stop",
-        timestamp: Date.now(),
-      },
-      scopeLabel: scope,
-    });
-    await tape({
-      kind: "message",
-      harness: "pi",
-      payload: {
+      }),
+    );
+    await tape(
+      piMessage({
         role: "toolResult",
         toolCallId: c.id,
         toolName: c.name,
-        content: [{ type: "text", text: c.result }],
+        content: textContent(c.result),
         isError: false,
-        timestamp: Date.now(),
-      },
-      scopeLabel: scope,
-    });
+      }),
+    );
   }
-  await tape({
-    kind: "message",
-    harness: "pi",
-    payload: {
-      role: "assistant",
-      content: [{ type: "text", text: turn.reply }],
-      stopReason: "stop",
-      timestamp: Date.now(),
-    },
-    scopeLabel: scope,
-  });
+  await tape(replyMessage(turn.reply));
   await tape({
     kind: "annotation",
     payload: { turnEnd: true },
@@ -131,25 +125,8 @@ async function simLiveTurn(
     payload: { text: turn.input, ts: turn.ts },
     scopeLabel: scope,
   });
-  await sim.store.appendTape(sim.lease, {
-    kind: "message",
-    harness,
-    payload: { role: "user", content: [{ type: "text", text: turn.input }], timestamp: Date.now() },
-    scopeLabel: scope,
-    entrySeq: userEntry.seq,
-    meta: { bareText: turn.input, ts: turn.ts, entryCreatedAt: userEntry.createdAt },
-  });
-  await sim.store.appendTape(sim.lease, {
-    kind: "message",
-    harness,
-    payload: {
-      role: "assistant",
-      content: [{ type: "text", text: turn.reply }],
-      stopReason: "stop",
-      timestamp: Date.now(),
-    },
-    scopeLabel: scope,
-  });
+  await sim.store.appendTape(sim.lease, userMessage(turn.input, turn.ts, userEntry, harness));
+  await sim.store.appendTape(sim.lease, replyMessage(turn.reply, harness));
   const replyEntry = await sim.store.append(sim.lease, {
     type: "assistant",
     payload: { text: turn.reply },
@@ -200,66 +177,11 @@ async function preCutoverSession(): Promise<Sim> {
   return sim;
 }
 
-test("a reply whose text AND timing both differ stays a real mismatch", () => {
-  const entry = entryAt(2, "assistant", { text: "done", workStartedAt: 5 });
-  const projected = entryAt(2, "assistant", { text: "different" });
-  const { real } = classifyDivergences([entry], [projected], { coarse: false });
-  assert.equal(real.length, 1);
-});
-
-test("a projection that fabricates timing the entry lacks is a real mismatch", () => {
-  const entry = entryAt(2, "assistant", { text: "done" });
-  const projected = entryAt(2, "assistant", { text: "done", workStartedAt: 5, workFinishedAt: 9 });
-  const { real } = classifyDivergences([entry], [projected], { coarse: false });
-  assert.equal(real.length, 1);
-});
-
-test("a curated error flag missing from tape blocks retirement", () => {
-  const entry = entryAt(3, "tool_result", {
-    tool: "read",
-    found: false,
-    callId: "c1",
-    isError: true,
-    result: "[no such file: x.md]",
-  });
-  const projected = entryAt(3, "tool_result", {
-    tool: "read",
-    callId: "c1",
-    isError: false,
-    result: "[no such file: x.md]",
-  });
-  const { real, benign } = classifyDivergences([entry], [projected], { coarse: false });
-  assert.equal(real.length, 1);
-  assert.equal(benign["tool-payload"], 0);
-});
-
-test("a projection inventing an error flag the entry lacks stays a real mismatch", () => {
-  const entry = entryAt(3, "tool_result", { tool: "read", callId: "c1", isError: false, result: "ok" });
-  const projected = entryAt(3, "tool_result", { tool: "read", callId: "c1", isError: true, result: "ok" });
-  const { real } = classifyDivergences([entry], [projected], { coarse: false });
-  assert.equal(real.length, 1);
-});
-
-test("an error-flag delta with differing result text stays a real mismatch", () => {
-  const entry = entryAt(3, "tool_result", { tool: "read", callId: "c1", isError: true, result: "boom A" });
-  const projected = entryAt(3, "tool_result", { tool: "read", callId: "c1", isError: false, result: "boom B" });
-  const { real } = classifyDivergences([entry], [projected], { coarse: false });
-  assert.equal(real.length, 1);
-});
-
-test("a reply differing only in work-timing fields is the timestamp benign class, not a real mismatch", () => {
-  const entry = entryAt(2, "assistant", { text: "done", workStartedAt: 5, workFinishedAt: 9 });
-  const projected = entryAt(2, "assistant", { text: "done" });
-  const { real, benign } = classifyDivergences([entry], [projected], { coarse: false });
-  assert.equal(real.length, 0);
-  assert.equal(benign.timestamp, 1);
-});
-
 test("the projection self-check accepts this checkout", () => {
   assertProjectionUnderstandsRenderImports();
 });
 
-test("a pre-cutover tape is unservable before the render import and serves exactly after it", async () => {
+test("a pre-cutover tape is unservable before the render import, serves exactly after it, anchors last and stays searchable", async () => {
   const sim = await preCutoverSession();
   const before = await sim.store.getTape(sim.session.id);
   assert.equal(projectTapeEntries(sim.session.id, before), null);
@@ -276,12 +198,7 @@ test("a pre-cutover tape is unservable before the render import and serves exact
   const slice = renderableTapeSlice(rows);
   assert.ok(slice.length < rows.length);
   assert.ok(slice.every((r) => r.kind !== "message"));
-});
 
-test("the anchor row lands last, after the mirrors and the bound", async () => {
-  const sim = await preCutoverSession();
-  await importSession(sim);
-  const rows = await sim.store.getTape(sim.session.id);
   const anchorAt = rows.findIndex(isAnchor);
   assert.equal(anchorAt, rows.length - 1);
   const firstTapeSeq = (rows[anchorAt]!.payload as { firstTapeSeq?: unknown }).firstTapeSeq;
@@ -289,6 +206,7 @@ test("the anchor row lands last, after the mirrors and the bound", async () => {
   const bound = rows[anchorAt - 1]!;
   assert.equal((bound.payload as { turnEnd?: unknown }).turnEnd, true);
   assert.equal((bound.payload as { render?: unknown }).render, TAPE_RENDER_VERSION);
+  assert.equal(await sim.store.missingSearchEntries(sim.session.id), 0);
 });
 
 test("forRender serves a backfilled session from the tape without reading entries", async () => {
@@ -332,13 +250,14 @@ test("a crashed partial import is invisible and a re-run supersedes it", async (
   assert.deepEqual(projection!.entries, entries);
 });
 
-test("the render import is idempotent and later live turns extend it densely", async () => {
+test("the render import is idempotent, force replans it, and later live turns extend it densely", async () => {
   const sim = await preCutoverSession();
   await importSession(sim);
   const afterFirst = (await sim.store.getTape(sim.session.id)).length;
 
   assert.deepEqual(await assessRenderImport(sim.store, sim.session.id), { action: "skip", reason: "covered" });
   assert.equal((await sim.store.getTape(sim.session.id)).length, afterFirst);
+  assert.equal((await assessRenderImport(sim.store, sim.session.id, { force: true })).action, "import");
 
   await simLiveTurn(sim, { input: "and staging?", ts: "1720000000.000200", reply: "Staging is green too." });
   assert.deepEqual(await assessRenderImport(sim.store, sim.session.id), { action: "skip", reason: "covered" });
@@ -375,12 +294,6 @@ test("an uncovered tape gets a fold import before the render stamp", async () =>
   const projection = projectTapeEntries(sim.session.id, rows);
   assert.ok(projection);
   assert.deepEqual(projection!.entries, entries);
-});
-
-test("search remains complete across a render import", async () => {
-  const sim = await preCutoverSession();
-  await importSession(sim);
-  assert.equal(await sim.store.missingSearchEntries(sim.session.id), 0);
 });
 
 test("a tainted uncovered session is refused without a coverage claim", async () => {
@@ -442,14 +355,6 @@ test("sessions over the shared import cap and gapped corpora are skipped", async
   assert.deepEqual(await assessRenderImport(fakeStore, "synthetic"), { action: "skip", reason: "gapped" });
 });
 
-test("force replans a covered session", async () => {
-  const sim = await preCutoverSession();
-  await importSession(sim);
-  assert.deepEqual(await assessRenderImport(sim.store, sim.session.id), { action: "skip", reason: "covered" });
-  const forced = await assessRenderImport(sim.store, sim.session.id, { force: true });
-  assert.equal(forced.action, "import");
-});
-
 function entryAt(
   seq: number,
   type: SessionEntry["type"],
@@ -473,6 +378,109 @@ test("classifier: identical transcripts report nothing", () => {
   assert.deepEqual(report.real, []);
   assert.deepEqual(report.benign, emptyBenignCounts());
 });
+
+const readResult = (result: string, isError?: boolean) => ({
+  tool: "read",
+  callId: "c1",
+  ...(isError === undefined ? {} : { isError }),
+  result,
+});
+const failedExecute = entryAt(0, "tool_result", { tool: "execute", callId: "c1", result: "failed", isError: true });
+const okExecute = entryAt(0, "tool_result", { tool: "execute", callId: "c1", result: "ok" });
+
+for (const [name, entry, projected, coarse, benignToolPayload] of [
+  [
+    "a reply whose text AND timing both differ stays a real mismatch",
+    entryAt(2, "assistant", { text: "done", workStartedAt: 5 }),
+    entryAt(2, "assistant", { text: "different" }),
+  ],
+  [
+    "a projection that fabricates timing the entry lacks is a real mismatch",
+    entryAt(2, "assistant", { text: "done" }),
+    entryAt(2, "assistant", { text: "done", workStartedAt: 5, workFinishedAt: 9 }),
+  ],
+  [
+    "a curated error flag missing from tape blocks retirement",
+    entryAt(3, "tool_result", { found: false, ...readResult("[no such file: x.md]", true) }),
+    entryAt(3, "tool_result", readResult("[no such file: x.md]", false)),
+    false,
+    0,
+  ],
+  [
+    "a projection inventing an error flag the entry lacks stays a real mismatch",
+    entryAt(3, "tool_result", readResult("ok", false)),
+    entryAt(3, "tool_result", readResult("ok", true)),
+  ],
+  [
+    "an error-flag delta with differing result text stays a real mismatch",
+    entryAt(3, "tool_result", readResult("boom A", true)),
+    entryAt(3, "tool_result", readResult("boom B", false)),
+  ],
+  ["classifier rejects a changed tool scope", failedExecute, { ...failedExecute, scopeLabel: "org:public" as ScopeId }],
+  [
+    "classifier rejects a lost tool result",
+    failedExecute,
+    { ...failedExecute, payload: { tool: "execute", callId: "c1", isError: true } },
+  ],
+  [
+    "classifier rejects a cleared error",
+    failedExecute,
+    { ...failedExecute, payload: { ...(failedExecute.payload as object), isError: false } },
+  ],
+  [
+    "an absent error flag cannot become a projected failure",
+    okExecute,
+    { ...okExecute, payload: { ...(okExecute.payload as object), isError: true } },
+  ],
+  ...(["user", "assistant", "system"] as const).map(
+    (type) =>
+      [`coarse transcripts must retain ${type} rows`, entryAt(0, type, { text: "retain" }), undefined, true] as const,
+  ),
+] as const) {
+  test(name, () => {
+    const report = classifyDivergences([entry], projected ? [projected] : [], { coarse: coarse ?? false });
+    assert.equal(report.real.length, 1);
+    if (benignToolPayload !== undefined) assert.equal(report.benign["tool-payload"], benignToolPayload);
+  });
+}
+
+const hey = entryAt(0, "user", { text: "hey", ts: "1.1" });
+const overheardHey = entryAt(0, "user", { overheard: true, ts: "1.1", text: "hey", mentions: { U1: "Alex" } });
+const [hi, hm] = [entryAt(0, "user", { text: "hi" }), entryAt(1, "thinking", { thinking: "hm" })];
+const timed = entryAt(2, "assistant", { text: "done", workStartedAt: 5, workFinishedAt: 9 });
+
+for (const [name, entries, projected, benignClass] of [
+  [
+    "a reply differing only in work-timing fields is the timestamp benign class, not a real mismatch",
+    [timed],
+    [entryAt(2, "assistant", { text: "done" })],
+    "timestamp",
+  ],
+  [
+    "classifier: createdAt drift on payload-equal rows is the timestamp class",
+    [hi, hm],
+    [hi, { ...hm, createdAt: hm.createdAt + 4 }],
+    "timestamp",
+  ],
+  [
+    "classifier: dropped overheard mentions are benign",
+    [overheardHey],
+    [{ ...overheardHey, payload: { overheard: true, ts: "1.1", text: "hey" } }],
+    "overheard-mentions",
+  ],
+  [
+    "classifier: a taint cleared from entries but frozen in the mirror is its own benign class",
+    [hey],
+    [{ ...hey, payload: { text: "hey", ts: "1.1", securityTainted: true } }],
+    "taint-cleared",
+  ],
+] as const) {
+  test(name, () => {
+    const report = classifyDivergences([...entries], [...projected], { coarse: false });
+    assert.deepEqual(report.real, []);
+    assert.equal(report.benign[benignClass], 1);
+  });
+}
 
 test("classifier: projected tool extras are benign; lost fields and corruption are real", () => {
   const entries = [
@@ -507,30 +515,6 @@ test("classifier: projected tool extras are benign; lost fields and corruption a
   assert.equal(realReport.real.length, 1);
   assert.equal(realReport.real[0]!.field, "tool-payload-content");
   assert.equal(realReport.benign["tool-payload"], 0);
-});
-
-test("classifier: createdAt drift on payload-equal rows is the timestamp class", () => {
-  const entries = [entryAt(0, "user", { text: "hi" }), entryAt(1, "thinking", { thinking: "hm" })];
-  const projected = [entries[0]!, { ...entries[1]!, createdAt: entries[1]!.createdAt + 4 }];
-  const report = classifyDivergences(entries, projected, { coarse: false });
-  assert.deepEqual(report.real, []);
-  assert.equal(report.benign.timestamp, 1);
-});
-
-test("classifier: dropped overheard mentions are benign", () => {
-  const entries = [entryAt(0, "user", { overheard: true, ts: "1.1", text: "hey", mentions: { U1: "Alex" } })];
-  const projected = [{ ...entries[0]!, payload: { overheard: true, ts: "1.1", text: "hey" } }];
-  const report = classifyDivergences(entries, projected, { coarse: false });
-  assert.deepEqual(report.real, []);
-  assert.equal(report.benign["overheard-mentions"], 1);
-});
-
-test("classifier: a taint cleared from entries but frozen in the mirror is its own benign class", () => {
-  const entries = [entryAt(0, "user", { text: "hey", ts: "1.1" })];
-  const projected = [{ ...entries[0]!, payload: { text: "hey", ts: "1.1", securityTainted: true } }];
-  const report = classifyDivergences(entries, projected, { coarse: false });
-  assert.deepEqual(report.real, []);
-  assert.equal(report.benign["taint-cleared"], 1);
 });
 
 test("classifier: an intra-turn type swap over the same rows is benign order drift", () => {
@@ -689,23 +673,6 @@ test("limitedSessionParity exercises the bounded read path and detects fallback"
   assert.deepEqual(raced, { status: "fallback" });
 });
 
-test("classifier rejects changed tool scopes, lost results, and cleared errors", () => {
-  const entry = entryAt(0, "tool_result", { tool: "execute", callId: "c1", result: "failed", isError: true });
-  for (const projected of [
-    { ...entry, scopeLabel: "org:public" as ScopeId },
-    { ...entry, payload: { tool: "execute", callId: "c1", isError: true } },
-    { ...entry, payload: { ...(entry.payload as object), isError: false } },
-  ]) {
-    assert.equal(classifyDivergences([entry], [projected], { coarse: false }).real.length, 1);
-  }
-});
-
-test("coarse transcripts must retain user, assistant and system rows", () => {
-  for (const type of ["user", "assistant", "system"] as const) {
-    assert.equal(classifyDivergences([entryAt(0, type, { text: "retain" })], [], { coarse: true }).real.length, 1);
-  }
-});
-
 test("a covered tape with lost payload is repaired without a forced import", async () => {
   const sim = await preCutoverSession();
   await importSession(sim);
@@ -731,12 +698,6 @@ test("a covered tape with lost payload is repaired without a forced import", asy
   const parity = sessionParity(sim.session.id, changed, await sim.store.getTape(sim.session.id));
   assert.ok(parity.status === "compared");
   assert.deepEqual(parity.report.real, []);
-});
-
-test("an absent error flag cannot become a projected failure", () => {
-  const entry = entryAt(0, "tool_result", { tool: "execute", callId: "c1", result: "ok" });
-  const projected = { ...entry, payload: { ...(entry.payload as object), isError: true } };
-  assert.equal(classifyDivergences([entry], [projected], { coarse: false }).real.length, 1);
 });
 
 test("limited parity rejects an empty served suffix even when coverage is complete", async () => {

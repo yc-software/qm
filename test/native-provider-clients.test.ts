@@ -185,14 +185,11 @@ mock.module("e2b", {
   },
 });
 
+const modalClient = (extra: Partial<Parameters<typeof createSdkModalClient>[0]> = {}) =>
+  createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu", ...extra });
+
 test("Modal native directory snapshot has a ten-minute timeout, finite retention, and restores the exact image", async () => {
-  const client = createSdkModalClient({
-    tokenId: "id",
-    tokenSecret: "secret",
-    appName: "test",
-    image: "ubuntu",
-    snapshotRetentionMs: 60_000,
-  });
+  const client = modalClient({ snapshotRetentionMs: 60_000 });
   const session = await client.create({ name: "test" });
   const before = Date.now();
   const snapshot = await session.snapshotHome!();
@@ -204,7 +201,7 @@ test("Modal native directory snapshot has a ten-minute timeout, finite retention
 });
 
 test("Modal exec deadlines are whole seconds with a single grace margin, even near a snapshot deadline", async () => {
-  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const client = modalClient();
   const session = await client.create({});
   modalExecs.length = 0;
   await session.runCommand("wc -c < /root/.qm-home.tar", { timeoutMs: 12_345 });
@@ -218,7 +215,7 @@ test("Modal exec deadlines are whole seconds with a single grace margin, even ne
 });
 
 test("Modal passes command env through exec and spools oversized commands through the filesystem", async () => {
-  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const client = modalClient();
   const session = await client.create({});
   modalExecs.length = 0;
   modalWrites.length = 0;
@@ -241,7 +238,7 @@ test("Modal passes command env through exec and spools oversized commands throug
 
 test("Modal creates sandboxes with a real reservation, an idle backstop, tags and the egress allowlist", async () => {
   modalCreateParams.length = 0;
-  const bare = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const bare = modalClient();
   await bare.create({ name: "qm-scope", tags: { "qm-kind": "scope" } });
   assert.deepEqual(modalCreateParams[0], {
     name: "qm-scope",
@@ -251,11 +248,7 @@ test("Modal creates sandboxes with a real reservation, an idle backstop, tags an
     cpu: 1,
     memoryMiB: 2048,
   });
-  const tuned = createSdkModalClient({
-    tokenId: "id",
-    tokenSecret: "secret",
-    appName: "test",
-    image: "ubuntu",
+  const tuned = modalClient({
     cpus: 4,
     memoryMb: 8192,
     regions: ["us-west-2"],
@@ -278,7 +271,7 @@ test("Modal creates sandboxes with a real reservation, an idle backstop, tags an
 });
 
 test("Modal lists running tagged sandboxes within the app and reports oversized reads clearly", async () => {
-  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const client = modalClient();
   modalRunning.set("sb-live", true);
   modalRunning.set("sb-done", false);
   modalCalls.length = 0;
@@ -293,17 +286,7 @@ test("Modal lists running tagged sandboxes within the app and reports oversized 
 
 test("Modal rejects invalid checkpoint retention", () => {
   for (const snapshotRetentionMs of [0, -1, Infinity, NaN]) {
-    assert.throws(
-      () =>
-        createSdkModalClient({
-          tokenId: "id",
-          tokenSecret: "secret",
-          appName: "test",
-          image: "ubuntu",
-          snapshotRetentionMs,
-        }),
-      /positive finite/,
-    );
+    assert.throws(() => modalClient({ snapshotRetentionMs }), /positive finite/);
   }
 });
 
@@ -477,7 +460,7 @@ test("Modal executes a one-megabyte payload through the sandbox and SDK without 
       wait: async () => result.status ?? -1,
     };
   };
-  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const client = modalClient();
   const session = await client.create({});
   const sandbox = createModalSandbox(createLocalWorkspaceStore(join(root, "workspace")), {
     client: {
@@ -489,12 +472,11 @@ test("Modal executes a one-megabyte payload through the sandbox and SDK without 
   });
   const handle = await sandbox.provision([{ scopeId: "large-command", mountPath: "", mode: "rw" }]);
   const size = 1024 * 1024;
-  const result = await sandbox.run(handle, `payload='${"x".repeat(size)}'; printf '%s' "${"${#payload}"}"`);
+  const command = `payload='${"x".repeat(size)}'; printf '%s' "${"${#payload}"}"`;
+  const result = await sandbox.run(handle, command);
   assert.equal(result.code, 0, result.stderr);
   assert.equal(result.stdout, String(size));
-  const signalled = await sandbox.run(handle, `payload='${"x".repeat(size)}'; printf '%s' "${"${#payload}"}"`, {
-    signal: new AbortController().signal,
-  });
+  const signalled = await sandbox.run(handle, command, { signal: new AbortController().signal });
   assert.equal(signalled.code, 0, signalled.stderr);
   assert.equal(signalled.stdout, String(size));
 });

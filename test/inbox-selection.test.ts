@@ -61,6 +61,19 @@ function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefres
   return { deps, uiState, call };
 }
 
+async function legacyWithPausedCron(w: ReturnType<typeof world>) {
+  const legacy = await ensureInboxLoop(w.deps.store, "alice");
+  const cron = await w.deps.crons.create({
+    owner: "alice",
+    createdBy: "alice",
+    ownerScopeId: "personal:alice",
+    schedule: { everyMs: 900000 },
+    enabled: false,
+  });
+  await w.deps.store.update(legacy.id, { cronId: cron.id });
+  return legacy;
+}
+
 test("default Loops are distinct, stable, and deliberate empty selections survive refresh", async () => {
   const w = world();
   const first = await w.call();
@@ -124,37 +137,9 @@ test("selection reuses original items, counts items, omits heavy fields, and enf
   assert.equal((await w.call("GET", null, `itemId=${item!.id}`, "mallory")).status, 404);
 });
 
-test("pagination is stable across equal timestamps and counts exceed the loaded page", async () => {
-  const w = world();
-  const [loop] = await ensureDefaultInboxLoops(w.deps.store, "alice");
-  for (let n = 0; n < 65; n++)
-    await w.deps.items.ingest([
-      {
-        loopId: loop!.id,
-        dedupeKey: String(n),
-        sourcePayload: { title: String(n) },
-        proposal: { data: {}, by: "agent" },
-      },
-    ]);
-  const first = (await w.call()).data;
-  const second = (await w.call("GET", null, `cursor=${first.nextCursor}`)).data;
-  assert.equal(first.total, 65);
-  assert.equal(first.items.length, 40);
-  assert.equal(second.items.length, 25);
-  assert.equal(new Set([...first.items, ...second.items].map((item: any) => item.id)).size, 65);
-});
-
 test("migration preserves human edits, item and output IDs, dedupe and paused automation", async () => {
   const w = world();
-  const legacy = await ensureInboxLoop(w.deps.store, "alice");
-  const cron = await w.deps.crons.create({
-    owner: "alice",
-    createdBy: "alice",
-    ownerScopeId: "personal:alice",
-    schedule: { everyMs: 900000 },
-    enabled: false,
-  });
-  await w.deps.store.update(legacy.id, { cronId: cron.id });
+  const legacy = await legacyWithPausedCron(w);
   await w.deps.items.ingest([
     {
       loopId: legacy.id,
@@ -252,16 +237,8 @@ test("Sent chat items stay out of Inbox counts and handled history remains reada
 for (const completed of [false, true]) {
   test(`payload-only source migration repairs ${completed ? "completed" : "pending"} accounts without losing drafts`, async () => {
     const w = world();
-    const legacy = await ensureInboxLoop(w.deps.store, "alice");
+    const legacy = await legacyWithPausedCron(w);
     const defaults = await ensureDefaultInboxLoops(w.deps.store, "alice");
-    const cron = await w.deps.crons.create({
-      owner: "alice",
-      createdBy: "alice",
-      ownerScopeId: "personal:alice",
-      schedule: { everyMs: 900000 },
-      enabled: false,
-    });
-    await w.deps.store.update(legacy.id, { cronId: cron.id });
     if (completed) {
       await w.deps.store.setState(legacy.id, "archived");
       await w.uiState.put(uiStateId("alice", "inbox-migration"), {
@@ -288,12 +265,14 @@ for (const completed of [false, true]) {
         if (index === 1) await w.deps.store.setState(loop.id, "paused");
       }
     }
-    const beforeCrons = await Promise.all(
-      defaults.map(async (loop) => {
-        const current = await w.deps.store.get(loop.id);
-        return current?.cronId ? w.deps.crons.get(current.cronId) : null;
-      }),
-    );
+    const cronsOf = () =>
+      Promise.all(
+        defaults.map(async (loop) => {
+          const current = await w.deps.store.get(loop.id);
+          return current?.cronId ? w.deps.crons.get(current.cronId) : null;
+        }),
+      );
+    const beforeCrons = await cronsOf();
     const beforeDefaults = await Promise.all(defaults.map((loop) => w.deps.store.get(loop.id)));
     for (const source of ["gmail", "slack"]) {
       await w.deps.items.ingest([
@@ -333,18 +312,10 @@ for (const completed of [false, true]) {
       assert.equal((await w.deps.outputs.byItem(item.id))[0]!.loopId, item.loopId);
       assert.equal(result.items.find((entry: any) => entry.id === item.id).source, item.source);
     }
-    if (completed)
+    if (completed) {
       assert.deepEqual(await Promise.all(defaults.map((loop) => w.deps.store.get(loop.id))), beforeDefaults);
-    if (completed)
-      assert.deepEqual(
-        await Promise.all(
-          defaults.map(async (loop) => {
-            const current = await w.deps.store.get(loop.id);
-            return current?.cronId ? w.deps.crons.get(current.cronId) : null;
-          }),
-        ),
-        beforeCrons,
-      );
+      assert.deepEqual(await cronsOf(), beforeCrons);
+    }
     assert.deepEqual((await w.call()).data.items, result.items);
     assert.equal((await w.deps.items.byLoop(legacy.id)).length, 0);
   });

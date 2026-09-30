@@ -53,6 +53,41 @@ function oauthIdToken(accountId: string): string {
   return `header.${payload}.signature`;
 }
 
+function writeCodexAuth(path: string): void {
+  writeFileSync(
+    path,
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: "access",
+        refresh_token: "refresh",
+        account_id: "account",
+        id_token: oauthIdToken("account"),
+      },
+    }),
+  );
+  chmodSync(path, 0o600);
+}
+
+function specInputs(overrides: Partial<SpecInputs> = {}): SpecInputs {
+  return {
+    worktree: "/tmp/worktree",
+    ports: slotPorts("pool1"),
+    baseEnv: {},
+    watch: false,
+    webUiBasePath: "/",
+    sessionStore: "memory",
+    runStore: "memory",
+    databaseUrl: "",
+    adminGrantsSeed: "",
+    coreSigningSecret: "",
+    portalSessionSecret: "secret",
+    portalDevPrincipal: "U1",
+    sandboxEnv: {},
+    ...overrides,
+  };
+}
+
 function addSlot(store: string, n: number, extra = ""): void {
   writeFileSync(
     join(store, `pool${n}.env`),
@@ -262,29 +297,16 @@ test("meta round-trips and lease staleness follows pids + heartbeat", () => {
   rmSync(store, { recursive: true, force: true });
 });
 
-test("reclaim never touches a lease with a fresh heartbeat and live supervisor", () => {
+test("reclaim keeps the not-today age rule for legacy leases and never touches a fresh heartbeat", () => {
   const store = tmpStore();
   claimSlotLock("pool1", store);
   const lock = lockDir("pool1", store);
   const worktree = mkdtempSync(join(tmpdir(), "qm-wt-"));
   const oldEpoch = Math.floor(Date.now() / 1000) - 3 * 86_400;
   writeMeta(lock, { slot: "pool1", worktree, created_epoch: String(oldEpoch) });
+  assert.match(leaseReclaimReason(listLeases(store)[0] as LeaseInfo) ?? "", /not today/);
   writeHeartbeat(lock, "live");
-  const lease = listLeases(store)[0] as LeaseInfo;
-  assert.equal(leaseReclaimReason(lease), null);
-  rmSync(worktree, { recursive: true, force: true });
-  rmSync(store, { recursive: true, force: true });
-});
-
-test("legacy lease (no heartbeat) keeps the not-today age reclaim rule", () => {
-  const store = tmpStore();
-  claimSlotLock("pool1", store);
-  const lock = lockDir("pool1", store);
-  const worktree = mkdtempSync(join(tmpdir(), "qm-wt-"));
-  const oldEpoch = Math.floor(Date.now() / 1000) - 3 * 86_400;
-  writeMeta(lock, { slot: "pool1", worktree, created_epoch: String(oldEpoch) });
-  const lease = listLeases(store)[0] as LeaseInfo;
-  assert.match(leaseReclaimReason(lease) ?? "", /not today/);
+  assert.equal(leaseReclaimReason(listLeases(store)[0] as LeaseInfo), null);
   rmSync(worktree, { recursive: true, force: true });
   rmSync(store, { recursive: true, force: true });
 });
@@ -302,14 +324,10 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   process.env.QM_DEV_ENV = liveEnv;
   const noise: string[] = [];
   const log = (m: string) => noise.push(m);
+  const assemble = (callerEnv: Record<string, string>, loginShell = "", allowMock = false) =>
+    assembleEnv({ worktree, callerEnv, allowMock, log, probeLoginShell: async () => loginShell });
 
-  const fromCaller = await assembleEnv({
-    worktree,
-    callerEnv: { ANTHROPIC_API_KEY: "from-caller", BOTH: "caller" },
-    allowMock: false,
-    log,
-    probeLoginShell: async () => "",
-  });
+  const fromCaller = await assemble({ ANTHROPIC_API_KEY: "from-caller", BOTH: "caller" });
   assert.equal(fromCaller.env.ANTHROPIC_API_KEY, "from-caller");
   assert.equal(fromCaller.env.BOTH, "caller");
   assert.equal(fromCaller.harness, "pi");
@@ -317,79 +335,31 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   assert.equal(fromCaller.env.PI_CAPTURE_REQUESTS, "1");
   assert.equal(fromCaller.anthropicKeySource, "your shell export");
 
-  const openCode = await assembleEnv({
-    worktree,
-    callerEnv: { ANTHROPIC_API_KEY: "from-caller", HARNESS: "opencode" },
-    allowMock: false,
-    log,
-    probeLoginShell: async () => "",
-  });
+  const openCode = await assemble({ ANTHROPIC_API_KEY: "from-caller", HARNESS: "opencode" });
   assert.equal(openCode.harness, "opencode");
   assert.equal(openCode.env.HARNESS, "opencode");
   assert.equal(openCode.env.PI_CAPTURE_REQUESTS, undefined);
 
   await assert.rejects(
-    assembleEnv({
-      worktree,
-      callerEnv: { HARNESS: "codex", CODEX_HOME: join(worktree, "empty-codex") },
-      allowMock: false,
-      log,
-      probeLoginShell: async () => "",
-    }),
+    assemble({ HARNESS: "codex", CODEX_HOME: join(worktree, "empty-codex") }),
     /HARNESS=codex needs OPENAI_API_KEY/,
   );
   const oauthAuthFile = join(worktree, "codex-auth.json");
-  writeFileSync(
-    oauthAuthFile,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: "access",
-        refresh_token: "refresh",
-        account_id: "account",
-        id_token: oauthIdToken("account"),
-      },
-    }),
-  );
-  chmodSync(oauthAuthFile, 0o600);
-  const codexOAuth = await assembleEnv({
-    worktree,
-    callerEnv: { HARNESS: "codex", CODEX_AUTH_FILE: oauthAuthFile },
-    allowMock: false,
-    log,
-    probeLoginShell: async () => "",
-  });
+  writeCodexAuth(oauthAuthFile);
+  const codexOAuth = await assemble({ HARNESS: "codex", CODEX_AUTH_FILE: oauthAuthFile });
   assert.equal(codexOAuth.harness, "codex");
   assert.equal(codexOAuth.env.CODEX_AUTH_FILE, oauthAuthFile);
   assert.equal(codexOAuth.codexAuthSource, oauthAuthFile);
-  const codex = await assembleEnv({
-    worktree,
-    callerEnv: { HARNESS: "codex", OPENAI_API_KEY: "sk-openai" },
-    allowMock: false,
-    log,
-    probeLoginShell: async () => "",
-  });
+  const codex = await assemble({ HARNESS: "codex", OPENAI_API_KEY: "sk-openai" });
   assert.equal(codex.harness, "codex");
   assert.equal(codex.env.HARNESS, "codex");
   assert.equal(codex.openaiKeySource, "your shell export");
 
-  const claude = await assembleEnv({
-    worktree,
-    callerEnv: { HARNESS: "claude" },
-    allowMock: false,
-    log,
-    probeLoginShell: async () => "",
-  });
+  const claude = await assemble({ HARNESS: "claude" });
   assert.equal(claude.harness, "claude");
   assert.equal(claude.env.HARNESS, "claude");
 
-  const fromLiveEnv = await assembleEnv({
-    worktree,
-    callerEnv: {},
-    allowMock: false,
-    log,
-    probeLoginShell: async () => "",
-  });
+  const fromLiveEnv = await assemble({});
   assert.equal(fromLiveEnv.env.ANTHROPIC_API_KEY, "from-liveenv");
   assert.equal(fromLiveEnv.env.LIVE_ONLY, "live");
   assert.equal(fromLiveEnv.env.CORE_SIGNING_SECRET, "sekrit");
@@ -399,33 +369,18 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   assert.equal(fromLiveEnv.env.PORTAL_SESSION_SECRET, "session");
   assert.equal(fromLiveEnv.anthropicKeySource, liveEnv);
 
-  const fromShell = await assembleEnv({
-    worktree,
-    callerEnv: {},
-    allowMock: false,
-    log,
-    probeLoginShell: async () => "from-shell",
-  });
+  const fromShell = await assemble({}, "from-shell");
   assert.equal(fromShell.env.ANTHROPIC_API_KEY, "from-shell", "login-shell key outranks a stale dev.env key");
   assert.equal(fromShell.anthropicKeySource, "your login-shell profile");
 
   writeFileSync(liveEnv, "");
-  const fromDotenv = await assembleEnv({
-    worktree,
-    callerEnv: {},
-    allowMock: false,
-    log,
-    probeLoginShell: async () => "",
-  });
+  const fromDotenv = await assemble({});
   assert.equal(fromDotenv.env.ANTHROPIC_API_KEY, "from-dotenv");
   assert.equal(fromDotenv.anthropicKeySource, "the worktree .env");
 
   writeFileSync(join(worktree, ".env"), "");
-  await assert.rejects(
-    assembleEnv({ worktree, callerEnv: {}, allowMock: false, log, probeLoginShell: async () => "" }),
-    /ANTHROPIC_API_KEY is required/,
-  );
-  const mock = await assembleEnv({ worktree, callerEnv: {}, allowMock: true, log, probeLoginShell: async () => "" });
+  await assert.rejects(assemble({}), /ANTHROPIC_API_KEY is required/);
+  const mock = await assemble({}, "", true);
   assert.equal(mock.harness, "mock");
   if (prevLive === undefined) delete process.env.QM_DEV_ENV;
   else process.env.QM_DEV_ENV = prevLive;
@@ -462,19 +417,7 @@ test("OpenCode config is strict, pinned, and inherits the Pi model", () => {
   assert.equal(loadConfig({ HARNESS: "claude", CLAUDE_BIN: "/bin/claude" }).claudeBinPath, "/bin/claude");
   const source = mkdtempSync(join(tmpdir(), "qm-codex-config-"));
   const authFile = join(source, "auth.json");
-  writeFileSync(
-    authFile,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: "access",
-        refresh_token: "refresh",
-        account_id: "account",
-        id_token: oauthIdToken("account"),
-      },
-    }),
-  );
-  chmodSync(authFile, 0o600);
+  writeCodexAuth(authFile);
   const oauthConfig = loadConfig({ HARNESS: "codex", CODEX_AUTH_FILE: authFile });
   assert.equal(oauthConfig.codexAuthFile, authFile);
   assert.equal(providerKeysPresent(oauthConfig).openai, false);
@@ -516,27 +459,15 @@ test("leaseOrgId reads the stale lease's booted org", () => {
 });
 
 test("supervised children share the selected dev org", () => {
-  const inputs: SpecInputs = {
-    worktree: "/tmp/worktree",
-    ports: slotPorts("pool1"),
+  const inputs = specInputs({
     baseEnv: {
       DEV_INSTANCE_ORG_ID: "beta",
       CODEX_AUTH_FILE: "/tmp/codex-auth.json",
       HOME: "/tmp/home",
       CODEX_HOME: "/tmp/home/.codex",
     },
-    watch: false,
-    webUiBasePath: "/",
     slack: { botToken: "xoxb-test", appToken: "xapp-test" },
-    sessionStore: "memory",
-    runStore: "memory",
-    databaseUrl: "",
-    adminGrantsSeed: "",
-    coreSigningSecret: "",
-    portalSessionSecret: "secret",
-    portalDevPrincipal: "U1",
-    sandboxEnv: {},
-  };
+  });
   const specs = buildChildSpecs(inputs);
   assert.equal(specs.find((spec) => spec.name === "core")!.env.ORG_ID, "beta");
   assert.equal(specs.find((spec) => spec.name === "core")!.env.CODEX_AUTH_FILE, "/tmp/codex-auth.json");
@@ -554,21 +485,7 @@ test("supervised children share the selected dev org", () => {
 });
 
 test("child specs disable environment Slack tokens when no Slack tokens are supplied", () => {
-  const inputs: SpecInputs = {
-    worktree: "/tmp/worktree",
-    ports: slotPorts("pool1"),
-    baseEnv: { SLACK_BOT_TOKEN: "inherited-bot", SLACK_APP_TOKEN: "inherited-app" },
-    watch: false,
-    webUiBasePath: "/",
-    sessionStore: "memory",
-    runStore: "memory",
-    databaseUrl: "",
-    adminGrantsSeed: "",
-    coreSigningSecret: "",
-    portalSessionSecret: "secret",
-    portalDevPrincipal: "U1",
-    sandboxEnv: {},
-  };
+  const inputs = specInputs({ baseEnv: { SLACK_BOT_TOKEN: "inherited-bot", SLACK_APP_TOKEN: "inherited-app" } });
   const core = buildChildSpecs(inputs).find((spec) => spec.name === "core")!;
   assert.equal(core.env.DEV_INSTANCE_NO_SLACK, "1");
   assert.equal(core.env.SLACK_BOT_TOKEN, "");

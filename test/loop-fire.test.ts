@@ -101,18 +101,48 @@ function stage(req: TurnRequest): string {
   return "other";
 }
 
-const HAPPY: Responder = (req) => {
-  switch (stage(req)) {
-    case "intake":
-      return '```json\n[{"sourceKey": "SENTRY-1", "sourceSummary": "TypeError in checkout"}]\n```';
-    case "work":
-      return 'Prepared a draft PR.\n```json\n{"outputs": [{"shipAction": "open_pr", "title": "Fix TypeError", "externalRef": "https://github.com/x/pull/1", "label": "checkout"}]}\n```';
-    case "judge":
-      return '```json\n{"outcome": "met", "reason": "draft PR linked"}\n```';
-    default:
-      return "done";
-  }
-};
+async function heldOutput(s: ReturnType<typeof service>, loopId: string, fireKey: string) {
+  await s.fire.fire(loopId, fireKey);
+  return (await s.outputs.awaitingReview(loopId))[0]!;
+}
+
+function script(replies: Partial<Record<"intake" | "work" | "judge", string>>, fallback = "done"): Responder {
+  return (req) => replies[stage(req) as keyof typeof replies] ?? fallback;
+}
+
+const HAPPY = script({
+  intake: '```json\n[{"sourceKey": "SENTRY-1", "sourceSummary": "TypeError in checkout"}]\n```',
+  work: 'Prepared a draft PR.\n```json\n{"outputs": [{"shipAction": "open_pr", "title": "Fix TypeError", "externalRef": "https://github.com/x/pull/1", "label": "checkout"}]}\n```',
+  judge: '```json\n{"outcome": "met", "reason": "draft PR linked"}\n```',
+});
+
+const TWO: Responder = (req) =>
+  stage(req) === "work"
+    ? '```json\n{"outputs": [{"shipAction": "open_pr", "title": "one", "externalRef": "1"}, {"shipAction": "open_pr", "title": "two", "externalRef": "2"}]}\n```'
+    : HAPPY(req);
+
+const ALERTS = { destination: { type: "slack", target: "C1", audienceScopeId: base.ownerScopeId } };
+
+function autoGrant(grants: ReturnType<typeof createShipGrantStore>, loop: { id: string; policyVersion: number }) {
+  return grants.put(
+    buildShipGrant({
+      loopId: loop.id,
+      shipAction: "open_pr",
+      actorId: "josh",
+      label: "checkout",
+      policyVersion: loop.policyVersion,
+    }),
+  );
+}
+
+function assertHeld(
+  result: Awaited<ReturnType<ReturnType<typeof service>["fire"]["fire"]>>,
+  s: ReturnType<typeof service>,
+) {
+  assert.deepEqual(result.summary?.shipped, []);
+  assert.equal(result.summary?.ready.length, 1);
+  assert.equal(s.turns.filter((t) => stage(t) === "ship").length, 0);
+}
 
 test("a fire runs intake, work, and judge turns and holds the finished output", async () => {
   const s = service(HAPPY);
@@ -195,8 +225,7 @@ test("a ready output cannot ship unless its ready parent publishes it", async ()
 test("returning a held output re-queues the item carrying the note, and the next fire re-works it", async () => {
   const s = service(HAPPY);
   const loop = await makeLoop(s.loops);
-  await s.fire.fire(loop.id, "f1");
-  const output = (await s.outputs.awaitingReview(loop.id))[0]!;
+  const output = await heldOutput(s, loop.id, "f1");
   const returned = await s.fire.returnOutput(loop.id, output.id, "josh", "wrong module");
   assert.equal(returned?.state, "returned");
   const item = await s.items.get(returned!.itemId);
@@ -212,8 +241,7 @@ test("a replayed ship operation becomes unconfirmed and a person can resolve it 
   for (const decision of ["shipped", "returned"] as const) {
     const s = service(HAPPY);
     const loop = await makeLoop(s.loops);
-    await s.fire.fire(loop.id, `fire-${decision}`);
-    const output = (await s.outputs.awaitingReview(loop.id))[0]!;
+    const output = await heldOutput(s, loop.id, `fire-${decision}`);
     await s.idempotency.once(`loop:${loop.id}:ship:${output.id}`, async () => {});
     const uncertain = await s.fire.shipOutput(loop.id, output.id, "josh");
     assert.equal(uncertain?.state, "unconfirmed");
@@ -227,11 +255,7 @@ test("a replayed ship operation becomes unconfirmed and a person can resolve it 
 });
 
 test("returning one output supersedes active siblings before requeueing the item", async () => {
-  const two: Responder = (req) =>
-    stage(req) === "work"
-      ? '```json\n{"outputs": [{"shipAction": "open_pr", "title": "one", "externalRef": "1"}, {"shipAction": "open_pr", "title": "two", "externalRef": "2"}]}\n```'
-      : HAPPY(req);
-  const s = service(two);
+  const s = service(TWO);
   const loop = await makeLoop(s.loops);
   await s.fire.fire(loop.id, "f1");
   const outputs = await s.outputs.awaitingReview(loop.id);
@@ -244,8 +268,7 @@ test("returning one output supersedes active siblings before requeueing the item
 test("an item decision lease serializes shipping and returning", async () => {
   const s = service(HAPPY);
   const loop = await makeLoop(s.loops);
-  await s.fire.fire(loop.id, "f1");
-  const output = (await s.outputs.awaitingReview(loop.id))[0]!;
+  const output = await heldOutput(s, loop.id, "f1");
   const token = await s.items.acquireDecision(output.itemId);
   assert.ok(token);
   assert.equal(await s.fire.returnOutput(loop.id, output.id, "josh", "retry"), null);
@@ -278,11 +301,7 @@ test("confirming an unconfirmed output requires its ready parent to publish it",
 });
 
 test("returning an output fails while a sibling is shipping", async () => {
-  const two: Responder = (req) =>
-    stage(req) === "work"
-      ? '```json\n{"outputs": [{"shipAction": "open_pr", "title": "one", "externalRef": "1"}, {"shipAction": "open_pr", "title": "two", "externalRef": "2"}]}\n```'
-      : HAPPY(req);
-  const s = service(two);
+  const s = service(TWO);
   const loop = await makeLoop(s.loops);
   await s.fire.fire(loop.id, "f1");
   const outputs = await s.outputs.awaitingReview(loop.id);
@@ -319,35 +338,23 @@ test("a concurrent duplicate intake is silent and does not record a failed fire"
   assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, undefined);
 });
 
-test("the scheduler sweep pings a stale loop without waiting for another fire", async () => {
-  const s = service(HAPPY);
-  const loop = await makeLoop(s.loops, {
-    governor: { staleFireMs: 1_000 },
-    destination: { type: "slack", target: "C1", audienceScopeId: base.ownerScopeId },
+for (const fired of [true, false]) {
+  test(`the scheduler sweep pings a stale loop that ${fired ? "fired" : "never fired"} without waiting for another fire`, async () => {
+    const s = service(HAPPY);
+    const loop = await makeLoop(s.loops, { governor: { staleFireMs: 1_000 }, ...ALERTS });
+    if (fired) await s.loops.recordFireOutcome(loop.id, false);
+    const since = fired ? (await s.loops.get(loop.id))!.lastFiredAt! : loop.createdAt;
+    await s.fire.sweepStale(since + 1_001);
+    assert.equal(s.deliveries.sent.length, 1);
+    assert.match(s.deliveries.sent[0]!.text, /trigger looks dead/);
   });
-  await s.loops.recordFireOutcome(loop.id, false);
-  const firedAt = (await s.loops.get(loop.id))!.lastFiredAt!;
-  await s.fire.sweepStale(firedAt + 1_001);
-  assert.equal(s.deliveries.sent.length, 1);
-  assert.match(s.deliveries.sent[0]!.text, /trigger looks dead/);
-});
-
-test("the scheduler sweep detects a stale loop that has never fired", async () => {
-  const s = service(HAPPY);
-  const loop = await makeLoop(s.loops, {
-    governor: { staleFireMs: 1_000 },
-    destination: { type: "slack", target: "C1", audienceScopeId: base.ownerScopeId },
-  });
-  await s.fire.sweepStale(loop.createdAt + 1_001);
-  assert.equal(s.deliveries.sent.length, 1);
-  assert.match(s.deliveries.sent[0]!.text, /trigger looks dead/);
-});
+}
 
 test("review saturation pings once and recovers after outputs drain", async () => {
   const s = service(HAPPY);
   const loop = await makeLoop(s.loops, {
     caps: { maxOpenOutputs: 1 },
-    destination: { type: "slack", target: "C1", audienceScopeId: base.ownerScopeId },
+    ...ALERTS,
   });
   await s.fire.fire(loop.id, "f1");
   assert.equal((await s.loops.get(loop.id))?.health, "degraded");
@@ -364,18 +371,11 @@ test("review saturation pings once and recovers after outputs drain", async () =
 
 test("prompt fences cannot be escaped by loop, item, output, or reviewer text", async () => {
   const poison = "before```after";
-  const malicious: Responder = (req) => {
-    switch (stage(req)) {
-      case "intake":
-        return `[{"sourceKey":"${poison}","sourceSummary":"${poison}"}]`;
-      case "work":
-        return `\`\`\`json\n${JSON.stringify({ outputs: [{ shipAction: "open_pr", title: poison, externalRef: poison }] })}\n\`\`\``;
-      case "judge":
-        return `\`\`\`json\n${JSON.stringify({ outcome: "met", reason: "done", checks: [{ command: poison, passed: true, detail: "ok" }] })}\n\`\`\``;
-      default:
-        return "done";
-    }
-  };
+  const malicious = script({
+    intake: `[{"sourceKey":"${poison}","sourceSummary":"${poison}"}]`,
+    work: `\`\`\`json\n${JSON.stringify({ outputs: [{ shipAction: "open_pr", title: poison, externalRef: poison }] })}\n\`\`\``,
+    judge: `\`\`\`json\n${JSON.stringify({ outcome: "met", reason: "done", checks: [{ command: poison, passed: true, detail: "ok" }] })}\n\`\`\``,
+  });
   const s = service(malicious);
   const loop = await makeLoop(s.loops, {
     name: poison,
@@ -383,8 +383,7 @@ test("prompt fences cannot be escaped by loop, item, output, or reviewer text", 
     successCondition: poison,
     successChecks: [poison],
   });
-  await s.fire.fire(loop.id, "fence-test");
-  const output = (await s.outputs.awaitingReview(loop.id))[0]!;
+  const output = await heldOutput(s, loop.id, "fence-test");
   await s.fire.shipOutput(loop.id, output.id, "josh", poison);
   for (const turn of s.turns) {
     assert.doesNotMatch(turn.text ?? "", /before```after/);
@@ -398,15 +397,7 @@ test("an auto grant ships the matching slice without a person", async () => {
   const grants = createShipGrantStore();
   const s = service(HAPPY, { grants });
   const loop = await makeLoop(s.loops);
-  await grants.put(
-    buildShipGrant({
-      loopId: loop.id,
-      shipAction: "open_pr",
-      actorId: "josh",
-      label: "checkout",
-      policyVersion: loop.policyVersion,
-    }),
-  );
+  await autoGrant(grants, loop);
   const result = await s.fire.fire(loop.id, "f1");
   assert.deepEqual(result.summary?.shipped.length, 1);
   assert.equal(s.turns.filter((t) => stage(t) === "ship").length, 1);
@@ -424,20 +415,9 @@ test("revoking an auto grant during work leaves the output held", async () => {
     { grants },
   );
   const loop = await makeLoop(s.loops);
-  const grant = await grants.put(
-    buildShipGrant({
-      loopId: loop.id,
-      shipAction: "open_pr",
-      actorId: "josh",
-      label: "checkout",
-      policyVersion: loop.policyVersion,
-    }),
-  );
-  grantId = grant.id;
+  grantId = (await autoGrant(grants, loop)).id;
   const result = await s.fire.fire(loop.id, "f1");
-  assert.deepEqual(result.summary?.shipped, []);
-  assert.equal(result.summary?.ready.length, 1);
-  assert.equal(s.turns.filter((turn) => stage(turn) === "ship").length, 0);
+  assertHeld(result, s);
 });
 
 test("a policy version bump during work leaves the output held", async () => {
@@ -452,52 +432,29 @@ test("a policy version bump during work leaves the output held", async () => {
   );
   const loop = await makeLoop(s.loops);
   loopId = loop.id;
-  await grants.put(
-    buildShipGrant({
-      loopId: loop.id,
-      shipAction: "open_pr",
-      actorId: "josh",
-      label: "checkout",
-      policyVersion: loop.policyVersion,
-    }),
-  );
+  await autoGrant(grants, loop);
   const result = await s.fire.fire(loop.id, "f1");
-  assert.deepEqual(result.summary?.shipped, []);
-  assert.equal(result.summary?.ready.length, 1);
-  assert.equal(s.turns.filter((turn) => stage(turn) === "ship").length, 0);
+  assertHeld(result, s);
 });
 
 test("a stale grant does not auto-ship after a semantic policy change", async () => {
   const grants = createShipGrantStore();
   const s = service(HAPPY, { grants });
   const loop = await makeLoop(s.loops);
-  await grants.put(
-    buildShipGrant({
-      loopId: loop.id,
-      shipAction: "open_pr",
-      actorId: "josh",
-      label: "checkout",
-      policyVersion: loop.policyVersion,
-    }),
-  );
+  await autoGrant(grants, loop);
   await s.loops.editPlaybook(loop.id, { playbook: "triage without side effects", by: "josh" });
   const result = await s.fire.fire(loop.id, "f1");
-  assert.deepEqual(result.summary?.shipped, []);
-  assert.equal(result.summary?.ready.length, 1);
-  assert.equal(s.turns.filter((t) => stage(t) === "ship").length, 0);
+  assertHeld(result, s);
 });
 
 test("an undeclared ship action parks the item and quarantines through the governor", async () => {
-  const rogue: Responder = (req) => {
-    switch (stage(req)) {
-      case "intake":
-        return '[{"sourceKey": "SENTRY-9"}]';
-      case "work":
-        return '```json\n{"outputs": [{"shipAction": "send_email", "title": "Emailed the customer"}]}\n```';
-      default:
-        return '```json\n{"outcome": "met", "reason": "n/a"}\n```';
-    }
-  };
+  const rogue = script(
+    {
+      intake: '[{"sourceKey": "SENTRY-9"}]',
+      work: '```json\n{"outputs": [{"shipAction": "send_email", "title": "Emailed the customer"}]}\n```',
+    },
+    '```json\n{"outcome": "met", "reason": "n/a"}\n```',
+  );
   const s = service(rogue);
   const loop = await makeLoop(s.loops);
   const result = await s.fire.fire(loop.id, "f1");
@@ -533,18 +490,11 @@ test("a quiet fire with nothing to review reports silent", async () => {
 });
 
 test("an unmet judgment continues the item; the attempt cap parks it", async () => {
-  const never: Responder = (req) => {
-    switch (stage(req)) {
-      case "intake":
-        return '[{"sourceKey": "SENTRY-2"}]';
-      case "work":
-        return '```json\n{"outputs": []}\n```';
-      case "judge":
-        return '```json\n{"outcome": "continue", "reason": "no PR yet"}\n```';
-      default:
-        return "done";
-    }
-  };
+  const never = script({
+    intake: '[{"sourceKey": "SENTRY-2"}]',
+    work: '```json\n{"outputs": []}\n```',
+    judge: '```json\n{"outcome": "continue", "reason": "no PR yet"}\n```',
+  });
   const s = service(never);
   const loop = await makeLoop(s.loops, { caps: { maxItemAttempts: 2 } });
   const first = await s.fire.fire(loop.id, "f1");
@@ -602,8 +552,7 @@ for (const unattendedGrants of [undefined, ["admin.sessions.read"]]) {
     await scheduler.tick(cron.createdAt + 60_000);
     assert.equal((await s.crons.listFires(cron.id)).runs[0]?.status, "ok");
     assert.deepEqual(s.turns.map(stage), ["intake", "work", "judge"]);
-    await s.fire.fire(loop.id, "manual");
-    const output = (await s.outputs.awaitingReview(loop.id))[0]!;
+    const output = await heldOutput(s, loop.id, "manual");
     await s.fire.shipOutput(loop.id, output.id, loop.owner);
     for (const turn of s.turns) {
       assert.deepEqual(turn.unattendedGrants, unattendedGrants);
@@ -684,21 +633,32 @@ test("legacy inbox sync cron is not a grant source for inbox event turns", async
   assert.equal((await s.fire.fire(loop.id, "invalid-delegation", cron.id)).status, "failed");
 });
 
-test("privileged item turns inherit grants only for the owner", async () => {
-  const s = service(HAPPY);
-  const created = await makeLoop(s.loops);
-  await bindCron(s, created, { unattendedGrants: ["admin.sessions.read"] });
-  await s.fire.fire(created.id, "setup");
-  const loop = (await s.loops.get(created.id))!;
-  const item = (await s.items.byLoop(loop.id))[0]!;
-  await s.fire.followUp(loop, item, "inspect", "josh");
-  assert.deepEqual(s.turns.at(-1)?.unattendedGrants, ["admin.sessions.read"]);
-  assert.equal((await s.fire.itemAction(loop, item, "inspect", {}, "josh")).ok, true);
-  const before = s.turns.length;
-  assert.equal((await s.fire.itemAction(loop, item, "inspect", {}, "mallory")).ok, false);
-  await assert.rejects(s.fire.followUp(loop, item, "inspect", "mallory"), /only the owner/);
-  assert.equal(s.turns.length, before);
-});
+for (const [owner, other, kind, samePerson] of [
+  ["josh", "mallory", "inspect", undefined],
+  [
+    "josh@example.test",
+    "other@example.test",
+    "custom",
+    async (a: string, b: string) => a === "josh" && b === "josh@example.test",
+  ],
+] as const) {
+  test(`privileged item turns inherit grants only for the owner (${owner})`, async () => {
+    const s = service(HAPPY, { samePerson });
+    const created = await makeLoop(s.loops);
+    await bindCron(s, created, { unattendedGrants: ["admin.sessions.read"] });
+    await s.fire.fire(created.id, "setup");
+    const loop = (await s.loops.get(created.id))!;
+    const item = (await s.items.byLoop(loop.id))[0]!;
+    await s.fire.followUp(loop, item, kind, owner);
+    assert.deepEqual(s.turns.at(-1)?.unattendedGrants, ["admin.sessions.read"]);
+    assert.equal((await s.fire.itemAction(loop, item, kind, {}, owner)).ok, true);
+    assert.deepEqual(s.turns.at(-1)?.unattendedGrants, ["admin.sessions.read"]);
+    const before = s.turns.length;
+    assert.equal((await s.fire.itemAction(loop, item, kind, {}, other)).ok, false);
+    await assert.rejects(s.fire.followUp(loop, item, kind, other), /only the owner/);
+    assert.equal(s.turns.length, before);
+  });
+}
 
 for (const patch of [{ enabled: false }, { archived: true }]) {
   test(`disabled or archived bound cron cannot authorize loop turns: ${JSON.stringify(patch)}`, async () => {
@@ -724,22 +684,6 @@ test("pausing an unprivileged cron does not block held-item follow-up", async ()
   await s.fire.followUp(loop, item, "inspect", loop.owner);
   assert.equal(s.turns.length, before + 1);
   assert.equal(s.turns.at(-1)?.unattendedGrants, undefined);
-});
-
-test("privileged item turns recognize the owner's verified directory alias", async () => {
-  const s = service(HAPPY, { samePerson: async (a, b) => a === "josh" && b === "josh@example.test" });
-  const created = await makeLoop(s.loops);
-  await bindCron(s, created, { unattendedGrants: ["admin.sessions.read"] });
-  const loop = (await s.loops.get(created.id))!;
-  await s.fire.fire(loop.id, "alias-owner");
-  const item = (await s.items.byLoop(loop.id))[0]!;
-  const result = await s.fire.itemAction(loop, item, "custom", {}, "josh@example.test");
-  assert.equal(result.ok, true);
-  assert.deepEqual(s.turns.at(-1)?.unattendedGrants, ["admin.sessions.read"]);
-  const before = s.turns.length;
-  const refused = await s.fire.itemAction(loop, item, "custom", {}, "other@example.test");
-  assert.equal(refused.ok, false);
-  assert.equal(s.turns.length, before);
 });
 
 test("an admitted loop drains all stages after ownership closes", async () => {
