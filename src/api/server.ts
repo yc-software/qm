@@ -136,8 +136,7 @@ function strictPostAllowed(pathname: string, body: unknown): boolean {
     pathname === "/v1/memory/search" ||
     pathname === "/v1/search" ||
     pathname === "/v1/memory/restore" ||
-    pathname.startsWith("/v1/run-signals/") ||
-    /^\/v1\/conversations\/[^/]+\/fork$/.test(pathname)
+    pathname.startsWith("/v1/run-signals/")
   )
     return true;
   if (/^\/v1\/projects\/[^/]+(?:\/members(?:\/[^/]+)?)?$/.test(pathname)) return true;

@@ -165,7 +165,6 @@ describe("agent conversations self-API", async () => {
     assert.equal((await get("/v1/conversations")).status, 401);
     assert.equal((await get(`/v1/conversations/${mineId}`)).status, 401);
     assert.equal((await post(`/v1/conversations/${mineId}`, { archived: true })).status, 401);
-    assert.equal((await post(`/v1/conversations/${mineId}/fork`, {})).status, 401);
   });
 
   it("lists only the actor's own conversations", async () => {
@@ -200,7 +199,6 @@ describe("agent conversations self-API", async () => {
     const token = await capFor("U1");
     assert.equal((await get(`/v1/conversations/${theirsId}`, token)).status, 404);
     assert.equal((await post(`/v1/conversations/${theirsId}`, { archived: true }, token)).status, 404);
-    assert.equal((await post(`/v1/conversations/${theirsId}/fork`, {}, token)).status, 404);
   });
 
   it("reads and tail-pages one of the actor's own conversations", async () => {
@@ -230,24 +228,16 @@ describe("agent conversations self-API", async () => {
     assert.equal((await get(`/v1/conversations/${mineId}?sinceSeq=0`, token)).status, 400);
   });
 
-  it("forks one of the actor's own conversations", async () => {
-    const res = await post(`/v1/conversations/${mineId}/fork`, {}, await capFor("U1"));
-    assert.equal(res.status, 200);
-    const body = (await res.json()) as { session: { id: string }; entries: Array<{ payload: { text?: string } }> };
-    assert.notEqual(body.session.id, mineId);
-    assert.ok(body.entries.some((entry) => entry.payload.text === "plan the launch"));
-    const mine = await built.app.listSessions("U1");
-    assert.ok(mine.some((session) => session.id === body.session.id));
-  });
-
-  it("allows forking under strict posture", async () => {
-    const scope = scopeId("personal", "U1");
-    await built.config.setSecurityPosture(scope, "strict");
-    try {
-      assert.equal((await post(`/v1/conversations/${mineId}/fork`, {}, await capFor("U1"))).status, 200);
-    } finally {
-      await built.config.setSecurityPosture(scope, "auto");
-    }
+  it("forks carry the source transcript into a new sidebar session", async () => {
+    const out = await startSession(built.app, built.sessions, "U1", {
+      scopeId: scopeId("personal", "U1"),
+      forkOf: mineId,
+    });
+    assert.ok("session" in out);
+    assert.notEqual(out.session.id, mineId);
+    const entries = await built.sessions.getEntries(out.session.id);
+    assert.ok(entries.some((e) => JSON.stringify(e.payload).includes("plan the launch")));
+    assert.ok((await built.app.listSessions("U1")).some((s) => s.id === out.session.id));
   });
 
   it("refuses to color a conversation the actor can't see", async () => {
