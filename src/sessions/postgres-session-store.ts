@@ -293,20 +293,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          )
          SELECT * FROM rollup ORDER BY day, scope_id, origin, model`;
 
-  const recountRecentSessions = `UPDATE sessions s
-        SET messages = c.messages, turns = c.turns, last_activity = c.last_activity
-       FROM (SELECT r.id,
-                    (SELECT COUNT(*) FROM session_entries t WHERE t.session_id = r.id)::int AS messages,
-                    (SELECT COUNT(*) FROM session_entries t WHERE t.session_id = r.id AND ${userTurn("t")})::int AS turns,
-                    GREATEST(COALESCE(r.last_activity, 0), r.created_at, COALESCE((SELECT MAX(t.created_at) FROM session_entries t WHERE t.session_id = r.id), 0)) AS last_activity
-               FROM sessions r
-              WHERE r.messages IS NULL
-                 OR ${lastActivityExpr("r")} > (EXTRACT(EPOCH FROM now()) * 1000)::bigint - 172800000) c
-      WHERE s.id = c.id
-        AND (s.messages IS DISTINCT FROM c.messages
-          OR s.turns IS DISTINCT FROM c.turns
-          OR s.last_activity IS DISTINCT FROM c.last_activity)`;
-
   const { pool, q } = createPgPool(
     connectionString,
     [
@@ -773,7 +759,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         END $entry_search_text_parallel$`,
         ],
       },
-      { id: "sessions/maintenance/recount-recent", statements: [recountRecentSessions] },
     ],
   );
 

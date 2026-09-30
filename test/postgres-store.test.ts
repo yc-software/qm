@@ -1364,27 +1364,51 @@ test("pg append debounces last_activity by 60s but keeps counters exact", { skip
   await s.releaseLease(lease);
 });
 
-test("pg boot recount leaves already-correct rows untouched", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!);
-  const scope = scopeId("channel", "recount-guard");
-  const session = await s.getOrCreateByThread("recountGuardA", "channel", scope);
-  const { lease } = await s.acquireLease(session.id);
-  assert.ok(lease);
-  await s.append(lease, { type: "user", payload: { text: "hello" }, scopeLabel: scope });
-  await s.append(lease, { type: "assistant", payload: { text: "hi" }, scopeLabel: scope });
-  await s.releaseLease(lease);
-
-  const settle = createPostgresSessionStore(URL!);
-  await settle.get(session.id);
+test("pg store startup never rewrites or waits on session rows", { skip }, async () => {
+  const nowRef = { v: Date.now() - 60_000 };
+  const s = createPostgresSessionStore(URL!, { now: () => nowRef.v });
+  const scope = scopeId("channel", "boot-no-lock");
+  const ids: string[] = [];
+  for (let i = 0; i < 4; i++) ids.push((await s.getOrCreateByThread(`bootNoLock${i}`, "channel", scope)).id);
+  nowRef.v += 10_000;
+  for (const id of ids) {
+    const { lease } = await s.acquireLease(id);
+    await s.append(lease!, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
+    await s.releaseLease(lease!);
+  }
+  const [held, writing, ...idle] = ids as [string, string, ...string[]];
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
+  const holder = await raw.connect();
+  let open = false;
+  const within = <T>(p: Promise<T>, what: string): Promise<T> =>
+    Promise.race([
+      p,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${what} blocked`)), 5_000).unref()),
+    ]);
   try {
-    const before = await raw.query("SELECT xmin::text AS v FROM sessions WHERE id = $1", [session.id]);
-    const reboot = createPostgresSessionStore(URL!);
-    await reboot.get(session.id);
-    const after = await raw.query("SELECT xmin::text AS v FROM sessions WHERE id = $1", [session.id]);
-    assert.equal(after.rows[0]!.v, before.rows[0]!.v, "a second boot's recount rewrites nothing that already agrees");
+    const rowVersions = async () =>
+      (await raw.query("SELECT id, xmin::text AS v FROM sessions WHERE id = ANY($1) ORDER BY id", [idle])).rows;
+    const before = await rowVersions();
+    await holder.query("BEGIN");
+    open = true;
+    await holder.query("SELECT 1 FROM sessions WHERE id = $1 FOR UPDATE", [held]);
+
+    const boots = [0, 1, 2].map(() => createPostgresSessionStore(URL!));
+    await within(Promise.all(boots.map((b) => b.get(held))), "concurrent fresh-store startup");
+    const { lease } = await boots[0]!.acquireLease(writing);
+    await within(
+      boots[0]!.append(lease!, { type: "assistant", payload: { text: "beside a boot" }, scopeLabel: scope }),
+      "append on a freshly booted store",
+    );
+    await boots[0]!.releaseLease(lease!);
+    assert.deepEqual(await rowVersions(), before, "startup writes no session rows");
+    const row = (await boots[1]!.scopeSessionSummaries(scope, false)).find((r) => r.id === writing)!;
+    assert.equal(row.messages, 2, "normal appends keep exact counters");
+    assert.equal(row.turns, 1);
   } finally {
+    if (open) await holder.query("ROLLBACK");
+    holder.release();
     await raw.end();
   }
 });
@@ -1608,96 +1632,103 @@ test("pg null-byte payloads: stripped on write, tolerated on read (no jsonb cast
   assert.equal(row.messages, 3, "messages self-heal from the entry seq");
 });
 
-test("pg session counters: boot backfill fills pre-column rows", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!);
-  const scope = scopeId("channel", "counters");
-  const a = await s.getOrCreateByThread("countersA", "channel", scope);
-  const b = await s.getOrCreateByThread("countersB", "channel", scope);
-  const { lease } = await s.acquireLease(a.id);
-  await s.append(lease!, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
-  await s.append(lease!, { type: "assistant", payload: { text: "yo" }, scopeLabel: scope });
-  await s.append(lease!, { type: "user", payload: { text: "heard", overheard: true }, scopeLabel: scope });
-  await s.releaseLease(lease!);
+test(
+  "pg session counters: legacy and mismatched counters heal on the next append, not at startup",
+  { skip },
+  async () => {
+    const s = createPostgresSessionStore(URL!);
+    const scope = scopeId("channel", "counters");
+    const a = await s.getOrCreateByThread("countersA", "channel", scope);
+    const b = await s.getOrCreateByThread("countersB", "channel", scope);
+    const { lease } = await s.acquireLease(a.id);
+    await s.append(lease!, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
+    await s.append(lease!, { type: "assistant", payload: { text: "yo" }, scopeLabel: scope });
+    await s.append(lease!, { type: "user", payload: { text: "heard", overheard: true }, scopeLabel: scope });
+    await s.releaseLease(lease!);
 
-  const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: URL });
-  try {
-    await raw.query("UPDATE sessions SET messages = NULL, turns = NULL, last_activity = NULL WHERE id = ANY($1)", [
-      [a.id, b.id],
-    ]);
-  } finally {
-    await raw.end();
-  }
-  const s2 = createPostgresSessionStore(URL!);
-  const rows = await s2.scopeSessionSummaries(scope, false);
-  const ra = rows.find((r) => r.id === a.id)!;
-  assert.equal(ra.messages, 3, "backfill counts every entry");
-  assert.equal(ra.turns, 1, "backfill excludes overheard user rows");
-  const entries = await s2.getEntries(a.id);
-  assert.equal(ra.lastActivity, entries[entries.length - 1]!.createdAt, "backfill last-activity = newest entry");
-  const rb = rows.find((r) => r.id === b.id)!;
-  assert.equal(rb.messages, 0, "entry-less session backfills to zero");
-  assert.equal(rb.lastActivity, rb.createdAt, "entry-less last-activity falls back to created_at");
+    const pg = (await import("pg")).default;
+    const raw = new pg.Pool({ connectionString: URL });
+    try {
+      await raw.query("UPDATE sessions SET messages = NULL, turns = NULL, last_activity = NULL WHERE id = ANY($1)", [
+        [a.id, b.id],
+      ]);
+      const s2 = createPostgresSessionStore(URL!);
+      const rows = await s2.scopeSessionSummaries(scope, false);
+      const ra = rows.find((r) => r.id === a.id)!;
+      assert.equal(ra.messages, 0, "startup no longer backfills: an idle legacy row reads as zero until it is written");
+      assert.equal(ra.lastActivity, ra.createdAt, "…and sorts by created_at");
+      assert.equal((await s2.getEntries(a.id)).length, 3, "its stored messages are all still readable");
+      const rb = rows.find((r) => r.id === b.id)!;
+      assert.equal(rb.messages, 0, "entry-less legacy session reads as zero");
+      assert.equal(rb.lastActivity, rb.createdAt, "entry-less last-activity falls back to created_at");
 
-  const raw2 = new pg.Pool({ connectionString: URL });
-  try {
-    await raw2.query(
-      "INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-      [a.id, 3, 2, "user", JSON.stringify({ text: "from the old instance" }), scope, Date.now()],
-    );
-  } finally {
-    await raw2.end();
-  }
-  const { lease: lease2 } = await s2.acquireLease(a.id);
-  await s2.append(lease2!, { type: "user", payload: { text: "back on new code" }, scopeLabel: scope });
-  await s2.releaseLease(lease2!);
-  const healed = (await s2.scopeSessionSummaries(scope, false)).find((r) => r.id === a.id)!;
-  assert.equal(healed.messages, 5, "messages self-heal from the entry seq");
-  assert.equal(healed.turns, 3, "seq/messages mismatch triggers a full turns recount");
+      const { lease: legacyLease } = await s2.acquireLease(a.id);
+      await s2.append(legacyLease!, {
+        type: "assistant",
+        payload: { text: "first write on new code" },
+        scopeLabel: scope,
+      });
+      await s2.releaseLease(legacyLease!);
+      const entries = await s2.getEntries(a.id);
+      const legacy = (await s2.scopeSessionSummaries(scope, false)).find((r) => r.id === a.id)!;
+      assert.equal(legacy.messages, 4, "append counts every entry of a legacy row");
+      assert.equal(legacy.turns, 1, "append recount excludes overheard user rows");
+      assert.equal(legacy.lastActivity, entries[entries.length - 1]!.createdAt, "last-activity = newest entry");
 
-  const raw3 = new pg.Pool({ connectionString: URL });
-  try {
-    await raw3.query(
-      "INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at) VALUES ($1,0,NULL,'user',$2,$3,$4), ($1,1,0,'assistant',$5,$3,$6)",
-      [
-        b.id,
-        JSON.stringify({ text: "drained turn" }),
-        scope,
-        Date.now(),
-        JSON.stringify({ text: "reply" }),
-        Date.now() + 1,
-      ],
-    );
-  } finally {
-    await raw3.end();
-  }
-  const s3 = createPostgresSessionStore(URL!);
-  const rb2 = (await s3.scopeSessionSummaries(scope, false)).find((r) => r.id === b.id)!;
-  assert.equal(rb2.messages, 2, "boot recount repairs stale non-NULL counters on recently-active sessions");
-  assert.equal(rb2.turns, 1, "boot recount restores turns the old writer never counted");
+      await raw.query(
+        "INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        [a.id, 4, 3, "user", JSON.stringify({ text: "from the old instance" }), scope, Date.now()],
+      );
+      const { lease: lease2 } = await s2.acquireLease(a.id);
+      await s2.append(lease2!, { type: "user", payload: { text: "back on new code" }, scopeLabel: scope });
+      await s2.releaseLease(lease2!);
+      const healed = (await s2.scopeSessionSummaries(scope, false)).find((r) => r.id === a.id)!;
+      assert.equal(healed.messages, 6, "messages self-heal from the entry seq");
+      assert.equal(healed.turns, 3, "seq/messages mismatch triggers a full turns recount");
 
-  const future = Date.now() + 5_000_000;
-  const raw4 = new pg.Pool({ connectionString: URL });
-  try {
-    await raw4.query("UPDATE sessions SET last_activity = $2 WHERE id = $1", [a.id, future]);
-    const { lease: lease3 } = await s3.acquireLease(a.id);
-    await s3.append(lease3!, { type: "assistant", payload: { text: "late clock" }, scopeLabel: scope });
-    await s3.releaseLease(lease3!);
-    const ra2 = (await s3.scopeSessionSummaries(scope, false)).find((r) => r.id === a.id)!;
-    assert.equal(ra2.lastActivity, future, "an older-clocked append never moves last_activity backwards");
+      await raw.query(
+        "INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at) VALUES ($1,0,NULL,'user',$2,$3,$4), ($1,1,0,'assistant',$5,$3,$6)",
+        [
+          b.id,
+          JSON.stringify({ text: "drained turn" }),
+          scope,
+          Date.now(),
+          JSON.stringify({ text: "reply" }),
+          Date.now() + 1,
+        ],
+      );
+      await raw.query("UPDATE sessions SET messages = 0, turns = 0 WHERE id = $1", [b.id]);
+      const s3 = createPostgresSessionStore(URL!);
+      const stale = (await s3.scopeSessionSummaries(scope, false)).find((r) => r.id === b.id)!;
+      assert.equal(stale.messages, 0, "a fresh store leaves stale non-NULL counters alone");
+      const { lease: leaseB } = await s3.acquireLease(b.id);
+      await s3.append(leaseB!, { type: "assistant", payload: { text: "next" }, scopeLabel: scope });
+      await s3.releaseLease(leaseB!);
+      const rb2 = (await s3.scopeSessionSummaries(scope, false)).find((r) => r.id === b.id)!;
+      assert.equal(rb2.messages, 3, "the next append repairs stale non-NULL counters");
+      assert.equal(rb2.turns, 1, "…and restores turns the old writer never counted");
 
-    const s4 = createPostgresSessionStore(URL!);
-    const ra3 = (await s4.scopeSessionSummaries(scope, false)).find((r) => r.id === a.id)!;
-    assert.equal(ra3.lastActivity, future, "a boot recount never moves last_activity backwards either");
+      const future = Date.now() + 5_000_000;
+      await raw.query("UPDATE sessions SET last_activity = $2 WHERE id = $1", [a.id, future]);
+      const { lease: lease3 } = await s3.acquireLease(a.id);
+      await s3.append(lease3!, { type: "assistant", payload: { text: "late clock" }, scopeLabel: scope });
+      await s3.releaseLease(lease3!);
+      const ra2 = (await s3.scopeSessionSummaries(scope, false)).find((r) => r.id === a.id)!;
+      assert.equal(ra2.lastActivity, future, "an older-clocked append never moves last_activity backwards");
+      const ra3 = (await createPostgresSessionStore(URL!).scopeSessionSummaries(scope, false)).find(
+        (r) => r.id === a.id,
+      )!;
+      assert.equal(ra3.lastActivity, future, "a fresh store never moves last_activity either");
 
-    await raw4.query("UPDATE sessions SET turns = 7 WHERE id = $1", [b.id]);
-  } finally {
-    await raw4.end();
-  }
-  const stats = await s3.scopeSessionStats(scope, false);
-  assert.equal(stats.total, 2, "stats count sessions in scope");
-  assert.equal(stats.turns, 3 + 7, "stats sum the stored turns counters, never the entries");
-});
+      await raw.query("UPDATE sessions SET turns = 7 WHERE id = $1", [b.id]);
+    } finally {
+      await raw.end();
+    }
+    const stats = await s.scopeSessionStats(scope, false);
+    assert.equal(stats.total, 2, "stats count sessions in scope");
+    assert.equal(stats.turns, 3 + 7, "stats sum the stored turns counters, never the entries");
+  },
+);
 
 test("pg run store: Unicode stays jsonb-safe through enqueue, edit and both steering paths", { skip }, async () => {
   const { runs, close } = createPostgresRunStore(URL!);
