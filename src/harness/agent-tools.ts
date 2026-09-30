@@ -3987,7 +3987,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         );
       }
       if (goal.floor) {
-        const { grindState } = await import("./grind.ts");
         const state = grindState(goal.floor, goalFloorMeter(goal, ref.goalMeter ?? createGrindMeter()));
         if (!state.met)
           return recordCoreAuthoredResult(
