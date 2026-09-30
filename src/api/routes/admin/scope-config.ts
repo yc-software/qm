@@ -52,6 +52,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
       "runtime",
       "cron-runtime",
       "subagent-runtime",
+      "fallback-runtime",
       "webui-models",
       "browse-model",
       "auto-flagger",
@@ -273,6 +274,7 @@ const SETTINGS_RESOURCES = {
     "runtime",
     "cronRuntime",
     "subagentRuntime",
+    "fallbackRuntime",
     "approvedHarnesses",
     "webuiModels",
     "interactiveFastMode",
@@ -373,7 +375,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     name: resolvedCurrent?.name ?? currentId + " (configured)",
     provider: resolvedCurrent?.provider ?? (currentId.includes("/") ? "openrouter" : ""),
   };
-  const purposeRuntimes = [values.cronRuntime, values.subagentRuntime].filter(
+  const purposeRuntimes = [values.cronRuntime, values.subagentRuntime, values.fallbackRuntime].filter(
     (value): value is { harnessId: string; modelId: string } =>
       !!value &&
       typeof (value as { harnessId?: unknown }).harnessId === "string" &&

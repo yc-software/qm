@@ -48,7 +48,7 @@ import { listBackLink } from "./list-page";
 import { registerPaneKind } from "./pane-kinds";
 import { exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
-import { brandName, fieldSelect, icon, initials, relTime, workingWave } from "./ui";
+import { brandName, fieldSelect, icon, initials, relTime, sheenLabel, workingWave } from "./ui";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { inboxChat } from "./inbox-chat";
 
@@ -1512,6 +1512,9 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
   `;
 }
 
+const MIGRATION_STATUS = "Moving your Inbox…";
+const MIGRATION_HINT = "Available once your existing Inbox finishes moving";
+
 function syncStatusLabel(cron: InboxSyncCron): string {
   if (!cron.enabled) return "Sync paused";
   return cron.lastFiredAt ? `Synced ${relTime(cron.lastFiredAt)}` : "First sync pending";
@@ -1521,6 +1524,7 @@ function syncActionTpl(opts: {
   label: string;
   busyLabel: string;
   busy: boolean;
+  disabled?: boolean;
   tooltip: string;
   action: () => void;
 }): TemplateResult {
@@ -1528,7 +1532,7 @@ function syncActionTpl(opts: {
     class="btn inbox-sync-action"
     type="button"
     ${tip(opts.tooltip)}
-    ?disabled=${opts.busy}
+    ?disabled=${opts.busy || opts.disabled}
     @click=${opts.action}
   >
     ${icon(RefreshCw, 13)}<span>${opts.busy ? opts.busyLabel : opts.label}</span>
@@ -1554,18 +1558,20 @@ function syncLineTpl(surface: InboxSurface): TemplateResult | typeof nothing {
   }
   const loops = syncLoops(surface.viewId);
   const crons = loops.flatMap((loop) => (loop.syncCron ? [loop.syncCron] : []));
-  if (!crons.length) return nothing;
+  const moving = inboxState.migrationPending;
+  if (!crons.length && !moving) return nothing;
+  const status =
+    crons.length === 1 ? syncStatusLabel(crons[0]!) : `${crons.filter((cron) => cron.enabled).length} syncs on`;
   return html`<span class="inbox-sync-line">
     ${syncActionTpl({
       label: "Sync",
       busyLabel: "Syncing…",
       busy: inboxState.syncBusy,
-      tooltip: "Sync now",
+      disabled: moving,
+      tooltip: moving ? MIGRATION_HINT : "Sync now",
       action: () => void syncNow(surface.viewId),
     })}
-    <span class="inbox-sync-status"
-      >${crons.length === 1 ? syncStatusLabel(crons[0]!) : `${crons.filter((cron) => cron.enabled).length} syncs on`}</span
-    >
+    <span class="inbox-sync-status" role=${moving ? "status" : nothing}>${moving ? MIGRATION_STATUS : status}</span>
   </span>`;
 }
 
@@ -1586,6 +1592,7 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
     emptyMessage = "Nothing is waiting on you. Choose From people or All emails to see more emails.";
   if (surface.viewId === "sent") emptyMessage = "No sent messages yet. Sent Email and Slack replies will appear here.";
   const handledItems = itemsFor(surface.viewId, "handled");
+  const hasMore = !!feedWindows.get(surface.viewId)?.nextCursor;
   const setupLoops = inboxState.selected.filter(
     (loop) =>
       loop.source && !loop.cronId && !loop.ingestionActive && (surface.viewId === loop.id || surface.viewId === "all"),
@@ -1654,7 +1661,15 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
     </div>
   `;
   const list = html`
-    ${!inboxState.loaded && inboxState.loading ? html`<div class="empty compact">Reading your inbox…</div>` : nothing}
+    ${
+      !inboxState.loaded && inboxState.loading
+        ? html`<div class="empty compact" role="status" aria-label="Reading your inbox…">
+            <span aria-hidden="true">
+              <span class="working-mark">${workingWave()}</span>${sheenLabel("Reading your inbox…", true)}
+            </span>
+          </div>`
+        : nothing
+    }
     ${
       inboxState.error && !inboxState.loaded
         ? html`<div class="empty compact">Couldn't load the inbox: ${inboxState.error}</div>`
@@ -1689,38 +1704,53 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
               ${icon(surface.showHandled ? ChevronDown : ChevronRight, 13)}
               <span>Handled (${handledItems.length})</span>
             </button>
-            ${surface.showHandled ? html`<div class="inbox-list handled">${handledItems.map((i) => itemRowTpl(surface, i))}</div>` : nothing}${surface.showHandled && feedWindows.get(`handled:${surface.viewId}`)?.nextCursor ? html`<button class="btn" ?disabled=${inboxState.loading} @click=${() => void refreshInbox({ more: true, viewId: `handled:${surface.viewId}` })}>Load more handled</button>` : nothing}
+            ${surface.showHandled ? html`<div class="inbox-list handled">${handledItems.map((i) => itemRowTpl(surface, i))}</div>` : nothing}${surface.showHandled && feedWindows.get(`handled:${surface.viewId}`)?.nextCursor ? html`<button class="inbox-load-more" type="button" ?disabled=${inboxState.loading} @click=${() => void refreshInbox({ more: true, viewId: `handled:${surface.viewId}` })}>Load more handled</button>` : nothing}
           `
         : nothing
     }
   `;
   return html`
     <div class="inbox-surface ${compact ? "compact" : ""}" data-density=${density}>
-      ${inboxState.migrationPending ? html`<div class="inbox-notice" role="status">Moving your existing Inbox. Sync setup will be available once active work finishes and records are verified.</div>` : nothing}
       <div class="inbox-toolbar">
         ${chips} ${surface.pane ? html`<span class="inbox-toolbar-spacer"></span>${syncLineTpl(surface)}` : nothing}
       </div>
       ${
-        showEmailFilter
+        showEmailFilter || hasMore
           ? html`
               <div class="inbox-filter-bar">
-                <label class="inbox-filter">
-                  <span>Emails</span>
-                  ${fieldSelect({
-                    className: "inbox-filter-control",
-                    ariaLabel: "Email filter",
-                    ariaDescription: INBOX_FILTERS.find((filter) => filter.id === inboxState.filter)?.description,
-                    value: inboxState.filter,
-                    disabled: inboxState.filterBusy || inboxState.loading,
-                    onChange: (value) => void selectInboxFilter(value as InboxFilter),
-                    options: INBOX_FILTERS.map(
-                      (filter) =>
-                        html`<option value=${filter.id} ?selected=${filter.id === inboxState.filter}>
-                          ${filter.label}
-                        </option>`,
-                    ),
-                  })}
-                </label>
+                ${
+                  showEmailFilter
+                    ? html`<label class="inbox-filter">
+                        <span>Emails</span>
+                        ${fieldSelect({
+                          className: "inbox-filter-control",
+                          ariaLabel: "Email filter",
+                          ariaDescription: INBOX_FILTERS.find((filter) => filter.id === inboxState.filter)?.description,
+                          value: inboxState.filter,
+                          disabled: inboxState.filterBusy || inboxState.loading,
+                          onChange: (value) => void selectInboxFilter(value as InboxFilter),
+                          options: INBOX_FILTERS.map(
+                            (filter) =>
+                              html`<option value=${filter.id} ?selected=${filter.id === inboxState.filter}>
+                                ${filter.label}
+                              </option>`,
+                          ),
+                        })}
+                      </label>`
+                    : nothing
+                }
+                ${
+                  hasMore
+                    ? html`<button
+                        class="inbox-load-more"
+                        type="button"
+                        ?disabled=${inboxState.loading}
+                        @click=${() => void refreshInbox({ more: true, viewId: surface.viewId })}
+                      >
+                        Load more
+                      </button>`
+                    : nothing
+                }
               </div>
             `
           : nothing
@@ -1734,11 +1764,14 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
                     <span class="inbox-setup-icon" aria-hidden="true">${loopIcon(loop, 17)}</span>
                     <div class="inbox-setup-copy">
                       <span class="inbox-setup-title">${loop.name}</span
-                      ><span class="inbox-setup-description">Sync not set up</span>
+                      ><span class="inbox-setup-description"
+                        >${inboxState.migrationPending ? MIGRATION_STATUS : "Sync not set up"}</span
+                      >
                     </div>
                     <button
                       class="inbox-setup-action"
                       aria-label=${`Set up ${loop.name}`}
+                      ${inboxState.migrationPending ? tip(MIGRATION_HINT) : nothing}
                       ?disabled=${inboxState.syncBusy || inboxState.migrationPending}
                       @click=${() => void setUpSync(loop.id)}
                     >
@@ -1800,7 +1833,6 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
             </section>`
           : nothing
       }
-      ${feedWindows.get(surface.viewId)?.nextCursor ? html`<button class="btn" ?disabled=${inboxState.loading} @click=${() => void refreshInbox({ more: true, viewId: surface.viewId })}>Load more</button>` : nothing}
       ${inboxState.notice ? html`<div class="inbox-notice" role="status">${inboxState.notice}</div>` : nothing}
       <div class="inbox-scroll">
         ${

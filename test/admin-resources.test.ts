@@ -948,7 +948,7 @@ test("org purpose runtimes round-trip, validate, and clear independently", async
   try {
     assert.equal((await get()).cronRuntime, null);
     assert.equal((await get()).subagentRuntime, null);
-    for (const purpose of ["cron", "subagent"] as const) {
+    for (const purpose of ["cron", "subagent", "fallback"] as const) {
       const resource = `${purpose}-runtime`;
       const choice = { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "low", fastMode: false };
       assert.equal(

@@ -1,6 +1,8 @@
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
+import { memoryBoundedEntries, memoryContextPayload, nextMemoryContext } from "../memory/context-boundary.ts";
 import { isBackendCredential } from "../credentials/keychain.ts";
+import { resolveBrowserModel } from "../model/browser-model.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
 import {
@@ -77,6 +79,7 @@ import {
   CAPABILITY_TTL_MS,
   SANDBOX_CAPABILITY_TTL_MS,
   CONTROL_PLANE_AUD,
+  BROWSER_MODEL_AUD,
   OAUTH_CONSENT_AUD,
   CREDENTIAL_BROKER_AUD,
   EGRESS_PROXY_AUD,
@@ -171,7 +174,7 @@ import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
-import { isHarnessId, resolveModel, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
+import { isHarnessId, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
 import type { ProviderKeys } from "../harness/pi-harness.ts";
 import type { CodexTurnAuth } from "../harness/harness.ts";
 import { resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
@@ -230,11 +233,6 @@ const ACTIVITY_ENTRY_TYPES = new Set<EntryType>([
   "approval_request",
   "approval_resolved",
 ]);
-
-function knownBrowseModel(id: string | null | undefined): { id: string; provider: string } | undefined {
-  const provider = id ? resolveModel(id)?.provider : undefined;
-  return id && provider ? { id, provider } : undefined;
-}
 
 const SHARED_CORE_MD = loadProtocolFile("shared-core");
 const MODE_CONVERSATION_MD = loadProtocolFile("mode-conversation");
@@ -1080,6 +1078,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         config: deps.config,
         sessions: deps.sessions,
         isCurrentSharedScopeMember,
+        currentScopeMembers: deps.currentScopeMembers,
         resolution,
         memoryPolicy,
         useMemory,
@@ -1092,7 +1091,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
       resolution.grantedHandles = context.listFiles();
       const recallStart = Date.now();
-      const recalled = await context.recall();
+      let memoryView = await context.memorySnapshot(false);
+      let recalled = memoryView.recalled;
       const recallMs = Date.now() - recallStart;
       const isWeb = input.surface === "web";
       const isSlack = input.surface === "slack";
@@ -1253,7 +1253,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       turnContextBlocks.push(computerBlock);
       if (!external && deps.scratchExec) {
         systemPrompt +=
-          '\n\nSelect a sandbox explicitly or use a stored default. The opt-in scratch box (scope:"scratch") is separate: same OS and tooling, org-global files only, no logins or tokens, wiped after the turn — prefer it for heavy self-contained runs that need no logins, workspace files, or follow-up; it keeps this computer responsive.';
+          '\n\nSelect a sandbox explicitly or use a stored default. The opt-in scratch box (scope:"scratch") is separate: same OS/tooling, read-only org-global files, this conversation\'s scoped Files/API capabilities, and credentials explicitly requested per execute call. Its local files are wiped after the turn, and resident workspace files and cached CLI logins are not restored. Use it for self-contained commands and API work; publish needed outputs to Files and verify success. Use scoped execution for existing workspace state or work that must continue locally.';
       }
       if (!external && deps.deploymentLayer?.hints.length) {
         systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;
@@ -1312,9 +1312,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (!input.runId || !deps.runs) return null;
         const seq = (await deps.runs.get(input.runId))?.turnUserSeq;
         if (seq == null) return null;
-        return turnAtSeq(await deps.sessions.getEntries(session.id, { sinceSeq: seq }), seq);
+        const entries = memoryBoundedEntries(await deps.sessions.getEntries(session.id));
+        if (!entries.some((entry) => entry.seq === seq)) return null;
+        return turnAtSeq(
+          entries.filter((entry) => entry.seq >= seq),
+          seq,
+        );
       };
-      const recordedTurn = isRetry ? await recordedTurnForRun() : null;
+      const initialMemoryWindow = await deps.sessions.getContextWindow(session.id);
+      const initialMemoryContext = initialMemoryWindow.entries.findLast((entry) => memoryContextPayload(entry));
+      const candidateMemoryContext = nextMemoryContext(
+        initialMemoryWindow.entries,
+        memoryView.snapshot,
+        await deps.sessions.latestEntrySeq(session.id),
+      );
+      let memoryContextChanged =
+        candidateMemoryContext.throughSeq >
+        (initialMemoryContext ? memoryContextPayload(initialMemoryContext)!.throughSeq : -1);
+      const recordedTurn = isRetry && !memoryContextChanged ? await recordedTurnForRun() : null;
       if (recordedTurn?.answer) {
         const recordedAnswer = recordedTurn.answer;
         deps.auditLog.record({
@@ -1608,17 +1623,26 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const browseSteps = deps.config?.getBrowseMaxSteps(toScopeId("org", orgId()));
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
-        const browseChoice =
-          knownBrowseModel(deps.config?.getBrowseModel(toScopeId("org", orgId()))) ??
-          knownBrowseModel(deps.resolveBaseModelId?.());
-        if (browseChoice && !("BROWSE_LAB_MODEL" in connectorEnv)) {
-          connectorEnv.BROWSE_LAB_MODEL = browseChoice.id;
-          connectorEnv.BROWSE_LAB_MODEL_PROVIDER = browseChoice.provider;
-        }
+      }
+      const browserSelection =
+        !strictReadOnly && allInternal
+          ? await resolveBrowserModel({
+              actorId: actor.id,
+              config: deps.config,
+              credentials: deps.userModelCredentials,
+              companyModel: deps.resolveBaseModelId?.(),
+            })
+          : undefined;
+      const managedBrowse = browserSelection;
+      if (managedBrowse) {
+        connectorEnv.BROWSE_LAB_MODEL_PROVIDER = "managed";
+        connectorEnv.BROWSE_LAB_MODEL = browserSelection.model ?? "unavailable";
       }
       let actorIsOrgAdmin = false;
       let orgMemoryWrite: ScopeId | undefined;
       let controlClaims: CapabilityClaims | undefined;
+      const sandboxTokenTtlMs = deps.sandboxCapabilityTtlMs ?? SANDBOX_CAPABILITY_TTL_MS;
+      const sandboxTokenExpiry = sandboxTokenTtlMs === 0 ? 0 : Date.now() + sandboxTokenTtlMs;
       const scopeAttestation = {
         ...(external ? { externalSlack: true as const } : {}),
         actorId: actor.id,
@@ -1649,6 +1673,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const memoryClaim = memoryAccess
           ? { ...memoryAccess, read: baseRecallScopes, ...(orgMemoryWrite ? { orgWrite: orgMemoryWrite } : {}) }
           : undefined;
+        const turnSurface = input.surface === "web" ? "web" : (session.surface ?? input.surface);
         controlClaims = {
           ...scopeAttestation,
           aud: CONTROL_PLANE_AUD,
@@ -1659,7 +1684,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true))
             ? { ownerConnections: true }
             : {}),
-          exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
+          exp: sandboxTokenExpiry,
           ...(turnTimezone ? { timezone: turnTimezone } : {}),
           ...(destination ? { destination } : {}),
           ...(delivery.candidates.length > 0 ? { destinations: delivery.candidates } : {}),
@@ -1682,17 +1707,31 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           runAttempt: input.attempt,
           runLeaseToken: input.runLeaseToken,
           threadRef: conversation.threadRef,
+          ...(turnSurface ? { surface: turnSurface } : {}),
         };
         connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(
           controlClaims,
           deps.capabilitySecret ?? deps.signingSecret,
           deps.capabilityTokenCompression,
         );
+        if (managedBrowse) {
+          connectorEnv.BROWSE_LAB_BASE_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}/v1/browser-model`;
+          connectorEnv.BROWSE_LAB_MODEL_TOKEN = await mintCapabilityToken(
+            {
+              ...scopeAttestation,
+              aud: BROWSER_MODEL_AUD,
+              browserModel: browserSelection.model ?? "unavailable",
+              browserAccount: browserSelection.account,
+              exp: Date.now() + CAPABILITY_TTL_MS,
+            },
+            deps.capabilitySecret ?? deps.signingSecret,
+          );
+        }
         connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
           {
             ...scopeAttestation,
             aud: OAUTH_CONSENT_AUD,
-            exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
+            exp: sandboxTokenExpiry,
           },
           deps.capabilitySecret ?? deps.signingSecret,
           deps.capabilityTokenCompression,
@@ -1709,8 +1748,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             if (slugs.length > 0) {
               const usable = records.filter((r) => slugs.includes(r.slug));
               const lines = usable.map((r) => {
-                const methods = r.allowedMethods?.length ? r.allowedMethods.join("/") : "GET";
-                const paths = r.allowedPathPrefixes?.length ? `paths ${r.allowedPathPrefixes.join(", ")}` : "any path";
+                const methods = r.allowedMethods?.length ? r.allowedMethods.toSorted().join("/") : "GET";
+                const paths = r.allowedPathPrefixes?.length
+                  ? `paths ${r.allowedPathPrefixes.toSorted().join(", ")}`
+                  : "any path";
                 return `- \`${r.slug}\` (${r.name}; shared org credential) → ${r.host} (${methods}; ${paths})`;
               });
               sharedCredsBlock =
@@ -1737,7 +1778,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 "If the intended account is unclear before a write, clarify it rather than silently switching accounts. " +
                 "A non-2xx `status` is the UPSTREAM service's own answer (e.g. a bad query or its auth), not a broker " +
                 "error. Use ONLY these (slug → host; allowed methods; allowed paths):\n" +
-                lines.join("\n");
+                lines.sort().join("\n");
             }
           }
         }
@@ -1750,7 +1791,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...scopeAttestation,
             aud: EGRESS_PROXY_AUD,
             egress: egressClaimAllowingControlPlane(egress, deps.apiBaseUrl ?? "", securityPolicy.denyPrivateNetworks),
-            exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
+            exp: sandboxTokenExpiry,
           },
           egressSecret,
           deps.capabilityTokenCompression,
@@ -1804,7 +1845,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     }
                   : {}),
                 credentials: brokerSlugs,
-                exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
+                exp: sandboxTokenExpiry,
               },
               (deps.capabilitySecret ?? deps.signingSecret)!,
               deps.capabilityTokenCompression,
@@ -2032,9 +2073,55 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
+        const memoryWindow = await deps.sessions.getContextWindow(session.id);
+        memoryView = await context.memorySnapshot();
+        recalled = memoryView.recalled;
+        const latestMemoryContext = memoryWindow.entries.findLast((entry) => memoryContextPayload(entry));
+        const nextContext = nextMemoryContext(
+          memoryWindow.entries,
+          memoryView.snapshot,
+          await deps.sessions.latestEntrySeq(session.id),
+        );
+        memoryContextChanged =
+          nextContext.throughSeq > (latestMemoryContext ? memoryContextPayload(latestMemoryContext)!.throughSeq : -1);
+        const memoryHistoryReset = nextContext.throughSeq >= 0;
+        const captureDependencies = () => [
+          ...memoryView.records,
+          ...(!memoryView.complete ||
+          memoryBoundedEntries(memoryWindow.entries).length > 0 ||
+          toolCalls > 0 ||
+          input.priorTurns?.length ||
+          input.overheard?.length ||
+          input.attachments?.length ||
+          input.inboundNotes
+            ? [
+                {
+                  id: "untracked-turn-context",
+                  text: "",
+                  sensitivity: "unknown" as const,
+                  sources: [],
+                  sourceUnknown: true,
+                },
+              ]
+            : []),
+        ];
+        if (memoryContextChanged) {
+          await deps.harness.turns.resetSession?.(session.id);
+          await deps.sessions.append(lease, { type: "system", scopeLabel: scopeId, payload: nextContext });
+        }
         if (input.approval) {
           const p = await pending.get(input.approval.requestId);
           const decision = input.approval.approved ? "approve" : "deny";
+          const cutoffEntry = memoryHistoryReset
+            ? await deps.sessions.getEntry(session.id, nextContext.throughSeq)
+            : undefined;
+          if (cutoffEntry && (!p?.createdAt || p.createdAt <= cutoffEntry.createdAt))
+            return {
+              status: "refused",
+              sessionId: session.id,
+              reason:
+                "Conversation audience changed; submit a fresh request rather than resuming the previous approval.",
+            };
           if (!p || p.sessionId !== session.id) {
             deps.auditLog.record({
               at: Date.now(),
@@ -2250,7 +2337,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (credentialDescriptions.length)
           systemPrompt +=
             "\n\n## Execution credentials\nRequest exact handles in execute.credentials:\n" +
-            credentialDescriptions.join("\n");
+            credentialDescriptions.sort().join("\n");
         systemPrompt += sharedCredsBlock;
         if (actorIsOrgAdmin) {
           systemPrompt +=
@@ -2333,12 +2420,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
             ...audienceMembers,
           ].map((p) => ({ id: p.id, ...(p.displayName ? { displayName: p.displayName } : {}) }));
-          const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks, ownerAsks] = await Promise.all([
+          const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
             deps.keychain.listByOwners(members.map((m) => m.id)),
             deps.keychain.listConnectorsByOwners(members.map((m) => m.id)),
             deps.keychain.grantsForScope(scopeId),
             deps.keychain.listAsks({ requesterScopeId: scopeId }),
-            conversation.kind === "dm" ? deps.keychain.listAsks({ ownerId: actor.id }) : Promise.resolve([]),
           ]);
           const keychainBlock = renderKeychainManifest({
             scopeId,
@@ -2351,7 +2437,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             scopeGrants,
             injected: [],
             scopeAsks,
-            ownerAsks,
           });
           if (keychainBlock) systemPrompt += `\n\n${keychainBlock}`;
         }
@@ -2382,20 +2467,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.harness.models.shouldRespond &&
           !(
             isRetry &&
-            (recordedTurn ?? findTrailingPartialTurn((await transcripts.forRender(session.id)).entries, input.text))
+            (recordedTurn ??
+              (!memoryContextChanged &&
+                findTrailingPartialTurn((await transcripts.forRender(session.id)).entries, input.text)))
           )
         ) {
           const detectHistory = filterHistory(
-            (await deps.sessions.getEntries(session.id, { limit: DETECT_HISTORY_TAIL })).filter(
-              (e) => e.type !== "soul",
-            ),
+            memoryBoundedEntries((await deps.sessions.getContextWindow(session.id)).entries)
+              .slice(-DETECT_HISTORY_TAIL)
+              .filter((e) => e.type !== "soul"),
           );
           const detectStart = Date.now();
           const decision = await deps.harness.models.shouldRespond({
             session,
             message: input.text,
-            recentContext: input.detectContext ?? "",
-            ...(input.detectOpener ? { threadOpener: input.detectOpener } : {}),
+            recentContext: memoryHistoryReset ? "" : (input.detectContext ?? ""),
+            ...(!memoryHistoryReset && input.detectOpener ? { threadOpener: input.detectOpener } : {}),
             systemPrompt: resolution.systemPrompt,
             ...(input.gatewayContext?.reactionGuidance
               ? { reactionGuidance: input.gatewayContext.reactionGuidance }
@@ -2437,7 +2524,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         }
 
-        if (input.runId) deps.turnStream?.begin(input.runId);
+        if (input.runId) {
+          if ((input.surface === "slack" || input.surface === "monitor") && input.runLeaseToken) {
+            await deps.runs
+              ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
+              .catch(swallowAs("orchestrator: persist reply engagement", false));
+          }
+          deps.turnStream?.begin(input.runId);
+        }
 
         const backgroundBroker =
           deps.processes && supportsProcessSessions(deps.sandbox)
@@ -2700,6 +2794,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   session,
                   scopeId: scopeId as ScopeId,
                   orgScopeId: resolution.orgScopeId,
+                  memoryContext: memoryView.snapshot,
                   request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
                 }),
               }
@@ -2726,7 +2821,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       }),
                   }),
               }),
-          memory: deps.memory,
+          memory: context.memory,
+          memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedRecords: captureDependencies() }),
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
           ...(!external && deps.mcp ? { mcp: deps.mcp } : {}),
@@ -2829,7 +2925,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         const importedOverheard: OverheardEntryPayload[] = [];
-        if ((!input.envelopeWrapped || humanTurn) && input.overheard?.length) {
+        if (!memoryHistoryReset && (!input.envelopeWrapped || humanTurn) && input.overheard?.length) {
           const toImport = await transcripts
             .forRender(session.id)
             .then((read) => selectOverheardToImport(input.overheard!, recordedMessageTimestamps(read.entries)))
@@ -2879,7 +2975,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const contextWindow = await deps.sessions.getContextWindow(session.id);
         const rawEntries = contextWindow.entries;
         const historyHasSecurityTaint = contextWindow.hasSecurityTaint;
-        const priorTurns = historyHasSecurityTaint ? undefined : input.priorTurns;
+        const priorTurns = historyHasSecurityTaint || memoryHistoryReset ? undefined : input.priorTurns;
         if (historyHasSecurityTaint) {
           await deps.harness.turns.resetSession?.(session.id);
         }
@@ -2917,7 +3013,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
         };
         const tapeRows = await (async () => {
-          if (historyHasSecurityTaint || contextWindow.totalEntries > TAPE_IMPORT_MAX_ENTRIES) return undefined;
+          if (memoryHistoryReset || historyHasSecurityTaint || contextWindow.totalEntries > TAPE_IMPORT_MAX_ENTRIES)
+            return undefined;
           try {
             const preAppended = new Set(preAppendedSeqs);
             const priorMaxSeq = rawEntries.reduce((m, e) => (preAppended.has(e.seq) ? m : Math.max(m, e.seq)), -1);
@@ -3355,7 +3452,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             tape?: { rows: Awaited<ReturnType<SessionStore["getTape"]>>; mode: "shadow" | "serve"; fold?: unknown[] };
           },
         ) => {
-          const recall = memoryRecallDelta(recalled, continuation?.history ?? history, memoryAccess?.read ?? []);
+          const recall = memoryRecallDelta(recalled, continuation?.history ?? history);
           const turnEnvironment = environmentNote(
             [turnEnvironmentContents, recall.text ? `${memoryHeading}${recall.text}` : ""].filter(Boolean).join("\n\n"),
           );
@@ -3392,6 +3489,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 const payload = isObj(tainted.payload) ? { ...tainted.payload } : {};
                 if (!recordedRecall && !payload.steered && !payload.overheard) {
                   recordedRecall = true;
+                  payload.memoryContext = nextContext;
                   if (environment) payload.environment = environment;
                   if (recall.text) payload.memoryRecall = recall.record;
                 }
@@ -4114,6 +4212,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               await onTurnEnd({
                 scopeId: memoryScopeId,
                 conversationScopeId: scopeId,
+                inheritedRecords: captureDependencies(),
                 input: turnInput,
                 reply,
                 actorId: actor.id,

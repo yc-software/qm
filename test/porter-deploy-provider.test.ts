@@ -1,7 +1,7 @@
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -112,6 +112,39 @@ test("apply serves the app on a stable public domain", async () => {
   assert.match(await fetchText("/"), /^hello from .*-app v1$/);
   assert.equal(provider.profile.dataDir, "/data");
   assert.equal(provider.profile.managedScaleToZero, false);
+});
+
+const bulkFiles = (): Record<string, string> =>
+  Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`assets/file-${i}.txt`, `x${i}`.repeat(50_000)]));
+
+test("apply uploads each tree as one bundle and removes it after unpacking", async () => {
+  const execsBefore = fake.execScripts().length;
+  await provider.apply(
+    deployment("dep-bundle", "bundled"),
+    version({ ...bulkFiles(), "server.js": SERVER }, "node server.js", {
+      homeDir: mkdtempSync(join(tmpdir(), "porter-deploy-home-")),
+    }),
+  );
+  const scripts = fake.execScripts().slice(execsBefore);
+  assert.equal(scripts.filter((s) => s.includes("base64 -d")).length, 0);
+  assert.equal(scripts.filter((s) => s.includes("tar -xmf")).length, 1);
+  assert.match(await fetchText("/"), /^hello from .*-app v\?$/);
+  assert.deepEqual(readdirSync(fake.volumeDir("qmt-app-dep-bundle-data")), []);
+});
+
+test("apply writes files one at a time when the bundle upload fails", async () => {
+  fake.client.volumes.raw.writeFile = async () => {
+    throw new Error("upload refused");
+  };
+  const execsBefore = fake.execScripts().length;
+  await provider.apply(
+    deployment("dep-fallback", "fallback"),
+    version({ ...bulkFiles(), "server.js": SERVER }, "node server.js"),
+  );
+  const scripts = fake.execScripts().slice(execsBefore);
+  assert.equal(scripts.filter((s) => s.includes("tar -xmf")).length, 0);
+  assert.ok(scripts.some((s) => s.includes("base64 -d")));
+  assert.match(await fetchText("/"), /^hello from .*-app v\?$/);
 });
 
 test("explicit public visibility opts the domain out of the private default", async () => {

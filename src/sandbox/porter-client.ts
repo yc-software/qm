@@ -57,6 +57,14 @@ export interface PorterClientLike {
     create(body: { name?: string }): Promise<{ id: string }>;
     get(name: string): Promise<{ id: string }>;
     delete(name: string): Promise<void>;
+    raw: {
+      writeFile(
+        id: string,
+        body: Uint8Array,
+        options: { path: string },
+        requestOptions?: { timeoutMs?: number },
+      ): Promise<void>;
+    };
   };
 }
 

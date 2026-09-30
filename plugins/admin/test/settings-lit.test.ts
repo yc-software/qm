@@ -162,7 +162,7 @@ test("credential save acknowledges its submitted snapshot and retains newer edit
   }
 });
 
-test("runtime reasoning choices follow the selected model and preserve legacy defaults", () => {
+test("runtime reasoning choices follow the selected model and offer the current default", () => {
   const dom = setup();
   try {
     const data = {
@@ -180,7 +180,7 @@ test("runtime reasoning choices follow the selected model and preserve legacy de
     const select = () => dom.window.document.getElementById("base-effort") as HTMLSelectElement;
     const choices = () => [...select().options].map((option) => [option.value, option.textContent]);
     assert.deepEqual(choices(), [
-      ["auto", "Legacy default"],
+      ["auto", "Default"],
       ["adaptive", "Auto"],
       ["default", "Provider default"],
       ["high", "High"],
@@ -208,10 +208,12 @@ test("purpose runtime cards independently set and clear overrides using the runt
   const dom = setup();
   try {
     dom.window.eval(
-      "settingsUI.load(" + JSON.stringify({ ...models, cronRuntime: null, subagentRuntime: null }) + ',"org:test")',
+      "settingsUI.load(" +
+        JSON.stringify({ ...models, cronRuntime: null, subagentRuntime: null, fallbackRuntime: null }) +
+        ',"org:test")',
     );
     const doc = dom.window.document;
-    for (const key of ["cron-runtime", "subagent-runtime"]) {
+    for (const key of ["cron-runtime", "subagent-runtime", "fallback-runtime"]) {
       const collect = () => JSON.parse(String(dom.window.eval(`JSON.stringify(settingsUI.collect("${key}"))`)));
       assert.deepEqual(collect(), { inherit: true });
       assert.equal(doc.querySelectorAll(`#card-${key}`).length, 1);
@@ -232,6 +234,7 @@ test("purpose runtime cards independently set and clear overrides using the runt
           ...models,
           cronRuntime: { harnessId: "codex", modelId: "b", effortLevel: "low", fastMode: false },
           subagentRuntime: null,
+          fallbackRuntime: null,
         }) +
         ',"org:test")',
     );

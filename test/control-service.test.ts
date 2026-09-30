@@ -1133,6 +1133,11 @@ test("noteCron rejects empty, over-cap (counted in code points), and marker-forg
   assert.equal(long.ok, false);
   assert.equal(long.ok ? "" : long.code, "bad_request");
   assert.match(long.ok ? "" : long.message, /401 chars.*cap is 400/);
+  assert.match(long.ok ? "" : long.message, /Files via the available Files API, verify success/);
+  assert.match(long.ok ? "" : long.message, /put the file ID in the note/);
+  assert.match(long.ok ? "" : long.message, /GET \/v1\/files\/:id\/content/);
+  assert.match(long.ok ? "" : long.message, /If publication is unavailable/);
+  assert.doesNotMatch(long.ok ? "" : long.message, /workspace disk/);
 
   const astral = await control.noteCron(id, "🚀".repeat(399), claims("U1"));
   assert.ok(astral.ok, "astral characters are counted as one char each, not two UTF-16 units");
@@ -1185,6 +1190,15 @@ test("noteCron refuses crons whose fires never read notes — archived, one-shot
   const loopNote = await control.noteCron(loop.id, "note", claims("U1"));
   assert.equal(loopNote.ok, false);
   assert.match(loopNote.ok ? "" : loopNote.message, /don't read shift-change notes/);
+  for (const result of [oneShotNote, bangNote, loopNote]) {
+    assert.ok(!result.ok);
+    assert.match(result.message, /Files via the available Files API and verify success/);
+    assert.match(result.message, /file ID in the consuming workflow/);
+    assert.match(result.message, /GET \/v1\/files\/:id\/content/);
+    assert.match(result.message, /cannot recover it from a note/);
+    assert.match(result.message, /If publication is unavailable/);
+    assert.doesNotMatch(result.message, /workspace disk/);
+  }
 });
 
 test("a privileged cron's note is writable by its own fire (grants intact) but refused to other unattended sessions", async () => {

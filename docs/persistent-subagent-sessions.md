@@ -4,7 +4,9 @@ A delegated task runs in a durable session with its own transcript and a mutable
 
 ## Lifecycle
 
-`sessions.open` accepts a task, title, model, harness, thinking level, and read-only preference. Reusing its request key recovers the same child and initial run after a lost receipt; using that key for different work is rejected. Children inherit the caller's scope and audience. Read-only delegation cannot be upgraded to writable execution. The session tree admits at most ten pending or running qm runs, including direct turns and explicit follow-up tasks.
+`sessions.open` accepts a task, title, model, harness, thinking level, and optional `noComputer` flag. `noComputer: true` removes computer access entirely: no shell, filesystem, browser, or computer-backed integrations. Only memory/history, session coordination, runtime inspection, and permitted read-only connectors remain. Leave it unset for tasks that need a computer to read email, files, or code; express any no-write constraint in the task.
+
+Reusing a request key recovers the same child and initial run after a lost receipt; using that key for different work is rejected. Children inherit the caller's scope and audience. The existing internal `readOnly` restriction remains durable: `noComputer: false` cannot lift a caller's restriction or an existing child's restriction. The session tree admits at most ten pending or running qm runs, including direct turns and explicit follow-up tasks.
 
 `sessions.send_message` adds attributed data to a durable recipient inbox without starting a turn. Parents, children, siblings, and other accessible sessions can exchange messages. Targets accept IDs, child/sibling titles, or `parent`. Messages arrive at tool boundaries; `sessions.wait` waits up to 60 seconds for mail. Idle recipients see messages when they next use a tool. Agents should continue independent work and wait for required results before giving one combined answer.
 

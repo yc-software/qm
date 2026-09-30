@@ -1,3 +1,4 @@
+import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
@@ -6,6 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inspect } from "node:util";
 import {
   createSpritesSandbox,
   processKeepaliveScript,
@@ -22,7 +24,7 @@ import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "./support/fake-sprites.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import { APIError } from "@fly/sprites";
+import { APIError, SpriteCommand } from "@fly/sprites";
 
 let fake: FakeSprites;
 let sandbox: Sandbox;
@@ -397,15 +399,52 @@ test("a refused restart with no checkpoint to fall back on names all three failu
   await assert.rejects(sandbox.restartComputer!(scope), /http 502.*boot loop.*no checkpoint to restore/s);
 });
 
-test("a command that ran before the response was lost is never re-executed", async () => {
+for (const submitted of [false, true]) {
+  for (const closeOnly of [false, true]) {
+    test(`exec failures report submission state without replay or private details (submitted=${submitted}, closeOnly=${closeOnly})`, async (t) => {
+      const h = await sandbox.provision(layers);
+      if (closeOnly) {
+        const dispatch = EventTarget.prototype.dispatchEvent;
+        t.mock.method(EventTarget.prototype, "dispatchEvent", function (this: EventTarget, event: Event) {
+          return event.type === "error" || dispatch.call(this, event);
+        });
+      }
+      const before = fake.calls.filter((call) => call.method === "WS").length;
+      if (submitted) fake.stallAfterRun(h.id);
+      else fake.fail502(h.id);
+
+      await assert.rejects(sandbox.run(h, "echo entry >> /home/sprite/workspace/ledger"), (error: Error) => {
+        assert.match(
+          error.message,
+          submitted ? /script submission started; execution unknown/ : /script not submitted/,
+        );
+        for (const value of [h.id, fake.baseUrl.replace("https:", "wss:"), "cmd=", "echo entry"])
+          assert.ok(!inspect(error).includes(value));
+        return true;
+      });
+
+      assert.equal(fake.calls.filter((call) => call.method === "WS").length, before + 1);
+      assert.equal(await sandbox.readFile(h, "ledger"), submitted ? "entry\n" : null);
+    });
+  }
+}
+
+test("exec diagnostics retain known transport reasons without raw error causes", async (t) => {
   const h = await sandbox.provision(layers);
-  await sandbox.run(h, ": > /home/sprite/workspace/ledger");
-  fake.stallAfterRun(h.id);
-
-  await assert.rejects(sandbox.run(h, "echo entry >> /home/sprite/workspace/ledger"));
-
-  const ledger = await sandbox.readFile(h, "ledger");
-  assert.equal(ledger, "entry\n", "the side effect must have happened exactly once");
+  let reason = "";
+  t.mock.method(SpriteCommand.prototype, "start", async () => {
+    throw new Error(`WebSocket error: ${reason} (url: wss://example.invalid/TypeError?token=example-secret)`, {
+      cause: new Error("example-secret"),
+    });
+  });
+  for (reason of ["TypeError", "unclassified provider failure"]) {
+    await assert.rejects(sandbox.run(h, "echo ignored"), (error: Error) => {
+      assert.match(error.message, /script not submitted/);
+      assert.ok(error.message.endsWith(reason === "TypeError" ? "TypeError" : "unknown transport error"));
+      assert.doesNotMatch(inspect(error), /example-secret|example\.invalid|token=/);
+      return true;
+    });
+  }
 });
 
 test("exec results carry io pressure when the guest exposes it, and omit it when it can't be read", async () => {
@@ -742,4 +781,29 @@ test("failed hydration and failed deletion remain pending across adapters withou
   const restored = await make(options).provision(layers);
   assert.equal(await b.readFile(restored, "ledger"), "saved");
   assert.equal(await initializationStore.get(h.id), null);
+});
+
+test("scratch allocation is deleted when resource initialization fails", async () => {
+  const box = make({ memoryMb: 4096 });
+  fake.failNext(400, { match: (call) => call.path.endsWith("/policy/resources") });
+  await assert.rejects(box.provision(layers, { scratch: { key: "partial-allocation" } }));
+  assert.ok(!fake.names().some((name) => name.includes("scratch")));
+});
+
+test("failed scratch initialization and deletion retain a safe retryable identity", async () => {
+  const box = make({ memoryMb: 4096 });
+  fake.failNext(400, { match: (call) => call.path.endsWith("/policy/resources") });
+  fake.failNext(400, { match: (call) => call.method === "DELETE" });
+  let pending: import("../src/sandbox/sandbox.ts").SandboxHandle | undefined;
+  await assert.rejects(box.provision(layers, { scratch: { key: "failed-rollback" } }), (error: Error) => {
+    assert.ok(error instanceof SandboxProvisionCleanupError);
+    pending = error.handle;
+    assert.equal(pending.backend, "sprites");
+    assert.ok(fake.names().includes(pending.id));
+    assert.equal(error.cause, undefined);
+    return true;
+  });
+  assert.ok(pending);
+  await box.teardown(pending, { destroy: true });
+  assert.ok(!fake.names().includes(pending.id));
 });

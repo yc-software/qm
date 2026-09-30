@@ -220,7 +220,12 @@ test("sharedManifest caps the listing at MAX_SHARED_FILES_LISTED with a '…and 
   assert.equal((m.match(/^- shared\//gm) ?? []).length, MAX_SHARED_FILES_LISTED, "only the cap is listed");
   assert.match(m, /…and 7 more \(read shared\/<name> to fetch\)/);
   assert.match(m, new RegExp(`^${total} files shared with you`));
-  assert.doesNotMatch(m, new RegExp(`shared/file-${total - 1}\\.txt`));
+  const sortedPaths = handles.map((h) => h.handlePath).sort();
+  assert.deepEqual(
+    m.split("\n").filter((line) => line.startsWith("- ")),
+    sortedPaths.slice(0, MAX_SHARED_FILES_LISTED).map((path) => `- ${path}`),
+  );
+  assert.equal(sharedManifest(handles.toReversed()), m);
 });
 
 test("sharedManifest at exactly the cap lists every file with no '…and N more' tail", () => {

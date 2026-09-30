@@ -169,8 +169,12 @@ export const multiUserScenarios: Scenario[] = [
     async run(ctx) {
       const ch = await ctx.freshChannel();
       const marker = ctx.marker();
-      const root = await ch.as(ctx.actor("alice")).mention(`what day of the week is it in London? include ${marker}.`);
-      const reply = await ch.waitForBotReply(root, { match: new RegExp(marker) });
+      const root = await ch
+        .as(ctx.actor("alice"))
+        .mention(
+          `What day of the week is it in London? Answer here in this channel and end your answer with the exact token ${marker}.`,
+        );
+      const reply = await ch.waitForBotReply(root, { match: new RegExp(marker), includeChannel: true });
       assert.ok(
         reply.text?.includes(marker),
         `channel answer missing marker (was it sent elsewhere?): ${reply.text?.slice(0, 160)}`,

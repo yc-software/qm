@@ -56,6 +56,9 @@ import { tip } from "./tooltip";
 import { isPhone } from "./viewport";
 import {
   LOADOUT_CAP,
+  ULTRAFAST_MODEL_ID,
+  presetModelId,
+  ultrafastChoice,
   loadLoadout,
   saveLoadout,
   reconcileLoadout,
@@ -253,7 +256,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         (restoredLoadout?.value === selected?.value ? restoredLoadout?.effort : undefined) ??
         (getRuntimeConfig(scopeKey())?.effective.effortLevel as EffortLevel | undefined) ??
         defaultEffortForModel(selected?.model);
-      const levels = effortLevelsForHarness(selected?.harnessId ?? "", selected?.model, effort);
+      const levels = effortLevelsForHarness(selected?.harnessId ?? "", selected?.model);
       return levels.some((level) => level.value === effort) ? effort : levels[0]!.value;
     },
     set effortLevel(value: EffortLevel) {
@@ -411,7 +414,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const threadRef = ctx.chat.state.threadRef;
     if (selected && threadRef && !threadModelPicks.has(threadRef)) {
       const preferred = modelLoadoutOptions(getModelOptions(scopeKey()), loadout, selected.harnessId).find(
-        (option) => option.model.id === selected!.model.id,
+        (option) => presetModelId(option.value) === presetModelId(selected!.value),
       );
       if (preferred && preferred.value !== selected.value) {
         rememberThreadPick(threadRef, preferred.value);
@@ -936,9 +939,12 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     `;
   }
 
-  function composerApprovalPanel(approvals: PendingApproval[]): TemplateResult {
+  function composerApprovalPanel(
+    approvals: PendingApproval[],
+    resolve: (decision: ApprovalDecision) => void = ctx.chat.resolveCommandApproval,
+  ): TemplateResult {
     const decide = (decision: ApprovalDecision): void => {
-      if (!ctx.chat.state.resolvingApprovals.has(decision.requestId)) ctx.chat.resolveCommandApproval(decision);
+      if (!ctx.chat.state.resolvingApprovals.has(decision.requestId)) resolve(decision);
     };
     return html`<div class="composer-approval-panel" role="group" aria-label="Command approval">
       ${approvals.map(
@@ -1028,7 +1034,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function normalizeLoadoutEntry(entry: LoadoutEntry, option: ModelOption): LoadoutEntry {
-    const levels = effortLevelsForHarness(option.harnessId, option.model, entry.effort);
+    const levels = effortLevelsForHarness(option.harnessId, option.model);
     const defaultEffort = defaultEffortForModel(option.model);
     const fallbackEffort = levels.some((level) => level.value === defaultEffort) ? defaultEffort : levels[0]!.value;
     return {
@@ -1881,9 +1887,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const selected = currentModelOption();
     if (
       !selected ||
-      !effortLevelsForHarness(selected.harnessId, selected.model, composerState.effortLevel).some(
-        (option) => option.value === level,
-      )
+      !effortLevelsForHarness(selected.harnessId, selected.model).some((option) => option.value === level)
     )
       return;
     composerState.effortLevel = level;
@@ -1895,6 +1899,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   function toggleFastMode(agent: Agent): void {
     const selected = currentModelOption();
     if (ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0) return;
+    if (selected?.model.id === ULTRAFAST_MODEL_ID) {
+      const target = ultrafastChoice(getModelOptions(scopeKey()), selected);
+      if (target) applyLoadout({ ...activeLoadoutEntry(selected), value: target.value, fast: true }, agent);
+      return;
+    }
     if (
       !selected ||
       !harnessSupportsFastMode(selected.harnessId) ||

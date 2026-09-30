@@ -1,6 +1,8 @@
+import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
-import { createKeychainApprovals } from "./credentials/keychain-approval.ts";
+import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
+import { asObject } from "./harness/codex-auth-file.ts";
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
 import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
@@ -31,6 +33,8 @@ import {
   deliverSubagentMail,
   sessionTreeRoot,
   sessionTreeRunCount,
+  sessionTreeWorking,
+  stoppableAncestors,
   SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
@@ -129,6 +133,7 @@ import type {
   ShipGrant,
   PendingApprovalRecord,
   ScopeId,
+  Session,
   SurfaceContextRequest,
   Webhook,
 } from "./types.ts";
@@ -292,7 +297,7 @@ import { createModelGateway, type ModelGateway } from "./model/model-gateway.ts"
 import { createModelCredentialStore, type ModelCredentialStore } from "./model/model-credential-store.ts";
 import { refreshChatGPTTokens, refreshClaudeTokens } from "./model/subscription-oauth.ts";
 import { createUserModelCredentialStore, type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
-import { setProviderBaseUrls } from "./model/provider-endpoints.ts";
+import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
 import { createCustomProviderStore, type CustomProviderStore } from "./model/custom-provider-store.ts";
 import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
@@ -301,10 +306,10 @@ import type { SessionStore } from "./sessions/session-store.ts";
 import { createMockHarness } from "./harness/mock-harness.ts";
 import { createOpenCodeHarness, openCodeHarnessConfigOptions } from "./harness/opencode-harness.ts";
 import { createCodexHarness, codexHarnessConfigOptions } from "./harness/codex-harness.ts";
-import { keychainCodexAuthStore } from "./harness/codex-auth-store.ts";
+import { keychainCodexAuthStore, fileCodexAuthStore, type CodexAuthStore } from "./harness/codex-auth-store.ts";
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
-import { createPiHarness, piHarnessConfigOptions } from "./harness/pi-harness.ts";
+import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
@@ -487,6 +492,8 @@ export interface BuiltApp {
   consentLinks: ConsentLinkStore;
   oauthFlows: OAuthFlowStore;
   secretDrops: SecretDropStore;
+  browserModelGateway?: ModelGatewayTransportConfig;
+  resolveBrowserCompanyKeys: (includeSubscription?: boolean) => Promise<ProviderKeys>;
   modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
@@ -520,6 +527,7 @@ export interface BuiltApp {
   keychain?: Keychain;
   serviceCreds: ServiceCredentialStore;
   deliveries: DeliveryStore;
+  keychainApprovals?: KeychainApprovals;
   fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
   fireDropResolution?: (drop: DropResolution) => Promise<unknown>;
   workspace: WorkspaceStore;
@@ -1328,6 +1336,21 @@ export function buildApp(
       ...customKeys,
     };
   };
+  let companyCodexAuthStore: CodexAuthStore | undefined;
+  if (config.codexAuthCredential && keychain)
+    companyCodexAuthStore = keychainCodexAuthStore({ keychain, credentialId: config.codexAuthCredential });
+  else if (config.codexAuthFile) companyCodexAuthStore = fileCodexAuthStore(config.codexAuthFile);
+  const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> => {
+    const keys: ProviderKeys = await resolveModelProviderKeys();
+    if (includeSubscription && harnessCarriedModelAuth(config) === "openai") {
+      const auth = await companyCodexAuthStore?.load();
+      const token = companyCodexAuthStore
+        ? asObject(auth?.tokens)?.access_token
+        : config.codexProcessEnv.CODEX_ACCESS_TOKEN;
+      if (typeof token === "string" && token) keys["openai-codex"] = token;
+    }
+    return keys;
+  };
   const runtimeOrgScope = scopeId("org", config.orgId);
   const orgBaseModelId = (): string | undefined =>
     configStore.getRuntimeSelection(runtimeOrgScope)?.modelId ?? configStore.getBaseModel(runtimeOrgScope) ?? undefined;
@@ -1347,6 +1370,7 @@ export function buildApp(
         ...piHarnessConfigOptions(config),
         modelGateway: gatewayTransport,
         resolveBaseModelId: () => orgBaseModelId() ?? defaultForHarness("pi"),
+        resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
         resolveProviderKeys: resolveModelProviderKeys,
         signals: runSignals,
         mcpTools,
@@ -1386,9 +1410,7 @@ export function buildApp(
         // owner's keychain; core refreshes it centrally and hands the harness
         // ephemeral derived material. The credential can be (re)registered at
         // runtime — resolution happens on every load.
-        ...(config.codexAuthCredential && keychain
-          ? { authStore: keychainCodexAuthStore({ keychain, credentialId: config.codexAuthCredential }) }
-          : {}),
+        ...(companyCodexAuthStore ? { authStore: companyCodexAuthStore } : {}),
         signals: runSignals,
         tasks,
         mcpTools,
@@ -1458,6 +1480,22 @@ export function buildApp(
     runStoreKind === "postgres"
       ? createPostgresRunStore(requireDbUrl("RUN_STORE"), { maxClaims: config.maxClaims })
       : createMemoryRunStore({ maxClaims: config.maxClaims });
+  const blockingApprovalSessions = async (): Promise<Set<string>> =>
+    new Set(
+      (await approvals.entries())
+        .filter(([, r]) => r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor))
+        .map(([, r]) => r.sessionId),
+    );
+  const workingAncestors = async (session: Session) => {
+    const awaiting = await blockingApprovalSessions();
+    const ancestors = (await stoppableAncestors(sessions, session)).filter((ancestor) => !awaiting.has(ancestor.id));
+    return Promise.all(
+      ancestors.map(async (ancestor) => ({
+        session: ancestor,
+        participants: await sessions.participantsOf(ancestor.id),
+      })),
+    );
+  };
   const runs: RunStore = {
     ...runStore.runs,
     async enqueue(input) {
@@ -1472,14 +1510,23 @@ export function buildApp(
         )
           throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
         const participants = known ? await sessions.participantsOf(known.id) : [];
+        const ancestors = known?.parentSessionId ? await workingAncestors(known) : [];
         const result = await runStore.runs.enqueue(input);
-        if (!result.deduped)
+        if (result.deduped) return result;
+        sessionStateBus.emit({
+          threadRef: input.sessionId,
+          ...(known ? { sessionId: known.id } : {}),
+          state: "working",
+          at: result.run.createdAt,
+          participants: participants.length ? participants : [input.request.actor.id],
+        });
+        for (const ancestor of ancestors)
           sessionStateBus.emit({
-            threadRef: input.sessionId,
-            ...(known ? { sessionId: known.id } : {}),
+            threadRef: ancestor.session.threadRef,
+            sessionId: ancestor.session.id,
             state: "working",
             at: result.run.createdAt,
-            participants: participants.length ? participants : [input.request.actor.id],
+            participants: ancestor.participants,
           });
         return result;
       };
@@ -1908,6 +1955,7 @@ export function buildApp(
     ...(securityScreener ? { securityScreener } : {}),
     backgroundJobTtlMs: config.backgroundJobTtlMs,
     backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
+    sandboxCapabilityTtlMs: config.sandboxCapabilityTtlMs,
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
@@ -1952,6 +2000,7 @@ export function buildApp(
     ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
     directory,
     isCurrentSharedScopeMember,
+    currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
     managedGroups: projects,
     ...(config.reachExecEnabled ? { reachExec: true } : {}),
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
@@ -2151,22 +2200,26 @@ export function buildApp(
     items: loopItems,
     requestFire: (loopId) => void loopFire.fire(loopId, `loop:${loopId}:slack-event:${Date.now()}`).catch(() => {}),
   });
+  const keychainApprovals = keychain
+    ? createKeychainApprovals({
+        keychain,
+        app,
+        identity,
+        sessions,
+        audit: auditLog,
+        deliveries,
+        resume: (ask, grant) => askResolution!(ask, grant),
+      })
+    : undefined;
   const slackCore = createSlackCoreClient({
     identity,
-    ...(keychain
-      ? {
-          keychainApprovals: createKeychainApprovals({
-            keychain,
-            app,
-            identity,
-            sessions,
-            audit: auditLog,
-            resume: (ask, grant) => askResolution!(ask, grant),
-          }),
-        }
-      : {}),
+    memory,
+    ...(keychainApprovals ? { keychainApprovals } : {}),
     surfaceCache,
     taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
+    sessionStatus: artifactMap<SlackSessionStatusState>("slack_session_status"),
+    statusActivity: { processes, monitors, sessions, publicWebUrl: config.publicWebUrl },
+    featureFlags,
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,
     leaderLease,
@@ -2199,20 +2252,30 @@ export function buildApp(
   });
   runs.onTerminal((run) => {
     void (async () => {
-      const uuid = (await sessions.getByThread(run.sessionId))?.id;
-      const rows = uuid ? await approvals.entries() : [];
-      const awaiting = rows.some(
-        ([, r]) => r.sessionId === uuid && r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor),
-      );
-      const participants = uuid ? await sessions.participantsOf(uuid) : [];
-      if (await runs.activeForThread(run.sessionId)) return;
-      sessionStateBus.emit({
-        threadRef: run.sessionId,
-        ...(uuid ? { sessionId: uuid } : {}),
-        state: awaiting ? "awaiting_approval" : "idle",
-        at: run.finishedAt ?? Date.now(),
-        ...(participants.length ? { participants } : {}),
-      });
+      const session = await sessions.getByThread(run.sessionId);
+      const at = run.finishedAt ?? Date.now();
+      if (!session) {
+        if (!(await runs.activeForThread(run.sessionId)))
+          sessionStateBus.emit({ threadRef: run.sessionId, state: "idle", at });
+        return;
+      }
+      const awaiting = await blockingApprovalSessions();
+      const settle = async (target: Session): Promise<boolean> => {
+        if (await runs.activeForThread(target.threadRef)) return false;
+        const waiting = awaiting.has(target.id);
+        if (!waiting && (await sessionTreeWorking(sessions, runs, target))) return false;
+        const participants = await sessions.participantsOf(target.id);
+        sessionStateBus.emit({
+          threadRef: target.threadRef,
+          sessionId: target.id,
+          state: waiting ? "awaiting_approval" : "idle",
+          at,
+          ...(participants.length ? { participants } : {}),
+        });
+        return true;
+      };
+      if (!(await settle(session))) return;
+      for (const ancestor of await stoppableAncestors(sessions, session)) if (!(await settle(ancestor))) return;
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
   let lastSignalPrune = 0;
@@ -2758,6 +2821,8 @@ export function buildApp(
     consentLinks,
     oauthFlows,
     secretDrops,
+    browserModelGateway: gatewayTransport,
+    resolveBrowserCompanyKeys,
     modelGateway,
     modelCredentials,
     userModelCredentials,
@@ -2793,6 +2858,7 @@ export function buildApp(
     ...(keychain ? { keychain } : {}),
     serviceCreds: credentialStore,
     deliveries,
+    ...(keychainApprovals ? { keychainApprovals } : {}),
     ...(askResolution ? { fireAskResolution: askResolution } : {}),
     ...(dropResolution ? { fireDropResolution: dropResolution } : {}),
     sandbox,
@@ -2847,6 +2913,8 @@ export function serverDeps(
   const carriedModelAuth = harnessCarriedModelAuth(config);
   return {
     externalSlackPolicies: config.externalSlackPolicies,
+    browserModelGateway: built.browserModelGateway,
+    resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
     production: config.production,
     checkReadiness: built.checkReadiness,
     ...(built.backgroundOwnership
@@ -2931,6 +2999,7 @@ export function serverDeps(
     ...(built.keychain ? { keychain: built.keychain } : {}),
     serviceCreds: built.serviceCreds,
     deliveries: built.deliveries,
+    ...(built.keychainApprovals ? { keychainApprovals: built.keychainApprovals } : {}),
     ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
     runs: built.runs,
     signals: built.signals,

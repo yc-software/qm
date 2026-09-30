@@ -127,7 +127,7 @@ interface ComposerState {
 }
 
 export interface ComposerSurface {
-  composerApprovalPanel(approvals: PendingApproval[]): TemplateResult;
+  composerApprovalPanel(approvals: PendingApproval[], resolve?: (decision: ApprovalDecision) => void): TemplateResult;
   submit(instruction?: string): Promise<void>;
   restageAttachments(attachments: Attachment[], note: string): void;
   state: ComposerState;

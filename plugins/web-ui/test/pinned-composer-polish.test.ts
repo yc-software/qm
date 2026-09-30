@@ -16,7 +16,7 @@ test("transcript top spacing and prompt gap stay compact at every density", () =
 test("background activity shares the queued inset above the composer", () => {
   assert.match(
     chat,
-    /ctx\.composer\.queuedStrip\(agent\)\} \$\{backgroundActivityStrip\(\)\}\s*\$\{ctx\.composer\.composerForm\(agent\)\}/,
+    /ctx\.composer\.queuedStrip\(agent\)\} \$\{subagentStrip\(\)\} \$\{backgroundActivityStrip\(\)\}\s*\$\{ctx\.composer\.composerForm\(agent\)\}/,
   );
   assert.match(css, /\.queued-strip,\s*\.chat-bottom-dock > \.bg-activity \{/);
   assert.doesNotMatch(css, /\.composer-wrap > \.bg-activity/);
@@ -25,13 +25,13 @@ test("background activity shares the queued inset above the composer", () => {
 test("the composer input follows the composer size variable while background activity stays compact", () => {
   assert.match(css, /\.chat-bottom-dock > \.bg-activity > \.bg-activity-strip \{[^}]*font-size: 12px;/);
   const sizes = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap((rule) =>
-    [...rule[2].matchAll(/--composer-font-size: (\d+)px/g)].map((match) => [rule[1].trim(), Number(match[1])]),
+    [...rule[2].matchAll(/--composer-font-size: ([^;]+);/g)].map((match) => [rule[1].trim(), match[1]]),
   );
   assert.deepEqual(sizes, [
-    [".composer-wrap", 15],
-    [".split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap", 12],
-    [".composer-wrap", 16],
-    ["body.app-edit-embed .composer-wrap", 13],
+    [".composer-wrap", "var(--font-15)"],
+    [".split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap", "12px"],
+    [".composer-wrap", "16px"],
+    ["body.app-edit-embed .composer-wrap", "var(--font-13)"],
   ]);
   const blocks = css.matchAll(/\.composer-input \{([^}]+)\}/g);
   const declarations = [...blocks].flatMap((match) => [...match[1].matchAll(/font-size: ([^;]+);/g)]);

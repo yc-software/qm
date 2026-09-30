@@ -49,6 +49,7 @@ type CapabilityCronBody = {
   scope?: unknown;
   unfurlLinks?: unknown;
   unattendedGrants?: unknown;
+  session?: unknown;
 };
 
 function taskText(b: CapabilityCronBody): string | undefined {
@@ -108,6 +109,7 @@ function isCronPatch(b: unknown): b is {
   unfurlLinks?: boolean;
   runAs?: "owner" | "scopeFloor" | "scopeShared";
   unattendedGrants?: string[];
+  session?: boolean;
 } {
   if (!isObj(b) || !isCronRuntime(b.runtime)) return false;
   if (!hasCronPatchFields(b)) return true;
@@ -133,6 +135,7 @@ function isCronPatch(b: unknown): b is {
   )
     return false;
   if (hasSchedule && userScheduleFromBody(b.schedule) === null) return false;
+  if (b.session !== undefined && typeof b.session !== "boolean") return false;
   return true;
 }
 
@@ -147,7 +150,8 @@ function hasCronPatchFields(b: Record<string, unknown>): boolean {
     b.archived !== undefined ||
     b.unfurlLinks !== undefined ||
     b.runAs !== undefined ||
-    b.unattendedGrants !== undefined
+    b.unattendedGrants !== undefined ||
+    b.session !== undefined
   );
 }
 
@@ -211,6 +215,7 @@ async function createCron(ctx: ApiCtx): Promise<void> {
         ...(b.runAs === "owner" || b.runAs === "scopeFloor" || b.runAs === "scopeShared" ? { runAs: b.runAs } : {}),
         ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
         ...(Array.isArray(b.unattendedGrants) ? { unattendedGrants: b.unattendedGrants } : {}),
+        ...(typeof b.session === "boolean" ? { session: b.session } : {}),
       },
       capability,
     );
@@ -349,7 +354,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
 }
 
 const CRON_PATCH_BAD_REQUEST =
-  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), runAs (owner/scopeFloor/scopeShared), and/or unattendedGrants (string[])";
+  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), runAs (owner/scopeFloor/scopeShared), unattendedGrants (string[]), and/or session (boolean)";
 
 async function cronById(ctx: ApiCtx): Promise<void> {
   const { res, app, pathname, method, body, capability } = ctx;
@@ -386,6 +391,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
         ...(body.unfurlLinks !== undefined ? { unfurlLinks: body.unfurlLinks } : {}),
         ...(body.runAs !== undefined ? { runAs: body.runAs } : {}),
         ...(body.unattendedGrants !== undefined ? { unattendedGrants: body.unattendedGrants } : {}),
+        ...(body.session !== undefined ? { session: body.session } : {}),
       },
       capability,
     );

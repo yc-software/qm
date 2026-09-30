@@ -46,33 +46,31 @@ export async function installConnectorSdk(
   const current = `${root}/current`;
   const nonce = randomUUID();
   const link = `${root}/.link-${nonce}`;
+  const stage = `${root}/.stage-${nonce}`;
   const baked = "/opt/qm/composio";
   const probe = (dir: string) => `printf '%s\\n' ${shq(`${bundle.sha}  ${dir}/sdk.cjs`)} | sha256sum -c --status`;
-  const activate = (dir: string) =>
-    `node -e ${shq(`const fs = require('node:fs'); fs.symlinkSync(${JSON.stringify(dir)}, ${JSON.stringify(link)}); fs.renameSync(${JSON.stringify(link)}, ${JSON.stringify(current)});`)}`;
-  const result = await io.exec(
-    `mkdir -p ${shq(root)} && { if ${probe(current)}; then exit 0; fi; if ${probe(baked)}; then ${activate(baked)}; elif ${probe(target)}; then ${activate(target)}; else exit 44; fi; }`,
-    60,
-  );
-  if (result.code === 0) return;
-  if (result.code !== 44) throw new Error(`Connector SDK probe failed (rc=${result.code})`);
-  const stage = `${root}/.stage-${nonce}`;
+  const activate = (dir: string) => `ln -s ${shq(dir)} ${shq(link)} && mv -Tf ${shq(link)} ${shq(current)}`;
   try {
-    const prep = await io.exec(`mkdir -p ${shq(stage)} ${shq(target)}`, 60);
-    if (prep.code !== 0) throw new Error(`Connector SDK staging failed (rc=${prep.code})`);
+    const result = await io.exec(
+      `mkdir -p ${shq(root)} && { if ${probe(current)}; then exit 0; fi; if ${probe(baked)}; then ${activate(baked)}; elif ${probe(target)}; then ${activate(target)}; else mkdir -p ${shq(stage)} ${shq(target)} && exit 44; fi; }`,
+      60,
+    );
+    if (result.code === 0) return;
+    if (result.code !== 44) throw new Error(`Connector SDK probe failed (rc=${result.code})`);
     await io.writeAbs(`${stage}/sdk.cjs`, bundle.sdk);
     await io.writeAbs(`${stage}/LICENSES.txt`, bundle.licenses);
     const commit = await io.exec(
-      `${probe(stage)} && node -e ${shq(`if(typeof require(${JSON.stringify(`${stage}/sdk.cjs`)}).Composio !== 'function') process.exit(1)`)} && chmod 0644 ${shq(stage)}/sdk.cjs ${shq(stage)}/LICENSES.txt && mv -f ${shq(stage)}/LICENSES.txt ${shq(target)}/LICENSES.txt && mv -f ${shq(stage)}/sdk.cjs ${shq(target)}/sdk.cjs && ${activate(target)} && ${probe(current)}`,
+      `${probe(stage)} && chmod 0644 ${shq(stage)}/sdk.cjs ${shq(stage)}/LICENSES.txt && mv -f ${shq(stage)}/LICENSES.txt ${shq(target)}/LICENSES.txt && mv -f ${shq(stage)}/sdk.cjs ${shq(target)}/sdk.cjs && ${activate(target)} && ${probe(current)} && rmdir ${shq(stage)}`,
       60,
     );
     if (commit.code !== 0) throw new Error(`Connector SDK installation failed (rc=${commit.code})`);
-  } finally {
+  } catch (error) {
     await io
       .exec(
         `rm -f ${shq(stage)}/sdk.cjs ${shq(stage)}/LICENSES.txt ${shq(link)}; rmdir ${shq(stage)} 2>/dev/null || true`,
         60,
       )
       .catch(() => {});
+    throw error;
   }
 }

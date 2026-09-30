@@ -3,7 +3,7 @@ import { deployAccessMessage } from "./deploy-access.ts";
 import { approvalDeliveryKey, approvalDeliveryRecipient } from "../core/approval-store.ts";
 import { samePerson } from "../directory/person.ts";
 import { approvalMessage } from "./approval-cards.ts";
-import { keychainApprovalMessage, keychainApprovalOrigin } from "./keychain-approvals.ts";
+import { deliverKeychainCard } from "./keychain-approvals.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { performance } from "node:perf_hooks";
 import {
@@ -230,6 +230,10 @@ export function createDeliveryPoller(deps: {
               }
               const postClient = d.destination.identity ? clientForIdentity(d.destination.identity) : client;
               const { channel, threadTs } = parseDeliveryTarget(d.destination.target);
+              if (d.destination.keychainAskId) {
+                await deliverKeychainCard(core, client, d, channel, threadTs, deps.webUiPublicUrl);
+                return undefined;
+              }
               if (d.destination.react) {
                 const { failed } = await applyReactions(client, channel, d.destination.react.messageTs, [
                   d.destination.react.emoji,
@@ -400,10 +404,11 @@ export function createDeliveryPoller(deps: {
           post: async () => {
             const tPost = performance.now();
             try {
-              const approval =
-                d.destination.keychainAskId && core.keychainApprovals
-                  ? await core.keychainApprovals.get(d.destination.keychainAskId, d.destination.target)
-                  : null;
+              if (d.destination.keychainAskId) {
+                const dm = await openConversationFor(client, [d.destination.target]);
+                await deliverKeychainCard(core, client, d, dm, d.destination.threadTs, deps.webUiPublicUrl);
+                return undefined;
+              }
               const commandApproval = d.destination.commandApprovalId
                 ? await core.getApproval(d.destination.commandApprovalId)
                 : null;
@@ -419,13 +424,7 @@ export function createDeliveryPoller(deps: {
               )
                 return undefined;
               let card: { text: string; blocks: Array<Record<string, unknown>> } | null = null;
-              if (approval)
-                card = keychainApprovalMessage(
-                  approval,
-                  await keychainApprovalOrigin(approval, client, deps.webUiPublicUrl),
-                );
-              else if (d.destination.deploymentAccess)
-                card = deployAccessMessage(d.destination.deploymentAccess, d.text);
+              if (d.destination.deploymentAccess) card = deployAccessMessage(d.destination.deploymentAccess, d.text);
               if (commandApproval)
                 card = approvalMessage([{ ...commandApproval, reason: commandApproval.reason ?? "Approval required" }]);
               let text = card?.text ?? toSlackMrkdwn(stripReactionDirectives(d.text));

@@ -348,7 +348,12 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
       triggered: true,
       ownerKeychainUnion: true,
     }),
-    /persistent control-plane deletion failure/,
+    (error: Error) => {
+      assert.equal(error.message, "Disposable sandbox destruction failed");
+      assert.equal(error.cause, undefined);
+      assert.ok(!error.stack?.includes("persistent control-plane deletion failure"));
+      return true;
+    },
   );
   built.sandbox.teardown = realTeardown;
   assert.ok(stranded);

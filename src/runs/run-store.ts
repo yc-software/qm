@@ -15,6 +15,7 @@ export interface ReapEvent {
 }
 
 export interface RunDeliveryState {
+  replying?: boolean;
   editRef?: string;
 }
 

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createPiHarness, piHarnessConfigOptions } from "../src/harness/pi-harness.ts";
 import { loadConfig } from "../src/config.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService, MEMORY_FILE } from "../src/memory/memory-service.ts";
+import { createMemoryService, readMemory } from "../src/memory/memory-service.ts";
 import { createMemoryStrategy, DEFAULT_MEMORY_STRATEGY, type MemoryStrategyKind } from "../src/memory/strategy.ts";
 import {
   DEFAULT_STRATEGY_FLOORS,
@@ -62,7 +62,7 @@ for (const kind of kinds) {
       console.log(`[${kind}] ${conversation.id}: no automatic capture — judging empty notebook`);
     }
     await replayConversation(strategy, scopeId, conversation);
-    const notebook = (await workspace.read(scopeId, MEMORY_FILE)) ?? "";
+    const notebook = (await readMemory(workspace, scopeId)) ?? "";
     const judgeOut = await oneShot(JUDGE_PROMPT, renderJudgeInput(conversation, notebook));
     const verdict = parseJudgeVerdict(judgeOut ?? "");
     results.push({ kind, conversationId: conversation.id, notebook, verdict });

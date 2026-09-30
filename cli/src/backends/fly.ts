@@ -71,6 +71,7 @@ const FLY_RESPONSE = "QM_LAYER_RESPONSE=";
 const FLY_REMOTE_ERROR = "QM_LAYER_ERROR=";
 const FLY_REQUEST_TIMEOUT_MS = 120_000;
 const FLY_EXEC_TIMEOUT_SEC = 120;
+const FLY_EXEC_ARG_BYTES = 64 * 1024;
 const FLY_APP_NOT_FOUND = /could not find app|app not found/i;
 const FLY_MACHINES_API = "https://api.machines.dev/v1";
 
@@ -120,7 +121,11 @@ async function flyRequest(
   body: string,
 ): Promise<{ status: number; body: string }> {
   const app = `${appPrefixOf(config)}-core`;
-  const script = `const fs=require("node:fs"),{createHmac}=require("node:crypto");const fail=error=>{const code=error&&(error.cause&&error.cause.code||error.code);console.log(${JSON.stringify(FLY_REMOTE_ERROR)}+JSON.stringify({message:error&&error.message?error.message:String(error),...(typeof code==="string"?{code}:{})}))};try{const method=${JSON.stringify(method)},path="/v1/deployment-layer",body=fs.readFileSync(0,"utf8"),timestamp=Math.floor(Date.now()/1000),canonical=method+"\\n"+path+"\\n"+body,secret=process.env.CORE_SIGNING_SECRET;if(!secret)throw new Error("CORE_SIGNING_SECRET is not set on core");const signature=createHmac("sha256",secret).update("v0:"+timestamp+":"+canonical).digest("hex");fetch("http://127.0.0.1:"+(process.env.PORT||8080)+path,{method,headers:{"content-type":"application/json","x-timestamp":String(timestamp),"x-signature":"v0="+signature},...(method==="PUT"?{body}: {})}).then(async response=>console.log(${JSON.stringify(FLY_RESPONSE)}+JSON.stringify({status:response.status,body:await response.text()}))).catch(fail)}catch(error){fail(error)}`;
+  const script = `const{createHmac}=require("node:crypto");const fail=error=>{const code=error&&(error.cause&&error.cause.code||error.code);console.log(${JSON.stringify(FLY_REMOTE_ERROR)}+JSON.stringify({message:error&&error.message?error.message:String(error),...(typeof code==="string"?{code}:{})}))};try{const method=${JSON.stringify(method)},path="/v1/deployment-layer",body=Buffer.from(process.argv.slice(1).join(""),"base64").toString("utf8"),timestamp=Math.floor(Date.now()/1000),canonical=method+"\\n"+path+"\\n"+body,secret=process.env.CORE_SIGNING_SECRET;if(!secret)throw new Error("CORE_SIGNING_SECRET is not set on core");const signature=createHmac("sha256",secret).update("v0:"+timestamp+":"+canonical).digest("hex");fetch("http://127.0.0.1:"+(process.env.PORT||8080)+path,{method,headers:{"content-type":"application/json","x-timestamp":String(timestamp),"x-signature":"v0="+signature},...(method==="PUT"?{body}: {})}).then(async response=>console.log(${JSON.stringify(FLY_RESPONSE)}+JSON.stringify({status:response.status,body:await response.text()}))).catch(fail)}catch(error){fail(error)}`;
+  const encodedBody = Buffer.from(body).toString("base64");
+  const bodyArgs = Array.from({ length: Math.ceil(encodedBody.length / FLY_EXEC_ARG_BYTES) }, (_, index) =>
+    encodedBody.slice(index * FLY_EXEC_ARG_BYTES, (index + 1) * FLY_EXEC_ARG_BYTES),
+  );
   const machineId = flyCoreMachineId(app);
   let response: Response;
   let text: string;
@@ -134,8 +139,7 @@ async function flyRequest(
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          command: ["node", "-e", script],
-          stdin: body,
+          command: ["node", "-e", script, ...bodyArgs],
           timeout: FLY_EXEC_TIMEOUT_SEC,
         }),
         signal: AbortSignal.timeout(FLY_REQUEST_TIMEOUT_MS),

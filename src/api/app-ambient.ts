@@ -23,7 +23,11 @@ import type { App, AppDeps } from "./app-types.ts";
 export function createAmbientHelpers(deps: AppDeps, app: App) {
   function shouldRouteToSpine(input: OrchestratorInput): boolean {
     const { conversation } = input;
-    return conversation.kind !== "dm" && (input.origin.kind === "human" || input.origin.kind === "ambient");
+    return (
+      input.surface !== "web" &&
+      conversation.kind !== "dm" &&
+      (input.origin.kind === "human" || input.origin.kind === "ambient")
+    );
   }
 
   function markTriggerHandled(input: OrchestratorInput): void {

@@ -10,7 +10,7 @@ import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
@@ -960,7 +960,19 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
 }
 
 const server = createServer((req, res) => {
+  const startedAt = performance.now();
+  let errorLogged = false;
+  res.once("finish", () => {
+    if (res.statusCode >= 500 && !errorLogged)
+      console.error(
+        "[portal] %d %s response (%d ms)",
+        res.statusCode,
+        METHODS.includes(req.method ?? "") ? req.method : "?",
+        Math.round(performance.now() - startedAt),
+      );
+  });
   void handle(req, res).catch((err: unknown) => {
+    errorLogged = true;
     reportBackendError(err);
     console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
     if (!res.headersSent) json(res, 500, { error: "internal_error" });

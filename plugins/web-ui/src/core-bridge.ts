@@ -139,9 +139,11 @@ export interface CoreSession {
   lastActivityAt?: number;
   working?: boolean;
   awaitingInput?: boolean;
+  lastTurnFailed?: boolean;
   backgroundJobs?: number;
   watches?: number;
   crons?: number;
+  goal?: { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> };
   forkedFrom?: { sessionId: string; title?: string | null };
   forkBoundarySeq?: number;
   parentSessionId?: string;
@@ -220,7 +222,12 @@ export interface SessionBackgroundView {
     expiresAt: number;
     lastFiredAt?: number;
   }>;
-  crons: Array<{ id: string; title?: string; nextFireAt?: number }>;
+  crons: Array<{
+    id: string;
+    title?: string;
+    nextFireAt?: number;
+    lastFire?: { firedAt: number; status?: string };
+  }>;
 }
 
 export interface SessionBackgroundOutput {
@@ -347,8 +354,17 @@ export async function fetchTranscript(
   return api<TranscriptPage>(`/api/sessions/${encodeURIComponent(id)}${suffix}`);
 }
 
+const resolvedCredentialApprovals = new Set<string>();
+
+export function unresolvedApprovals(approvals: PendingApproval[]): PendingApproval[] {
+  const pending = approvals.filter((approval) => !resolvedCredentialApprovals.has(approval.requestId));
+  return pending.length === approvals.length ? approvals : pending;
+}
+
 export function fetchSessionApprovals(id: string): Promise<{ approvals: PendingApproval[] } | null> {
-  return api<{ approvals: PendingApproval[] }>(`/api/sessions/${encodeURIComponent(id)}/approvals`).catch(() => null);
+  return api<{ approvals: PendingApproval[] }>(`/api/sessions/${encodeURIComponent(id)}/approvals`)
+    .then((result) => ({ approvals: unresolvedApprovals(result.approvals) }))
+    .catch(() => null);
 }
 
 export async function fetchEntry(sessionId: string, seq: number): Promise<SessionEntry> {
@@ -974,11 +990,29 @@ export function makeRunResumeStreamFn(
   return fn as unknown as StreamFn;
 }
 
-export async function resolveApproval(decision: ApprovalDecision): Promise<string> {
+export async function resolveApproval(decision: ApprovalDecision): Promise<string | null> {
+  if (decision.requestId.startsWith("keychain:")) {
+    if (resolvedCredentialApprovals.has(decision.requestId)) return "";
+    const id = decision.requestId.slice("keychain:".length);
+    let choice = "deny";
+    if (decision.approved) choice = decision.scope === "always" ? "standing" : "once";
+    const result = await api<{ ask: { status: string } }>(`/api/keychain/approvals/${encodeURIComponent(id)}`, {
+      method: "POST",
+      body: JSON.stringify({ decision: choice }),
+    });
+    if (!["approved", "declined", "expired"].includes(result.ask?.status))
+      throw new Error("The credential request is still pending. Please try again.");
+    resolvedCredentialApprovals.add(decision.requestId);
+    return "";
+  }
   const submit = await api<{ runId?: string }>(`/api/approvals/${encodeURIComponent(decision.requestId)}`, {
     method: "POST",
     body: JSON.stringify({ approved: decision.approved, ...(decision.scope ? { scope: decision.scope } : {}) }),
+  }).catch((err: unknown) => {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
   });
+  if (!submit) return null;
   if (!submit.runId) throw new Error("Could not continue after the approval.");
   return submit.runId;
 }
@@ -989,6 +1023,10 @@ export async function runApprovalTurn(
   onWork: WorkObserver | undefined,
   slot?: RunSlot,
 ): Promise<void> {
+  if (decision.requestId.startsWith("keychain:")) {
+    await resolveApproval(decision);
+    return;
+  }
   const stream = createAssistantMessageEventStream();
   await driveApproval(stream, agent.state.model, decision, onWork, slot);
   const outcome = await stream.result();
@@ -2131,6 +2169,7 @@ export function attachPendingApprovals(
   approvals: PendingApproval[],
   model?: Model<Api>,
 ): void {
+  approvals = unresolvedApprovals(approvals);
   if (!approvals.length) return;
 
   const turnForCommand = (command: string): AssistantWork | undefined => {

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import { createGoalRecord } from "../src/harness/goal.ts";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
+import { fromJSONSchema, z, type ZodObject } from "zod";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
@@ -3413,6 +3414,33 @@ test("conversation coordinators cannot execute commands through any command tool
   );
 });
 
+test("sessions open exposes noComputer and preserves the internal restriction", async () => {
+  const opened: Array<{ readOnly?: boolean }> = [];
+  const tc = fakeToolContext();
+  tc.sessionSyscalls = {
+    open: async (input) => {
+      opened.push(input);
+      return { ok: true, sessionId: "child", title: "child", liveRunsRemaining: 9 };
+    },
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async () => ({ ok: false, message: "unused" }),
+  };
+  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "sessions")!;
+  const properties = (session.parameters as { properties: Record<string, { description?: string }> }).properties;
+  assert.ok(properties.noComputer);
+  assert.equal(properties.readOnly, undefined);
+  assert.match(properties.noComputer.description!, /no shell, filesystem, browser/);
+  const shape = (fromJSONSchema(session.parameters as Parameters<typeof fromJSONSchema>[0]) as ZodObject).shape;
+  assert.ok(!Check(session.parameters, { action: "open", task: "test", noComputer: "true" }));
+  for (const noComputer of [undefined, false, true]) {
+    const params = { action: "open", task: "test", ...(noComputer === undefined ? {} : { noComputer }) };
+    assert.ok(Check(session.parameters, params));
+    await call(session, z.object(shape).parse(params));
+    assert.equal(opened.at(-1)!.readOnly, noComputer);
+  }
+  assert.equal(opened.length, 3);
+});
+
 test("sessions open schema and dispatch preserve an explicit false fast mode", async () => {
   const tc = fakeToolContext();
   tc.sessionSyscalls = {
@@ -3819,7 +3847,7 @@ test("context recovery drains in-flight effects, preserves an active goal, and b
       },
     },
     scopeLabel: "personal:U1",
-    goal: createGoalRecord({ objective: "finish verification", source: "tool" }),
+    goal: createGoalRecord({ objective: "finish verification" }),
     emit: async (entry) => {
       events.push(entry as Emitted);
     },
@@ -3966,4 +3994,16 @@ test("thrown execution errors leave pending child messages for the next delivere
     assert.match(JSON.stringify(await call(tool, input)), /Important child finding/);
     assert.equal(pending, false);
   }
+});
+
+test("background process guidance reflects the configured sandbox token lifetime", () => {
+  const guidance = (opts?: { sandboxCapabilityTtlMs?: number }) =>
+    createAgentTools({ current: fakeToolContext() }, { sandboxResources: true, ...opts })
+      .map((tool) => tool.description)
+      .join("\n");
+  assert.match(guidance(), /turn tokens expire 48 hours/);
+  assert.match(guidance({ sandboxCapabilityTtlMs: 72 * 3_600_000 }), /turn tokens expire 72 hours/);
+  const unlimited = guidance({ sandboxCapabilityTtlMs: 0 });
+  assert.match(unlimited, /does not expire those turn tokens/);
+  assert.doesNotMatch(unlimited, /turn tokens expire \d+ hours/);
 });

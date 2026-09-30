@@ -22,6 +22,9 @@ interface AgentApiFamily {
 
 const onPath = (m: string, p: string) => (method: string, pathname: string) => method === m && pathname === p;
 
+const CONVERSATION_UPDATE =
+  "update one of the asking person's conversations — body {archived?, pinned?, title?, color?}; archive/unarchive, pin/unpin, rename (null title clears), or set the sidebar color (#rrggbb; null clears). These are per-person.";
+
 const FAMILIES: AgentApiFamily[] = [
   {
     match: (method, path) =>
@@ -319,7 +322,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/crons",
         summary:
-          'schedule future or recurring work — a 2-5 word `title` naming what the cron is for (distinctive in a list, not the command) plus `task` (re-run at fire time) or exact `text`, optionally addressed by name to a teammate (`recipient`), a channel (`channel`), or a group DM (`participants`: its other members, which must already exist as a group DM — reach it once first, which opens it; same venue rule as /v1/reach — narrowest audience, a channel only when explicitly requested or genuinely room-wide), or run privately for whoever asked at their own scope (`scope:"personal"`, even from a channel); pass `unfurlLinks:false` to suppress Slack previews (to send now instead, use /v1/reach)',
+          'schedule future or recurring work — a 2-5 word `title` naming what the cron is for (distinctive in a list, not the command) plus `task` (re-run at fire time) or exact `text`, optionally addressed by name to a teammate (`recipient`), a channel (`channel`), or a group DM (`participants`: its other members, which must already exist as a group DM — reach it once first, which opens it; same venue rule as /v1/reach — narrowest audience, a channel only when explicitly requested or genuinely room-wide), or run privately for whoever asked at their own scope (`scope:"personal"`, even from a channel); pass `unfurlLinks:false` to suppress Slack previews; the cron is tied to this conversation so it shows as ongoing work here unless `session:false` (to send now instead, use /v1/reach)',
       },
       { method: "GET", path: "/v1/crons", summary: "list your crons" },
       {
@@ -399,12 +402,6 @@ const FAMILIES: AgentApiFamily[] = [
           "list the asking person's own conversations (id, title, status, archived, pinned, lastActivityAt) — the same list their web sidebar shows",
       },
       {
-        method: "POST",
-        path: "/v1/conversations/:id",
-        summary:
-          "update one of the asking person's conversations — body {archived?, pinned?, title?, color?, status?}; archive/unarchive, pin/unpin, rename (null title clears), or set the sidebar color (#rrggbb; null clears). Title, archive, pin, and color are per-person. Status is shared by everyone in the session: {emoji: one Unicode emoji, text: 1–200 characters}, or null to clear. Use it for verified milestones, e.g. ✅ PR merged or 🚀 Live in production, and replace it as work progresses. 404 for a conversation not on their list",
-      },
-      {
         method: "GET",
         path: "/v1/conversations/:id?tailTurns=20",
         summary:
@@ -421,6 +418,28 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/conversations/:id/fork",
         summary:
           "fork one of the asking person's conversations into a new conversation — body optionally {upToSeq}; returns 404 for a conversation they cannot see",
+      },
+    ],
+  },
+  {
+    match: () => false,
+    when: (v) => v.claims.surface === "slack",
+    routes: [
+      {
+        method: "POST",
+        path: "/v1/conversations/:id",
+        summary: `${CONVERSATION_UPDATE} 404 for a conversation not on their list`,
+      },
+    ],
+  },
+  {
+    match: () => false,
+    when: (v) => v.claims.surface !== "slack",
+    routes: [
+      {
+        method: "POST",
+        path: "/v1/conversations/:id",
+        summary: `${CONVERSATION_UPDATE} Body status sets the web UI sidebar status shared by everyone in the session: {emoji: one Unicode emoji, text: 1–200 characters}, or null to clear. Use it for verified milestones, e.g. ✅ PR merged or 🚀 Live in production, and replace it as work progresses. 404 for a conversation not on their list`,
       },
     ],
   },
@@ -607,13 +626,12 @@ const FAMILIES: AgentApiFamily[] = [
       (p === "/v1/keychain/credentials" && (m === "POST" || m === "GET")) ||
       (p === "/v1/keychain/overview" && m === "GET") ||
       (m === "DELETE" && p.startsWith("/v1/keychain/credentials/")) ||
-      (p === "/v1/keychain/grants" && (m === "POST" || m === "GET")) ||
+      (p === "/v1/keychain/grants" && m === "GET") ||
       (m === "POST" && p.startsWith("/v1/keychain/grants/") && p.endsWith("/revoke")) ||
       (p === "/v1/keychain/asks" && (m === "POST" || m === "GET")) ||
-      (m === "POST" && p.startsWith("/v1/keychain/asks/") && p.endsWith("/decline")) ||
       (m === "POST" && p === "/v1/keychain/drops") ||
       (m === "POST" && p === "/v1/keychain/use"),
-    guidance: "The keychain ask→approve→use protocol is documented in your keychain manifest when one renders.",
+    guidance: "The keychain ask→card approval→use protocol is documented in your keychain manifest when one renders.",
     routes: [
       {
         method: "POST|GET",
@@ -627,12 +645,7 @@ const FAMILIES: AgentApiFamily[] = [
         summary: "list this user's credential metadata, grants, and pending asks (never secret values)",
       },
       { method: "DELETE", path: "/v1/keychain/credentials/:id", summary: "remove a registered login" },
-      {
-        method: "POST|GET",
-        path: "/v1/keychain/grants",
-        summary:
-          "request a purpose-bound grant to use someone's login here (when the owner authorized it mid-conversation rather than on their own turn, pass onBehalfOf with their id) / list grants",
-      },
+      { method: "GET", path: "/v1/keychain/grants", summary: "list grants for this conversation" },
       { method: "POST", path: "/v1/keychain/grants/:id/revoke", summary: "revoke a grant" },
       {
         method: "POST|GET",
@@ -640,7 +653,6 @@ const FAMILIES: AgentApiFamily[] = [
         summary:
           "ask a credential's owner for access, including scheduled turns in personal or shared conversations for discoverable credentials (no access until owner approval) / list asks",
       },
-      { method: "POST", path: "/v1/keychain/asks/:id/decline", summary: "decline an ask" },
       {
         method: "POST",
         path: "/v1/keychain/drops",

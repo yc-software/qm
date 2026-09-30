@@ -1,3 +1,9 @@
+import {
+  memoryBoundedEntries,
+  memoryContextPayload,
+  nextMemoryContext,
+  type MemoryContextSnapshot,
+} from "../memory/context-boundary.ts";
 import { principalDestination } from "../reach/reach.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
@@ -6,7 +12,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import { filterHistoryForAudience } from "../resolution/context-filter.ts";
 import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
@@ -155,6 +161,7 @@ type SessionReadResult =
   | { ok: false; message: string };
 
 interface SessionSyscallBinding {
+  memoryContext?: MemoryContextSnapshot;
   session: Session;
   scopeId: ScopeId;
   orgScopeId?: ScopeId;
@@ -337,7 +344,8 @@ function assertAudienceCompatible(
     throw new Error("the target audience includes people outside the sender's authorized audience");
 }
 
-export async function sessionTreeRoot(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session> {
+async function sessionAncestors(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session[]> {
+  const ancestors: Session[] = [];
   let current = session;
   const seen = new Set<string>();
   while (current.parentSessionId) {
@@ -345,9 +353,49 @@ export async function sessionTreeRoot(sessions: Pick<SessionStore, "get">, sessi
     seen.add(current.id);
     const parent = await sessions.get(current.parentSessionId);
     if (!parent) break;
+    ancestors.push(parent);
     current = parent;
   }
-  return current;
+  return ancestors;
+}
+
+export async function sessionTreeRoot(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session> {
+  return (await sessionAncestors(sessions, session)).at(-1) ?? session;
+}
+
+export async function stoppableAncestors(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session[]> {
+  return (await sessionAncestors(sessions, session)).filter((ancestor) => ancestor.scopeId === session.scopeId);
+}
+
+export async function sessionTreeWorking(
+  sessions: Pick<SessionStore, "childrenOf">,
+  runs: Pick<RunStore, "activeForThread">,
+  root: Session,
+): Promise<boolean> {
+  for (const session of await treeSessions(sessions, root)) {
+    if (session.scopeId === root.scopeId && (await runs.activeForThread(session.threadRef))) return true;
+  }
+  return false;
+}
+
+export async function workingSessionThreadRefs(
+  sessions: Pick<SessionStore, "get" | "getByThread">,
+  runs: Pick<RunStore, "activeSessionIds">,
+  awaitingSessionIds: ReadonlySet<string>,
+): Promise<Set<string>> {
+  const active = await runs.activeSessionIds();
+  const working = new Set(active);
+  await Promise.all(
+    active
+      .map(async (threadRef) => {
+        const session = await sessions.getByThread(threadRef);
+        if (!session?.parentSessionId) return;
+        for (const ancestor of await stoppableAncestors(sessions, session))
+          if (!awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
+      })
+      .map((lookup) => lookup.catch(swallowAs("session list: working ancestors", undefined))),
+  );
+  return working;
 }
 
 async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Session): Promise<Session[]> {
@@ -424,7 +472,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
   return {
     rejectMessage: (sessionId, messageId) => deps.mailbox.acknowledge(sessionId, [messageId]),
     forTurn(binding) {
-      const callerTitle = binding.session.title?.trim() || "this conversation";
+      const callerTitle = binding.memoryContext
+        ? binding.session.id
+        : binding.session.title?.trim() || "this conversation";
 
       async function resolveTarget(ref: string): Promise<Session | null> {
         const trimmed = ref.trim();
@@ -447,7 +497,11 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         return inFlight.length ? "pending" : "idle";
       }
 
+      const readableTitles = new Set<string>();
+      const visibleTitle = (target: Session) =>
+        !binding.memoryContext || readableTitles.has(target.id) ? target.title?.trim() || target.id : target.id;
       async function visibleHistory(target: Session): Promise<SessionEntry[]> {
+        readableTitles.delete(target.id);
         const audience = binding.request.conversation.audience.length
           ? binding.request.conversation.audience
           : [binding.request.actor];
@@ -456,6 +510,15 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             deps.sessions.visibleEntries(target.id, id),
           ),
         );
+        if (binding.memoryContext) {
+          const all = await deps.sessions.getEntries(target.id);
+          const last = all.findLast((entry) => memoryContextPayload(entry));
+          const next = nextMemoryContext(all, binding.memoryContext, all.at(-1)?.seq ?? -1);
+          if (next.throughSeq > (last ? memoryContextPayload(last)!.throughSeq : -1)) return [];
+          if (next.throughSeq < 0) readableTitles.add(target.id);
+          const visible = new Set(memoryBoundedEntries(all).map((entry) => entry.seq));
+          for (let i = 0; i < views.length; i++) views[i] = views[i]!.filter((entry) => visible.has(entry.seq));
+        }
         const allowed = views.slice(1).map((view) => new Set(view.map((entry) => entry.seq)));
         return filterHistoryForAudience(
           (views[0] ?? []).filter((entry) => allowed.every((seqs) => seqs.has(entry.seq))),
@@ -463,6 +526,11 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           binding.scopeId,
           binding.orgScopeId ?? binding.scopeId,
         );
+      }
+
+      async function safeTitle(target: Session): Promise<string> {
+        await visibleHistory(target);
+        return visibleTitle(target);
       }
 
       async function currentCaller(): Promise<OrchestratorInput> {
@@ -503,6 +571,14 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   { actor: message.actor, conversation: { ...caller.conversation, audience: message.audience } },
                   caller,
                 );
+                if (binding.memoryContext) {
+                  const history = await visibleHistory(sender);
+                  if (
+                    message.sourceEntrySeq !== undefined &&
+                    !history.some((entry) => entry.seq === message.sourceEntrySeq)
+                  )
+                    continue;
+                }
                 if (message.sourceEntrySeq !== undefined) {
                   const viewers = new Set([
                     caller.actor.id,
@@ -563,7 +639,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 return {
                   ok: true,
                   sessionId: existing.id,
-                  title: existing.title || autoTitle(task),
+                  title: await safeTitle(existing),
                   liveRunsRemaining: Math.max(0, cap - live),
                 };
               if (live >= cap) {
@@ -579,7 +655,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 binding.session.channelName,
                 binding.session.surface ?? binding.request.surface,
               );
-              const title = existing?.title || input.name?.trim() || autoTitle(task);
+              const title = existing ? await safeTitle(existing) : input.name?.trim() || autoTitle(task);
               const meta: SpawnMeta = {
                 ...(caller.origin.kind === "automation"
                   ? {
@@ -698,7 +774,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               );
               const request = deps.prepareRequest ? await deps.prepareRequest(prepared) : prepared;
               assertAudienceCompatible(caller, request);
-              const title = target.title?.trim() || target.id;
+              const title = await safeTitle(target);
               if (input.interrupt) {
                 if (privateMessage)
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
@@ -801,7 +877,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const said = lastAssistantText(entries);
               summaries.push({
                 sessionId: child.id,
-                title: child.title?.trim() || child.id,
+                title: visibleTitle(child),
                 status: await statusOf(child),
                 ...(said ? { lastSaid: snippet(said, 200) } : {}),
               });
@@ -830,7 +906,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             ok: true,
             mode: "tape",
             sessionId: target.id,
-            title: target.title?.trim() || target.id,
+            title: visibleTitle(target),
             status: await statusOf(target),
             rendered: rendered || "[no readable entries yet]",
           };
@@ -885,7 +961,8 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
         },
         unattendedGrants: undefined,
       };
-  const title = child.title?.trim() || child.id;
+  const memoryContext = (await deps.sessions.getEntries(child.id)).findLast((entry) => memoryContextPayload(entry));
+  const title = memoryContext ? child.id : child.title?.trim() || child.id;
   const result = run.result;
   let kind: SubagentMailKind;
   let body: string;
