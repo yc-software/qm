@@ -232,7 +232,11 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       const action = () => forHandle(handle).teardown(handle, tdOpts);
       return handle.resourceId && opts.resources
-        ? opts.resources.use(handle.resourceId, action, handle.backend !== "modal" || !!tdOpts?.destroy)
+        ? opts.resources.use(
+            handle.resourceId,
+            action,
+            !!tdOpts?.destroy || !!forHandle(handle).profile.parksOnTeardown,
+          )
         : action();
     },
 

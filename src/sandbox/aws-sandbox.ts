@@ -321,6 +321,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     backend: "aws-microvm",
     writablePersistence: "snapshot_to_workspace",
     processSessions: true,
+    parksOnTeardown: true,
     egressEnforcement: "none",
     spec: {
       os: "Amazon Linux 2023, glibc",

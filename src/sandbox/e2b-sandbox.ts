@@ -303,6 +303,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     backend: "e2b",
     writablePersistence: client.nativePause ? "provider_managed" : "snapshot_to_workspace",
     processSessions: true,
+    parksOnTeardown: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
       os: "Linux — E2B Firecracker sandbox (provider pause preserves state; publish durable work to git or Files)",
