@@ -1,4 +1,4 @@
-import type { RuntimeChoice } from "./harness.ts";
+import type { RuntimeChoiceInput } from "./harness.ts";
 import type { SessionEntry } from "../types.ts";
 import { isHarnessId } from "../model/pi-models.ts";
 import { isObj } from "../util/objects.ts";
@@ -7,7 +7,7 @@ export function recoveredRuntime(
   entries: readonly SessionEntry[],
   runId: string,
   actorId: string,
-): RuntimeChoice | undefined {
+): RuntimeChoiceInput | undefined {
   for (const entry of [...entries].reverse()) {
     const p = entry.payload;
     if (
@@ -26,8 +26,14 @@ export function recoveredRuntime(
       typeof choice.modelId === "string" &&
       (choice.effortLevel === undefined || typeof choice.effortLevel === "string") &&
       (choice.fastMode === undefined || typeof choice.fastMode === "boolean")
-    )
-      return choice as unknown as RuntimeChoice;
+    ) {
+      return {
+        harnessId: choice.harnessId,
+        modelId: choice.modelId,
+        ...(choice.effortLevel !== undefined ? { effortLevel: choice.effortLevel } : {}),
+        ...(choice.fastMode !== undefined ? { fastMode: choice.fastMode } : {}),
+      };
+    }
   }
   return undefined;
 }

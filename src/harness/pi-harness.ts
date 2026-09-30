@@ -17,6 +17,7 @@ import {
   calculateCost,
   InMemoryCredentialStore,
   isContextOverflow,
+  getSupportedThinkingLevels,
   isRetryableAssistantError,
   type Api,
   type AssistantMessage,
@@ -39,7 +40,6 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "high",
   "xhigh",
   "max",
-  "ultracode",
   "auto",
   "default",
   "adaptive",
@@ -1529,7 +1529,8 @@ export function withRequestHeaders(model: Model<Api>, direct: boolean, fast: boo
 }
 
 export function applyTurnEffort(session: AgentSession, level?: string): void {
-  if (!level || !TURN_EFFORT_LEVELS.has(level)) return;
+  if (!level) return;
+  if (!TURN_EFFORT_LEVELS.has(level)) throw new NonRetryableTurnError(`effort ${level} isn't a Pi effort level`);
   if (level === "adaptive" || level === "default") {
     session.setThinkingLevel("off");
     return;
@@ -1537,10 +1538,11 @@ export function applyTurnEffort(session: AgentSession, level?: string): void {
   const effectiveLevel =
     level === "auto" && session.state.model ? defaultInteractiveThinkingLevel(session.state.model) : level;
   const normalizedLevel = effectiveLevel === "auto" ? "medium" : effectiveLevel;
-  const providerLevel = normalizedLevel === "ultracode" ? "max" : normalizedLevel;
-  // Normalize UI aliases before Pi clamps to the model's declared capabilities.
+  const model = session.state.model;
+  if (level !== "auto" && model && !getSupportedThinkingLevels(model).includes(normalizedLevel as ModelThinkingLevel))
+    throw new NonRetryableTurnError(`effort ${level} isn't available on pi/${model.id}`);
   // Mutating thinkingLevelMap would enable efforts the provider explicitly excludes.
-  session.setThinkingLevel(providerLevel as ModelThinkingLevel);
+  session.setThinkingLevel(normalizedLevel as ModelThinkingLevel);
 }
 
 export function applyReasoningMode<T>(payload: T, model: Model<Api>, level?: string): T {

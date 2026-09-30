@@ -13,7 +13,7 @@ import {
   isHarnessId,
   modelSupportedByHarness,
   modelOfferedInWebui,
-  thinkingLevelsForHarness,
+  parseRuntimeChoice,
   fastModeModelIds,
 } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
@@ -1314,12 +1314,15 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
     if (typeof modelId !== "string" || !modelSupportedByHarness(modelId, harnessId))
       return sendJson(ctx.res, 400, { error: "model_not_supported" });
     if (!(await webuiModelEnabled(ctx, modelId))) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
-    const effortLevel = ctx.body.effortLevel ?? "auto";
-    if (typeof effortLevel !== "string" || !thinkingLevelsForHarness(harnessId, modelId).includes(effortLevel))
-      return sendJson(ctx.res, 400, { error: "effort_not_supported" });
     const fastMode = ctx.body.fastMode ?? false;
-    if (typeof fastMode !== "boolean") return sendJson(ctx.res, 400, { error: "fast_mode_invalid" });
-    const choice = { harnessId, modelId, effortLevel, fastMode: fastMode && fastModeModelIds().includes(modelId) };
+    const parsed = parseRuntimeChoice({
+      harnessId,
+      modelId,
+      effortLevel: ctx.body.effortLevel ?? "auto",
+      fastMode: typeof fastMode === "boolean" ? fastMode && fastModeModelIds().includes(modelId) : fastMode,
+    });
+    if (!parsed.ok) return sendJson(ctx.res, 400, { error: parsed.error, message: parsed.message });
+    const choice = parsed.choice;
     if ((await config.getModelAccountDurable(target.actorId)) !== "company") {
       const available = await userRuntimeConfigBody(ctx, target.scope, target.actorId);
       if (!available.modelsByHarness[harnessId]?.includes(modelId))

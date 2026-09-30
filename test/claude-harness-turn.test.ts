@@ -50,6 +50,8 @@ mock.module("@anthropic-ai/claude-agent-sdk", {
 });
 
 const { createClaudeHarness } = await import("../src/harness/claude-harness.ts");
+const { builtInModelCatalog } = await import("../src/model/model-catalog.ts");
+const { modelSupportedByHarness, parseEffort, thinkingLevelsForHarness } = await import("../src/model/pi-models.ts");
 
 function assistantMessage(id: string, text: string, usage: Record<string, number>): FakeSdkMessage {
   return {
@@ -672,6 +674,31 @@ for (const surfaceTools of [false, true]) {
     assert.ok(entries.some((entry) => entry.type === "tool_result" && (entry.payload as { silent?: boolean }).silent));
   });
 }
+
+test("Claude Code receives every catalog model's offered effort exactly, with Ultracode as its own setting", async () => {
+  const modelIds = builtInModelCatalog()
+    .map((model) => model.id)
+    .filter((id) => modelSupportedByHarness(id, "claude"));
+  assert.ok(modelIds.length > 0);
+  for (const modelId of modelIds)
+    for (const level of thinkingLevelsForHarness("claude", modelId)) {
+      currentScript = async function* (prompts) {
+        await prompts[Symbol.asyncIterator]().next();
+        yield resultMessage("ok");
+      };
+      const { turn } = harnessTurn({
+        runtime: { harnessId: "claude", modelId, effortLevel: parseEffort("claude", modelId, level) },
+      });
+      await createClaudeHarness().turns.runTurn(turn);
+      assert.equal(capturedOptions.model, modelId);
+      const expected: Record<string, string | undefined> = { auto: undefined, ultracode: "xhigh" };
+      assert.equal(capturedOptions.effort, level in expected ? expected[level] : level, `${modelId} ${level}`);
+      assert.deepEqual(
+        capturedOptions.settings,
+        level === "ultracode" ? { enableWorkflows: true, ultracode: true } : undefined,
+      );
+    }
+});
 
 test("Claude emits repeated-text steers only at distinct native user echoes", async () => {
   const signals = createMemoryRunSignalStore();

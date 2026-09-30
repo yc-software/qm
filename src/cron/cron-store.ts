@@ -161,7 +161,7 @@ export function createCronStore(
     async update(id, patch) {
       const before = await backing.get(id);
       if (!before) return null;
-      assertCronRuntime({ ...before, ...patch });
+      assertCronRuntime({ ...before, ...patch }, patch.runtime === undefined);
       const fields: Partial<Cron> = {};
       if (patch.runtime !== undefined) fields.runtime = patch.runtime;
       if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);

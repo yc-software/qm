@@ -4,7 +4,6 @@ import { Check, ChevronDown, ChevronRight, Plus, Sparkles, Star, X, Zap } from "
 import { icon, modelMark } from "./ui";
 import { getRuntimeConfig, saveRuntimeConfig } from "./runtime-config-store";
 import {
-  EFFORT_LEVELS,
   effortLabel,
   defaultEffortForModel,
   defaultModelValue,
@@ -22,6 +21,7 @@ import {
   ULTRAFAST_BASE_MODEL_ID,
   ultrafastChoice,
   effortLevelsForHarness,
+  isPeakEffort,
   compatibleHarnessOptions,
   presetModelId,
   modelLoadoutOptions,
@@ -31,12 +31,14 @@ import { tip } from "./tooltip";
 import { isPhone } from "./viewport";
 import { burstEffortConfetti } from "./effort-confetti";
 
-const EFFORT_PEAK_FLOOR = EFFORT_LEVELS.findIndex((option) => option.value === "xhigh");
-
-function effortText(level: EffortLevel | string): TemplateResult | string {
-  const label = effortLabel(level as EffortLevel);
-  const rank = EFFORT_LEVELS.findIndex((option) => option.value === level);
-  return rank >= EFFORT_PEAK_FLOOR ? html`<span class="effort-peak">${label}</span>` : label;
+function effortText(
+  level: EffortLevel,
+  option: Pick<ModelOption, "harnessId" | "model"> | undefined,
+): TemplateResult | string {
+  const label = effortLabel(level) || "Default";
+  return option && isPeakEffort(option.harnessId, option.model, level)
+    ? html`<span class="effort-peak">${label}</span>`
+    : label;
 }
 
 interface ModelPickerBindings<T> {
@@ -142,7 +144,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
         role="menuitemradio"
         aria-checked=${active ? "true" : "false"}
         @click=${(event: MouseEvent) => {
-          burstEffortConfetti(event, settings.effort, option.harnessId);
+          burstEffortConfetti(event, settings.effort, option.harnessId, option.model);
           dismissSelection();
           applyLoadout(entry, agent);
         }}
@@ -155,7 +157,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
           </span>
           <span class="loadout-details">
             <span class="loadout-harness">${option.harnessLabel}</span>
-            <span>${effortText(settings.effort)}</span>
+            ${effortLabel(settings.effort) ? html`<span>${effortText(settings.effort, option)}</span>` : nothing}
             ${option.model.id === ULTRAFAST_MODEL_ID ? html`<span class="loadout-ultrafast-badge">${icon(Zap, 10)} Ultrafast</span>` : nothing}
             ${settings.fast ? html`<span class="loadout-bolt" aria-label="Fast">${icon(Zap, 10)}</span>` : nothing}
           </span>
@@ -303,12 +305,12 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                   role="menuitemradio"
                   aria-checked=${composerState.effortLevel === level.value ? "true" : "false"}
                   @click=${(event: MouseEvent) => {
-                    burstEffortConfetti(event, level.value, selected.harnessId);
+                    burstEffortConfetti(event, level.value, selected.harnessId, selected.model);
                     selectEffort(level.value, agent);
                     closeLoadoutSection();
                   }}
                 >
-                  <span>${effortText(level.value)}</span
+                  <span>${effortText(level.value, selected)}</span
                   >${composerState.effortLevel === level.value ? icon(Check, 15) : nothing}
                 </button>`,
             )
@@ -472,7 +474,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
         class="menu-button loadout-button ${ultrafastOn ? "ultrafast-active" : ""}"
         data-focus-key=${`${loadoutMenuId}-trigger`}
         type="button"
-        aria-label=${choice ? `Model: ${modelLabel(choice)}, ${effortLabel(composerState.effortLevel)} effort${speedLabel}` : "Choose model"}
+        aria-label=${choice ? `Model: ${modelLabel(choice)}${effortLabel(composerState.effortLevel) ? `, ${effortLabel(composerState.effortLevel)} effort` : ""}${speedLabel}` : "Choose model"}
         aria-haspopup="menu"
         aria-expanded=${open ? "true" : "false"}
         aria-controls=${loadoutMenuId}
@@ -501,7 +503,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
         }}
       >
         <span class="menu-label">${choice ? modelLabel(choice) : "Choose model"}</span>
-        ${choice ? html`<span class="menu-suffix">${effortText(composerState.effortLevel)}</span>` : nothing}
+        ${choice && effortLabel(composerState.effortLevel) ? html`<span class="menu-suffix">${effortText(composerState.effortLevel, choice)}</span>` : nothing}
         ${ultrafastOn ? html`<span class="loadout-ultrafast-badge">${icon(Zap, 12)} Ultrafast</span>` : nothing}
         ${fastOn ? html`<span class="loadout-bolt">${icon(Zap, 13)}</span>` : nothing}${icon(ChevronDown, 13)}
       </button>
@@ -595,7 +597,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                                 >
                                   <span class="loadout-setting-label">Effort</span
                                   ><span class="loadout-setting-value"
-                                    >${effortText(composerState.effortLevel)}<span class="loadout-end"
+                                    >${effortText(composerState.effortLevel, selected)}<span class="loadout-end"
                                       >${icon(ChevronRight, 14)}</span
                                     ></span
                                   >

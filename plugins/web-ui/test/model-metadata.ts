@@ -14,5 +14,11 @@ export function metadata(id: string, name = id, provider = "openai"): ModelMetad
     maxTokens: 4321,
     cost: { input: 7, output: 17, cacheRead: 0.2, cacheWrite: 9 },
     fastMode: false,
+    effortLevelsByHarness: {
+      pi: ["auto", "low", "medium", "high", "xhigh", "max"],
+      claude: ["auto", "low", "medium", "high", "xhigh", "max", "ultracode"],
+      codex: ["auto", "low", "medium", "high", "xhigh", "max", "ultra"],
+      opencode: ["auto"],
+    },
   };
 }

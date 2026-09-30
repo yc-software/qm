@@ -315,7 +315,7 @@ import { keychainCodexAuthStore, fileCodexAuthStore, type CodexAuthStore } from 
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
 import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
-import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
+import { createHarnessRouter, resolvePinnedRuntime, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
@@ -397,7 +397,6 @@ import {
   modelProviderAvailabilityFor,
   resolveModel,
   type HarnessId,
-  modelSupportedByHarness,
 } from "./model/pi-models.ts";
 import { createAdminService, bootAdminGrantSeed, type AdminService } from "./admin/admin-service.ts";
 import { createAdminGrantStore, createMapAdminGrantPersistence, type AdminGrant } from "./admin/admin-grant-store.ts";
@@ -1455,17 +1454,19 @@ export function buildApp(
   };
   const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, async (input) => {
     await refreshModels();
-    if (input.runtimePinned && input.runtime?.harnessId && input.runtime.modelId) {
-      if (!modelSupportedByHarness(input.runtime.modelId, input.runtime.harnessId))
-        throw new Error(`Unsupported model: ${input.runtime.modelId}`);
-      return { ...input.runtime, harnessId: input.runtime.harnessId, modelId: input.runtime.modelId };
-    }
+    const requested = input.requestedRuntime;
+    if (input.runtimePinned && requested?.harnessId && requested.modelId)
+      return resolvePinnedRuntime(configStore, runtimeOrgScope, input.scopeLabel, {
+        ...requested,
+        harnessId: requested.harnessId,
+        modelId: requested.modelId,
+      });
     return resolveRuntimeChoiceDurable(
       configStore,
       runtimeOrgScope,
       input.scopeLabel,
       fallback,
-      input.runtime,
+      requested,
       hydrateModelCatalog,
       input.runtimePurpose,
     );

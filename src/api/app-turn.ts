@@ -1,6 +1,7 @@
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
 import { availableRuntimeError, runtimeConfigBody } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
+import { errMessage } from "../util/errors.ts";
 import { userRuntimeConfigBody } from "./runtime-config.ts";
 import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscalls.ts";
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
@@ -216,7 +217,8 @@ export function createTurnMethods(
             ...(req.thinkingLevel ? { effortLevel: req.thinkingLevel } : {}),
             ...(typeof req.fastMode === "boolean" ? { fastMode: req.fastMode } : {}),
           },
-        );
+        ).catch((error: unknown) => errMessage(error));
+        if (typeof choices === "string") return { status: "refused", reason: choices };
         const harness = req.harness ?? choices.effective.harnessId;
         const model = req.model ?? choices.effective.modelId;
         const error = !isHarnessId(harness)

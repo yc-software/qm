@@ -419,9 +419,6 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
         modelsFor(id).map((model) => ({ ...model, effortLevels: thinkingLevelsForHarness(id, model.id) })),
       ]),
     ),
-    thinkingLevelsByHarness: Object.fromEntries(
-      HARNESS_IDS.filter((id) => id !== "mock").map((id) => [id, thinkingLevelsForHarness(id)]),
-    ),
     fastModeModelIds: FAST_MODE_MODEL_IDS,
     fastModeHarnessIds: HARNESS_IDS.filter(harnessSupportsFastMode),
     autoFlaggerDefault: defaultAutoFlaggerConfig(deps),

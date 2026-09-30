@@ -24,8 +24,10 @@ const models = {
   baseModelOptions: [{ id: "a", name: "Alpha" }],
   harnessDefault: "pi",
   harnessOptions: ["pi", "codex"],
-  modelsByHarness: { pi: [{ id: "a", name: "Alpha" }], codex: [{ id: "b", name: "Beta" }] },
-  thinkingLevelsByHarness: { pi: ["auto", "high"], codex: ["low"] },
+  modelsByHarness: {
+    pi: [{ id: "a", name: "Alpha", effortLevels: ["auto", "high"] }],
+    codex: [{ id: "b", name: "Beta", effortLevels: ["auto", "low"] }],
+  },
   runtime: { harnessId: "pi", modelId: "a", effortLevel: "high", fastMode: true },
   fastModeHarnessIds: ["pi"],
   fastModeModelIds: ["a"],
@@ -41,7 +43,7 @@ test("runtime selection derives compatible model, reasoning, and fast mode from 
     assert.deepEqual(JSON.parse(String(dom.window.eval('JSON.stringify(settingsUI.collect("runtime"))'))), {
       harnessId: "codex",
       modelId: "b",
-      effortLevel: "low",
+      effortLevel: "auto",
       fastMode: false,
     });
     assert.equal((dom.window.document.querySelector('[data-save="runtime"]') as HTMLButtonElement).disabled, false);
@@ -173,7 +175,6 @@ test("runtime reasoning choices follow the selected model and offer the current 
           { id: "b", effortLevels: ["auto", "high"] },
         ],
       },
-      thinkingLevelsByHarness: { pi: ["auto", "adaptive", "default", "high"] },
       runtime: { harnessId: "pi", modelId: "a", effortLevel: "auto" },
     };
     dom.window.eval("settingsUI.load(" + JSON.stringify(data) + ',"org:test","runtime")');
@@ -181,24 +182,37 @@ test("runtime reasoning choices follow the selected model and offer the current 
     const choices = () => [...select().options].map((option) => [option.value, option.textContent]);
     assert.deepEqual(choices(), [
       ["auto", "Default"],
-      ["adaptive", "Auto"],
+      ["adaptive", "Adaptive"],
       ["default", "Provider default"],
       ["high", "High"],
     ]);
+    assert.equal(select().options[0]!.hidden, false);
+    assert.equal(select().value, "auto");
+    assert.equal(dom.window.eval('settingsUI.collect("runtime").effortLevel'), "auto");
+    assert.doesNotMatch(dom.window.document.body.textContent ?? "", /Legacy default/);
     select().value = "adaptive";
     select().dispatchEvent(new dom.window.Event("change"));
     assert.equal(dom.window.eval('settingsUI.collect("runtime").effortLevel'), "adaptive");
-    assert.equal(
-      choices().some(([value]) => value === "auto"),
-      false,
-    );
+    assert.equal(choices()[0]![0], "auto");
     dom.window.eval('settingsUI.states.get("runtime").change("modelId", "b")');
-    assert.deepEqual(choices(), [["high", "High"]]);
-    assert.equal(dom.window.eval('settingsUI.collect("runtime").effortLevel'), "high");
+    assert.deepEqual(choices(), [
+      ["auto", "Default"],
+      ["high", "High"],
+    ]);
+    assert.equal(dom.window.eval('settingsUI.collect("runtime").effortLevel'), "auto");
+    dom.window.eval(
+      'settingsUI.states.get("runtime").context.modelsByHarness.pi = [{id:"a",effortLevels:["auto","low","high","max"]},{id:"b",effortLevels:["auto","low","high"]}]',
+    );
+    dom.window.eval('settingsUI.states.get("runtime").change("modelId", "a")');
+    dom.window.eval('settingsUI.states.get("runtime").change("effortLevel", "max")');
+    assert.equal(dom.window.eval('settingsUI.collect("runtime").effortLevel'), "max");
+    dom.window.eval('settingsUI.states.get("runtime").change("modelId", "b")');
+    assert.equal(dom.window.eval('settingsUI.collect("runtime").effortLevel'), "auto");
     dom.window.eval(
       'settingsUI.states.get("runtime").context.modelsByHarness.pi = [{id:"b"}]; settingsUI.states.get("runtime").changed()',
     );
-    assert.deepEqual(choices(), [["high", "High"]]);
+    assert.deepEqual(choices(), [["auto", "Default"]]);
+    assert.equal(select().disabled, true);
   } finally {
     dom.window.close();
   }

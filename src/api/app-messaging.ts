@@ -21,7 +21,7 @@ import { externalMemberActive } from "../identity/external-members.ts";
 import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
-import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
+import { availableRuntimeError } from "./runtime-config.ts";
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
@@ -163,9 +163,7 @@ export function createMessagingMethods(
   const validateRuntime = async (cron: Pick<Cron, "runtime" | "ownerScopeId" | "loopId" | "action" | "message">) => {
     assertCronRuntime(cron);
     if (!cron.runtime) return;
-    const error =
-      validateRuntimeChoice(cron.runtime) ??
-      (await availableRuntimeError({ deps }, cron.ownerScopeId, cron.runtime, "cron"));
+    const error = await availableRuntimeError({ deps }, cron.ownerScopeId, cron.runtime, "cron");
     if (error) throw new Error(error);
   };
 

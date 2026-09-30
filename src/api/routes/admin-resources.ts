@@ -14,7 +14,8 @@ import {
   modelServiceable,
   modelProviderAvailabilityFor,
   resolveModel,
-  thinkingLevelsForHarness,
+  parseRuntimeChoice,
+  type ParsedRuntimeChoice,
   selectableBaseModels,
   ALL_PROVIDERS_AVAILABLE,
   type HarnessId,
@@ -576,6 +577,24 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
               error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured for the ${harness} harness`,
             }
           : null;
+      const effortLevel = (ctx.body as { effortLevel?: unknown }).effortLevel;
+      const retarget = (
+        harnessId: HarnessId,
+        base: { modelId: string; effortLevel?: string; fastMode?: boolean },
+      ): ParsedRuntimeChoice =>
+        parseRuntimeChoice(
+          {
+            harnessId,
+            modelId,
+            effortLevel: effortLevel ?? base.effortLevel,
+            ...(typeof base.fastMode === "boolean"
+              ? {
+                  fastMode: base.fastMode && harnessSupportsFastMode(harnessId) && fastModeModelIds().includes(modelId),
+                }
+              : {}),
+          },
+          effortLevel === undefined,
+        );
       const runtime = await ctx.deps.config!.getRuntimeSelectionDurable(scope);
       if (!modelId) await ctx.deps.config!.setRuntimeSelectionLatest(scope, null);
       else if (runtime) {
@@ -583,19 +602,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           return { error: `model ${modelId} is not supported by ${runtime.harnessId}` };
         const bad = unserviceable(runtime.harnessId);
         if (bad) return bad;
-        await ctx.deps.config!.setRuntimeSelectionLatest(scope, {
-          harnessId: runtime.harnessId,
-          modelId,
-          ...(runtime.effortLevel ? { effortLevel: runtime.effortLevel } : {}),
-          ...(typeof runtime.fastMode === "boolean"
-            ? {
-                fastMode:
-                  runtime.fastMode &&
-                  harnessSupportsFastMode(runtime.harnessId) &&
-                  fastModeModelIds().includes(modelId),
-              }
-            : {}),
-        });
+        const parsed = retarget(runtime.harnessId, runtime);
+        if (!parsed.ok) return { error: parsed.message };
+        await ctx.deps.config!.setRuntimeSelectionLatest(scope, parsed.choice);
       } else {
         const harnessId = isHarnessId(ctx.deps.harnessId) ? ctx.deps.harnessId : "pi";
         const effective = await resolveRuntimeChoiceDurable(ctx.deps.config!, scopeId("org", configOrgId()), scope, {
@@ -606,19 +615,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           return { error: `model ${modelId} is not supported by ${effective.harnessId}` };
         const bad = unserviceable(effective.harnessId);
         if (bad) return bad;
-        await ctx.deps.config!.setRuntimeSelectionLatest(scope, {
-          harnessId: effective.harnessId,
-          modelId,
-          ...(effective.effortLevel ? { effortLevel: effective.effortLevel } : {}),
-          ...(typeof effective.fastMode === "boolean"
-            ? {
-                fastMode:
-                  effective.fastMode &&
-                  harnessSupportsFastMode(effective.harnessId) &&
-                  fastModeModelIds().includes(modelId),
-              }
-            : {}),
-        });
+        const parsed = retarget(effective.harnessId, effective);
+        if (!parsed.ok) return { error: parsed.message };
+        await ctx.deps.config!.setRuntimeSelectionLatest(scope, parsed.choice);
       }
       return { ok: true };
     },
@@ -652,31 +651,24 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (!approved.includes(harnessId)) return { error: `harness ${harnessId} is not approved` };
       if (typeof modelId !== "string" || !modelSupportedByHarness(modelId, harnessId))
         return { error: `model ${String(modelId)} is not supported by ${harnessId}` };
-      const thinkingLevels = thinkingLevelsForHarness(harnessId, modelId);
-      if (effortLevel !== undefined && (typeof effortLevel !== "string" || !thinkingLevels.includes(effortLevel)))
-        return { error: `runtime requires effortLevel (${thinkingLevels.join(" | ")}) for ${harnessId}` };
       if (fastMode !== undefined && typeof fastMode !== "boolean")
         return { error: "runtime requires fastMode (boolean)" };
-      if (
-        purpose &&
-        fastMode === true &&
-        (!harnessSupportsFastMode(harnessId) || !fastModeModelIds().includes(modelId))
-      )
-        return { error: `fast mode is not supported by ${harnessId} with ${modelId}` };
+      const parsed = parseRuntimeChoice({
+        harnessId,
+        modelId,
+        effortLevel,
+        fastMode: purpose
+          ? fastMode
+          : fastMode && harnessSupportsFastMode(harnessId) && fastModeModelIds().includes(modelId),
+      });
+      if (!parsed.ok) return { error: parsed.message };
       const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
       const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
       if (!modelServiceable(modelId, modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys)))
         return {
           error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured for the ${harnessId} harness`,
         };
-      const choice = {
-        harnessId,
-        modelId,
-        ...(typeof effortLevel === "string" ? { effortLevel } : {}),
-        ...(typeof fastMode === "boolean"
-          ? { fastMode: fastMode && harnessSupportsFastMode(harnessId) && fastModeModelIds().includes(modelId) }
-          : {}),
-      };
+      const choice = parsed.choice;
       if (purpose) await ctx.deps.config!.setPurposeRuntime(purpose, choice);
       else await ctx.deps.config!.setRuntimeSelectionLatest(scope, choice);
       return { ok: true };

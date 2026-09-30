@@ -91,7 +91,9 @@ import type {
   HarnessLlmRequestRecord,
   HarnessTurnInput,
   HarnessTurnResult,
+  RequestedRuntime,
   RuntimeChoice,
+  RuntimeChoiceInput,
 } from "../harness/harness.ts";
 import { forModelContext, forSearchView } from "../harness/context-compaction.ts";
 import {
@@ -3288,7 +3290,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           humanTurn &&
           (await deps.config?.getInteractiveFastModeDurable());
         const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanTurn, wantsOrgFastMode === true);
-        const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
+        const loadRuntimeAuth = async (runtime: Partial<RuntimeChoiceInput>) => {
           let userProviderKeys: ProviderKeys | undefined;
           let userModelOverride: string | undefined;
           let userHarnessOverride: string | undefined;
@@ -3388,10 +3390,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         if (input.harness && !isHarnessId(input.harness))
           throw new NonRetryableTurnError(`runtime ${input.harness} is not approved`);
-        let requestedRuntime: Partial<RuntimeChoice> = {
+        let requestedRuntime: RequestedRuntime = {
           ...(effectiveHarness && isHarnessId(effectiveHarness) ? { harnessId: effectiveHarness } : {}),
           ...(effectiveModel ? { modelId: effectiveModel } : {}),
           ...(input.thinkingLevel ? { effortLevel: input.thinkingLevel } : {}),
+          ...(input.defaultThinkingLevel ? { defaultEffortLevel: input.defaultThinkingLevel } : {}),
           ...(typeof effectiveFastMode === "boolean" ? { fastMode: effectiveFastMode } : {}),
         };
         const runtimeDefaults = requestedRuntime;
@@ -3405,7 +3408,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           input.runId && isRetry
             ? recoveredRuntime(filterHistory(await deps.sessions.getEntries(session.id)), input.runId, actor.id)
             : undefined;
-        const checkRuntimeAuth = async (choice: RuntimeChoice): Promise<string | null> => {
+        const checkRuntimeAuth = async (choice: RuntimeChoiceInput): Promise<string | null> => {
           try {
             const auth = await loadRuntimeAuth(choice);
             if (
@@ -3418,7 +3421,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             return errMessage(error);
           }
         };
-        const adoptRuntime = async (choice: RuntimeChoice) => {
+        const adoptRuntime = async (choice: RuntimeChoiceInput) => {
           const error = await checkRuntimeAuth(choice);
           if (error) throw new NonRetryableTurnError(error);
           ({ userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken, codexTurnAuth } =
@@ -3668,7 +3671,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
             ...(extras.images?.length ? { images: extras.images } : {}),
             documents: [...documentInputs.documents],
-            ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
+            ...(Object.keys(requestedRuntime).length ? { requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
             surfaceName,
             delegateWork,

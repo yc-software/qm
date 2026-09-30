@@ -55,7 +55,7 @@ export function parseLoadout(raw: string | null): LoadoutEntry[] {
         typeof entry !== "object" ||
         typeof entry.value !== "string" ||
         !entry.value.trim() ||
-        !EFFORT_LEVELS.some(({ value }) => value === entry.effort)
+        (entry.effort !== "auto" && !EFFORT_LEVELS.some(({ value }) => value === entry.effort))
       )
         continue;
       entries.push({ value: entry.value, effort: entry.effort, fast: entry.fast === true });
@@ -93,17 +93,17 @@ export function effortLevelsForHarness(
   harnessId: string,
   model?: Model<Api>,
 ): Array<{ value: EffortLevel; label: string }> {
-  const advertised = (model as ModelMetadata | undefined)?.effortLevelsByHarness?.[harnessId];
-  const levels = EFFORT_LEVELS.filter(({ value }) => {
-    if (value === "auto") return false;
-    if (advertised) return advertised.includes(value);
-    if (value === "adaptive" || value === "default") return false;
-    if (harnessId === "pi") return true;
-    if (harnessId === "claude") return value !== "ultracode";
-    if (harnessId === "codex") return value !== "max" && value !== "ultracode";
-    return false;
-  });
-  return [EFFORT_LEVELS.find(({ value }) => value === "auto")!, ...levels];
+  const advertised = (model as ModelMetadata | undefined)?.effortLevelsByHarness?.[harnessId] ?? [];
+  const [unset, ...levels] = EFFORT_LEVELS;
+  return [unset!, ...levels.filter(({ value }) => advertised.includes(value))];
+}
+
+export function isPeakEffort(harnessId: string, model: Model<Api> | undefined, level: string): boolean {
+  return level === "ultracode" && effortLevelsForHarness(harnessId, model).some(({ value }) => value === level);
+}
+
+export function resolveEffort(harnessId: string, model: Model<Api> | undefined, effort: EffortLevel): EffortLevel {
+  return effortLevelsForHarness(harnessId, model).some(({ value }) => value === effort) ? effort : "auto";
 }
 
 export function compatibleHarnessOptions<T extends { harnessId: string; model: { id: string } }>(

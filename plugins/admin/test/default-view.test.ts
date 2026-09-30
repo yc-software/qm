@@ -244,10 +244,9 @@ test("default runtime controls save reasoning level and fast mode", () => {
     assert.match(html, new RegExp(`id="${id}"`));
   loadSettings(
     {
-      baseModelOptions: [{ id: "a" }],
+      baseModelOptions: [{ id: "a", effortLevels: ["auto", "high"] }],
       baseModelDefault: "a",
       runtime: { harnessId: "pi", modelId: "a", effortLevel: "high", fastMode: true },
-      thinkingLevelsByHarness: { pi: ["auto", "high"] },
       fastModeHarnessIds: ["pi"],
       fastModeModelIds: ["a"],
     },

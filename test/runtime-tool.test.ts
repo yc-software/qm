@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { runtimeChoice } from "./support/runtime-choice.ts";
+import type { RuntimeChoice } from "../src/harness/harness.ts";
 import { createRuntimeService } from "../src/harness/runtime-control.ts";
 import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
-import type { RuntimeChoice } from "../src/harness/harness.ts";
 import type { SessionEntry } from "../src/types.ts";
 
-const active: RuntimeChoice = { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
+const active = runtimeChoice({ harnessId: "pi", modelId: "claude-opus-5", effortLevel: "high", fastMode: false });
 const claims: CapabilityClaims = {
   actorId: "alice",
   scopeId: "personal:alice",
@@ -71,10 +72,12 @@ test("runtime rejects unsupported effort and fast mode instead of silently dropp
   assert.deepEqual(await service(claims, active, { action: "set", harness: "opencode" }), {
     ok: false,
     error: "effort_not_supported",
+    message: "effort high isn't available on opencode/claude-opus-5; choose another effort (valid: auto)",
   });
   assert.deepEqual(await service(claims, active, { action: "set", model: "claude-sonnet-5", fastMode: true }), {
     ok: false,
     error: "fast_mode_not_supported",
+    message: "fast mode isn't available on pi/claude-sonnet-5",
   });
 });
 

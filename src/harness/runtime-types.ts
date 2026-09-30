@@ -1,4 +1,4 @@
-import type { RuntimeChoice } from "./harness.ts";
+import type { RequestedRuntime, RuntimeChoice } from "./harness.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 
 export interface RuntimeRequest {
@@ -35,5 +35,5 @@ export type RuntimeService = (
   signal?: AbortSignal,
   cronFire?: boolean,
   purpose?: import("../resolution/config-store.ts").RuntimePurpose,
-  defaults?: Partial<RuntimeChoice>,
+  defaults?: RequestedRuntime,
 ) => Promise<RuntimeResult>;

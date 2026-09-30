@@ -37,15 +37,15 @@ export function turnModelOptions(input: {
   fastMode?: boolean;
 }): {
   thinkingLevel?: string;
+  defaultThinkingLevel?: string;
   fastMode?: boolean;
 } {
   const legacyDefaults = input.triggered && input.surface !== "cron" && input.surface !== "loop";
-  let thinkingLevel = input.thinkingLevel;
-  if (!thinkingLevel && legacyDefaults) thinkingLevel = NON_INTERACTIVE_THINKING_LEVEL;
   let fastMode = input.fastMode;
   if (typeof fastMode !== "boolean" && legacyDefaults) fastMode = NON_INTERACTIVE_FAST_MODE;
   return {
-    ...(thinkingLevel ? { thinkingLevel } : {}),
+    ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+    ...(!input.thinkingLevel && legacyDefaults ? { defaultThinkingLevel: NON_INTERACTIVE_THINKING_LEVEL } : {}),
     ...(typeof fastMode === "boolean" ? { fastMode } : {}),
   };
 }

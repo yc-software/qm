@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 
-test("confetti celebrates only the highest supported effort and respects reduced motion", async () => {
+test("confetti celebrates only Ultracode and respects reduced motion", async () => {
   const vite = await createServer({
     root: fileURLToPath(new URL("..", import.meta.url)),
     configFile: false,
@@ -12,7 +12,7 @@ test("confetti celebrates only the highest supported effort and respects reduced
     optimizeDeps: { noDiscovery: true },
     appType: "custom",
   });
-  const dom = new JSDOM('<button><span class="effort-peak">Extra high</span></button>');
+  const dom = new JSDOM('<button><span class="effort-peak">Ultra</span></button>');
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const previousDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
   let reducedMotion = false;
@@ -28,39 +28,47 @@ test("confetti celebrates only the highest supported effort and respects reduced
   label.getBoundingClientRect = () => ({ left: 100, top: 100, width: 60, height: 20 }) as DOMRect;
   try {
     const { burstEffortConfetti } = await vite.ssrLoadModule("/src/effort-confetti.ts");
-    let selectedLevel = "xhigh";
-    let selectedHarness = "codex";
-    button.addEventListener("click", (event) => burstEffortConfetti(event, selectedLevel, selectedHarness));
+    const model = {
+      effortLevelsByHarness: {
+        pi: ["auto", "low", "high", "xhigh", "max"],
+        claude: ["auto", "low", "high", "xhigh", "max", "ultracode"],
+        codex: ["auto", "low", "high", "xhigh", "max", "ultra"],
+        opencode: ["auto"],
+      },
+    };
+    let selectedLevel = "ultracode";
+    let selectedHarness = "claude";
+    button.addEventListener("click", (event) => burstEffortConfetti(event, selectedLevel, selectedHarness, model));
     const finishBurst = async (): Promise<void> => {
       completions.splice(0).forEach((complete) => complete());
       await new Promise((resolve) => setTimeout(resolve, 0));
       assert.equal(dom.window.document.querySelector(".effort-confetti"), null);
     };
-    for (const [harness, top] of [
-      ["pi", "ultracode"],
-      ["claude", "max"],
-      ["codex", "xhigh"],
-    ]) {
-      selectedHarness = harness;
-      for (const level of ["high", "auto", top]) {
-        selectedLevel = level;
-        button.click();
-        assert.equal(dom.window.document.querySelectorAll(".effort-confetti > span").length, level === top ? 14 : 0);
-        await finishBurst();
-      }
+    selectedHarness = "claude";
+    for (const level of ["high", "auto", "ultracode"]) {
+      selectedLevel = level;
+      button.click();
+      assert.equal(
+        dom.window.document.querySelectorAll(".effort-confetti > span").length,
+        level === "ultracode" ? 14 : 0,
+      );
+      await finishBurst();
     }
     for (const [harness, level] of [
-      ["opencode", "auto"],
-      ["codex", "ultracode"],
       ["pi", "max"],
+      ["codex", "ultra"],
+      ["opencode", "auto"],
+      ["codex", "max"],
+      ["claude", "max"],
+      ["pi", "ultracode"],
     ]) {
       selectedHarness = harness;
       selectedLevel = level;
       button.click();
       assert.equal(dom.window.document.querySelector(".effort-confetti"), null);
     }
-    selectedHarness = "codex";
-    selectedLevel = "xhigh";
+    selectedHarness = "claude";
+    selectedLevel = "ultracode";
     reducedMotion = true;
     button.click();
     assert.equal(dom.window.document.querySelector(".effort-confetti"), null);

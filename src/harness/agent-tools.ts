@@ -204,7 +204,7 @@ function fmtCronSchedule(c: {
 }
 
 interface CronLike {
-  runtime?: import("./harness.ts").RuntimeChoice | null;
+  runtime?: import("./harness.ts").RuntimeChoiceInput | null;
   id: string;
   title?: string;
   enabled: boolean;
@@ -1527,7 +1527,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
       model: Type.Optional(Type.String({ description: "open: model override; fails closed if unavailable." })),
       harness: Type.Optional(Type.String({ description: "open: harness override." })),
-      thinkingLevel: Type.Optional(Type.String({ description: "open: reasoning effort override." })),
+      thinkingLevel: Type.Optional(
+        Type.String({
+          description:
+            "open: reasoning effort override. With a model override, an inherited effort that model does not offer is an error, so pass one.",
+        }),
+      ),
       fastMode: Type.Optional(Type.Boolean({ description: "open: fast mode override." })),
       target: Type.Optional(
         Type.String({
@@ -4145,7 +4150,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "runtime",
     label: "runtime",
     description:
-      "Inspect or change your model, harness, reasoning effort, and fast mode. Use get to see the actual active runtime, saved defaults, and available choices. Use set for requests such as 'switch to Astra and do this'. A successful change stops this runtime and resumes the unfinished task on the selected runtime with saved tool results. Omitted settings are preserved. lifetime defaults to task (this user request or cron fire, including retries); scope changes the default for future requests in this scope too and requires a live user. Cron fires may change only their task runtime; the next fire keeps its configured runtime. inherit returns to the scope default, or clears the scope override when lifetime is scope. Never guess capabilities or claim you cannot switch before using this tool. Call a change by itself, after other tools finish.",
+      "Inspect or change your model, harness, reasoning effort, and fast mode. Use get to see the actual active runtime, saved defaults, and available choices. Use set for requests such as 'switch to Astra and do this'. A successful change stops this runtime and resumes the unfinished task on the selected runtime with saved tool results. Omitted settings are preserved; an effort the new harness and model do not offer is an error, so pass one. lifetime defaults to task (this user request or cron fire, including retries); scope changes the default for future requests in this scope too and requires a live user. Cron fires may change only their task runtime; the next fire keeps its configured runtime. inherit returns to the scope default, or clears the scope override when lifetime is scope. Never guess capabilities or claim you cannot switch before using this tool. Call a change by itself, after other tools finish.",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("get"), Type.Literal("set"), Type.Literal("inherit")]),
       model: Type.Optional(Type.String({ description: "Model ID or exact display name from get, such as Astra." })),
@@ -4153,7 +4158,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       effort: Type.Optional(
         Type.String({
           description:
-            "Use modelCatalog[modelId].effortLevelsByHarness[harnessId] from get. adaptive = native Auto; default = provider default; auto = legacy harness default, not adaptive reasoning.",
+            "Use modelCatalog[modelId].effortLevelsByHarness[harnessId] from get. Levels follow each provider: adaptive = Anthropic adaptive thinking; default = provider default; ultra = Codex task delegation; ultracode = Claude Code workflow orchestration; auto = unset, so the harness picks its usual level.",
         }),
       ),
       fastMode: Type.Optional(Type.Boolean()),

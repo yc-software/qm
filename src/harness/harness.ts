@@ -9,7 +9,7 @@ import type {
   SessionEntry,
   TurnRequest,
 } from "../types.ts";
-import type { HarnessId } from "../model/pi-models.ts";
+import type { EffortLevel, HarnessId } from "../model/pi-models.ts";
 import type {
   GapPhases,
   GapWork,
@@ -29,9 +29,12 @@ import type { SecurityScreenVerdict, ToolResultScreen, ToolResultScreenInput } f
 export interface RuntimeChoice {
   harnessId: HarnessId;
   modelId: string;
-  effortLevel?: string;
+  effortLevel?: EffortLevel;
   fastMode?: boolean;
 }
+
+export type RuntimeChoiceInput = Omit<RuntimeChoice, "effortLevel"> & { effortLevel?: string };
+export type RequestedRuntime = Partial<RuntimeChoiceInput> & { defaultEffortLevel?: string };
 
 interface HarnessImage {
   mimeType: string;
@@ -116,6 +119,7 @@ export interface HarnessTurnInput {
   ): Promise<{ text: string; attachments?: AttachmentMeta[]; images?: HarnessImage[]; documents?: DocumentInput[] }>;
   documents?: DocumentInput[];
   runtime?: Partial<RuntimeChoice>;
+  requestedRuntime?: RequestedRuntime;
   runtimePurpose?: import("../resolution/config-store.ts").RuntimePurpose;
   runtimeControl?: RuntimeControl;
   runtimeActorId?: string;

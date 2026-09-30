@@ -1,6 +1,7 @@
 import { availableRuntimeError } from "../src/api/runtime-config.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { runtimeChoice } from "./support/runtime-choice.ts";
 import {
   createMemoryConfigStore,
   type PersistedApprovedHarnesses,
@@ -56,12 +57,10 @@ test("runtime resolution uses explicit choice, then scope, then org and rejects 
 test("runtime resolution carries reasoning and fast-mode defaults into turns", () => {
   const config = createMemoryConfigStore("default-org");
   config.setApprovedHarnesses(["pi", "opencode", "codex"]);
-  config.setRuntimeSelection(ORG, {
-    harnessId: "pi",
-    modelId: "claude-opus-5",
-    effortLevel: "high",
-    fastMode: true,
-  });
+  config.setRuntimeSelection(
+    ORG,
+    runtimeChoice({ harnessId: "pi", modelId: "claude-opus-5", effortLevel: "high", fastMode: true }),
+  );
   assert.deepEqual(resolveRuntimeChoice(config, ORG, PERSONAL, { harnessId: "pi", modelId: "claude-fable-5" }), {
     harnessId: "pi",
     modelId: "claude-opus-5",
@@ -86,18 +85,26 @@ test("runtime resolution carries reasoning and fast-mode defaults into turns", (
       fastMode: false,
     },
   );
+  assert.throws(
+    () =>
+      resolveRuntimeChoice(
+        config,
+        ORG,
+        PERSONAL,
+        { harnessId: "pi", modelId: "claude-fable-5" },
+        { harnessId: "opencode", modelId: "claude-opus-5" },
+      ),
+    { message: "effort high isn't available on opencode/claude-opus-5; choose another effort (valid: auto)" },
+  );
   assert.deepEqual(
     resolveRuntimeChoice(
       config,
       ORG,
       PERSONAL,
       { harnessId: "pi", modelId: "claude-fable-5" },
-      {
-        harnessId: "opencode",
-        modelId: "claude-opus-5",
-      },
+      { harnessId: "opencode", modelId: "claude-opus-5", effortLevel: "auto" },
     ),
-    { harnessId: "opencode", modelId: "claude-opus-5", fastMode: true },
+    { harnessId: "opencode", modelId: "claude-opus-5", effortLevel: "auto", fastMode: true },
   );
 });
 
@@ -219,18 +226,18 @@ test("explicit runtime validation rejects a revoked scoped model and unsupported
   );
   assert.equal(
     await availableRuntimeError(ctx, PERSONAL, { harnessId: "pi", modelId: "claude-sonnet-5", fastMode: true }),
-    "fast_mode_not_supported",
+    "fast mode isn't available on pi/claude-sonnet-5",
   );
 });
 
-test("runtime availability preserves the existing harness normalization of inherited scheduled effort", async () => {
+test("scheduled runtimes with an effort the harness does not offer are rejected, not normalized", async () => {
   const config = createMemoryConfigStore("default-org");
   config.setApprovedHarnesses(["opencode"]);
   config.setWebuiModels(ORG, ["claude-sonnet-5"]);
   await config.flushScope(ORG);
   const choice = { harnessId: "opencode" as const, modelId: "claude-sonnet-5", effortLevel: "xhigh", fastMode: false };
-  assert.equal(await availableRuntimeError({ deps: { config, harnessId: "opencode" } }, PERSONAL, choice), null);
-  const resolved = resolveRuntimeChoice(config, ORG, PERSONAL, choice, choice);
-  assert.equal(resolved.modelId, choice.modelId);
-  assert.equal(resolved.effortLevel, undefined);
+  const message = "effort xhigh isn't available on opencode/claude-sonnet-5 (valid: auto)";
+  assert.equal(await availableRuntimeError({ deps: { config, harnessId: "opencode" } }, PERSONAL, choice), message);
+  const fallback = { harnessId: "opencode" as const, modelId: "claude-sonnet-5" };
+  assert.throws(() => resolveRuntimeChoice(config, ORG, PERSONAL, fallback, choice), { message });
 });

@@ -306,9 +306,8 @@ test("models view loads and saves purpose cards through the real page handlers",
     f.ui.settings.mountCards();
     const data = {
       baseModelDefault: "model",
-      baseModelOptions: [{ id: "model" }],
+      baseModelOptions: [{ id: "model", effortLevels: ["auto", "low"] }],
       harnessOptions: ["pi"],
-      thinkingLevelsByHarness: { pi: ["auto", "low"] },
       runtime: null,
       cronRuntime: null,
       subagentRuntime: null,

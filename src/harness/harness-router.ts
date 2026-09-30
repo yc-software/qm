@@ -6,12 +6,15 @@ import {
   isHarnessId,
   modelSupportedByHarness,
   resolveModel,
-  thinkingLevelsForHarness,
+  parseEffort,
+  parseRuntimeChoice,
+  effortNotOfferedMessage,
   modelUnavailableReason,
+  type EffortLevel,
   type HarnessId,
 } from "../model/pi-models.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
-import type { Harness, HarnessTurnInput, HarnessTurnResult, RuntimeChoice } from "./harness.ts";
+import type { Harness, HarnessTurnInput, HarnessTurnResult, RequestedRuntime, RuntimeChoice } from "./harness.ts";
 import { withTapedEntryMirrors } from "./harness-shared.ts";
 import { NON_INTERACTIVE_THINKING_LEVEL, NON_INTERACTIVE_FAST_MODE } from "../core/turn-options.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
@@ -104,24 +107,35 @@ async function runTurnEnforcingGoal(
   return result;
 }
 
-function normalizeRuntimeChoice(choice: RuntimeChoice): RuntimeChoice {
-  if (
-    (choice.effortLevel === "adaptive" || choice.effortLevel === "default") &&
-    !thinkingLevelsForHarness(choice.harnessId, choice.modelId).includes(choice.effortLevel)
-  )
+type StoredRuntime = { harnessId: string; modelId: string; effortLevel?: string; fastMode?: boolean };
+
+function resolvedEffort(
+  target: { harnessId: HarnessId; modelId: string },
+  requested: string | undefined,
+  inherited: StoredRuntime | undefined,
+): EffortLevel | undefined {
+  const level = requested ?? inherited?.effortLevel;
+  if (level === undefined) return undefined;
+  const effort = parseEffort(target.harnessId, target.modelId, level);
+  if (!effort)
     throw new NonRetryableTurnError(
-      `${choice.effortLevel} reasoning is not supported by ${choice.harnessId}/${choice.modelId}`,
+      effortNotOfferedMessage(target.harnessId, target.modelId, level, requested === undefined),
     );
+  return effort;
+}
+
+function normalizeRuntimeChoice(
+  target: { harnessId: HarnessId; modelId: string; fastMode?: boolean },
+  effortLevel: EffortLevel | undefined,
+): RuntimeChoice {
   return {
-    harnessId: choice.harnessId,
-    modelId: choice.modelId,
-    ...(choice.effortLevel && thinkingLevelsForHarness(choice.harnessId, choice.modelId).includes(choice.effortLevel)
-      ? { effortLevel: choice.effortLevel }
-      : {}),
-    ...(typeof choice.fastMode === "boolean"
+    harnessId: target.harnessId,
+    modelId: target.modelId,
+    ...(effortLevel ? { effortLevel } : {}),
+    ...(typeof target.fastMode === "boolean"
       ? {
           fastMode:
-            choice.fastMode && harnessSupportsFastMode(choice.harnessId) && fastModeModelIds().includes(choice.modelId),
+            target.fastMode && harnessSupportsFastMode(target.harnessId) && fastModeModelIds().includes(target.modelId),
         }
       : {}),
   };
@@ -133,7 +147,7 @@ export function resolveRuntimeChoice(
   orgScopeId: ScopeId,
   scope: ScopeId,
   fallback: RuntimeChoice,
-  requested?: Partial<RuntimeChoice>,
+  requested?: RequestedRuntime,
   purpose?: RuntimePurpose,
 ): RuntimeChoice {
   const approved = config.getApprovedHarnesses() ?? [fallback.harnessId];
@@ -150,23 +164,24 @@ export function resolveRuntimeChoice(
       throw new NonRetryableTurnError(`runtime ${choice.harnessId}/${choice.modelId} is not approved`);
     const unavailable = modelUnavailableReason(choice.modelId);
     if (unavailable) throw new NonRetryableTurnError(`${choice.modelId}: ${unavailable}`);
-    if (
-      choice.effortLevel !== undefined &&
-      !thinkingLevelsForHarness(choice.harnessId, choice.modelId).includes(choice.effortLevel)
-    )
-      throw new NonRetryableTurnError(
-        `${choice.effortLevel} reasoning is not supported by ${choice.harnessId}/${choice.modelId}`,
-      );
     if (choice.fastMode && (!harnessSupportsFastMode(choice.harnessId) || !fastModeModelIds().includes(choice.modelId)))
       throw new NonRetryableTurnError(`fast mode is not supported by ${choice.harnessId}/${choice.modelId}`);
-    return { ...choice, harnessId: choice.harnessId };
+    const target = { ...choice, harnessId: choice.harnessId };
+    return normalizeRuntimeChoice(
+      target,
+      resolvedEffort(target, explicit.effortLevel as string | undefined, purposeRuntime),
+    );
   }
   if (purpose === "cron")
-    requested = { effortLevel: NON_INTERACTIVE_THINKING_LEVEL, fastMode: NON_INTERACTIVE_FAST_MODE, ...requested };
+    requested = {
+      defaultEffortLevel: NON_INTERACTIVE_THINKING_LEVEL,
+      fastMode: NON_INTERACTIVE_FAST_MODE,
+      ...requested,
+    };
 
   const orgStored = config.getRuntimeSelection(orgScopeId);
   const orgLegacy = config.getBaseModel(orgScopeId);
-  const configuredOrg: RuntimeChoice =
+  const configuredOrg: StoredRuntime & { harnessId: HarnessId } =
     orgStored && isHarnessId(orgStored.harnessId)
       ? {
           harnessId: orgStored.harnessId,
@@ -186,14 +201,14 @@ export function resolveRuntimeChoice(
     approved.includes(fallback.harnessId) && modelSupportedByHarness(fallback.modelId, fallback.harnessId)
       ? fallback
       : { harnessId: firstApproved, modelId: defaultModelForHarness(firstApproved, fallback.modelId) };
-  const org =
+  const org: StoredRuntime & { harnessId: HarnessId } =
     approved.includes(configuredOrg.harnessId) &&
     modelSupportedByHarness(configuredOrg.modelId, configuredOrg.harnessId)
       ? configuredOrg
       : safeFallback;
   const scopedStored = scope === orgScopeId ? null : config.getRuntimeSelection(scope);
   const scopedLegacy = scope === orgScopeId ? null : config.getBaseModel(scope);
-  let inherited: RuntimeChoice = org;
+  let inherited: StoredRuntime & { harnessId: HarnessId } = org;
   if (scopedStored && isHarnessId(scopedStored.harnessId)) {
     inherited = {
       harnessId: scopedStored.harnessId,
@@ -204,13 +219,50 @@ export function resolveRuntimeChoice(
   } else if (scopedLegacy) {
     inherited = { harnessId: fallback.harnessId, modelId: scopedLegacy };
   }
-  const choice = { ...inherited, ...requested };
-  if (!approved.includes(choice.harnessId) || !modelSupportedByHarness(choice.modelId, choice.harnessId)) {
+  let base = inherited;
+  const { defaultEffortLevel, ...overrides } = requested ?? {};
+  let target = { ...inherited, ...overrides };
+  if (!approved.includes(target.harnessId) || !modelSupportedByHarness(target.modelId, target.harnessId)) {
     if (requested?.harnessId || requested?.modelId)
-      throw new NonRetryableTurnError(`runtime ${choice.harnessId}/${choice.modelId} is not approved`);
-    return normalizeRuntimeChoice({ ...org, ...requested });
+      throw new NonRetryableTurnError(`runtime ${target.harnessId}/${target.modelId} is not approved`);
+    base = org;
+    target = { ...org, ...overrides };
   }
-  return normalizeRuntimeChoice(choice);
+  const effort =
+    defaultEffortLevel !== undefined && overrides.effortLevel === undefined
+      ? parseEffort(target.harnessId, target.modelId, defaultEffortLevel)
+      : resolvedEffort(target, overrides.effortLevel, base);
+  return normalizeRuntimeChoice(target, effort);
+}
+
+export async function resolvePinnedRuntime(
+  config: ScopedConfigStore,
+  orgScopeId: ScopeId,
+  scope: ScopeId,
+  requested: RequestedRuntime & { harnessId: HarnessId; modelId: string },
+): Promise<RuntimeChoice> {
+  const { fastMode, defaultEffortLevel, ...rest } = requested;
+  const pinned = parseRuntimeChoice(rest);
+  if (!pinned.ok) throw new NonRetryableTurnError(pinned.message);
+  const [orgStored, scopedStored, scopedLegacy] = await Promise.all([
+    config.getRuntimeSelectionDurable(orgScopeId),
+    scope === orgScopeId ? null : config.getRuntimeSelectionDurable(scope),
+    scope === orgScopeId ? null : config.getBaseModelOwnDurable(scope),
+  ]);
+  const orgInherited = !scopedLegacy && orgStored && isHarnessId(orgStored.harnessId) ? orgStored : undefined;
+  const inherited = scopedStored && isHarnessId(scopedStored.harnessId) ? scopedStored : orgInherited;
+  const saved =
+    pinned.choice.effortLevel === undefined && defaultEffortLevel === undefined ? inherited?.effortLevel : undefined;
+  const effortLevel =
+    pinned.choice.effortLevel ??
+    (saved === undefined
+      ? parseEffort(pinned.choice.harnessId, pinned.choice.modelId, defaultEffortLevel)
+      : resolvedEffort(pinned.choice, undefined, { ...pinned.choice, effortLevel: saved }));
+  return {
+    ...pinned.choice,
+    ...(effortLevel ? { effortLevel } : {}),
+    ...(typeof fastMode === "boolean" ? { fastMode } : {}),
+  };
 }
 
 export async function resolveRuntimeChoiceDurable(
@@ -218,7 +270,7 @@ export async function resolveRuntimeChoiceDurable(
   orgScopeId: ScopeId,
   scope: ScopeId,
   fallback: RuntimeChoice,
-  requested?: Partial<RuntimeChoice>,
+  requested?: RequestedRuntime,
   hydrateModelCatalog?: () => Promise<unknown>,
   purpose?: RuntimePurpose,
 ): Promise<RuntimeChoice> {

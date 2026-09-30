@@ -16,14 +16,16 @@ import {
   safeModelMetadata,
   modelOfferedInWebui,
   modelUnavailableReason,
-  thinkingLevelsForHarness,
+  parseEffort,
+  parseRuntimeChoice,
   harnessSupportsFastMode,
   codexProviderModelId,
   codexSubscriptionModelId,
+  type EffortLevel,
   type HarnessId,
 } from "../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
-import type { RuntimeChoice } from "../harness/harness.ts";
+import type { RequestedRuntime, RuntimeChoice, RuntimeChoiceInput } from "../harness/harness.ts";
 
 export type RuntimeDeps = Partial<
   Pick<
@@ -74,11 +76,7 @@ export async function userRuntimeConfigBody(ctx: { deps: RuntimeDeps }, scope: S
       ...snapshot.effective,
       harnessId: route.harness,
       modelId: route.model,
-      effortLevel: thinkingLevelsForHarness(route.harness, route.model).includes(
-        snapshot.effective.effortLevel ?? "auto",
-      )
-        ? snapshot.effective.effortLevel
-        : "auto",
+      effortLevel: parseEffort(route.harness, route.model, snapshot.effective.effortLevel ?? "auto"),
       fastMode:
         snapshot.effective.fastMode === true &&
         harnessSupportsFastMode(route.harness) &&
@@ -92,7 +90,7 @@ export async function runtimeConfigBody(
   scope: ScopeId,
   authorizeChoice?: (choice: RuntimeChoice) => Promise<string | null>,
   purpose?: RuntimePurpose,
-  requested?: Partial<RuntimeChoice>,
+  requested?: RequestedRuntime,
 ) {
   if (authorizeChoice)
     ctx = { deps: { ...ctx.deps, providerKeys: ALL_PROVIDERS_AVAILABLE, modelCredentials: undefined } };
@@ -112,7 +110,7 @@ export async function runtimeConfigBody(
   let orgDefault: {
     harnessId: HarnessId;
     modelId: string;
-    effortLevel?: string;
+    effortLevel?: EffortLevel;
     fastMode?: boolean;
     revision: number;
   } = { ...fallback, revision: orgStored?.revision ?? 0 };
@@ -120,7 +118,9 @@ export async function runtimeConfigBody(
     orgDefault = {
       harnessId: orgStored.harnessId,
       modelId: orgStored.modelId,
-      ...(orgStored.effortLevel ? { effortLevel: orgStored.effortLevel } : {}),
+      ...(orgStored.effortLevel
+        ? { effortLevel: parseEffort(orgStored.harnessId, orgStored.modelId, orgStored.effortLevel) }
+        : {}),
       ...(typeof orgStored.fastMode === "boolean" ? { fastMode: orgStored.fastMode } : {}),
       revision: orgStored.revision ?? 0,
     };
@@ -132,7 +132,7 @@ export async function runtimeConfigBody(
   let scopeOverride: {
     harnessId: HarnessId;
     modelId: string;
-    effortLevel?: string;
+    effortLevel?: EffortLevel;
     fastMode?: boolean;
     orgRevision?: number;
   } | null = null;
@@ -140,7 +140,7 @@ export async function runtimeConfigBody(
     scopeOverride = {
       harnessId: stored.harnessId,
       modelId: stored.modelId,
-      ...(stored.effortLevel ? { effortLevel: stored.effortLevel } : {}),
+      ...(stored.effortLevel ? { effortLevel: parseEffort(stored.harnessId, stored.modelId, stored.effortLevel) } : {}),
       ...(typeof stored.fastMode === "boolean" ? { fastMode: stored.fastMode } : {}),
       orgRevision: stored.orgRevision,
     };
@@ -188,7 +188,7 @@ export async function runtimeConfigBody(
     for (const harnessId of approvedHarnesses) {
       const candidates = modelsByHarness[harnessId] ?? [];
       const allowed = await Promise.all(
-        candidates.map((modelId) => authorizeChoice({ harnessId, modelId, effortLevel: "auto", fastMode: false })),
+        candidates.map((modelId) => authorizeChoice({ harnessId, modelId, fastMode: false })),
       );
       modelsByHarness[harnessId] = candidates.filter((_, index) => !allowed[index]);
     }
@@ -226,19 +226,6 @@ export async function runtimeConfigBody(
   };
 }
 
-export function validateRuntimeChoice(choice: RuntimeChoice): string | null {
-  if (!modelSupportedByHarness(choice.modelId, choice.harnessId)) return "model_not_supported";
-  if (
-    choice.effortLevel !== undefined &&
-    !thinkingLevelsForHarness(choice.harnessId, choice.modelId).includes(choice.effortLevel)
-  )
-    return "effort_not_supported";
-  if (choice.fastMode !== undefined && typeof choice.fastMode !== "boolean") return "fast_mode_invalid";
-  if (choice.fastMode && (!harnessSupportsFastMode(choice.harnessId) || !fastModeModelIds().includes(choice.modelId)))
-    return "fast_mode_not_supported";
-  return null;
-}
-
 export async function webuiModelEnabled(
   ctx: { deps: RuntimeDeps },
   modelId: string,
@@ -259,18 +246,18 @@ export async function webuiModelEnabled(
 export async function availableRuntimeError(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
-  choice: RuntimeChoice,
+  input: RuntimeChoiceInput,
   purpose?: RuntimePurpose,
 ): Promise<string | null> {
   await ctx.deps.refreshModels?.();
+  const parsed = parseRuntimeChoice(input);
+  if (!parsed.ok) return parsed.message;
+  const choice = parsed.choice;
   const choices = await runtimeConfigBody(ctx, scope, undefined, purpose, choice);
   if (
     !choices.modelsByHarness[choice.harnessId]?.includes(choice.modelId) ||
     !(await webuiModelEnabled(ctx, choice.modelId, purpose))
   )
     return "runtime is no longer available or enabled on this deployment";
-  return validateRuntimeChoice({
-    ...choice,
-    effortLevel: choice.effortLevel === "adaptive" || choice.effortLevel === "default" ? choice.effortLevel : undefined,
-  });
+  return null;
 }

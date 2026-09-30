@@ -1,9 +1,10 @@
 import { gatewayModelCatalog, gatewayModelsVersion, isGatewayModelId, resolveGatewayModel } from "./gateway-models.ts";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import { parseModelOverlay, type ModelOverlay } from "./model-overlay.ts";
 import { providerBaseUrl } from "./provider-endpoints.ts";
 import { isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
+import type { RuntimeChoice } from "../harness/harness.ts";
 
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
@@ -33,8 +34,11 @@ export const THINKING_LEVELS = [
   "high",
   "xhigh",
   "max",
+  "ultra",
   "ultracode",
 ] as const;
+const EFFORT_TIERS = ["low", "medium", "high", "xhigh", "max"] as const;
+type EffortTier = (typeof EFFORT_TIERS)[number];
 export const HARNESS_IDS = ["pi", "opencode", "codex", "claude", "mock"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
@@ -54,18 +58,86 @@ export function modelSupportsProviderDefault(model: Pick<Model<Api>, "api" | "co
   );
 }
 
-export function thinkingLevelsForHarness(harnessId: HarnessId, modelId?: string): readonly string[] {
-  const model = modelId ? resolveModel(modelId) : undefined;
-  return THINKING_LEVELS.filter((level) => {
-    if (level === "adaptive")
-      return harnessId === "pi" && (!modelId || (!!model && modelSupportsAdaptiveThinking(model)));
-    if (level === "default")
-      return harnessId === "pi" && (!modelId || (!!model && modelSupportsProviderDefault(model)));
-    if (harnessId === "pi") return true;
-    if (harnessId === "claude") return level !== "ultracode";
-    if (harnessId === "codex") return level !== "max" && level !== "ultracode";
-    return level === "auto";
-  });
+function providerEfforts(modelId: string): readonly EffortTier[] {
+  const entry = REGISTRY_BY_ID.get(modelId) ?? REGISTRY_BY_ID.get(codexProviderModelId(modelId));
+  if (entry?.efforts) return entry.efforts;
+  const model = resolveModel(modelId);
+  if (!model?.reasoning) return [];
+  const supported = getSupportedThinkingLevels(model) as readonly string[];
+  return EFFORT_TIERS.filter((tier) => supported.includes(tier));
+}
+
+function clientTier(harnessId: HarnessId, modelId: string): "ultra" | "ultracode" | undefined {
+  const entry = REGISTRY_BY_ID.get(modelId) ?? REGISTRY_BY_ID.get(codexProviderModelId(modelId));
+  if (harnessId === "codex") return entry?.codexUltra ? "ultra" : undefined;
+  if (harnessId === "claude") return providerEfforts(modelId).includes("xhigh") ? "ultracode" : undefined;
+  return undefined;
+}
+
+export function thinkingLevelsForHarness(harnessId: HarnessId, modelId: string): readonly string[] {
+  if (!["pi", "claude", "codex"].includes(harnessId)) return ["auto"];
+  if (harnessId !== "pi" && !modelSupportedByHarness(modelId, harnessId)) return ["auto"];
+  const model = resolveModel(modelId);
+  const modes =
+    harnessId === "pi" && model
+      ? [
+          ...(modelSupportsProviderDefault(model) ? ["default"] : []),
+          ...(modelSupportsAdaptiveThinking(model) ? ["adaptive"] : []),
+        ]
+      : [];
+  const tier = clientTier(harnessId, modelId);
+  return ["auto", ...modes, ...providerEfforts(modelId), ...(tier ? [tier] : [])];
+}
+
+declare const offeredEffort: unique symbol;
+export type EffortLevel = string & { readonly [offeredEffort]: true };
+
+export function parseEffort(harnessId: HarnessId, modelId: string, level: unknown): EffortLevel | undefined {
+  return typeof level === "string" && thinkingLevelsForHarness(harnessId, modelId).includes(level)
+    ? (level as EffortLevel)
+    : undefined;
+}
+
+export function effortNotOfferedMessage(harnessId: HarnessId, modelId: string, level: string, carried = false): string {
+  const levels = thinkingLevelsForHarness(harnessId, modelId).join(", ");
+  return `effort ${level} isn't available on ${harnessId}/${modelId}${carried ? "; choose another effort" : ""} (valid: ${levels})`;
+}
+
+export type ParsedRuntimeChoice = { ok: true; choice: RuntimeChoice } | { ok: false; error: string; message: string };
+
+export function parseRuntimeChoice(
+  raw: { harnessId?: unknown; modelId?: unknown; effortLevel?: unknown; fastMode?: unknown },
+  carriedEffort = false,
+): ParsedRuntimeChoice {
+  const { harnessId, modelId, effortLevel, fastMode } = raw;
+  if (!isHarnessId(harnessId))
+    return { ok: false, error: "harness_not_supported", message: `unknown harness ${String(harnessId)}` };
+  if (typeof modelId !== "string" || !modelSupportedByHarness(modelId, harnessId))
+    return { ok: false, error: "model_not_supported", message: `${String(modelId)} doesn't run on ${harnessId}` };
+  const effort = effortLevel === undefined ? undefined : parseEffort(harnessId, modelId, effortLevel);
+  if (effortLevel !== undefined && !effort)
+    return {
+      ok: false,
+      error: "effort_not_supported",
+      message: effortNotOfferedMessage(harnessId, modelId, String(effortLevel), carriedEffort),
+    };
+  if (fastMode !== undefined && typeof fastMode !== "boolean")
+    return { ok: false, error: "fast_mode_invalid", message: "fastMode must be a boolean" };
+  if (fastMode && (!harnessSupportsFastMode(harnessId) || !fastModeModelIds().includes(modelId)))
+    return {
+      ok: false,
+      error: "fast_mode_not_supported",
+      message: `fast mode isn't available on ${harnessId}/${modelId}`,
+    };
+  return {
+    ok: true,
+    choice: {
+      harnessId,
+      modelId,
+      ...(effort ? { effortLevel: effort } : {}),
+      ...(fastMode !== undefined ? { fastMode } : {}),
+    },
+  };
 }
 
 export function harnessSupportsFastMode(harnessId: HarnessId): boolean {
@@ -93,6 +165,8 @@ interface ModelEntry {
   webui: boolean;
   base: boolean;
   auxiliary?: boolean;
+  efforts?: readonly EffortTier[];
+  codexUltra?: true;
   request?: { model: string; service_tier: "ultrafast" };
   clone?: {
     template: string;
@@ -128,6 +202,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: true,
     webui: true,
     base: true,
+    efforts: EFFORT_TIERS,
     clone: {
       template: "claude-opus-4-8",
       thinkingLevelMap: { off: null },
@@ -145,6 +220,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: false,
     webui: true,
     base: true,
+    efforts: EFFORT_TIERS,
     clone: {
       template: "claude-fable-5",
       input: 10,
@@ -155,13 +231,21 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       maxTokens: 128_000,
     },
   },
-  { id: "claude-fable-5", name: "Claude Fable 5", fastMode: false, webui: true, base: true },
+  {
+    id: "claude-fable-5",
+    name: "Claude Fable 5",
+    fastMode: false,
+    webui: true,
+    base: true,
+    efforts: EFFORT_TIERS,
+  },
   {
     id: "claude-opus-5",
     name: "Claude Opus 5",
     fastMode: true,
     webui: true,
     base: true,
+    efforts: EFFORT_TIERS,
     clone: {
       template: "claude-opus-4-8",
       input: 5,
@@ -171,13 +255,21 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       maxTokens: 128_000,
     },
   },
-  { id: "claude-opus-4-8", name: "Claude Opus 4.8", fastMode: true, webui: true, base: true },
+  {
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8",
+    fastMode: true,
+    webui: true,
+    base: true,
+    efforts: EFFORT_TIERS,
+  },
   {
     id: "claude-sonnet-5-5",
     name: "Claude Sonnet 5.5",
     fastMode: false,
     webui: true,
     base: true,
+    efforts: EFFORT_TIERS,
     clone: {
       template: "claude-opus-4-8",
       thinkingLevelMap: { off: null },
@@ -189,8 +281,23 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       maxTokens: 128_000,
     },
   },
-  { id: "claude-sonnet-5", name: "Claude Sonnet 5", fastMode: false, webui: true, base: true },
-  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", fastMode: false, webui: true, base: true, auxiliary: true },
+  {
+    id: "claude-sonnet-5",
+    name: "Claude Sonnet 5",
+    fastMode: false,
+    webui: true,
+    base: true,
+    efforts: EFFORT_TIERS,
+  },
+  {
+    id: "claude-haiku-4-5",
+    name: "Claude Haiku 4.5",
+    fastMode: false,
+    webui: true,
+    base: true,
+    auxiliary: true,
+    efforts: [],
+  },
   {
     id: "gpt-5.6-sol",
     buttonLabel: "5.6 Sol",
@@ -198,6 +305,8 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: true,
     webui: true,
     base: true,
+    efforts: EFFORT_TIERS,
+    codexUltra: true,
     clone: {
       ...GPT_56_CLONE,
       input: 4,
@@ -213,6 +322,8 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: true,
     webui: true,
     base: true,
+    efforts: EFFORT_TIERS,
+    codexUltra: true,
     clone: {
       ...GPT_56_CLONE,
       input: 2,
@@ -228,6 +339,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: true,
     webui: true,
     base: true,
+    efforts: EFFORT_TIERS,
     auxiliary: true,
     clone: {
       ...GPT_56_CLONE,
@@ -244,6 +356,8 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: true,
     webui: true,
     base: true,
+    efforts: EFFORT_TIERS,
+    codexUltra: true,
     clone: {
       ...GPT_56_CLONE,
       thinkingLevelMap: { ...GPT_56_CLONE.thinkingLevelMap, off: null },
@@ -261,6 +375,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: false,
     webui: true,
     base: true,
+    efforts: EFFORT_TIERS,
     request: { model: "gpt-6-astra", service_tier: "ultrafast" },
     clone: {
       ...GPT_56_CLONE,
@@ -279,6 +394,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: true,
     webui: true,
     base: true,
+    efforts: EFFORT_TIERS,
     clone: {
       ...GPT_56_CLONE,
       thinkingLevelMap: { off: null, minimal: null, max: "max" },
@@ -296,6 +412,8 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: true,
     webui: true,
     base: true,
+    efforts: EFFORT_TIERS,
+    codexUltra: true,
     clone: {
       ...GPT_56_CLONE,
       input: 2,
@@ -311,6 +429,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     fastMode: true,
     webui: true,
     base: true,
+    efforts: EFFORT_TIERS,
     clone: {
       ...GPT_56_CLONE,
       input: 0.1,
@@ -319,9 +438,23 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       tiers: [{ inputTokensAbove: 272_000, input: 0.2, output: 0.75, cacheRead: 0.02, cacheWrite: 0.25 }],
     },
   },
-  { id: "openrouter/auto", name: "OpenRouter Auto", fastMode: false, webui: true, base: true },
-  { id: "claude-opus-4-7", name: "Claude Opus 4.7", fastMode: false, webui: false, base: false },
-  { id: "claude-opus-4-6", name: "Claude Opus 4.6", fastMode: false, webui: false, base: false },
+  { id: "openrouter/auto", name: "OpenRouter Auto", fastMode: false, webui: true, base: true, efforts: [] },
+  {
+    id: "claude-opus-4-7",
+    name: "Claude Opus 4.7",
+    fastMode: false,
+    webui: false,
+    base: false,
+    efforts: EFFORT_TIERS,
+  },
+  {
+    id: "claude-opus-4-6",
+    name: "Claude Opus 4.6",
+    fastMode: false,
+    webui: false,
+    base: false,
+    efforts: ["low", "medium", "high", "max"],
+  },
 ];
 
 let overlays = new Map<string, ModelOverlay>();

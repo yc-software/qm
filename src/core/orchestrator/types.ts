@@ -184,7 +184,7 @@ export interface OrchestratorDeps {
   runtime?: RuntimeService;
   validateScheduledRuntime?: (
     scope: import("../../types.ts").ScopeId,
-    choice: import("../../harness/harness.ts").RuntimeChoice,
+    choice: import("../../harness/harness.ts").RuntimeChoiceInput,
     purpose?: import("../../resolution/config-store.ts").RuntimePurpose,
   ) => Promise<string | null>;
   livenessCache?: LivenessCache;

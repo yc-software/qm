@@ -17,7 +17,7 @@ import {
   saveLoadout,
   reconcileLoadout,
   upsertLoadout,
-  effortLevelsForHarness,
+  resolveEffort,
   compatibleHarnessOptions,
   type LoadoutEntry,
 } from "./composer-loadout";
@@ -103,22 +103,12 @@ function selectedValue(config: RuntimeConfig): string {
   return config.scopeOverride ? `${config.scopeOverride.harnessId}:${config.scopeOverride.modelId}` : INHERIT;
 }
 
-function effortLevelsFor(
-  harnessId: string,
-  model?: ModelOption["model"],
-): Array<{ value: EffortLevel; label: string }> {
-  if (!harnessSupportsEffort(harnessId)) return [];
-  return effortLevelsForHarness(harnessId, model);
-}
-
 function selectedEffort(config: RuntimeConfig): string {
-  return (
-    config.effective.effortLevel ??
-    defaultEffortForModel(
-      optionsFor(config).find((option) => option.value === `${config.effective.harnessId}:${config.effective.modelId}`)
-        ?.model,
-    )
+  const option = optionsFor(config).find(
+    (option) => option.value === `${config.effective.harnessId}:${config.effective.modelId}`,
   );
+  const effort = (config.effective.effortLevel ?? defaultEffortForModel(option?.model)) as EffortLevel;
+  return option ? resolveEffort(option.harnessId, option.model, effort) : effort;
 }
 
 async function choose(scope: string, value: string, effort?: string, fast = false): Promise<void> {
@@ -147,7 +137,9 @@ async function choose(scope: string, value: string, effort?: string, fast = fals
             harnessId,
             modelId: value.slice(sep + 1),
             fastMode: fast && harnessSupportsFastMode(harnessId) && modelSupportsFastMode(scope, value.slice(sep + 1)),
-            ...(effort && effortLevelsFor(harnessId, model).some((o) => o.value === effort)
+            ...(effort &&
+            harnessSupportsEffort(harnessId) &&
+            resolveEffort(harnessId, model, effort as EffortLevel) === effort
               ? { effortLevel: effort }
               : {}),
           },
@@ -188,10 +180,9 @@ function contextPicker(scopeId: string) {
     if (contextModelState.saving) return;
     const option = options().find((option) => option.value === entry.value);
     if (!option) return;
-    const levels = effortLevelsForHarness(option.harnessId, option.model);
     const normalized = {
       ...entry,
-      effort: levels.some((level) => level.value === entry.effort) ? entry.effort : levels[0]!.value,
+      effort: resolveEffort(option.harnessId, option.model, entry.effort),
       fast: entry.fast && harnessSupportsFastMode(option.harnessId) && modelSupportsFastMode(scopeId, option.model.id),
     };
     void choose(scopeId, normalized.value, normalized.effort, normalized.fast);

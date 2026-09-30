@@ -1,21 +1,23 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 
-export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultracode" | "auto" | "adaptive" | "default";
+export type EffortLevel =
+  "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | "ultracode" | "auto" | "adaptive" | "default";
 
 export const EFFORT_LEVELS: Array<{ value: EffortLevel; label: string }> = [
   { value: "auto", label: "Default" },
-  { value: "adaptive", label: "Auto" },
+  { value: "adaptive", label: "Adaptive" },
   { value: "default", label: "Provider default" },
   { value: "low", label: "Low" },
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
   { value: "xhigh", label: "Extra high" },
   { value: "max", label: "Max" },
+  { value: "ultra", label: "Ultra" },
   { value: "ultracode", label: "Ultracode" },
 ];
 
 export function effortLabel(level: EffortLevel): string {
-  return EFFORT_LEVELS.find((option) => option.value === level)?.label ?? level;
+  return level === "auto" ? "" : (EFFORT_LEVELS.find((option) => option.value === level)?.label ?? level);
 }
 
 export function harnessSupportsEffort(harnessId: string): boolean {
@@ -32,5 +34,8 @@ export function harnessSupportsSteer(harnessId: string): boolean {
 
 export function defaultEffortForModel(model: Model<Api> | undefined): EffortLevel {
   const provider = String(model?.provider ?? model?.api ?? "").toLowerCase();
-  return provider.includes("anthropic") ? "low" : "auto";
+  const levels = (model as { effortLevelsByHarness?: Record<string, readonly string[]> } | undefined)
+    ?.effortLevelsByHarness;
+  const offersLow = Object.values(levels ?? {}).some((offered) => offered.includes("low"));
+  return provider.includes("anthropic") && offersLow ? "low" : "auto";
 }

@@ -7,6 +7,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { isHarnessId, modelSupportedByHarness } from "../model/pi-models.ts";
+import type { RuntimeChoice } from "../harness/harness.ts";
 import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
 import { composeSharingPostures, type SharingPosture } from "./sharing-posture.ts";
 import type { ApprovalGrantModes } from "../types.ts";
@@ -214,13 +215,13 @@ export interface ScopedConfigStore {
   onChannelHeaderPinChanged(listener: (id: ScopeId) => void): void;
   getPurposeRuntime(purpose: RuntimePurpose): RuntimeSelection | undefined;
   getPurposeRuntimeDurable(purpose: RuntimePurpose): Promise<RuntimeSelection | undefined>;
-  setPurposeRuntime(purpose: RuntimePurpose, selection: RuntimeSelection): Promise<void>;
+  setPurposeRuntime(purpose: RuntimePurpose, selection: RuntimeChoice): Promise<void>;
   clearPurposeRuntime(purpose: RuntimePurpose): Promise<void>;
   getBaseModel(id: ScopeId): string | null;
   setBaseModel(id: ScopeId, modelId: string | null): void;
   getRuntimeSelection(id: ScopeId): ScopedRuntimeSelection | null;
-  setRuntimeSelection(id: ScopeId, selection: RuntimeSelection | null): void;
-  setRuntimeSelectionLatest(id: ScopeId, selection: RuntimeSelection | null): Promise<void>;
+  setRuntimeSelection(id: ScopeId, selection: RuntimeChoice | null): void;
+  setRuntimeSelectionLatest(id: ScopeId, selection: RuntimeChoice | null): Promise<void>;
   acknowledgeRuntimeSelection(id: ScopeId): void;
   acknowledgeRuntimeSelectionLatest(id: ScopeId): Promise<void>;
   getRuntimeSelectionDurable(id: ScopeId): Promise<ScopedRuntimeSelection | null>;
@@ -417,7 +418,7 @@ export function createMemoryConfigStore(
     await baseModelStore.delete(id);
     return null;
   };
-  const setPurposeRuntime = async (purpose: RuntimePurpose, selection?: RuntimeSelection) => {
+  const setPurposeRuntime = async (purpose: RuntimePurpose, selection?: RuntimeChoice) => {
     await writeQueue(`model:${org}`, async () => {
       const row = { ...(await baseModelStore.get(org)), scopeId: org };
       const key = `${purpose}Runtime` as const;

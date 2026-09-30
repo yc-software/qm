@@ -8,17 +8,18 @@ import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
 import { turnModelOptions } from "../src/core/turn-options.ts";
 import type { RuntimeChoice } from "../src/harness/harness.ts";
 import type { SessionEntry } from "../src/types.ts";
+import { runtimeChoice } from "./support/runtime-choice.ts";
 
 const ORG = "org:default-org";
 const SCOPE = "personal:alice";
 const fallback: RuntimeChoice = { harnessId: "pi", modelId: "claude-opus-5" };
-const category: RuntimeChoice = { harnessId: "pi", modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
+const category = runtimeChoice({ harnessId: "pi", modelId: "gpt-6-astra", effortLevel: "low", fastMode: true });
 
 function setup() {
   const config = createMemoryConfigStore("default-org");
   config.setApprovedHarnesses(["pi", "codex", "claude"]);
-  config.setRuntimeSelection(ORG, { ...fallback, effortLevel: "high", fastMode: true });
-  config.setRuntimeSelection(SCOPE, { ...fallback, modelId: "claude-sonnet-5", effortLevel: "medium" });
+  config.setRuntimeSelection(ORG, runtimeChoice({ ...fallback, effortLevel: "high", fastMode: true }));
+  config.setRuntimeSelection(SCOPE, runtimeChoice({ ...fallback, modelId: "claude-sonnet-5", effortLevel: "medium" }));
   return config;
 }
 
@@ -30,7 +31,7 @@ test("unset categories preserve legacy conversation, child, and cron behavior", 
     resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, "cron"),
     resolveRuntimeChoice(config, ORG, SCOPE, fallback, { effortLevel: "xhigh", fastMode: false }),
   );
-  assert.deepEqual(turnModelOptions({ triggered: true }), { thinkingLevel: "xhigh", fastMode: false });
+  assert.deepEqual(turnModelOptions({ triggered: true }), { defaultThinkingLevel: "xhigh", fastMode: false });
 });
 
 test("cron and loop entry points defer legacy injections until runtime resolution", () => {
@@ -100,7 +101,7 @@ test("configured purpose fails closed for unapproved or incompatible merged choi
   );
   assert.throws(
     () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { effortLevel: "nonsense" }, "cron"),
-    /not supported/,
+    /effort nonsense isn't available on pi\/gpt-6-astra/,
   );
   assert.throws(
     () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { modelId: "claude-sonnet-5" }, "cron"),

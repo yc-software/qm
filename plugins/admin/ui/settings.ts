@@ -53,12 +53,8 @@ export class SettingsState extends SettingState {
     return this.context.harnessOptions?.length ? this.context.harnessOptions : [this.context.harnessDefault || "pi"];
   }
   get efforts(): string[] {
-    const advertised = this.models.find((model) => model.id === this.draft.modelId)?.effortLevels;
-    const levels: string[] = advertised ?? this.context.thinkingLevelsByHarness?.[this.draft.harnessId] ?? [];
-    const choices = levels.filter(
-      (level) => level !== "auto" && (advertised || (level !== "adaptive" && level !== "default")),
-    );
-    return this.draft.effortLevel === "auto" || !choices.length ? ["auto", ...choices] : choices;
+    const advertised = this.models.find((model) => model.id === this.draft.modelId)?.effortLevels ?? [];
+    return advertised.length ? ["auto", ...advertised.filter((level) => level !== "auto")] : [];
   }
   get fastCapable() {
     return (
@@ -70,8 +66,7 @@ export class SettingsState extends SettingState {
     if (!runtimeKeys.includes(this.key)) return;
     if (!this.harnesses.includes(this.draft.harnessId)) this.draft.harnessId = this.harnesses[0];
     if (!this.models.some((m) => m.id === this.draft.modelId)) this.draft.modelId = this.models[0]?.id || "";
-    if (!this.efforts.includes(this.draft.effortLevel))
-      this.draft.effortLevel = this.efforts.includes("auto") ? "auto" : this.efforts[0];
+    if (!this.efforts.includes(this.draft.effortLevel)) this.draft.effortLevel = "auto";
     if (!this.fastCapable) this.draft.fastMode = false;
   }
   change(field: string, value: unknown) {
@@ -163,13 +158,14 @@ const harnessLabels: Record<string, string> = {
 };
 const effortLabels: Record<string, string> = {
   auto: "Default",
-  adaptive: "Auto",
+  adaptive: "Adaptive",
   default: "Provider default",
   low: "Low",
   medium: "Medium",
   high: "High",
   xhigh: "Extra high",
   max: "Max",
+  ultra: "Ultra",
   ultracode: "Ultracode",
 };
 const value = (event: Event) => (event.target as HTMLInputElement).value;
@@ -257,10 +253,11 @@ function card(s: SettingsState) {
             <label for=${`${prefix}-effort`}>Reasoning level</label
             ><select
               id=${`${prefix}-effort`}
-              ?disabled=${purpose && s.draft.inherit}
+              ?disabled=${(purpose && s.draft.inherit) || !s.efforts.length}
               .value=${s.draft.effortLevel || "auto"}
               @change=${(e: Event) => s.change("effortLevel", value(e))}
             >
+              ${s.efforts.length ? null : html`<option value="auto" selected hidden>Default</option>`}
               ${repeat(
                 s.efforts,
                 (id) => id,

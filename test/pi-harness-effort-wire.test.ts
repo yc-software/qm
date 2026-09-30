@@ -2,11 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
-import { getRequiredModel } from "../src/model/pi-models.ts";
+import { getRequiredModel, type EffortLevel } from "../src/model/pi-models.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 
 // Exercise the real AgentSession and SDK serializer, not just the effort setter.
-for (const [modelId, upper, allowed, off, minimal] of [
+for (const [modelId, , allowed, off, minimal] of [
   ["gpt-5.4", "xhigh", ["none", "low", "medium", "high", "xhigh"], "none", "low"],
   ["gpt-5", "high", ["minimal", "low", "medium", "high"], "minimal", "minimal"],
   ["gpt-6.1-sol", "max", ["low", "medium", "high", "xhigh", "max"], "low", "low"],
@@ -127,21 +127,21 @@ for (const [modelId, upper, allowed, off, minimal] of [
     t.after(() => harness.turns.close?.());
     // Repeat turns in the same conversation with different effort selections.
     for (const [effortLevel, expected] of [
-      ["ultracode", upper],
-      ["max", upper],
+      ["max", (allowed as readonly string[]).includes("max") ? "max" : null],
       ["medium", "medium"],
       ["low", "low"],
       ["high", "high"],
-      ["minimal", minimal],
-      ["off", off],
-      ["xhigh", (allowed as readonly string[]).includes("xhigh") ? "xhigh" : upper],
+      ["minimal", minimal === "minimal" ? "minimal" : null],
+      ["off", off === "none" ? "none" : null],
+      ["xhigh", (allowed as readonly string[]).includes("xhigh") ? "xhigh" : null],
       ["auto", "medium"],
       ["default", undefined],
     ]) {
       await t.test(effortLevel!, async () => {
         let seq = 0;
         sendTool = effortLevel === "default";
-        const result = await harness.turns.runTurn({
+        const sent = bodies.length;
+        const turn = harness.turns.runTurn({
           session: { id: `effort-${modelId}` } as HarnessTurnInput["session"],
           input: "hello",
           systemPrompt: "Reply ok.",
@@ -149,11 +149,17 @@ for (const [modelId, upper, allowed, off, minimal] of [
           tools: { attach: async () => ({ ok: true, files: [], staged: 0 }) } as unknown as HarnessTurnInput["tools"],
           scopeLabel: "personal:test",
           orgScopeId: "org:test",
-          runtime: { effortLevel },
+          runtime: { effortLevel: effortLevel as EffortLevel },
           emit: async (entry) => ({ ...entry, seq: seq++, createdAt: Date.now() }) as never,
           recordModelCall: () => {},
           cancel: AbortSignal.timeout(10_000),
         });
+        if (expected === null) {
+          await assert.rejects(turn, new RegExp(`effort ${effortLevel} isn't available on pi/${modelId}`));
+          assert.equal(bodies.length, sent);
+          return;
+        }
+        const result = await turn;
         assert.equal(result.reply, "ok");
         assert.equal(bodies.at(-1)?.reasoning?.effort, expected);
         if (effortLevel === "default") {

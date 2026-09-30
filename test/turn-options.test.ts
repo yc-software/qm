@@ -9,7 +9,7 @@ import {
 
 test("triggered turns default to extra-high thinking and non-fast mode", () => {
   assert.deepEqual(turnModelOptions({ triggered: true }), {
-    thinkingLevel: NON_INTERACTIVE_THINKING_LEVEL,
+    defaultThinkingLevel: NON_INTERACTIVE_THINKING_LEVEL,
     fastMode: NON_INTERACTIVE_FAST_MODE,
   });
 });

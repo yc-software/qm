@@ -697,6 +697,39 @@ test("admin runtime saves reasoning level and fast mode with the default model",
     ]) {
       assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify(body) })).status, 400);
     }
+    const ultracode = await fetch(url, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ harnessId: "codex", modelId: "gpt-6-astra", effortLevel: "ultracode" }),
+    });
+    assert.equal(ultracode.status, 400);
+    assert.match(
+      JSON.stringify(await ultracode.json()),
+      /effort ultracode isn't available on codex\/gpt-6-astra \(valid: auto, low, medium, high, xhigh, max, ultra\)/,
+    );
+    await fetch(url, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ harnessId: "pi", modelId: "claude-opus-5", effortLevel: "xhigh" }),
+    });
+    const carried = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/base-model`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ modelId: "claude-haiku-4-5" }),
+    });
+    assert.equal(carried.status, 400);
+    assert.match(
+      JSON.stringify(await carried.json()),
+      /effort xhigh isn't available on pi\/claude-haiku-4-5; choose another effort/,
+    );
+    assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.modelId, "claude-opus-5");
+    const explicit = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/base-model`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ modelId: "claude-haiku-4-5", effortLevel: "auto" }),
+    });
+    assert.equal(explicit.status, 200);
+    assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.effortLevel, "auto");
   } finally {
     await srv.close();
   }

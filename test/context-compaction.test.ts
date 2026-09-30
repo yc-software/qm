@@ -1,4 +1,5 @@
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { runtimeChoice } from "./support/runtime-choice.ts";
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -1067,7 +1068,7 @@ test("runtime handoff continues once with saved results under the original run a
   const base = createMockHarness();
   const seen: import("../src/harness/harness.ts").HarnessTurnInput[] = [];
   let resets = 0;
-  const choice = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "high", fastMode: false };
+  const choice = runtimeChoice({ harnessId: "pi", modelId: "gpt-6-astra", effortLevel: "high", fastMode: false });
   const harness: Harness = {
     ...base,
     turns: {
@@ -1092,7 +1093,7 @@ test("runtime handoff continues once with saved results under the original run a
           await new Promise((resolve) => setTimeout(resolve, 5));
           return { reply: "must not be delivered", runtimeHandoff: { choice, lifetime: "task" }, modelCalls: 1 };
         }
-        assert.deepEqual(input.runtime, choice);
+        assert.deepEqual(input.requestedRuntime, choice);
         assert.equal(input.runId, "runtime-run");
         assert.ok(input.history.some((e) => e.type === "tool_result"));
         assert.ok(input.turnWallClockMs! < seen[0]!.turnWallClockMs!);
@@ -1162,7 +1163,7 @@ test("a retry restores a committed runtime decision after reset crashes, without
           });
           return { reply: "", runtimeHandoff: { choice, lifetime: "task" } };
         }
-        assert.deepEqual(input.runtime, choice);
+        assert.deepEqual(input.requestedRuntime, choice);
         return { reply: "resumed" };
       },
     },
@@ -1176,7 +1177,7 @@ test("a retry restores a committed runtime decision after reset crashes, without
 
 test("only a cron automation receives task-runtime authority and each fire starts fresh", async () => {
   const base = createMockHarness();
-  const active = { harnessId: "pi" as const, modelId: "claude-sonnet-5", effortLevel: "high", fastMode: false };
+  const active = runtimeChoice({ harnessId: "pi", modelId: "claude-sonnet-5", effortLevel: "high", fastMode: false });
   const outcomes: { surface: string; ok: boolean }[] = [];
   let resumed = 0;
   const harness: Harness = {
@@ -1184,7 +1185,7 @@ test("only a cron automation receives task-runtime authority and each fire start
     turns: {
       ...base.turns,
       runTurn: async (input) => {
-        if (input.runtime?.modelId === "gpt-6-astra") {
+        if (input.requestedRuntime?.modelId === "gpt-6-astra") {
           resumed++;
           return { reply: "handled" };
         }
@@ -1235,7 +1236,7 @@ test("only a cron automation receives task-runtime authority and each fire start
 
 test("cron and loop dispatch use purpose defaults while task handoffs and later fires stay isolated", async () => {
   const base = createMockHarness();
-  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
+  const category = runtimeChoice({ harnessId: "pi", modelId: "gpt-6-astra", effortLevel: "low", fastMode: true });
   const handoff = { ...category, modelId: "gpt-6-sol", fastMode: false };
   const seen: import("../src/harness/harness.ts").RuntimeChoice[] = [];
   const adapter: Harness = {
@@ -1258,18 +1259,17 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
       "org:default-org",
       input.scopeLabel,
       category,
-      input.runtime,
+      input.requestedRuntime,
       undefined,
       input.runtimePurpose,
     ),
   );
   const built = buildOrchestrator(router);
   built.config.setApprovedHarnesses(["pi"]);
-  await built.config.setRuntimeSelectionLatest(PERSONAL, {
-    harnessId: "pi",
-    modelId: "claude-sonnet-5",
-    effortLevel: "high",
-  });
+  await built.config.setRuntimeSelectionLatest(
+    PERSONAL,
+    runtimeChoice({ harnessId: "pi", modelId: "claude-sonnet-5", effortLevel: "high" }),
+  );
   await built.config.setPurposeRuntime("cron", category);
   for (const surface of ["cron", "loop"]) {
     const result = await built.orch.handleTurn({
@@ -1286,7 +1286,7 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
 
 test("human child continuations respect non-fast category defaults", async () => {
   const base = createMockHarness();
-  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
+  const category = runtimeChoice({ harnessId: "pi", modelId: "gpt-6-astra", effortLevel: "low", fastMode: false });
   const seen: unknown[] = [];
   const adapter: Harness = {
     ...base,
@@ -1304,7 +1304,7 @@ test("human child continuations respect non-fast category defaults", async () =>
       "org:default-org",
       input.scopeLabel,
       category,
-      input.runtime,
+      input.requestedRuntime,
       undefined,
       input.runtimePurpose,
     ),
@@ -1329,8 +1329,8 @@ test("human child continuations respect non-fast category defaults", async () =>
 });
 
 test("verified swarm workers use category defaults instead of copied parent choices, retaining unset behavior and handoffs", async () => {
-  const inherited = { harnessId: "pi" as const, modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
-  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
+  const inherited = runtimeChoice({ harnessId: "pi", modelId: "claude-opus-5", effortLevel: "high", fastMode: true });
+  const category = runtimeChoice({ harnessId: "pi", modelId: "gpt-6-astra", effortLevel: "low", fastMode: false });
   const handoff = { ...category, modelId: "gpt-6-sol" };
   for (const configured of [false, true]) {
     const f = await swarmFixture({
@@ -1366,7 +1366,7 @@ test("verified swarm workers use category defaults instead of copied parent choi
         "org:default-org",
         input.scopeLabel,
         inherited,
-        input.runtime,
+        input.requestedRuntime,
         undefined,
         input.runtimePurpose,
       ),

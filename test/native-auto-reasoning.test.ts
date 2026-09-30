@@ -1,8 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { applyReasoningMode, createPiHarness } from "../src/harness/pi-harness.ts";
-import { getRequiredModel, thinkingLevelsForHarness, safeModelMetadata } from "../src/model/pi-models.ts";
-import { validateRuntimeChoice } from "../src/api/runtime-config.ts";
+import {
+  getRequiredModel,
+  parseEffort,
+  parseRuntimeChoice,
+  thinkingLevelsForHarness,
+  safeModelMetadata,
+} from "../src/model/pi-models.ts";
+import { runtimeChoice } from "./support/runtime-choice.ts";
+
+const runtimeError = (input: Parameters<typeof parseRuntimeChoice>[0]) => {
+  const parsed = parseRuntimeChoice(input);
+  return parsed.ok ? null : parsed.error;
+};
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
 
@@ -11,14 +22,14 @@ const adaptiveId = "claude-sonnet-4-6";
 test("native Auto is model and harness specific, while legacy auto remains valid", () => {
   for (const harnessId of ["pi", "codex", "claude", "opencode"] as const) {
     const modelId = harnessId === "codex" ? "gpt-5.4" : adaptiveId;
-    assert.equal(validateRuntimeChoice({ harnessId, modelId, effortLevel: "auto" }), null);
+    assert.equal(runtimeError({ harnessId, modelId, effortLevel: "auto" }), null);
     assert.equal(
-      validateRuntimeChoice({ harnessId, modelId, effortLevel: "adaptive" }),
+      runtimeError({ harnessId, modelId, effortLevel: "adaptive" }),
       harnessId === "pi" ? null : "effort_not_supported",
     );
   }
   for (const modelId of ["gpt-6-astra", "codex/gpt-5.4", "claude-haiku-4-5", "openrouter/auto"])
-    assert.equal(validateRuntimeChoice({ harnessId: "pi", modelId, effortLevel: "adaptive" }), "effort_not_supported");
+    assert.equal(runtimeError({ harnessId: "pi", modelId, effortLevel: "adaptive" }), "effort_not_supported");
   assert.deepEqual(safeModelMetadata(adaptiveId)?.effortLevelsByHarness.pi, thinkingLevelsForHarness("pi", adaptiveId));
 });
 
@@ -136,7 +147,7 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
           "auto",
           "adaptive",
           "low",
-          ...(mandatoryThinking ? ["xhigh", "max", "ultracode", "medium"] : []),
+          ...(mandatoryThinking ? ["xhigh", "max", "medium"] : []),
         ]) {
           sendTool = true;
           const result = await harness.turns.runTurn({
@@ -147,7 +158,7 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
             tools: { attach: async () => ({ ok: true, files: [], staged: 0 }) } as unknown as HarnessTurnInput["tools"],
             scopeLabel: "personal:test",
             orgScopeId: "org:test",
-            runtime: { effortLevel },
+            runtime: { effortLevel: parseEffort("pi", modelId, effortLevel) },
             ...(route === "personal-key" || route === "oauth"
               ? { providerKeys: { anthropic: route === "oauth" ? "sk-ant-oat-offline-test" : "sk-personal-test" } }
               : {}),
@@ -167,11 +178,7 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
           assert.equal(request.body.max_tokens, getRequiredModel(modelId).maxTokens);
           if (effortLevel === "adaptive" || effortLevel === "default")
             assert.equal(request.body.output_config?.effort, undefined);
-          else
-            assert.equal(
-              request.body.output_config?.effort,
-              { auto: "low", ultracode: "max" }[effortLevel] ?? effortLevel,
-            );
+          else assert.equal(request.body.output_config?.effort, { auto: "low" }[effortLevel] ?? effortLevel);
           if (effortLevel === "default" && (route === "gateway" || !mandatoryThinking))
             assert.equal(request.body.thinking, undefined);
           else assert.equal(request.body.thinking?.type, "adaptive");
@@ -192,7 +199,7 @@ test("runtime scope writes and turn dispatch reject unsupported modes without ch
   const { createRuntimeService } = await import("../src/harness/runtime-control.ts");
   const config = createMemoryConfigStore("default-org");
   config.setApprovedHarnesses(["pi", "claude", "codex", "opencode"]);
-  const active = { harnessId: "pi" as const, modelId: "claude-sonnet-5", effortLevel: "auto" };
+  const active = runtimeChoice({ harnessId: "pi", modelId: "claude-sonnet-5", effortLevel: "auto" });
   await config.setRuntimeSelectionLatest("personal:test", active);
   const service = createRuntimeService({ config, harnessId: "pi" }, { authorizesCapabilityScope: async () => true });
   const claims = { actorId: "test", scopeId: "personal:test" as const, liveActor: true, exp: Date.now() + 60_000 };
@@ -203,7 +210,11 @@ test("runtime scope writes and turn dispatch reject unsupported modes without ch
   }
   assert.deepEqual(
     await service(claims, active, { action: "set", effort: "adaptive", model: "gpt-6-astra", lifetime: "scope" }),
-    { ok: false, error: "effort_not_supported" },
+    {
+      ok: false,
+      error: "effort_not_supported",
+      message: `effort adaptive isn't available on pi/gpt-6-astra (valid: ${thinkingLevelsForHarness("pi", "gpt-6-astra").join(", ")})`,
+    },
   );
   assert.equal(config.getRuntimeSelection("personal:test")?.effortLevel, "default");
   assert.throws(
@@ -212,7 +223,7 @@ test("runtime scope writes and turn dispatch reject unsupported modes without ch
         modelId: "gpt-6-astra",
         effortLevel: "adaptive",
       }),
-    /not supported/,
+    /isn't available on pi\/gpt-6-astra/,
   );
   await config.setRuntimeSelectionLatest("personal:test", active);
   assert.equal(resolveRuntimeChoice(config, "org:default-org", "personal:test", active).effortLevel, "auto");

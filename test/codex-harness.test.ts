@@ -34,7 +34,13 @@ import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
 import { createMemoryTaskStore } from "../src/tasks/memory-task-store.ts";
 import { CodexAppServer, redactCodexDiagnostics } from "../src/harness/codex-app-server.ts";
-import { DEFAULT_CODEX_MODEL_ID } from "../src/model/pi-models.ts";
+import {
+  DEFAULT_CODEX_MODEL_ID,
+  modelSupportedByHarness,
+  parseEffort,
+  thinkingLevelsForHarness,
+} from "../src/model/pi-models.ts";
+import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { readCodexOAuthAuthFile } from "../src/harness/codex-auth.ts";
 import { acquireCodexOAuthAuthLock } from "../src/harness/codex-auth.ts";
 
@@ -536,6 +542,82 @@ test("Codex task titles stay concise when the provider includes the parent reque
     "WEST subagent",
   );
   assert.equal(codexTaskTitle("Return ALPHA"), "Return ALPHA");
+});
+
+function recordingCodexBinary(dir: string): string {
+  const path = join(dir, "recording-codex");
+  writeFileSync(
+    path,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") return send({ id: msg.id, result: { userAgent: "fake" } });
+  if (msg.method === "initialized") return;
+  if (msg.method === "thread/start") {
+    fs.appendFileSync(${JSON.stringify(join(dir, "thread-starts.jsonl"))}, JSON.stringify(msg.params) + "\\n");
+    return send({ id: msg.id, result: { thread: { id: "thread-1" }, model: msg.params.model } });
+  }
+  if (msg.method === "thread/inject_items") return send({ id: msg.id, result: {} });
+  if (msg.method === "turn/start") {
+    send({ id: msg.id, result: { turn: { id: "turn-1", status: "inProgress", items: [] } } });
+    send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "agentMessage", id: "item-1", text: "ok", phase: "final_answer", memoryCitation: null } } });
+    return send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [], itemsView: "notLoaded" } } });
+  }
+  if (msg.method === "turn/interrupt" || msg.method === "turn/steer") return send({ id: msg.id, result: {} });
+});
+`,
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
+test("Codex receives every catalog model's offered effort exactly as model_reasoning_effort", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-effort-"));
+  const harness = createCodexHarness({ binaryPath: recordingCodexBinary(dir), env: testHarnessEnv(dir) });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const modelIds = builtInModelCatalog()
+    .map((model) => model.id)
+    .filter((id) => modelSupportedByHarness(id, "codex"));
+  assert.ok(modelIds.length > 0);
+  const expected: Array<{ model: string; effort?: string }> = [];
+  for (const modelId of modelIds)
+    for (const level of thinkingLevelsForHarness("codex", modelId)) {
+      const result = await harness.turns.runTurn({
+        session: { id: `codex-effort-${modelId}-${level}` } as Session,
+        input: "hi",
+        systemPrompt: "be concise",
+        history: [],
+        tools: {} as HarnessTurnInput["tools"],
+        scopeLabel: scope,
+        orgScopeId: scope,
+        readOnly: true,
+        runtime: { harnessId: "codex", modelId, effortLevel: parseEffort("codex", modelId, level) },
+        emit: async (entry) => ({ ...entry, sessionId: "s", seq: 1, createdAt: Date.now() }) as SessionEntry,
+        recordModelCall: () => {},
+      });
+      assert.equal(result.reply, "ok");
+      expected.push({ model: modelId, ...(level === "auto" ? {} : { effort: level }) });
+    }
+  const starts = readFileSync(join(dir, "thread-starts.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { model: string; config: { model_reasoning_effort?: string } });
+  assert.deepEqual(
+    starts.map((start) => ({
+      model: start.model,
+      ...(start.config.model_reasoning_effort ? { effort: start.config.model_reasoning_effort } : {}),
+    })),
+    expected,
+  );
+  assert.ok(expected.some((entry) => entry.effort === "ultra"));
 });
 
 test("Codex maps the web effort control to native reasoning effort", () => {
