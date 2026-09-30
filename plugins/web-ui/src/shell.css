@@ -9618,7 +9618,27 @@ h3.ambient-field-label {
   border-bottom: 1px solid var(--border);
 }
 .inbox-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 0 10px 18px;
+}
+.inbox-load-more {
+  margin-left: auto;
+  padding: 4px 2px;
+  border: 0;
+  background: none;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: var(--font-12-5);
+  cursor: pointer;
+}
+.inbox-load-more:hover:not(:disabled) {
+  color: var(--foreground);
+}
+.inbox-load-more:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }
 .inbox-page .inbox-filter-bar {
   padding-inline: 0;
